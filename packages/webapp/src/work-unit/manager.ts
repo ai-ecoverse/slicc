@@ -10,7 +10,7 @@
  */
 
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../scoops/types.js';
-import { childrenOf, rootsOf } from './policy.js';
+import { assertChildPolicyAllowed, childrenOf, rootsOf } from './policy.js';
 import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
 import type { CreateWorkUnitOptions, WorkUnitDescriptor, WorkUnitId } from './types.js';
 
@@ -47,12 +47,16 @@ export function buildWorkUnitRecord(
 export class WorkUnitManager {
   constructor(private readonly host: WorkUnitManagerHost) {}
 
-  /** Register a unit. A child's parent must exist. */
+  /** Register a unit. A child's parent must exist and the child policy ⊆ it. */
   async create(options: CreateWorkUnitOptions): Promise<WorkUnitDescriptor> {
-    if (options.parentId !== null && !this.host.getScoop(options.parentId)) {
-      throw new Error(`Parent work unit not found: ${options.parentId}`);
-    }
     const record = buildWorkUnitRecord(options);
+    if (options.parentId !== null) {
+      const parent = this.host.getScoop(options.parentId);
+      if (!parent) {
+        throw new Error(`Parent work unit not found: ${options.parentId}`);
+      }
+      assertChildPolicyAllowed(record, parent);
+    }
     await this.host.registerScoop(record);
     return this.get(record.jid)!.descriptor;
   }

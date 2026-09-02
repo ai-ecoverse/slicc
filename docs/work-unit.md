@@ -16,7 +16,7 @@ They differ in exactly one structural fact — the ownership edge — and in wha
 | `display.role`                                                                                    | `primary`                                                              | `child`                                                      |
 | `policy.filesystem`                                                                               | `full-workspace` (`VirtualFS`)                                         | `restricted` (`RestrictedFS` over the config paths)          |
 | `policy.approvalAuthority`                                                                        | `user`                                                                 | `{ parentId }`                                               |
-| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                                                                 | `false`                                                      |
+| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                                                                 | `false` (unless an explicit grant, below)                    |
 | `policy.sudoDefaultDisposition`                                                                   | `allow`                                                                | `require-approval`                                           |
 | `completion.mode`                                                                                 | `interactive`                                                          | `notify-parent` (`silent` when `notifyOnComplete === false`) |
 | `workspace.root`                                                                                  | `/workspace` (primary cone) / `/cones/<folder>/workspace` (extra cone) | `/scoops/<folder>/workspace`                                 |
@@ -30,7 +30,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 3. **Field name**: the edge stays `parentJid` (jid is this codebase's id vocabulary) but is **required** `string | null`. `WorkUnitDescriptor.parentId` maps to it.
 4. **Ordering**: structural cleanup first. Multiple concurrent roots are the payoff of Phases 1–3, not a UI deliverable of them.
 5. **Default root**: the oldest root (`WorkUnitManager.resolveDefaultRoot()`) receives unaddressed events. A UI-selected root comes with the client protocol phase.
-6. **Grandchildren**: children keep `canCreateChildren: false`. The flag exists so an explicit grant is a policy change, not a runtime type.
+6. **Grandchildren**: children default to `canCreateChildren: false`. The flag exists so an explicit grant (`ScoopConfig.canCreateChildren: true`) is a policy change, not a runtime type. `WorkUnitManager.create` and `scoop_scoop` refuse a child whose derived policy is not ⊆ its parent's (`assertChildPolicyAllowed`). See [Nested delegation](#nested-delegation).
 
 ## Invariants (adopted from the RFC)
 
@@ -46,7 +46,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 | File            | Purpose                                                                                                                                                                                                                                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), events, `statusFromTab`                                                                                                                                                                               |
-| `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `childrenOf`, `rootsOf`                                                                                                                                                                                                   |
+| `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `assertChildPolicyAllowed`, `childrenOf`, `rootsOf`                                                                                                                                                                       |
 | `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                                                                                                                                                                              |
 | `runtime.ts`    | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                                                                                                                                                                                          |
 | `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown                                                                                                                                                                      |
@@ -564,7 +564,18 @@ the kernel host, for every float.
 - Unaddressed events (licks, sprinkles, workflow completions, follower snapshots) resolve the default root through `rootsOf(...)[0]` / `WorkUnitManager.resolveDefaultRoot()`; `bootstrapCone` only seeds a root when none exists.
 - `normalizeScoopRecord` sanitizes a root's trigger fields on register and restore; `ScoopPresentation` projects the wire's `isCone` from `isRootUnit`. Since #2279 the record has no role field at all, so nothing — `ui/` included — can branch on one.
 - `WorkUnitManager.close(id)` cascades to the unit's children first; closing root A leaves root B's subtree untouched.
-- Name-based child resolution in the scoop-management tools (`feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute`, `scoop_wait`, `list_scoops`, `scoop_scoop`'s duplicate check) runs against `subtreeOf(roster, caller.jid)` — the caller plus what it transitively owns. An unmatched name is an error naming the caller's subtree; it never widens to a global match, so cone A's `scoop_wait helper` cannot capture cone B's `helper` (#2360). Scoop _folders_ stay globally unique (suffixed on collision) because `/scoops/<folder>/` is one shared VFS path. Cross-subtree operations wait on #2278's supervisor APIs.
+- Name-based child resolution in the scoop-management tools (`feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute`, `scoop_wait`, `list_scoops`, `scoop_scoop`'s duplicate check) runs against `subtreeOf(roster, caller.jid)` — the caller plus what it transitively owns. An unmatched name is an error naming the caller's subtree; it never widens to a global match, so cone A's `scoop_wait helper` cannot capture cone B's `helper` (#2360). Scoop _folders_ stay globally unique (suffixed on collision) because `/scoops/<folder>/` is one shared VFS path. Cross-subtree operations wait on #2278's supervisor APIs (`createMany` / `join` / detach / promote).
+
+### Nested delegation
+
+A child may create grandchildren only when granted. `ScoopConfig.canCreateChildren: true` (the `scoop_scoop` `canCreateChildren` argument, or `CreateWorkUnitOptions.config`) is the grant; `derivePolicy` turns on `canCreateChildren` **and** `canManageChildren` so the child can feed / drop / wait on what it spawns. The grandchild is still a delegated child: restricted FS, parent-mediated approvals, `canCreateChildren: false` unless the grant is passed on, and `parentJid` names the granting scoop — not the cone.
+
+Create-time enforcement (`assertChildPolicyAllowed` in `WorkUnitManager.create` and the `onScoopScoop` callback):
+
+1. Child capabilities ⊆ parent (`isPolicySubset`). A leaf cannot grant nested delegation; a granted scoop cannot mint an approver grandchild it does not itself hold.
+2. The parent must have `canCreateChildren`. Without the grant, `WorkUnitManager.create` refuses even a default child. Tool registration already hides `scoop_scoop` when the flag is false.
+
+The one-shot `agent` shell command is a different primitive and is not gated on this flag.
 
 ### Phase 2 detail
 

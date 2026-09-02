@@ -46,13 +46,21 @@ ${isRoot ? '' : '- **send_message**: Send messages immediately while working (fo
 ${
   policy.canManageChildren
     ? `
-As the cone (main assistant), you have elevated privileges:
+${
+  isRoot
+    ? `As the cone (main assistant), you have elevated privileges:
 - **list_scoops**: See all registered scoops
 - **register_scoop**: Add new scoops
-- **update_global_memory**: Update the global CLAUDE.md shared across all scoops
-- Full filesystem access (unrestricted)
+${policy.canWriteSharedMemory ? '- **update_global_memory**: Update the global CLAUDE.md shared across all scoops\n' : ''}- Full filesystem access (unrestricted)
 - You can schedule tasks for any scoop
-
+`
+    : `You are a scoop granted nested delegation. You may create and manage scoops you own — not the whole roster:
+- **list_scoops**: See the scoops in your subtree
+- **scoop_scoop**: Create a child scoop (a grandchild of the cone)
+- **feed_scoop** / **drop_scoop** / **scoop_wait**: Manage those children
+- Your workspace stays restricted: /scoops/${scoop.folder}/
+`
+}
 ## Delegating to Scoops
 
 Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:

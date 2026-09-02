@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertChildPolicyAllowed,
+  capableApproverOf,
   childrenOf,
   delegatedChildPolicy,
   deriveCompletion,
@@ -48,8 +50,27 @@ describe('work-unit policy', () => {
     });
     expect(policy.approvalAuthority).toEqual({ parentId: 'cone_1' });
     expect(policy.canCreateChildren).toBe(false);
+    expect(policy.canManageChildren).toBe(false);
     expect(policy.sudoDefaultDisposition).toBe('require-approval');
     expect(policy.persistCommandGrants).toBe(false);
+  });
+
+  it('grants nested delegation only when config.canCreateChildren is true', () => {
+    const granted = childRecord('cone_1', { config: { canCreateChildren: true } });
+    const policy = derivePolicy(granted);
+    expect(policy.canCreateChildren).toBe(true);
+    expect(policy.canManageChildren).toBe(true);
+    // The grant is the supervisor pair only — nothing else widens.
+    expect(policy.canWriteSharedMemory).toBe(false);
+    expect(policy.canResolveApprovals).toBe(false);
+    expect(policy.persistCommandGrants).toBe(false);
+    expect(policy.sudoDefaultDisposition).toBe('require-approval');
+    expect(policy.filesystem.kind).toBe('restricted');
+    expect(isPolicySubset(policy, interactiveRootPolicy())).toBe(true);
+
+    const ungranted = derivePolicy(childRecord('cone_1'));
+    expect(ungranted.canCreateChildren).toBe(false);
+    expect(ungranted.canManageChildren).toBe(false);
   });
 
   it('keeps explicit empty path lists empty (no defaults live here)', () => {
@@ -93,12 +114,119 @@ describe('work-unit policy', () => {
       expect(isPolicySubset({ ...child, persistCommandGrants: true }, child)).toBe(false);
     });
 
+    it('a granted child is still ⊆ a root, and a default grandchild ⊆ the granted child', () => {
+      const granted = delegatedChildPolicy('cone_1', { canCreateChildren: true });
+      expect(isPolicySubset(granted, root)).toBe(true);
+      expect(isPolicySubset(child, granted)).toBe(true);
+      expect(isPolicySubset(granted, child)).toBe(false);
+    });
+
     it('rejects sudo auto-allow and full-workspace under a restricted parent', () => {
       expect(isPolicySubset({ ...child, sudoDefaultDisposition: 'allow' }, child)).toBe(false);
       expect(isPolicySubset({ ...child, filesystem: { kind: 'full-workspace' } }, child)).toBe(
         false
       );
       expect(isPolicySubset(root, child)).toBe(false);
+    });
+
+    it('rejects a grandchild whose writable/visible paths escape the supervisor sandbox', () => {
+      const supervisor = delegatedChildPolicy('cone_1', {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/lead/'],
+        visiblePaths: ['/scoops/lead/'],
+      });
+      const escape = delegatedChildPolicy('scoop_lead', {
+        writablePaths: ['/workspace/'],
+        visiblePaths: ['/workspace/'],
+      });
+      expect(isPolicySubset(escape, supervisor)).toBe(false);
+
+      const nested = delegatedChildPolicy('scoop_lead', {
+        writablePaths: ['/scoops/lead/deep/'],
+        visiblePaths: ['/scoops/lead/notes/'],
+      });
+      expect(isPolicySubset(nested, supervisor)).toBe(true);
+
+      // Visible may sit under a parent writable path (writable ⇒ readable).
+      const visibleUnderWritable = delegatedChildPolicy('scoop_lead', {
+        writablePaths: [],
+        visiblePaths: ['/scoops/lead/readme.md'],
+      });
+      expect(isPolicySubset(visibleUnderWritable, supervisor)).toBe(true);
+
+      // Narrower is fine; empty is fine; equal is fine.
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            visiblePaths: [],
+          }),
+          supervisor
+        )
+      ).toBe(true);
+    });
+
+    it('rejects a grandchild that widens allowedCommands past the supervisor', () => {
+      const supervisor = delegatedChildPolicy('cone_1', {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/lead/'],
+        visiblePaths: ['/scoops/lead/'],
+        allowedCommands: ['echo', 'cat'],
+      });
+      // Omitting allowedCommands → NOPASSWD Cmnd * — a widen.
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            visiblePaths: ['/scoops/lead/'],
+          }),
+          supervisor
+        )
+      ).toBe(false);
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            visiblePaths: ['/scoops/lead/'],
+            allowedCommands: ['*'],
+          }),
+          supervisor
+        )
+      ).toBe(false);
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            visiblePaths: ['/scoops/lead/'],
+            allowedCommands: ['echo', 'rm'],
+          }),
+          supervisor
+        )
+      ).toBe(false);
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            visiblePaths: ['/scoops/lead/'],
+            allowedCommands: ['echo'],
+          }),
+          supervisor
+        )
+      ).toBe(true);
+      // Unrestricted parent subsumes any child command list.
+      const open = delegatedChildPolicy('cone_1', {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/lead/'],
+      });
+      expect(
+        isPolicySubset(
+          delegatedChildPolicy('scoop_lead', {
+            writablePaths: ['/scoops/lead/'],
+            allowedCommands: ['rm', 'curl'],
+          }),
+          open
+        )
+      ).toBe(true);
     });
   });
 
@@ -190,5 +318,156 @@ describe('delegated approver scoops', () => {
     expect(approver.persistCommandGrants).toBe(false);
     expect(approver.sudoDefaultDisposition).toBe('require-approval');
     expect(approver.filesystem.kind).toBe('restricted');
+  });
+});
+
+describe('assertChildPolicyAllowed', () => {
+  const root = rootRecord();
+  // Supervisor sandbox must cover any grandchild paths it mints — empty
+  // writable/visible lists (config: { canCreateChildren: true } alone) would
+  // reject every default childRecord path under the new containment gate.
+  const granted = childRecord(root.jid, {
+    folder: 'lead-scoop',
+    config: {
+      canCreateChildren: true,
+      writablePaths: ['/scoops/', '/shared/'],
+      visiblePaths: ['/workspace/', '/scoops/'],
+    },
+  });
+  const leaf = childRecord(root.jid, { folder: 'leaf-scoop' });
+
+  it('allows a default child of a root and a grandchild of a granted child', () => {
+    expect(() => assertChildPolicyAllowed(leaf, root)).not.toThrow();
+    expect(() =>
+      assertChildPolicyAllowed(childRecord(granted.jid, { folder: 'deep-scoop' }), granted)
+    ).not.toThrow();
+  });
+
+  it('allows re-granting nested delegation when the parent already holds it', () => {
+    const grandchild = childRecord(granted.jid, {
+      folder: 'deep-scoop',
+      config: {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/deep-scoop/', '/shared/'],
+        visiblePaths: ['/workspace/'],
+      },
+    });
+    expect(() => assertChildPolicyAllowed(grandchild, granted)).not.toThrow();
+  });
+
+  it('refuses a grandchild when the parent was not granted canCreateChildren', () => {
+    // Use empty paths so the subset gate does not fire first — this assertion
+    // is about the canCreateChildren capability, not path containment.
+    expect(() =>
+      assertChildPolicyAllowed(
+        childRecord(leaf.jid, {
+          folder: 'deep-scoop',
+          config: { writablePaths: [], visiblePaths: [] },
+        }),
+        leaf
+      )
+    ).toThrow(/cannot create children/);
+  });
+
+  it('rejects a subset violation — a grant the parent does not hold', () => {
+    const overreaching = childRecord(leaf.jid, {
+      folder: 'lead-scoop',
+      config: {
+        canCreateChildren: true,
+        writablePaths: [],
+        visiblePaths: [],
+      },
+    });
+    expect(() => assertChildPolicyAllowed(overreaching, leaf)).toThrow(/isPolicySubset/);
+
+    const approverGrandchild = childRecord(granted.jid, {
+      folder: 'reviewer-scoop',
+      approvesGuestRequests: true,
+      config: {
+        writablePaths: ['/scoops/reviewer-scoop/', '/shared/'],
+        visiblePaths: ['/workspace/'],
+      },
+    });
+    expect(() => assertChildPolicyAllowed(approverGrandchild, granted)).toThrow(/isPolicySubset/);
+  });
+
+  it('rejects a grandchild whose paths escape the granted supervisor', () => {
+    const sandbox = childRecord(root.jid, {
+      folder: 'lead-scoop',
+      config: {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/lead-scoop/'],
+        visiblePaths: ['/scoops/lead-scoop/'],
+      },
+    });
+    const escape = childRecord(sandbox.jid, {
+      folder: 'deep-scoop',
+      config: {
+        writablePaths: ['/workspace/'],
+        visiblePaths: ['/workspace/'],
+      },
+    });
+    expect(() => assertChildPolicyAllowed(escape, sandbox)).toThrow(/isPolicySubset/);
+
+    const nested = childRecord(sandbox.jid, {
+      folder: 'deep-scoop',
+      config: {
+        writablePaths: ['/scoops/lead-scoop/deep/'],
+        visiblePaths: ['/scoops/lead-scoop/'],
+        allowedCommands: ['echo'],
+      },
+    });
+    // Parent has no allowedCommands (unrestricted) so echo is fine.
+    expect(() => assertChildPolicyAllowed(nested, sandbox)).not.toThrow();
+  });
+
+  it('rejects a grandchild that omits allowedCommands under a restricted supervisor', () => {
+    const sandbox = childRecord(root.jid, {
+      folder: 'lead-scoop',
+      config: {
+        canCreateChildren: true,
+        writablePaths: ['/scoops/lead-scoop/'],
+        visiblePaths: ['/scoops/lead-scoop/'],
+        allowedCommands: ['echo', 'cat'],
+      },
+    });
+    const widen = childRecord(sandbox.jid, {
+      folder: 'deep-scoop',
+      config: {
+        writablePaths: ['/scoops/lead-scoop/deep/'],
+        visiblePaths: ['/scoops/lead-scoop/'],
+      },
+    });
+    expect(() => assertChildPolicyAllowed(widen, sandbox)).toThrow(/isPolicySubset/);
+  });
+});
+
+describe('capableApproverOf', () => {
+  it('walks past a canCreateChildren supervisor to a capable ancestor', () => {
+    const root = rootRecord({ jid: 'cone_1' });
+    const supervisor = childRecord(root.jid, {
+      folder: 'lead-scoop',
+      config: { canCreateChildren: true },
+    });
+    const grandchild = childRecord(supervisor.jid, { folder: 'deep-scoop' });
+    const all = [root, supervisor, grandchild];
+    expect(capableApproverOf(all, grandchild)?.jid).toBe(root.jid);
+    expect(derivePolicy(supervisor).canResolveApprovals).toBe(false);
+  });
+
+  it('stops at a delegated approver between the requester and the root', () => {
+    const root = rootRecord({ jid: 'cone_1' });
+    const approver = childRecord(root.jid, {
+      folder: 'reviewer-scoop',
+      approvesGuestRequests: true,
+      config: { canCreateChildren: true },
+    });
+    const grandchild = childRecord(approver.jid, { folder: 'deep-scoop' });
+    expect(capableApproverOf([root, approver, grandchild], grandchild)?.jid).toBe(approver.jid);
+  });
+
+  it('returns undefined when the chain has no capable ancestor', () => {
+    const orphan = childRecord('missing', { folder: 'orphan-scoop' });
+    expect(capableApproverOf([orphan], orphan)).toBeUndefined();
   });
 });

@@ -87,9 +87,9 @@ function descendantsOf(
  * leader's `orderForSwitcher` split the same roster into "selected subtree"
  * and "the rest" but kept registry order inside each half, which reads as
  * "cone, its scoops, next cone" only as long as registry order happens to be
- * owner-grouped. The two agree on every roster that exists today — children
- * carry `canCreateChildren: false`, so there is no nesting to group, and with
- * one cone both reduce to "cone, then its scoops in registry order".
+ * owner-grouped. Depth-first descendants already cover an explicit
+ * nested-delegation grant (`canCreateChildren`); with one cone and no grant
+ * both reduce to "cone, then its scoops in registry order".
  *
  * A roster where NO unit carries an edge comes from a leader too old to send
  * one: there is nothing to group by, so roots simply come first and everything

@@ -259,7 +259,10 @@ export class ScoopMessageRouter {
    * events that address a scoop directly, not every channel that formats as a
    * lick. `bash` belongs here because a detached job's completion is the result
    * of work that scoop itself started — dropping it would silently break the
-   * promise the tool made when it returned the job id.
+   * promise the tool made when it returned the job id. Scoop-lifecycle channels
+   * (`scoop-notify` / `scoop-idle` / `scoop-wait`) belong here too: nested
+   * supervisors have `requiresTrigger: true`, and completion/wait delivery
+   * addresses them without embedding `@trigger`.
    */
   private passesTriggerGate(scoop: RegisteredScoop | undefined, message: ChannelMessage): boolean {
     const isLick =
@@ -267,7 +270,10 @@ export class ScoopMessageRouter {
       message.channel === 'cron' ||
       message.channel === 'fswatch' ||
       message.channel === 'sprinkle' ||
-      message.channel === 'bash';
+      message.channel === 'bash' ||
+      message.channel === 'scoop-notify' ||
+      message.channel === 'scoop-idle' ||
+      message.channel === 'scoop-wait';
     return (
       !scoop ||
       scoop.parentJid === null ||

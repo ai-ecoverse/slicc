@@ -127,6 +127,50 @@ describe('WorkUnitManager', () => {
     expect(host.registerScoop).toHaveBeenCalledOnce();
   });
 
+  it('create grants nested delegation from config and records the ownership edge', async () => {
+    const { manager } = tree();
+    const lead = await manager.create({
+      parentId: root.jid,
+      name: 'lead',
+      config: { canCreateChildren: true },
+    });
+    expect(lead.parentId).toBe(root.jid);
+    expect(lead.display.role).toBe('child');
+    expect(lead.policy.canCreateChildren).toBe(true);
+    expect(lead.policy.canManageChildren).toBe(true);
+
+    const grandchild = await manager.create({ parentId: lead.id, name: 'deep' });
+    expect(grandchild.parentId).toBe(lead.id);
+    expect(grandchild.policy.canCreateChildren).toBe(false);
+    expect(grandchild.policy.canManageChildren).toBe(false);
+    expect(manager.getParent(grandchild.id)?.descriptor.id).toBe(lead.id);
+    expect(manager.getChildren(lead.id).map((u) => u.descriptor.id)).toEqual([grandchild.id]);
+    expect(manager.rootOf(grandchild.id)?.descriptor.id).toBe(root.jid);
+  });
+
+  it('create refuses a grandchild when the parent was not granted canCreateChildren', async () => {
+    const { host, manager } = tree();
+    const helper = await manager.create({ parentId: root.jid, name: 'helper' });
+    expect(helper.policy.canCreateChildren).toBe(false);
+    await expect(manager.create({ parentId: helper.id, name: 'deep' })).rejects.toThrow(
+      /cannot create children/
+    );
+    expect(host.registerScoop).toHaveBeenCalledOnce();
+  });
+
+  it('create refuses a nested-delegation grant the parent does not hold', async () => {
+    const { host, manager } = tree();
+    const helper = await manager.create({ parentId: root.jid, name: 'helper' });
+    await expect(
+      manager.create({
+        parentId: helper.id,
+        name: 'lead',
+        config: { canCreateChildren: true },
+      })
+    ).rejects.toThrow(/isPolicySubset/);
+    expect(host.registerScoop).toHaveBeenCalledOnce();
+  });
+
   it('abort stops the turn; close unregisters and drops the runtime', async () => {
     const { host, manager } = tree();
     await manager.abort(a.jid);
