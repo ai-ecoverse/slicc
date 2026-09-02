@@ -118,6 +118,61 @@ describe('ScoopLifecycleManager', () => {
     expect(deleteScoop).not.toHaveBeenCalled();
   });
 
+  it('cascades unregister through a supervisor subtree', async () => {
+    const supervisor: RegisteredScoop = {
+      ...worker,
+      jid: 'scoop_lead',
+      name: 'lead',
+      folder: 'lead',
+      parentJid: scoop.jid,
+      config: { canCreateChildren: true },
+    };
+    const grandchild: RegisteredScoop = {
+      ...worker,
+      jid: 'scoop_deep',
+      name: 'deep',
+      folder: 'deep',
+      parentJid: supervisor.jid,
+    };
+    const scoops = new Map([
+      [scoop.jid, scoop],
+      [supervisor.jid, supervisor],
+      [grandchild.jid, grandchild],
+    ]);
+    const deleteScoop = vi.fn(async () => {});
+    const forgetScoop = vi.fn();
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getConversationStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: { saveScoop: vi.fn(async () => {}), deleteScoop },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop,
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    await manager.unregister(supervisor.jid);
+
+    expect(scoops.has(supervisor.jid)).toBe(false);
+    expect(scoops.has(grandchild.jid)).toBe(false);
+    expect(scoops.has(scoop.jid)).toBe(true);
+    expect(deleteScoop).toHaveBeenCalledWith(grandchild.jid);
+    expect(deleteScoop).toHaveBeenCalledWith(supervisor.jid);
+    expect(forgetScoop).toHaveBeenCalledWith(grandchild.jid);
+    expect(forgetScoop).toHaveBeenCalledWith(supervisor.jid);
+  });
+
   // #2271: the sink path is bound from the unit's own record, so an extra
   // cone's compaction pass can only append to its own `CLAUDE.md`.
   it('binds each cone memory append to that cone workspace', async () => {

@@ -33,7 +33,13 @@ import { conversationKeyFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
-import { assertChildPolicyAllowed, isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import {
+  assertChildPolicyAllowed,
+  childrenOf,
+  isRootUnit,
+  rootOwnerOf,
+  rootsOf,
+} from '../work-unit/policy.js';
 import {
   modelFor,
   modelIdFor,
@@ -696,9 +702,19 @@ export class ScoopLifecycleManager {
     if (model) setUnitModel(scoop, model);
   }
 
-  /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
+  /**
+   * Unregister a scoop and, first, everything it owns. Nested supervisors can
+   * hold live descendants; dropping only the parent would orphan them with a
+   * dangling `parentJid`. Throws if the scoop (or a descendant) has active
+   * licks (webhooks/cron tasks).
+   */
   async unregister(jid: string): Promise<void> {
     const scoops = this.deps.getScoops();
+    // Cascade deepest-first so a lick-blocked grandchild aborts before the
+    // supervisor is removed.
+    for (const child of childrenOf(scoops.values(), jid)) {
+      await this.unregister(child.jid);
+    }
     const scoop = scoops.get(jid);
     // The last root is never unregistered: every delegated result, lick and
     // approval needs a user-facing unit to land on. Deepest backstop — the

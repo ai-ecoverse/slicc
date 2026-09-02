@@ -317,23 +317,31 @@ describe('ScoopMessageRouter trigger gate', () => {
   // `bash` is in this list because a detached job's completion is the result of
   // work the scoop itself started: gating it on the scoop's `@trigger` (which
   // nothing types into a machine-generated lick) would drop the result the bash
-  // tool promised when it handed back a job id.
-  it.each<ChannelMessage['channel']>(['webhook', 'cron', 'fswatch', 'sprinkle', 'bash'])(
-    'lets %s rows bypass the trigger gate',
-    async (channel) => {
-      const message = { ...makeMessage('scoop', 0, channel), content: 'no trigger' };
-      const { router, sends } = makeHarness({
-        jids: ['scoop'],
-        scoop: triggerScoop,
-        store: [message],
-      });
+  // tool promised when it handed back a job id. Scoop-lifecycle channels are
+  // included for the same reason once nested supervisors (requiresTrigger) own
+  // children whose completion/wait licks address them without `@trigger`.
+  it.each<ChannelMessage['channel']>([
+    'webhook',
+    'cron',
+    'fswatch',
+    'sprinkle',
+    'bash',
+    'scoop-notify',
+    'scoop-idle',
+    'scoop-wait',
+  ])('lets %s rows bypass the trigger gate', async (channel) => {
+    const message = { ...makeMessage('scoop', 0, channel), content: 'no trigger' };
+    const { router, sends } = makeHarness({
+      jids: ['scoop'],
+      scoop: triggerScoop,
+      store: [message],
+    });
 
-      await router.flushOnIdle('scoop');
+    await router.flushOnIdle('scoop');
 
-      expect(sends).toHaveLength(1);
-      expect(sends[0]).toContain('no trigger');
-    }
-  );
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('no trigger');
+  });
 
   it('never gates a cone', async () => {
     const message = { ...makeMessage('cone', 0), content: 'no trigger' };

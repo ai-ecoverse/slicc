@@ -48,7 +48,7 @@ import {
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { capableApproverOf, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   legacyRecordIsCone,
   modelFor,
@@ -292,7 +292,7 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
     getScoops: () => this.scoops,
-    findApprover: (scoopJid) => this.parentOrDefaultRoot(scoopJid),
+    findApprover: (scoopJid) => this.capableApproverOrDefaultRoot(scoopJid),
     getSudoManager: () => this.sudoManager,
     getLickManager: () => this.lickManager,
     handleMessage: (msg) => this.handleMessage(msg),
@@ -1238,13 +1238,23 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /**
    * The unit that owns `jid`, or the default root when the parent is gone or
-   * `jid` is unknown. Delegated results, idle notices and approval requests
-   * must always land somewhere a user can see them.
+   * `jid` is unknown. Delegated results and idle notices must always land
+   * somewhere a user (or nested supervisor) can see them.
    */
   private parentOrDefaultRoot(jid: string | undefined): RegisteredScoop | undefined {
     const scoop = jid === undefined ? undefined : this.scoops.get(jid);
     const parent = scoop?.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
     return parent ?? this.defaultRoot();
+  }
+
+  /**
+   * The nearest ancestor that can settle sudo (`canResolveApprovals`), or the
+   * default root. A nested supervisor from `canCreateChildren` alone cannot
+   * settle approvals — walking past it keeps grandchild sudo from stalling.
+   */
+  private capableApproverOrDefaultRoot(jid: string | undefined): RegisteredScoop | undefined {
+    const scoop = jid === undefined ? undefined : this.scoops.get(jid);
+    return capableApproverOf(this.scoops.values(), scoop) ?? this.defaultRoot();
   }
 
   /**

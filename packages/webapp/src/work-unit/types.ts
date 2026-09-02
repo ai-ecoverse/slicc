@@ -62,6 +62,12 @@ export type ApprovalAuthority = 'user' | { parentId: WorkUnitId };
  */
 export interface WorkUnitPolicy {
   filesystem: FileSystemPolicy;
+  /**
+   * Shell command allow-list (`ScoopConfig.allowedCommands`). `undefined` or a
+   * list containing `'*'` means unrestricted (`NOPASSWD Cmnd *`), matching
+   * {@link import('../sudo/sudo-manager.js').generateScoopSudoers}.
+   */
+  allowedCommands?: readonly string[];
   /** May spawn child units (`scoop_scoop`). Roots always; a child only with an explicit `ScoopConfig.canCreateChildren` grant. */
   canCreateChildren: boolean;
   /** May feed / drop / mute / wait on children. */

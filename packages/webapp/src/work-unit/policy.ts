@@ -7,8 +7,9 @@
  * the source of truth.
  */
 
+import { normalizePath } from '../fs/path-utils.js';
 import type { RegisteredScoop } from '../scoops/types.js';
-import type { CompletionPolicy, WorkUnitId, WorkUnitPolicy } from './types.js';
+import type { CompletionPolicy, FileSystemPolicy, WorkUnitId, WorkUnitPolicy } from './types.js';
 
 /** `true` when the record is a root unit (a cone). The ONLY root test. */
 export function isRootUnit(scoop: Pick<RegisteredScoop, 'parentJid'>): boolean {
@@ -40,6 +41,10 @@ export function delegatedChildPolicy(
     writablePaths?: readonly string[];
     visiblePaths?: readonly string[];
     /**
+     * Shell allow-list. Omitted → unrestricted (same as ScoopConfig).
+     */
+    allowedCommands?: readonly string[];
+    /**
      * Grant the approval-settling capability — the `scoop` approver tier. Only
      * ever true for a record explicitly marked `approvesGuestRequests`, and the
      * parent (a root) already holds it, so the subset invariant is preserved.
@@ -60,6 +65,7 @@ export function delegatedChildPolicy(
       writablePaths: [...(paths.writablePaths ?? [])],
       visiblePaths: [...(paths.visiblePaths ?? [])],
     },
+    ...(paths.allowedCommands !== undefined ? { allowedCommands: [...paths.allowedCommands] } : {}),
     canCreateChildren: nested,
     // Creating children without being able to feed / drop / wait on them
     // is a trap, so the grant is the supervisor pair — not create alone.
@@ -78,6 +84,7 @@ export function derivePolicy(scoop: RegisteredScoop): WorkUnitPolicy {
   return delegatedChildPolicy(scoop.parentJid, {
     writablePaths: scoop.config?.writablePaths,
     visiblePaths: scoop.config?.visiblePaths,
+    allowedCommands: scoop.config?.allowedCommands,
     approvesGuestRequests: scoop.approvesGuestRequests === true,
     canCreateChildren: scoop.config?.canCreateChildren === true,
   });
@@ -98,11 +105,79 @@ const CAPABILITY_FLAGS = [
   'persistCommandGrants',
 ] as const;
 
+/** Trailing-slash prefix form used by RestrictedFS grants. */
+function asPrefix(path: string): string {
+  const n = normalizePath(path);
+  return n.endsWith('/') ? n : `${n}/`;
+}
+
+/**
+ * True when every path reachable under `childPath` is also reachable under
+ * `parentPath` (RestrictedFS prefix semantics: trailing slash, normalize).
+ */
+export function pathCoveredBy(childPath: string, parentPath: string): boolean {
+  const child = asPrefix(childPath);
+  const parent = asPrefix(parentPath);
+  return child === parent || child.startsWith(parent);
+}
+
+function everyPathCoveredBy(
+  childPaths: readonly string[],
+  parentPaths: readonly string[]
+): boolean {
+  return childPaths.every((c) => parentPaths.some((p) => pathCoveredBy(c, p)));
+}
+
+/**
+ * Readable reach for a restricted policy: writable paths are always readable
+ * too (RestrictedFS merges them into the allow set).
+ */
+function readablePathsOf(fs: Extract<FileSystemPolicy, { kind: 'restricted' }>): readonly string[] {
+  return [...fs.writablePaths, ...fs.visiblePaths];
+}
+
+/** `true` when the allow-list is absent or contains `*` (NOPASSWD Cmnd *). */
+function isCommandListUnrestricted(cmds: readonly string[] | undefined): boolean {
+  return cmds === undefined || cmds.includes('*');
+}
+
+/**
+ * Child command grants must not widen past the parent. Unrestricted parent
+ * (omitted / `*`) subsumes any child; a concrete parent list requires the
+ * child to also be concrete and every entry to appear in the parent list.
+ */
+function isCommandSubset(
+  child: readonly string[] | undefined,
+  parent: readonly string[] | undefined
+): boolean {
+  if (isCommandListUnrestricted(parent)) return true;
+  // Concrete parent list: child must also be concrete (not omitted / `*`).
+  if (child === undefined || child.includes('*')) return false;
+  const parentSet = new Set(parent);
+  return child.every((c) => parentSet.has(c));
+}
+
+/**
+ * When the parent is restricted, every child writable/visible grant must sit
+ * under a parent grant of the same class (writable ⊆ parent's writable;
+ * visible ⊆ parent's readable = writable ∪ visible). A `full-workspace`
+ * parent subsumes any restricted child paths.
+ */
+function isFilesystemSubset(child: FileSystemPolicy, parent: FileSystemPolicy): boolean {
+  if (child.kind === 'full-workspace') return parent.kind === 'full-workspace';
+  if (parent.kind === 'full-workspace') return true;
+  // restricted → restricted: path containment
+  if (!everyPathCoveredBy(child.writablePaths, parent.writablePaths)) return false;
+  if (!everyPathCoveredBy(child.visiblePaths, readablePathsOf(parent))) return false;
+  return true;
+}
+
 /**
  * Invariant: `child capabilities ⊆ parent capabilities`. A child may never
  * hold a boolean capability its parent lacks, may not auto-allow sudo when
- * its parent must ask, and may not see the full workspace when its parent
- * is restricted.
+ * its parent must ask, may not see the full workspace when its parent is
+ * restricted, and — once nesting is enabled — may not name filesystem paths
+ * or shell commands outside the parent's sandbox.
  */
 export function isPolicySubset(child: WorkUnitPolicy, parent: WorkUnitPolicy): boolean {
   for (const flag of CAPABILITY_FLAGS) {
@@ -111,9 +186,8 @@ export function isPolicySubset(child: WorkUnitPolicy, parent: WorkUnitPolicy): b
   if (child.sudoDefaultDisposition === 'allow' && parent.sudoDefaultDisposition !== 'allow') {
     return false;
   }
-  if (child.filesystem.kind === 'full-workspace' && parent.filesystem.kind !== 'full-workspace') {
-    return false;
-  }
+  if (!isFilesystemSubset(child.filesystem, parent.filesystem)) return false;
+  if (!isCommandSubset(child.allowedCommands, parent.allowedCommands)) return false;
   return true;
 }
 
@@ -173,6 +247,33 @@ export function subtreeOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
     if (!grew) break;
   }
   return units.filter((unit) => owned.has(unit.jid));
+}
+
+/**
+ * The nearest ancestor of `unit` that can settle sudo (`canResolveApprovals`),
+ * walking the `parentJid` chain. Returns `undefined` when the chain dangles,
+ * loops, or never hits a capable unit — callers fall back to a default root.
+ *
+ * Capability matches {@link derivePolicy}: roots always, children only when
+ * `approvesGuestRequests` is set. A `canCreateChildren` supervisor alone is
+ * not an approver.
+ */
+export function capableApproverOf<
+  T extends Pick<RegisteredScoop, 'jid' | 'parentJid'> & {
+    approvesGuestRequests?: boolean;
+  },
+>(units: Iterable<T>, unit: T | undefined): T | undefined {
+  if (!unit?.parentJid) return undefined;
+  const byJid = new Map<string, T>();
+  for (const u of units) byJid.set(u.jid, u);
+  const seen = new Set<string>();
+  let current: T | undefined = byJid.get(unit.parentJid);
+  while (current && !seen.has(current.jid)) {
+    seen.add(current.jid);
+    if (current.parentJid === null || current.approvesGuestRequests === true) return current;
+    current = current.parentJid ? byJid.get(current.parentJid) : undefined;
+  }
+  return undefined;
 }
 
 /**
