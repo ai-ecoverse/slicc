@@ -59,6 +59,15 @@ Usage:
 Common flags pass through to ffmpeg unchanged. Inputs/outputs are
 resolved against the current VFS working directory.
 
+Concatenating (concat demuxer):
+  printf "file 'a.mp4'\\nfile 'b.mp4'\\n" > list.txt
+  ffmpeg -f concat -safe 0 -i list.txt -c copy joined.mp4
+
+Files named inside the list are read from the VFS too, resolved
+against the LIST FILE's directory. As in ffmpeg, absolute and
+parent-traversing members need -safe 0. The \`concat:\` protocol
+form (-i "concat:a.ts|b.ts") is not supported — use -f concat.
+
 Webcam capture (avfoundation-style):
   ffmpeg -f avfoundation -video_size 1280x720 -framerate 30 \\
          -i "0" -frames:v 1 -update 1 -y photo.jpg
@@ -177,8 +186,17 @@ export function parseAvfoundationDeviceSpec(spec: string): {
 
 // Conservative list of ffmpeg flags that consume a single value.
 // Anything not in the list is treated as a boolean toggle.
+//
+// A missing entry does not degrade gracefully: the flag's value is
+// read as a positional, which makes it a phantom output path AND
+// flushes every option pending at that point into that phantom
+// output — so those options silently vanish from argv. `-safe 0`
+// swallowed the `-f concat` bound to the very next `-i`, leaving the
+// core to probe a text file as media ("Invalid data found when
+// processing input").
 const VALUE_TAKING_FLAGS = new Set([
   '-f',
+  '-safe',
   '-i',
   '-c',
   '-c:v',
@@ -1088,6 +1106,162 @@ interface ResolvedInput {
   bytes: Uint8Array | null;
   /** True for libavfilter virtual sources (`-f lavfi -i testsrc=...`). */
   virtual: boolean;
+  /**
+   * Files named *inside* a concat list, staged alongside it. The
+   * demuxer opens these itself rather than receiving them through
+   * argv, so they must already exist in MEMFS under exactly the
+   * names the rewritten list points at.
+   */
+  extraFiles?: Array<{ ffmpegName: string; bytes: Uint8Array }>;
+}
+
+/** True for a concat-demuxer input (`-f concat -i list.txt`). */
+function isConcatInput(input: ParsedInput): boolean {
+  return input.format === 'concat';
+}
+
+/**
+ * One line of a concat-demuxer list. `file` is set only for a
+ * `file <path>` directive — the one kind that names an external
+ * input. Every other line (`duration`, `inpoint`, `outpoint`,
+ * `ffconcat version 1.0`, comments, blanks) is carried through
+ * untouched, so options the user set still reach the demuxer.
+ *
+ * Exported so the quoting rules are testable without the wasm core.
+ */
+export interface ConcatListLine {
+  raw: string;
+  file?: string;
+}
+
+/**
+ * Parse a concat-demuxer list file. ffmpeg accepts a path bare, in
+ * single quotes, or in double quotes; a literal `'` inside a
+ * single-quoted path is written `'\''`.
+ */
+export function parseConcatList(text: string): ConcatListLine[] {
+  return text.split('\n').map((raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('file ')) return { raw };
+    const file = unquoteConcatPath(trimmed.slice('file'.length).trim());
+    return file ? { raw, file } : { raw };
+  });
+}
+
+function unquoteConcatPath(rest: string): string {
+  const quote = rest[0];
+  // Bare form: ffmpeg still honours backslash escapes, so
+  // `file clip\ one.mp4` names `clip one.mp4`. Returning the token
+  // verbatim would look for a member with a literal backslash and
+  // report a perfectly good list as missing a file.
+  if (quote !== "'" && quote !== '"') return rest.replace(/\\(.)/g, '$1');
+  let out = '';
+  for (let i = 1; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === '\\' && quote === '"' && i + 1 < rest.length) {
+      out += rest[i + 1];
+      i += 1;
+      continue;
+    }
+    if (ch !== quote) {
+      out += ch;
+      continue;
+    }
+    // `'\''` re-opens the quote to embed one literal apostrophe.
+    if (quote === "'" && rest.slice(i, i + 4) === "'\\''") {
+      out += "'";
+      i += 3;
+      continue;
+    }
+    return out;
+  }
+  return out;
+}
+
+/**
+ * MEMFS is flat, so a staged concat member needs a name that is
+ * unique across the whole invocation and free of characters that
+ * would need quoting inside the rewritten list.
+ */
+function concatMemberName(path: string, inputIdx: number, memberIdx: number): string {
+  const base = path.slice(path.lastIndexOf('/') + 1).replace(/[^A-Za-z0-9._-]/g, '_');
+  return `__cat${inputIdx}_${memberIdx}_${base || 'part.bin'}`;
+}
+
+/** Why a concat member could not be staged. */
+interface ConcatListError {
+  kind: 'missing' | 'unsafe';
+  file: string;
+}
+
+/**
+ * ffmpeg's concat demuxer refuses absolute paths and parent traversal
+ * unless `-safe 0` is passed. Mirror that rather than silently
+ * granting `-safe 0` semantics to every list: a script that works here
+ * should work against a real ffmpeg, and vice versa.
+ */
+function isSafeConcatPath(file: string): boolean {
+  if (file.startsWith('/')) return false;
+  if (/^[A-Za-z]:/.test(file)) return false;
+  return !file.split('/').includes('..');
+}
+
+/**
+ * Effective value of the demuxer's `safe` option for this input.
+ * ffmpeg defaults it to enabled, so only an explicit `-safe 0`
+ * (or a negative value) turns the check off.
+ */
+function concatSafeMode(input: ParsedInput): boolean {
+  const idx = input.raw.lastIndexOf('-safe');
+  if (idx < 0) return true;
+  const value = input.raw[idx + 1];
+  return !(value === '0' || value?.startsWith('-'));
+}
+
+/**
+ * Read every file a concat list names, and rewrite the list to point
+ * at the MEMFS names they will be staged under.
+ *
+ * Without this, `-f concat` cannot work at all: only paths that
+ * appear as `-i` reach the staging pass, so the demuxer opened
+ * members that were never written into MEMFS. Member paths resolve
+ * against the *list file's* directory, matching ffmpeg, rather than
+ * the shell cwd.
+ */
+async function stageConcatList(
+  listPath: string,
+  listBytes: Uint8Array,
+  inputIdx: number,
+  safe: boolean,
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
+): Promise<
+  | { listBytes: Uint8Array; extraFiles: NonNullable<ResolvedInput['extraFiles']> }
+  | { error: ConcatListError }
+> {
+  const lines = parseConcatList(new TextDecoder().decode(listBytes));
+  const listDir = listPath.slice(0, listPath.lastIndexOf('/')) || '/';
+  const extraFiles: NonNullable<ResolvedInput['extraFiles']> = [];
+  const rewritten: string[] = [];
+
+  for (const line of lines) {
+    if (line.file === undefined) {
+      rewritten.push(line.raw);
+      continue;
+    }
+    // Rewriting every member to a flat `__cat…` name would make the
+    // demuxer's own safety check trivially pass, so the check has to
+    // happen here, on the path the user actually wrote.
+    if (safe && !isSafeConcatPath(line.file)) {
+      return { error: { kind: 'unsafe', file: line.file } };
+    }
+    const resolved = ctx.fs.resolvePath(listDir, line.file);
+    if (!(await ctx.fs.exists(resolved))) return { error: { kind: 'missing', file: line.file } };
+    const ffmpegName = concatMemberName(line.file, inputIdx, extraFiles.length);
+    extraFiles.push({ ffmpegName, bytes: await ctx.fs.readFileBuffer(resolved) });
+    rewritten.push(`file '${ffmpegName}'`);
+  }
+
+  return { listBytes: new TextEncoder().encode(rewritten.join('\n')), extraFiles };
 }
 
 /**
@@ -1130,7 +1304,32 @@ async function loadResolvedInputs(
       };
     }
     const bytes = await ctx.fs.readFileBuffer(resolved);
-    resolvedInputs.push({ ffmpegName: inferInputName(input, idx), bytes, virtual: false });
+    const ffmpegName = inferInputName(input, idx);
+    if (isConcatInput(input)) {
+      const staged = await stageConcatList(resolved, bytes, idx, concatSafeMode(input), ctx);
+      if ('error' in staged) {
+        const { kind, file } = staged.error;
+        const detail =
+          kind === 'unsafe'
+            ? `unsafe file name: ${file} (pass -safe 0 to allow it)`
+            : `file not found: ${file}`;
+        return {
+          error: {
+            stdout: '',
+            stderr: `ffmpeg: concat list ${input.path}: ${detail}\n`,
+            exitCode: 1,
+          },
+        };
+      }
+      resolvedInputs.push({
+        ffmpegName,
+        bytes: staged.listBytes,
+        virtual: false,
+        extraFiles: staged.extraFiles,
+      });
+      continue;
+    }
+    resolvedInputs.push({ ffmpegName, bytes, virtual: false });
   }
   return { inputs: resolvedInputs };
 }
@@ -1187,8 +1386,9 @@ function isCoreFault(err: unknown): boolean {
 
 /**
  * Copy every staged input into the core's MEMFS. Virtual (lavfi)
- * inputs are synthesized by ffmpeg itself, so they carry no bytes and
- * are skipped.
+ * inputs are synthesized by ffmpeg itself, so they carry no bytes
+ * and are skipped. Concat members go in before the list that names
+ * them — the demuxer opens them as soon as it reads the list.
  */
 async function stageInputsIntoMemfs(
   ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
@@ -1196,6 +1396,9 @@ async function stageInputsIntoMemfs(
 ): Promise<void> {
   for (const input of resolvedInputs) {
     if (input.bytes === null) continue;
+    for (const extra of input.extraFiles ?? []) {
+      await ffmpeg.writeFile(extra.ffmpegName, extra.bytes);
+    }
     await ffmpeg.writeFile(input.ffmpegName, input.bytes);
   }
 }
@@ -1213,6 +1416,13 @@ async function cleanupMemfs(
   for (const input of resolvedInputs) {
     // Virtual (lavfi) inputs were never staged into MEMFS.
     if (input.bytes === null) continue;
+    for (const extra of input.extraFiles ?? []) {
+      try {
+        await ffmpeg.deleteFile(extra.ffmpegName);
+      } catch {
+        /* noop */
+      }
+    }
     try {
       await ffmpeg.deleteFile(input.ffmpegName);
     } catch {

@@ -9,6 +9,7 @@ import {
   createIpkContextFromCtx,
   isAvfoundationCapture,
   parseAvfoundationDeviceSpec,
+  parseConcatList,
   parseFfmpegArgs,
   permissionKindsFor,
   requestCapturePermission,
@@ -164,6 +165,30 @@ describe('parseFfmpegArgs', () => {
 
   it('errors when -f is missing its value', () => {
     expect(() => parseFfmpegArgs(['-f'])).toThrow(/-f requires a value/);
+  });
+
+  it('treats -safe as value-taking so it cannot swallow the input format', () => {
+    const parsed = parseFfmpegArgs([
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      'list.txt',
+      '-c',
+      'copy',
+      'joined.mp4',
+    ]);
+    // The canonical concat incantation. When `-safe` was treated as a
+    // boolean toggle, `0` parsed as a positional: it became a phantom
+    // output path and flushed the pending `-f concat` into ITS output
+    // options, so `-f concat` never reached the next `-i` and the core
+    // probed the list as media.
+    expect(parsed.inputs).toHaveLength(1);
+    expect(parsed.inputs[0].format).toBe('concat');
+    expect(parsed.inputs[0].raw).toEqual(['-f', 'concat', '-safe', '0', '-i', 'list.txt']);
+    expect(parsed.outputPath).toBe('joined.mp4');
+    expect(parsed.outputOpts).toEqual(['-c', 'copy']);
   });
 });
 
@@ -1128,6 +1153,228 @@ describe('runWasmFfmpeg fault classification', () => {
     expect(result.stderr).not.toMatch(/faulted and was recycled/);
     expect(recycleFfmpeg).not.toHaveBeenCalled();
     expect(fake.deleteFile).toHaveBeenCalled();
+  });
+});
+
+describe('parseConcatList', () => {
+  it('extracts single-quoted file directives', () => {
+    const lines = parseConcatList("file '01.mp4'\nfile '02.mp4'\n");
+    expect(lines.filter((l) => l.file).map((l) => l.file)).toEqual(['01.mp4', '02.mp4']);
+  });
+
+  it('accepts bare and double-quoted paths', () => {
+    const lines = parseConcatList('file bare.mp4\nfile "quoted one.mp4"\n');
+    expect(lines.filter((l) => l.file).map((l) => l.file)).toEqual(['bare.mp4', 'quoted one.mp4']);
+  });
+
+  it("unquotes an embedded apostrophe written as '\\''", () => {
+    const lines = parseConcatList("file 'it'\\''s.mp4'\n");
+    expect(lines.find((l) => l.file)?.file).toBe("it's.mp4");
+  });
+
+  it('carries non-file directives, comments and blanks through untouched', () => {
+    const text = "ffconcat version 1.0\n# a comment\n\nfile 'a.mp4'\nduration 4.6\n";
+    const lines = parseConcatList(text);
+    expect(lines.filter((l) => l.file)).toHaveLength(1);
+    expect(lines.map((l) => l.raw)).toEqual([
+      'ffconcat version 1.0',
+      '# a comment',
+      '',
+      "file 'a.mp4'",
+      'duration 4.6',
+      '',
+    ]);
+  });
+
+  it('decodes backslash escapes in a bare path', () => {
+    // `file clip\ one.mp4` is valid ffmpeg; the member is "clip one.mp4".
+    const lines = parseConcatList('file clip\\ one.mp4\n');
+    expect(lines.find((l) => l.file)?.file).toBe('clip one.mp4');
+  });
+
+  it('does not treat a filename starting with "file" as a directive', () => {
+    expect(parseConcatList('filelist.mp4\n').filter((l) => l.file)).toHaveLength(0);
+  });
+});
+
+describe('runWasmFfmpeg concat demuxer', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  /** VFS holding a concat list plus the members it names. */
+  function concatCtx(list: string, members: Record<string, Uint8Array>) {
+    const files: Record<string, Uint8Array> = {
+      '/clips/list.txt': new TextEncoder().encode(list),
+      ...members,
+    };
+    return createMockCtx({
+      cwd: '/clips',
+      fs: {
+        exists: vi.fn(async (p: string) => p in files),
+        readFileBuffer: vi.fn(async (p: string) => {
+          const v = files[p];
+          if (!v) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+      },
+    });
+  }
+
+  it('stages every member named in the list and rewrites the list to match', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7, 7]) });
+    useFakeFfmpeg(fake);
+    const ctx = concatCtx("file '01.mp4'\nfile '02.mp4'\n", {
+      '/clips/01.mp4': new Uint8Array([1]),
+      '/clips/02.mp4': new Uint8Array([2]),
+    });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'joined.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    const staged = new Map(
+      fake.writeFile.mock.calls.map(([name, bytes]) => [name as string, bytes as Uint8Array])
+    );
+    // Both members reached MEMFS...
+    const memberNames = [...staged.keys()].filter((n) => n.startsWith('__cat'));
+    expect(memberNames).toHaveLength(2);
+    // ...and the list the core sees points at exactly those names,
+    // not at the original VFS paths.
+    const listName = [...staged.keys()].find((n) => n.endsWith('list.txt'));
+    const rewritten = new TextDecoder().decode(staged.get(listName as string));
+    for (const name of memberNames) expect(rewritten).toContain(`file '${name}'`);
+    // The original directives are gone — a bare `01.mp4` would send
+    // the demuxer looking for a MEMFS file that was never staged.
+    expect(rewritten).not.toContain("file '01.mp4'");
+    expect(rewritten).not.toContain("file '02.mp4'");
+  });
+
+  it('writes members before the list so the demuxer can open them', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+    const ctx = concatCtx("file '01.mp4'\n", { '/clips/01.mp4': new Uint8Array([1]) });
+
+    await createFfmpegCommand().execute(['-f', 'concat', '-i', 'list.txt', 'out.mp4'], ctx);
+
+    const order = fake.writeFile.mock.calls.map(([name]) => name as string);
+    expect(order[0]).toMatch(/^__cat/);
+    expect(order[1]).toMatch(/list\.txt$/);
+  });
+
+  it('resolves member paths against the list file, not the shell cwd', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+    // cwd is /home; the list lives in /clips and names a sibling.
+    const files: Record<string, Uint8Array> = {
+      '/clips/list.txt': new TextEncoder().encode("file '01.mp4'\n"),
+      '/clips/01.mp4': new Uint8Array([1]),
+    };
+    const ctx = createMockCtx({
+      cwd: '/home',
+      fs: {
+        exists: vi.fn(async (p: string) => p in files),
+        readFileBuffer: vi.fn(async (p: string) => {
+          const v = files[p];
+          if (!v) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+      },
+    });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', '/clips/list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(ctx.fs.exists).toHaveBeenCalledWith('/clips/01.mp4');
+  });
+
+  it('names the missing member when the list points at a file that is gone', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = concatCtx("file '01.mp4'\nfile 'gone.mp4'\n", {
+      '/clips/01.mp4': new Uint8Array([1]),
+    });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('concat list list.txt: file not found: gone.mp4');
+  });
+
+  it('cleans staged members out of MEMFS after the run', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+    const ctx = concatCtx("file '01.mp4'\nfile '02.mp4'\n", {
+      '/clips/01.mp4': new Uint8Array([1]),
+      '/clips/02.mp4': new Uint8Array([2]),
+    });
+
+    await createFfmpegCommand().execute(['-f', 'concat', '-i', 'list.txt', 'out.mp4'], ctx);
+
+    const deleted = fake.deleteFile.mock.calls.map(([n]) => n as string);
+    expect(deleted.filter((n) => n.startsWith('__cat'))).toHaveLength(2);
+  });
+
+  it('rejects a parent-traversing member unless -safe 0 is given', async () => {
+    // Real ffmpeg refuses this at safe=1. Rewriting members to flat
+    // `__cat…` names would make its own check pass vacuously, so the
+    // wrapper has to enforce it on the path the user wrote.
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = concatCtx("file '../secret.mp4'\n", {
+      '/secret.mp4': new Uint8Array([1]),
+    });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unsafe file name: ../secret.mp4');
+    expect(result.stderr).toContain('-safe 0');
+  });
+
+  it('rejects an absolute member at the default safe level', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = concatCtx("file '/abs.mp4'\n", { '/abs.mp4': new Uint8Array([1]) });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unsafe file name: /abs.mp4');
+  });
+
+  it('allows an absolute member once -safe 0 is passed', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+    const ctx = concatCtx("file '/abs.mp4'\n", { '/abs.mp4': new Uint8Array([1]) });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-safe', '0', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(fake.writeFile.mock.calls.some(([n]) => (n as string).startsWith('__cat'))).toBe(true);
+  });
+
+  it('leaves an ordinary input untouched by the concat path', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+
+    await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
+
+    expect(fake.writeFile.mock.calls.map(([n]) => n as string)).toEqual(['__in0_in.mp4']);
   });
 });
 
