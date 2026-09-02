@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import type { AppendConeMemoryMeta } from '../../src/scoops/cone-memory-store.js';
 import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import {
@@ -9,12 +10,25 @@ import type { ChannelMessage, RegisteredScoop } from '../../src/scoops/types.js'
 
 vi.mock('../../src/scoops/scoop-context.js', () => ({
   ScoopContext: class {
+    disposed = false;
     constructor(
-      _scoop: RegisteredScoop,
-      readonly callbacks: { onFatalError(error: string): void }
+      readonly scoop: RegisteredScoop,
+      readonly callbacks: {
+        onFatalError?(error: string): void;
+        onScoopScoop?: unknown;
+        onFeedScoop?: unknown;
+      },
+      readonly fs?: unknown
     ) {}
 
     async init(): Promise<void> {}
+    stop(): void {}
+    dispose(): void {
+      this.disposed = true;
+    }
+    getFS(): unknown {
+      return this.fs ?? null;
+    }
   },
 }));
 
@@ -374,5 +388,101 @@ describe('ScoopLifecycleManager', () => {
 
     await expect(manager.register({ ...worker, jid: 'scoop_c' })).rejects.toThrow(/quota exceeded/);
     expect(scoops.has('scoop_c')).toBe(false);
+  });
+});
+
+describe('ScoopLifecycleManager.reinitAfterPromote (#2278)', () => {
+  type FakeContext = {
+    scoop: RegisteredScoop;
+    callbacks: { onScoopScoop?: unknown; onFeedScoop?: unknown };
+    fs?: unknown;
+    disposed: boolean;
+  };
+
+  function makePair() {
+    const child: RegisteredScoop = { ...worker };
+    const scoops = new Map<string, RegisteredScoop>([
+      [scoop.jid, scoop],
+      [child.jid, child],
+    ]);
+    const sharedFs = { kind: 'shared-vfs' };
+    const idleTimers = { start: vi.fn(), clear: vi.fn() };
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => sharedFs,
+      getSessionStore: () => null,
+      getConversationStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      idleTimers,
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      completionService: {
+        forgetScoop: vi.fn(),
+        clearResponse: vi.fn(),
+        notifyCompletion: vi.fn(),
+      },
+      cone: { getScoops: () => [...scoops.values()] },
+    } as unknown as ScoopLifecycleDeps);
+    return { manager, scoops, child, sharedFs, idleTimers };
+  }
+
+  it('rebuilds the live context as a root: full-workspace FS, child tools, no idle timer', async () => {
+    const { manager, child, sharedFs, idleTimers } = makePair();
+    await manager.createTab(child.jid);
+    const before = manager.getContext(child.jid) as unknown as FakeContext;
+    expect(before.scoop.parentJid).toBe(scoop.jid);
+    expect(before.fs).toBeInstanceOf(RestrictedFS);
+    expect(before.callbacks.onScoopScoop).toBeUndefined();
+    expect(idleTimers.start).toHaveBeenCalledWith(child.jid);
+
+    child.parentJid = null;
+    await manager.reinitAfterPromote(child.jid);
+
+    expect(before.disposed).toBe(true);
+    const after = manager.getContext(child.jid) as unknown as FakeContext;
+    expect(after).not.toBe(before);
+    expect(after.scoop.parentJid).toBeNull();
+    expect(after.fs).toBe(sharedFs);
+    expect(after.callbacks.onScoopScoop).toBeTypeOf('function');
+    expect(after.callbacks.onFeedScoop).toBeTypeOf('function');
+    expect(idleTimers.start).toHaveBeenCalledOnce();
+    expect(idleTimers.clear).toHaveBeenCalled();
+    expect(manager.getTab(child.jid)?.status).toBe('ready');
+  });
+
+  it('is a no-op when the unit has never spawned', async () => {
+    const { manager, child, idleTimers } = makePair();
+    child.parentJid = null;
+    await manager.reinitAfterPromote(child.jid);
+    expect(manager.getContext(child.jid)).toBeUndefined();
+    expect(idleTimers.start).not.toHaveBeenCalled();
+  });
+
+  it('keeps observers across the rebuild', async () => {
+    const { manager, child } = makePair();
+    const statuses: string[] = [];
+    manager.observe(child.jid, { onStatusChange: (status) => statuses.push(status) });
+    await manager.createTab(child.jid);
+    child.parentJid = null;
+    await manager.reinitAfterPromote(child.jid);
+    expect(statuses).toContain('ready');
+    expect(manager.getContext(child.jid)).toBeDefined();
+  });
+
+  it('does not leave the child runtime in place if rebuild fails', async () => {
+    const { manager, child } = makePair();
+    await manager.createTab(child.jid);
+    const before = manager.getContext(child.jid) as unknown as FakeContext;
+    child.parentJid = null;
+    vi.spyOn(manager, 'createTab').mockRejectedValueOnce(new Error('boom'));
+    await manager.reinitAfterPromote(child.jid);
+    expect(before.disposed).toBe(true);
+    expect(manager.getContext(child.jid)).toBeUndefined();
+    expect(manager.getTab(child.jid)?.status).toBe('error');
   });
 });

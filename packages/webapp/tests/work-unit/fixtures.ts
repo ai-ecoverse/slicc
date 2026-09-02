@@ -88,6 +88,7 @@ export interface FakeHost extends WorkUnitManagerHost {
   stopScoop: ReturnType<typeof vi.fn<(jid: string) => void>>;
   registerScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['registerScoop']>>;
   persistScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['persistScoop']>>;
+  reinitLiveUnit: ReturnType<typeof vi.fn<WorkUnitManagerHost['reinitLiveUnit']>>;
   unregisterScoop: ReturnType<typeof vi.fn<(jid: string) => Promise<void>>>;
   waitForScoops: ReturnType<typeof vi.fn<WorkUnitManagerHost['waitForScoops']>>;
   /** Drive the scoop-wait bus as a child completing its turn would. */
@@ -149,6 +150,13 @@ export function makeFakeHost(initial: RegisteredScoop[] = []): FakeHost {
     }),
     persistScoop: vi.fn(async (scoop: RegisteredScoop) => {
       scoops.set(scoop.jid, scoop);
+    }),
+    reinitLiveUnit: vi.fn(async (jid: string) => {
+      const unit = units.get(jid);
+      if (!unit?.context) return;
+      unit.disposeContext();
+      unit.context = stubContext(jid, host);
+      unit.transition('ready');
     }),
     unregisterScoop: vi.fn(async (jid: string) => {
       scoops.delete(jid);

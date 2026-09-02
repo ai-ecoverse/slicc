@@ -465,6 +465,8 @@ describe('WorkUnitManager', () => {
         parentJid: null,
         requiresTrigger: false,
       });
+      expect(host.reinitLiveUnit).toHaveBeenCalledOnce();
+      expect(host.reinitLiveUnit).toHaveBeenCalledWith(a.jid);
       expect(manager.getParent(a.jid)).toBeNull();
       expect(manager.roots().map((u) => u.descriptor.id)).toEqual([root.jid, a.jid, other.jid]);
       expect(manager.getChildren(root.jid).map((u) => u.descriptor.id)).toEqual([b.jid]);
@@ -476,6 +478,7 @@ describe('WorkUnitManager', () => {
       const { host, manager } = tree();
       await expect(manager.promote('ghost')).rejects.toThrow(/Work unit not found: ghost/);
       expect(host.persistScoop).not.toHaveBeenCalled();
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
     });
 
     it('is a no-op on a unit that is already a root', async () => {
@@ -484,6 +487,7 @@ describe('WorkUnitManager', () => {
       expect(d.parentId).toBeNull();
       expect(d.id).toBe(root.jid);
       expect(host.persistScoop).not.toHaveBeenCalled();
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
     });
 
     it('rolls the record back when persist fails', async () => {
@@ -493,6 +497,7 @@ describe('WorkUnitManager', () => {
       expect(manager.get(a.jid)?.descriptor.parentId).toBe(root.jid);
       expect(manager.get(a.jid)?.descriptor.display.role).toBe('child');
       expect(host.getScoop(a.jid)?.trigger).toBe(`@${a.folder}`);
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
     });
 
     it('detach is an alias of promote', async () => {

@@ -49,6 +49,12 @@ export interface WorkUnitManagerHost extends WorkUnitHost {
    */
   persistScoop(scoop: RegisteredScoop): Promise<void>;
   /**
+   * Rebuild the live agent after a promote so `ScoopContext.unit`, the
+   * filesystem view, and the tool set match the new root policy. No-op
+   * when nothing has spawned. Must not run if persist rolled back.
+   */
+  reinitLiveUnit(id: WorkUnitId): Promise<void>;
+  /**
    * Wait until each unit's current work settles, up to an optional timeout.
    * This IS `ScoopCompletionService.waitForScoops` — `join` must not grow a
    * second wait bus. Unknown ids come back as `timedOut` immediately.
@@ -284,8 +290,12 @@ export class WorkUnitManager {
    *
    * The unit keeps its folder (and therefore its chat session key).
    * `workspaceFor` then treats it as an extra cone (`/cones/<folder>/…`);
-   * files under `/scoops/<folder>/` are not moved. The live agent's
-   * RestrictedFS stays until the next spawn — descriptors update immediately.
+   * files under `/scoops/<folder>/` are not moved.
+   *
+   * After persist, the live runtime is torn down and `createTab`'d so
+   * `ScoopContext.unit`, the filesystem (RestrictedFS → VirtualFS) and the
+   * tool/callback set stay in lockstep with the new root policy. A unit
+   * that has never spawned is persist-only.
    *
    * Idempotent on a unit that is already a root. Unknown ids throw.
    */
@@ -303,6 +313,7 @@ export class WorkUnitManager {
       restoreOwnership(scoop, previous);
       throw err;
     }
+    await this.host.reinitLiveUnit(id);
     return this.get(id)!.descriptor;
   }
 

@@ -1245,6 +1245,14 @@ export class Orchestrator implements ConeApprovalRouter {
     await db.saveScoop(scoop);
   }
 
+  /**
+   * Rebuild a live unit after promote/detach so the agent is not left on
+   * the child `ScoopContext.unit` cache + RestrictedFS.
+   */
+  reinitLiveUnit(jid: string): Promise<void> {
+    return this.lifecycle.reinitAfterPromote(jid);
+  }
+
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
   unregisterScoop(jid: string): Promise<void> {
     return this.lifecycle.unregister(jid);

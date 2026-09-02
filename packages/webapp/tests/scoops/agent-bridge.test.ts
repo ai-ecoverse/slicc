@@ -208,8 +208,8 @@ function makeWorkUnits(scoops: RegisteredScoop[]): WorkUnitManager {
     getScoops: () => scoops,
     registerScoop: async () => {},
     persistScoop: async () => {},
+    reinitLiveUnit: async () => {},
     waitForScoops: async (jids) => jids.map((jid) => ({ jid, summary: null, timedOut: true })),
-
     ensureLiveUnit: (jid) =>
       new LiveWorkUnit(jid, {
         getScoop: (j) => scoops.find((s) => s.jid === j),
