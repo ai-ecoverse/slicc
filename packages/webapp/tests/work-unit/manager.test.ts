@@ -171,6 +171,16 @@ describe('WorkUnitManager', () => {
     expect(host.registerScoop).toHaveBeenCalledOnce();
   });
 
+  it('create rejects an explicit id that is already in the registry', async () => {
+    const { host, manager } = tree();
+    const before = manager.get(root.jid)?.descriptor.name;
+    await expect(
+      manager.create({ parentId: null, name: 'Impostor', folder: 'impostor', id: root.jid })
+    ).rejects.toThrow(/Work unit already exists: cone_1/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.get(root.jid)?.descriptor.name).toBe(before);
+  });
+
   it('abort stops the turn; close unregisters and drops the runtime', async () => {
     const { host, manager } = tree();
     await manager.abort(a.jid);
@@ -245,6 +255,19 @@ describe('WorkUnitManager', () => {
 
     expect(manager.list().map((d) => d.id)).toEqual(before);
     expect(manager.list().some((d) => d.folder === 'keep-me')).toBe(false);
+  });
+
+  it('createMany rejects an explicit id already in the registry — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'ok', folder: 'ok' },
+        { parentId: null, name: 'Impostor', id: root.jid },
+      ])
+    ).rejects.toThrow(/Work unit already exists: cone_1/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
   });
 
   it('createMany rejects a duplicate explicit id and a cycle without registering', async () => {

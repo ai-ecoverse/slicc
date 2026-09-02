@@ -67,9 +67,14 @@ export function buildWorkUnitRecord(
 export class WorkUnitManager {
   constructor(private readonly host: WorkUnitManagerHost) {}
 
-  /** Register a unit. A child's parent must exist and the child policy ⊆ it. */
+  /**
+   * Register a unit. A child's parent must exist and the child policy ⊆ it.
+   * An explicit (or generated) id that is already in the registry is rejected —
+   * `registerScoop` would otherwise overwrite via `Map.set`.
+   */
   async create(options: CreateWorkUnitOptions): Promise<WorkUnitDescriptor> {
     const record = buildWorkUnitRecord(options);
+    assertIdAvailable(record.jid, (id) => this.host.getScoop(id));
     if (options.parentId !== null) {
       const parent = this.host.getScoop(options.parentId);
       if (!parent) {
@@ -83,16 +88,20 @@ export class WorkUnitManager {
 
   /**
    * Register many units. Fail closed: a missing parent, a duplicate explicit
-   * `id`, or a cycle in the batch throws before anything is registered.
-   * Intra-batch edges (`parentId` matching another option's explicit `id`)
-   * are applied parent-before-child; the returned array matches `options`
-   * order. A `registerScoop` failure rolls back every unit already created
-   * in this call (`close`), so the registry is left as it was.
+   * `id`, an id already in the registry, or a cycle in the batch throws
+   * before anything is registered. Intra-batch edges (`parentId` matching
+   * another option's explicit `id`) are applied parent-before-child; the
+   * returned array matches `options` order. A `registerScoop` failure rolls
+   * back every unit already created in this call (`close`), so the registry
+   * is left as it was.
    */
   async createMany(options: CreateWorkUnitOptions[]): Promise<WorkUnitDescriptor[]> {
     if (options.length === 0) return [];
     assertCreateManyOptions(options, (id) => this.host.getScoop(id));
     const stamped = stampCreateManyIds(options);
+    for (const opts of stamped) {
+      if (opts.id) assertIdAvailable(opts.id, (id) => this.host.getScoop(id));
+    }
     const ordered = orderCreateMany(stamped);
     const created: WorkUnitId[] = [];
     const byOption = new Map<CreateWorkUnitOptions, WorkUnitDescriptor>();
@@ -214,9 +223,20 @@ function stampCreateManyIds(options: CreateWorkUnitOptions[]): CreateWorkUnitOpt
   });
 }
 
+/** Fail closed: `registerScoop` overwrites a live record via `Map.set`. */
+function assertIdAvailable(
+  id: WorkUnitId,
+  getScoop: (id: WorkUnitId) => RegisteredScoop | undefined
+): void {
+  if (getScoop(id)) {
+    throw new Error(`Work unit already exists: ${id}`);
+  }
+}
+
 /**
- * Fail closed before any register: duplicate explicit ids, and every
- * `parentId` must already exist or be an explicit `id` elsewhere in the batch.
+ * Fail closed before any register: duplicate explicit ids, an id already in
+ * the registry, and every `parentId` must already exist or be an explicit
+ * `id` elsewhere in the batch.
  */
 function assertCreateManyOptions(
   options: readonly CreateWorkUnitOptions[],
@@ -228,6 +248,7 @@ function assertCreateManyOptions(
     if (batchIds.has(opts.id)) {
       throw new Error(`Duplicate work unit id in createMany: ${opts.id}`);
     }
+    assertIdAvailable(opts.id, getScoop);
     batchIds.add(opts.id);
   }
   const missing: WorkUnitId[] = [];
