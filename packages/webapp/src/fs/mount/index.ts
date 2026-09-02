@@ -18,6 +18,7 @@ export type {
   MountDirEntry,
   MountKind,
   MountStat,
+  ReadDirOptions,
   RefreshReport,
 } from './backend.js';
 export type { AemMountBackendOptions } from './backend-aem.js';

@@ -17,13 +17,24 @@ describe('LocalMountBackend basic ops', () => {
     expect(root.find((e) => e.name === 'sub')!.kind).toBe('directory');
   });
 
-  it('readDir reports file size and lastModified', async () => {
+  // Stats are opt-in since #2733 — filling them costs one getFile() IPC per
+  // entry and the dominant caller (isomorphic-git's names-only readdir) drops
+  // them. Op-count coverage lives in backend-local-handle-cache.test.ts.
+  it('readDir reports file size and lastModified when includeStats is set', async () => {
     const handle = createDirectoryHandle({ 'a.txt': 'hello' });
     const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });
-    const root = await backend.readDir('/');
+    const root = await backend.readDir('/', { includeStats: true });
     const file = root.find((e) => e.name === 'a.txt')!;
     expect(file.size).toBe(5);
     expect(typeof file.lastModified).toBe('number');
+  });
+
+  it('readDir omits size and lastModified by default', async () => {
+    const handle = createDirectoryHandle({ 'a.txt': 'hello' });
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });
+    const file = (await backend.readDir('/')).find((e) => e.name === 'a.txt')!;
+    expect(file.size).toBeUndefined();
+    expect(file.lastModified).toBeUndefined();
   });
 
   it('readFile returns the file body', async () => {

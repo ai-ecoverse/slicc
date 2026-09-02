@@ -35,7 +35,16 @@ export interface MountStatIdentity {
   mode?: number;
 }
 
-/** A single entry returned by readDir() — file or synthesized directory. */
+/**
+ * A single entry returned by readDir() — file or synthesized directory.
+ *
+ * Every field beyond `name`/`kind` is optional and a consumer must be able to
+ * work without it. Which of them arrive depends on the backend *and* on
+ * `ReadDirOptions.includeStats`: the HTTP backends get size/mtime for free in
+ * the listing response and always report them, while the File System Access
+ * backend has to spend one `getFile()` IPC per entry and therefore reports
+ * them only when they were asked for (issue #2733).
+ */
 export interface MountDirEntry extends MountStatIdentity {
   name: string;
   kind: 'file' | 'directory';
@@ -44,6 +53,25 @@ export interface MountDirEntry extends MountStatIdentity {
   etag?: string;
   /** ms since epoch. */
   lastModified?: number;
+}
+
+/** Options for `MountBackend.readDir`. */
+export interface ReadDirOptions {
+  /**
+   * Ask the backend to fill `size`/`lastModified` on file entries.
+   *
+   * Off by default because the largest caller — isomorphic-git's `readdir`,
+   * whose contract is names-only — throws them away, and on an FSA mount
+   * gathering them costs one IPC per entry: `git log --all` over the slicc
+   * checkout listed `objects/pack` (91 entries) ~25,000 times for 2.29 M
+   * `getFile()` calls / 370 s of pure metadata (#2733).
+   *
+   * A backend that already has the stats may ignore this and report them
+   * anyway; a backend that does not must omit the fields when it is unset,
+   * never substitute zeros — a zeroed size/mtime makes isomorphic-git's
+   * `compareStats` call every file stale and rewrite `.git/index` (#2708).
+   */
+  includeStats?: boolean;
 }
 
 /** Result of a stat() call. */
@@ -89,7 +117,7 @@ export interface MountBackend {
   readonly profile?: string;
   readonly mountId: string;
 
-  readDir(path: string): Promise<MountDirEntry[]>;
+  readDir(path: string, opts?: ReadDirOptions): Promise<MountDirEntry[]>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, body: Uint8Array): Promise<void>;
 
