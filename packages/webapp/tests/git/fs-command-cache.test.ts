@@ -18,7 +18,7 @@ import 'fake-indexeddb/auto';
 import * as git from 'isomorphic-git';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { withCommandScopedReadCache } from '../../src/git/fs-command-cache.js';
+import { createCommandScopedReadCache } from '../../src/git/fs-command-cache.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import {
   createIsomorphicGitFs,
@@ -128,63 +128,70 @@ function countOf(calls: string[], entry: string): number {
   return calls.filter((c) => c === entry).length;
 }
 
-describe('withCommandScopedReadCache (issue #2709)', () => {
-  it('is a passthrough until a scope is opened', async () => {
-    const inner = fakeFs();
-    const { promises } = withCommandScopedReadCache(inner.fs);
-    await promises.lstat('/a');
-    await promises.lstat('/a');
-    expect(countOf(inner.calls, 'lstat /a')).toBe(2);
-  });
-
+describe('createCommandScopedReadCache (issue #2709)', () => {
   it('serves repeated stat/lstat of one path from a single round trip', async () => {
     const inner = fakeFs();
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const fs = createCommandScopedReadCache(inner.fs);
     await Promise.all([
-      promises.lstat('/repo/.git/index'),
-      promises.lstat('/repo/.git/index'),
-      promises.lstat('/repo/.git/index'),
+      fs.lstat('/repo/.git/index'),
+      fs.lstat('/repo/.git/index'),
+      fs.lstat('/repo/.git/index'),
     ]);
-    await promises.lstat('/repo/.git/index');
-    await promises.stat('/repo/.git/index');
-    cache.end();
+    await fs.lstat('/repo/.git/index');
+    await fs.stat('/repo/.git/index');
     expect(countOf(inner.calls, 'lstat /repo/.git/index')).toBe(1);
     // stat and lstat differ on symlinks, so they never share an entry.
     expect(countOf(inner.calls, 'stat /repo/.git/index')).toBe(1);
   });
 
-  it('drops everything when the scope closes', async () => {
+  it('never shares a memo between two wrappers over one filesystem', async () => {
+    // The memo IS the wrapper: two commands — even overlapping ones — hold
+    // two wrappers and therefore two memos.
     const inner = fakeFs();
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
-    await promises.lstat('/a');
-    cache.end();
-    cache.begin();
-    await promises.lstat('/a');
-    cache.end();
+    const first = createCommandScopedReadCache(inner.fs);
+    const second = createCommandScopedReadCache(inner.fs);
+    await Promise.all([first.lstat('/a'), second.lstat('/a')]);
+    await first.lstat('/a');
+    await second.lstat('/a');
     expect(countOf(inner.calls, 'lstat /a')).toBe(2);
   });
 
-  it('keeps the memo alive until the outermost overlapping scope closes', async () => {
+  it('stops memoizing once the entry cap is reached, misses included', async () => {
+    // Negative results carry no bytes, so only the entry cap bounds them — a
+    // walk that probes thousands of absent loose objects must not grow the
+    // memo without limit.
     const inner = fakeFs();
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
-    cache.begin();
-    await promises.lstat('/a');
-    cache.end();
-    await promises.lstat('/a');
-    cache.end();
-    expect(countOf(inner.calls, 'lstat /a')).toBe(1);
+    const fs = createCommandScopedReadCache(inner.fs, { maxEntries: 3 });
+    for (let i = 0; i < 3; i++) {
+      await expect(fs.readFile(`/repo/miss-${i}`, 'utf8')).rejects.toThrow('ENOENT');
+      await expect(fs.readFile(`/repo/miss-${i}`, 'utf8')).rejects.toThrow('ENOENT');
+    }
+    // The first three misses are remembered: one round trip each.
+    expect(inner.calls.filter((c) => c.startsWith('readFile /repo/miss-')).length).toBe(3);
+    // The memo is full, so the next one is served but never retained.
+    await expect(fs.readFile('/repo/over', 'utf8')).rejects.toThrow('ENOENT');
+    await expect(fs.readFile('/repo/over', 'utf8')).rejects.toThrow('ENOENT');
+    expect(countOf(inner.calls, 'readFile /repo/over')).toBe(2);
+  });
+
+  it('shares one entry budget across stat, readdir and readFile', async () => {
+    const inner = fakeFs();
+    inner.files.set('/repo/a.txt', 'a');
+    const fs = createCommandScopedReadCache(inner.fs, { maxEntries: 2 });
+    await fs.lstat('/repo');
+    await fs.readdir('/repo');
+    // Two entries already used, so this read is not retained.
+    await fs.readFile('/repo/a.txt', 'utf8');
+    await fs.readFile('/repo/a.txt', 'utf8');
+    expect(countOf(inner.calls, 'readFile /repo/a.txt')).toBe(2);
+    expect(countOf(inner.calls, 'lstat /repo')).toBe(1);
   });
 
   it('normalizes duplicate and trailing slashes onto one entry', async () => {
     const inner = fakeFs();
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     await promises.lstat('/repo/.git/index');
     await promises.lstat('/repo//.git/index');
-    cache.end();
     expect(inner.calls.filter((c) => c.startsWith('lstat ')).length).toBe(1);
   });
 
@@ -192,13 +199,11 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
     const inner = fakeFs();
     inner.errors.set('/repo/.gitignore', 'ENOENT');
     inner.errors.set('/repo/flaky', 'EIO');
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     await expect(promises.readFile('/repo/.gitignore', 'utf8')).rejects.toThrow('ENOENT');
     await expect(promises.readFile('/repo/.gitignore', 'utf8')).rejects.toThrow('ENOENT');
     await expect(promises.readFile('/repo/flaky', 'utf8')).rejects.toThrow('EIO');
     await expect(promises.readFile('/repo/flaky', 'utf8')).rejects.toThrow('EIO');
-    cache.end();
     // The ENOENT is the answer; the EIO (hostfs bridge hiccup, #2720) is not.
     expect(countOf(inner.calls, 'readFile /repo/.gitignore')).toBe(1);
     expect(countOf(inner.calls, 'readFile /repo/flaky')).toBe(2);
@@ -207,13 +212,11 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
   it('keys reads by encoding and hands out copies of the bytes', async () => {
     const inner = fakeFs();
     inner.files.set('/repo/.git/index', new Uint8Array([1, 2, 3]));
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     const first = (await promises.readFile('/repo/.git/index')) as Uint8Array;
     first[0] = 99;
     const second = (await promises.readFile('/repo/.git/index')) as Uint8Array;
     await promises.readFile('/repo/.git/index', 'utf8');
-    cache.end();
     expect(Array.from(second)).toEqual([1, 2, 3]);
     expect(countOf(inner.calls, 'readFile /repo/.git/index')).toBe(2); // binary + utf8
   });
@@ -221,13 +224,11 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
   it('hands out an independent readdir array (isomorphic-git sorts in place)', async () => {
     const inner = fakeFs();
     inner.dirs.set('/repo', ['b', 'a']);
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     const first = await promises.readdir('/repo');
     first.sort();
     first.push('injected');
     const second = await promises.readdir('/repo');
-    cache.end();
     expect(second).toEqual(['b', 'a']);
     expect(countOf(inner.calls, 'readdir /repo')).toBe(1);
   });
@@ -236,13 +237,11 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
     const inner = fakeFs();
     inner.files.set('/repo/.git/objects/pack/p.pack', new Uint8Array([1]));
     inner.files.set('/repo/.git/objects/pack/p.idx', new Uint8Array([1]));
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     await promises.readFile('/repo/.git/objects/pack/p.pack');
     await promises.readFile('/repo/.git/objects/pack/p.pack');
     await promises.readFile('/repo/.git/objects/pack/p.idx');
     await promises.readFile('/repo/.git/objects/pack/p.idx');
-    cache.end();
     expect(countOf(inner.calls, 'readFile /repo/.git/objects/pack/p.pack')).toBe(2);
     expect(countOf(inner.calls, 'readFile /repo/.git/objects/pack/p.idx')).toBe(2);
   });
@@ -251,11 +250,9 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
     const inner = fakeFs();
     const big = new Uint8Array(1024 * 1024 + 1);
     inner.files.set('/repo/big.bin', big);
-    const { promises, cache } = withCommandScopedReadCache(inner.fs);
-    cache.begin();
+    const promises = createCommandScopedReadCache(inner.fs);
     const first = (await promises.readFile('/repo/big.bin')) as Uint8Array;
     const second = (await promises.readFile('/repo/big.bin')) as Uint8Array;
-    cache.end();
     expect(first.byteLength).toBe(big.byteLength);
     expect(second.byteLength).toBe(big.byteLength);
     expect(countOf(inner.calls, 'readFile /repo/big.bin')).toBe(2);
@@ -266,8 +263,7 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
       const inner = fakeFs();
       inner.files.set('/repo/a.txt', 'one');
       inner.dirs.set('/repo', ['a.txt']);
-      const { promises, cache } = withCommandScopedReadCache(inner.fs);
-      cache.begin();
+      const promises = createCommandScopedReadCache(inner.fs);
       expect(await promises.readFile('/repo/a.txt', 'utf8')).toBe('one');
       await promises.lstat('/repo/a.txt');
       await promises.readdir('/repo');
@@ -275,7 +271,6 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
       expect(await promises.readFile('/repo/a.txt', 'utf8')).toBe('two');
       await promises.lstat('/repo/a.txt');
       await promises.readdir('/repo');
-      cache.end();
       expect(countOf(inner.calls, 'readFile /repo/a.txt')).toBe(2);
       expect(countOf(inner.calls, 'lstat /repo/a.txt')).toBe(2);
       expect(countOf(inner.calls, 'readdir /repo')).toBe(2);
@@ -283,8 +278,7 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
 
     it('unlink forgets the path, its parent listing and everything below it', async () => {
       const inner = fakeFs();
-      const { promises, cache } = withCommandScopedReadCache(inner.fs);
-      cache.begin();
+      const promises = createCommandScopedReadCache(inner.fs);
       await promises.lstat('/repo/sub/deep.txt');
       await promises.readdir('/repo/sub');
       await promises.readdir('/repo');
@@ -292,7 +286,6 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
       await promises.lstat('/repo/sub/deep.txt');
       await promises.readdir('/repo/sub');
       await promises.readdir('/repo');
-      cache.end();
       expect(countOf(inner.calls, 'lstat /repo/sub/deep.txt')).toBe(2);
       expect(countOf(inner.calls, 'readdir /repo/sub')).toBe(2);
       expect(countOf(inner.calls, 'readdir /repo')).toBe(2);
@@ -300,8 +293,7 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
 
     it('mkdir, rmdir and symlink refresh the paths they touch', async () => {
       const inner = fakeFs();
-      const { promises, cache } = withCommandScopedReadCache(inner.fs);
-      cache.begin();
+      const promises = createCommandScopedReadCache(inner.fs);
       await promises.readdir('/repo');
       await promises.mkdir('/repo/new');
       await promises.readdir('/repo');
@@ -311,7 +303,6 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
       await promises.lstat('/repo/link');
       await promises.symlink('/target', '/repo/link');
       await promises.lstat('/repo/link');
-      cache.end();
       expect(countOf(inner.calls, 'readdir /repo')).toBe(2);
       expect(countOf(inner.calls, 'stat /repo/new')).toBe(2);
       expect(countOf(inner.calls, 'lstat /repo/link')).toBe(2);
@@ -326,12 +317,10 @@ describe('withCommandScopedReadCache (issue #2709)', () => {
           throw new FakeFsError('EIO');
         },
       };
-      const { promises, cache } = withCommandScopedReadCache(failing);
-      cache.begin();
+      const promises = createCommandScopedReadCache(failing);
       await promises.lstat('/repo/a.txt');
       await expect(promises.writeFile('/repo/a.txt', 'x')).rejects.toThrow('EIO');
       await promises.lstat('/repo/a.txt');
-      cache.end();
       expect(countOf(inner.calls, 'lstat /repo/a.txt')).toBe(2);
     });
   });
@@ -456,6 +445,39 @@ describe('GitCommands read caching end to end (issue #2709)', () => {
     expect(result.stdout).not.toContain('ignored-thing.txt');
     expect(result.stdout).not.toContain('nested-thing.txt');
     expect(result.stdout).toContain('?? untracked-0.txt');
+  });
+
+  it('gives two overlapping execute() calls two separate memos', async () => {
+    // Regression for the review of #2709: the memo used to be reference-counted
+    // instance state, so a second command starting while the first was still
+    // in flight joined the first one's memo. Each invocation now stats the
+    // index exactly once — two commands, two stats, never one.
+    await Promise.all([
+      commands.execute(['ls-files'], CWD),
+      commands.execute(['status', '--short'], CWD),
+    ]);
+    expect(counting.counts.get(`lstat ${CWD}/.git/index`)).toBe(2);
+  });
+
+  it('runs a command that writes outside the adapter uncached', async () => {
+    // `clean` deletes through ctx.fs, which the memo cannot see, so it must
+    // never be handed a cached adapter — it re-stats the index per file.
+    const result = await commands.execute(['clean', '-n'], CWD);
+    expect(result.exitCode).toBe(0);
+    expect(counting.counts.get(`lstat ${CWD}/.git/index`) ?? 0).toBeGreaterThan(1);
+  });
+
+  it('cannot be poisoned by an uncached command running concurrently', async () => {
+    // `mv` writes the destination and removes the source through ctx.fs —
+    // invisible to any memo. Running it alongside a cached command must not
+    // leave a stale entry behind for the NEXT command to read.
+    await Promise.all([
+      commands.execute(['status', '--short'], CWD),
+      commands.execute(['mv', 'tracked-0.txt', 'renamed-0.txt'], CWD),
+    ]);
+    const after = await commands.execute(['status', '--short'], CWD);
+    expect(after.stdout).toContain('A  renamed-0.txt');
+    expect(after.stdout).toContain('D  tracked-0.txt');
   });
 
   it('a command that writes through the adapter still sees its own writes', async () => {
