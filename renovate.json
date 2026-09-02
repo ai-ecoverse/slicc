@@ -2,8 +2,8 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "description": [
-    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies); do not re-add a broad catch-all group.",
-    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile, renovate-patch-reconcile, and renovate-swift-pin-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those three workflows."
+    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies, v86); do not re-add a broad catch-all group.",
+    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile, renovate-patch-reconcile, renovate-swift-pin-reconcile, and renovate-skill-pin-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those four workflows."
   ],
   "rebaseWhen": "conflicted",
   "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
@@ -27,6 +27,14 @@
       ],
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Agent-skill install pin for v86. The live canary requires packages/vfs-root/workspace/skills/v86/SKILL.md's `ipk add -g v86@X` to match the npm pin; without this manager Renovate only bumps package.json and CI fails (PR #2773). Grouped with the npm pin below; renovate-skill-pin-reconcile.yml raises a leftover stale skill line.",
+      "managerFilePatterns": ["/(^|/)packages/vfs-root/workspace/skills/v86/SKILL\\.md$/"],
+      "matchStrings": ["ipk add -g v86@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "v86"
     }
   ],
   "packageRules": [
@@ -107,6 +115,12 @@
       "matchPackageNames": ["huggingface/swift-huggingface", "swift-huggingface"],
       "groupName": "huggingface/swift-huggingface",
       "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "v86 is dual-pinned in packages/webapp/package.json and the agent skill install line. Without a group Renovate only bumps package.json and the lockstep canary fails (PR #2773). Group them; label skill-pin so renovate-skill-pin-reconcile.yml can raise a leftover stale skill line. Keep in sync with packages/dev-tools/skill-pin-reconcile/.",
+      "matchPackageNames": ["v86"],
+      "groupName": "v86",
+      "addLabels": ["skill-pin"]
     },
     {
       "description": "go-optel is a sibling module resolved through a `replace` directive in packages/slicc-cli/go.mod, so it is never published to a proxy and every run reports it under 'Package lookup failures' on the Dependency Dashboard. Disable it so that banner only ever means a real lookup failure.",
