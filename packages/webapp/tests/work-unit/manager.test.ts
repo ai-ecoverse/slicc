@@ -287,6 +287,35 @@ describe('WorkUnitManager', () => {
     expect(host.registerScoop).not.toHaveBeenCalled();
   });
 
+  it('createMany rejects a duplicate folder within the batch — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'A', folder: 'shared-folder' },
+        { parentId: null, name: 'B', folder: 'shared-folder' },
+      ])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: shared-folder/);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'SameName' },
+        { parentId: null, name: 'SameName' },
+      ])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: SameName/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
+  it('createMany rejects a folder already in the registry — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([{ parentId: null, name: 'Impostor', folder: root.folder }])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: cone/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
   it('join waits on children of two roots through the scoop-wait bus', async () => {
     const { host, manager } = tree();
     const pending = manager.join([a.jid, c.jid]);

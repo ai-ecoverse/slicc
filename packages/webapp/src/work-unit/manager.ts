@@ -88,16 +88,21 @@ export class WorkUnitManager {
 
   /**
    * Register many units. Fail closed: a missing parent, a duplicate explicit
-   * `id`, an id already in the registry, or a cycle in the batch throws
-   * before anything is registered. Intra-batch edges (`parentId` matching
-   * another option's explicit `id`) are applied parent-before-child; the
-   * returned array matches `options` order. A `registerScoop` failure rolls
-   * back every unit already created in this call (`close`), so the registry
-   * is left as it was.
+   * `id`, an id already in the registry, a duplicate folder (within the batch
+   * or against the live roster), or a cycle in the batch throws before
+   * anything is registered. Intra-batch edges (`parentId` matching another
+   * option's explicit `id`) are applied parent-before-child; the returned
+   * array matches `options` order. A `registerScoop` failure rolls back every
+   * unit already created in this call (`close`), so the registry is left as
+   * it was.
    */
   async createMany(options: CreateWorkUnitOptions[]): Promise<WorkUnitDescriptor[]> {
     if (options.length === 0) return [];
-    assertCreateManyOptions(options, (id) => this.host.getScoop(id));
+    assertCreateManyOptions(
+      options,
+      (id) => this.host.getScoop(id),
+      () => this.host.getScoops()
+    );
     const stamped = stampCreateManyIds(options);
     for (const opts of stamped) {
       if (opts.id) assertIdAvailable(opts.id, (id) => this.host.getScoop(id));
@@ -125,6 +130,8 @@ export class WorkUnitManager {
    * {@link WorkUnitManagerHost.waitForScoops} — the scoop-wait completion
    * bus `scoop_wait` already uses. Product tools stay aliases; this is the
    * blocking supervisor form. Unknown ids are `timedOut` immediately.
+   * Interactive roots and silent children do not publish on this bus (see
+   * `docs/work-unit.md` Phase 8a).
    */
   async join(ids: readonly WorkUnitId[], options?: JoinOptions): Promise<JoinResult[]> {
     const results = await this.host.waitForScoops(ids, options?.timeoutMs);
@@ -235,12 +242,14 @@ function assertIdAvailable(
 
 /**
  * Fail closed before any register: duplicate explicit ids, an id already in
- * the registry, and every `parentId` must already exist or be an explicit
- * `id` elsewhere in the batch.
+ * the registry, a folder colliding within the batch or with the live roster
+ * (`workspaceFor` / `chatSessionIdFor` key on folder), and every `parentId`
+ * must already exist or be an explicit `id` elsewhere in the batch.
  */
 function assertCreateManyOptions(
   options: readonly CreateWorkUnitOptions[],
-  getScoop: (id: WorkUnitId) => RegisteredScoop | undefined
+  getScoop: (id: WorkUnitId) => RegisteredScoop | undefined,
+  getScoops: () => readonly RegisteredScoop[]
 ): void {
   const batchIds = new Set<WorkUnitId>();
   for (const opts of options) {
@@ -251,6 +260,7 @@ function assertCreateManyOptions(
     assertIdAvailable(opts.id, getScoop);
     batchIds.add(opts.id);
   }
+  assertCreateManyFolders(options, getScoops);
   const missing: WorkUnitId[] = [];
   const seenMissing = new Set<WorkUnitId>();
   for (const opts of options) {
@@ -262,6 +272,27 @@ function assertCreateManyOptions(
   }
   if (missing.length > 0) {
     throw new Error(`Parent work unit not found: ${missing.join(', ')}`);
+  }
+}
+
+/**
+ * Folders are globally unique under `/scoops/<folder>/`. A colliding batch
+ * would share workspace, memory, and `session-<folder>` — reject before any
+ * register. Single `create` leaves folder choice to the caller (UI uses
+ * `coneFolderFor` / `uniqueFolder`); `createMany` fails closed instead.
+ */
+function assertCreateManyFolders(
+  options: readonly CreateWorkUnitOptions[],
+  getScoops: () => readonly RegisteredScoop[]
+): void {
+  const taken = new Set(getScoops().map((s) => s.folder));
+  const batchFolders = new Set<string>();
+  for (const opts of options) {
+    const folder = opts.folder ?? opts.name;
+    if (batchFolders.has(folder) || taken.has(folder)) {
+      throw new Error(`Duplicate work unit folder in createMany: ${folder}`);
+    }
+    batchFolders.add(folder);
   }
 }
 
