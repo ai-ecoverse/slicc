@@ -120,10 +120,36 @@ function wantsUtf8(options: unknown): boolean {
   return false;
 }
 
+/**
+ * The `{ start, end }` window of a `readFile` call, if it carries one.
+ *
+ * isomorphic-git's `FileSystem.read(filepath, options)` passes `options`
+ * straight through to this adapter's `readFile`, so accepting the pair here is
+ * all a caller needs to read a slice of a packfile instead of the whole thing
+ * (issue #2711). `end` is EXCLUSIVE, matching `subarray` and isomorphic-git's
+ * own `shasumRange({ start, end })`.
+ *
+ * isomorphic-git 1.41.9 does not use it yet: `readObjectPacked` calls
+ * `fs.read(packFile)` with no options and `GitPackIndex.readSlice` then does
+ * `pack.slice(start)` over the whole buffer, so consuming a ranged reader
+ * needs an upstream change (see `docs/mounts.md`). The capability is wired
+ * from the bridge up to here so that change is the only piece missing.
+ */
+function readRange(options: unknown): { start: number; end: number } | null {
+  if (!options || typeof options !== 'object') return null;
+  const { start, end } = options as { start?: unknown; end?: unknown };
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  return { start, end };
+}
+
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
 export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
   const promises: IsoGitFsPromises = {
     async readFile(path, options) {
+      // A window wins over an encoding: a slice of a packfile is bytes, and
+      // decoding half a deflate stream as text would be nonsense anyway.
+      const range = readRange(options);
+      if (range) return await vfs.readFileRange(path, range.start, range.end);
       const content = await vfs.readFile(
         path,
         wantsUtf8(options) ? { encoding: 'utf-8' } : { encoding: 'binary' }

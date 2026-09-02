@@ -32,6 +32,15 @@
  * max-age. `read` deliberately stays a `GET` on a per-file URL so the
  * browser HTTP cache can still revalidate large blobs with a 304.
  *
+ * `read` also speaks `Range` (single `bytes=` window, 206 + `Content-Range`,
+ * 416 when the window is outside the file) and streams every body straight
+ * off disk. Before that, one `git` command against a `--mount`ed checkout
+ * buffered the whole 92 MB packfile in express AND in the kernel worker, and
+ * a pack over `HOSTFS_MAX_BODY_BYTES` was simply unreachable — every git
+ * command in such a repo died with isomorphic-git's `InternalError`
+ * (issue #2711). The whole-file cap still guards an unranged read; a ranged
+ * read is bounded by the window it names, so it is exempt.
+ *
  * The hostfs surface owns its own body parsing end to end. `index.ts` skips
  * the stable dispatcher in its global `express.json()` filter (via
  * `isHostFsStableBodyRequest`) so the bounded 1 MiB parser here is the one
@@ -43,23 +52,21 @@
 
 import type { ErrorRequestHandler, Express, Request, Response } from 'express';
 import express from 'express';
-import type { Stats } from 'fs';
-import {
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from 'fs/promises';
+import { createReadStream, type Stats } from 'fs';
+import { lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from 'fs/promises';
 import { dirname, resolve, sep } from 'path';
 
 import type { HostMountMapping } from './runtime-flags.js';
 
-/** Matches the webapp's hostfs body cap (backend-hostfs.ts). */
+/**
+ * Cap on a WHOLE-FILE `GET /api/hostfs/read` (and on `PUT /write`). It exists
+ * because the caller has to hold the entire body in the kernel worker; it is
+ * NOT a limit on what the bridge is willing to serve. A ranged read is exempt:
+ * the window it asks for is its own bound, the server streams it, and neither
+ * side ever materializes more than that window. See `parseByteRange`.
+ *
+ * Matches the webapp's hostfs body cap (backend-hostfs.ts).
+ */
 export const HOSTFS_MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 interface FsCodeError {
@@ -94,6 +101,12 @@ function toFsCodeError(err: unknown): FsCodeError {
 }
 
 function sendFsError(res: Response, err: unknown): void {
+  // A streamed body may already have committed the status line; the only
+  // honest signal left is a broken connection.
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
   const mapped = toFsCodeError(err);
   res.status(mapped.status).json({ code: mapped.code, message: mapped.message });
 }
@@ -143,6 +156,104 @@ interface HostMountRoot {
   path: string;
   /** realpath()'d OS root. */
   root: string;
+}
+
+/**
+ * What `Range:` asked for, resolved against the file's actual size.
+ *
+ *   - `none`          — no (or unusable) Range header: serve the whole file.
+ *   - `range`         — a satisfiable window, INCLUSIVE on both ends, exactly
+ *                       as `Content-Range` and `createReadStream` want it.
+ *   - `unsatisfiable` — syntactically fine but outside the file: 416.
+ */
+export type ParsedByteRange =
+  | { kind: 'none' }
+  | { kind: 'range'; start: number; end: number }
+  | { kind: 'unsatisfiable' };
+
+const NO_RANGE: ParsedByteRange = { kind: 'none' };
+const UNSATISFIABLE: ParsedByteRange = { kind: 'unsatisfiable' };
+
+/**
+ * Parse a single-range `Range: bytes=…` header against a known file size.
+ *
+ * Deliberately narrow: one range, `bytes` unit only. RFC 9110 §14.2 says a
+ * recipient that cannot make sense of a Range header MUST ignore it and serve
+ * the whole representation, so anything malformed — a different unit, a
+ * multi-range list, non-digits — returns `none` rather than an error. Only a
+ * well-formed range that lies outside the file is a 416, because answering
+ * that one with the whole file would silently hand the caller bytes it did
+ * not ask for (and a git pack reader would then parse garbage).
+ *
+ * Both ends of the result are inclusive and clamped into `[0, size - 1]`.
+ * A zero-length file has no satisfiable range at all.
+ */
+export function parseByteRange(header: string | undefined, size: number): ParsedByteRange {
+  if (!header) return NO_RANGE;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return NO_RANGE;
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === '' && rawEnd === '') return NO_RANGE;
+  if (size === 0) return UNSATISFIABLE;
+
+  if (rawStart === '') {
+    // Suffix form `bytes=-N`: the last N bytes. `-0` names nothing.
+    const suffix = Number(rawEnd);
+    if (suffix === 0) return UNSATISFIABLE;
+    return { kind: 'range', start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(rawStart);
+  if (start >= size) return UNSATISFIABLE;
+  // An open-ended `bytes=N-` runs to EOF; an explicit end past EOF clamps.
+  const end = rawEnd === '' ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  if (end < start) return UNSATISFIABLE;
+  return { kind: 'range', start, end };
+}
+
+/**
+ * Stream a file (or a window of it) to the response instead of buffering it.
+ *
+ * `readFile` + `res.send` held the whole body in the server process — 92 MB
+ * per pack read in the benchmark of issue #2707 — for no benefit: express is
+ * already writing to a socket. Headers are committed on the stream's `open`,
+ * so a failure to open (a raced unlink, EACCES) still rejects BEFORE anything
+ * is on the wire and is mapped to the usual errno JSON by the caller. After
+ * that point the status line is spent, so a mid-body failure can only be
+ * reported by destroying the connection — a truncated body the client's
+ * `fetch` rejects on, which its retry path already handles.
+ */
+async function streamFileBody(
+  res: Response,
+  target: string,
+  status: number,
+  headers: Record<string, string>,
+  window?: { start: number; end: number }
+): Promise<void> {
+  const stream = createReadStream(target, window);
+  await new Promise<void>((resolveStream, rejectStream) => {
+    let committed = false;
+    stream.once('open', () => {
+      committed = true;
+      res.status(status);
+      for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+      stream.pipe(res);
+    });
+    stream.once('error', (err) => {
+      if (!committed) {
+        rejectStream(err);
+        return;
+      }
+      res.destroy();
+      resolveStream();
+    });
+    // The client hung up (or the pipe finished): either way we are done, and
+    // an aborted response must not leave the read fd open.
+    res.once('close', () => {
+      stream.destroy();
+      resolveStream();
+    });
+    res.once('finish', resolveStream);
+  });
 }
 
 /**
@@ -345,6 +456,61 @@ async function statOp(target: string): Promise<ReturnType<typeof statPayload>> {
   return statPayload(await stat(target));
 }
 
+/**
+ * `GET /api/hostfs/read` — the whole file, or the `Range` window it asked for.
+ *
+ * Writes the response itself rather than returning a payload, because the body
+ * is streamed: buffering a 92 MB packfile in express to `res.send` it was pure
+ * overhead, and a pack over `HOSTFS_MAX_BODY_BYTES` had no way through at all
+ * (issue #2711). The cap survives only for the unranged read, whose caller has
+ * to hold the whole body.
+ */
+async function readOp(target: string, req: Request, res: Response): Promise<void> {
+  const s = await stat(target);
+  if (s.isDirectory()) {
+    sendFsError(res, Object.assign(new Error(`is a directory: ${target}`), { code: 'EISDIR' }));
+    return;
+  }
+  const range = parseByteRange(req.header('range'), s.size);
+  if (range.kind === 'unsatisfiable') {
+    res
+      .status(416)
+      .set({ 'Accept-Ranges': 'bytes', 'Content-Range': `bytes */${s.size}` })
+      .json({ code: 'EINVAL', message: `range not satisfiable for a ${s.size} byte file` });
+    return;
+  }
+  const common = { 'Accept-Ranges': 'bytes', 'Content-Type': 'application/octet-stream' };
+  if (range.kind === 'range') {
+    // No size cap here on purpose: the window IS the bound, and the body is
+    // streamed, so neither the bridge nor the caller ever holds more than the
+    // bytes that were asked for. This is what lets git reach a pack larger
+    // than HOSTFS_MAX_BODY_BYTES at all.
+    await streamFileBody(
+      res,
+      target,
+      206,
+      {
+        ...common,
+        'Content-Range': `bytes ${range.start}-${range.end}/${s.size}`,
+        'Content-Length': String(range.end - range.start + 1),
+      },
+      range
+    );
+    return;
+  }
+  if (s.size > HOSTFS_MAX_BODY_BYTES) {
+    res
+      .status(413)
+      .set({ 'Accept-Ranges': 'bytes' })
+      .json({
+        code: 'EFBIG',
+        message: `file exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs whole-file cap; read it with a Range request`,
+      });
+    return;
+  }
+  await streamFileBody(res, target, 200, { ...common, 'Content-Length': String(s.size) });
+}
+
 async function mkdirOp(target: string): Promise<{ ok: true }> {
   await mkdir(target, { recursive: true });
   return { ok: true };
@@ -484,27 +650,7 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
     })
   );
 
-  app.get(
-    '/api/hostfs/read',
-    withTarget(async (target, _req, res) => {
-      // lstat first so a dangling symlink is ENOENT, a directory is EISDIR.
-      const s = await stat(target);
-      if (s.isDirectory()) {
-        sendFsError(res, Object.assign(new Error(`is a directory: ${target}`), { code: 'EISDIR' }));
-        return;
-      }
-      if (s.size > HOSTFS_MAX_BODY_BYTES) {
-        res.status(413).json({
-          code: 'EFBIG',
-          message: `file exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs cap`,
-        });
-        return;
-      }
-      const body = await readFile(target);
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.send(body);
-    })
-  );
+  app.get('/api/hostfs/read', withTarget(readOp));
 
   app.put(
     '/api/hostfs/write',

@@ -67,6 +67,24 @@ describe('RestrictedFS', () => {
     );
   });
 
+  // The shell hands its `fs` — a RestrictedFS for every scoop — to the
+  // isomorphic-git adapter, so the ranged read git needs has to exist here
+  // and be gated exactly like a whole-file read (#2711).
+  it('reads a byte window within an allowed dir', async () => {
+    await expect(restricted.readFileRange('/shared/data.txt', 0, 6)).resolves.toEqual(
+      new TextEncoder().encode('shared')
+    );
+  });
+
+  it('throws ENOENT for a byte window outside allowed dirs', async () => {
+    await expect(restricted.readFileRange('/scoops/other-scoop/secret.txt', 0, 3)).rejects.toThrow(
+      'ENOENT'
+    );
+    await expect(
+      restricted.readFileRange('/scoops/andy-scoop/../../root-file.txt', 0, 3)
+    ).rejects.toThrow('ENOENT');
+  });
+
   it('returns false for exists() outside allowed dirs', async () => {
     expect(await restricted.exists('/scoops/other-scoop/secret.txt')).toBe(false);
     expect(await restricted.exists('/usr/bin/mkdir')).toBe(false);

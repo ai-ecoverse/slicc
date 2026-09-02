@@ -74,8 +74,20 @@ export function fsSudoMessage(decision: SudoDecision): string {
   return sudoRefusalMessage('sudo', decision);
 }
 
-/** Async + sync read methods routed through a `read` match. */
-const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
+/**
+ * Async + sync read methods routed through a `read` match. `readFileRange`
+ * belongs here for the obvious reason: a window of a file is still a read of
+ * that file, and the Proxy only intercepts the names listed here — anything
+ * omitted falls straight through to the target, ungated.
+ */
+const READ_ASYNC = [
+  'readFile',
+  'readFileRange',
+  'readTextFile',
+  'readDir',
+  'exists',
+  'stat',
+] as const;
 /**
  * Async CONTENT-write methods routed through a `write` match on the FIRST
  * argument (the path being written to) WITH the content-write flag set, so a

@@ -365,6 +365,24 @@ export class RestrictedFS {
     return this.vfs.readFile(resolved, options);
   }
 
+  /**
+   * Byte-window read, gated exactly like `readFile`.
+   *
+   * The shell hands its `fs` to the isomorphic-git adapter, and that `fs` is a
+   * RestrictedFS for every scoop — so a surface that exists only on VirtualFS
+   * would be a `TypeError` the moment git took the ranged path (#2711). No
+   * virtual-device or ephemeral-fd cases: neither has a stable byte offset to
+   * seek into, so a window over them is meaningless and they fall through to
+   * the same ENOENT an out-of-sandbox path gets.
+   */
+  async readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    if (!this.isAllowedStrict(path)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    const resolved = await this.resolveAndCheckRead(path);
+    return this.vfs.readFileRange(resolved, start, end);
+  }
+
   async readDir(path: string): Promise<DirEntry[]> {
     if (!this.isAllowed(path)) return [];
     // Resolve symlinks on the directory path itself when strictly allowed

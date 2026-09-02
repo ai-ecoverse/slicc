@@ -64,3 +64,43 @@ describe('expandGitError', () => {
     expect(expandGitError(42)).toBe('42');
   });
 });
+
+/**
+ * isomorphic-git's packfile `InternalError`s are the only thing a user sees
+ * when a repo's largest pack is bigger than the hostfs bridge's whole-file
+ * body cap — and every git command in that repo fails, with nothing in the
+ * text pointing at the mount (issue #2711).
+ */
+describe('expandGitError — packfile reads', () => {
+  it('names the pack and the hostfs limit instead of "too large to read into memory"', () => {
+    const err = new Error(
+      'Could not read packfile at /mnt/slicc/.git/objects/pack/pack-abc.pack. ' +
+        'The file may be missing, corrupted, or too large to read into memory.'
+    );
+    const message = expandGitError(err);
+    expect(message).toContain('/mnt/slicc/.git/objects/pack/pack-abc.pack');
+    expect(message).toContain('hostfs');
+    expect(message).not.toContain('too large to read into memory');
+  });
+
+  it('explains the path-less variant too', () => {
+    const err = new Error(
+      'Could not read packfile data. The packfile may be missing, corrupted, ' +
+        'or too large to read into memory.'
+    );
+    expect(expandGitError(err)).toContain('hostfs');
+  });
+
+  it('rewrites the same error when it arrives inside a MultipleGitError', () => {
+    const wrapper = new MultipleGitError('There are multiple errors...');
+    wrapper.errors = [
+      new Error('Could not read packfile at /mnt/p/.git/objects/pack/pack-1.pack. Whatever.'),
+    ];
+    expect(expandGitError(wrapper)).toContain('/mnt/p/.git/objects/pack/pack-1.pack');
+  });
+
+  it('leaves an unrelated packfile error alone', () => {
+    const err = new Error('Packfile trailer mismatch: expected abc, got def.');
+    expect(expandGitError(err)).toBe('Packfile trailer mismatch: expected abc, got def.');
+  });
+});

@@ -17,6 +17,7 @@ import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
 import {
   HOSTFS_STABLE_MAX_BODY_BYTES,
   isHostFsStableBodyRequest,
+  parseByteRange,
   registerHostFsRoutes,
   resolveHostMountRoots,
   resolveWithinRoot,
@@ -405,6 +406,116 @@ describe('stable endpoint under the production middleware order', () => {
       body: JSON.stringify({ hello: 'world' }),
     });
     expect((await res.json()) as { body: unknown }).toEqual({ body: { hello: 'world' } });
+  });
+});
+
+/**
+ * `Range` support on `read` is what makes a repo whose largest packfile
+ * exceeds the whole-file cap reachable by git at all, and it keeps the bridge
+ * from buffering a 92 MB pack per object lookup (issue #2711).
+ */
+describe('hostfs read: byte ranges', () => {
+  const readWithRange = (range: string): Promise<Response> =>
+    api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', { headers: { Range: range } });
+
+  it('answers a window with 206, Content-Range and only those bytes', async () => {
+    const res = await readWithRange('bytes=6-9');
+    expect(res.status).toBe(206);
+    // "hello host" → bytes 6..9 are "host".
+    expect(await res.text()).toBe('host');
+    expect(res.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(res.headers.get('content-length')).toBe('4');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+  });
+
+  it('runs an open-ended range to EOF and clamps an end past it', async () => {
+    expect(await (await readWithRange('bytes=6-')).text()).toBe('host');
+    const clamped = await readWithRange('bytes=6-9999');
+    expect(clamped.status).toBe(206);
+    expect(clamped.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(await clamped.text()).toBe('host');
+  });
+
+  it('serves the suffix form as the last N bytes', async () => {
+    const res = await readWithRange('bytes=-4');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(await res.text()).toBe('host');
+  });
+
+  it('rejects a range outside the file with 416 + Content-Range', async () => {
+    const res = await readWithRange('bytes=99-120');
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */10');
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'EINVAL' });
+  });
+
+  it('ignores an unparseable Range and serves the whole file', async () => {
+    // RFC 9110 §14.2: a Range a recipient cannot make sense of is ignored.
+    const res = await readWithRange('items=0-2');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('hello host');
+    // Still advertised, so a client knows it can retry with a real range.
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('advertises Accept-Ranges and a Content-Length on an unranged read', async () => {
+    const res = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-length')).toBe('10');
+    expect(await res.text()).toBe('hello host');
+  });
+
+  it('keeps errno answers for a missing file and a directory', async () => {
+    const missing = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=missing.txt', {
+      headers: { Range: 'bytes=0-1' },
+    });
+    expect(missing.status).toBe(404);
+    expect((await missing.json()) as { code: string }).toMatchObject({ code: 'ENOENT' });
+    const dir = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=sub', {
+      headers: { Range: 'bytes=0-1' },
+    });
+    expect(dir.status).toBe(409);
+    expect((await dir.json()) as { code: string }).toMatchObject({ code: 'EISDIR' });
+  });
+});
+
+describe('parseByteRange', () => {
+  it('returns the inclusive window for the three well-formed shapes', () => {
+    expect(parseByteRange('bytes=0-9', 100)).toEqual({ kind: 'range', start: 0, end: 9 });
+    expect(parseByteRange('bytes=90-', 100)).toEqual({ kind: 'range', start: 90, end: 99 });
+    expect(parseByteRange('bytes=-10', 100)).toEqual({ kind: 'range', start: 90, end: 99 });
+    // A suffix longer than the file is the whole file, not an error.
+    expect(parseByteRange('bytes=-500', 100)).toEqual({ kind: 'range', start: 0, end: 99 });
+    expect(parseByteRange(' bytes=0-0 ', 100)).toEqual({ kind: 'range', start: 0, end: 0 });
+  });
+
+  it('ignores anything it cannot make sense of', () => {
+    for (const header of [undefined, '', 'bytes=', 'items=0-1', 'bytes=0-1, 5-6', 'bytes=a-b']) {
+      expect(parseByteRange(header, 100)).toEqual({ kind: 'none' });
+    }
+  });
+
+  it('reports a well-formed range outside the file as unsatisfiable', () => {
+    expect(parseByteRange('bytes=100-200', 100)).toEqual({ kind: 'unsatisfiable' });
+    expect(parseByteRange('bytes=-0', 100)).toEqual({ kind: 'unsatisfiable' });
+    // A zero-length file has no satisfiable range at all.
+    expect(parseByteRange('bytes=0-0', 0)).toEqual({ kind: 'unsatisfiable' });
+  });
+
+  it('treats a descending window as unsatisfiable, never as an empty read', () => {
+    expect(parseByteRange('bytes=9-3', 100)).toEqual({ kind: 'unsatisfiable' });
+  });
+
+  it('sizes a window past 2 GiB without clamping — packs are why this exists', () => {
+    const twoGiB = 2 * 1024 * 1024 * 1024;
+    expect(parseByteRange(`bytes=${twoGiB}-${twoGiB + 15}`, twoGiB + 64)).toEqual({
+      kind: 'range',
+      start: twoGiB,
+      end: twoGiB + 15,
+    });
   });
 });
 

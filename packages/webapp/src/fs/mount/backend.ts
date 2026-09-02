@@ -92,6 +92,21 @@ export interface MountBackend {
   readDir(path: string): Promise<MountDirEntry[]>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, body: Uint8Array): Promise<void>;
+
+  /**
+   * Optional native byte-range read of `[start, end)` — half-open, like
+   * `subarray`, so `end - start` is the length. Present on hostfs only, where
+   * it becomes an HTTP `Range` request.
+   *
+   * It exists for git: isomorphic-git wants a packfile as one buffer, so a
+   * repo whose largest pack exceeds the bridge's whole-file cap was entirely
+   * unreadable, and even a pack under the cap cost its full size in kernel-
+   * worker memory on every object lookup (issue #2711). `VirtualFS
+   * .readFileRange` falls back to reading the whole file and slicing for
+   * backends that omit this, so callers never have to branch — but only a
+   * backend that implements it actually saves the bytes.
+   */
+  readFileRange?(path: string, start: number, end: number): Promise<Uint8Array>;
   stat(path: string): Promise<MountStat>;
   /** Always a no-op on S3 / DA / AEM — all three materialize paths on first write. */
   mkdir(path: string): Promise<void>;

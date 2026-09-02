@@ -53,6 +53,80 @@ final class HostFSRoutesTests: XCTestCase {
         return try JSONDecoder().decode(LickSystem.JSONValue.self, from: data)
     }
 
+    /// `Range` on `read` is what makes a repo whose largest packfile exceeds
+    /// the whole-file cap reachable by git at all (#2711). Mirrors
+    /// node-server's `hostfs read: byte ranges` suite.
+    func testReadHonorsByteRanges() async throws {
+        try await makeApp().test(.router) { client in
+            func read(_ range: String?, _ check: @escaping (TestResponse) throws -> Void)
+                async throws
+            {
+                var headers = HTTPFields()
+                if let range { headers[HostFSRoutes.rangeHeader] = range }
+                try await client.execute(
+                    uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get,
+                    headers: headers
+                ) { response in try check(response) }
+            }
+            // "hello host" → bytes 6..9 are "host".
+            try await read("bytes=6-9") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes 6-9/10")
+                XCTAssertEqual(response.headers[HostFSRoutes.acceptRangesHeader], "bytes")
+                var buffer = response.body
+                XCTAssertEqual(
+                    buffer.readData(length: buffer.readableBytes) ?? Data(), Data("host".utf8))
+            }
+            try await read("bytes=-4") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes 6-9/10")
+            }
+            try await read("bytes=99-120") { response in
+                XCTAssertEqual(response.status, .rangeNotSatisfiable)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes */10")
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad error shape")
+                }
+                XCTAssertEqual(body["code"], .string("EINVAL"))
+            }
+            // RFC 9110 §14.2: a Range the server cannot parse is ignored.
+            try await read("items=0-2") { response in
+                XCTAssertEqual(response.status, .ok)
+                var buffer = response.body
+                XCTAssertEqual(
+                    buffer.readData(length: buffer.readableBytes) ?? Data(),
+                    Data("hello host".utf8))
+            }
+            try await read(nil) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(response.headers[HostFSRoutes.acceptRangesHeader], "bytes")
+            }
+        }
+    }
+
+    /// Byte-for-byte the cases node-server's `parseByteRange` suite pins.
+    func testParseByteRangeMatchesNodeServer() {
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-9", size: 100), .window(start: 0, end: 9))
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=90-", size: 100), .window(start: 90, end: 99))
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=-10", size: 100), .window(start: 90, end: 99))
+        // A suffix longer than the file is the whole file, not an error.
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=-500", size: 100), .window(start: 0, end: 99))
+        // An explicit end past EOF clamps.
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=6-9999", size: 10), .window(start: 6, end: 9))
+        for header in [nil, "", "bytes=", "items=0-1", "bytes=0-1, 5-6", "bytes=a-b"] {
+            XCTAssertEqual(HostFSRoutes.parseByteRange(header, size: 100), .whole, "\(header ?? "nil")")
+        }
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=100-200", size: 100), .unsatisfiable)
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=-0", size: 100), .unsatisfiable)
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=9-3", size: 100), .unsatisfiable)
+        // A zero-length file has no satisfiable range at all.
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-0", size: 0), .unsatisfiable)
+    }
+
     func testListStatReadRoundTrip() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(

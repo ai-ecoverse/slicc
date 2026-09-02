@@ -22,6 +22,13 @@ import NIOCore
 /// so `Access-Control-Max-Age` never applied (#2715). `read` and `write` keep
 /// their per-op routes — a POST response is not cacheable, and a read the
 /// browser can revalidate with a 304 is worth more than its preflight.
+///
+/// `read` also speaks `Range` (single `bytes=` window, 206 + `Content-Range`,
+/// 416 outside the file). Without it a repo whose largest packfile crosses
+/// `maxBodyBytes` is unreadable by git, because isomorphic-git needs the pack
+/// as one buffer and the bridge refused to serve it (issue #2711). The
+/// whole-file cap still guards an unranged read; a ranged read is bounded by
+/// the window it names, so it is exempt.
 enum HostFSRoutes {
     /// Matches the webapp's hostfs body cap (`backend-hostfs.ts`).
     static let maxBodyBytes = 100 * 1024 * 1024
@@ -91,6 +98,67 @@ enum HostFSRoutes {
             probe = parent
         }
         return target
+    }
+
+    // MARK: - Byte ranges
+
+    /// Header names built by string so the code does not depend on which
+    /// standard names this swift-http-types version happens to expose.
+    static var rangeHeader: HTTPField.Name { HTTPField.Name("Range")! }
+    static var contentRangeHeader: HTTPField.Name { HTTPField.Name("Content-Range")! }
+    static var acceptRangesHeader: HTTPField.Name { HTTPField.Name("Accept-Ranges")! }
+
+    /// What `Range:` asked for, resolved against the file's actual size.
+    /// `window` is INCLUSIVE on both ends, exactly as `Content-Range` wants it.
+    /// Mirrors node-server's `ParsedByteRange`.
+    enum ByteRange: Equatable {
+        case whole
+        case window(start: Int, end: Int)
+        case unsatisfiable
+    }
+
+    /// Parse a single-range `Range: bytes=…` header against a known file size.
+    ///
+    /// Deliberately narrow: one range, `bytes` unit only. RFC 9110 §14.2 says
+    /// a recipient that cannot make sense of a Range header MUST ignore it, so
+    /// anything malformed falls back to `whole`. Only a well-formed range
+    /// outside the file is a 416 — answering that one with the whole file
+    /// would hand the caller bytes from offsets it never asked for, which a
+    /// pack reader would parse as garbage. Mirrors node-server's
+    /// `parseByteRange`.
+    static func parseByteRange(_ header: String?, size: Int) -> ByteRange {
+        guard let header else { return .whole }
+        let trimmed = header.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("bytes=") else { return .whole }
+        let spec = trimmed.dropFirst("bytes=".count)
+        let parts = spec.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return .whole }
+        let rawStart = String(parts[0])
+        let rawEnd = String(parts[1])
+        guard rawStart.allSatisfy(\.isNumber), rawEnd.allSatisfy(\.isNumber) else { return .whole }
+        if rawStart.isEmpty && rawEnd.isEmpty { return .whole }
+        if size == 0 { return .unsatisfiable }
+
+        if rawStart.isEmpty {
+            // Suffix form `bytes=-N`: the last N bytes. `-0` names nothing.
+            guard let suffix = Int(rawEnd), suffix > 0 else { return .unsatisfiable }
+            return .window(start: max(0, size - suffix), end: size - 1)
+        }
+        guard let start = Int(rawStart), start < size else { return .unsatisfiable }
+        // An open-ended `bytes=N-` runs to EOF; an explicit end past EOF clamps.
+        let end = rawEnd.isEmpty ? size - 1 : min(Int(rawEnd) ?? (size - 1), size - 1)
+        guard end >= start else { return .unsatisfiable }
+        return .window(start: start, end: end)
+    }
+
+    /// Read `length` bytes from `start` without materializing the whole file.
+    private static func readWindow(path: String, start: Int, length: Int) throws -> Data {
+        try wrapErrno {
+            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(start))
+            return try handle.read(upToCount: length) ?? Data()
+        }
     }
 
     // MARK: - Registration
@@ -175,18 +243,44 @@ enum HostFSRoutes {
         router.get("/api/hostfs/read") { request, _ in
             try run {
                 let path = try target(for: request)
-                let (isDirectory, size, _) = try statAt(path)
+                let (isDirectory, rawSize, _) = try statAt(path)
                 if isDirectory {
                     throw FsFailure.code("EISDIR", .conflict, "is a directory")
                 }
-                if size > Double(maxBodyBytes) {
-                    throw FsFailure.code("EFBIG", .contentTooLarge, "file exceeds the hostfs cap")
-                }
-                let data = try wrapErrno { try Data(contentsOf: URL(fileURLWithPath: path)) }
+                let size = Int(rawSize)
                 var headers = HTTPFields()
                 headers[.contentType] = "application/octet-stream"
-                return Response(
-                    status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(bytes: data)))
+                headers[acceptRangesHeader] = "bytes"
+                switch parseByteRange(request.headers[rangeHeader], size: size) {
+                case .unsatisfiable:
+                    return fsError(
+                        "EINVAL", .rangeNotSatisfiable,
+                        "range not satisfiable for a \(size) byte file",
+                        extra: [
+                            (acceptRangesHeader, "bytes"), (contentRangeHeader, "bytes */\(size)"),
+                        ])
+                case .window(let start, let end):
+                    // No size cap here on purpose: the window IS the bound, so
+                    // neither side ever holds more than the bytes asked for.
+                    // This is what lets git reach a pack larger than
+                    // `maxBodyBytes` at all (issue #2711).
+                    let data = try readWindow(path: path, start: start, length: end - start + 1)
+                    headers[contentRangeHeader] = "bytes \(start)-\(end)/\(size)"
+                    return Response(
+                        status: .partialContent, headers: headers,
+                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+                case .whole:
+                    if size > maxBodyBytes {
+                        return fsError(
+                            "EFBIG", .contentTooLarge,
+                            "file exceeds the hostfs whole-file cap; read it with a Range request",
+                            extra: [(acceptRangesHeader, "bytes")])
+                    }
+                    let data = try wrapErrno { try Data(contentsOf: URL(fileURLWithPath: path)) }
+                    return Response(
+                        status: .ok, headers: headers,
+                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+                }
             }
         }
 
@@ -427,7 +521,12 @@ enum HostFSRoutes {
         }
     }
 
-    private static func fsError(_ code: String, _ status: HTTPResponse.Status, _ message: String)
+    /// `extra` carries the headers an errno answer still has to advertise —
+    /// a 416 owes the client a `Content-Range: bytes */<size>` (RFC 9110 §15.5.17).
+    private static func fsError(
+        _ code: String, _ status: HTTPResponse.Status, _ message: String,
+        extra: [(HTTPField.Name, String)] = []
+    )
         -> Response
     {
         let payload: LickSystem.JSONValue = .object([
@@ -438,6 +537,7 @@ enum HostFSRoutes {
         }
         var headers = HTTPFields()
         headers[.contentType] = "application/json; charset=utf-8"
+        for (name, value) in extra { headers[name] = value }
         return Response(status: status, headers: headers, body: .init(byteBuffer: ByteBuffer(bytes: data)))
     }
 
