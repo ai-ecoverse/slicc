@@ -104,6 +104,31 @@ describe('fetchSecretEnvVars', () => {
       expect(result).toEqual({});
     });
 
+    // This call is awaited by `mountWorkbenchTerminal` before `view.mount`, so
+    // an unbounded request does not degrade — it wedges the Term surface. A
+    // stalled connection never rejects on its own, so the deadline has to come
+    // from an abort signal on the request.
+    it('bounds the masked-secrets request with an abort signal', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => [],
+      } as Response);
+
+      await fetchSecretEnvVars();
+
+      const init = vi.mocked(globalThis.fetch).mock.calls[0]?.[1];
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('degrades to an empty env when the request is aborted by its deadline', async () => {
+      vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+        Object.assign(new Error('signal timed out'), { name: 'TimeoutError' })
+      );
+
+      const result = await fetchSecretEnvVars();
+      expect(result).toEqual({});
+    });
+
     // Internal subsystem secrets (s3.*, oauth.*, db.*) must NOT be exposed
     // as shell env vars. Only valid POSIX identifiers are emitted.
     it('filters out dotted / non-POSIX names from the shell env', async () => {

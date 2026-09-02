@@ -110,6 +110,55 @@ starts at the command's cwd, so a package sitting in `/workspace/node_modules`
 is genuinely invisible from `/shared`, and the bare message reads as a false
 claim.
 
+## A Lazy-Mount Latch Must Release on a HANG, Not Just a Rejection
+
+The same "promise that never settles" shape as the esbuild handshake above, one
+layer up. A once-only lazy mount guarded by a boolean typically looks like:
+
+```ts
+if (surfaceId === 'term' && !terminalMounted) {
+  terminalMounted = true;
+  deps.mountTerminal(deps.termSurface).catch(() => {
+    terminalMounted = false; // only a REJECTION re-arms
+  });
+}
+```
+
+That is correct for a failure and wrong for a stall. `mountWorkbenchTerminal`
+awaits `fetchSecretEnvVars()`, `boot.onClientReady`, and `view.mount()`; if any
+of them never settles the `.catch` never runs, the latch stays set for the life
+of the page, and every later activation no-ops against a surface that will
+never appear. The panel is dead with no user-visible error and no recovery
+short of a reload.
+
+Two rules:
+
+1. **Bound every await on the mount path.** A bare `fetch` is the usual
+   culprit: a stalled connection is not an error, so a fail-silent
+   `try/catch` that "degrades gracefully" degrades to a hang. Give it
+   `AbortSignal.timeout(...)` — `secret-env.ts` (`MASKED_SECRETS_TIMEOUT_MS`)
+   is the reference, and its unbounded version wedged the whole Term surface.
+2. **Re-arm the latch on a stall, not only on a rejection**
+   (`TERMINAL_MOUNT_STALL_MS` in `ui/wc/wc-workbench.ts`). Keep the re-arm
+   one-shot: the abandoned attempt cannot be cancelled, so an unbounded re-arm
+   would mount one view per activation.
+
+This also had a long tail in CI. E2E specs waiting on
+`window.__slicc_terminal_view` failed with an unhelpfully generic
+`page.waitForFunction: Timeout`, and because the latch could never clear,
+raising the wait changed nothing (90s failed identically) while a fresh browser
+context always passed — which reads exactly like environmental flake and hid
+the real defect for weeks. Raising an E2E budget is the tempting response and
+the wrong one: no wait can outlast a latch that never clears, so treat "a
+longer timeout did not help" as evidence of a wedge rather than of a slower
+runner.
+
+The shared `openTerminal` helper (`tests/e2e/two-instance-helpers.ts`) therefore
+RE-FIRES `selectItem('term')` on a `SELECT_RETRY_WINDOW_MS` cadence instead of
+selecting once and waiting out the budget: a re-armed latch only becomes a real
+retry if something activates the surface AGAIN. Programmatic `selectItem` always
+emits select (collapse-on-active is click-only), so re-firing is safe.
+
 ## emscripten WASM Heap Views: Copy Inside the Callback
 
 WASM modules built with emscripten — magick-wasm, Pyodide, sql.js — hand

@@ -62,6 +62,15 @@ const NAV_TIMEOUT_MS = 60_000;
 /** Budget for a single UI action (a tab click). */
 const ACTION_TIMEOUT_MS = 30_000;
 
+/**
+ * How long each `openTerminal` attempt waits before re-firing the activation.
+ *
+ * Long enough that a merely slow mount (dynamic import + session handshake on
+ * a loaded runner) completes on the first attempt, short enough that a wedged
+ * one gets several re-selects inside the overall budget.
+ */
+const SELECT_RETRY_WINDOW_MS = 15_000;
+
 /** Model id every multi-cone fixture advertises and every cone runs on. */
 export const CONE_MODEL = 'fake-cone-primary';
 /** Second advertised model, so a follower has something to switch cone B to. */
@@ -468,24 +477,42 @@ export async function execInTerminal(
  * workbench and triggers the mount) — the same sequence `speech-roundtrip`
  * and `git-clone-live` use.
  *
+ * The select is RE-FIRED while waiting rather than sent once. A mount attempt
+ * that stalls re-arms the activator's one-shot latch
+ * (`TERMINAL_MOUNT_STALL_MS` in `ui/wc/wc-workbench.ts`), and that re-arm only
+ * becomes a real retry if something activates the surface AGAIN — a single
+ * select would just sit out the rest of the budget against a latch that had
+ * already been consumed. This is also why the budget alone was never the fix:
+ * no wait outlasts a latch that never clears. Programmatic `selectItem` always
+ * emits select (collapse-on-active is click-only), so re-firing is safe.
+ *
  * Idempotent, so callers can treat it as "make sure there is a terminal".
  */
 export async function openTerminal(page: Page, timeoutMs = 90_000): Promise<void> {
   if (await page.evaluate(() => Boolean(window.__slicc_terminal_view))) return;
-  await page.evaluate(() => {
-    const dock = document.querySelector('slicc-dock') as
-      | (HTMLElement & { selectItem?: (id: string) => void })
-      | null;
-    if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
-    dock.selectItem('term');
-  });
-  // 90s, not 30/60: the lazy mount (dynamic import + session handshake) regularly
-  // exceeds half a minute on a loaded CI runner. Specs that still wait only 30s
-  // (python-print, git-clone-live) turn that into a red run; this helper is the
-  // shared entry point so every caller inherits the corrected budget.
-  await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-    timeout: timeoutMs,
-  });
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    await page.evaluate(() => {
+      const dock = document.querySelector('slicc-dock') as
+        | (HTMLElement & { selectItem?: (id: string) => void })
+        | null;
+      if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
+      dock.selectItem('term');
+    });
+    try {
+      await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
+        timeout: Math.min(SELECT_RETRY_WINDOW_MS, Math.max(1_000, deadline - Date.now())),
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(
+    `__slicc_terminal_view was never published within ${timeoutMs}ms ` +
+      `(re-selected the term surface until the deadline): ${String(lastError)}`
+  );
 }
 
 // ── Chat ───────────────────────────────────────────────────────────

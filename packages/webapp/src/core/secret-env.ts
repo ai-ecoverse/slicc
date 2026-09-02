@@ -17,6 +17,20 @@ export { isValidShellEnvName } from '../base/shell-env-name.js';
 
 const log = createLogger('secret-env');
 
+/**
+ * Cap on the masked-secrets fetch.
+ *
+ * This call sits on the terminal-mount hot path (`mountWorkbenchTerminal`
+ * awaits it before `view.mount`), and the surrounding design is
+ * fail-silent: every error path below degrades to `{}` because secrets are
+ * optional and must not block shell init. A STALLED connection is not an
+ * error, though — it never rejects, so without a deadline the await hangs
+ * forever and the Term surface never finishes mounting. Matches the
+ * 10s budget the other cross-origin bridge fetches use
+ * (`setup-standalone-tray-init-hosted.ts`, `wc-tray.ts`).
+ */
+const MASKED_SECRETS_TIMEOUT_MS = 10_000;
+
 export interface MaskedSecretEntry {
   name: string;
   maskedValue: string;
@@ -128,7 +142,10 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
 
   // node-rest (CLI / Electron / swift): standard REST against the local server.
   try {
-    const resp = await fetch(resolveApiUrl('/api/secrets/masked'), { headers: apiHeaders() });
+    const resp = await fetch(resolveApiUrl('/api/secrets/masked'), {
+      headers: apiHeaders(),
+      signal: AbortSignal.timeout(MASKED_SECRETS_TIMEOUT_MS),
+    });
     if (!resp.ok) {
       log.warn('Failed to fetch masked secrets', { status: resp.status });
       return {};
