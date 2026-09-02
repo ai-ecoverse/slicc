@@ -14,7 +14,9 @@
  *
  * What the factory wires up:
  *
- *  1. `Orchestrator` with the supplied callbacks + `getBrowserAPI`.
+ *  1. `Orchestrator` with the supplied callbacks + `getBrowserAPI`, and
+ *     one `CapabilityBroker` (page adapter by default) injected before
+ *     `orchestrator.init()` so restored scoops never probe the float (#2276).
  *  2. `bridge.bind(orchestrator, browser)`.
  *  3. Tray-runtime subscription so leader/follower status pushes to the
  *     panel via `bridge.emitTrayRuntimeStatus()`.
@@ -78,6 +80,10 @@ import {
 } from '../shell/provider-env-seed.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import {
+  type CapabilityBroker,
+  createPageCapabilityBroker,
+} from '../work-unit/capability/index.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { matchDiscoveryRouteCandidate } from './discovery-lick-routing.js';
 import { ProcMountBackend } from './proc-mount.js';
@@ -170,6 +176,13 @@ export interface KernelHostConfig {
    */
   syncFsChannelNonce?: SyncFsNonce | null;
   /**
+   * Privileged-capability adapter for this float (#2276). Default: the
+   * page stub with `network.localNodeServer` snapshotted from
+   * `hasLocalNodeServer()` at composition time. Tests inject a fake.
+   */
+  capabilityBroker?: CapabilityBroker;
+
+  /**
    * Boot-progress heartbeat, called at each boot milestone (orchestrator
    * up, each restored scoop's context, lick manager, cone bootstrap, …).
    * The kernel worker forwards it to the page, which re-arms the
@@ -221,6 +234,11 @@ export interface KernelHost {
    * mount.
    */
   processManager: ProcessManager;
+  /**
+   * Privileged-capability adapter composed for this float (#2276). Scoops
+   * and work-unit logic read this; they do not probe the runtime.
+   */
+  capabilityBroker: CapabilityBroker;
   /**
    * Stop the BshWatchdog and unsubscribe tray-runtime listeners. Idempotent.
    * Callers wire this to their float's lifecycle hook (worker close).
@@ -428,13 +446,14 @@ async function bootOrchestrator(
   browser: BrowserAPI,
   bridge: KernelFacade,
   callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>,
-  onBootProgress?: (stage: string) => void
+  config: KernelHostConfig
 ): Promise<{
   processManager: ProcessManager;
   orchestrator: OrchestratorType;
   unsubLeader: () => void;
   unsubFollower: () => void;
   sharedFs: VirtualFS | null;
+  capabilityBroker: CapabilityBroker;
 }> {
   // 1. Construct orchestrator + process manager. The manager is the
   // single source of truth for live processes — every scoop turn,
@@ -448,6 +467,11 @@ async function bootOrchestrator(
     getBrowserAPI: () => browser,
   });
   orchestrator.setProcessManager(processManager);
+  // One broker for the float, before `init()` restores scoops (#2276).
+  const capabilityBroker =
+    config.capabilityBroker ??
+    createPageCapabilityBroker({ localNodeServer: hasLocalNodeServer() });
+  orchestrator.setCapabilityBroker(capabilityBroker);
   // Fallback global for shell scripts / `.jsh` callers that can't
   // accept constructor injection. `ps` prefers the DI path when the
   // supplemental command is constructed via
@@ -476,7 +500,7 @@ async function bootOrchestrator(
   //    Each restored scoop's context init emits a boot-progress heartbeat —
   //    this is the boot's main time sink for a large session, so it must
   //    keep the ready watchdog alive (#2007).
-  await orchestrator.init(onBootProgress);
+  await orchestrator.init(config.onBootProgress);
 
   // 4b. Seed the bridge's chat buffers from each scoop's restored
   // canonical conversation, BEFORE `kernel-worker-ready` is signaled and
@@ -488,7 +512,7 @@ async function bootOrchestrator(
 
   // 5 (caller): publish agent bridge for the `agent` shell command.
   const sharedFs = orchestrator.getSharedFS();
-  return { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs };
+  return { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs, capabilityBroker };
 }
 
 /**
@@ -974,8 +998,8 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
 
   // Steps 1–4b: construct + init the orchestrator, bind the bridge, wire tray
   // subs, seed chat buffers. See `bootOrchestrator` for the per-step detail.
-  const { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs } =
-    await bootOrchestrator(container, browser, bridge, callbacks, config.onBootProgress);
+  const { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs, capabilityBroker } =
+    await bootOrchestrator(container, browser, bridge, callbacks, config);
   progress('orchestrator-ready');
   if (sharedFs) {
     publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
@@ -1107,6 +1131,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     lickManager,
     sharedFs: sharedFs ?? null,
     processManager,
+    capabilityBroker,
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;

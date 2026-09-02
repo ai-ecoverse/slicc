@@ -299,6 +299,12 @@ Test in both CLI and extension floats.
   import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
 - `packages/dev-tools/tools/layer-back-edge-baseline.json` growing in a diff — someone is
   trying to grandfather a new violation instead of fixing it.
+- A new `isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
+  `resolveFloatTopology` call in `scoops/` or `tools/` business logic. Privileged
+  float detection belongs on the injected `CapabilityBroker`
+  (`work-unit/capability/`), composed once in `kernel/host.ts` (#2276). See
+  [`work-unit.md`](work-unit.md) Phase 6. The tell is the same as a back-edge:
+  the call site is in the wrong layer.
 
 **Historical precedents**
 

@@ -46,6 +46,7 @@ import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-ma
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { TurnGuestGate } from '../sudo/types.js';
+import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { tmpDirFor, toDescriptor } from '../work-unit/descriptor.js';
@@ -127,6 +128,7 @@ export class ScoopContext {
 
   private skillsFs: VirtualFS | null = null;
   private sudoManager: SudoManager | null = null;
+  private capabilityBroker: CapabilityBroker | null = null;
 
   private structuredOutputValue: unknown;
   /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
@@ -176,7 +178,8 @@ export class ScoopContext {
     coneJid?: string,
     processManager?: ProcessManager,
     sudoManager?: SudoManager | null,
-    conversationStore?: WorkUnitConversationStore | null
+    conversationStore?: WorkUnitConversationStore | null,
+    capabilityBroker?: CapabilityBroker | null
   ) {
     this.scoop = scoop;
     this.unit = toDescriptor(scoop);
@@ -187,6 +190,7 @@ export class ScoopContext {
     this.coneJid = coneJid;
     this.processManager = processManager ?? null;
     this.sudoManager = sudoManager ?? null;
+    this.capabilityBroker = capabilityBroker ?? null;
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
@@ -312,6 +316,7 @@ export class ScoopContext {
         callbacks: this.callbacks,
         sessions: this.sessions,
         sudoManager: this.sudoManager,
+        capabilityBroker: this.capabilityBroker,
         processManager: this.processManager,
         processOwner: this.owner,
         coneJid: this.coneJid,

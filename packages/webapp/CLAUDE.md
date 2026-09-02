@@ -59,7 +59,9 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
   append-only record (history/UI/transcripts DERIVE from it); never make a canonical read
   fatal or delete a still-written legacy record. **Users never talk to a scoop**: a selected
   scoop is READ-ONLY (`isReadOnlyUnit`); its asks go to the OWNING cone. Layout from
-  `workspaceFor` ALONE (never hardcode `/workspace`); memory per cone.
+  `workspaceFor` ALONE (never hardcode `/workspace`); memory per cone. Privileged float
+  detection goes through `CapabilityBroker` at kernel-host composition (#2276), never
+  `isExtensionRealm` in scoops/tools.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without queue/
   watermark loss; user `web` bypasses the window. `transcript-limits.ts` caps bridge/event
   transcripts at 64 KB — never `agent-sessions` history or compaction input.

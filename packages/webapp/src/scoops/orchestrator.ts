@@ -38,6 +38,7 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
 import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import {
@@ -226,6 +227,12 @@ export class Orchestrator implements ConeApprovalRouter {
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
+  /**
+   * Privileged-capability adapter for this float (#2276). Injected by
+   * `createKernelHost` before `init()`; scoops read it and never probe
+   * the runtime.
+   */
+  private capabilityBroker: CapabilityBroker | null = null;
   /** Live /etc/llmstxtignore policy installed into the LickManager upstream gate. */
   private llmsTxtIgnorePolicy: LlmsTxtIgnorePolicy | null = null;
   /** Live `/etc/models` loader — publishes the model access policy (#2195). */
@@ -368,6 +375,7 @@ export class Orchestrator implements ConeApprovalRouter {
       getConversationStore: () => this.conversationStore,
       getProcessManager: () => this.processManager,
       getSudoManager: () => this.sudoManager,
+      getCapabilityBroker: () => this.capabilityBroker,
       callbacks: this.callbacks,
       idleTimers: this.idleTimers,
       completionService: this.completionService,
@@ -420,6 +428,20 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   setProcessManager(pm: ProcessManager): void {
     this.processManager = pm;
+  }
+
+  /**
+   * Inject the privileged-capability adapter. New `ScoopContext`s created
+   * after this point pick it up. `createKernelHost` calls this before
+   * `init()` so restored scoops see the same broker.
+   */
+  setCapabilityBroker(broker: CapabilityBroker): void {
+    this.capabilityBroker = broker;
+  }
+
+  /** The float's CapabilityBroker, or null when unwired (tests). */
+  getCapabilityBroker(): CapabilityBroker | null {
+    return this.capabilityBroker;
   }
 
   /**

@@ -29,6 +29,7 @@ import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { TurnGuestGate } from '../sudo/types.js';
+import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { conversationKeyFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
@@ -153,6 +154,12 @@ export interface ScoopLifecycleDeps {
   getProcessManager(): ProcessManager | null;
   /** Live SudoManager — used for sudoers seeding and threaded into every new `ScoopContext`. */
   getSudoManager(): SudoManager | null;
+  /**
+   * Privileged-capability adapter for this float (#2276). Optional so
+   * existing tests that construct a manager without a host keep compiling;
+   * production always injects via `createKernelHost`.
+   */
+  getCapabilityBroker?(): CapabilityBroker | null;
   /** Top-level orchestrator-callback surface. */
   callbacks: ScoopLifecycleCallbacks;
   /** Idle-timer ops — armed on every `ready` transition for non-cone scoops, cleared on destroy. */
@@ -435,7 +442,8 @@ export class ScoopLifecycleManager {
       coneJid,
       this.deps.getProcessManager() ?? undefined,
       this.deps.getSudoManager(),
-      this.deps.getConversationStore()
+      this.deps.getConversationStore(),
+      this.deps.getCapabilityBroker?.() ?? undefined
     );
 
     unit.attachContext(context, contextId);

@@ -20,6 +20,7 @@ import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-head
 import type { SudoManager } from '../../sudo/sudo-manager.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
 import type { BashJobProcess } from '../../tools/types.js';
+import type { CapabilityBroker } from '../../work-unit/capability/index.js';
 import { thinkingFor } from '../../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { RegisteredScoop } from '../types.js';
@@ -46,6 +47,8 @@ export interface RuntimeInitDeps {
   callbacks: ScoopContextCallbacks;
   sessions: SessionPersistence;
   sudoManager: SudoManager | null;
+  /** Privileged-capability adapter for this float (#2276). */
+  capabilityBroker: CapabilityBroker | null;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
   coneJid: string | undefined;
@@ -97,6 +100,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     skillsFs: deps.skillsFs,
     getBrowserAPI: callbacks.getBrowserAPI,
     sudoManager: deps.sudoManager,
+    capabilityBroker: deps.capabilityBroker,
     onSudoRequest: callbacks.onSudoRequest,
     processManager: deps.processManager,
     processOwner: deps.processOwner,
