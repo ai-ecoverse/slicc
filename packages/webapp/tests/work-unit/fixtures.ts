@@ -6,6 +6,7 @@
  */
 
 import { vi } from 'vitest';
+import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import type { ScoopObserver } from '../../src/scoops/scoop-lifecycle-manager.js';
 import type { RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
 import { LiveWorkUnit, type UnitContext } from '../../src/work-unit/live-unit.js';
@@ -87,11 +88,26 @@ export interface FakeHost extends WorkUnitManagerHost {
   stopScoop: ReturnType<typeof vi.fn<(jid: string) => void>>;
   registerScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['registerScoop']>>;
   unregisterScoop: ReturnType<typeof vi.fn<(jid: string) => Promise<void>>>;
+  waitForScoops: ReturnType<typeof vi.fn<WorkUnitManagerHost['waitForScoops']>>;
+  /** Drive the scoop-wait bus as a child completing its turn would. */
+  complete(jid: string, summary: string): Promise<void>;
 }
 
 export function makeFakeHost(initial: RegisteredScoop[] = []): FakeHost {
   const scoops = new Map(initial.map((s) => [s.jid, s]));
   const units = new Map<string, LiveWorkUnit>();
+  const completion = new ScoopCompletionService({
+    getSharedFs: () => null,
+    getScoop: (jid) => scoops.get(jid),
+    findParent: (jid) => {
+      const scoop = scoops.get(jid);
+      return scoop?.parentJid ? scoops.get(scoop.parentJid) : undefined;
+    },
+    hasScoop: (jid) => scoops.has(jid),
+    notifyIncomingMessage: () => {},
+    handleMessage: async () => {},
+    reportError: () => {},
+  });
   const host: FakeHost = {
     scoops,
     units,
@@ -114,7 +130,7 @@ export function makeFakeHost(initial: RegisteredScoop[] = []): FakeHost {
           sendPrompt: (j, text, senderId, senderName, options) =>
             host.sendPrompt(j, text, senderId, senderName, options),
           clearIdleTimer: () => {},
-          forgetCompletion: () => {},
+          forgetCompletion: (j) => completion.forgetScoop(j, 'close'),
           unregister: (j) => host.unregisterScoop(j),
         });
         // Every spawned unit owns a context; `abort()` stops it, which is what
@@ -135,6 +151,11 @@ export function makeFakeHost(initial: RegisteredScoop[] = []): FakeHost {
       await units.get(jid)?.teardown();
       units.delete(jid);
     }),
+    waitForScoops: vi.fn((jids, timeoutMs) => completion.waitForScoops(jids, timeoutMs)),
+    complete(jid, summary) {
+      completion.setResponseFull(jid, summary);
+      return completion.notifyCompletion(jid);
+    },
   };
   return host;
 }

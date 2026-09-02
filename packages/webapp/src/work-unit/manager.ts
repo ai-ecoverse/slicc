@@ -1,23 +1,43 @@
 /**
  * `WorkUnitManager` — hierarchy-aware facade over the orchestrator's scoop
- * registry (#1666, Phase 1).
+ * registry (#1666, Phase 1; `createMany` / `join` in Phase 8a / #2278).
  *
  * It answers the questions the RFC says nobody can answer today — "who is
  * my parent?", "which units do I own?", "which root should an unaddressed
  * event go to?" — from the explicit `parentJid` edge instead of a global
  * role lookup. Creation and teardown delegate to the existing
- * register/unregister paths.
+ * register/unregister paths. `join` is a thin map over the scoop-wait
+ * completion bus — it must not grow a second waiter table.
  */
 
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../scoops/types.js';
 import { assertChildPolicyAllowed, childrenOf, rootsOf } from './policy.js';
 import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
-import type { CreateWorkUnitOptions, WorkUnitDescriptor, WorkUnitId } from './types.js';
+import type {
+  CreateWorkUnitOptions,
+  JoinOptions,
+  JoinResult,
+  WorkUnitDescriptor,
+  WorkUnitId,
+} from './types.js';
+
+/** One row of the scoop-wait bus. Structurally the completion-service `WaitResult`. */
+export interface CompletionWaitResult {
+  jid: WorkUnitId;
+  summary: string | null;
+  timedOut: boolean;
+}
 
 /** What the manager needs beyond a {@link WorkUnitHost}. */
 export interface WorkUnitManagerHost extends WorkUnitHost {
   getScoops(): RegisteredScoop[];
   registerScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Wait until each unit's current work settles, up to an optional timeout.
+   * This IS `ScoopCompletionService.waitForScoops` — `join` must not grow a
+   * second wait bus. Unknown ids come back as `timedOut` immediately.
+   */
+  waitForScoops(jids: readonly WorkUnitId[], timeoutMs?: number): Promise<CompletionWaitResult[]>;
 }
 
 /** Build the `RegisteredScoop` record for a new unit. Exported for tests. */
@@ -59,6 +79,47 @@ export class WorkUnitManager {
     }
     await this.host.registerScoop(record);
     return this.get(record.jid)!.descriptor;
+  }
+
+  /**
+   * Register many units. Fail closed: a missing parent, a duplicate explicit
+   * `id`, or a cycle in the batch throws before anything is registered.
+   * Intra-batch edges (`parentId` matching another option's explicit `id`)
+   * are applied parent-before-child; the returned array matches `options`
+   * order. A `registerScoop` failure rolls back every unit already created
+   * in this call (`close`), so the registry is left as it was.
+   */
+  async createMany(options: CreateWorkUnitOptions[]): Promise<WorkUnitDescriptor[]> {
+    if (options.length === 0) return [];
+    assertCreateManyOptions(options, (id) => this.host.getScoop(id));
+    const stamped = stampCreateManyIds(options);
+    const ordered = orderCreateMany(stamped);
+    const created: WorkUnitId[] = [];
+    const byOption = new Map<CreateWorkUnitOptions, WorkUnitDescriptor>();
+    try {
+      for (const opts of ordered) {
+        const descriptor = await this.create(opts);
+        created.push(descriptor.id);
+        byOption.set(opts, descriptor);
+      }
+    } catch (err) {
+      for (let i = created.length - 1; i >= 0; i--) {
+        await this.close(created[i]).catch(() => undefined);
+      }
+      throw err;
+    }
+    return stamped.map((opts) => byOption.get(opts)!);
+  }
+
+  /**
+   * Wait until each unit settles or `options.timeoutMs` fires. Thin map over
+   * {@link WorkUnitManagerHost.waitForScoops} — the scoop-wait completion
+   * bus `scoop_wait` already uses. Product tools stay aliases; this is the
+   * blocking supervisor form. Unknown ids are `timedOut` immediately.
+   */
+  async join(ids: readonly WorkUnitId[], options?: JoinOptions): Promise<JoinResult[]> {
+    const results = await this.host.waitForScoops(ids, options?.timeoutMs);
+    return results.map((r) => ({ id: r.jid, summary: r.summary, timedOut: r.timedOut }));
   }
 
   /** Descriptors of every registered unit. */
@@ -136,4 +197,95 @@ export class WorkUnitManager {
     }
     await runtime.close();
   }
+}
+
+/**
+ * Assign unique ids up front so two roots created in the same millisecond
+ * do not collide on `cone_${Date.now()}` and overwrite each other. Caller-
+ * supplied ids are left alone.
+ */
+function stampCreateManyIds(options: CreateWorkUnitOptions[]): CreateWorkUnitOptions[] {
+  let t = Date.now();
+  return options.map((opts) => {
+    if (opts.id) return opts;
+    const folder = opts.folder ?? opts.name;
+    const id = opts.parentId === null ? `cone_${t++}` : `scoop_${folder}_${t++}`;
+    return { ...opts, id };
+  });
+}
+
+/**
+ * Fail closed before any register: duplicate explicit ids, and every
+ * `parentId` must already exist or be an explicit `id` elsewhere in the batch.
+ */
+function assertCreateManyOptions(
+  options: readonly CreateWorkUnitOptions[],
+  getScoop: (id: WorkUnitId) => RegisteredScoop | undefined
+): void {
+  const batchIds = new Set<WorkUnitId>();
+  for (const opts of options) {
+    if (!opts.id) continue;
+    if (batchIds.has(opts.id)) {
+      throw new Error(`Duplicate work unit id in createMany: ${opts.id}`);
+    }
+    batchIds.add(opts.id);
+  }
+  const missing: WorkUnitId[] = [];
+  const seenMissing = new Set<WorkUnitId>();
+  for (const opts of options) {
+    if (opts.parentId === null) continue;
+    if (getScoop(opts.parentId) || batchIds.has(opts.parentId)) continue;
+    if (seenMissing.has(opts.parentId)) continue;
+    seenMissing.add(opts.parentId);
+    missing.push(opts.parentId);
+  }
+  if (missing.length > 0) {
+    throw new Error(`Parent work unit not found: ${missing.join(', ')}`);
+  }
+}
+
+/**
+ * Parent-before-child permutation of a `createMany` batch. Intra-batch
+ * edges are `parentId` matching another option's explicit `id`. A cycle
+ * throws; callers that already ran {@link assertCreateManyOptions} still
+ * need this so a loop cannot register a prefix.
+ */
+function orderCreateMany(options: readonly CreateWorkUnitOptions[]): CreateWorkUnitOptions[] {
+  const n = options.length;
+  if (n <= 1) return options.slice();
+
+  const idToIndex = new Map<WorkUnitId, number>();
+  for (let i = 0; i < n; i++) {
+    const id = options[i].id;
+    if (id) idToIndex.set(id, i);
+  }
+
+  const indegree = new Array<number>(n).fill(0);
+  const children: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    const parentId = options[i].parentId;
+    if (parentId === null) continue;
+    const parentIndex = idToIndex.get(parentId);
+    if (parentIndex === undefined) continue;
+    children[parentIndex].push(i);
+    indegree[i] += 1;
+  }
+
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (indegree[i] === 0) queue.push(i);
+  }
+  const ordered: CreateWorkUnitOptions[] = [];
+  for (let q = 0; q < queue.length; q++) {
+    const i = queue[q];
+    ordered.push(options[i]);
+    for (const child of children[i]) {
+      indegree[child] -= 1;
+      if (indegree[child] === 0) queue.push(child);
+    }
+  }
+  if (ordered.length !== n) {
+    throw new Error('createMany cycle: parentId edges in this batch form a cycle');
+  }
+  return ordered;
 }
