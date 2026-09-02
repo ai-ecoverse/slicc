@@ -7,6 +7,7 @@ import {
   buildCameraRequest,
   createFfmpegCommand,
   createIpkContextFromCtx,
+  isAnalysisSink,
   isAvfoundationCapture,
   parseAvfoundationDeviceSpec,
   parseConcatList,
@@ -1468,6 +1469,157 @@ describe('runWasmFfmpeg concat demuxer', () => {
     await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
 
     expect(fake.writeFile.mock.calls.map(([n]) => n as string)).toEqual(['__in0_in.mp4']);
+  });
+});
+
+describe('runWasmFfmpeg analysis sinks (-f null)', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+    vi.mocked(recycleFfmpeg).mockReset();
+  });
+
+  it('parseFfmpegArgs treats lone - as an output positional (not a flag)', () => {
+    const parsed = parseFfmpegArgs([
+      '-i',
+      'in.mp4',
+      '-af',
+      'silencedetect=noise=-30dB:d=0.5',
+      '-f',
+      'null',
+      '-',
+    ]);
+    expect(parsed.outputPath).toBe('-');
+    expect(parsed.outputOpts).toEqual(['-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null']);
+    expect(isAnalysisSink(parsed)).toBe(true);
+  });
+
+  it('isAnalysisSink accepts -f null /dev/null and bare /dev/null', () => {
+    expect(
+      isAnalysisSink(
+        parseFfmpegArgs([
+          '-i',
+          'in.mp4',
+          '-af',
+          'loudnorm=print_format=json',
+          '-f',
+          'null',
+          '/dev/null',
+        ])
+      )
+    ).toBe(true);
+    expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-af', 'loudnorm', '/dev/null']))).toBe(
+      true
+    );
+    // Bare `-` without `-f null` is stdout, not a sink.
+    expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-']))).toBe(false);
+    // Real output path with `-f null` is still an encode artifact.
+    expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-f', 'null', 'dump.bin']))).toBe(false);
+  });
+
+  it('succeeds for -f null - and returns the captured log without VFS writeback', async () => {
+    const fake = makeFakeFfmpeg({
+      exitCode: 0,
+      readFile: () => {
+        throw new Error('FS error: no such file or directory');
+      },
+    });
+    // Emit a silencedetect-shaped log through the on('log') handler.
+    fake.on.mockImplementation((event: string, handler: (e: { message: string }) => void) => {
+      if (event === 'log') {
+        handler({ message: '[silencedetect @ 0x0] silence_start: 0.5' });
+        handler({ message: '[silencedetect @ 0x0] silence_end: 1.2 | silence_duration: 0.7' });
+      }
+    });
+    useFakeFfmpeg(fake);
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { writeFile } });
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/silence_start: 0\.5/);
+    expect(result.stderr).toMatch(/silence_duration: 0\.7/);
+    expect(fake.readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    expect(execArgs.at(-1)).toBe('__null_sink');
+    expect(execArgs).toContain('-f');
+    expect(execArgs[execArgs.indexOf('-f') + 1]).toBe('null');
+  });
+
+  it('succeeds for -f null /dev/null and returns the captured log', async () => {
+    const fake = makeFakeFfmpeg({
+      exitCode: 0,
+      readFile: () => {
+        throw new Error('FS error: no such file or directory');
+      },
+    });
+    fake.on.mockImplementation((event: string, handler: (e: { message: string }) => void) => {
+      if (event === 'log') {
+        handler({ message: 'Input Integrated loudness: -14.0 LUFS' });
+      }
+    });
+    useFakeFfmpeg(fake);
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { writeFile } });
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'loudnorm=print_format=json', '-f', 'null', '/dev/null'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/Integrated loudness/);
+    expect(fake.readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('still fails a normal encode with a missing or empty output', async () => {
+    useFakeFfmpeg(
+      makeFakeFfmpeg({
+        exitCode: 0,
+        readFile: () => {
+          throw new Error('FS error: no such file or directory');
+        },
+      })
+    );
+    const missing = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.gif'],
+      createMockCtx()
+    );
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toMatch(/produced no output file/i);
+
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array() }));
+    const empty = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], createMockCtx());
+    expect(empty.exitCode).toBe(1);
+    expect(empty.stderr).toMatch(/empty output file/i);
+  });
+
+  it('does not recycle the core on a successful analysis sink', async () => {
+    // Skipping readback must not be confused with a core fault: the
+    // null muxer leaves no MEMFS artifact by design.
+    const fake = makeFakeFfmpeg({
+      exitCode: 0,
+      readFile: () => {
+        throw new Error('FS error: no such file or directory');
+      },
+    });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(recycleFfmpeg).not.toHaveBeenCalled();
+    expect(fake.readFile).not.toHaveBeenCalled();
+    // Inputs still cleaned from MEMFS; the disposable sink name is too.
+    expect(fake.deleteFile).toHaveBeenCalled();
   });
 });
 

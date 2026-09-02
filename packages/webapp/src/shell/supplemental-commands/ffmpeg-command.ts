@@ -11,6 +11,9 @@
  *     invoked with the user's args, and the output file is read
  *     back into the VFS. Log lines from `ffmpeg.on('log')` are
  *     forwarded to stderr so timing and progress are visible.
+ *     **Analysis sinks** (`-f null` with `-` or `/dev/null`, or a
+ *     bare `/dev/null`) skip VFS writeback — the product is the
+ *     filter log on stderr (`silencedetect`, `loudnorm`, …).
  *
  *  2. **`-f avfoundation` capture**: when the input format is
  *     `avfoundation` we route through the browser's `getUserMedia`
@@ -90,6 +93,14 @@ invocation. Output options like -c:v, -c:a, -crf, -preset, -pix_fmt,
 -vf, -b:v, -b:a, and a mismatched output extension all trigger a
 post-capture wasm pass so the produced file matches what the user asked
 for (e.g. real H.264 mp4 instead of webm bytes in a .mp4 wrapper).
+
+Analysis sinks (no output file — results are on stderr):
+  ffmpeg -i in.mp4 -af silencedetect=noise=-30dB:d=0.5 -f null -
+  ffmpeg -i in.mp4 -af loudnorm=print_format=json -f null /dev/null
+  With \`-f null\` and output \`-\` or \`/dev/null\`, the wrapper skips
+  VFS writeback and returns the core log (filter measurements) on
+  stderr. Bare \`/dev/null\` without \`-f null\` is also treated as a
+  sink (MEMFS has no /dev/null device).
 
 Notes:
   - First run downloads ~31 MB of ffmpeg-core; subsequent runs reuse
@@ -509,6 +520,15 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
       i += 1;
       continue;
     }
+    // Lone `-` is ffmpeg's stdin/stdout filename, not an option.
+    // Treating it as a flag made `ffmpeg … -f null -` report "at
+    // least one output file must be specified" because no positional
+    // was ever bound. `-i -` is unaffected: `-i` consumes the next
+    // token via VALUE_TAKING_FLAGS before this branch runs.
+    if (tok === '-') {
+      i = handlePositionalToken(state, tok, i);
+      continue;
+    }
     if (tok.startsWith('-')) {
       i = handleGenericOptionToken(state, args, i, tok);
       continue;
@@ -533,6 +553,40 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
  */
 export function isAvfoundationCapture(parsed: ParsedFfmpegInvocation): boolean {
   return parsed.inputs.some((input) => input.format === 'avfoundation');
+}
+
+/** Output tokens that discard media rather than naming a VFS artifact. */
+const ANALYSIS_SINK_TOKENS = new Set(['-', '/dev/null']);
+
+/** True when `outputOpts` contain an explicit `-f null` (null muxer). */
+function hasNullMuxer(outputOpts: string[]): boolean {
+  for (let i = 0; i < outputOpts.length - 1; i++) {
+    if (outputOpts[i] === '-f' && outputOpts[i + 1] === 'null') return true;
+  }
+  return false;
+}
+
+/**
+ * An analysis sink discards encoded media; the caller's product is
+ * what filters print on stderr (`silencedetect`, `loudnorm`, …).
+ *
+ * Detection (deliberately narrow so a failed encode cannot report
+ * success):
+ * - Output token is `-` or `/dev/null`, AND
+ * - either `-f null` is in the output options, OR the token is
+ *   `/dev/null` itself (MEMFS has no `/dev/null` device — treating a
+ *   bare `/dev/null` as a sink avoids a guaranteed empty-artifact
+ *   failure without widening the rule to arbitrary paths).
+ *
+ * A bare `-` without `-f null` is NOT a sink: that means stdout in
+ * native ffmpeg, which we do not emulate, so it still fails the
+ * missing-output check.
+ */
+export function isAnalysisSink(parsed: ParsedFfmpegInvocation): boolean {
+  const out = parsed.outputPath;
+  if (out === null || !ANALYSIS_SINK_TOKENS.has(out)) return false;
+  if (out === '/dev/null') return true;
+  return hasNullMuxer(parsed.outputOpts);
 }
 
 /**
@@ -1601,6 +1655,16 @@ async function readEncodedOutput(
   return { bytes };
 }
 
+/**
+ * MEMFS name for the encode artifact. Analysis sinks never produce a
+ * readable file — stage a disposable placeholder the null muxer can
+ * point at, then skip readback.
+ */
+function memfsOutputName(outputPath: string, analysisSink: boolean): string {
+  if (analysisSink) return '__null_sink';
+  return `__out_${outputPath.split('/').pop() || 'out.bin'}`;
+}
+
 async function runWasmFfmpeg(
   parsed: ParsedFfmpegInvocation,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
@@ -1612,7 +1676,8 @@ async function runWasmFfmpeg(
   const resolvedInputs = loaded.inputs;
 
   const outputPath = parsed.outputPath!;
-  const outputName = `__out_${outputPath.split('/').pop() || 'out.bin'}`;
+  const analysisSink = isAnalysisSink(parsed);
+  const outputName = memfsOutputName(outputPath, analysisSink);
 
   let stderr = '';
   let ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>;
@@ -1649,6 +1714,13 @@ async function runWasmFfmpeg(
         stderr: stderr || `ffmpeg: exited with code ${exitCode}\n`,
         exitCode: exitCode || 1,
       };
+    } else if (analysisSink) {
+      // Product is the filter log on stderr (silencedetect / loudnorm / …).
+      // Skip MEMFS readback and the VFS write below — including not
+      // writing a literal `/dev/null` path. Returning via `early` keeps
+      // the post-try write gated; this is not a core fault, so the
+      // instance is left cached (no recycle).
+      early = { stdout: '', stderr, exitCode: 0 };
     } else {
       const read = await readEncodedOutput(ffmpeg, outputName, outputPath, stderr);
       if ('error' in read) early = read.error;
