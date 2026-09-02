@@ -17,6 +17,26 @@ import { FsError, type Stats } from '../fs/types.js';
 
 export type PromiseFsClient = { promises: IsoGitFsPromises };
 
+export interface IsoGitFsOptions {
+  /**
+   * Memoize the `.git/objects` directory lookups isomorphic-git repeats once
+   * per object read: the `objects/pack` listing `readObjectPacked` re-reads on
+   * every packed lookup, and the `objects/` fan-out listing that decides
+   * whether the loose probe `_readObject` always tries first can find anything
+   * at all (issue #2712).
+   *
+   * OFF by default, and deliberately not a switch that can be flipped later:
+   * the memo lives exactly as long as the adapter object, so only a caller
+   * that builds ONE adapter PER git invocation may turn it on. That is
+   * `GitCommands.contextFor()`; two overlapping commands each get their own
+   * adapter and therefore never share a view of the object store. A memo that
+   * outlived one command would serve a stale view of a repo another writer is
+   * changing. Any write through the adapter drops it, so a pack or loose
+   * object created mid-command is visible to the next read.
+   */
+  objectCache?: boolean;
+}
+
 export interface IsoGitFsPromises {
   readFile(path: string, options?: unknown): Promise<Uint8Array | string>;
   writeFile(path: string, data: Uint8Array | string, options?: unknown): Promise<void>;
@@ -147,12 +167,101 @@ function readRange(options: unknown): { start: number; end: number } | null {
   return { start, end };
 }
 
+/**
+ * Memo tables for one command's `.git/objects` lookups. Both are keyed by the
+ * directory path (a process can have several repos open) and hold the pending
+ * promise rather than its value, so a fan-out of concurrent object reads
+ * shares ONE round trip instead of racing N identical ones.
+ */
+interface ObjectScope {
+  /** `<gitdir>/objects/pack` -> its entry names. */
+  packDirs: Map<string, Promise<string[]>>;
+  /** `<gitdir>/objects` -> the loose fan-out directory names present in it. */
+  fanouts: Map<string, Promise<Set<string>>>;
+}
+
+/** The directory isomorphic-git re-lists on every packed object read. */
+const PACK_DIR_SUFFIX = '/objects/pack';
+
+/** `<gitdir>/objects/ab/cdef…`; captures the objects dir and the fan-out name. */
+const LOOSE_OBJECT_PATH = /^(.*\/objects)\/([0-9a-f]{2})\/[0-9a-f]{38,}$/;
+
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
-export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
+export function createIsomorphicGitFs(
+  vfs: VirtualFS,
+  options: IsoGitFsOptions = {}
+): PromiseFsClient {
+  const scope: ObjectScope | undefined = options.objectCache
+    ? { packDirs: new Map(), fanouts: new Map() }
+    : undefined;
+
+  const listNames = async (path: string): Promise<string[]> =>
+    (await vfs.readDir(path)).map((e) => e.name);
+
+  /**
+   * Names of the loose fan-out directories under `objectsDir`, listed once per
+   * scope.
+   */
+  const fanoutNames = (active: ObjectScope, objectsDir: string): Promise<Set<string>> => {
+    const hit = active.fanouts.get(objectsDir);
+    if (hit) return hit;
+    const pending = listNames(objectsDir).then((names) => new Set(names));
+    active.fanouts.set(objectsDir, pending);
+    return pending;
+  };
+
+  /**
+   * True when `path` is a loose object whose fan-out directory is known to be
+   * absent. isomorphic-git's `_readObject` probes the loose path for EVERY
+   * object and only falls back to the packfile once that read fails, so on a
+   * packed repo it is one wasted round trip per object — 46,696 of them for a
+   * single `git log --all` over the hostfs bridge (#2712). One listing of
+   * `objects/` answers all of them.
+   */
+  const isMissingLooseObject = async (path: string): Promise<boolean> => {
+    if (!scope) return false;
+    const match = LOOSE_OBJECT_PATH.exec(path);
+    if (!match) return false;
+    try {
+      return !(await fanoutNames(scope, match[1])).has(match[2]);
+    } catch {
+      // Could not list `objects/` — let the real read answer.
+      return false;
+    }
+  };
+
+  /** Any write may add a pack or a loose object, so the memo cannot survive it. */
+  const invalidateObjectScope = (): void => {
+    scope?.packDirs.clear();
+    scope?.fanouts.clear();
+  };
+
+  /**
+   * Run a mutation with the memo dropped on BOTH sides of it. Dropping it only
+   * up front is not enough: a concurrent reader can repopulate the maps while
+   * the write is still in flight, and that listing — taken before the write
+   * landed — would then outlive it (#2749 review).
+   */
+  const mutate = async <T>(op: () => Promise<T>): Promise<T> => {
+    invalidateObjectScope();
+    try {
+      return await op();
+    } finally {
+      invalidateObjectScope();
+    }
+  };
+
   const promises: IsoGitFsPromises = {
     async readFile(path, options) {
+      // The loose-object shortcut comes first: whether the caller wants the
+      // whole file or a window, an object whose fan-out directory does not
+      // exist is ENOENT either way, and answering from the memo costs nothing.
+      if (await isMissingLooseObject(path)) {
+        throw new FsError('ENOENT', 'no such file or directory', path);
+      }
       // A window wins over an encoding: a slice of a packfile is bytes, and
-      // decoding half a deflate stream as text would be nonsense anyway.
+      // decoding half a deflate stream as text would be nonsense anyway. A
+      // ranged read is still a READ — it must not drop the object memo.
       const range = readRange(options);
       if (range) return await vfs.readFileRange(path, range.start, range.end);
       const content = await vfs.readFile(
@@ -163,28 +272,32 @@ export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
     },
 
     async writeFile(path, data, _options) {
-      await vfs.writeFile(path, data);
+      await mutate(() => vfs.writeFile(path, data));
     },
 
     async unlink(path) {
-      await vfs.rm(path);
+      await mutate(() => vfs.rm(path));
     },
 
     async readdir(path) {
-      const entries = await vfs.readDir(path);
-      return entries.map((e) => e.name);
+      if (!scope || !path.endsWith(PACK_DIR_SUFFIX)) return await listNames(path);
+      const hit = scope.packDirs.get(path);
+      if (hit) return [...(await hit)];
+      const pending = listNames(path);
+      scope.packDirs.set(path, pending);
+      // Hand out a copy: isomorphic-git sorts the array it is given in place.
+      return [...(await pending)];
     },
 
     async mkdir(path, options) {
       const opts = (options ?? undefined) as { recursive?: boolean } | undefined;
-      await vfs.mkdir(
-        path,
-        opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined
+      await mutate(() =>
+        vfs.mkdir(path, opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined)
       );
     },
 
     async rmdir(path) {
-      await vfs.rm(path);
+      await mutate(() => vfs.rm(path));
     },
 
     async stat(path) {
@@ -210,7 +323,7 @@ export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
       if (vfs.isPathUnderMount(path)) {
         throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', path);
       }
-      await vfs.symlink(target, path);
+      await mutate(() => vfs.symlink(target, path));
     },
   };
 

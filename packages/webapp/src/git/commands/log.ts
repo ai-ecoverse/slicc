@@ -3,6 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
+import { logAllBranches, walkAllBranches } from './log-walk.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -77,12 +78,23 @@ async function selectCommits(
     return await logPathspecs(ctx, cwd, { ref, pathspecs: selection.pathspecs, limit, caches });
   }
 
+  // `--all -- <path>…`: filter the traversal AS IT RUNS. Materializing a
+  // bounded candidate window first would silently drop a match that a busy
+  // branch pushed past the window (#2749 review).
+  if (selection.all && selection.pathspecs.length > 0) {
+    return await logAllBranchesPathspec(ctx, cwd, {
+      pathspecs: selection.pathspecs,
+      limit,
+      caches,
+      exclude: range ? await rangeExclusions(ctx, cwd, range[0], caches) : undefined,
+    });
+  }
+
   let commits = selection.all
-    ? await logAllBranches(
-        ctx,
-        cwd,
-        selection.pathspecs.length > 0 ? undefined : selection.maxCount
-      )
+    ? await logAllBranches(ctx, cwd, {
+        limit: selection.maxCount ?? ALL_BRANCHES_DEFAULT_LIMIT,
+        cache: caches.git,
+      })
     : await git.log({
         fs: ctx.lfs,
         dir: cwd,
@@ -92,14 +104,84 @@ async function selectCommits(
         ...(selection.followFile ? { filepath: selection.followFile, follow: true } : {}),
       });
   if (range) {
-    const excluded = await git.log({ fs: ctx.lfs, dir: cwd, cache: caches.git, ref: range[0] });
-    const excludedOids = new Set(excluded.map((entry) => entry.oid));
+    const excludedOids = await rangeExclusions(ctx, cwd, range[0], caches);
     commits = commits.filter((entry) => !excludedOids.has(entry.oid));
   }
   if (selection.pathspecs.length > 0) {
     return await filterByPathspec(ctx, cwd, commits, selection.pathspecs, limit, caches);
   }
   return range ? commits.slice(0, limit) : commits;
+}
+
+/**
+ * Commits `--all` materializes when `-n` is absent. The per-branch walk it
+ * replaced read 50 commits per branch and returned every one of them; 50 total
+ * is the same window for a one-branch repo and a bounded one for 29 (#2712).
+ */
+const ALL_BRANCHES_DEFAULT_LIMIT = 50;
+
+/**
+ * How many commits `--all -- <path>…` pulls off the traversal before running a
+ * round of pathspec matching. Purely a batching knob — the walk continues
+ * until `limit` matches are found or every branch is exhausted — but a batch
+ * lets the filter prime its `commit oid -> tree oid` memo from the whole batch,
+ * so a commit's first parent is usually resolved without re-reading it.
+ */
+const ALL_BRANCHES_PATHSPEC_BATCH = 64;
+
+/** The oids `a..b` excludes: everything reachable from `a`. */
+async function rangeExclusions(
+  ctx: GitCommandContext,
+  cwd: string,
+  from: string,
+  caches: PathspecCaches
+): Promise<ReadonlySet<string>> {
+  const excluded = await git.log({ fs: ctx.lfs, dir: cwd, cache: caches.git, ref: from });
+  return new Set(excluded.map((entry) => entry.oid));
+}
+
+/**
+ * `git log --all -- <path>…`: filter the all-branches traversal as it runs,
+ * stopping at `limit` matches or when every branch is exhausted.
+ *
+ * There is deliberately NO cap on how many commits get examined. Capping the
+ * candidate pool — as both the per-branch `depth: 50` loop and this function's
+ * first version did — makes the answer depend on how busy the OTHER branches
+ * are: 500 commits on one branch would push another branch's matching tip out
+ * of the window and the match would vanish with no diagnostic. Real `git log`
+ * walks until it has the matches too.
+ */
+async function logAllBranchesPathspec(
+  ctx: GitCommandContext,
+  cwd: string,
+  opts: {
+    pathspecs: string[];
+    limit: number;
+    caches: PathspecCaches;
+    exclude?: ReadonlySet<string>;
+  }
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const matched: Awaited<ReturnType<typeof git.log>> = [];
+  let batch: Awaited<ReturnType<typeof git.log>> = [];
+  /** Match one batch; true once `limit` matches have been collected. */
+  const drain = async (): Promise<boolean> => {
+    if (batch.length > 0) {
+      const remaining = opts.limit - matched.length;
+      matched.push(
+        ...(await filterByPathspec(ctx, cwd, batch, opts.pathspecs, remaining, opts.caches))
+      );
+      batch = [];
+    }
+    return matched.length >= opts.limit;
+  };
+
+  for await (const entry of walkAllBranches(ctx, cwd, { cache: opts.caches.git })) {
+    if (opts.exclude?.has(entry.oid)) continue;
+    batch.push(entry);
+    if (batch.length >= ALL_BRANCHES_PATHSPEC_BATCH && (await drain())) return matched;
+  }
+  await drain();
+  return matched;
 }
 
 /**
@@ -254,47 +336,6 @@ async function renderLog(
     if (opts.showStat) output += await logStatForCommit(ctx, cwd, entry);
   }
   return output;
-}
-
-/**
- * Collect commits from all local branches, dedup by oid, sorted by date descending.
- */
-async function logAllBranches(
-  ctx: GitCommandContext,
-  cwd: string,
-  maxCount?: number
-): Promise<Awaited<ReturnType<typeof git.log>>> {
-  const branches = await git.listBranches({ fs: ctx.lfs, dir: cwd });
-  const seen = new Set<string>();
-  const allCommits: Awaited<ReturnType<typeof git.log>> = [];
-
-  for (const branch of branches) {
-    try {
-      const branchCommits = await git.log({
-        fs: ctx.lfs,
-        cache: ctx.cache,
-        dir: cwd,
-        ref: branch,
-        depth: maxCount ?? 50,
-      });
-      for (const entry of branchCommits) {
-        if (!seen.has(entry.oid)) {
-          seen.add(entry.oid);
-          allCommits.push(entry);
-        }
-      }
-    } catch {
-      // Skip branches that can't be read
-    }
-  }
-
-  // Sort by timestamp descending (newest first)
-  allCommits.sort((a, b) => b.commit.author.timestamp - a.commit.author.timestamp);
-
-  if (maxCount) {
-    return allCommits.slice(0, maxCount);
-  }
-  return allCommits;
 }
 
 /**
