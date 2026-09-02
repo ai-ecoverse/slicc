@@ -57,9 +57,11 @@ export async function push(
       output += `Branch '${branch}' set up to track remote branch '${branch}' from '${remote}'.\n`;
     }
   } else {
+    const remotes = await git.listRemotes({ fs: ctx.lfs, dir: cwd }).catch(() => []);
+    const remoteUrl = remotes.find((item) => item.remote === remote)?.url;
     return {
       stdout: '',
-      stderr: `error: failed to push to '${remote}': ${annotateGitHubAuthFailure(String(result.error))}\n`,
+      stderr: `error: failed to push to '${remote}': ${annotateGitHubAuthFailure(String(result.error), remoteUrl)}\n`,
       exitCode: 1,
     };
   }

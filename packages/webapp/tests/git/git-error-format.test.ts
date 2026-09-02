@@ -5,7 +5,11 @@
  * "There are multiple errors..." text (#1033-5).
  */
 import { describe, expect, it } from 'vitest';
-import { expandGitError } from '../../src/git/commands/shared.js';
+import {
+  annotateGitHubAuthFailure,
+  expandGitError,
+  isGitHubRemoteUrl,
+} from '../../src/git/commands/shared.js';
 
 class MultipleGitError extends Error {
   override name = 'MultipleGitError';
@@ -59,16 +63,34 @@ describe('expandGitError', () => {
     expect(expandGitError(new Error('plain failure'))).toBe('plain failure');
   });
 
-  it('annotates a bare GitHub 401 with an actionable hint (#2777)', () => {
+  it('annotates an unknown-host 401 with a provider-neutral hint (#2777)', () => {
     const message = expandGitError(new Error('HTTP Error: 401 Unauthorized'));
     expect(message).toContain('HTTP Error: 401 Unauthorized');
     expect(message).toContain('hint:');
+    expect(message).toContain('Authentication failed (401)');
+    expect(message).toContain('If this is GitHub');
+  });
+
+  it('uses the GitHub-specific hint when the remote URL is GitHub', () => {
+    const message = expandGitError(
+      new Error('HTTP Error: 401 Unauthorized'),
+      'https://github.com/example/repo.git'
+    );
+    expect(message).toContain('GitHub returned 401');
     expect(message).toContain('oauth-token github');
     expect(message).toContain('stale');
   });
 
-  it('annotates a non-Error 401 string the same way', () => {
-    expect(expandGitError('HTTP Error: 401 Unauthorized')).toContain('hint:');
+  it('does not blame GitHub OAuth for a non-GitHub remote 401', () => {
+    const message = expandGitError(
+      new Error('HTTP Error: 401 Unauthorized'),
+      'https://gitlab.com/example/repo.git'
+    );
+    expect(message).toBe('HTTP Error: 401 Unauthorized');
+  });
+
+  it('annotates a non-Error unknown-host 401 string neutrally', () => {
+    expect(expandGitError('HTTP Error: 401 Unauthorized')).toContain('Authentication failed (401)');
   });
 
   it('leaves non-auth failures alone', () => {
@@ -80,6 +102,21 @@ describe('expandGitError', () => {
   it('stringifies a non-Error value', () => {
     expect(expandGitError('boom')).toBe('boom');
     expect(expandGitError(42)).toBe('42');
+  });
+});
+
+describe('isGitHubRemoteUrl / annotateGitHubAuthFailure', () => {
+  it('recognizes common GitHub remote forms', () => {
+    expect(isGitHubRemoteUrl('https://github.com/o/r.git')).toBe(true);
+    expect(isGitHubRemoteUrl('git@github.com:o/r.git')).toBe(true);
+    expect(isGitHubRemoteUrl('ssh://git@github.com/o/r.git')).toBe(true);
+    expect(isGitHubRemoteUrl('https://gitlab.com/o/r.git')).toBe(false);
+  });
+
+  it('keeps annotateGitHubAuthFailure silent for non-GitHub URLs', () => {
+    expect(
+      annotateGitHubAuthFailure('HTTP Error: 401 Unauthorized', 'https://bitbucket.org/o/r.git')
+    ).toBe('HTTP Error: 401 Unauthorized');
   });
 });
 

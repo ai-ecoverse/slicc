@@ -358,6 +358,43 @@ describe('GitCommands', () => {
     }
   });
 
+  it('gives each overlapping network command its own onAuthFailure latch (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
+    const ensureFreshGithubToken = vi.fn(async () => {});
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      await renewingGit.execute(['clone', 'https://github.com/example/a.git', 'a'], '/workspace');
+      await renewingGit.execute(['clone', 'https://github.com/example/b.git', 'b'], '/workspace');
+      const first = cloneSpy.mock.calls[0]?.[0] as {
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      const second = cloneSpy.mock.calls[1]?.[0] as {
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      expect(first.onAuthFailure).not.toBe(second.onAuthFailure);
+
+      await first.onAuthFailure?.();
+      // First latch is spent, but the second command still gets its own retry.
+      await expect(first.onAuthFailure?.()).resolves.toBeUndefined();
+      await expect(second.onAuthFailure?.()).resolves.toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked',
+      });
+      expect(ensureFreshGithubToken.mock.calls.filter((c) => c[0]?.force).length).toBe(2);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
   it('annotates push 401 errors with an actionable GitHub-auth hint (#2777)', async () => {
     const globalFs = await VirtualFS.create({ dbName: globalDbName });
     await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
@@ -380,6 +417,31 @@ describe('GitCommands', () => {
       expect(result.stderr).toContain('HTTP Error: 401 Unauthorized');
       expect(result.stderr).toContain('hint:');
       expect(result.stderr).toContain('oauth-token github');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  it('does not suggest oauth-token github for a non-GitHub push 401 (#2777)', async () => {
+    await git.execute(['init'], '/gitlab');
+    await git.execute(['commit', '--allow-empty', '-m', 'init'], '/gitlab');
+    await git.execute(
+      ['remote', 'add', 'origin', 'https://gitlab.com/example/repo.git'],
+      '/gitlab'
+    );
+
+    const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+      ok: false,
+      error: 'HTTP Error: 401 Unauthorized',
+      refs: {},
+    } as never);
+
+    try {
+      const result = await git.execute(['push', 'origin', 'main'], '/gitlab');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('HTTP Error: 401 Unauthorized');
+      expect(result.stderr).not.toContain('oauth-token github');
+      expect(result.stderr).not.toContain('GitHub returned 401');
     } finally {
       pushSpy.mockRestore();
     }

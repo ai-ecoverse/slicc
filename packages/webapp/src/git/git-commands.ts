@@ -183,12 +183,6 @@ export class GitCommands {
    * leak across calls.
    */
   private currentConfigOverrides?: ReadonlyMap<string, string>;
-  /**
-   * Guards {@link getOnAuthFailure} so a 401 triggers at most one silent
-   * renew+retry per `execute()` (#2777). Reset at the start of every
-   * network-capable invocation.
-   */
-  private authFailureRetried = false;
 
   /**
    * Cross-command isomorphic-git object/pack cache (#2710). One per INSTANCE —
@@ -244,6 +238,10 @@ export class GitCommands {
     const lfs = CACHEABLE_COMMANDS.has(command)
       ? createCommandScopedReadCache(client.promises)
       : client.promises;
+    // Latch is closed over here — NOT on the instance — so overlapping
+    // network commands on the same GitCommands each get their own single
+    // renew+retry (#2777 Codex review).
+    const onAuthFailure = this.createOnAuthFailure();
     const ctx: GitCommandContext = {
       lfs,
       fs: this.options.fs,
@@ -254,7 +252,7 @@ export class GitCommands {
       cache: this.cacheManager.cache,
       corsProxy: this.corsProxy,
       getOnAuth: () => this.getOnAuth(),
-      getOnAuthFailure: () => this.getOnAuthFailure(),
+      getOnAuthFailure: () => onAuthFailure,
       resolveAuthor: (cwd) => this.resolveAuthor(cwd, lfs),
       getGlobalFs: () => this.getGlobalFs(),
       setGithubToken: (token) => this.setGithubToken(token),
@@ -284,20 +282,21 @@ export class GitCommands {
   }
 
   /**
-   * After GitHub rejects credentials, force one silent renew and retry with
-   * the refreshed bridge token. isomorphic-git keeps calling this as long as
-   * credentials are returned, so the {@link authFailureRetried} latch caps
-   * retries at one (#2777).
+   * Build a per-invocation onAuthFailure: after GitHub rejects credentials,
+   * force one silent renew and retry with the refreshed bridge token.
+   * isomorphic-git keeps calling as long as credentials are returned, so the
+   * closed-over latch caps retries at one for THIS command only (#2777).
    */
-  private getOnAuthFailure():
+  private createOnAuthFailure():
     | (() => Promise<{ username: string; password: string } | undefined>)
     | undefined {
     // Always install the callback when a freshness hook exists — even if the
     // first onAuth had no token, a force renew might produce one.
     if (!this.options.ensureFreshGithubToken) return undefined;
+    let retried = false;
     return async () => {
-      if (this.authFailureRetried) return undefined;
-      this.authFailureRetried = true;
+      if (retried) return undefined;
+      retried = true;
       try {
         await this.options.ensureFreshGithubToken?.({ force: true });
       } catch (err) {
@@ -479,7 +478,6 @@ export class GitCommands {
       this.cacheManager.setDeepVerification(this.shouldVerifyPackfiles());
       await this.cacheManager.beforeCommand(effectiveCwd);
       if (NETWORK_COMMANDS.has(command)) {
-        this.authFailureRetried = false;
         await this.ensureFreshGithubToken();
       }
       await this.loadGithubToken();

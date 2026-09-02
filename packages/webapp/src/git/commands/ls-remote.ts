@@ -42,7 +42,7 @@ export async function lsRemote(
     const message = err instanceof Error ? err.message : String(err);
     return {
       stdout: '',
-      stderr: `fatal: ${annotateGitHubAuthFailure(message)}\n`,
+      stderr: `fatal: ${annotateGitHubAuthFailure(message, url)}\n`,
       exitCode: 128,
     };
   }
