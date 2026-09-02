@@ -1,7 +1,7 @@
 /** `git symbolic-ref` — read, update, and delete symbolic refs. */
 
-import * as git from 'isomorphic-git';
 import { type ParsedArgs, parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

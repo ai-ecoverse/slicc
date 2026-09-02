@@ -14,11 +14,12 @@
 // Buffer polyfill must be imported before isomorphic-git
 import '../shims/buffer-polyfill.js';
 
-import * as git from 'isomorphic-git';
 import { createLogger } from '../base/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { VirtualFS } from '../fs/index.js';
 import { type ArgSpec, parseArgs } from '../shell/arg-parser.js';
+import * as git from './cached-isomorphic-git.js';
+import { GitObjectCache } from './cached-isomorphic-git.js';
 import { add } from './commands/add.js';
 import { branch } from './commands/branch.js';
 import { checkout } from './commands/checkout.js';
@@ -137,11 +138,11 @@ export class GitCommands {
 
   /**
    * The uncached adapter over the repo's VirtualFS. `execute()` derives a
-   * per-invocation view of it (see {@link GitCommands.contextFor}); nothing
-   * here is ever a cached adapter, because instance state is shared by
-   * concurrent invocations and a memo must not be.
+   * per-invocation filesystem view while the object cache remains shared.
    */
   private readonly lfs: IsoGitFsPromises;
+  /** Parsed pack indexes, pack bodies, and verification state retained per repository. */
+  private readonly objectCache = new GitObjectCache();
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
@@ -177,14 +178,17 @@ export class GitCommands {
   /**
    * Build the context for ONE `execute()` call.
    *
-   * `lfs` is the only per-invocation part: a cacheable subcommand gets a fresh
-   * `createCommandScopedReadCache` wrapper that it alone can see, so two
-   * commands overlapping in time never share a memo and a command that writes
-   * outside the adapter never gets one at all (issue #2709 review). The memo
-   * is unreachable — and therefore collected — as soon as the command returns.
+   * Filesystem metadata/content reads remain command-scoped (issue #2709),
+   * while isomorphic-git's object cache survives commands until the pack
+   * listing or packed-refs metadata changes (issue #2710).
    */
-  private contextFor(command: string): GitCommandContext {
-    const lfs = CACHEABLE_COMMANDS.has(command) ? createCommandScopedReadCache(this.lfs) : this.lfs;
+  private contextFor(command: string, cwd: string): GitCommandContext {
+    // Even uncached commands get a distinct adapter object so concurrent
+    // invocations bind their repository cache without overwriting each other.
+    const lfs = CACHEABLE_COMMANDS.has(command)
+      ? createCommandScopedReadCache(this.lfs)
+      : { ...this.lfs };
+    this.objectCache.bind(lfs, cwd);
     return {
       lfs,
       fs: this.options.fs,
@@ -371,9 +375,9 @@ export class GitCommands {
 
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
-    // One context — and, for a cacheable subcommand, one read memo — per
-    // invocation, so nothing a command reads is visible to any other (#2709).
-    const ctx = this.contextFor(command);
+    // Filesystem reads stay per-invocation; only the validated object/pack
+    // cache is shared across commands.
+    const ctx = this.contextFor(command, effectiveCwd);
     try {
       if (NETWORK_COMMANDS.has(command)) {
         await this.ensureFreshGithubToken();

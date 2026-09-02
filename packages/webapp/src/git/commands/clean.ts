@@ -8,8 +8,8 @@
  * that safety default so `git clean` alone doesn't silently delete anything.
  */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { CLEAN_SPEC, NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

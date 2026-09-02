@@ -1,6 +1,6 @@
 /** `git rev-parse`. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { resolveRevision } from './revision.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

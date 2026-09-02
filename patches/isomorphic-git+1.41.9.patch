@@ -1,0 +1,96 @@
+diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
+index bbdc7f0..18a1f07 100644
+--- a/node_modules/isomorphic-git/index.js
++++ b/node_modules/isomorphic-git/index.js
+@@ -3448,11 +3448,12 @@ class GitPackIndex {
+     this.pack = null;
+   }
+ 
+-  async read({ oid }) {
++  async read({ oid, getExternalRefDelta }) {
+     if (!this.offsets.get(oid)) {
+-      if (this.getExternalRefDelta) {
++      const readExternal = getExternalRefDelta || this.getExternalRefDelta;
++      if (readExternal) {
+         this.externalReadDepth++;
+-        return this.getExternalRefDelta(oid)
++        return readExternal(oid)
+       } else {
+         throw new InternalError(`Could not read object ${oid} from packfile`)
+       }
+@@ -3613,36 +3614,48 @@ async function readObjectPacked({
+       }
+ 
+       // === Packfile Integrity Verification ===
+-      // Performance optimization: use _checksumVerified flag to verify only once per packfile
++      // Share the in-flight verification as well as its completed state. Tree
++      // walks fan out object reads concurrently; a boolean set after `await`
++      // lets every queued reader hash the complete pack independently.
+       if (!p._checksumVerified) {
+-        const expectedShaFromIndex = p.packfileSha;
+-
+-        // 1. Fast Check: Verify packfile trailer matches index record
+-        // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
+-        const packTrailer = pack.subarray(-20);
+-        const packTrailerSha = Array.from(packTrailer)
+-          .map(b => b.toString(16).padStart(2, '0'))
+-          .join('');
+-        if (packTrailerSha !== expectedShaFromIndex) {
+-          throw new InternalError(
+-            `Packfile trailer mismatch: expected ${expectedShaFromIndex}, got ${packTrailerSha}. The packfile may be corrupted.`
+-          )
+-        }
++        p._checksumVerification ||= (async () => {
++          const expectedShaFromIndex = p.packfileSha;
++
++          // 1. Fast Check: Verify packfile trailer matches index record
++          // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
++          const packTrailer = pack.subarray(-20);
++          const packTrailerSha = Array.from(packTrailer)
++            .map(b => b.toString(16).padStart(2, '0'))
++            .join('');
++          if (packTrailerSha !== expectedShaFromIndex) {
++            throw new InternalError(
++              `Packfile trailer mismatch: expected ${expectedShaFromIndex}, got ${packTrailerSha}. The packfile may be corrupted.`
++            )
++          }
+ 
+-        // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
+-        // The Node package build swaps in a chunked implementation for large packs.
+-        const actualPayloadSha = await shasumRange(pack, {
+-          start: 0,
+-          end: pack.length - 20,
+-        });
+-        if (actualPayloadSha !== expectedShaFromIndex) {
+-          throw new InternalError(
+-            `Packfile payload corrupted: calculated ${actualPayloadSha} but expected ${expectedShaFromIndex}. The packfile may have been tampered with.`
+-          )
+-        }
++          // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
++          // The Node package build swaps in a chunked implementation for large packs.
++          const actualPayloadSha = await shasumRange(pack, {
++            start: 0,
++            end: pack.length - 20,
++          });
++          if (actualPayloadSha !== expectedShaFromIndex) {
++            throw new InternalError(
++              `Packfile payload corrupted: calculated ${actualPayloadSha} but expected ${expectedShaFromIndex}. The packfile may have been tampered with.`
++            )
++          }
+ 
+-        // Mark as verified to prevent performance regression on subsequent reads
+-        p._checksumVerified = true;
++          // Mark as verified to prevent performance regression on subsequent reads
++          p._checksumVerified = true;
++        })();
++        try {
++          await p._checksumVerification;
++        } catch (err) {
++          // Keep transient crypto failures retryable without allowing any
++          // reader to continue past a failed integrity check.
++          p._checksumVerification = null;
++          throw err
++        }
+       }
+ 
+       const result = await p.read({ oid, getExternalRefDelta });

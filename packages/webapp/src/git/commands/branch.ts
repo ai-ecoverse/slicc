@@ -1,6 +1,6 @@
 /** `git branch` — list, create, or delete branches. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function branch(

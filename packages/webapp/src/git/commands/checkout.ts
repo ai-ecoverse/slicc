@@ -1,6 +1,6 @@
 /** `git checkout` — switch branches, create branches, or restore files. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { expandGitError } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

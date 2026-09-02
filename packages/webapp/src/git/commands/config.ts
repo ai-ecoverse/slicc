@@ -1,6 +1,6 @@
 /** `git config` — get, set, unset, and list repo/global config. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import {
   GLOBAL_GITCONFIG_PATH,
   readGlobalGitConfigValue,

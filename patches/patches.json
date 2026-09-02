@@ -24,6 +24,14 @@
     "removeWhen": "Remove once kerium bounds its log backlog upstream (ring buffer or opt-in retention).",
     "verify": "npm run test -w @slicc/webapp -- kerium-log-cap-patch"
   },
+  "isomorphic-git": {
+    "patchedVersion": "1.41.9",
+    "upstream": "https://github.com/isomorphic-git/isomorphic-git",
+    "issue": "https://github.com/ai-ecoverse/slicc/issues/2710",
+    "reason": "#2710/#2735: share in-flight pack SHA-1 verification across concurrent readers and use each call's external-delta reader so a persistent pack cache neither re-hashes a pack nor retains a stale command-scoped filesystem closure.",
+    "removeWhen": "Remove once isomorphic-git memoizes in-flight pack verification and GitPackIndex.read uses the current call's external-delta reader.",
+    "verify": "npm run test -w @slicc/webapp -- git-object-cache"
+  },
   "just-bash": {
     "patchedVersion": "3.4.2",
     "upstream": "https://github.com/vercel-labs/just-bash",

@@ -1,6 +1,6 @@
 /** `git ls-remote` — inspect advertised refs without fetching objects. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { gitHttp } from '../git-http.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

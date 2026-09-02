@@ -12,8 +12,8 @@
  * without committing. Merge commits are rejected like real git.
  */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { threeWayMerge } from '../merge-file-core.js';
 import { tryResolveRevision } from './revision.js';
 import { expandGitError, GIT_FLAG_SPECS } from './shared.js';

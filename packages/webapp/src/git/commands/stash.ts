@@ -3,7 +3,7 @@
  * as a chained commit history (each stash's second parent is the previous one).
  */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { threeWayMerge } from '../merge-file-core.js';
 import { diffCommits } from './diff.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';

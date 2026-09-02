@@ -8,8 +8,8 @@
  * are rejected natively by `cherryPick`; we format those into git-style errors.
  */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { makeMergeDriver } from './merge-driver.js';
 import { tryResolveRevision } from './revision.js';
 import { expandGitError, GIT_FLAG_SPECS } from './shared.js';

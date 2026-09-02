@@ -1,6 +1,6 @@
 /** `git reset` — unstage, or move HEAD/index/workdir (soft/mixed/hard). */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function reset(

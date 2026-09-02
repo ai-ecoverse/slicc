@@ -1,7 +1,7 @@
 /** `git fetch`. */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { gitHttp } from '../git-http.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';

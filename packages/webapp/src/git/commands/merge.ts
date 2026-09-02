@@ -1,7 +1,7 @@
 /** `git merge` and its error formatter. */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { makeMergeDriver } from './merge-driver.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';

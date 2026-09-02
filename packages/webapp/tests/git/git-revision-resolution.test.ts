@@ -163,11 +163,13 @@ describe('git revision resolution (#2713)', () => {
       expect(result.stdout).toContain('file.txt');
     });
 
-    it('ls-tree does not scan the pack indexes for a symbolic ref', async () => {
+    it('ls-tree does not read pack indexes for a loose symbolic ref', async () => {
       await seedHistory();
       const paths = recordPaths();
       expect((await git.execute(['ls-tree', 'HEAD'], '/project')).exitCode).toBe(0);
-      expect(paths.filter((p) => p.includes('objects/pack'))).toEqual([]);
+      // The persistent object cache validates the pack directory once, but a
+      // loose object must not make revision resolution read an index or pack.
+      expect(paths.filter((p) => p.endsWith('.idx') || p.endsWith('.pack'))).toEqual([]);
     });
 
     it('revert accepts a relative revision', async () => {

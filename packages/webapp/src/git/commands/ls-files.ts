@@ -1,6 +1,6 @@
 /** `git ls-files` — list tracked / modified / deleted / other files. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 

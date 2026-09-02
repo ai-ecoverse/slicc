@@ -6,8 +6,8 @@
  * the stat formatter stay module-local.
  */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { diffStat, unifiedDiff } from '../diff.js';
 import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision.js';
 import { GIT_FLAG_SPECS, NO_INDEX_REFRESH } from './shared.js';

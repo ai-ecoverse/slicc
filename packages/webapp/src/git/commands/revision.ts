@@ -1,6 +1,6 @@
 /** Shared Git revision resolution, including first-parent suffixes. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import type { GitCommandContext } from './types.js';
 
 type RevisionStep = { kind: 'first-parent' | 'parent'; count: number };

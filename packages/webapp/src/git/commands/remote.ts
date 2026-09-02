@@ -1,6 +1,6 @@
 /** `git remote` — add, remove, or list remotes. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function remote(

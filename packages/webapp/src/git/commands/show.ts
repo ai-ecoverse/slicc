@@ -1,7 +1,7 @@
 /** `git show` — commit details and diff, or `<commit>:<path>` file content. */
 
-import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import * as git from '../cached-isomorphic-git.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
 import { tryResolveRevision } from './revision.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';

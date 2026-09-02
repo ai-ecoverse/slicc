@@ -1,6 +1,6 @@
 /** `git show-ref` — list branch and tag references. */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function showRef(

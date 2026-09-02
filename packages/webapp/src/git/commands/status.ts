@@ -1,6 +1,6 @@
 /** `git status` (long and short/porcelain forms). */
 
-import * as git from 'isomorphic-git';
+import * as git from '../cached-isomorphic-git.js';
 import { matchesPathspec } from './revision.js';
 import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
