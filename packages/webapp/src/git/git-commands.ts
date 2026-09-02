@@ -180,7 +180,8 @@ export class GitCommands {
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
     // points (File System Access API) the same way shell/agent tools do.
-    // See packages/webapp/src/git/vfs-fs-adapter.ts.
+    // See packages/webapp/src/git/vfs-fs-adapter.ts. This uncached instance
+    // backs the class's own config reads; each `execute()` builds its own.
     this.lfs = createIsomorphicGitFs(options.fs).promises;
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
@@ -196,14 +197,29 @@ export class GitCommands {
   /**
    * Build the context for ONE `execute()` call.
    *
-   * `lfs` is the only per-invocation part: a cacheable subcommand gets a fresh
-   * `createCommandScopedReadCache` wrapper that it alone can see, so two
-   * commands overlapping in time never share a memo and a command that writes
-   * outside the adapter never gets one at all (issue #2709 review). The memo
-   * is unreachable — and therefore collected — as soon as the command returns.
+   * `lfs` is the only per-invocation part, and it is TWO memos deep:
+   *
+   * - The base adapter carries the `.git/objects` memo (issue #2712) — the
+   *   `objects/pack` listing isomorphic-git re-reads on every packed object
+   *   lookup, and the `objects/` fan-out listing that decides whether the
+   *   loose probe `_readObject` always tries first can find anything at all.
+   *   Every subcommand gets it: unlike the read cache, the object store is
+   *   written ONLY through this adapter (nothing reaches past it to `ctx.fs`
+   *   for `.git/objects`), so a command that writes to the working tree
+   *   directly cannot leave it stale, and every write through the adapter
+   *   drops it anyway.
+   * - A cacheable subcommand is additionally wrapped in a fresh
+   *   `createCommandScopedReadCache` (issue #2709), which sits ABOVE the
+   *   object memo: a read it misses still reaches the fan-out shortcut
+   *   instead of the filesystem, and a write it forwards invalidates both.
+   *
+   * Both memos are built here and nowhere else, so two commands overlapping
+   * in time never share either one, and both are unreachable — and therefore
+   * collected — as soon as the command returns.
    */
   private contextFor(command: string): GitCommandContext {
-    const lfs = CACHEABLE_COMMANDS.has(command) ? createCommandScopedReadCache(this.lfs) : this.lfs;
+    const base = createIsomorphicGitFs(this.options.fs, { objectCache: true }).promises;
+    const lfs = CACHEABLE_COMMANDS.has(command) ? createCommandScopedReadCache(base) : base;
     return {
       lfs,
       fs: this.options.fs,
@@ -395,8 +411,9 @@ export class GitCommands {
 
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
-    // One context — and, for a cacheable subcommand, one read memo — per
-    // invocation, so nothing a command reads is visible to any other (#2709).
+    // One context — and with it one view of `.git/objects` (#2712) plus, for a
+    // cacheable subcommand, one read memo (#2709) — per invocation, so nothing
+    // a command reads is visible to any other.
     const ctx = this.contextFor(command);
     try {
       // Object/pack cache housekeeping (#2710). The verification switch is

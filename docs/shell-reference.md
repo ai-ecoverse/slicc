@@ -198,6 +198,37 @@ every `.git/objects/pack/*.idx` searching for a prefix match, so trying it first
 `git rev-parse HEAD` over a `--mount`ed host repo read all 30 pack indexes (3.8 MB, 34 bridge
 requests) instead of `HEAD` plus `packed-refs` (issue #2713).
 
+### `git log --all` walks every branch in one pass
+
+`--all` used to run `git.log({ ref: branch, depth: 50 })` once per branch, concatenate the
+results, sort them by date and only then apply `-n`. With 29 local branches that is 29
+independent walks, each with its own isomorphic-git object cache, so all 30 pack indexes were
+parsed once per branch: `git log --oneline --all -n 20` over a `--mount`ed host repo took
+157 s and 72,767 bridge requests (issue #2712).
+
+`walkAllBranches()` (`packages/webapp/src/git/commands/log-walk.ts`) is one date-ordered
+traversal instead — seed a priority queue with every branch tip, pop the newest commit, yield
+it, push its parents — so each commit object is read exactly once. It is an async generator,
+so a consumer that stops pulling never pays for the next generation of commit reads: `-n 20`
+reads 20 commits plus the queue frontier, not 50 per branch. Without `-n`, `--all` returns
+the newest 50 commits across all branches (the old per-branch depth, now a global one).
+
+**`--all -- <path>` filters the traversal as it runs, and is NOT capped.** A fixed candidate
+window makes the answer depend on how busy the other branches are — 500 commits on one branch
+would push another branch's matching tip out of the window and the match would vanish with no
+diagnostic. The walk continues until `-n` matches are found or every branch is exhausted, the
+same as real `git log`; commits are pulled in batches only so the pathspec filter can prime
+its `commit oid -> tree oid` memo.
+
+The adapter caches what such a walk repeats. `createIsomorphicGitFs(vfs, { objectCache: true })`
+(`packages/webapp/src/git/vfs-fs-adapter.ts`) memoizes the `objects/pack` listing
+isomorphic-git re-reads on every packed object lookup, plus the `objects/` fan-out listing
+that decides whether the loose-object probe `_readObject` always tries first can find anything
+at all. The memo's lifetime is the adapter object's, and `GitCommands.contextFor()` builds one
+adapter per invocation — so two commands overlapping in time never share a view of the object
+store, and nothing is cached across commands. Any write through the adapter drops the memo on
+both sides of the write, so an object created mid-command is visible to the next read.
+
 ### Read-only git commands never touch the index
 
 `status`, `ls-files`, `diff` and `clean --dry-run` pass `refresh: false` to
