@@ -178,7 +178,10 @@ export function runCapabilityBrokerConformance(name: string, make: () => Capabil
       );
       for (const { domain, operation, result } of rows) {
         if (result.ok) {
-          expect(result.value).toBeDefined();
+          // `CapabilityResult<void>` success is `{ ok: true, value: undefined }`.
+          // Assert the envelope, not that `value` is defined.
+          expect(result).toEqual(expect.objectContaining({ ok: true }));
+          expect('value' in result).toBe(true);
           continue;
         }
         expect(isCapabilityUnavailable(result)).toBe(true);

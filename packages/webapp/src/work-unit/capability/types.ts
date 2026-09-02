@@ -110,11 +110,20 @@ export interface LocalNodeServerStatus {
 export interface NetworkFetchRequest {
   url: string;
   method?: string;
+  headers?: Record<string, string>;
+  /** Request body bytes as base64 when binary; plain text otherwise. */
+  body?: string;
 }
 
 export interface NetworkFetchResponse {
   status: number;
   ok: boolean;
+  statusText: string;
+  headers: Record<string, string>;
+  /** Response body bytes as base64 when binary; plain text / latin1 otherwise. */
+  body: string;
+  /** Final URL after redirects. */
+  url: string;
 }
 
 export interface NetworkWebsocketRequest {
@@ -125,8 +134,14 @@ export interface NetworkWebsocketHandle {
   id: string;
 }
 
+export interface SecretMaskedEnvEntry {
+  name: string;
+  maskedValue: string;
+  domains?: readonly string[];
+}
+
 export interface SecretListResult {
-  names: readonly string[];
+  entries: readonly SecretMaskedEnvEntry[];
 }
 
 export interface SecretGetRequest {
@@ -174,8 +189,16 @@ export interface ApprovalRequest {
   detail: string;
 }
 
+export type ApprovalDenialReason = 'user-timeout' | 'cone-timeout';
+
 export interface ApprovalDecision {
   decision: 'allow' | 'deny';
+  /**
+   * Why a `deny` was reached when nobody refused. Absent for a real gesture.
+   * Mirrors `SudoDecision.reason` so unanswered approvals are not treated as
+   * genuine refusals (which would immediately re-request the same action).
+   */
+  reason?: ApprovalDenialReason;
 }
 
 export interface BrowserCapability {
