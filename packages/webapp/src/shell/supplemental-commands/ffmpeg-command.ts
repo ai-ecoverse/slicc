@@ -1039,6 +1039,7 @@ async function transcodeCapturedBytes(args: {
     args.onLog(event.message);
   };
   ffmpeg.on('log', logHandler);
+  let faulted = false;
   try {
     await ffmpeg.writeFile(inputName, args.bytes);
     const argv: string[] = ['-i', inputName, ...args.outputOpts, outputName];
@@ -1050,21 +1051,33 @@ async function transcodeCapturedBytes(args: {
     if (out instanceof Uint8Array) return out;
     if (typeof out === 'string') return new TextEncoder().encode(out);
     throw new Error('ffmpeg-core returned an unknown payload type');
+  } catch (err) {
+    // Shares the realm-cached core with `runWasmFfmpeg`, so a trap
+    // here poisons `ffmpeg` for the whole session too. The non-zero
+    // exit above is our own throw and leaves the core healthy, so
+    // only genuine faults retire the instance.
+    if (isCoreFault(err)) {
+      faulted = true;
+      recycleFfmpeg(ffmpeg);
+    }
+    throw err;
   } finally {
     try {
       ffmpeg.off('log', logHandler);
     } catch {
       /* noop */
     }
-    try {
-      await ffmpeg.deleteFile(inputName);
-    } catch {
-      /* noop */
-    }
-    try {
-      await ffmpeg.deleteFile(outputName);
-    } catch {
-      /* noop */
+    if (!faulted) {
+      try {
+        await ffmpeg.deleteFile(inputName);
+      } catch {
+        /* noop */
+      }
+      try {
+        await ffmpeg.deleteFile(outputName);
+      } catch {
+        /* noop */
+      }
     }
   }
 }
@@ -1157,6 +1170,37 @@ function buildFinalFfmpegArgs(
 }
 
 /**
+ * True when an error out of the core is unrecoverable for the
+ * *instance*, not merely for the call: a WebAssembly trap, an
+ * emscripten abort, or an allocation the runtime could not satisfy.
+ * All of them leave linear memory inconsistent, so the instance has
+ * to be retired instead of reused.
+ */
+function isCoreFault(err: unknown): boolean {
+  if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) return true;
+  if (err instanceof RangeError) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /RuntimeError|memory access out of bounds|unreachable|Aborted|out of memory|allocation failed|table index is out of bounds|function signature mismatch/i.test(
+    message
+  );
+}
+
+/**
+ * Copy every staged input into the core's MEMFS. Virtual (lavfi)
+ * inputs are synthesized by ffmpeg itself, so they carry no bytes and
+ * are skipped.
+ */
+async function stageInputsIntoMemfs(
+  ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
+  resolvedInputs: ResolvedInput[]
+): Promise<void> {
+  for (const input of resolvedInputs) {
+    if (input.bytes === null) continue;
+    await ffmpeg.writeFile(input.ffmpegName, input.bytes);
+  }
+}
+
+/**
  * Best-effort MEMFS cleanup so repeated invocations don't pile up
  * megabytes of stale media in the wasm heap. Swallow each
  * `deleteFile` error individually.
@@ -1180,6 +1224,55 @@ async function cleanupMemfs(
   } catch {
     /* noop */
   }
+}
+
+/**
+ * Read the encoded artifact back out of MEMFS.
+ *
+ * `@ffmpeg/core` can report exit 0 even when the encode aborted
+ * internally — a WASM `Aborted()` leaves the return code stale — so
+ * the artifact is trusted over the code, and a missing or empty file
+ * is a failure.
+ *
+ * A *trap* during readback is different in kind: the core died
+ * mid-encode. Reporting that as "produced no output" would leave the
+ * poisoned instance cached and let cleanup re-enter the dead module —
+ * exactly the session-wide failure this is meant to prevent — so it
+ * is rethrown for the caller's recycling handler.
+ */
+async function readEncodedOutput(
+  ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
+  outputName: string,
+  outputPath: string,
+  stderr: string
+): Promise<{ bytes: Uint8Array } | { error: CmdResult }> {
+  let outputData: Awaited<ReturnType<typeof ffmpeg.readFile>>;
+  try {
+    outputData = await ffmpeg.readFile(outputName);
+  } catch (err) {
+    if (isCoreFault(err)) throw err;
+    return {
+      error: {
+        stdout: '',
+        stderr: stderr || `ffmpeg: produced no output file for ${outputPath}\n`,
+        exitCode: 1,
+      },
+    };
+  }
+  const bytes =
+    outputData instanceof Uint8Array
+      ? outputData
+      : new TextEncoder().encode(typeof outputData === 'string' ? outputData : '');
+  if (bytes.byteLength === 0) {
+    return {
+      error: {
+        stdout: '',
+        stderr: stderr || `ffmpeg: produced an empty output file for ${outputPath}\n`,
+        exitCode: 1,
+      },
+    };
+  }
+  return { bytes };
 }
 
 async function runWasmFfmpeg(
@@ -1217,65 +1310,34 @@ async function runWasmFfmpeg(
   };
   ffmpeg.on('log', logHandler);
   let faulted = false;
+  let early: CmdResult | null = null;
+  let outputBytes: Uint8Array | null = null;
   try {
-    // Stage inputs into MEMFS. Virtual (lavfi) inputs have no bytes
-    // and are synthesized by the core itself, so skip them.
-    for (const input of resolvedInputs) {
-      if (input.bytes === null) continue;
-      await ffmpeg.writeFile(input.ffmpegName, input.bytes);
-    }
+    await stageInputsIntoMemfs(ffmpeg, resolvedInputs);
 
     const finalArgs = buildFinalFfmpegArgs(parsed, resolvedInputs, outputName);
     const exitCode = await ffmpeg.exec(finalArgs);
     if (exitCode !== 0) {
-      return {
+      early = {
         stdout: '',
         stderr: stderr || `ffmpeg: exited with code ${exitCode}\n`,
         exitCode: exitCode || 1,
       };
+    } else {
+      const read = await readEncodedOutput(ffmpeg, outputName, outputPath, stderr);
+      if ('error' in read) early = read.error;
+      else outputBytes = read.bytes;
     }
-
-    // Secondary success check: @ffmpeg/core can report exit 0 even
-    // when the encode aborted internally (a WASM `Aborted()` leaves
-    // the return code stale), so trust the artifact, not the code.
-    // A missing or empty output file is a failure — surface a
-    // non-zero exit instead of silently "succeeding" with no output.
-    let outputData: Awaited<ReturnType<typeof ffmpeg.readFile>>;
-    try {
-      outputData = await ffmpeg.readFile(outputName);
-    } catch {
-      return {
-        stdout: '',
-        stderr: stderr || `ffmpeg: produced no output file for ${outputPath}\n`,
-        exitCode: 1,
-      };
-    }
-    const outputBytes =
-      outputData instanceof Uint8Array
-        ? outputData
-        : new TextEncoder().encode(typeof outputData === 'string' ? outputData : '');
-    if (outputBytes.byteLength === 0) {
-      return {
-        stdout: '',
-        stderr: stderr || `ffmpeg: produced an empty output file for ${outputPath}\n`,
-        exitCode: 1,
-      };
-    }
-
-    const resolvedOutput = ctx.fs.resolvePath(ctx.cwd, outputPath);
-    await ctx.fs.writeFile(resolvedOutput, outputBytes);
-
-    return { stdout: '', stderr, exitCode: 0 };
   } catch (err) {
     // A *throw* out of the wasm path is not an ordinary ffmpeg
     // failure — bad flags and unsupported codecs come back as a
     // non-zero exit code, handled above. What lands here is the core
     // itself faulting, which leaves the realm-shared instance
-    // unusable for every later command. Recycle it so the damage is
-    // scoped to this invocation.
+    // unusable for every later command. Retire that generation so the
+    // damage is scoped to this invocation.
     faulted = true;
-    recycleFfmpeg();
-    return {
+    recycleFfmpeg(ffmpeg);
+    early = {
       stdout: '',
       stderr:
         `${stderr}ffmpeg: ${err instanceof Error ? err.message : String(err)}\n` +
@@ -1293,4 +1355,24 @@ async function runWasmFfmpeg(
     // `deleteFile` would re-enter the trapped module.
     if (!faulted) await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
   }
+  if (early) return early;
+
+  // Deliberately OUTSIDE the wasm try/catch. A read-only mount or an
+  // exhausted quota makes this throw while the core is perfectly
+  // healthy; blaming that on the core would cost a needless ~31 MB
+  // reboot and tell the user the wrong thing.
+  try {
+    await ctx.fs.writeFile(
+      ctx.fs.resolvePath(ctx.cwd, outputPath),
+      outputBytes ?? new Uint8Array()
+    );
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `${stderr}ffmpeg: cannot write ${outputPath}: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
+
+  return { stdout: '', stderr, exitCode: 0 };
 }

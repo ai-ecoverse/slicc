@@ -77,12 +77,26 @@ function makeCoreIpk(): IpkResolutionContext {
   };
 }
 
+const created: string[] = [];
+const revoked: string[] = [];
+
 describe('recycleFfmpeg', () => {
   beforeEach(() => {
     instances.length = 0;
     loadImpl.value = async () => {};
     resetFfmpegForTests();
-    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:core'), revokeObjectURL: vi.fn() });
+    created.length = 0;
+    revoked.length = 0;
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => {
+        const url = `blob:core-${created.length}`;
+        created.push(url);
+        return url;
+      }),
+      revokeObjectURL: vi.fn((url: string) => {
+        revoked.push(url);
+      }),
+    });
   });
   afterEach(() => {
     resetFfmpegForTests();
@@ -130,6 +144,46 @@ describe('recycleFfmpeg', () => {
     expect(() => recycleFfmpeg()).not.toThrow();
     await Promise.resolve();
     expect(instances[0].terminate).not.toHaveBeenCalled();
+  });
+
+  it('only retires the generation that faulted', async () => {
+    const ipk = makeCoreIpk();
+    const first = await getFfmpeg({ ipk });
+    recycleFfmpeg(first);
+    const second = await getFfmpeg({ ipk });
+    expect(second).not.toBe(first);
+
+    // A slow run unwinding from the ALREADY retired instance must not
+    // take the healthy core its retry just installed.
+    recycleFfmpeg(first);
+
+    expect(await getFfmpeg({ ipk })).toBe(second);
+    expect(instances).toHaveLength(2);
+    expect(instances[1].terminate).not.toHaveBeenCalled();
+  });
+
+  it('revokes the retired generation\u2019s blob URLs', async () => {
+    const ipk = makeCoreIpk();
+    await getFfmpeg({ ipk });
+    expect(created.length).toBeGreaterThan(0);
+    const firstGen = [...created];
+
+    recycleFfmpeg();
+
+    // Terminating the worker does not free the ~31 MB asset set; only
+    // revoking does, and a recycled core would otherwise pin it until
+    // the tab closed.
+    expect([...revoked].sort()).toEqual([...firstGen].sort());
+  });
+
+  it('revokes assets when the core fails to boot', async () => {
+    const ipk = makeCoreIpk();
+    loadImpl.value = async () => {
+      throw new Error('core boot failed');
+    };
+    await expect(getFfmpeg({ ipk })).rejects.toThrow('core boot failed');
+    expect(revoked.length).toBeGreaterThan(0);
+    expect([...revoked].sort()).toEqual([...created].sort());
   });
 
   it('tolerates a worker that is already gone', async () => {

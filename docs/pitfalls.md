@@ -205,10 +205,30 @@ package without entering wasm — so the command looked healthy.
 promise _and_ `terminate()` the worker (terminating is what actually releases
 the dead heap), then let the next call boot a clean core.
 
+Three things the recycle path has to get right:
+
+- **Retire a generation, not "the cache".** Callers share the instance, so a
+  slow run can unwind from a core that a faster retry has already replaced.
+  Pass the faulting instance in and no-op unless it is still the current one,
+  or the late unwind terminates the healthy core the retry just booted.
+- **Revoke the `blob:` URLs.** `terminate()` does not. The core JS + wasm are
+  ~31 MB per generation, so a recyclable loader that never revokes feeds the
+  memory pressure that caused the fault.
+- **Cover every entry point into the shared core.** In `ffmpeg-command.ts` that
+  is the main command path _and_ `transcodeCapturedBytes` (the webcam
+  post-capture pass), which uses the same cached instance.
+
 Distinguish a fault from an ordinary failure: these commands report bad flags
 and unsupported inputs as a **non-zero exit code**, so a _throw_ out of the
 WASM call path is already exceptional and is the right trigger. Skip MEMFS
 cleanup afterwards — every `deleteFile` would re-enter the trapped module.
+
+Two traps for that heuristic. The core can return a stale exit 0 after an
+internal `Aborted()`, so the real trap surfaces on the **readback** — catching
+it locally as "produced no output" leaves the poisoned instance cached. And
+keep non-WASM work (writing the artifact back to the VFS) outside the fault
+`catch`, or a read-only mount gets reported as a core fault and costs a
+needless reboot.
 
 | Site                                         | Status                                                                           |
 | -------------------------------------------- | -------------------------------------------------------------------------------- |

@@ -87,6 +87,32 @@ const FFMPEG_CORE_PACKAGE = '@ffmpeg/core';
 let ffmpegPromise: Promise<FFmpeg> | null = null;
 
 /**
+ * The instance {@link ffmpegPromise} currently resolves to, tracked
+ * separately so {@link recycleFfmpeg} can identify the *generation*
+ * being retired without awaiting. `null` while a load is in flight.
+ */
+let currentFfmpeg: FFmpeg | null = null;
+
+/**
+ * `blob:` URLs backing the loaded core (~31 MB of JS + wasm, plus the
+ * pthread worker for `-mt`). Terminating the wrapper worker does not
+ * revoke them, so a recycled generation would pin its assets until the
+ * tab closed — feeding the very memory pressure that forced the
+ * recycle. Retired alongside the instance.
+ */
+let currentAssetUrls: string[] = [];
+
+function revokeAssetUrls(urls: string[]): void {
+  for (const url of urls) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* no URL registry in this realm */
+    }
+  }
+}
+
+/**
  * Public entry point. Idempotent across calls within a session —
  * the loaded `FFmpeg` instance is shared. Subsequent `ffmpeg`
  * invocations reuse the same wasm-backed worker.
@@ -116,14 +142,25 @@ async function loadFfmpeg(
   const log = onProgress ?? (() => {});
   const ffmpeg = new FFmpeg();
   const assets = await resolveAssetUrls(ipk, log);
+  const urls = [assets.coreURL, assets.wasmURL, assets.workerURL, assets.classWorkerURL].filter(
+    (u): u is string => typeof u === 'string'
+  );
   log('initializing ffmpeg-core...');
-  await ffmpeg.load({
-    coreURL: assets.coreURL,
-    wasmURL: assets.wasmURL,
-    ...(assets.workerURL ? { workerURL: assets.workerURL } : {}),
-    ...(assets.classWorkerURL ? { classWorkerURL: assets.classWorkerURL } : {}),
-  });
+  try {
+    await ffmpeg.load({
+      coreURL: assets.coreURL,
+      wasmURL: assets.wasmURL,
+      ...(assets.workerURL ? { workerURL: assets.workerURL } : {}),
+      ...(assets.classWorkerURL ? { classWorkerURL: assets.classWorkerURL } : {}),
+    });
+  } catch (err) {
+    // A core that never booted still allocated its blob URLs.
+    revokeAssetUrls(urls);
+    throw err;
+  }
   log('ffmpeg ready');
+  currentFfmpeg = ffmpeg;
+  currentAssetUrls = urls;
   return ffmpeg;
 }
 
@@ -258,24 +295,29 @@ function stringToBlobUrl(source: string, contentType: string): string {
  * `catch` above in {@link getFfmpeg} only covers a *load* failure,
  * which never produced an instance to begin with.
  */
-export function recycleFfmpeg(): void {
-  const stale = ffmpegPromise;
+export function recycleFfmpeg(faulted?: FFmpeg): void {
+  // Retire only the generation that actually faulted. Shell runs share
+  // the cached core, so a slow run can unwind from an instance that a
+  // faster retry has already replaced — without this guard it would
+  // terminate the healthy core the retry just booted. A `null`
+  // `currentFfmpeg` means a fresh load is in flight, which by
+  // definition is not the instance that faulted.
+  if (faulted !== undefined && currentFfmpeg !== faulted) return;
+
+  const stale = currentFfmpeg;
+  const staleUrls = currentAssetUrls;
   ffmpegPromise = null;
-  if (!stale) return;
-  // Settle out-of-band: the promise may still be pending, and a
-  // rejected one must not resurface here as an unhandled rejection.
-  void stale.then(
-    (ffmpeg) => {
-      try {
-        ffmpeg.terminate();
-      } catch {
-        /* worker already gone */
-      }
-    },
-    () => {
-      /* load failed — there is no worker to terminate */
+  currentFfmpeg = null;
+  currentAssetUrls = [];
+
+  if (stale) {
+    try {
+      stale.terminate();
+    } catch {
+      /* worker already gone */
     }
-  );
+  }
+  revokeAssetUrls(staleUrls);
 }
 
 /**
@@ -285,4 +327,6 @@ export function recycleFfmpeg(): void {
  */
 export function resetFfmpegForTests(): void {
   ffmpegPromise = null;
+  currentFfmpeg = null;
+  currentAssetUrls = [];
 }
