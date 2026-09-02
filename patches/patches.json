@@ -16,6 +16,14 @@
     "removeWhen": "Split by hunk. The ino-allocation hunks track zen-fs/dom#43, filed with a failing test against zen-fs/dom's own ponyfill suite; remove them once WebAccess allocates real ino/data pairs at both minting sites. The zero-byte createFile/remove hunks are still unfiled — reproduced on 1.2.11: writeFile of an empty buffer never creates the OPFS handle, so unlink then throws ENOENT for a file stat says exists.",
     "verify": "npm run test -w @slicc/webapp -- zenfs-dom-truncate-upstream zero-byte-file-delete"
   },
+  "isomorphic-git": {
+    "patchedVersion": "1.41.9",
+    "upstream": "https://github.com/isomorphic-git/isomorphic-git",
+    "issue": "https://github.com/ai-ecoverse/slicc/issues/2735",
+    "reason": "Concurrent packed-object readers all observed `_checksumVerified === false` before the first SHA-1 await completed, so each reader independently hashed and copied the same large pack. Memoizing the in-flight verification promise makes every reader share one integrity pass.",
+    "removeWhen": "Remove once isomorphic-git memoizes in-flight packfile checksum verification in a released version.",
+    "verify": "npm run test -w @slicc/webapp -- isomorphic-git-pack-verification-patch"
+  },
   "kerium": {
     "patchedVersion": "1.4.2",
     "upstream": "https://github.com/zen-fs/kerium",
