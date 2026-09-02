@@ -4062,10 +4062,19 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     } catch {
       /* ignore */
     }
-    if (chromeProcess) {
+    if (chromeProcess && chromeProcess.exitCode === null && chromeProcess.signalCode === null) {
+      // Wait for the real exit (bounded) rather than a guessed 500 ms: the
+      // profile-dir rmSync below races a Chrome that is still tearing down.
+      const exited = new Promise<void>((resolve) => chromeProcess.once('exit', () => resolve()));
       chromeProcess.kill('SIGKILL');
-      // Wait a bit for process to exit
-      await new Promise((r) => setTimeout(r, 500));
+      let fallback: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        exited,
+        new Promise<void>((resolve) => {
+          fallback = setTimeout(resolve, 5_000);
+        }),
+      ]);
+      clearTimeout(fallback);
     }
     server?.close();
     try {
@@ -4075,17 +4084,79 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     }
   });
 
-  async function navigateAndWait(targetId: string, url: string): Promise<void> {
+  // `createPage()` returns as soon as `Target.createTarget` does: the new tab
+  // is still on its initial `about:blank` document and the fixture (plus its
+  // child iframe) loads in the background. A fixed sleep here was a guess at
+  // how long that takes, and on a contended CI runner (merge_group run
+  // 33633701671) the guess lost — the snapshot captured `Page URL: about:blank`
+  // and a green PR was dequeued. Poll for the DOM state the assertions below
+  // depend on instead, with a deadline that reports what was observed.
+  const FIXTURE_LOAD_TIMEOUT_MS = 30_000;
+  const FIXTURE_LOAD_POLL_MS = 50;
+  // Parent and child frame are same-origin, so the parent document can read
+  // the child's document directly. Note that an iframe's INITIAL about:blank
+  // document already reports `readyState === 'complete'`, so the probe checks
+  // the child's URL and a known element, not just its readyState.
+  const FIXTURE_READY_PROBE = `(() => {
+    const frameDoc = document.getElementById('child-frame')?.contentDocument ?? null;
+    return JSON.stringify({
+      href: location.href,
+      readyState: document.readyState,
+      frameHref: frameDoc ? frameDoc.location.href : null,
+      frameReadyState: frameDoc ? frameDoc.readyState : null,
+      frameHasButton: Boolean(frameDoc?.getElementById('frame-btn')),
+    });
+  })()`;
+
+  interface FixtureProbe {
+    href: string;
+    readyState: string;
+    frameHref: string | null;
+    frameReadyState: string | null;
+    frameHasButton: boolean;
+  }
+
+  function fixtureIsLoaded(probe: FixtureProbe): boolean {
+    return (
+      probe.href.endsWith('/main.html') &&
+      probe.readyState === 'complete' &&
+      (probe.frameHref?.endsWith('/frame.html') ?? false) &&
+      probe.frameReadyState === 'complete' &&
+      probe.frameHasButton
+    );
+  }
+
+  async function waitForFixtureLoaded(targetId: string): Promise<void> {
+    const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
+    let lastObserved = 'no probe result yet';
     await browser.withTab(targetId, async () => {
-      await browser.navigate(url);
-      // Wait for the page and iframes to load
-      await new Promise((r) => setTimeout(r, 1500));
+      while (Date.now() < deadline) {
+        try {
+          const raw = await browser.evaluate(FIXTURE_READY_PROBE);
+          lastObserved = String(raw);
+          if (fixtureIsLoaded(JSON.parse(lastObserved) as FixtureProbe)) return;
+        } catch (err) {
+          // The about:blank execution context is torn down when main.html
+          // commits; an evaluate that lands in that window throws. Keep polling.
+          lastObserved = `probe threw: ${err instanceof Error ? err.message : String(err)}`;
+        }
+        await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+      }
+      throw new Error(
+        `iframe fixture did not finish loading within ${FIXTURE_LOAD_TIMEOUT_MS}ms ` +
+          `(last observed: ${lastObserved})`
+      );
     });
   }
 
-  it('snapshot includes iframe content with frame-prefixed refs', async () => {
+  async function openMainPage(): Promise<string> {
     const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    await waitForFixtureLoaded(targetId);
+    return targetId;
+  }
+
+  it('snapshot includes iframe content with frame-prefixed refs', async () => {
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
@@ -4104,8 +4175,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   });
 
   it('snapshot --no-iframes shows placeholder only', async () => {
-    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
@@ -4122,8 +4192,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   });
 
   it('frames lists main and child frames', async () => {
-    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
@@ -4138,8 +4207,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   });
 
   it('eval --frame sees globals defined by the frame page', async () => {
-    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
@@ -4159,8 +4227,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   });
 
   it('click on iframe element works', async () => {
-    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
@@ -4191,8 +4258,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   });
 
   it('fill in iframe input works', async () => {
-    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
-    await new Promise((r) => setTimeout(r, 2000));
+    const targetId = await openMainPage();
     const cmd = createPlaywrightCommand(
       'playwright-cli',
       browser as BrowserAPI,
