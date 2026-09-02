@@ -184,9 +184,15 @@
 /* setTheme), which deliberately never touches .theme-light. Inline      */
 /* (fragment) sprinkles and dips render into the page DOM, so they only  */
 /* follow a light WC shell if both markers select these values.          */
+/*                                                                       */
+/* The :has() sits inside :where() so the WC marker stays SPECIFICITY-   */
+/* NEUTRAL — plain :root (0,1,0), same as the dark block above, winning  */
+/* on order alone. Without :where() it would score (0,2,1) and outrank   */
+/* the `:root` block theme-engine.ts injects for the active preset,      */
+/* replacing a light preset's tokens with these defaults.                */
 /* ================================================================== */
 :root.theme-light,
-:root:has(body[data-theme="light"]) {
+:root:where(:has(body[data-theme="light"])) {
   /* ── S2 Gray Scale (Light Theme — from Figma UXC) ─────────── */
   --s2-gray-25: #ffffff;
   --s2-gray-50: #f8f8f8;
@@ -251,43 +257,43 @@
    shell renders markdown through the same `message-renderer.ts`, so these
    spans exist there too. */
 .theme-light .tok-keyword,
-:root:has(body[data-theme="light"]) .tok-keyword {
+:root:where(:has(body[data-theme="light"])) .tok-keyword {
   color: #8839ef;
 }
 .theme-light .tok-string,
-:root:has(body[data-theme="light"]) .tok-string {
+:root:where(:has(body[data-theme="light"])) .tok-string {
   color: #40a02b;
 }
 .theme-light .tok-number,
-:root:has(body[data-theme="light"]) .tok-number {
+:root:where(:has(body[data-theme="light"])) .tok-number {
   color: #d05d1a;
 }
 .theme-light .tok-comment,
-:root:has(body[data-theme="light"]) .tok-comment {
+:root:where(:has(body[data-theme="light"])) .tok-comment {
   color: var(--s2-gray-500);
 }
 .theme-light .tok-punct,
-:root:has(body[data-theme="light"]) .tok-punct {
+:root:where(:has(body[data-theme="light"])) .tok-punct {
   color: #1e66f5;
 }
 .theme-light .tok-fn,
-:root:has(body[data-theme="light"]) .tok-fn {
+:root:where(:has(body[data-theme="light"])) .tok-fn {
   color: #2b6cb0;
 }
 
 /* Tooltip inverts in light mode */
 .theme-light .s2-tooltip,
-:root:has(body[data-theme="light"]) .s2-tooltip {
+:root:where(:has(body[data-theme="light"])) .s2-tooltip {
   background: var(--s2-gray-900);
   color: var(--s2-gray-25);
 }
 
 /* Scrollbar lighter */
 .theme-light ::-webkit-scrollbar-thumb,
-:root:has(body[data-theme="light"]) ::-webkit-scrollbar-thumb {
+:root:where(:has(body[data-theme="light"])) ::-webkit-scrollbar-thumb {
   background: var(--s2-gray-300);
 }
 .theme-light ::-webkit-scrollbar-thumb:hover,
-:root:has(body[data-theme="light"]) ::-webkit-scrollbar-thumb:hover {
+:root:where(:has(body[data-theme="light"])) ::-webkit-scrollbar-thumb:hover {
   background: var(--s2-gray-400);
 }

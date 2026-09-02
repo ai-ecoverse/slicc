@@ -56,8 +56,12 @@ const darkTokens = tokensIn(ruleBody(tokensCss, ':root'));
 const lightRule = rule(tokensCss, ':root.theme-light');
 const lightTokens = tokensIn(lightRule.body);
 
-/** The WC shell's light marker — it never sets `.theme-light` on <html>. */
-const WC_LIGHT_MARKER = ':root:has(body[data-theme="light"])';
+/**
+ * The WC shell's light marker — it never sets `.theme-light` on <html>. The
+ * `:has()` is wrapped in `:where()` to keep the selector at plain `:root`
+ * specificity; see the specificity test below.
+ */
+const WC_LIGHT_MARKER = ':root:where(:has(body[data-theme="light"]))';
 
 const SUBTLE_HUES = [
   'yellow',
@@ -133,6 +137,22 @@ describe('light overrides reach both shells', () => {
         expect(selectors, `${sel} has no WC-marker twin`).toContain(`${WC_LIGHT_MARKER} ${suffix}`);
       }
     }
+  });
+
+  it('keeps the WC marker specificity-neutral so an active theme still wins', () => {
+    // `theme-engine.ts` injects the selected preset's tokens into a LATER
+    // `:root { … }` block. A bare `:root:has(body[data-theme="light"])` scores
+    // (0,2,1) and would outrank it, so a light preset would render these
+    // defaults instead of its own tokens. `:where()` contributes nothing,
+    // leaving plain `:root` (0,1,0), which wins over the dark block above on
+    // order alone and still loses to the injected theme.
+    const withoutComments = tokensCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of withoutComments.matchAll(/:root[^,{\s]*:has\(/g)) {
+      expect(m[0], 'unwrapped :has() raises specificity above the injected theme').toBe(
+        ':root:where(:has('
+      );
+    }
+    expect(withoutComments).toContain(WC_LIGHT_MARKER);
   });
 });
 
