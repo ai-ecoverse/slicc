@@ -76,6 +76,7 @@
     "@types/w3c-web-serial": "1.0.8",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.0.1",
-    "puppeteer-core": "25.9.0"
+    "puppeteer-core": "25.9.0",
+    "v86": "0.5.424"
   }
 }
