@@ -1186,6 +1186,12 @@ describe('parseConcatList', () => {
     ]);
   });
 
+  it('decodes backslash escapes in a bare path', () => {
+    // `file clip\ one.mp4` is valid ffmpeg; the member is "clip one.mp4".
+    const lines = parseConcatList('file clip\\ one.mp4\n');
+    expect(lines.find((l) => l.file)?.file).toBe('clip one.mp4');
+  });
+
   it('does not treat a filename starting with "file" as a directive', () => {
     expect(parseConcatList('filelist.mp4\n').filter((l) => l.file)).toHaveLength(0);
   });
@@ -1314,6 +1320,52 @@ describe('runWasmFfmpeg concat demuxer', () => {
 
     const deleted = fake.deleteFile.mock.calls.map(([n]) => n as string);
     expect(deleted.filter((n) => n.startsWith('__cat'))).toHaveLength(2);
+  });
+
+  it('rejects a parent-traversing member unless -safe 0 is given', async () => {
+    // Real ffmpeg refuses this at safe=1. Rewriting members to flat
+    // `__cat…` names would make its own check pass vacuously, so the
+    // wrapper has to enforce it on the path the user wrote.
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = concatCtx("file '../secret.mp4'\n", {
+      '/secret.mp4': new Uint8Array([1]),
+    });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unsafe file name: ../secret.mp4');
+    expect(result.stderr).toContain('-safe 0');
+  });
+
+  it('rejects an absolute member at the default safe level', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = concatCtx("file '/abs.mp4'\n", { '/abs.mp4': new Uint8Array([1]) });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unsafe file name: /abs.mp4');
+  });
+
+  it('allows an absolute member once -safe 0 is passed', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
+    useFakeFfmpeg(fake);
+    const ctx = concatCtx("file '/abs.mp4'\n", { '/abs.mp4': new Uint8Array([1]) });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'concat', '-safe', '0', '-i', 'list.txt', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(fake.writeFile.mock.calls.some(([n]) => (n as string).startsWith('__cat'))).toBe(true);
   });
 
   it('leaves an ordinary input untouched by the concat path', async () => {

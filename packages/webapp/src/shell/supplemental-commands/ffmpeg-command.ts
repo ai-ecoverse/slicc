@@ -64,8 +64,9 @@ Concatenating (concat demuxer):
   ffmpeg -f concat -safe 0 -i list.txt -c copy joined.mp4
 
 Files named inside the list are read from the VFS too, resolved
-against the LIST FILE's directory. The \`concat:\` protocol form
-(-i "concat:a.ts|b.ts") is not supported — use -f concat.
+against the LIST FILE's directory. As in ffmpeg, absolute and
+parent-traversing members need -safe 0. The \`concat:\` protocol
+form (-i "concat:a.ts|b.ts") is not supported — use -f concat.
 
 Webcam capture (avfoundation-style):
   ffmpeg -f avfoundation -video_size 1280x720 -framerate 30 \\
@@ -1149,7 +1150,11 @@ export function parseConcatList(text: string): ConcatListLine[] {
 
 function unquoteConcatPath(rest: string): string {
   const quote = rest[0];
-  if (quote !== "'" && quote !== '"') return rest;
+  // Bare form: ffmpeg still honours backslash escapes, so
+  // `file clip\ one.mp4` names `clip one.mp4`. Returning the token
+  // verbatim would look for a member with a literal backslash and
+  // report a perfectly good list as missing a file.
+  if (quote !== "'" && quote !== '"') return rest.replace(/\\(.)/g, '$1');
   let out = '';
   for (let i = 1; i < rest.length; i++) {
     const ch = rest[i];
@@ -1183,6 +1188,36 @@ function concatMemberName(path: string, inputIdx: number, memberIdx: number): st
   return `__cat${inputIdx}_${memberIdx}_${base || 'part.bin'}`;
 }
 
+/** Why a concat member could not be staged. */
+interface ConcatListError {
+  kind: 'missing' | 'unsafe';
+  file: string;
+}
+
+/**
+ * ffmpeg's concat demuxer refuses absolute paths and parent traversal
+ * unless `-safe 0` is passed. Mirror that rather than silently
+ * granting `-safe 0` semantics to every list: a script that works here
+ * should work against a real ffmpeg, and vice versa.
+ */
+function isSafeConcatPath(file: string): boolean {
+  if (file.startsWith('/')) return false;
+  if (/^[A-Za-z]:/.test(file)) return false;
+  return !file.split('/').includes('..');
+}
+
+/**
+ * Effective value of the demuxer's `safe` option for this input.
+ * ffmpeg defaults it to enabled, so only an explicit `-safe 0`
+ * (or a negative value) turns the check off.
+ */
+function concatSafeMode(input: ParsedInput): boolean {
+  const idx = input.raw.lastIndexOf('-safe');
+  if (idx < 0) return true;
+  const value = input.raw[idx + 1];
+  return !(value === '0' || value?.startsWith('-'));
+}
+
 /**
  * Read every file a concat list names, and rewrite the list to point
  * at the MEMFS names they will be staged under.
@@ -1197,10 +1232,11 @@ async function stageConcatList(
   listPath: string,
   listBytes: Uint8Array,
   inputIdx: number,
+  safe: boolean,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
 ): Promise<
   | { listBytes: Uint8Array; extraFiles: NonNullable<ResolvedInput['extraFiles']> }
-  | { error: string }
+  | { error: ConcatListError }
 > {
   const lines = parseConcatList(new TextDecoder().decode(listBytes));
   const listDir = listPath.slice(0, listPath.lastIndexOf('/')) || '/';
@@ -1212,8 +1248,14 @@ async function stageConcatList(
       rewritten.push(line.raw);
       continue;
     }
+    // Rewriting every member to a flat `__cat…` name would make the
+    // demuxer's own safety check trivially pass, so the check has to
+    // happen here, on the path the user actually wrote.
+    if (safe && !isSafeConcatPath(line.file)) {
+      return { error: { kind: 'unsafe', file: line.file } };
+    }
     const resolved = ctx.fs.resolvePath(listDir, line.file);
-    if (!(await ctx.fs.exists(resolved))) return { error: line.file };
+    if (!(await ctx.fs.exists(resolved))) return { error: { kind: 'missing', file: line.file } };
     const ffmpegName = concatMemberName(line.file, inputIdx, extraFiles.length);
     extraFiles.push({ ffmpegName, bytes: await ctx.fs.readFileBuffer(resolved) });
     rewritten.push(`file '${ffmpegName}'`);
@@ -1264,12 +1306,17 @@ async function loadResolvedInputs(
     const bytes = await ctx.fs.readFileBuffer(resolved);
     const ffmpegName = inferInputName(input, idx);
     if (isConcatInput(input)) {
-      const staged = await stageConcatList(resolved, bytes, idx, ctx);
+      const staged = await stageConcatList(resolved, bytes, idx, concatSafeMode(input), ctx);
       if ('error' in staged) {
+        const { kind, file } = staged.error;
+        const detail =
+          kind === 'unsafe'
+            ? `unsafe file name: ${file} (pass -safe 0 to allow it)`
+            : `file not found: ${file}`;
         return {
           error: {
             stdout: '',
-            stderr: `ffmpeg: concat list ${input.path}: file not found: ${staged.error}\n`,
+            stderr: `ffmpeg: concat list ${input.path}: ${detail}\n`,
             exitCode: 1,
           },
         };
