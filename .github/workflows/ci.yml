@@ -200,6 +200,9 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -297,6 +300,9 @@ jobs:
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -322,6 +328,9 @@ jobs:
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -349,6 +358,9 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -611,6 +623,9 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -654,6 +669,9 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -751,7 +769,10 @@ jobs:
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from 15: the job itself runs ~9 minutes, which left no room for
+    # the npm-ci action to time out a hung install and retry it (~9 minutes).
+    # A single hang would have failed the job instead of recovering from it.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -996,6 +1017,9 @@ jobs:
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1107,6 +1131,9 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1135,6 +1162,9 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1165,6 +1195,9 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1196,6 +1229,9 @@ jobs:
       needs.changes.outputs.cherry == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1577,6 +1613,9 @@ jobs:
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.native-root-config == 'true')
     runs-on: macos-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1953,6 +1992,9 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -2115,6 +2157,9 @@ jobs:
       needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
+    # Backstop, not a budget: a hung `npm ci` (see .github/actions/npm-ci)
+    # must not sit on a runner until the 6-hour default fires.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
