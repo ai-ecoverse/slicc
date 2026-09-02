@@ -207,6 +207,8 @@ export interface MountIndexState {
   abortCause?: MountIndexAbortCause;
 }
 
+type DirectoryChildren = Map<string, 'file' | 'directory'>;
+
 interface MountData {
   handle: FileSystemDirectoryHandle;
   state: MountIndexState;
@@ -214,6 +216,8 @@ interface MountData {
   files: Set<string>;
   /** Set of all directory paths under this mount (absolute VFS paths) */
   directories: Set<string>;
+  /** Immediate children keyed by their absolute parent directory path. */
+  childrenByDirectory: Map<string, DirectoryChildren>;
   /** Abort controller for cancelling in-progress indexing */
   abortController: AbortController | null;
   /**
@@ -250,6 +254,7 @@ export class MountIndex {
       state: { status: 'pending', indexed: 0 },
       files: new Set(),
       directories: new Set(),
+      childrenByDirectory: new Map(),
       abortController,
       limits,
     };
@@ -293,6 +298,7 @@ export class MountIndex {
     data.state = { status: 'pending', indexed: 0 };
     data.files.clear();
     data.directories.clear();
+    data.childrenByDirectory.clear();
     if (limits) data.limits = limits;
     this.notifyListeners();
 
@@ -373,28 +379,10 @@ export class MountIndex {
       return undefined;
     }
 
-    const prefix = dirPath === '/' ? '/' : dirPath + '/';
-    const entries = new Map<string, 'file' | 'directory'>();
+    const children = data.childrenByDirectory.get(dirPath);
+    if (!children) return [];
 
-    // Find all files that are immediate children of dirPath
-    for (const path of data.files) {
-      if (!path.startsWith(prefix)) continue;
-      const rest = path.slice(prefix.length);
-      if (!rest.includes('/')) {
-        entries.set(rest, 'file');
-      }
-    }
-
-    // Find all directories that are immediate children of dirPath
-    for (const path of data.directories) {
-      if (!path.startsWith(prefix)) continue;
-      const rest = path.slice(prefix.length);
-      if (!rest.includes('/')) {
-        entries.set(rest, 'directory');
-      }
-    }
-
-    return [...entries.entries()].map(([name, type]) => ({ name, type }));
+    return [...children].map(([name, type]) => ({ name, type }));
   }
 
   /**
@@ -421,16 +409,16 @@ export class MountIndex {
     if (data?.state.status !== 'ready') return;
 
     data.files.add(absolutePath);
+    this.addPathToChildIndex(data, absolutePath, 'file');
 
     // Ensure parent directories are indexed
-    let parent = absolutePath;
-    while (parent !== mountPath) {
-      const lastSlash = parent.lastIndexOf('/');
-      if (lastSlash <= 0) break;
-      parent = parent.slice(0, lastSlash) || '/';
-      if (parent.length >= mountPath.length) {
-        data.directories.add(parent);
-      }
+    let parent = this.parentPath(absolutePath);
+    while (parent === mountPath || parent.startsWith(`${mountPath}/`)) {
+      data.directories.add(parent);
+      this.ensureDirectoryChildren(data, parent);
+      if (parent === mountPath) break;
+      this.addPathToChildIndex(data, parent, 'directory');
+      parent = this.parentPath(parent);
     }
   }
 
@@ -460,6 +448,13 @@ export class MountIndex {
         data.directories.delete(path);
       }
     }
+
+    this.removePathFromChildIndex(data, absolutePath);
+    for (const directoryPath of data.childrenByDirectory.keys()) {
+      if (directoryPath === absolutePath || directoryPath.startsWith(prefix)) {
+        data.childrenByDirectory.delete(directoryPath);
+      }
+    }
   }
 
   /**
@@ -476,6 +471,8 @@ export class MountIndex {
     if (data.files.has(oldPath)) {
       data.files.delete(oldPath);
       data.files.add(newPath);
+      this.removePathFromChildIndex(data, oldPath);
+      this.addPathToChildIndex(data, newPath, 'file');
       return;
     }
 
@@ -499,7 +496,58 @@ export class MountIndex {
           data.directories.add(newPrefix + path.slice(oldPrefix.length));
         }
       }
+
+      this.removePathFromChildIndex(data, oldPath);
+      this.addPathToChildIndex(data, newPath, 'directory');
+      const movedDirectories = [...data.childrenByDirectory.entries()].filter(
+        ([path]) => path === oldPath || path.startsWith(oldPrefix)
+      );
+      for (const [path] of movedDirectories) {
+        data.childrenByDirectory.delete(path);
+      }
+      for (const [path, children] of movedDirectories) {
+        const renamedPath = path === oldPath ? newPath : newPrefix + path.slice(oldPrefix.length);
+        data.childrenByDirectory.set(renamedPath, children);
+      }
     }
+  }
+
+  /** Get or create the child bucket for an indexed directory. */
+  private ensureDirectoryChildren(data: MountData, dirPath: string): DirectoryChildren {
+    let children = data.childrenByDirectory.get(dirPath);
+    if (!children) {
+      children = new Map();
+      data.childrenByDirectory.set(dirPath, children);
+    }
+    return children;
+  }
+
+  /** Add one absolute path to its parent's child bucket. */
+  private addPathToChildIndex(
+    data: MountData,
+    absolutePath: string,
+    type: 'file' | 'directory'
+  ): void {
+    const name = absolutePath.slice(absolutePath.lastIndexOf('/') + 1);
+    if (!name) return;
+
+    const children = this.ensureDirectoryChildren(data, this.parentPath(absolutePath));
+    children.set(name, type);
+    if (type === 'directory') {
+      this.ensureDirectoryChildren(data, absolutePath);
+    }
+  }
+
+  /** Remove one absolute path from its parent's child bucket. */
+  private removePathFromChildIndex(data: MountData, absolutePath: string): void {
+    const name = absolutePath.slice(absolutePath.lastIndexOf('/') + 1);
+    const children = data.childrenByDirectory.get(this.parentPath(absolutePath));
+    children?.delete(name);
+  }
+
+  private parentPath(absolutePath: string): string {
+    const lastSlash = absolutePath.lastIndexOf('/');
+    return lastSlash <= 0 ? '/' : absolutePath.slice(0, lastSlash);
   }
 
   /**
@@ -588,6 +636,7 @@ export class MountIndex {
     this.enforceWalkBounds(depth, data);
 
     data.directories.add(basePath);
+    this.ensureDirectoryChildren(data, basePath);
 
     // Read this directory's entries up front so we can fingerprint it for cycle
     // detection before descending. `readChildren` enforces the entry budget as
@@ -725,8 +774,10 @@ export class MountIndex {
 
       if (childHandle.kind === 'file') {
         data.files.add(childPath);
+        this.addPathToChildIndex(data, childPath, 'file');
         data.state.indexed++;
       } else if (childHandle.kind === 'directory') {
+        this.addPathToChildIndex(data, childPath, 'directory');
         await this.walkHandle(
           childPath,
           childHandle as FileSystemDirectoryHandle,
