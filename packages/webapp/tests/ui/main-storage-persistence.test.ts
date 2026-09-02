@@ -28,7 +28,7 @@ const source = readFileSync(mainPath, 'utf8');
  * commented-out `// setupStoragePersistence();` cannot satisfy the ordering
  * assertions below — that is exactly the regression they exist to catch.
  */
-const callIdx = source.search(/^  setupStoragePersistence\(\);$/m);
+const callIdx = source.search(/^ {2}setupStoragePersistence\(\);$/m);
 
 describe('ui/main.ts storage-persistence wiring', () => {
   it('imports setupStoragePersistence from the boot helper', () => {
