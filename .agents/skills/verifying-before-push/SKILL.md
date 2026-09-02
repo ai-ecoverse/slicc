@@ -33,7 +33,8 @@ separate `check-touched-exemptions.mjs` command: `npm run verify` does not inclu
 The `.husky/pre-push` hook runs the full CI lint gate automatically before every
 push to a feature branch. It mirrors every check from the CI `lint` job —
 biome, prettier, custom lint scripts, complexity gate, manifest justifications,
-and knip dead-code detection — all in parallel (~6 s wall-clock).
+and knip dead-code detection — all in parallel (~6 s wall-clock), then the
+autofix-drift check (below) serially, because it writes.
 
 You can also run it manually:
 
@@ -79,6 +80,12 @@ xcodegen `project.yml` must overlap — see `packages/dev-tools/swift-pin-reconc
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
+
+CI then runs `npm run lint:autofix-drift`, which fails if `biome check --write` changes any
+file. `biome check` only fails on errors, but `--write` applies every safe fix, including
+those of warn/info rules, so a violation of one of those passes `lint:ci` yet gets rewritten by
+every local `npm run lint` — re-dirtying every worktree. Such violations land through commits
+that skip the pre-commit hook (GitHub web UI, Copilot Autofix). Fix: `npm run lint`, commit.
 
 ## Duplicate-code gate (`lint:duplication`)
 

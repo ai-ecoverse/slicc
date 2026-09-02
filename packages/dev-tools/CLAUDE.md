@@ -18,6 +18,7 @@ Bare script names below live under `tools/` unless a fuller path is given.
 - **Doc gates** (`npm run lint:docs`, `.husky/pre-commit`): `tools/check-doc-sizes.mjs` + `check-doc-refs.mjs` (each + `-lib`). [details](../../docs/dev-tools-details.md#doc-dead-reference-gate).
 - **Hugging Face caching mirror** (`tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror; e2e CI caches `.cache/hf-mirror` and sets `HF_ENDPOINT` for warm-run Kokoro weights.
 - **Linear-history check**: `bash packages/dev-tools/tools/check-linear-history.sh [base-ref] [head-ref]`. `linear-history` CI job.
+- **Autofix-drift gate** (`npm run lint:autofix-drift`): `tools/check-autofix-drift.sh` — `biome check --write` must be a no-op; catches safe fixes of warn/info rules that `biome check` (lint:ci) accepts. CI `lint` job + pre-push gate.
 - **Skill lint** (`npm run lint:skills`): `tools/lint-skills.mjs` — `tessl skill lint` via `@tessl/cli`; warns locally, fails under `--strict`/CI.
 - **Patch reconcile** (`npm run lint:patches`): `packages/dev-tools/patch-reconcile/check-patches.mjs` + `reconcile-context.mjs`. See `patches/README.md`.
 - **Developer-skill sync** (`npm run lint:skill-router`): `tools/check-skill-router-sync.sh` — keeps root router, `.agents/skills/`, `.claude/skills/` in sync.
