@@ -1255,7 +1255,9 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     expect(events[1].text).toContain('compacting history');
     // All three events target the same synthetic bubble.
     expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
-    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing');
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
+      trigger: 'threshold',
+    });
   });
 
   it('renders "fallback" as a truncation notice and stays silent for other states', () => {
@@ -1318,7 +1320,54 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     });
 
     expect(events).toHaveLength(0);
-    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'fallback');
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'fallback', {
+      trigger: 'threshold',
+    });
+  });
+
+  it('carries the erase intent on clear-chat only when asked', async () => {
+    void client.clearAllMessages('cone_123', { discardLiveSnapshot: true });
+    void client.clearAllMessages('cone_123');
+    const clears = sentMessages
+      .map((m) => (m as { payload: { type: string } }).payload)
+      .filter((payload) => payload.type === 'clear-chat');
+    expect(clears[0]).toMatchObject({ scoopJid: 'cone_123', discardLiveSnapshot: true });
+    expect(clears[1]).not.toHaveProperty('discardLiveSnapshot');
+  });
+
+  it('words an idle round as one and appends the transcript pointer', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: 'cone_123',
+      state: 'summarizing',
+      trigger: 'idle',
+      transcriptPath: '/sessions/live-cone-abc.md',
+    });
+
+    expect(events[1].text).toContain('Cone idle — compacting history in the background');
+    expect(events[1].text).toContain('Full transcript: /sessions/live-cone-abc.md');
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
+      trigger: 'idle',
+      transcriptPath: '/sessions/live-cone-abc.md',
+    });
+  });
+
+  it('keeps the threshold wording for an overflow round and omits a missing pointer', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: 'cone_123',
+      state: 'summarizing',
+      trigger: 'overflow',
+    });
+
+    expect(events[1].text).toContain('Context window almost exceeded');
+    expect(events[1].text).not.toContain('Full transcript');
   });
 });
 

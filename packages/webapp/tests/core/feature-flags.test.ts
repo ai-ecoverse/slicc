@@ -69,6 +69,12 @@ describe('feature flag registry', () => {
         floatDefaults: { cherry: 'off' },
         userToggleable: false,
       }),
+      expect.objectContaining({
+        id: 'compact-on-idle',
+        label: 'Compact on idle',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -203,6 +209,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
+      'compact-on-idle': 'off',
     });
     expect(
       resolveFlags(
@@ -215,6 +222,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
+      'compact-on-idle': 'off',
     });
   });
 

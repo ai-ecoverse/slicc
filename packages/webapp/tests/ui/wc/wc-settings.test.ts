@@ -18,6 +18,11 @@ import {
   setFeatureFlagOverride,
 } from '../../../src/core/feature-flags.js';
 import {
+  IDLE_COMPACTION_DEFAULTS,
+  readIdleCompactionSettings,
+  writeIdleCompactionSettings,
+} from '../../../src/core/idle-compaction-settings.js';
+import {
   accountDetail,
   maskKey,
   showExperimentalSettings,
@@ -298,6 +303,35 @@ describe('showExperimentalSettings', () => {
     expect(isFeatureEnabled('panel-layouts')).toBe(true);
     clickDone(dialog);
     await result;
+  });
+
+  it('offers the compact-on-idle tuning fields and persists them', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+    try {
+      expect(dialog.querySelector('#wcset-feature-compact-on-idle')).not.toBeNull();
+      const minutes = dialog.querySelector('#wcset-idle-compaction-minutes') as HTMLInputElement;
+      const tokens = dialog.querySelector('#wcset-idle-compaction-min-tokens') as HTMLInputElement;
+      expect(minutes.value).toBe(String(IDLE_COMPACTION_DEFAULTS.idleMinutes));
+      expect(tokens.value).toBe(String(IDLE_COMPACTION_DEFAULTS.minTokens));
+
+      minutes.value = '25';
+      minutes.dispatchEvent(new Event('change'));
+      tokens.value = '';
+      tokens.dispatchEvent(new Event('change'));
+
+      expect(readIdleCompactionSettings()).toEqual({
+        idleMinutes: 25,
+        minTokens: IDLE_COMPACTION_DEFAULTS.minTokens,
+      });
+      // An emptied field shows the default it fell back to.
+      expect(tokens.value).toBe(String(IDLE_COMPACTION_DEFAULTS.minTokens));
+    } finally {
+      clickDone(dialog);
+      await result;
+      writeIdleCompactionSettings({ idleMinutes: undefined, minTokens: undefined });
+    }
   });
 
   it('persists an agentic-memory toggle', async () => {

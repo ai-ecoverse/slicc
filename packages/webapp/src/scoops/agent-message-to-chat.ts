@@ -58,9 +58,21 @@ export function agentMessagesToChatMessages(
     source?: string;
     idSeed?: () => string;
     hiddenToolNames?: ReadonlySet<string>;
+    /**
+     * Keep tool inputs and results whole instead of capping them at the
+     * transcript limit. For ARCHIVAL projections only (the compaction
+     * snapshot in `/sessions`): the oversized payloads are exactly the ones
+     * compaction elides, so a capped copy would be the only copy left.
+     */
+    uncapped?: boolean;
   } = {}
 ): ChatMessage[] {
-  const { source = 'cone', idSeed = defaultUid, hiddenToolNames = HIDDEN_TOOL_NAMES } = options;
+  const {
+    source = 'cone',
+    idSeed = defaultUid,
+    hiddenToolNames = HIDDEN_TOOL_NAMES,
+    uncapped = false,
+  } = options;
   const out: ChatMessage[] = [];
   let lastAssistant: ChatMessage | null = null;
   // Tool-call ids that we dropped from an assistant message because
@@ -80,11 +92,12 @@ export function agentMessagesToChatMessages(
         source,
         idSeed,
         hiddenToolNames,
-        droppedToolCallIds
+        droppedToolCallIds,
+        uncapped
       );
       out.push(lastAssistant);
     } else if (isToolResultMessage(m)) {
-      patchToolResult(m, lastAssistant, droppedToolCallIds);
+      patchToolResult(m, lastAssistant, droppedToolCallIds, uncapped);
     }
   }
 
@@ -145,10 +158,11 @@ function translateAssistantMessage(
   source: string,
   idSeed: () => string,
   hiddenToolNames: ReadonlySet<string>,
-  droppedToolCallIds: Set<string>
+  droppedToolCallIds: Set<string>,
+  uncapped = false
 ): ChatMessage {
   const visibleToolCalls: UiToolCall[] = [];
-  for (const tc of collectToolCalls(m)) {
+  for (const tc of collectToolCalls(m, uncapped)) {
     if (hiddenToolNames.has(tc.name)) {
       droppedToolCallIds.add(tc.id);
     } else {
@@ -193,15 +207,18 @@ function translateAssistantMessage(
 function patchToolResult(
   m: ToolResultMessage,
   lastAssistant: ChatMessage | null,
-  droppedToolCallIds: ReadonlySet<string>
+  droppedToolCallIds: ReadonlySet<string>,
+  uncapped = false
 ): void {
   if (droppedToolCallIds.has(m.toolCallId)) return;
   const target = lastAssistant?.toolCalls?.find((tc) => tc.id === m.toolCallId);
   if (!target) return;
   // Transcript boundary: cap rebuilt tool results so seeding a large
   // restored history doesn't materialize unbounded text in memory
-  // (the canonical history this reads from stays untouched).
-  target.result = capTranscriptText(textOf(m.content));
+  // (the canonical history this reads from stays untouched). The archival
+  // projection opts out — see `uncapped`.
+  const text = textOf(m.content);
+  target.result = uncapped ? text : capTranscriptText(text);
   target.isError = m.isError;
 }
 
@@ -241,7 +258,7 @@ function isToolCallBlock(block: unknown): block is AgentToolCall {
   return (block as { type?: string }).type === 'toolCall';
 }
 
-function collectToolCalls(m: AssistantMessage): UiToolCall[] {
+function collectToolCalls(m: AssistantMessage, uncapped = false): UiToolCall[] {
   if (!Array.isArray(m.content)) return [];
   const out: UiToolCall[] = [];
   for (const block of m.content) {
@@ -251,8 +268,8 @@ function collectToolCalls(m: AssistantMessage): UiToolCall[] {
       name: block.name,
       // Transcript boundary: shallow-cap oversized string fields (e.g.
       // write_file's `content`) — shape preserved for the panel's
-      // per-tool input renderers.
-      input: capTranscriptToolInput(block.arguments),
+      // per-tool input renderers. The archival projection keeps them whole.
+      input: uncapped ? block.arguments : capTranscriptToolInput(block.arguments),
     });
   }
   return out;

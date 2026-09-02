@@ -607,6 +607,42 @@ through `onFatalError`. The scoop lifecycle sends a `scoop-error` message to the
 to trigger another turn, so a stalled scoop is a bug: every failed terminal path must notify the
 cone, which can re-delegate a narrower task.
 
+**Transcript snapshots**: every compaction round on a cone — threshold, overflow recovery, or idle —
+first hands the untouched history to `CompactionConfig.onBeforeCompaction`, which
+`scoops/live-session-snapshot.ts` turns into a `/sessions/live-<cone>-<id>.md` archive (index entry
+`live: true`, at most one per cone). Rounds accumulate: `liveThrough` is the newest message timestamp
+already on disk, so the kept tail is never written twice and the previous summary shows up in the
+transcript as a checkpoint; a same-millisecond message is appended unless the archive already holds
+it, a row whose archive file went missing is rewritten from the full history, and any other read
+fault skips the round rather than rewriting the archive. The projection is UNCAPPED (tool inputs
+and results are kept whole, unlike the 64 KB transcript cap) because the oversized payloads are
+exactly what compaction elides first. The summary
+message (and the naive-drop marker) ends with a pointer to that path so the agent can read what the
+summary replaced; the UI notice shows the same path, and the pointer sentence is stripped again
+before a later round's summary/memory prompts see the previous summary. "New chat" completes the
+snapshot on **Save** / **Skip memory** (same id and file, `live` dropped, enrichment renames it);
+**Erase** sends `discardLiveSnapshot` on the `clear-chat` envelope so the KERNEL deletes it; a bare
+`clear-chat` finalizes it into a pending draft. Every `/sessions/index.json` read-modify-write —
+page freezer, enrichment, worker snapshot — runs under one origin-wide Web Lock
+(`slicc:sessions-index`, `transcript/frozen-archive-writer.ts` `serializeIndexWrite`), and a
+snapshot re-checks the unit's session generation inside that transaction so a clear that overtook
+it writes nothing. The cursor (`liveThrough`) and round count also ride the archive frontmatter, so
+a corrupt-index rebuild restores them. Scoops write no snapshot.
+
+**Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
+`ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after N idle minutes and
+the estimated context (`estimateConversationTokens`, the same pricing the threshold uses) is at
+least M tokens, the ordinary forced compaction runs in the background with `trigger: 'idle'`. The
+result is adopted only if the thread stood still for the whole round — same array, same length,
+same last message, no prompt in flight; otherwise it is discarded and the conversation continues
+untouched. A prompt, `stop()`, `clear-chat` or dispose ABORTS a round in flight (the LLM calls get
+the round's `AbortSignal`), and the round's memory extraction is deferred
+(`CompactionOptions.deferMemoryExtraction`) until the result is adopted, so a discarded round never
+writes bullets for a history that is still in the conversation. N and M live in `localStorage`
+(`slicc_idle_compaction_minutes`, `slicc_idle_compaction_min_tokens`, defaults 10 / 50 000) and are
+editable under Experimental features next to the flag; minutes are capped at `MAX_IDLE_MINUTES`
+(~24.8 days, the 32-bit `setTimeout` limit) so a huge value means "very long", never "now".
+
 ---
 
 ## Tool Error Handling

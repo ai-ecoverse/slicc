@@ -21,6 +21,7 @@
 
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
+import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import type { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -83,7 +84,8 @@ export interface ScoopLifecycleCallbacks {
   onStatusChange(scoopJid: string, status: ScoopTabState['status']): void;
   onCompactionStateChange?(
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+    state: CompactionState,
+    detail: CompactionStateDetail
   ): void;
   onError(scoopJid: string, error: string): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;
@@ -949,8 +951,8 @@ export class ScoopLifecycleManager {
           void completionService.notifyCompletion(jid);
         }
       },
-      onCompactionStateChange: (state) => {
-        callbacks.onCompactionStateChange?.(jid, state);
+      onCompactionStateChange: (state, detail) => {
+        callbacks.onCompactionStateChange?.(jid, state, detail);
       },
       onToolStart: (toolName, toolInput, toolCallId) => {
         callbacks.onToolStart?.(jid, toolName, toolInput, toolCallId);

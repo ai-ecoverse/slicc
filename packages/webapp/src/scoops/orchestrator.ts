@@ -12,6 +12,7 @@
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
+import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
@@ -75,7 +76,7 @@ import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
-import type { ScoopContext } from './scoop-context.js';
+import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
 import { ScoopIdleTimers } from './scoop-idle-timers.js';
 import { ScoopLifecycleManager, type ScoopObserver } from './scoop-lifecycle-manager.js';
@@ -122,7 +123,8 @@ export interface OrchestratorCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+    state: CompactionState,
+    detail: CompactionStateDetail
   ) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;
@@ -1359,8 +1361,8 @@ export class Orchestrator implements ConeApprovalRouter {
    * next prompt (because `lastAgentTimestamp` was just deleted) and
    * replays every pre-reset turn back into the live agent.
    */
-  clearScoopMessages(jid: string): Promise<void> {
-    return this.messageRouter.clearScoopMessages(jid, this.lifecycle.getContext(jid));
+  clearScoopMessages(jid: string, options: ClearSessionOptions = {}): Promise<void> {
+    return this.messageRouter.clearScoopMessages(jid, this.lifecycle.getContext(jid), options);
   }
 
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */

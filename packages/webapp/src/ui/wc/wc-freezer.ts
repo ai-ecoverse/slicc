@@ -38,7 +38,9 @@ function metaLine(entry: FrozenSessionIndexEntry): string {
     month: 'short',
     day: 'numeric',
   });
-  return `${day} · ${entry.messageCount} turns`;
+  const turns = `${day} · ${entry.messageCount} turns`;
+  // A compaction snapshot of the chat that is still open in this cone.
+  return entry.live ? `${turns} · in progress` : turns;
 }
 
 /** Build one freezer card; `slug` carries the archive filename. */
@@ -162,29 +164,43 @@ export async function rebuildFreezerIndexFromArchives(
     try {
       const raw = await fs.readFile(`/sessions/${filename}`, { encoding: 'utf-8' });
       const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      const header = text.slice(0, 2000);
-      const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
-      const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
-      const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
-      const parsed = parseFrozenArchive(text);
-      entries.push({
-        filename,
-        title,
-        frozenAt,
-        messageCount,
-        ...(parsed.cost ? { cost: parsed.cost } : {}),
-        ...(parsed.models ? { models: parsed.models } : {}),
-        ...(parsed.cone ? { cone: parsed.cone } : {}),
-        ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
-        ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
-        ...(filename.startsWith('pending-') ? { pendingEnrichment: true } : {}),
-      });
+      entries.push(entryFromArchive(filename, text));
     } catch {
       // Unreadable archive — skip it rather than failing the whole rebuild.
     }
   }
   entries.sort((a, b) => b.frozenAt.localeCompare(a.frozenAt));
   return entries;
+}
+
+/** One rebuilt index row from an archive's text (frontmatter + data block). */
+function entryFromArchive(filename: string, text: string): FrozenSessionIndexEntry {
+  const header = text.slice(0, 2000);
+  const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
+  const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
+  const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
+  const parsed = parseFrozenArchive(text);
+  // A live compaction snapshot is still being written to — it must not be
+  // handed to the enrichment catch-up, and it needs its cursor back. A
+  // `live-` file WITHOUT the marker was finalized (bare clear-chat) and is
+  // an ordinary draft.
+  const pending = filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live);
+  return {
+    filename,
+    title,
+    frozenAt,
+    messageCount,
+    ...(parsed.cost ? { cost: parsed.cost } : {}),
+    ...(parsed.models ? { models: parsed.models } : {}),
+    ...(parsed.cone ? { cone: parsed.cone } : {}),
+    ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
+    ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
+    ...(parsed.live ? { live: true as const } : {}),
+    ...(parsed.live && parsed.liveThrough ? { liveThrough: parsed.liveThrough } : {}),
+    ...(parsed.live && parsed.compactions ? { compactions: parsed.compactions } : {}),
+    ...(parsed.id ? { sessionId: parsed.id } : {}),
+    ...(pending ? { pendingEnrichment: true } : {}),
+  };
 }
 
 /**

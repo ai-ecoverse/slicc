@@ -16,6 +16,7 @@
  * - `scoop-context/agent-event-router.ts` — agent events → UI callbacks
  * - `scoop-context/agent-end-dispatch.ts` — what a terminal `agent_end` means
  * - `scoop-context/overflow-recovery.ts` — context-overflow compaction ladder
+ * - `scoop-context/idle-compaction.ts` — compact-on-idle timer + adoption gate
  * - `scoop-context/image-recovery.ts` — rejected-image recovery
  * - `scoop-context/session-persistence.ts` — durable history (#1987)
  * - `scoop-context/bash-job-reaper.ts` — detached job pids (#1166)
@@ -29,7 +30,13 @@
  */
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
-import type { createCompactContext } from '../core/context-compaction.js';
+import {
+  type CompactionSnapshot,
+  type CompactionTrigger,
+  type createCompactContext,
+  estimateConversationTokens,
+} from '../core/context-compaction.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import type {
   Agent,
   AgentMessage,
@@ -57,6 +64,7 @@ import { handleAgentEnd } from './scoop-context/agent-end-dispatch.js';
 import { type AgentEventSink, routeAgentEvent } from './scoop-context/agent-event-router.js';
 import { BashJobReaper } from './scoop-context/bash-job-reaper.js';
 import type { ScoopContextCallbacks } from './scoop-context/callbacks.js';
+import type { IdleCompaction } from './scoop-context/idle-compaction.js';
 import { ImageRecovery } from './scoop-context/image-recovery.js';
 import {
   applyModelUpdate,
@@ -89,6 +97,15 @@ export {
 } from './scoop-context/error-classification.js';
 export { buildScoopShellEnv, ownLickTargetFor } from './scoop-context/shell-env.js';
 export { resolveThinkingLevel } from './scoop-context/thinking-level.js';
+
+/** How a cleared root treats its live compaction snapshot. */
+export interface ClearSessionOptions {
+  /**
+   * "Erase" (#2272 vocabulary: the user keeps nothing): delete the live
+   * snapshot instead of finalizing it into a pending archive.
+   */
+  discardLiveSnapshot?: boolean;
+}
 
 export class ScoopContext {
   private scoop: RegisteredScoop;
@@ -141,6 +158,19 @@ export class ScoopContext {
   private readonly bashJobs: BashJobReaper;
   private readonly imageRecovery: ImageRecovery;
   private readonly overflow: OverflowRecovery;
+  /**
+   * Compact-on-idle timer, loaded on the first `ready` of a root with the
+   * flag on and never for anyone else — the module (and its settings
+   * reader) stays out of the kernel worker's eager first-load closure.
+   */
+  private idleCompaction: IdleCompaction | null = null;
+  private idleCompactionLoading: Promise<IdleCompaction> | null = null;
+  /**
+   * Bumped by every `clearSession`. A pre-compaction snapshot captures it
+   * and checks it again inside the index transaction, so a snapshot that
+   * was waiting for the lock while the chat was cleared writes nothing.
+   */
+  private sessionGeneration = 0;
   private readonly turnRunner: TurnRunner;
 
   /**
@@ -334,6 +364,10 @@ export class ScoopContext {
           this.structuredOutputCaptured = true;
         },
         spawnBashJob: (command) => this.bashJobs.spawn(command),
+        onBeforeCompaction:
+          this.unit.parentId === null
+            ? (messages, trigger) => this.snapshotBeforeCompaction(messages, trigger)
+            : undefined,
       });
 
       if (runtime.kind === 'abandoned') return;
@@ -530,6 +564,9 @@ export class ScoopContext {
     );
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
+    // A stop also cuts off an idle round in flight — its summary would
+    // otherwise finish and be adopted over a chat the user is acting on.
+    this.idleCompaction?.cancel();
     this.isProcessing = false;
     // Preserve an `error` state (a tripped bound set it deliberately, so the
     // lifecycle doesn't announce completion); a plain user interrupt lands
@@ -549,10 +586,111 @@ export class ScoopContext {
    * conversation (#2275) — the canonical record and the legacy agent
    * session. `clearMessages()` alone only empties the in-memory list, which
    * a reload would refill from whichever store still held it.
+   *
+   * A root's live compaction snapshot is finalized too: the freezer has
+   * already turned it into an archive (save / skip) or deleted it (erase)
+   * by the time its clear reaches here, so this only matters for a bare
+   * `clear-chat` — where the snapshot would otherwise stay `live` and the
+   * NEXT session's compactions would append to it.
    */
-  async clearSession(): Promise<void> {
+  async clearSession(options: ClearSessionOptions = {}): Promise<void> {
+    this.sessionGeneration++;
+    this.idleCompaction?.cancel();
     this.clearMessages();
     await this.sessions.clear();
+    await this.settleLiveSnapshot(options.discardLiveSnapshot === true);
+  }
+
+  /** Whether compact-on-idle applies to this unit right now (flag + role). */
+  private idleCompactionEnabled(): boolean {
+    return this.unit.parentId === null && isFeatureEnabled('compact-on-idle');
+  }
+
+  /**
+   * (Re)arm the idle window on `ready`. The first arm of an eligible unit
+   * loads the module; a unit that settles again before the load finishes is
+   * armed once it lands, provided it is still `ready`.
+   */
+  private armIdleCompaction(): void {
+    if (!this.idleCompactionEnabled()) {
+      this.idleCompaction?.disarm();
+      return;
+    }
+    if (this.idleCompaction) {
+      this.idleCompaction.arm();
+      return;
+    }
+    this.idleCompactionLoading ??= this.loadIdleCompaction();
+    void this.idleCompactionLoading.then((idle) => {
+      if (!this.disposed && this.status === 'ready') idle.arm();
+    });
+  }
+
+  private async loadIdleCompaction(): Promise<IdleCompaction> {
+    const [{ IdleCompaction }, { readIdleCompactionSettings }] = await Promise.all([
+      import('./scoop-context/idle-compaction.js'),
+      import('../core/idle-compaction-settings.js'),
+    ]);
+    const idle = new IdleCompaction({
+      isEnabled: () => this.idleCompactionEnabled(),
+      getSettings: readIdleCompactionSettings,
+      getAgent: () => this.agent,
+      isDisposed: () => this.disposed,
+      isBusy: () => this.isBusy,
+      getCompactFn: () => this.compactFn,
+      getCompactionApiKey: () => this.getCompactionApiKey?.(),
+      estimateTokens: estimateConversationTokens,
+      // The adopted history is what a reload must restore.
+      onCompacted: () => this.sessions.persistNow(),
+      folder: this.scoop.folder,
+    });
+    this.idleCompaction = idle;
+    return idle;
+  }
+
+  /**
+   * Pre-compaction transcript snapshot (`live-session-snapshot.ts`), wired
+   * into the compactor for roots. Lazy-imported: the writer is not on the
+   * boot path, and the worker's eager closure is budgeted.
+   */
+  private async snapshotBeforeCompaction(
+    messages: AgentMessage[],
+    trigger: CompactionTrigger
+  ): Promise<CompactionSnapshot | undefined> {
+    if (!this.fs || this.disposed) return undefined;
+    const generation = this.sessionGeneration;
+    const { snapshotLiveSession } = await import('./live-session-snapshot.js');
+    const result = await snapshotLiveSession({
+      vfs: this.fs,
+      cone: { folder: this.scoop.folder, label: this.scoop.assistantLabel },
+      messages,
+      trigger,
+      stillValid: () => !this.disposed && generation === this.sessionGeneration,
+    });
+    return result ? { transcriptPath: result.transcriptPath } : undefined;
+  }
+
+  /**
+   * What becomes of a root's live snapshot when its chat is cleared. The
+   * freezer has normally already completed it (save / skip) by the time the
+   * clear arrives, so both paths are usually no-ops; "erase" asks for the
+   * discard explicitly, and a bare `clear-chat` finalizes.
+   */
+  private async settleLiveSnapshot(discard: boolean): Promise<void> {
+    if (this.unit.parentId !== null || !this.fs) return;
+    try {
+      const { discardLiveSnapshot, finalizeLiveSnapshot } = await import(
+        './live-session-snapshot.js'
+      );
+      if (discard) await discardLiveSnapshot(this.fs, this.scoop.folder);
+      else await finalizeLiveSnapshot(this.fs, this.scoop.folder);
+    } catch (err) {
+      log.warn('Live snapshot settle failed (archive stays live)', {
+        folder: this.scoop.folder,
+        discard,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Get the agent's current in-memory messages (for diagnostics). */
@@ -628,6 +766,7 @@ export class ScoopContext {
     // messages a pending debounce hadn't flushed yet (#1987).
     this.sessions.persistNow();
     this.disposed = true;
+    this.idleCompaction?.cancel();
     // Clear the run-bound wall-clock timer symmetrically with
     // `cleanupPromptState` (#1972): a dispose mid-bounded-run (shutdown,
     // drop_scoop) bypasses cleanup, and the armed timer would otherwise
@@ -671,6 +810,11 @@ export class ScoopContext {
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
     if (this.disposed) return;
     this.status = status;
+    // A settled root starts its idle window; anything else cancels it —
+    // including a round in flight, since a prompt just started against the
+    // history it was summarizing.
+    if (status === 'ready') this.armIdleCompaction();
+    else this.idleCompaction?.cancel();
     this.callbacks.onStatusChange(status);
   }
 

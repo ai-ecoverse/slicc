@@ -256,6 +256,13 @@ export interface ClearChatMsg {
    * every sender did before multiple cones existed.
    */
   scoopJid?: string;
+  /**
+   * "Erase": also delete the cone's live compaction snapshot in `/sessions`
+   * instead of finalizing it. Decided in the kernel, in the same index
+   * transaction the snapshot writer uses, so an erase cannot race a
+   * snapshot that is still being written.
+   */
+  discardLiveSnapshot?: boolean;
 }
 
 export interface ClearChatAckMsg {
@@ -1040,6 +1047,14 @@ export interface CompactionStateMsg {
   type: 'compaction-state';
   scoopJid: string;
   state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
+  /**
+   * What started the round: the proactive threshold check, overflow
+   * recovery, or the `compact-on-idle` timer. Absent on envelopes from an
+   * older leader, which the panel reads as `threshold`.
+   */
+  trigger?: 'threshold' | 'overflow' | 'idle';
+  /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
+  transcriptPath?: string;
 }
 
 /**

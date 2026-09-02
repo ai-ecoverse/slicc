@@ -11,6 +11,7 @@
  * method that also owned retries, bounds and recovery.
  */
 
+import type { CompactionConfig } from '../../core/context-compaction.js';
 import type { Agent } from '../../core/index.js';
 import { createLogger } from '../../core/index.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -69,6 +70,8 @@ export interface RuntimeInitDeps {
   onShellReady: (shell: AlmostBashShellHeadless) => void;
   onStructuredOutput: (value: unknown) => void;
   spawnBashJob: (command: string) => BashJobProcess | null;
+  /** Pre-compaction transcript snapshot; omitted for units that persist none. */
+  onBeforeCompaction?: CompactionConfig['onBeforeCompaction'];
 }
 
 export type ScoopRuntime =
@@ -143,7 +146,8 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
     getModelApiKey: () => getModelApiKey(scoop),
     getEffortOverride: deps.getEffortOverride,
     appendConeMemory: callbacks.appendConeMemory,
-    onCompactionStateChange: (state) => callbacks.onCompactionStateChange?.(state),
+    onCompactionStateChange: (state, detail) => callbacks.onCompactionStateChange?.(state, detail),
+    onBeforeCompaction: deps.onBeforeCompaction,
   });
 
   if (deps.isDisposed()) return { kind: 'abandoned' };

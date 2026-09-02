@@ -115,11 +115,27 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   });
 }
 
+/** Save and skip archive the chat; erase keeps nothing (the kernel drops the snapshot). */
+async function archiveUnlessErase(
+  action: 'save' | 'skip' | 'erase',
+  deps: Omit<ArchiveConeSessionDeps, 'action'>
+): Promise<void> {
+  if (action === 'erase') return;
+  await archiveConeSession({ ...deps, action });
+}
+
 interface ClearConeSessionDeps {
   writer: ArchiveConeSessionDeps['writer'];
   /** Root being cleared; `undefined` only if the roster is empty. */
   root: RegisteredScoop | undefined;
   client: Pick<OffscreenClient, 'clearAllMessages'>;
+  /**
+   * "Erase": the user keeps nothing, so the compaction snapshot the session
+   * accumulated in `/sessions` goes with the chat. Decided in the kernel,
+   * inside the snapshot writer's own index transaction — a page-side delete
+   * could race a snapshot still being written and resurrect the chat.
+   */
+  discardLiveSnapshot: boolean;
   getController(): WcChatController | null;
   log: BootStageLogger;
   resetNewSessionTmp: typeof import('../new-session.js').resetNewSessionTmp;
@@ -144,7 +160,10 @@ async function clearConeSession(deps: ClearConeSessionDeps): Promise<void> {
   } catch (err) {
     deps.log.warn('WC new session /tmp reset failed — clearing anyway', err);
   }
-  await deps.client.clearAllMessages(deps.root?.jid);
+  await deps.client.clearAllMessages(
+    deps.root?.jid,
+    deps.discardLiveSnapshot ? { discardLiveSnapshot: true } : {}
+  );
   deps.getController()?.loadMessages([]);
   window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
   void import('../../speech/dictation-priming.js')
@@ -230,18 +249,15 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
           '../new-session.js'
         );
-        if (action !== 'erase') {
-          await archiveConeSession({
-            action,
-            writer,
-            root,
-            client,
-            freezerNew,
-            refreshFreezer,
-            runNewSessionFreeze,
-            runNewSessionFreezeQuick,
-          });
-        }
+        await archiveUnlessErase(action, {
+          writer,
+          root,
+          client,
+          freezerNew,
+          refreshFreezer,
+          runNewSessionFreeze,
+          runNewSessionFreezeQuick,
+        });
         // Scoped to the cone we are clearing (#2568): its own `$TMPDIR`
         // subtree, which contains its scoops' scratch too. A sibling cone's
         // working directory is no longer in the blast radius.
@@ -253,6 +269,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           log,
           resetNewSessionTmp,
           tmpDir: tmpDirFor(client.getScoops(), root),
+          discardLiveSnapshot: action === 'erase',
         });
         refreshFreezer();
         // Stay on the cone we just cleared — its record may have been

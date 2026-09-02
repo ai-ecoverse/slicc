@@ -53,9 +53,19 @@ import {
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
+import {
+  findLiveSnapshotEntry,
+  formatArchiveAsMarkdown,
+  heuristicTitle,
+  isDraftArchiveFilename,
+  readSessionsIndexForWrite,
+  serializeIndexWrite,
+  shortId,
+  slugify,
+  upsertSessionsIndexEntry,
+} from '../transcript/frozen-archive-writer.js';
 import { workspaceFor } from '../work-unit/descriptor.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
-import { formatChatForClipboard } from './chat-clipboard.js';
 import type { ChatMessage, Session } from './types.js';
 
 export type {
@@ -410,19 +420,26 @@ async function writeFrozenArchive(
   memoryPending = false
 ): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
+  const coneFolder = coneFolderOf(opts);
+  // The session's compaction rounds may already have written a live
+  // snapshot of it. The final freeze COMPLETES that archive rather than
+  // adding a second one: same id, same provisional filename (enrichment
+  // renames it), the full chat from the UI store replacing the
+  // accumulated transcript, and the `live` marker gone.
+  const live = await findLiveConeSnapshot(opts.vfs, coneFolder);
   // sessionId is generated BEFORE the filename so it is stable across
   // enrichment renames from `pending-…md` to the canonical slug form.
-  const sessionId = crypto.randomUUID();
+  const sessionId = live?.sessionId ?? crypto.randomUUID();
   const filename =
-    mode === 'quick'
-      ? `pending-${pendingShortId()}.md`
-      : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
+    live?.filename ??
+    (mode === 'quick'
+      ? `pending-${shortId()}.md`
+      : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`);
   const usageSummary = summarizeSessionUsage(session.messages);
   // Provenance: which cone this chat came from, so the rail can label the
   // card and a thaw can route back to the right root (#2272). The label is
   // recorded for extra cones only — every primary card would just say
   // `sliccy`.
-  const coneFolder = coneFolderOf(opts);
   const provenance = {
     cone: coneFolder,
     ...(coneFolder !== PRIMARY_CONE_FOLDER && opts.cone?.label
@@ -438,7 +455,9 @@ async function writeFrozenArchive(
     ...(usageSummary ?? {}),
     ...provenance,
     ...(icon ? { icon } : {}),
-    ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
+    // A reused live snapshot keeps its provisional `live-…` name, which the
+    // enrichment pass renames exactly like a `pending-…` draft.
+    ...(mode === 'quick' || live ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
     ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
   };
@@ -463,7 +482,7 @@ async function writeFrozenArchive(
     };
     const archiveMarkdown = formatArchiveAsMarkdown(archive);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
-    await updateSessionsIndex(opts.vfs, indexEntry);
+    await upsertSessionsIndexEntry(opts.vfs, indexEntry);
     // The WC new-session flow clears the chat in-place (no `location.reload()`),
     // but the OPFS backend still persists on its own debounce; force a flush so
     // the archive + index are durable before the caller proceeds to clear the
@@ -474,6 +493,7 @@ async function writeFrozenArchive(
       title,
       cone: coneFolder,
       messageCount: session.messages.length,
+      completedLiveSnapshot: Boolean(live),
     });
     return { ...indexEntry, archive };
   } catch (err) {
@@ -663,6 +683,25 @@ async function loadSessionSafely(store: SessionStore, folder: string): Promise<S
 }
 
 /**
+ * The live compaction snapshot of `coneFolder`, if its session has had one
+ * written. Best-effort: an unreadable index means "none" — the freeze then
+ * writes a fresh archive, which is the pre-snapshot behaviour.
+ */
+async function findLiveConeSnapshot(
+  vfs: WritableVfsClient,
+  coneFolder: string
+): Promise<FrozenSessionIndexEntry | undefined> {
+  try {
+    return findLiveSnapshotEntry(await readSessionsIndexForWrite(vfs), coneFolder);
+  } catch (err) {
+    log.warn('Sessions index unreadable while looking for a live snapshot', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
+/**
  * Lift ChatMessage[] (UI shape) into a minimal AgentMessage[] suitable for
  * `runOneOffCompactionCall`'s serializer. We drop tool-call detail and
  * attachments — for memory extraction and titling, the plain conversation
@@ -679,81 +718,6 @@ function toAgentMessages(messages: ChatMessage[]): AgentMessage[] {
   );
 }
 
-/** Markers for the embedded structured-data block. */
-const SESSION_DATA_START = '<!-- slicc:session-data\n';
-const SESSION_DATA_END = '\n-->';
-
-/**
- * Strip ephemeral fields that should never survive into a frozen archive
- * (transient pointers held only for the live render). What's left is a
- * pure data shape suitable for JSON round-trip and re-render.
- */
-function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((m) => {
-    const out: ChatMessage = {
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp,
-    };
-    if (m.attachments?.length) out.attachments = m.attachments;
-    if (m.toolCalls?.length) {
-      out.toolCalls = m.toolCalls.map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-        ...(tc.result !== undefined ? { result: tc.result } : {}),
-        ...(tc.isError ? { isError: tc.isError } : {}),
-      }));
-    }
-    if (m.source) out.source = m.source;
-    if (m.channel) out.channel = m.channel;
-    return out;
-  });
-}
-
-/**
- * Render the archive as markdown. The frontmatter carries scalar
- * metadata; an HTML-commented JSON block carries the full structured
- * message list (toolCalls, attachments, source, channel, timestamps)
- * so the read-only chat-panel view can render with the same fidelity
- * as a live scoop. The visible markdown body below is what the chat
- * panel's "copy chat history" long-press produces — that part stays
- * human-readable.
- */
-function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
-  const usageFrontmatter =
-    (archive.cost ? `cost: ${JSON.stringify(archive.cost)}\n` : '') +
-    (archive.models ? `models: ${JSON.stringify(archive.models)}\n` : '');
-  // Cone provenance rides the archive too, so a rebuild from `/sessions/*.md`
-  // (corrupt index) recovers it. The label is user text — quote it like the
-  // title so newlines and quotes round-trip.
-  const coneFrontmatter =
-    (archive.cone ? `cone: ${archive.cone}\n` : '') +
-    (archive.coneLabel ? `coneLabel: ${JSON.stringify(archive.coneLabel)}\n` : '') +
-    // The memory opt-out has to survive an index rebuild too: `pendingEnrichment`
-    // comes back from the `pending-` filename, so without this marker a rebuilt
-    // entry would look like an ordinary pending freeze and the next catch-up
-    // would extract memories from a chat archived with memory explicitly off.
-    (archive.memorySkipped ? `memorySkipped: true\n` : '');
-  const header =
-    `---\n` +
-    `id: ${archive.id}\n` +
-    `title: ${JSON.stringify(archive.title)}\n` +
-    `frozenAt: ${archive.frozenAt}\n` +
-    `createdAt: ${archive.createdAt}\n` +
-    `updatedAt: ${archive.updatedAt}\n` +
-    `messageCount: ${archive.messageCount}\n` +
-    usageFrontmatter +
-    coneFrontmatter +
-    `---\n\n`;
-  // Escape the only sequence that would prematurely close an HTML comment.
-  const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
-  const dataBlock = `${SESSION_DATA_START}${dataJson}${SESSION_DATA_END}\n\n`;
-  const title = `# ${archive.title}\n\n`;
-  return header + dataBlock + title + formatChatForClipboard(archive.messages);
-}
-
 function cleanTitle(raw: string): string {
   let t = raw.trim();
   // Strip surrounding quotes if the model added any
@@ -763,42 +727,6 @@ function cleanTitle(raw: string): string {
   // Hard cap so very chatty models don't blow out the filename
   if (t.length > 80) t = t.slice(0, 80).trimEnd();
   return t;
-}
-
-function heuristicTitle(messages: ChatMessage[]): string {
-  const firstUser = messages.find((m) => m.role === 'user');
-  if (!firstUser?.content) return 'untitled-session';
-  const head = firstUser.content.trim().replace(/\s+/g, ' ');
-  return head.length > 60 ? `${head.slice(0, 60)}…` : head || 'untitled-session';
-}
-
-function slugify(text: string): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return slug || 'session';
-}
-
-/**
- * Short, unique-enough id used in quick-mode pending filenames. Pairs a
- * base-36 timestamp with a few random characters so multiple pending
- * freezes within the same millisecond still collide-free.
- */
-function pendingShortId(): string {
-  const time = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 6);
-  return `${time}-${rand}`;
-}
-
-/**
- * Whether a filename is a quick-mode draft name (and so safe to rename once
- * the real title is known). Canonical `<timestamp>-<slug>.md` names are final:
- * the rail, deep links, and snapshot lookups all key off them.
- */
-function isPendingDraftFilename(filename: string): boolean {
-  return filename.startsWith('pending-');
 }
 
 async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
@@ -870,25 +798,6 @@ async function appendConeMemoryViaVfs(
       error: err instanceof Error ? err.message : String(err),
     });
   }
-}
-
-async function updateSessionsIndex(
-  vfs: WritableVfsClient,
-  newEntry: FrozenSessionIndexEntry
-): Promise<void> {
-  let existing: FrozenSessionIndexEntry[] = [];
-  try {
-    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
-    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-  } catch (err) {
-    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    // No index yet — start fresh.
-  }
-  // Newest first.
-  const updated = [newEntry, ...existing.filter((e) => e.filename !== newEntry.filename)];
-  await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
 }
 
 /**
@@ -1353,7 +1262,7 @@ async function commitEnrichedArchive(
   // name, so when the legacy fallback picks one up (agentic-memory toggled off
   // before catch-up ran) retitling it would rename the file out from under
   // deep links that already point at it.
-  const isDraft = isPendingDraftFilename(entry.filename);
+  const isDraft = isDraftArchiveFilename(entry.filename);
   const resolvedTitle = isDraft ? newTitle : entry.title;
   const newFilename = isDraft
     ? `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`
@@ -1432,17 +1341,6 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
 }
 
 /**
- * Promise-chain mutex serializing every `replaceIndexEntry` call within
- * this module. The sessions index is a single shared JSON file with a
- * read-modify-write update; two concurrent callers (e.g. the boot-time
- * background enrichment pass racing a freshly-quick-frozen entry)
- * would otherwise read the same stale snapshot and clobber one of the
- * writes. Cross-tab concurrency is out of scope — the app runs in a
- * single context.
- */
-let indexWriteChain: Promise<void> = Promise.resolve();
-
-/**
  * Clear every catch-up marker and its attempt counter after successful
  * work, and stamp the durable positive record that curation completed
  * (`memoryCuratedAt`; any earlier failure note is superseded). Without the
@@ -1475,11 +1373,7 @@ async function clearPendingMarkers(
     await vfs.flush();
     cleared = updatedEntry;
   };
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  const next = serializeIndexWrite(run);
   try {
     await next;
   } catch (err) {
@@ -1511,11 +1405,7 @@ async function recordPendingAttempt(
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
     await vfs.flush();
   };
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  const next = serializeIndexWrite(run);
   await next;
   return attempted;
 }
@@ -1540,11 +1430,7 @@ async function stampMemoryFailure(
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
     await vfs.flush();
   };
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  const next = serializeIndexWrite(run);
   try {
     await next;
   } catch (err) {
@@ -1572,11 +1458,7 @@ async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Pro
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
     await vfs.flush();
   };
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  const next = serializeIndexWrite(run);
   try {
     await next;
   } catch (err) {
@@ -1592,7 +1474,7 @@ async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Pro
  * enrichment pass to flip a `pending-…` entry over to its renamed
  * canonical form. Always dedupes by `replacement.filename` so a row
  * with the same target name is never duplicated when `oldFilename`
- * isn't found in the index. Writes are serialized via {@link indexWriteChain}.
+ * isn't found in the index. Writes are serialized via `serializeIndexWrite`.
  */
 async function replaceIndexEntry(
   vfs: WritableVfsClient,
@@ -1627,15 +1509,9 @@ async function replaceIndexEntry(
     }
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
   };
-  // Append to the shared chain so writers run strictly in arrival order.
-  // `.catch(() => {})` keeps a failed write from poisoning the chain for
-  // subsequent callers; each call still surfaces its own error via the
-  // returned `next` promise below.
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  // Serialized with every other index writer in this realm so writers run
+  // strictly in arrival order; each call still surfaces its own error.
+  const next = serializeIndexWrite(run);
   return next;
 }
 
@@ -1646,7 +1522,7 @@ async function replaceIndexEntry(
  * sanitized transcript bundle was not produced. Best-effort — write failures
  * are swallowed by the caller.
  *
- * The entire read-modify-write executes inside `indexWriteChain` so a
+ * The entire read-modify-write executes inside `serializeIndexWrite` so a
  * concurrent enrichment rename cannot interleave between the read and write.
  */
 export async function markSnapshotUnavailable(
@@ -1672,10 +1548,6 @@ export async function markSnapshotUnavailable(
     );
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
   };
-  const next = indexWriteChain.then(run, run);
-  indexWriteChain = next.then(
-    () => undefined,
-    () => undefined
-  );
+  const next = serializeIndexWrite(run);
   return next;
 }

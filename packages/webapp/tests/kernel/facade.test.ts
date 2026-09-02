@@ -305,6 +305,18 @@ describe('Kernel facade parity', () => {
     expect(orchestrator.clearScoopMessages).not.toHaveBeenCalledWith('cone_1');
   });
 
+  // 3d. "Erase" carries the discard intent through to the orchestrator so the
+  //     kernel deletes the live compaction snapshot inside the writer's own
+  //     index transaction; a plain clear does not name the option at all.
+  it('client.clearAllMessages(jid, { discardLiveSnapshot }) → forwards the erase intent', async () => {
+    void client.clearAllMessages('cone_1', { discardLiveSnapshot: true });
+    await tick();
+
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1', {
+      discardLiveSnapshot: true,
+    });
+  });
+
   // 3c. cone-create with a purpose and a first message (#2272): the purpose
   //     lands on the record's system-prompt hook, the message goes through
   //     the ordinary user-message path into the NEW cone's buffer.

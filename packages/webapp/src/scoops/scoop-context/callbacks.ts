@@ -10,6 +10,7 @@
  */
 
 import type { BrowserAPI } from '../../cdp/index.js';
+import type { CompactionState, CompactionStateDetail } from '../../core/context-compaction.js';
 import type { ToolProgressEvent } from '../../shell/progress/types.js';
 import type { AppendConeMemoryMeta } from '../cone-memory-store.js';
 import type { RegisteredScoop } from '../types.js';
@@ -91,11 +92,11 @@ export interface ScoopContextCallbacks {
    * Optional lifecycle hook for compaction. Emitted by the compaction
    * `transformContext` before and after each LLM call so the panel can
    * render a ghost-bubble affordance while the agent is silent.
-   * `state === 'idle'` clears the affordance.
+   * `state === 'idle'` clears the affordance. `detail` carries the trigger
+   * (threshold / overflow / idle) and the `/sessions` transcript path once
+   * the pre-compaction snapshot has been written.
    */
-  onCompactionStateChange?: (
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
-  ) => void;
+  onCompactionStateChange?: (state: CompactionState, detail: CompactionStateDetail) => void;
   /**
    * Scoop-only: request a cone-mediated sudo escalation. Routes through the
    * orchestrator's pending-request registry and resolves with the cone's

@@ -12,7 +12,8 @@ export type FeatureFlagId =
   | 'experimental-settings'
   | 'panel-layouts'
   | 'agentic-memory'
-  | 'multiple-cones';
+  | 'multiple-cones'
+  | 'compact-on-idle';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -70,6 +71,14 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+  }),
+  Object.freeze({
+    id: 'compact-on-idle',
+    label: 'Compact on idle',
+    description:
+      'When a cone has been idle for a while with a large context, summarize its history in the background. The full transcript is kept in /sessions.',
+    defaultValue: 'off',
+    userToggleable: true,
   }),
 ]);
 

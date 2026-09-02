@@ -9,6 +9,12 @@
 
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
 import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
+import {
+  IDLE_COMPACTION_DEFAULTS,
+  MAX_IDLE_MINUTES,
+  readIdleCompactionSettings,
+  writeIdleCompactionSettings,
+} from '../../core/idle-compaction-settings.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {
@@ -391,8 +397,75 @@ function buildExperimentalSection(deps: {
     });
     row.append(info, check);
     section.append(row);
+    if (flag.id === 'compact-on-idle') section.append(buildIdleCompactionTuning(deps));
   }
   return section;
+}
+
+/**
+ * The two knobs of `compact-on-idle`: minutes of idleness before a round,
+ * and the context size a cone must have reached for a round to be worth it.
+ * Written to the same `localStorage` the kernel worker mirrors, so a change
+ * applies to the next idle window without a reload. An emptied field
+ * restores the default.
+ */
+function buildIdleCompactionTuning(deps: {
+  setStatus(text: string, isError?: boolean): void;
+}): HTMLElement {
+  const wrap = div('wcset__list');
+  const current = readIdleCompactionSettings();
+  const field = (
+    id: string,
+    label: string,
+    detail: string,
+    value: number,
+    min: number,
+    apply: (value: number | undefined) => void,
+    max?: number
+  ): HTMLElement => {
+    const row = div('wcset__toggle-row');
+    const info = div('wcset__info');
+    const labelEl = document.createElement('label');
+    labelEl.htmlFor = id;
+    labelEl.textContent = label;
+    info.append(labelEl, div('wcset__detail', detail));
+    const input = document.createElement('input');
+    input.id = id;
+    input.type = 'number';
+    input.min = String(min);
+    if (max !== undefined) input.max = String(max);
+    input.step = '1';
+    input.value = String(value);
+    input.addEventListener('change', () => {
+      const parsed = input.value.trim() === '' ? undefined : Number(input.value);
+      apply(parsed);
+      const next = readIdleCompactionSettings();
+      input.value = String(id.endsWith('minutes') ? next.idleMinutes : next.minTokens);
+      deps.setStatus('Saved.');
+    });
+    row.append(info, input);
+    return row;
+  };
+  wrap.append(
+    field(
+      'wcset-idle-compaction-minutes',
+      'Idle minutes before compacting',
+      `How long a cone must sit idle before a round starts (default ${IDLE_COMPACTION_DEFAULTS.idleMinutes}).`,
+      current.idleMinutes,
+      1,
+      (value) => writeIdleCompactionSettings({ idleMinutes: value }),
+      MAX_IDLE_MINUTES
+    ),
+    field(
+      'wcset-idle-compaction-min-tokens',
+      'Minimum context tokens',
+      `Rounds only start above this estimated context size (default ${IDLE_COMPACTION_DEFAULTS.minTokens}).`,
+      current.minTokens,
+      1000,
+      (value) => writeIdleCompactionSettings({ minTokens: value })
+    )
+  );
+  return wrap;
 }
 
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
