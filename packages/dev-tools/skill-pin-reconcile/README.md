@@ -9,9 +9,11 @@ the agent-facing mirror. Renovate's npm manager updates `package.json`. A regex
 bumped `package.json` (PR #2773), and the live canary in
 `v86-wasm-live.test.ts` failed until the skill moved by hand.
 
+- **`lib.mjs`** — pure parse / sync (unit-tested in `lib.test.mjs`).
 - **`reconcile.mjs`** — `--write` rewrites the skill pin from `package.json`.
   Consumed by
   [`.github/workflows/renovate-skill-pin-reconcile.yml`](../../../.github/workflows/renovate-skill-pin-reconcile.yml).
+  Exit codes: `0` ok/applied, `1` malformed input, `2` dry-run found drift.
 
 The CI backstop is the live canary (not a separate lint gate): a Renovate bump
 cannot merge while the skill is stale.

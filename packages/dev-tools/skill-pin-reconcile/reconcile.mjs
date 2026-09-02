@@ -11,57 +11,42 @@
  * Usage:
  *   node packages/dev-tools/skill-pin-reconcile/reconcile.mjs          # dry-run
  *   node packages/dev-tools/skill-pin-reconcile/reconcile.mjs --write  # apply
+ *
+ * Exit codes: 0 ok / applied, 1 malformed input, 2 dry-run found drift.
+ * Tests may set SKILL_PIN_ROOT to point at a fixture tree.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PINS, reconcilePin } from './lib.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const ROOT =
+  process.env.SKILL_PIN_ROOT?.trim() ||
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const WRITE = process.argv.includes('--write');
-
-/** @type {readonly { dep: string; packageJson: string; skill: string; pattern: RegExp; line: (v: string) => string }[]} */
-const PINS = [
-  {
-    dep: 'v86',
-    packageJson: 'packages/webapp/package.json',
-    skill: 'packages/vfs-root/workspace/skills/v86/SKILL.md',
-    pattern: /ipk add -g v86@\d+\.\d+\.\d+/g,
-    line: (v) => `ipk add -g v86@${v}`,
-  },
-];
 
 let changed = false;
 for (const pin of PINS) {
   const pkgPath = resolve(ROOT, pin.packageJson);
   const skillPath = resolve(ROOT, pin.skill);
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-  const version = pkg.dependencies?.[pin.dep] ?? pkg.devDependencies?.[pin.dep] ?? null;
-  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) {
-    console.error(
-      `skill-pin-reconcile: ${pin.packageJson} has no exact ${pin.dep} pin (got ${JSON.stringify(version)})`
-    );
+  const result = reconcilePin({
+    packageJsonText: readFileSync(pkgPath, 'utf8'),
+    skillText: readFileSync(skillPath, 'utf8'),
+    pin,
+  });
+  if (!result.ok) {
+    const path = result.where === 'packageJson' ? pin.packageJson : pin.skill;
+    console.error(`skill-pin-reconcile: ${path} ${result.reason}`);
     process.exit(1);
   }
-
-  const skill = readFileSync(skillPath, 'utf8');
-  const expected = pin.line(version);
-  if (!pin.pattern.test(skill)) {
-    console.error(
-      `skill-pin-reconcile: ${pin.skill} has no \`ipk add -g ${pin.dep}@X.Y.Z\` line to sync`
-    );
-    process.exit(1);
-  }
-  // Reset lastIndex after the test() above (global regex).
-  pin.pattern.lastIndex = 0;
-  const next = skill.replace(pin.pattern, expected);
-  if (next === skill) {
-    console.log(`ok: ${pin.dep} skill pin already matches ${version}`);
+  if (!result.changed) {
+    console.log(`ok: ${pin.dep} skill pin already matches ${result.version}`);
     continue;
   }
   changed = true;
-  console.log(`sync: ${pin.skill} → ${expected}`);
+  console.log(`sync: ${pin.skill} → ${pin.line(result.version)}`);
   if (WRITE) {
-    writeFileSync(skillPath, next);
+    writeFileSync(skillPath, result.next);
   }
 }
 
