@@ -22,8 +22,8 @@
  * fakes. `@ffmpeg/core-mt` is not covered either: it is not a devDependency,
  * and its pthread pool needs real workers too.
  *
- * Cost is ~100 ms: Node compiles the 31 MB wasm lazily and the encode is a
- * 10 ms silent clip.
+ * Cost is ~1 s under vitest (~100 ms in bare Node): the 31 MB wasm is read
+ * once and compiled lazily, and the encode is a 10 ms silent clip.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, posix, resolve } from 'node:path';
