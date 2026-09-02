@@ -656,6 +656,33 @@ cancels the ~1 kB Linux-vs-macOS build difference. Flags:
 `--baseline=<ref>` (default `origin/main`), `--baseline=none` to skip,
 `--json` to just measure.
 
+**Dependency changes** are realigned before the baseline is measured. The
+worktree borrows the caller's `node_modules` (npm workspaces hoist, so the
+base build only needs them to resolve), which used to mean a version bump
+built the NEW version on both sides and reported +0.0 kB for exactly the
+change under test — `@imagemagick/magick-wasm` 0.0.42 -> 0.0.43 (PR #2744)
+added 103 kB to the worker eager graph and the delta gate saw nothing, with
+only ceiling headroom catching it. `dependencyDrift` now diffs the two
+lockfiles and `realignDriftedDependencies` puts the base tree back via
+`npm pack` (a symlinked `@scope` is split into per-child links first, so the
+caller's real install is never written through). Aliases are fetched under
+the lock entry's `name`, not its install directory — this repo has
+`node_modules/undici8` for `undici`, and asking the registry for `undici8`
+would fetch a different package.
+
+The two corrections are not symmetric. A **version bump** is required: not
+fixing it is the silently-wrong +0.0 kB, so a failed fetch aborts. A package
+the change **removes** is best effort: HEAD's mirror has no copy, and if the
+base source imports it the build fails on its own, so a failed fetch is not
+fatal — aborting would newly fail PRs that merely drop an unused dependency.
+Packages the change **adds** are ignored; the base never had them.
+
+Drift it cannot realign — an un-hoisted nested copy, or more than 25 changed
+packages — makes the baseline unmeasurable rather than quietly wrong, which a
+CI `pull_request` run fails. Transitive dependencies of a realigned package
+stay borrowed from HEAD: a deliberate approximation, since the alternative is
+a full `npm ci` per gate run.
+
 On `merge_group` the delta is skipped — a queue branch is cumulative, so
 its delta is the batch sum and a per-change allowance would fail on
 queue depth; only the ceilings run, with no baseline build. That split
