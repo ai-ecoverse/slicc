@@ -14,13 +14,22 @@ const stylesDir = resolve(here, '../../src/ui/styles');
 const tokensCss = readFileSync(resolve(stylesDir, 'tokens.css'), 'utf8');
 const sprinkleCss = readFileSync(resolve(stylesDir, 'sprinkle-components.css'), 'utf8');
 
-/** Body of a top-level rule whose selector matches exactly. */
+/**
+ * The top-level rule whose selector LIST contains `selector` — the light
+ * values are shared by two markers, so an exact-selector lookup would miss
+ * them (see the WC-marker test below).
+ */
+function rule(css: string, selector: string): { selectors: string[]; body: string } {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const m of withoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = m[1].split(',').map((s) => s.trim());
+    if (selectors.includes(selector)) return { selectors, body: m[2] };
+  }
+  expect.fail(`missing rule ${selector}`);
+}
+
 function ruleBody(css: string, selector: string): string {
-  const start = css.indexOf(`\n${selector} {`);
-  expect(start, `missing rule ${selector}`).toBeGreaterThan(-1);
-  const open = css.indexOf('{', start);
-  const close = css.indexOf('\n}', open);
-  return css.slice(open + 1, close);
+  return rule(css, selector).body;
 }
 
 function tokensIn(body: string): Map<string, string> {
@@ -44,7 +53,15 @@ function contrast(a: string, b: string): number {
 }
 
 const darkTokens = tokensIn(ruleBody(tokensCss, ':root'));
-const lightTokens = tokensIn(ruleBody(tokensCss, ':root.theme-light'));
+const lightRule = rule(tokensCss, ':root.theme-light');
+const lightTokens = tokensIn(lightRule.body);
+
+/**
+ * The WC shell's light marker — it never sets `.theme-light` on <html>. The
+ * `:has()` is wrapped in `:where()` to keep the selector at plain `:root`
+ * specificity; see the specificity test below.
+ */
+const WC_LIGHT_MARKER = ':root:where(:has(body[data-theme="light"]))';
 
 const SUBTLE_HUES = [
   'yellow',
@@ -99,6 +116,43 @@ describe('uxc subtle palette is theme-aware', () => {
       const gray700 = tokens.get('--s2-gray-700') as string;
       expect(contrast(bg, gray700), `neutral in ${theme}`).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe('light overrides reach both shells', () => {
+  it('declares the light token block under the WC body marker too', () => {
+    // Inline (fragment) sprinkles and dips render into the page DOM, so in the
+    // WC shell — which marks `body[data-theme="light"]` and never touches
+    // `.theme-light` — a `.theme-light`-only block would leave them dark.
+    expect(lightRule.selectors).toContain(WC_LIGHT_MARKER);
+  });
+
+  it('pairs every .theme-light descendant rule with the WC marker', () => {
+    const withoutComments = tokensCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of withoutComments.matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+      const selectors = m[1].split(',').map((s) => s.trim());
+      const themeLight = selectors.filter((s) => s.startsWith('.theme-light '));
+      for (const sel of themeLight) {
+        const suffix = sel.slice('.theme-light '.length);
+        expect(selectors, `${sel} has no WC-marker twin`).toContain(`${WC_LIGHT_MARKER} ${suffix}`);
+      }
+    }
+  });
+
+  it('keeps the WC marker specificity-neutral so an active theme still wins', () => {
+    // `theme-engine.ts` injects the selected preset's tokens into a LATER
+    // `:root { … }` block. A bare `:root:has(body[data-theme="light"])` scores
+    // (0,2,1) and would outrank it, so a light preset would render these
+    // defaults instead of its own tokens. `:where()` contributes nothing,
+    // leaving plain `:root` (0,1,0), which wins over the dark block above on
+    // order alone and still loses to the injected theme.
+    const withoutComments = tokensCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of withoutComments.matchAll(/:root[^,{\s]*:has\(/g)) {
+      expect(m[0], 'unwrapped :has() raises specificity above the injected theme').toBe(
+        ':root:where(:has('
+      );
+    }
+    expect(withoutComments).toContain(WC_LIGHT_MARKER);
   });
 });
 
