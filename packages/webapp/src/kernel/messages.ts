@@ -1035,6 +1035,14 @@ export interface CompactionStateMsg {
   type: 'compaction-state';
   scoopJid: string;
   state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
+  /**
+   * What started the round: the proactive threshold check, overflow
+   * recovery, or the `compact-on-idle` timer. Absent on envelopes from an
+   * older leader, which the panel reads as `threshold`.
+   */
+  trigger?: 'threshold' | 'overflow' | 'idle';
+  /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
+  transcriptPath?: string;
 }
 
 /**

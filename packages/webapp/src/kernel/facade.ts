@@ -298,11 +298,13 @@ export class Bridge implements KernelFacade {
         bridge.emitScoopList();
       },
 
-      onCompactionStateChange: (scoopJid, state) => {
+      onCompactionStateChange: (scoopJid, state, detail) => {
         bridge.emit({
           type: 'compaction-state',
           scoopJid,
           state,
+          trigger: detail.trigger,
+          ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
         });
       },
 

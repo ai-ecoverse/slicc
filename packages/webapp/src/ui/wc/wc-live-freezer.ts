@@ -115,6 +115,23 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   });
 }
 
+/**
+ * The archive half of "New chat", by action. Save and skip archive the
+ * chat; erase keeps nothing — including the compaction snapshot the session
+ * accumulated in `/sessions`, which goes with it.
+ */
+async function archiveOrDiscardConeSession(
+  action: 'save' | 'skip' | 'erase',
+  deps: Omit<ArchiveConeSessionDeps, 'action'>
+): Promise<void> {
+  if (action !== 'erase') {
+    await archiveConeSession({ ...deps, action });
+    return;
+  }
+  const { discardLiveConeSnapshot } = await import('../session-freezer.js');
+  await discardLiveConeSnapshot(deps.writer, deps.root?.folder);
+}
+
 interface ClearConeSessionDeps {
   writer: ArchiveConeSessionDeps['writer'];
   /** Root being cleared; `undefined` only if the roster is empty. */
@@ -230,18 +247,15 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
           '../new-session.js'
         );
-        if (action !== 'erase') {
-          await archiveConeSession({
-            action,
-            writer,
-            root,
-            client,
-            freezerNew,
-            refreshFreezer,
-            runNewSessionFreeze,
-            runNewSessionFreezeQuick,
-          });
-        }
+        await archiveOrDiscardConeSession(action, {
+          writer,
+          root,
+          client,
+          freezerNew,
+          refreshFreezer,
+          runNewSessionFreeze,
+          runNewSessionFreezeQuick,
+        });
         // Scoped to the cone we are clearing (#2568): its own `$TMPDIR`
         // subtree, which contains its scoops' scratch too. A sibling cone's
         // working directory is no longer in the blast radius.

@@ -143,14 +143,58 @@ export interface CompactionConfig {
    *                          `onMemoryUpdates` is also wired)
    *   'idle'               → in `finally`, always fires last
    *
+   * `detail` names what started the round and, once
+   * {@link onBeforeCompaction} has run, where the full transcript went.
    * No-op when omitted.
    */
-  onCompactionStateChange?: (state: CompactionState) => void;
+  onCompactionStateChange?: (state: CompactionState, detail: CompactionStateDetail) => void;
+  /**
+   * Called once per compaction round, AFTER the decision to compact and
+   * BEFORE any message is elided, summarized or dropped — with the
+   * conversation exactly as the model last saw it. The owner persists a
+   * transcript snapshot and returns where it landed; that path is then
+   * written into the summary message so the agent can read what the
+   * summary replaced (`scoops/live-session-snapshot.ts`).
+   *
+   * Best-effort: a hook that throws or returns nothing costs the pointer,
+   * never the compaction.
+   */
+  onBeforeCompaction?: (
+    messages: AgentMessage[],
+    trigger: CompactionTrigger
+  ) => Promise<CompactionSnapshot | undefined | void> | CompactionSnapshot | undefined | void;
+}
+
+/**
+ * Why a compaction round started: the proactive threshold check inside the
+ * agent's `transformContext`, the overflow-recovery ladder after a provider
+ * rejected the prompt, or the idle timer of a cone that has gone quiet
+ * (`compact-on-idle`).
+ */
+export type CompactionTrigger = 'threshold' | 'overflow' | 'idle';
+
+/** What {@link CompactionConfig.onBeforeCompaction} reports back. */
+export interface CompactionSnapshot {
+  /** VFS path of the transcript written before this round. */
+  transcriptPath: string;
+}
+
+/** Context attached to every {@link CompactionState} emission. */
+export interface CompactionStateDetail {
+  trigger: CompactionTrigger;
+  /** Set from the `summarizing` phase on, once the snapshot hook has answered. */
+  transcriptPath?: string;
 }
 
 export interface CompactionOptions {
   /** Run the existing compaction path even when the local estimate is below its threshold. */
   force?: boolean;
+  /**
+   * What started this round, for the snapshot hook and the UI notice. A
+   * forced round with no trigger named is overflow recovery, the original
+   * `force` caller.
+   */
+  trigger?: CompactionTrigger;
 }
 
 /**
@@ -596,6 +640,16 @@ function estimateContextTokens(messages: AgentMessage[]): number {
   return Math.max(heuristic, reported);
 }
 
+/**
+ * Context size as the compaction trigger sees it — the provider's own
+ * accounting when the last assistant turn reported it, the chars/4
+ * heuristic otherwise. Exported for the idle-compaction gate, which has to
+ * price the conversation the same way the threshold check does.
+ */
+export function estimateConversationTokens(messages: AgentMessage[]): number {
+  return estimateContextTokens(messages);
+}
+
 /** Whether compaction changed the message sequence rather than returning a true no-op. */
 export function hasCompactionProgress(
   messages: AgentMessage[],
@@ -606,9 +660,13 @@ export function hasCompactionProgress(
 }
 
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
-function emitCompactionState(config: CompactionConfig, state: CompactionState): void {
+function emitCompactionState(
+  config: CompactionConfig,
+  state: CompactionState,
+  detail: CompactionStateDetail
+): void {
   try {
-    config.onCompactionStateChange?.(state);
+    config.onCompactionStateChange?.(state, detail);
   } catch (e) {
     log.warn('onCompactionStateChange listener threw', {
       error: e instanceof Error ? e.message : String(e),
@@ -798,7 +856,8 @@ async function extractMemoriesIfConfigured(
   config: CompactionConfig,
   apiKey: string,
   systemPrompt: string,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  detail: CompactionStateDetail
 ): Promise<void> {
   if (!config.onMemoryUpdates) return;
   // Live per-compaction gate — see `shouldExtractMemories` (#2003).
@@ -806,7 +865,7 @@ async function extractMemoriesIfConfigured(
   // Memory budget is much smaller — bullets, not a structured doc.
   const memoryMaxTokens = 2048;
   try {
-    emitCompactionState(config, 'extracting-memory');
+    emitCompactionState(config, 'extracting-memory', detail);
     const bullets = await runCompactionCall(
       config.model,
       apiKey,
@@ -847,7 +906,8 @@ async function summarizeWithLlm(
   reserveTokens: number,
   contextWindow: number,
   originalMessageCount: number,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  detail: CompactionStateDetail
 ): Promise<AgentMessage[] | null> {
   try {
     // #2012 defense-in-depth: never serialize an individually-oversized message
@@ -864,7 +924,7 @@ async function summarizeWithLlm(
     // Summary uses ~80% of the reserve budget for output, mirroring the
     // pi-coding-agent default.
     const summaryMaxTokens = Math.floor(0.8 * reserveTokens);
-    emitCompactionState(config, 'summarizing');
+    emitCompactionState(config, 'summarizing', detail);
     const summary = await runCompactionCall(
       config.model,
       apiKey,
@@ -877,7 +937,15 @@ async function summarizeWithLlm(
 
     const summaryMessage: UserMessage = {
       role: 'user',
-      content: [{ type: 'text', text: `<context-summary>\n${summary}\n</context-summary>` }],
+      content: [
+        {
+          type: 'text',
+          text: withTranscriptPointer(
+            `<context-summary>\n${summary}\n</context-summary>`,
+            detail.transcriptPath
+          ),
+        },
+      ],
       timestamp: Date.now(),
     };
 
@@ -887,9 +955,9 @@ async function summarizeWithLlm(
       summaryLength: summary.length,
     });
 
-    await extractMemoriesIfConfigured(config, apiKey, systemPrompt, signal);
+    await extractMemoriesIfConfigured(config, apiKey, systemPrompt, signal, detail);
 
-    emitCompactionState(config, 'idle');
+    emitCompactionState(config, 'idle', detail);
     return [summaryMessage, ...messagesToKeep];
   } catch (err) {
     log.warn('LLM summarization failed, falling back to naive drop', {
@@ -897,6 +965,44 @@ async function summarizeWithLlm(
     });
     return null;
   }
+}
+
+/**
+ * Run the owner's snapshot hook. Never throws: the transcript pointer is a
+ * courtesy to the next turn, the compaction is what keeps the turn alive.
+ */
+async function snapshotBeforeCompaction(
+  config: CompactionConfig,
+  messages: AgentMessage[],
+  trigger: CompactionTrigger
+): Promise<CompactionSnapshot | undefined> {
+  if (!config.onBeforeCompaction) return undefined;
+  try {
+    const snapshot = await config.onBeforeCompaction(messages, trigger);
+    if (snapshot?.transcriptPath) {
+      log.info('Pre-compaction transcript snapshot written', {
+        trigger,
+        transcriptPath: snapshot.transcriptPath,
+      });
+      return snapshot;
+    }
+  } catch (err) {
+    log.warn('Pre-compaction snapshot hook failed (compaction continues without a pointer)', {
+      trigger,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return undefined;
+}
+
+/**
+ * Append the transcript pointer to a compaction message. The agent reads
+ * this: it tells the model where the messages the summary replaced can
+ * still be found, so a lost detail is one `cat` away instead of gone.
+ */
+function withTranscriptPointer(text: string, transcriptPath: string | undefined): string {
+  if (!transcriptPath) return text;
+  return `${text}\n\nThe full transcript of the conversation before this compaction is saved at ${transcriptPath} — read it when the summary is not enough.`;
 }
 
 /**
@@ -938,6 +1044,14 @@ export function createCompactContext(
     if (!options?.force && !shouldCompact(totalTokens, contextWindow, settings)) {
       return messages;
     }
+
+    // The round is happening. Snapshot the conversation as the model last
+    // saw it BEFORE any elision touches a message, so the transcript on disk
+    // is the real one, not the stubbed one.
+    const trigger = options?.trigger ?? (options?.force ? 'overflow' : 'threshold');
+    const detail: CompactionStateDetail = { trigger };
+    const snapshot = await snapshotBeforeCompaction(config, messages, trigger);
+    if (snapshot) detail.transcriptPath = snapshot.transcriptPath;
 
     const hopeless = applyHopelessElision(
       messages,
@@ -981,7 +1095,8 @@ export function createCompactContext(
         reserveTokens,
         contextWindow,
         messages.length,
-        signal
+        signal,
+        detail
       );
       if (summarized) {
         // The summary head is small; the tail's images are what re-blow the
@@ -997,8 +1112,8 @@ export function createCompactContext(
     // summary. The `fallback` phase is the observable difference between
     // "compacted cleanly" and "dropped history"; `idle` still fires last so
     // every consumer's resting-state contract holds.
-    emitCompactionState(config, 'fallback');
-    emitCompactionState(config, 'idle');
+    emitCompactionState(config, 'fallback', detail);
+    emitCompactionState(config, 'idle', detail);
 
     // Fallback: naive drop (same as old behavior but without eager truncation)
     const compactedMsg: UserMessage = {
@@ -1006,7 +1121,10 @@ export function createCompactContext(
       content: [
         {
           type: 'text',
-          text: '[Earlier conversation messages were compacted to save context space]',
+          text: withTranscriptPointer(
+            '[Earlier conversation messages were compacted to save context space]',
+            detail.transcriptPath
+          ),
         },
       ],
       timestamp: Date.now(),

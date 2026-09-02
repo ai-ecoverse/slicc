@@ -12,6 +12,7 @@
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
+import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
@@ -121,7 +122,8 @@ export interface OrchestratorCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+    state: CompactionState,
+    detail: CompactionStateDetail
   ) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;

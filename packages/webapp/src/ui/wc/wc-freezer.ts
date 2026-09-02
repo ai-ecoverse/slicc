@@ -38,7 +38,9 @@ function metaLine(entry: FrozenSessionIndexEntry): string {
     month: 'short',
     day: 'numeric',
   });
-  return `${day} · ${entry.messageCount} turns`;
+  const turns = `${day} · ${entry.messageCount} turns`;
+  // A compaction snapshot of the chat that is still open in this cone.
+  return entry.live ? `${turns} · in progress` : turns;
 }
 
 /** Build one freezer card; `slug` carries the archive filename. */
@@ -177,7 +179,13 @@ export async function rebuildFreezerIndexFromArchives(
         ...(parsed.cone ? { cone: parsed.cone } : {}),
         ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
         ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
-        ...(filename.startsWith('pending-') ? { pendingEnrichment: true } : {}),
+        // A live compaction snapshot is still being written to — it must not
+        // be handed to the enrichment catch-up. A `live-` file WITHOUT the
+        // marker was finalized (bare clear-chat) and is an ordinary draft.
+        ...(parsed.live ? { live: true as const } : {}),
+        ...(filename.startsWith('pending-') || (filename.startsWith('live-') && !parsed.live)
+          ? { pendingEnrichment: true }
+          : {}),
       });
     } catch {
       // Unreadable archive — skip it rather than failing the whole rebuild.

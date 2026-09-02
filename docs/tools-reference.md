@@ -607,6 +607,27 @@ through `onFatalError`. The scoop lifecycle sends a `scoop-error` message to the
 to trigger another turn, so a stalled scoop is a bug: every failed terminal path must notify the
 cone, which can re-delegate a narrower task.
 
+**Transcript snapshots**: every compaction round on a cone — threshold, overflow recovery, or idle —
+first hands the untouched history to `CompactionConfig.onBeforeCompaction`, which
+`scoops/live-session-snapshot.ts` turns into a `/sessions/live-<cone>-<id>.md` archive (index entry
+`live: true`, at most one per cone). Rounds accumulate: `liveThrough` is the newest message timestamp
+already on disk, so the kept tail is never written twice and the previous summary shows up in the
+transcript as a checkpoint. The summary message (and the naive-drop marker) ends with a pointer to
+that path so the agent can read what the summary replaced; the UI notice shows the same path.
+"New chat" completes the snapshot on **Save** / **Skip memory** (same id and file, `live` dropped,
+enrichment renames it) and deletes it on **Erase**; a bare `clear-chat` finalizes it into a pending
+draft. Scoops write no snapshot.
+
+**Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
+`ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after N idle minutes and
+the estimated context (`estimateConversationTokens`, the same pricing the threshold uses) is at
+least M tokens, the ordinary forced compaction runs in the background with `trigger: 'idle'`. The
+result is adopted only if the thread stood still for the whole round — same array, same length,
+same last message, no prompt in flight; otherwise it is discarded and the conversation continues
+untouched. N and M live in `localStorage` (`slicc_idle_compaction_minutes`,
+`slicc_idle_compaction_min_tokens`, defaults 10 / 50 000) and are editable under Experimental
+features next to the flag.
+
 ---
 
 ## Tool Error Handling

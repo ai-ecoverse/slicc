@@ -5,10 +5,10 @@
  * back-edging into `ui/session-freezer.ts` and dragging its LLM /
  * icon / cone-memory / clipboard imports along with them.
  *
- * The writer (`writeFrozenArchive`, `formatArchiveAsMarkdown`) still lives
- * in `ui/session-freezer.ts` because writing an archive is part of the
- * UI-driven "New session" flow; only the read/parse surface is pulled
- * down here.
+ * The renderer and index primitives live next door in
+ * `frozen-archive-writer.ts` (shared by the page-side freezer and the
+ * worker-side compaction snapshot); the UI-driven "New session" flow itself
+ * stays in `ui/session-freezer.ts`.
  */
 
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
@@ -120,6 +120,21 @@ export interface FrozenSessionIndexEntry {
    * back to the folder when it is absent.
    */
   coneLabel?: string;
+  /**
+   * A snapshot of a session that is STILL RUNNING. Written by context
+   * compaction (every round, forced or idle) so the full transcript survives
+   * the summary that replaces it; at most one per cone. "New chat" turns it
+   * into an ordinary archive (save / skip) or deletes it (erase).
+   */
+  live?: true;
+  /**
+   * Epoch ms of the newest message the live snapshot already contains. The
+   * next compaction appends only messages newer than this, so the kept tail
+   * that survived the previous round is never written twice.
+   */
+  liveThrough?: number;
+  /** How many compaction rounds have written into this live snapshot. */
+  compactions?: number;
 }
 
 export interface FrozenSessionArchive {
@@ -142,6 +157,12 @@ export interface FrozenSessionArchive {
    * rebuild from `/sessions/*.md` cannot turn the opt-out back on.
    */
   memorySkipped?: true;
+  /**
+   * Snapshot of a session still in progress — see
+   * {@link FrozenSessionIndexEntry.live}. On the archive so an index rebuild
+   * does not mistake it for a quick-freeze draft owed an enrichment pass.
+   */
+  live?: true;
 }
 
 /**
@@ -184,13 +205,13 @@ export function parseFrozenArchive(
   markdown: string
 ): Pick<
   FrozenSessionArchive,
-  'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped'
+  'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped' | 'live'
 > {
   let body = markdown;
   let title = 'Untitled';
   const meta: Pick<
     FrozenSessionArchive,
-    'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped'
+    'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped' | 'live'
   > = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
@@ -215,6 +236,9 @@ export function parseFrozenArchive(
     // Memory opt-out (#2272). Only `true` is meaningful: absent means "not
     // decided", which is what an ordinary freeze records.
     if (/^memorySkipped:\s*true\s*$/m.test(fmMatch[1])) meta.memorySkipped = true;
+    // A compaction snapshot of a session still in progress. Absent on every
+    // finished archive; only `true` is meaningful.
+    if (/^live:\s*true\s*$/m.test(fmMatch[1])) meta.live = true;
     const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
     if (titleLine) title = decodeFrontmatterString(titleLine[1]);
   }

@@ -100,6 +100,16 @@ export interface SessionStats {
   }>;
 }
 
+/**
+ * What the panel learns about a compaction phase beyond its name: the
+ * trigger (so an idle round is worded as one) and, once written, where the
+ * pre-compaction transcript went.
+ */
+export interface CompactionNoticeDetail {
+  trigger: 'threshold' | 'overflow' | 'idle';
+  transcriptPath?: string;
+}
+
 export interface OffscreenClientCallbacks {
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
   onScoopCreated: (scoop: RegisteredScoop) => void;
@@ -146,7 +156,8 @@ export interface OffscreenClientCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle',
+    detail: CompactionNoticeDetail
   ) => void;
   /**
    * Fired when any scoop (selected or not) produces meaningful agent
@@ -891,10 +902,15 @@ export class OffscreenClient implements KernelClientFacade {
         this.handleScoopStatus(msg as ScoopStatusMsg);
         break;
 
-      case 'compaction-state':
-        this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state);
-        this.renderCompactionNotice(msg.scoopJid, msg.state);
+      case 'compaction-state': {
+        const detail: CompactionNoticeDetail = {
+          trigger: msg.trigger ?? 'threshold',
+          ...(msg.transcriptPath ? { transcriptPath: msg.transcriptPath } : {}),
+        };
+        this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);
+        this.renderCompactionNotice(msg.scoopJid, msg.state, detail);
         break;
+      }
 
       case 'clear-chat-ack': {
         const resolve = this.pendingClearAcks.get(msg.requestId);
@@ -1304,17 +1320,24 @@ export class OffscreenClient implements KernelClientFacade {
    */
   private renderCompactionNotice(
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle',
+    detail: CompactionNoticeDetail
   ): void {
     if (scoopJid !== this.selectedScoopJid) return;
     let notice: string;
     if (state === 'summarizing') {
-      notice = 'Context window almost exceeded — compacting history…';
+      notice =
+        detail.trigger === 'idle'
+          ? 'Cone idle — compacting history in the background…'
+          : 'Context window almost exceeded — compacting history…';
     } else if (state === 'fallback') {
       notice = 'Compaction summarization failed — continuing with older messages truncated.';
     } else {
       return;
     }
+    // The pointer is the user-facing half of the snapshot: the same path
+    // the agent was told about, so both can find what the summary replaced.
+    if (detail.transcriptPath) notice += ` Full transcript: ${detail.transcriptPath}`;
     const noticeId = `compaction-${scoopJid}-${uid()}`;
     this.emitToUI({ type: 'message_start', messageId: noticeId });
     this.emitToUI({ type: 'content_delta', messageId: noticeId, text: notice });

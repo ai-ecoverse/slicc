@@ -12,7 +12,12 @@
 
 import type { Api } from '@earendil-works/pi-ai';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
-import { createCompactContext } from '../../core/context-compaction.js';
+import {
+  type CompactionConfig,
+  type CompactionState,
+  type CompactionStateDetail,
+  createCompactContext,
+} from '../../core/context-compaction.js';
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { Model } from '../../core/index.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
@@ -30,9 +35,12 @@ export interface SessionHelpersDeps {
   /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
   getEffortOverride: () => string | undefined;
   appendConeMemory?: (bullets: string, meta: AppendConeMemoryMeta) => Promise<void>;
-  onCompactionStateChange?: (
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
-  ) => void;
+  onCompactionStateChange?: (state: CompactionState, detail: CompactionStateDetail) => void;
+  /**
+   * Pre-compaction transcript snapshot (`scoops/live-session-snapshot.ts`).
+   * Wired for roots only — a scoop's `/sessions` is not its to write.
+   */
+  onBeforeCompaction?: CompactionConfig['onBeforeCompaction'];
 }
 
 export interface SessionHelpers {
@@ -99,9 +107,10 @@ export async function buildSessionHelpers(
     // transcript notices (#1985). Emitting them here via onResponse would
     // clobber the streaming bubble on the bridge path and poison non-cone
     // scoops' completion buffers routed back to the cone.
-    onCompactionStateChange: (state) => {
-      deps.onCompactionStateChange?.(state);
+    onCompactionStateChange: (state, detail) => {
+      deps.onCompactionStateChange?.(state, detail);
     },
+    onBeforeCompaction: deps.onBeforeCompaction,
   });
 
   return { streamWithSessionId, compactFn, getCompactionApiKey };

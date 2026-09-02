@@ -60,7 +60,8 @@
       "base": {
         "experimental-settings": "on",
         "panel-layouts": "off",
-        "agentic-memory": "off"
+        "agentic-memory": "off",
+        "compact-on-idle": "off"
       },
       "floats": {
         "standalone": {},
@@ -144,7 +145,8 @@
           "base": {
             "experimental-settings": "on",
             "panel-layouts": "off",
-            "agentic-memory": "off"
+            "agentic-memory": "off",
+            "compact-on-idle": "off"
           },
           "floats": {
             "standalone": {},
