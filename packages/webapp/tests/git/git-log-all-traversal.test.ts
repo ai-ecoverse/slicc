@@ -222,6 +222,21 @@ describe('git log --all traversal (issue #2712)', () => {
     expect(io.reads().filter((p) => p.includes('/.git/objects/')).length).toBeLessThan(100);
   }, 120_000);
 
+  it('terminates when no commit anywhere matches the pathspec', async () => {
+    // The uncapped walk's failure mode is not stopping: with no match to find
+    // it must exhaust every branch and return empty rather than spin.
+    await seedInterleaved();
+    await noiseCommits(60, 1_700_002_000);
+
+    const result = await git.execute(
+      ['log', '--all', '--format', '%s', '--', 'does/not/exist.ts'],
+      '/project'
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(subjects(result.stdout)).toEqual([]);
+  }, 60_000);
+
   it('orders same-second merge parents first-parent first', async () => {
     await git.execute(['init'], '/project');
     await commitAt('base.txt', 'base\n', 'c1', 1_700_000_000);
@@ -307,8 +322,11 @@ describe('git log --all traversal (issue #2712)', () => {
       const result = await git.execute(['log', '--all', '--format', '%s'], '/project');
 
       expect(subjects(result.stdout)).toEqual(['f2', 'c2', 'f1', 'c1']);
-      // One listing for the whole command, not one per object read.
+      // Two listings for the whole command, not one per object read: #2710's
+      // cache manager samples the directory to validate its cached packs, and
+      // the walk itself lists it once.
       expect(io.dirs().filter((p) => p.endsWith('/objects/pack'))).toEqual([
+        '/project/.git/objects/pack',
         '/project/.git/objects/pack',
       ]);
       // And no loose probe survives: the fan-out directories are gone, which
@@ -353,7 +371,10 @@ describe('git log --all traversal (issue #2712)', () => {
 
       expect(subjects((await second).stdout)).toEqual(['c2']);
       expect(subjects((await first).stdout)).toEqual(['f2', 'c2', 'f1', 'c1']);
-      expect(packLists).toHaveLength(2);
+      // The second command issued its own listing rather than awaiting the
+      // first's still-pending one — 3 across the pair once #2710's
+      // invalidation sample is counted; a shared memo makes it 2.
+      expect(packLists).toHaveLength(3);
     });
 
     it('still finds a loose object written next to the pack', async () => {

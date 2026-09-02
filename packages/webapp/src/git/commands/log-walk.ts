@@ -11,8 +11,10 @@
  * This is one walk instead: seed a date-ordered priority queue with every
  * branch tip, pop the newest commit, emit it, push its parents. Each commit
  * object is read at most once, the walk stops the moment `limit` commits have
- * been emitted (so `-n 20` never reads a 21st generation), and one shared
- * `cache` is threaded through every read.
+ * been emitted (so `-n 20` never reads a 21st generation), and the caller's
+ * `cache` — `ctx.cache`, the instance-wide object/pack cache (#2710) — is
+ * threaded through every read, so those pack indexes are parsed once per
+ * SHELL rather than once per branch.
  */
 
 import * as git from 'isomorphic-git';

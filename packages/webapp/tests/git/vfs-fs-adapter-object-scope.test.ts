@@ -157,6 +157,36 @@ describe('isomorphic-git fs adapter object cache (issue #2712)', () => {
     await expect(client.promises.readFile(MISSING_LOOSE, 'utf-8')).resolves.toBe('loose');
   });
 
+  it('coexists with a ranged read: the window is served, the memo survives', async () => {
+    // #2752 added the `{ start, end }` passthrough to `readFile`. A ranged
+    // read is a READ, so it must neither be blocked by nor drop the memo.
+    await vfs.writeFile(`${PACK_DIR}/pack-2.pack`, 'abcdefghij');
+    const client2 = createIsomorphicGitFs(vfs, { objectCache: true });
+    const dirSpy = vi.spyOn(vfs, 'readDir');
+
+    await client2.promises.readdir(PACK_DIR);
+    const window = await client2.promises.readFile(`${PACK_DIR}/pack-2.pack`, {
+      start: 2,
+      end: 5,
+    });
+    await client2.promises.readdir(PACK_DIR);
+
+    expect(new TextDecoder().decode(window as Uint8Array)).toBe('cde');
+    expect(dirSpy.mock.calls.filter((call) => call[0] === PACK_DIR)).toHaveLength(1);
+  });
+
+  it('answers a ranged read of an absent loose object from the memo', async () => {
+    const rangeSpy = vi.spyOn(vfs, 'readFileRange');
+    const readSpy = vi.spyOn(vfs, 'readFile');
+
+    await expect(
+      client.promises.readFile(MISSING_LOOSE, { start: 0, end: 4 })
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+
+    expect(rangeSpy).not.toHaveBeenCalled();
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
   it('does not intercept paths that only look like loose objects', async () => {
     await vfs.mkdir('/repo/objects/ab', { recursive: true });
     await vfs.writeFile(`/repo/objects/ab/short`, 'not an object');
