@@ -35,7 +35,7 @@ export async function commit(
 
   // Check for empty commit if --allow-empty is not set
   if (!allowEmpty && !amend) {
-    const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+    const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
     const hasStaged = matrix.some(([, head, , stage]) => stage !== head);
     if (!hasStaged) {
       return {
@@ -48,6 +48,7 @@ export async function commit(
 
   const sha = await git.commit({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
     message,
     author: await ctx.resolveAuthor(cwd),
@@ -69,14 +70,14 @@ export async function commit(
  * Stage all tracked files that have been modified or deleted (like `git add -u`).
  */
 async function stageTrackedChanges(ctx: GitCommandContext, cwd: string): Promise<void> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   for (const [file, head, workdir, stage] of matrix) {
     if (head === 0) continue; // Skip untracked files
     if (workdir === stage) continue; // Skip unchanged
     if (workdir === 0) {
-      await git.remove({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
     } else {
-      await git.add({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
     }
   }
 }

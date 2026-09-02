@@ -55,6 +55,7 @@ import { symbolicRef } from './commands/symbolic-ref.js';
 import { tag } from './commands/tag.js';
 import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './commands/types.js';
 import { createCommandScopedReadCache } from './fs-command-cache.js';
+import { GitCacheManager } from './git-cache.js';
 import { readGlobalGitConfigValue } from './git-config.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
@@ -62,6 +63,10 @@ export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
 
 const logger = createLogger('git-commands');
 const NETWORK_COMMANDS = new Set(['clone', 'fetch', 'pull', 'push', 'ls-remote']);
+/** Commands that land new packfiles locally, invalidating the pack cache (#2710). */
+const PACK_WRITING_COMMANDS = new Set(['clone', 'fetch', 'pull']);
+/** Shell env var that re-enables the deep packfile SHA-1 verification (#2710). */
+const VERIFY_PACKS_ENV = 'SLICC_GIT_VERIFY_PACKS';
 
 /**
  * Subcommands that get a command-scoped read cache (`fs-command-cache.ts`),
@@ -163,6 +168,15 @@ export class GitCommands {
    */
   private currentConfigOverrides?: ReadonlyMap<string, string>;
 
+  /**
+   * Cross-command isomorphic-git object/pack cache (#2710). One per INSTANCE —
+   * unlike the per-invocation read memo `contextFor` builds (#2709), the
+   * object/pack cache is only worth having when it outlives the command that
+   * filled it, and `GitCacheManager` owns the invalidation that makes sharing
+   * it safe.
+   */
+  private readonly cacheManager: GitCacheManager;
+
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
     // points (File System Access API) the same way shell/agent tools do.
@@ -172,6 +186,11 @@ export class GitCommands {
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
     this.globalDbName = options.globalDbName ?? GLOBAL_FS_DB_NAME;
+    this.cacheManager = new GitCacheManager(this.lfs, {
+      ...(options.maxResidentPacks !== undefined
+        ? { maxResidentPacks: options.maxResidentPacks }
+        : {}),
+    });
   }
 
   /**
@@ -188,6 +207,11 @@ export class GitCommands {
     return {
       lfs,
       fs: this.options.fs,
+      // The object/pack cache is the instance's, NOT the invocation's (#2710):
+      // the read memo above must die with the command, but the parsed `.idx`
+      // files and pack buffers are what the next command must not pay for
+      // again.
+      cache: this.cacheManager.cache,
       corsProxy: this.corsProxy,
       getOnAuth: () => this.getOnAuth(),
       resolveAuthor: (cwd) => this.resolveAuthor(cwd, lfs),
@@ -375,6 +399,12 @@ export class GitCommands {
     // invocation, so nothing a command reads is visible to any other (#2709).
     const ctx = this.contextFor(command);
     try {
+      // Object/pack cache housekeeping (#2710). The verification switch is
+      // per-invocation (it reads the shell env), and `beforeCommand` re-samples
+      // the repository's pack state so a pack landed by another writer since
+      // the last command is never served out of a stale cache.
+      this.cacheManager.setDeepVerification(this.shouldVerifyPackfiles());
+      await this.cacheManager.beforeCommand(effectiveCwd);
       if (NETWORK_COMMANDS.has(command)) {
         await this.ensureFreshGithubToken();
       }
@@ -474,9 +504,27 @@ export class GitCommands {
         exitCode: 128,
       };
     } finally {
+      await this.cacheManager.afterCommand(effectiveCwd, {
+        wrotePacks: PACK_WRITING_COMMANDS.has(command),
+      });
       this.currentEnv = undefined;
       this.currentConfigOverrides = undefined;
     }
+  }
+
+  /**
+   * Whether to run isomorphic-git's deep (full payload) SHA-1 check on every
+   * packfile read. Off by default: it costs a full hash of the pack (5.2 s for
+   * the 92 MB slicc pack) on data the VFS already delivered, and canonical git
+   * verifies packs on `fsck` / `index-pack`, not on an object read. The
+   * O(1) trailer check runs either way. `$SLICC_GIT_VERIFY_PACKS=1` turns the
+   * deep check back on for a shell that wants it.
+   */
+  private shouldVerifyPackfiles(): boolean {
+    const env = this.currentEnv;
+    const flag = env ? readEnvVar(env, VERIFY_PACKS_ENV) : undefined;
+    if (flag !== undefined) return flag !== '0' && flag.toLowerCase() !== 'false';
+    return this.options.verifyPackfiles === true;
   }
 
   /**

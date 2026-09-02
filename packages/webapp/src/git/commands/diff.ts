@@ -111,12 +111,11 @@ async function diffStagedChanges(
   ref = 'HEAD'
 ): Promise<FileChange[]> {
   const changes: FileChange[] = [];
-  const cache = {};
 
   await git.walk({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
-    cache,
     trees: [git.TREE({ ref }), git.STAGE()],
     // A pathspec-excluded subtree is dropped before its tree object is read.
     iterate: pruningIterate((filepath) => pathspecCouldMatch(filepath, pathspecs)),
@@ -133,8 +132,8 @@ async function diffStagedChanges(
       // Unchanged between the tree and the index: no object read at all.
       if (headOid === stageOid) return undefined;
 
-      const oldText = await readBlobText(ctx, cwd, headOid, cache);
-      const newText = await readBlobText(ctx, cwd, stageOid, cache);
+      const oldText = await readBlobText(ctx, cwd, headOid);
+      const newText = await readBlobText(ctx, cwd, stageOid);
 
       changes.push({ filepath, oldContent: oldText, newContent: newText });
       return undefined;
@@ -181,12 +180,11 @@ async function diffWorkdirChanges(
   pathspecs: string[] = []
 ): Promise<FileChange[]> {
   const changes: FileChange[] = [];
-  const cache = {};
 
   await git.walk({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
-    cache,
     trees: [git.STAGE(), git.WORKDIR(NO_INDEX_REFRESH)],
     // Untracked paths (`.git`, `node_modules`, …) and anything a pathspec
     // rules out are dropped here, before the workdir walker would `lstat`
@@ -212,7 +210,7 @@ async function diffWorkdirChanges(
         return null;
       }
 
-      const oldContent = await readBlobText(ctx, cwd, stageOid, cache);
+      const oldContent = await readBlobText(ctx, cwd, stageOid);
       const newContent = workBytes ? new TextDecoder().decode(workBytes) : '';
       if (oldContent !== newContent) changes.push({ filepath, oldContent, newContent });
       return null;
@@ -242,12 +240,11 @@ async function readWorkdirBytes(entry: git.WalkerEntry | null): Promise<Uint8Arr
 async function readBlobText(
   ctx: GitCommandContext,
   cwd: string,
-  oid: string | undefined,
-  cache?: object
+  oid: string | undefined
 ): Promise<string> {
   if (!oid) return '';
   try {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, cache });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, cache: ctx.cache });
     return new TextDecoder().decode(blob);
   } catch {
     return '';
@@ -282,8 +279,8 @@ async function diffResolvedTrees(
 
   await git.walk({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
-    cache: {},
     trees: [git.TREE({ ref: resolvedRef1 }), git.TREE({ ref: resolvedRef2 })],
     iterate: pruningIterate((filepath) => pathspecCouldMatch(filepath, opts.pathspecs ?? [])),
     map: async (filepath, [entry1, entry2]) => {
@@ -311,14 +308,13 @@ async function diffCommitWorkdir(
   } catch {
     return ambiguousRevision(ref);
   }
-  const cache = {};
-  const tracked = new Set<string>(await git.listFiles({ fs: ctx.lfs, dir: cwd, cache }));
+  const tracked = new Set<string>(await git.listFiles({ fs: ctx.lfs, dir: cwd, cache: ctx.cache }));
   const trackedDirs = ancestorDirs(tracked);
   const changes: FileChange[] = [];
   await git.walk({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
-    cache,
     // NO_INDEX_REFRESH: a read-only diff must not rewrite `.git/index` (#2708).
     trees: [git.TREE({ ref: resolved }), git.WORKDIR(NO_INDEX_REFRESH)],
     // Same pre-`lstat` pruning as `git diff`: untracked paths (nothing in the
@@ -483,6 +479,7 @@ export async function diffInitialCommit(
 
   await git.walk({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
     trees: [git.TREE({ ref: commitOid })],
     map: async (filepath, [entry]) => {

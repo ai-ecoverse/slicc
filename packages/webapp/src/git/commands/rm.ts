@@ -55,11 +55,11 @@ async function rmOne(
         exitCode: 128,
       };
     }
-    const indexFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd });
+    const indexFiles = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
     const matchingFiles = indexFiles.filter((f) => f === filepath || f.startsWith(filepath + '/'));
 
     for (const file of matchingFiles) {
-      await git.remove({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
       if (!cached) {
         try {
           await ctx.fs.rm(`${cwd}/${file}`);
@@ -69,7 +69,7 @@ async function rmOne(
       }
     }
   } else {
-    await git.remove({ fs: ctx.lfs, dir: cwd, filepath });
+    await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
     if (!cached) {
       try {
         await ctx.fs.rm(fullPath);

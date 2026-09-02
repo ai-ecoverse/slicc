@@ -45,12 +45,12 @@ export async function clone(
   const local = localCloneSource(url, cwd);
   if (local) return cloneLocal(ctx, local, targetDir, url, dir, output, branch);
 
-  // Use a shared cache for the clone operation
-  const cache = {};
-
   try {
+    // The object/pack cache is instance-wide since #2710, so the objects a
+    // clone writes stay cached for the commands that follow it.
     await git.clone({
       fs: ctx.lfs,
+      cache: ctx.cache,
       http: gitHttp,
       dir: targetDir,
       url,
@@ -59,7 +59,6 @@ export async function clone(
       ref: branch,
       singleBranch,
       noCheckout: false, // Let clone handle checkout
-      cache,
       onAuth: ctx.getOnAuth(),
       onProgress: (event) => {
         if (event.phase === 'Receiving objects') {
@@ -82,7 +81,7 @@ export async function clone(
 
   // List files that were checked out
   try {
-    const files = await git.listFiles({ fs: ctx.lfs, dir: targetDir });
+    const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
     if (files.length > 0) {
       output += `Checked out ${files.length} files.\n`;
     }
@@ -139,7 +138,14 @@ async function cloneLocal(
     }
     const branch = requestedBranch ?? (await git.currentBranch({ fs: ctx.lfs, dir: sourceDir }));
     await copyLocalTree(ctx, `${sourceDir}/.git`, `${targetDir}/.git`);
-    if (branch) await git.checkout({ fs: ctx.lfs, dir: targetDir, ref: branch, force: true });
+    if (branch)
+      await git.checkout({
+        fs: ctx.lfs,
+        cache: ctx.cache,
+        dir: targetDir,
+        ref: branch,
+        force: true,
+      });
     await git.addRemote({
       fs: ctx.lfs,
       dir: targetDir,
@@ -148,7 +154,7 @@ async function cloneLocal(
       force: true,
     });
     await ctx.fs.flush();
-    const files = await git.listFiles({ fs: ctx.lfs, dir: targetDir });
+    const files = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: targetDir });
     if (files.length > 0) output += `Checked out ${files.length} files.\n`;
     return { stdout: `${output}done.\n`, stderr: '', exitCode: 0 };
   } catch (err) {

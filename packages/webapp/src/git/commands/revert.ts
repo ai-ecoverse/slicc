@@ -48,7 +48,7 @@ export async function revert(
     };
   }
 
-  const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid });
+  const { commit } = await git.readCommit({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
   if (commit.parent.length !== 1) {
     return {
       stdout: '',
@@ -83,7 +83,14 @@ export async function revert(
 
     const author = await ctx.resolveAuthor(cwd);
     const message = `Revert "${subject}"\n\nThis reverts commit ${oid}.\n`;
-    const newOid = await git.commit({ fs: ctx.lfs, dir: cwd, message, author, committer: author });
+    const newOid = await git.commit({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      message,
+      author,
+      committer: author,
+    });
 
     return {
       stdout: `[${branch} ${newOid.slice(0, 7)}] Revert "${subject}"\n`,
@@ -109,9 +116,9 @@ async function applyReverse(
   labels: { current: string; base: string; other: string }
 ): Promise<string[]> {
   const [hFiles, cFiles, pFiles] = await Promise.all([
-    git.listFiles({ fs: ctx.lfs, dir: cwd, ref: headOid }),
-    git.listFiles({ fs: ctx.lfs, dir: cwd, ref: commitOid }),
-    git.listFiles({ fs: ctx.lfs, dir: cwd, ref: parentOid }),
+    git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: headOid }),
+    git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: commitOid }),
+    git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: parentOid }),
   ]);
   const union = new Set([...hFiles, ...cFiles, ...pFiles]);
 
@@ -144,7 +151,7 @@ async function applyReverse(
     await ctx.fs.writeFile(`${cwd}/${filepath}`, encoder.encode(mergedText));
 
     if (conflicted) conflicts.push(filepath);
-    else await git.add({ fs: ctx.lfs, dir: cwd, filepath });
+    else await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
   }
 
   return conflicts;
@@ -158,7 +165,7 @@ async function readAt(
   filepath: string
 ): Promise<string | undefined> {
   try {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, filepath });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid, filepath });
     return new TextDecoder().decode(blob);
   } catch {
     return undefined;
@@ -173,7 +180,7 @@ async function removeFile(ctx: GitCommandContext, cwd: string, filepath: string)
     /* already gone */
   }
   try {
-    await git.remove({ fs: ctx.lfs, dir: cwd, filepath });
+    await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
   } catch {
     /* not in index */
   }

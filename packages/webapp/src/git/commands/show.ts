@@ -33,7 +33,7 @@ export async function show(
     };
   }
 
-  const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid });
+  const { commit } = await git.readCommit({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
 
   let output = formatShowHeader(oid, commit, format);
 
@@ -64,7 +64,7 @@ async function showFileAtCommit(
   if (oid === undefined) {
     return { stdout: '', stderr: `fatal: bad object ${commitRef}\n`, exitCode: 128 };
   }
-  const result = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, filepath });
+  const result = await git.readBlob({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid, filepath });
   const content = new TextDecoder().decode(result.blob);
   return { stdout: content, stderr: '', exitCode: 0 };
 }

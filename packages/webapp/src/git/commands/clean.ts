@@ -42,6 +42,7 @@ export async function clean(
 
   const normalMatrix = (await git.statusMatrix({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
     ...NO_INDEX_REFRESH,
   })) as StatusRow[];
@@ -55,6 +56,7 @@ export async function clean(
   if (onlyIgnored || includeIgnored) {
     const withIgnored = (await git.statusMatrix({
       fs: ctx.lfs,
+      cache: ctx.cache,
       dir: cwd,
       ignored: true,
       ...NO_INDEX_REFRESH,

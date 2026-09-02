@@ -38,6 +38,7 @@ export async function cherryPick(
   try {
     const newOid = await git.cherryPick({
       fs: ctx.lfs,
+      cache: ctx.cache,
       dir: cwd,
       oid,
       abortOnConflict: false,
@@ -53,13 +54,19 @@ export async function cherryPick(
     }
 
     let headOid = newOid;
-    const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: newOid });
+    const { commit } = await git.readCommit({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid: newOid,
+    });
 
     // `-x`: annotate the message with the source commit (full oid), like git.
     if (appendOrigin) {
       const body = commit.message.replace(/\s+$/, '');
       headOid = await git.commit({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         message: `${body}\n\n(cherry picked from commit ${oid})\n`,
         author: commit.author,

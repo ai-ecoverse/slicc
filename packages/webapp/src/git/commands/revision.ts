@@ -69,7 +69,7 @@ async function resolveBase(ctx: GitCommandContext, cwd: string, ref: string): Pr
   } catch (error) {
     if (!ABBREVIATED_OID.test(ref)) throw error;
   }
-  return await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref });
+  return await git.expandOid({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid: ref });
 }
 
 async function readParent(
@@ -79,7 +79,7 @@ async function readParent(
   parentNumber: number
 ): Promise<string> {
   if (parentNumber < 1) return oid;
-  const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid });
+  const { commit } = await git.readCommit({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
   const parent = commit.parent[parentNumber - 1];
   if (!parent) throw new Error('missing parent');
   return parent;

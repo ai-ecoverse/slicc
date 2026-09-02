@@ -104,7 +104,12 @@ async function startRebase(
   const dirty = await assertCleanWorktree(ctx, cwd);
   if (dirty) return dirty;
 
-  const [mergeBase] = await git.findMergeBase({ fs: ctx.lfs, dir: cwd, oids: [headOid, ontoOid] });
+  const [mergeBase] = await git.findMergeBase({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    oids: [headOid, ontoOid],
+  });
 
   if (mergeBase === headOid) {
     await resetHard(ctx, cwd, branch, ontoOid);
@@ -155,9 +160,15 @@ async function continueRebase(ctx: GitCommandContext, cwd: string): Promise<GitC
   if (!state) return noRebaseInProgress();
 
   if (state.current) {
-    const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: state.current });
+    const { commit } = await git.readCommit({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid: state.current,
+    });
     await git.commit({
       fs: ctx.lfs,
+      cache: ctx.cache,
       dir: cwd,
       message: commit.message,
       author: commit.author,
@@ -173,7 +184,7 @@ async function skipRebase(ctx: GitCommandContext, cwd: string): Promise<GitComma
   const state = await readState(ctx, cwd);
   if (!state) return noRebaseInProgress();
   // Discard the conflicted working tree + index back to the current tip.
-  await git.checkout({ fs: ctx.lfs, dir: cwd, ref: state.branch, force: true });
+  await git.checkout({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: state.branch, force: true });
   state.current = undefined;
   return replay(ctx, cwd, state);
 }
@@ -199,11 +210,12 @@ async function replay(
 ): Promise<GitCommandResult> {
   while (state.todo.length > 0) {
     const oid = state.todo[0];
-    const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid });
+    const { commit } = await git.readCommit({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
     const subject = commit.message.split('\n')[0];
     try {
       await git.cherryPick({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         oid,
         abortOnConflict: false,
@@ -267,7 +279,7 @@ async function collectRange(
   headOid: string,
   baseOid: string
 ): Promise<Array<{ oid: string; parents: number }>> {
-  const log = await git.log({ fs: ctx.lfs, dir: cwd, ref: headOid });
+  const log = await git.log({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: headOid });
   const out: Array<{ oid: string; parents: number }> = [];
   for (const entry of log) {
     if (entry.oid === baseOid) break;
@@ -287,7 +299,7 @@ async function assertCleanWorktree(
   ctx: GitCommandContext,
   cwd: string
 ): Promise<GitCommandResult | undefined> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   let hasUnstaged = false;
   let hasStaged = false;
   for (const [, head, workdir, stage] of matrix) {
@@ -328,7 +340,7 @@ async function resetHard(
     value: oid,
     force: true,
   });
-  await git.checkout({ fs: ctx.lfs, dir: cwd, ref: branch, force: true });
+  await git.checkout({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: branch, force: true });
 }
 
 /** Whether a rebase state directory is present. */
