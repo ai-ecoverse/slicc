@@ -12,11 +12,13 @@
 # lint-staged normally applies the fix at commit time, but commits made
 # outside the hook (GitHub web UI, Copilot Autofix, `--no-verify`) skip it.
 #
-# Runs the writing linter and fails if it changed anything. Compares the
-# working-tree diff before and after instead of demanding a clean tree, so an
-# on-demand `npm run verify` on a dirty checkout still works; the pre-push
-# hook already guarantees the tree matches the pushed commit. On a dirty tree
-# the `--stat` below lists pre-existing local edits too.
+# Runs the writing linter and fails if it changed anything. Compares a
+# working-tree snapshot before and after instead of demanding a clean tree, so
+# an on-demand `npm run verify` on a dirty checkout still works; the pre-push
+# hook already guarantees the tree matches the pushed commit. The snapshot
+# covers untracked (non-ignored) files too: Biome scans them as well, and
+# `git diff` alone would miss a rewrite there. On a dirty tree the status and
+# diff below list pre-existing local edits too.
 #
 # Usage: bash packages/dev-tools/tools/check-autofix-drift.sh
 # Fix:   npm run lint, then commit the rewrites.
@@ -33,7 +35,10 @@ if [[ ! -x "$BIOME" ]]; then
 fi
 
 snapshot() {
-  git diff | git hash-object --stdin
+  {
+    git diff
+    git ls-files --others --exclude-standard | git hash-object --stdin-paths
+  } | git hash-object --stdin
 }
 
 before="$(snapshot)"
@@ -49,7 +54,7 @@ after="$(snapshot)"
 
 if [[ "$before" != "$after" ]]; then
   echo "::error::'biome check --write' rewrote files that 'biome check' accepted:" >&2
-  git diff --stat >&2
+  git status --short >&2
   git diff >&2
   echo "Run 'npm run lint' and commit the result." >&2
   exit 1
