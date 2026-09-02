@@ -25,10 +25,16 @@ import type {
   WaitForSelectorOptions,
 } from './types.js';
 
-/** Read PNG width from IHDR (bytes 16–19 after the 8-byte signature). */
+/**
+ * Read PNG width from IHDR (bytes 16–19 after the 8-byte signature).
+ * Returns 0 for non-PNG data — without the signature check, JPEG/WebP bytes
+ * at the same offsets decode to a garbage "width" and --max-width would
+ * compute a nonsensical rescale.
+ */
 function pngWidth(base64: string): number {
   try {
     const bin = atob(base64.slice(0, 48));
+    if (!bin.startsWith('\x89PNG\r\n\x1a\n')) return 0;
     return (
       ((bin.charCodeAt(16) << 24) |
         (bin.charCodeAt(17) << 16) |
@@ -73,6 +79,19 @@ export function getDefaultCdpUrl(
  */
 type CdpPayload = { [key: string]: unknown };
 
+/**
+ * Per-target emulation override, re-applied on every fresh attach so a
+ * sibling driver switching tabs cannot reset it (see setViewportOverride).
+ */
+interface ViewportOverride {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: boolean;
+  /** Set for mobile emulation so sites serve their mobile layout. */
+  userAgent?: string;
+}
+
 export class BrowserAPI {
   private client: CDPTransport;
   private localClient: CDPTransport; // preserved original when using remote transport
@@ -83,7 +102,7 @@ export class BrowserAPI {
   private _frameContextCache = new Map<string, number>();
   private _mainWorldContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
-  private _viewportOverrides = new Map<string, { width: number; height: number }>();
+  private _viewportOverrides = new Map<string, ViewportOverride>();
   private _tabLockQueueDepth = 0;
   private _tabLockTotalWaitMs = 0;
   private _tabLockAcquisitions = 0;
@@ -269,14 +288,58 @@ export class BrowserAPI {
    * session, making a tab's viewport stable no matter which driver measured it
    * last. Cleared by {@link closePage}.
    */
-  async setViewportOverride(targetId: string, width: number, height: number): Promise<void> {
+  async setViewportOverride(
+    targetId: string,
+    width: number,
+    height: number,
+    options?: { deviceScaleFactor?: number; mobile?: boolean; userAgent?: string }
+  ): Promise<void> {
     const sessionId = await this.attachToPage(targetId);
+    // Omitted options inherit the target's existing override: `resize` on a
+    // tab opened with mobile emulation must change only the dimensions, not
+    // silently strip the device identity (DPR / mobile layout / UA).
+    const prev = this._viewportOverrides.get(targetId);
+    const vp: ViewportOverride = {
+      width,
+      height,
+      deviceScaleFactor: options?.deviceScaleFactor ?? prev?.deviceScaleFactor ?? 1,
+      mobile: options?.mobile ?? prev?.mobile ?? false,
+      ...((options?.userAgent ?? prev?.userAgent) !== undefined && {
+        userAgent: options?.userAgent ?? prev?.userAgent,
+      }),
+    };
+    await this.applyViewportOverride(vp, sessionId);
+    this._viewportOverrides.set(targetId, vp);
+  }
+
+  /** Send the recorded metrics (and UA + touch, for mobile emulation) to a session. */
+  private async applyViewportOverride(vp: ViewportOverride, sessionId: string): Promise<void> {
     await this.client.send(
       'Emulation.setDeviceMetricsOverride',
-      { width, height, deviceScaleFactor: 1, mobile: false },
+      {
+        width: vp.width,
+        height: vp.height,
+        deviceScaleFactor: vp.deviceScaleFactor,
+        mobile: vp.mobile,
+      },
       sessionId
     );
-    this._viewportOverrides.set(targetId, { width, height });
+    if (vp.mobile) {
+      // Sites that feature-detect touch (navigator.maxTouchPoints) rather
+      // than sniffing width/UA won't switch layouts without this.
+      await this.client.send(
+        'Emulation.setTouchEmulationEnabled',
+        { enabled: true, maxTouchPoints: 5 },
+        sessionId
+      );
+    }
+    if (vp.userAgent !== undefined) {
+      await this.client.send(
+        'Emulation.setUserAgentOverride',
+        { userAgent: vp.userAgent },
+        sessionId
+      );
+    }
   }
 
   /** Re-apply a recorded viewport override after a fresh attach (best-effort). */
@@ -284,11 +347,7 @@ export class BrowserAPI {
     const vp = this._viewportOverrides.get(targetId);
     if (!vp) return;
     try {
-      await this.client.send(
-        'Emulation.setDeviceMetricsOverride',
-        { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false },
-        sessionId
-      );
+      await this.applyViewportOverride(vp, sessionId);
     } catch (err) {
       log.warn('Failed to re-apply viewport override on re-attach', {
         targetId,
@@ -797,7 +856,11 @@ export class BrowserAPI {
       | undefined;
 
     if (existingClip) {
-      existingClip.scale = scale;
+      // `peekWidth` is the ENCODED width, which already includes the clip's
+      // own scale (e.g. --hires sets scale=DPR). Replacing the scale would
+      // shrink relative to CSS pixels instead — a 2560px hires capture asked
+      // to fit 1280 would come back at 640. Compose the ratios instead.
+      existingClip.scale = (existingClip.scale ?? 1) * scale;
     } else {
       let vw = 1280;
       let vh = 800;

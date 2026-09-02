@@ -57,9 +57,30 @@ async function evaluateWithTopLevelAwait(
   }
 }
 
+/**
+ * The output path from the `--filename`/`--output` aliases, or an error when
+ * both are given — the two verbs historically used opposite precedence, so
+ * an invocation passing both would write to different paths per verb.
+ */
+function resolveOutputPath(
+  verb: string,
+  flags: Record<string, string>
+): { path: string | undefined } | { error: string } {
+  const filename = flags['filename'];
+  const output = flags['output'];
+  if (filename !== undefined && output !== undefined) {
+    return { error: `${verb}: --filename and --output are aliases — pass one, not both\n` };
+  }
+  return { path: filename ?? output };
+}
+
 export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'eval requires an expression\n', exitCode: 1 };
+  }
+  const outPath = resolveOutputPath('eval', flags);
+  if ('error' in outPath) {
+    return { stdout: '', stderr: outPath.error, exitCode: 1 };
   }
   const tab = requireTab(flags);
   if ('error' in tab) {
@@ -74,9 +95,12 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
     const evalResult = await evaluateWithTopLevelAwait(evaluate, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
-  if (flags['filename']) {
-    await fs.writeFile(flags['filename'], output ?? 'null');
-    return { stdout: `Result saved to ${flags['filename']}\n`, stderr: '', exitCode: 0 };
+  // --output is accepted as an alias so eval and eval-file agree; before, the
+  // manifest declared it here but only eval-file read it — `eval --output=…`
+  // exited 0 with the file never written.
+  if (outPath.path) {
+    await fs.writeFile(outPath.path, output ?? 'null');
+    return { stdout: `Result saved to ${outPath.path}\n`, stderr: '', exitCode: 0 };
   }
   return { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
 };
@@ -90,7 +114,12 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const scriptPath = positional[0];
-  const outputPath = flags['output'];
+  // --filename is accepted as an alias so eval-file and eval agree.
+  const resolved = resolveOutputPath('eval-file', flags);
+  if ('error' in resolved) {
+    return { stdout: '', stderr: resolved.error, exitCode: 1 };
+  }
+  const outputPath = resolved.path;
 
   let scriptContent: string;
   try {

@@ -1,11 +1,17 @@
 /**
- * Page inspection subcommands: snapshot, frames, screenshot.
+ * Page inspection subcommands: snapshot, find, frames, screenshot.
  */
 
 import { isExtensionRealm } from '../../../../base/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
 import { renderNode, takeSnapshot } from '../snapshot.js';
-import { base64ToBytes, filenameSafeTimestamp, requireTab, resolveFrame } from '../state.js';
+import {
+  base64ToBytes,
+  filenameSafeTimestamp,
+  parsePageJson,
+  requireTab,
+  resolveFrame,
+} from '../state.js';
 import type {
   PlaywrightHandler,
   PlaywrightHandlerCtx,
@@ -18,7 +24,18 @@ import type {
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
 type FrameInfo = Awaited<ReturnType<BrowserAPI['getFrameTree']>>[number];
 
-type ScreenshotClip = { x: number; y: number; width: number; height: number };
+type ScreenshotClip = { x: number; y: number; width: number; height: number; scale?: number };
+
+/**
+ * The --depth/--boxes/find/--hires feature code, loaded lazily: the handlers
+ * table is in the kernel worker's boot-critical graph (ratcheted by
+ * `first-load-budget.json`), and none of it runs until a caller asks for one
+ * of those features. Unlike the validate-args chunk, a failed load here must
+ * FAIL the command — the caller explicitly requested the feature.
+ */
+function loadSnapshotFeatures(): Promise<typeof import('./snapshot-features.js')> {
+  return import('./snapshot-features.js');
+}
 
 async function takeFrameSnapshot(
   browser: BrowserAPI,
@@ -88,7 +105,7 @@ async function clipFromSelector(
       return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
     })()`
   );
-  return rectJson ? (JSON.parse(rectJson as string) as ScreenshotClip) : undefined;
+  return rectJson ? parsePageJson<ScreenshotClip>(rectJson, 'element clip rect') : undefined;
 }
 
 /** Resolve the bounding box to clip a screenshot to, for a ref like `e5`. */
@@ -108,31 +125,45 @@ async function resolveElementClip(
   return clipFromSelector(browser, selector);
 }
 
-export const snapshotHandler: PlaywrightHandler = async ({
-  browser,
-  fs,
-  state,
-  positional,
-  flags,
-}) => {
+export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  // ponytail: [target] positional arg for partial snapshots not yet wired
-  const _target = positional[0];
   const noIframes = flags['no-iframes'] === 'true';
-  // ponytail: depth/boxes not yet wired to injected script
-  const _depth = flags['depth'] ? parseInt(flags['depth'], 10) : undefined;
-  const _boxes = flags['boxes'] === 'true';
-  const output = await browser.withTab(tab.targetId, async () => {
+  const depthRaw = flags['depth'];
+  // Strict digits-only — parseInt would silently read "2abc" as 2.
+  if (depthRaw !== undefined && !/^[1-9][0-9]*$/.test(depthRaw)) {
+    return {
+      stdout: '',
+      stderr: `snapshot: --depth must be a positive integer, got "${depthRaw}"\n`,
+      exitCode: 1,
+    };
+  }
+  const depth = depthRaw === undefined ? undefined : parseInt(depthRaw, 10);
+  const boxes = flags['boxes'] === 'true';
+  if (boxes && flags['frame']) {
+    return {
+      stdout: '',
+      stderr:
+        'snapshot: --boxes is not supported with --frame (child-frame rects live in another coordinate space)\n',
+      exitCode: 1,
+    };
+  }
+  let output = await browser.withTab(tab.targetId, async () => {
     const frame = await resolveFrame(browser, flags);
     if (frame) return takeFrameSnapshot(browser, state, tab.targetId, frame);
-    const snapshot = await takeSnapshot(browser, state, tab.targetId, {
+    const { snapshot, output: text } = await takeSnapshot(browser, state, tab.targetId, {
       noIframes,
     });
-    return snapshot.output;
+    if (!boxes) return text;
+    const { annotateBoxes } = await loadSnapshotFeatures();
+    return annotateBoxes(browser, snapshot.refToBackendNodeId, text);
   });
+  if (depth !== undefined) {
+    const { limitSnapshotDepth } = await loadSnapshotFeatures();
+    output = limitSnapshotDepth(output, depth);
+  }
   if (flags['filename']) {
     await fs.writeFile(flags['filename'], output);
     return {
@@ -142,6 +173,12 @@ export const snapshotHandler: PlaywrightHandler = async ({
     };
   }
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
+};
+
+/** Search the page snapshot for text or a regexp (implementation lazy-loaded). */
+export const findHandler: PlaywrightHandler = async (ctx) => {
+  const { findHandlerImpl } = await loadSnapshotFeatures();
+  return findHandlerImpl(ctx);
 };
 
 export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
@@ -192,6 +229,45 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratc
   return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
 };
 
+/** Resolve a positional element ref to a clip, or a caller-facing error. */
+async function resolveRefClipOrError(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  targetId: string,
+  ref: string
+): Promise<{ clip: ScreenshotClip } | { error: string }> {
+  const snapshot = state.snapshots.get(targetId);
+  if (!snapshot) {
+    throw new Error('No snapshot available. Run "snapshot" first.');
+  }
+  const clip = await resolveElementClip(browser, snapshot, ref);
+  if (!clip || clip.width <= 0 || clip.height <= 0) {
+    return {
+      error:
+        `could not resolve element ${ref} to a visible box — the snapshot is ` +
+        'likely stale (navigation, reload, or layout change). Re-run "snapshot" and retry ' +
+        'with a fresh ref, or omit the ref to capture the viewport deliberately.',
+    };
+  }
+  return { clip };
+}
+
+const SCREENSHOT_FORMATS = new Set(['png', 'jpeg', 'webp'] as const);
+type ScreenshotFormat = 'png' | 'jpeg' | 'webp';
+
+/**
+ * The capture format: explicit --type, else inferred from the --filename
+ * extension, else png (matching the official CLI's inference rule).
+ */
+function screenshotFormat(flags: Record<string, string>): ScreenshotFormat {
+  const type = flags['type'];
+  if (type && SCREENSHOT_FORMATS.has(type as ScreenshotFormat)) return type as ScreenshotFormat;
+  const filename = flags['filename'] ?? '';
+  if (/\.jpe?g$/i.test(filename)) return 'jpeg';
+  if (/\.webp$/i.test(filename)) return 'webp';
+  return 'png';
+}
+
 export const screenshotHandler: PlaywrightHandler = async ({
   browser,
   fs,
@@ -204,40 +280,57 @@ export const screenshotHandler: PlaywrightHandler = async ({
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  if (flags['type'] && !SCREENSHOT_FORMATS.has(flags['type'] as ScreenshotFormat)) {
+    return {
+      stdout: '',
+      stderr: `screenshot: --type must be png, jpeg, or webp, got "${flags['type']}"\n`,
+      exitCode: 1,
+    };
+  }
+  // The downscale pass reads the encoded width from the PNG IHDR; on JPEG or
+  // WebP output it cannot measure the image, so it would silently return the
+  // oversized original — reject loudly instead (#2405 discipline).
+  if (flags['max-width'] && screenshotFormat(flags) !== 'png') {
+    return {
+      stdout: '',
+      stderr:
+        'screenshot: --max-width requires png output (the downscale pass measures PNG headers); drop --type/--filename extension or --max-width\n',
+      exitCode: 1,
+    };
+  }
   const output = await browser.withTab(tab.targetId, async () => {
     // Ref-based screenshot: the requested element's crop or a loud failure.
     // Silently substituting the full viewport corrupts downstream visual
     // comparisons with a 0 exit code — worse than any error.
     let clip: ScreenshotClip | undefined;
     if (positional[0]?.startsWith('e')) {
-      const snapshot = state.snapshots.get(tab.targetId);
-      if (!snapshot) {
-        throw new Error('No snapshot available. Run "snapshot" first.');
-      }
-      clip = await resolveElementClip(browser, snapshot, positional[0]);
-      if (!clip || clip.width <= 0 || clip.height <= 0) {
-        return {
-          error:
-            `could not resolve element ${positional[0]} to a visible box — the snapshot is ` +
-            'likely stale (navigation, reload, or layout change). Re-run "snapshot" and retry ' +
-            'with a fresh ref, or omit the ref to capture the viewport deliberately.',
-        };
-      }
+      const resolved = await resolveRefClipOrError(browser, state, tab.targetId, positional[0]);
+      if ('error' in resolved) return resolved;
+      clip = resolved.clip;
+    }
+
+    const fullPage = flags['fullPage'] === 'true' || flags['full-page'] === 'true';
+    if (flags['hires'] === 'true') {
+      const { hiresClip } = await loadSnapshotFeatures();
+      clip = await hiresClip(browser, clip, fullPage);
     }
 
     const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
+    const format = screenshotFormat(flags);
     const base64 = await browser.screenshot({
-      fullPage: flags['fullPage'] === 'true' || flags['full-page'] === 'true',
+      format,
+      fullPage,
       ...(clip ? { clip } : {}),
       ...(maxWidth ? { maxWidth } : {}),
     });
-    const savePath = flags['filename'] || `${scratchDir}/screenshot-${Date.now()}.png`;
+    const extension = format === 'jpeg' ? 'jpg' : format;
+    const savePath = flags['filename'] || `${scratchDir}/screenshot-${Date.now()}.${extension}`;
     const bytes = base64ToBytes(base64);
     await fs.writeFile(savePath, bytes);
     // Archive screenshot to /.playwright/screenshots/
     try {
       await ensureSessionDirs(fs, state);
-      const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.png`;
+      const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.${extension}`;
       await fs.writeFile(archivePath, bytes);
     } catch {
       // Best-effort

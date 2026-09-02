@@ -1,5 +1,7 @@
 import { SLICC_HOSTED_ORIGIN, SLICC_STAGING_HUB_ORIGIN } from '@slicc/shared-ts';
+import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from '../base/tray-storage-keys.js';
 
+export { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY };
 export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = SLICC_HOSTED_ORIGIN;
 export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = SLICC_STAGING_HUB_ORIGIN;
 
@@ -14,8 +16,6 @@ import {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
   type TrayJoinConfig,
   type TrayUrlConfig,
 } from '../base/tray-url-config.js';
@@ -32,11 +32,9 @@ export {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
-  TRAY_JOIN_STORAGE_KEY,
   TRAY_LEGACY_LEAD_QUERY_PARAM,
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
-  TRAY_WORKER_STORAGE_KEY,
   type TrayJoinConfig,
   type TrayUrlConfig,
 };

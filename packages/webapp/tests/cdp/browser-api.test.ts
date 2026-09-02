@@ -12,6 +12,37 @@ let dbCounter = 0;
 // Mock CDPClient
 // ---------------------------------------------------------------------------
 
+/** Minimal PNG header: signature + IHDR with the given width (height 100). */
+function pngBase64(width: number): string {
+  const bytes = [
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+    0,
+    0,
+    0,
+    13,
+    73,
+    72,
+    68,
+    82,
+    (width >>> 24) & 255,
+    (width >>> 16) & 255,
+    (width >>> 8) & 255,
+    width & 255,
+    0,
+    0,
+    0,
+    100,
+  ];
+  return btoa(String.fromCharCode(...bytes));
+}
+
 function createMockClient() {
   const eventHandlers = new Map<string, Set<(params: Record<string, unknown>) => void>>();
 
@@ -640,6 +671,46 @@ describe('BrowserAPI', () => {
       );
     });
 
+    it('maxWidth composes with an existing clip scale instead of replacing it', async () => {
+      // A 1280-CSS-px clip at scale 2 (--hires) encodes 2560 device px.
+      // Fitting maxWidth=1280 must yield scale 1 (= 2 × 1280/2560), not 0.5 —
+      // replacing the scale shrank hires captures to half the requested size.
+      // Keyed by method: the clip path also sends Runtime.enable/evaluate
+      // before capturing, so positional once-mocks would misalign.
+      let capture = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Page.captureScreenshot'
+          ? { data: ++capture === 1 ? pngBase64(2560) : pngBase64(1280) }
+          : {}
+      );
+
+      await api.screenshot({
+        clip: { x: 0, y: 0, width: 1280, height: 800, scale: 2 },
+        maxWidth: 1280,
+      });
+      const recapture = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Page.captureScreenshot'
+      )[1];
+      expect((recapture[1] as { clip: { scale: number } }).clip.scale).toBe(1);
+    });
+
+    it('maxWidth is a no-op for non-PNG output rather than misreading the header', async () => {
+      // JPEG bytes at the IHDR offsets decode to garbage; the signature check
+      // makes pngWidth return 0 so no bogus rescale is attempted.
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Page.captureScreenshot'
+          ? { data: btoa('\xff\xd8\xffjpegjunkjpegjunkjpegjunk') }
+          : {}
+      );
+      const data = await api.screenshot({ format: 'jpeg', maxWidth: 100 });
+      expect(data).toBe(btoa('\xff\xd8\xffjpegjunkjpegjunkjpegjunk'));
+      expect(
+        (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+          ([m]) => m === 'Page.captureScreenshot'
+        )
+      ).toHaveLength(1);
+    });
+
     it('retries with bringToFront when capture fails on background tab', async () => {
       // No focused page found -> wake, capture, no restore leg.
       vi.spyOn(
@@ -1152,6 +1223,55 @@ describe('BrowserAPI', () => {
         { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false },
         'sess-3',
       ]);
+    });
+
+    it('mobile emulation sends metrics, touch, and UA — and a later resize preserves them', async () => {
+      attachCounting();
+      const calls = (method: string) =>
+        (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(([m]) => m === method);
+
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 412, 915, {
+          deviceScaleFactor: 2.625,
+          mobile: true,
+          userAgent: 'MobileUA',
+        });
+      });
+      expect(emulationCalls()[0][1]).toEqual({
+        width: 412,
+        height: 915,
+        deviceScaleFactor: 2.625,
+        mobile: true,
+      });
+      expect(calls('Emulation.setTouchEmulationEnabled')[0][1]).toEqual({
+        enabled: true,
+        maxTouchPoints: 5,
+      });
+      expect(calls('Emulation.setUserAgentOverride')[0][1]).toEqual({ userAgent: 'MobileUA' });
+
+      // A plain resize must change only the dimensions — stripping the device
+      // identity would flip the tab to desktop on the next re-attach.
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 500, 800);
+      });
+      expect(emulationCalls()[1][1]).toEqual({
+        width: 500,
+        height: 800,
+        deviceScaleFactor: 2.625,
+        mobile: true,
+      });
+      expect(calls('Emulation.setUserAgentOverride')).toHaveLength(2);
+
+      // And the merged override is what re-attach re-applies.
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+      const reapplied = emulationCalls().at(-1)?.[1];
+      expect(reapplied).toEqual({
+        width: 500,
+        height: 800,
+        deviceScaleFactor: 2.625,
+        mobile: true,
+      });
     });
 
     it('drops the override when the tab is closed', async () => {

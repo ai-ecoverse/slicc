@@ -11,8 +11,13 @@ import type { ParsedLink } from '../../../net/link-header.js';
 // back-edge; the string union is identical to the scoops definition.
 import type { createServeCommand } from '../serve-command.js';
 
-type BrowserAPI = NonNullable<Parameters<typeof createServeCommand>[0]>;
+/** The cdp BrowserAPI, named without a cdp import (see layer note above). */
+export type BrowserAPI = NonNullable<Parameters<typeof createServeCommand>[0]>;
 type HarRecorder = ReturnType<BrowserAPI['createHarRecorder']>;
+
+/** cdp PageInfo / FrameInfo, derived the same layer-safe way. */
+export type PageInfo = Awaited<ReturnType<BrowserAPI['listPages']>>[number];
+export type FrameInfo = Awaited<ReturnType<BrowserAPI['getFrameTree']>>[number];
 
 /** Runtime float kind; mirrors scoops/tray-leader without importing up-stack. */
 export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';

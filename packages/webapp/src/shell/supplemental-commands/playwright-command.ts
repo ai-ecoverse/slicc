@@ -16,7 +16,6 @@ import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { scratchDir } from '../tmpdir-env.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';
-import { formatHelp, formatSubcommandHelp } from './playwright/help.js';
 import { autoSaveSnapshot, logSession } from './playwright/session-log.js';
 import {
   AUTO_SNAPSHOT_COMMANDS,
@@ -166,6 +165,9 @@ async function parseSubcommandArgs(
   }
 
   if (flags['help'] === 'true' || flags['h'] === 'true') {
+    // Lazy like the validator: several kB of help text is dead weight in the
+    // kernel worker's boot graph until someone actually asks for help.
+    const { formatSubcommandHelp } = await import('./playwright/help.js');
     return {
       answer: { stdout: formatSubcommandHelp(name, subcommand), stderr: '', exitCode: 0 },
     };
@@ -195,13 +197,13 @@ export function createPlaywrightCommand(
   browser: PlaywrightBrowser | null | undefined,
   fs: VirtualFS
 ): Command {
-  const helpText = formatHelp(name);
   const state = browser ? getSharedState(browser, fs) : null;
   const knownFlagSpec = playwrightKnownFlagSpec();
 
   return defineCommand(name, async (args, ctx): Promise<CmdResult> => {
     if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
-      return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
+      const { formatHelp } = await import('./playwright/help.js');
+      return { stdout: formatHelp(name) + '\n', stderr: '', exitCode: 0 };
     }
 
     const subcommand = args[0];

@@ -77,12 +77,12 @@ describe('validateSubcommandArgs', () => {
     expect(check('type', ['--tab=t1', '--', '--not-a-flag'])).toBeNull();
   });
 
-  it('rejects the snapshot args the handler never wired up', () => {
-    // `[target]`, `--depth` and `--boxes` were documented and parsed, but
-    // `snapshotHandler` reads them into `_`-prefixed locals and drops them.
+  it('rejects the snapshot positional the handler never wired up, accepts depth/boxes', () => {
+    // `[target]` is documented upstream but not implemented; `--depth` and
+    // `--boxes` are implemented (post-processing in snapshotHandler).
     expect(check('snapshot', ['e5', '--tab=t1'])).toContain('unexpected argument "e5"');
-    expect(check('snapshot', ['--tab=t1', '--depth=2'])).toContain('unknown flag "--depth"');
-    expect(check('snapshot', ['--tab=t1', '--boxes'])).toContain('unknown flag "--boxes"');
+    expect(check('snapshot', ['--tab=t1', '--depth=2'])).toBeNull();
+    expect(check('snapshot', ['--tab=t1', '--boxes'])).toBeNull();
   });
 
   it('does not read a negative number as a flag', () => {
