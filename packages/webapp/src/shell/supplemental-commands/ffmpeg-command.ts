@@ -185,8 +185,17 @@ export function parseAvfoundationDeviceSpec(spec: string): {
 
 // Conservative list of ffmpeg flags that consume a single value.
 // Anything not in the list is treated as a boolean toggle.
+//
+// A missing entry does not degrade gracefully: the flag's value is
+// read as a positional, which makes it a phantom output path AND
+// flushes every option pending at that point into that phantom
+// output — so those options silently vanish from argv. `-safe 0`
+// swallowed the `-f concat` bound to the very next `-i`, leaving the
+// core to probe a text file as media ("Invalid data found when
+// processing input").
 const VALUE_TAKING_FLAGS = new Set([
   '-f',
+  '-safe',
   '-i',
   '-c',
   '-c:v',

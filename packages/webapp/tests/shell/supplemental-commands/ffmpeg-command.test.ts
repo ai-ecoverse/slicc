@@ -166,6 +166,30 @@ describe('parseFfmpegArgs', () => {
   it('errors when -f is missing its value', () => {
     expect(() => parseFfmpegArgs(['-f'])).toThrow(/-f requires a value/);
   });
+
+  it('treats -safe as value-taking so it cannot swallow the input format', () => {
+    const parsed = parseFfmpegArgs([
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      'list.txt',
+      '-c',
+      'copy',
+      'joined.mp4',
+    ]);
+    // The canonical concat incantation. When `-safe` was treated as a
+    // boolean toggle, `0` parsed as a positional: it became a phantom
+    // output path and flushed the pending `-f concat` into ITS output
+    // options, so `-f concat` never reached the next `-i` and the core
+    // probed the list as media.
+    expect(parsed.inputs).toHaveLength(1);
+    expect(parsed.inputs[0].format).toBe('concat');
+    expect(parsed.inputs[0].raw).toEqual(['-f', 'concat', '-safe', '0', '-i', 'list.txt']);
+    expect(parsed.outputPath).toBe('joined.mp4');
+    expect(parsed.outputOpts).toEqual(['-c', 'copy']);
+  });
 });
 
 describe('isAvfoundationCapture', () => {
