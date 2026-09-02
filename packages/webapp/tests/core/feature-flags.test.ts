@@ -63,9 +63,11 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'multiple-cones',
         label: 'Multiple cones',
-        // Graduated (#2280) — on by default, still toggleable as an opt-out.
+        // Graduated (#2280): on by default, out of Settings → Experimental,
+        // and carved out for Cherry.
         defaultValue: 'on',
-        userToggleable: true,
+        floatDefaults: { cherry: 'off' },
+        userToggleable: false,
       }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
@@ -110,9 +112,9 @@ describe('feature flag registry', () => {
     expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
-  it('turns multiple cones ON on every float and accepts a local opt-OUT (#2280)', () => {
-    // Graduated: uniform across floats — the leader shell is the only gate, so
-    // a follower or Cherry embed resolving `on` still wires nothing from it.
+  it('turns multiple cones ON everywhere except a Cherry embed (#2280)', () => {
+    // Graduated. Cherry is the one carve-out: a garnish in someone else's
+    // page stays single-cone, the same shape as `experimental-settings`.
     for (const float of [
       'standalone',
       'extension',
@@ -120,15 +122,45 @@ describe('feature flag registry', () => {
       'extension-detached',
       'hosted-leader',
       'connect',
-      'cherry',
       'follower',
     ] as const) {
       initFeatureFlags(float);
       expect(isFeatureEnabled('multiple-cones')).toBe(true);
     }
 
+    initFeatureFlags('cherry');
+    expect(isFeatureEnabled('multiple-cones')).toBe(false);
+  });
+
+  it('ignores a user override of multiple cones — it left the settings UI (#2280)', () => {
+    // `userToggleable: false` is what removes the row from Settings →
+    // Experimental, and `canOverride` makes that stick at the resolver: a
+    // stale `off` from before the graduation cannot keep a user on one cone,
+    // and a Cherry host cannot push `on` into its embed.
+    // A stale `off` written before the graduation survives in storage — what
+    // changes is that the resolver stops honouring it.
+    localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'multiple-cones': 'off' }));
     initFeatureFlags('standalone');
+    expect(readFeatureFlagOverrides()['multiple-cones']).toBe('off');
+    expect(isFeatureEnabled('multiple-cones')).toBe(true);
+
+    // And nothing can write a new one, so the settings row could not come back
+    // by the back door.
+    localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
     setFeatureFlagOverride('multiple-cones', 'off');
+    expect(readFeatureFlagOverrides()['multiple-cones']).toBeUndefined();
+
+    initFeatureFlags('cherry');
+    expect(applyHostFlagOverrides({ 'multiple-cones': 'on' })).toEqual({});
+    expect(isFeatureEnabled('multiple-cones')).toBe(false);
+  });
+
+  it('still lets the worker turn multiple cones off centrally (#2280)', () => {
+    // The remaining kill switch now that the flag is not user-facing. Central
+    // values are checked BEFORE the bundled default, so a `base` entry would
+    // also outrank the Cherry carve-out — which is why the definition says a
+    // central `base` value needs a matching `floats.cherry` one.
+    initFeatureFlags('standalone', { 'multiple-cones': 'off' });
     expect(isFeatureEnabled('multiple-cones')).toBe(false);
   });
 

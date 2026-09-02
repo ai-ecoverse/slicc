@@ -950,10 +950,11 @@ export function attachWcClient(
   boot.onClientReady(refreshFreezer);
 
   // Cone actions of the rail's action row: new cone / drop cone (#1666,
-  // #2272). On by default since #2280; the `multiple-cones` flag survives one
-  // release as an opt-OUT (Settings → Experimental), and turning it off leaves
-  // the row without a cone count so it shows neither action. Re-synced from
-  // the roster whenever the switcher chips refresh.
+  // #2272). Graduated in #2280: on for every float that reaches this shell.
+  // The `multiple-cones` flag is no longer user-facing — it survives as the
+  // Cherry carve-out (`floatDefaults`) and the central kill switch, and when
+  // it resolves off the row never learns a cone count and shows neither
+  // action. Re-synced from the roster whenever the switcher chips refresh.
   if (isFeatureEnabled('multiple-cones')) {
     const coneActions = wireConeActions({
       freezer: refs.freezer,

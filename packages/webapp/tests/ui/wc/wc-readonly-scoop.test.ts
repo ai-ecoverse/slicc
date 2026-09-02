@@ -13,7 +13,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { FEATURE_FLAG_STORAGE_KEY, isFeatureEnabled } from '../../../src/core/feature-flags.js';
+import { initFeatureFlags, isFeatureEnabled } from '../../../src/core/feature-flags.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
@@ -78,7 +78,10 @@ function bootShell() {
 
 describe('read-only scoop view (leader)', () => {
   afterEach(() => {
-    localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+    // Restore the graduated default — the off-switch below is a CENTRAL value
+    // (a user override cannot turn this flag off since #2280), and central
+    // values live on the module until the next `initFeatureFlags`.
+    initFeatureFlags('standalone');
   });
 
   it('unmounts the composer band when a scoop is selected and restores it for a cone', () => {
@@ -249,7 +252,11 @@ describe('read-only scoop view (leader)', () => {
     // and the follower's `summaryRole`) reads a feature flag; this pins that
     // so a future gate around the selection wiring cannot silently re-expose
     // a scoop composer.
-    localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'multiple-cones': 'off' }));
+    //
+    // The off-switch is the worker's central value, not a `localStorage`
+    // override: since #2280 the flag is not `userToggleable`, so an override
+    // is dropped by `canOverride` and would leave this testing the ON state.
+    initFeatureFlags('standalone', { 'multiple-cones': 'off' });
     expect(isFeatureEnabled('multiple-cones')).toBe(false);
     const boot = bootShell();
 
@@ -279,7 +286,7 @@ describe('read-only scoop view (leader)', () => {
     // composer. Driven through the real callback (`onReady`) rather than by
     // calling `selectScoop` directly, which is what makes this cover the
     // wiring instead of just the resolution.
-    localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'multiple-cones': 'off' }));
+    initFeatureFlags('standalone', { 'multiple-cones': 'off' });
     const boot = bootShell();
     boot.wiring.pendingUrlContext = 'scoop:worker';
 
