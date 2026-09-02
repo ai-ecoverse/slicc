@@ -159,7 +159,7 @@ async function cloneLocal(
     if (files.length > 0) output += `Checked out ${files.length} files.\n`;
     return { stdout: `${output}done.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
-    return formatCloneError(err, targetDir, url);
+    return formatCloneError(err, targetDir, sourceUrl);
   }
 }
 

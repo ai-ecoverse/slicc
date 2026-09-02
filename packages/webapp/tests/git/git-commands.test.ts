@@ -361,7 +361,7 @@ describe('GitCommands', () => {
   it('gives each overlapping network command its own onAuthFailure latch (#2777)', async () => {
     const globalFs = await VirtualFS.create({ dbName: globalDbName });
     await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
-    const ensureFreshGithubToken = vi.fn(async () => {});
+    const ensureFreshGithubToken = vi.fn(async (_opts?: { force?: boolean }) => {});
     const renewingGit = new GitCommands({
       fs: vfs,
       globalDbName,
@@ -388,7 +388,11 @@ describe('GitCommands', () => {
         username: 'x-access-token',
         password: 'ghp_masked',
       });
-      expect(ensureFreshGithubToken.mock.calls.filter((c) => c[0]?.force).length).toBe(2);
+      expect(
+        ensureFreshGithubToken.mock.calls.filter(
+          (c) => (c[0] as { force?: boolean } | undefined)?.force
+        ).length
+      ).toBe(2);
     } finally {
       cloneSpy.mockRestore();
       listFilesSpy.mockRestore();
