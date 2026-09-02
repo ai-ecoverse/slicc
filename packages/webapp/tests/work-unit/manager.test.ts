@@ -465,8 +465,25 @@ describe('WorkUnitManager', () => {
         parentJid: null,
         requiresTrigger: false,
       });
+      expect(host.rekeyConversation).toHaveBeenCalledOnce();
+      expect(host.rekeyConversation.mock.calls[0]).toEqual([
+        `/scoops/${a.folder}/workspace::${a.jid}`,
+        {
+          key: `/cones/${a.folder}/workspace::${a.jid}`,
+          workUnitId: a.jid,
+          workspaceId: `/cones/${a.folder}/workspace`,
+          folder: a.folder,
+          legacyKeys: { agentSessionId: a.jid, chatSessionId: `session-${a.folder}` },
+        },
+      ]);
       expect(host.reinitLiveUnit).toHaveBeenCalledOnce();
       expect(host.reinitLiveUnit).toHaveBeenCalledWith(a.jid);
+      // Persist → rekey → reinit so createTab binds the migrated record.
+      const persistOrder = host.persistScoop.mock.invocationCallOrder[0];
+      const rekeyOrder = host.rekeyConversation.mock.invocationCallOrder[0];
+      const reinitOrder = host.reinitLiveUnit.mock.invocationCallOrder[0];
+      expect(persistOrder).toBeLessThan(rekeyOrder);
+      expect(rekeyOrder).toBeLessThan(reinitOrder);
       expect(manager.getParent(a.jid)).toBeNull();
       expect(manager.roots().map((u) => u.descriptor.id)).toEqual([root.jid, a.jid, other.jid]);
       expect(manager.getChildren(root.jid).map((u) => u.descriptor.id)).toEqual([b.jid]);

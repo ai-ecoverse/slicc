@@ -17,9 +17,11 @@ import {
   type RegisteredScoop,
   type ScoopConfig,
 } from '../scoops/types.js';
+import { conversationKeyFor, workspaceIdFor } from './conversation/key.js';
+import type { ConversationIdentity } from './conversation/store.js';
 import { defaultChildPathsForMode, workspaceFor } from './descriptor.js';
 import { assertChildPolicyAllowed, childrenOf, rootsOf } from './policy.js';
-import { normalizeScoopRecord } from './record.js';
+import { chatSessionIdFor, normalizeScoopRecord } from './record.js';
 import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
 import type {
   CloseWorkUnitOptions,
@@ -54,6 +56,12 @@ export interface WorkUnitManagerHost extends WorkUnitHost {
    * when nothing has spawned. Must not run if persist rolled back.
    */
   reinitLiveUnit(id: WorkUnitId): Promise<void>;
+  /**
+   * Move the canonical conversation from the pre-promote key to the new
+   * workspace identity. Optional so lightweight fakes need not wire a store;
+   * the real orchestrator always implements it.
+   */
+  rekeyConversation?(fromKey: string, identity: ConversationIdentity): Promise<void>;
   /**
    * Wait until each unit's current work settles, up to an optional timeout.
    * This IS `ScoopCompletionService.waitForScoops` — `join` must not grow a
@@ -290,7 +298,9 @@ export class WorkUnitManager {
    *
    * The unit keeps its folder (and therefore its chat session key).
    * `workspaceFor` then treats it as an extra cone (`/cones/<folder>/…`);
-   * files under `/scoops/<folder>/` are not moved.
+   * files under `/scoops/<folder>/` are not moved. The canonical conversation
+   * record is rekeyed (`/scoops/…` → `/cones/…`) before the live runtime is
+   * rebuilt so history is not orphaned under the old workspace identity.
    *
    * After persist, the live runtime is torn down and `createTab`'d so
    * `ScoopContext.unit`, the filesystem (RestrictedFS → VirtualFS) and the
@@ -304,6 +314,8 @@ export class WorkUnitManager {
     if (!scoop) throw new Error(`Work unit not found: ${id}`);
     if (scoop.parentJid === null) return this.get(id)!.descriptor;
 
+    // Capture before `parentJid = null` changes workspaceFor / conversationKeyFor.
+    const fromConversationKey = conversationKeyFor(scoop);
     const previous = snapshotOwnership(scoop, scoop.parentJid);
     scoop.parentJid = null;
     normalizeScoopRecord(scoop);
@@ -313,6 +325,17 @@ export class WorkUnitManager {
       restoreOwnership(scoop, previous);
       throw err;
     }
+    // Rekey before reinit so createTab binds the survivor to the migrated record.
+    await this.host.rekeyConversation?.(fromConversationKey, {
+      key: conversationKeyFor(scoop),
+      workUnitId: scoop.jid,
+      workspaceId: workspaceIdFor(scoop),
+      folder: scoop.folder,
+      legacyKeys: {
+        agentSessionId: scoop.jid,
+        chatSessionId: chatSessionIdFor(scoop),
+      },
+    });
     await this.host.reinitLiveUnit(id);
     return this.get(id)!.descriptor;
   }

@@ -41,7 +41,10 @@ import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
-import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
+import {
+  type ConversationIdentity,
+  WorkUnitConversationStore,
+} from '../work-unit/conversation/store.js';
 import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
@@ -1251,6 +1254,14 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   reinitLiveUnit(jid: string): Promise<void> {
     return this.lifecycle.reinitAfterPromote(jid);
+  }
+
+  /**
+   * Move the canonical conversation when promote changes workspace identity
+   * (`/scoops/<folder>/…` → `/cones/<folder>/…`). No-op without a store.
+   */
+  async rekeyConversation(fromKey: string, identity: ConversationIdentity): Promise<void> {
+    await this.conversationStore?.rekey(fromKey, identity);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */

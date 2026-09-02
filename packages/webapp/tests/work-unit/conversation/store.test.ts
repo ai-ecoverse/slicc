@@ -185,4 +185,42 @@ describe('WorkUnitConversationStore', () => {
     expect(await store.listKeys()).toEqual([]);
     expect(await store.getMigrationState('conversations')).toBeNull();
   });
+
+  it('rekey moves a record to the post-promote workspace identity (#2278)', async () => {
+    const from: ConversationIdentity = {
+      key: '/scoops/worker-scoop/workspace::scoop_worker-scoop_1',
+      workUnitId: 'scoop_worker-scoop_1',
+      workspaceId: '/scoops/worker-scoop/workspace',
+      folder: 'worker-scoop',
+      legacyKeys: {
+        agentSessionId: 'scoop_worker-scoop_1',
+        chatSessionId: 'session-worker-scoop',
+      },
+    };
+    const to: ConversationIdentity = {
+      key: '/cones/worker-scoop/workspace::scoop_worker-scoop_1',
+      workUnitId: 'scoop_worker-scoop_1',
+      workspaceId: '/cones/worker-scoop/workspace',
+      folder: 'worker-scoop',
+      legacyKeys: from.legacyKeys,
+    };
+    await store.syncAgentMessages(from, legacyAgentMessages());
+    await store.rekey(from.key, to);
+    expect(await store.load(from.key)).toBeNull();
+    const moved = await store.load(to.key);
+    expect(moved?.workspaceId).toBe(to.workspaceId);
+    expect(moved?.key).toBe(to.key);
+    expect(moved?.entries).toHaveLength(5);
+  });
+
+  it('rekey is a no-op when keys match or the source is absent', async () => {
+    await store.rekey(identity.key, identity);
+    expect(await store.load(identity.key)).toBeNull();
+    await store.rekey('/scoops/missing/workspace::x', {
+      ...identity,
+      key: '/cones/missing/workspace::x',
+      workspaceId: '/cones/missing/workspace',
+    });
+    expect(await store.listKeys()).toEqual([]);
+  });
 });

@@ -1840,7 +1840,13 @@ export class Bridge implements KernelFacade {
       }
       const subtree = this.descendantsOf(scoops, scoopJid);
       await this.orchestrator.getWorkUnits().close(scoopJid);
-      for (const scoop of [...subtree, droppedScoop]) this.forgetDroppedScoop(scoop);
+      // `#2278` detach survivors stay registered (promoted roots + their
+      // grandchildren). Only forget units that `close` actually removed —
+      // otherwise we wipe the survivor's message buffer and session.
+      const remaining = new Set(this.orchestrator.getScoops().map((s) => s.jid));
+      for (const scoop of [...subtree, droppedScoop]) {
+        if (!remaining.has(scoop.jid)) this.forgetDroppedScoop(scoop);
+      }
     } else {
       await this.orchestrator.unregisterScoop(scoopJid);
       this.forgetDroppedScoop(droppedScoop ?? { jid: scoopJid });
