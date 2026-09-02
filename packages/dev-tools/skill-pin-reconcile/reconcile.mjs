@@ -35,8 +35,7 @@ for (const pin of PINS) {
   const pkgPath = resolve(ROOT, pin.packageJson);
   const skillPath = resolve(ROOT, pin.skill);
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-  const version =
-    pkg.dependencies?.[pin.dep] ?? pkg.devDependencies?.[pin.dep] ?? null;
+  const version = pkg.dependencies?.[pin.dep] ?? pkg.devDependencies?.[pin.dep] ?? null;
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) {
     console.error(
       `skill-pin-reconcile: ${pin.packageJson} has no exact ${pin.dep} pin (got ${JSON.stringify(version)})`
