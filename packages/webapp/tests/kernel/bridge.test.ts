@@ -2301,7 +2301,17 @@ describe('Bridge handlePanelMessage dispatch', () => {
   });
 
   it('scoop-drop of a cone cascades through the work-unit manager and forgets its subtree', async () => {
-    mockOrchestrator.getScoops.mockReturnValue([
+    // `handleScoopDrop` only forgets units that `close` actually removed
+    // (#2278 detach survivors). Mirror that by shrinking the roster in the
+    // close mock so the post-close remaining set excludes the dropped subtree.
+    let scoops: Array<{
+      jid: string;
+      name: string;
+      folder: string;
+      isCone: boolean;
+      parentJid: string | null;
+      addedAt: string;
+    }> = [
       { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, parentJid: null, addedAt: '1' },
       {
         jid: 'cone_2',
@@ -2319,7 +2329,11 @@ describe('Bridge handlePanelMessage dispatch', () => {
         parentJid: 'cone_2',
         addedAt: '3',
       },
-    ]);
+    ];
+    mockOrchestrator.getScoops.mockImplementation(() => scoops);
+    workUnitClose.mockImplementation(async (jid: string) => {
+      scoops = scoops.filter((s) => s.jid !== jid && s.parentJid !== jid);
+    });
     (bridge as any).getBuffer('cone_2').push({ id: 'm', role: 'user', content: 'x' });
     (bridge as any).getBuffer('scoop_b').push({ id: 'n', role: 'user', content: 'y' });
     await (bridge as any).handlePanelMessage({ type: 'scoop-drop', scoopJid: 'cone_2' });
