@@ -19,6 +19,8 @@ export type PromiseFsClient = { promises: IsoGitFsPromises };
 
 export interface IsoGitFsPromises {
   readFile(path: string, options?: unknown): Promise<Uint8Array | string>;
+  /** SLICC extension consumed by the patched pack reader. End is exclusive. */
+  readFileRange?(path: string, range: { start: number; end: number }): Promise<Uint8Array>;
   writeFile(path: string, data: Uint8Array | string, options?: unknown): Promise<void>;
   unlink(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
@@ -134,6 +136,14 @@ export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
         wantsUtf8(options) ? { encoding: 'utf-8' } : { encoding: 'binary' }
       );
       return content;
+    },
+
+    async readFileRange(path, range) {
+      return (await vfs.readFile(path, {
+        encoding: 'binary',
+        start: range.start,
+        end: range.end,
+      })) as Uint8Array;
     },
 
     async writeFile(path, data, _options) {

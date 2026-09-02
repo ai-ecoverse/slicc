@@ -1671,10 +1671,18 @@ export class VirtualFS {
       if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
       const relPath = mount.relParts.join('/');
       try {
-        const body = await mount.backend.readFile(relPath);
+        const wantsRange = options?.start !== undefined || options?.end !== undefined;
+        const start = options?.start ?? 0;
+        const end = options?.end;
+        const nativeRangeReader =
+          wantsRange && end !== undefined ? mount.backend.readFileRange : undefined;
+        const body = nativeRangeReader
+          ? await nativeRangeReader.call(mount.backend, relPath, { start, end: end ?? start })
+          : await mount.backend.readFile(relPath);
+        const rangedBody = wantsRange && !nativeRangeReader ? body.subarray(start, end) : body;
         const encoding = options?.encoding ?? 'utf-8';
-        if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(body);
-        return body;
+        if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(rangedBody);
+        return rangedBody;
       } catch (err) {
         rebrandFsError(err, normalized);
       }
@@ -1683,10 +1691,13 @@ export class VirtualFS {
     const resolved = await this.resolveSymlinks(normalized);
     try {
       const encoding = options?.encoding ?? 'utf-8';
-      if (encoding === 'utf-8') {
+      if (encoding === 'utf-8' && options?.start === undefined && options?.end === undefined) {
         return (await this.lfs.readFile(resolved, { encoding: 'utf8' })) as string;
       }
-      return (await this.lfs.readFile(resolved)) as Uint8Array;
+      const body = (await this.lfs.readFile(resolved)) as Uint8Array;
+      const rangedBody = body.subarray(options?.start ?? 0, options?.end);
+      if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(rangedBody);
+      return rangedBody;
     } catch (err) {
       throw convertError(err, normalized);
     }

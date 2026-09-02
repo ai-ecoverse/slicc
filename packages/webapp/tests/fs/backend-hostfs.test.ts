@@ -127,6 +127,41 @@ describe('HostFsMountBackend', () => {
     ]);
   });
 
+  it('requests an exclusive byte range with an inclusive HTTP Range header', async () => {
+    let rangeHeader: string | null = null;
+    const { backend } = backendWith((_url, init) => {
+      rangeHeader = new Headers(init?.headers).get('range');
+      return new Response(new Uint8Array([2, 3, 4]), {
+        status: 206,
+        headers: { 'Content-Range': 'bytes 2-4/10' },
+      });
+    });
+    await expect(backend.readFileRange('big.pack', { start: 2, end: 5 })).resolves.toEqual(
+      new Uint8Array([2, 3, 4])
+    );
+    expect(rangeHeader).toBe('bytes=2-4');
+  });
+
+  it('slices a sub-cap whole response from an older bridge that ignores Range', async () => {
+    const { backend } = backendWith(() => new Response(new Uint8Array([0, 1, 2, 3, 4])));
+    await expect(backend.readFileRange('old.pack', { start: 1, end: 4 })).resolves.toEqual(
+      new Uint8Array([1, 2, 3])
+    );
+  });
+
+  it('rejects an oversized requested range with a readable EFBIG', async () => {
+    const { backend, calls } = backendWith(() => {
+      throw new Error('must not fetch');
+    });
+    const err = await backend
+      .readFileRange('huge.pack', { start: 0, end: 100 * 1024 * 1024 + 1 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FsError);
+    expect((err as FsError).code).toBe('EFBIG');
+    expect((err as FsError).message).toContain('requested range exceeds');
+    expect(calls).toHaveLength(0);
+  });
+
   it('falls back to the per-op routes when the bridge has no stable endpoint', async () => {
     const { backend, calls } = backendWith((url) =>
       url.endsWith('/api/hostfs') ? notFoundHtml() : ok({ kind: 'file', size: 1, mtime: 2 })

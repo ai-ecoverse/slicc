@@ -91,6 +91,22 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
+    func testReadSupportsBoundedByteRanges() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get,
+                headers: [HTTPField.Name("Range")!: "bytes=2-5"]
+            ) { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(
+                    response.headers[HTTPField.Name("Content-Range")!], "bytes 2-5/10")
+                var buffer = response.body
+                let data = buffer.readData(length: buffer.readableBytes) ?? Data()
+                XCTAssertEqual(String(decoding: data, as: UTF8.self), "llo ")
+            }
+        }
+    }
+
     /// The webapp needs ctime/ino/uid/gid/mode to decide a working-tree file
     /// still matches its git index entry; without them every read-only git
     /// command rewrites `.git/index` once per file (issue #2708). Mirrors

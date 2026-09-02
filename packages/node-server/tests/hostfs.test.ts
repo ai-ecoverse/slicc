@@ -7,6 +7,7 @@ import {
   realpath,
   stat,
   symlink,
+  truncate,
   utimes,
   writeFile,
 } from 'fs/promises';
@@ -15,6 +16,7 @@ import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
 import {
+  HOSTFS_MAX_BODY_BYTES,
   HOSTFS_STABLE_MAX_BODY_BYTES,
   isHostFsStableBodyRequest,
   registerHostFsRoutes,
@@ -101,7 +103,48 @@ describe('hostfs routes', () => {
     const statRes = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt');
     expect(((await statRes.json()) as { kind: string }).kind).toBe('file');
     const readRes = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt');
+    expect(readRes.headers.get('accept-ranges')).toBe('bytes');
     expect(await readRes.text()).toBe('hello host');
+  });
+
+  it('serves a bounded byte range without reading the whole file', async () => {
+    const res = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', {
+      headers: { Range: 'bytes=2-5' },
+    });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 2-5/10');
+    expect(res.headers.get('content-length')).toBe('4');
+    expect(await res.text()).toBe('llo ');
+  });
+
+  it('keeps the whole-body cap while allowing small ranges from a larger file', async () => {
+    const large = join(root, 'large.pack');
+    await writeFile(large, 'PACK');
+    await truncate(large, HOSTFS_MAX_BODY_BYTES + 1);
+
+    const whole = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=large.pack');
+    expect(whole.status).toBe(413);
+    expect((await whole.json()) as { code: string }).toMatchObject({ code: 'EFBIG' });
+
+    const range = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=large.pack', {
+      headers: { Range: 'bytes=0-3' },
+    });
+    expect(range.status).toBe(206);
+    expect(await range.text()).toBe('PACK');
+  });
+
+  it('returns a coded error for unsupported or oversized ranges', async () => {
+    const suffix = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', {
+      headers: { Range: 'bytes=-4' },
+    });
+    expect(suffix.status).toBe(416);
+    expect((await suffix.json()) as { code: string }).toMatchObject({ code: 'EINVAL' });
+
+    const oversized = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=large.pack', {
+      headers: { Range: `bytes=0-${HOSTFS_MAX_BODY_BYTES}` },
+    });
+    expect(oversized.status).toBe(413);
+    expect((await oversized.json()) as { code: string }).toMatchObject({ code: 'EFBIG' });
   });
 
   it('reports the stat identity git needs (ctime, ino, uid, gid, mode)', async () => {

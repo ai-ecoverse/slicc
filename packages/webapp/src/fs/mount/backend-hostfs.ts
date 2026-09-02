@@ -431,6 +431,33 @@ export class HostFsMountBackend implements MountBackend {
     return new Uint8Array(buffer);
   }
 
+  async readFileRange(path: string, range: { start: number; end: number }): Promise<Uint8Array> {
+    const { start, end } = range;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) {
+      throw new FsError('EINVAL', `invalid byte range: ${start}-${end}`, path);
+    }
+    if (end - start > HOSTFS_MAX_BODY_BYTES) {
+      throw new FsError('EFBIG', 'requested range exceeds the hostfs body cap', path);
+    }
+
+    return this.request(
+      'read',
+      path,
+      async (response) => {
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength > HOSTFS_MAX_BODY_BYTES) {
+          throw new FsError('EFBIG', 'response exceeds the hostfs body cap', path);
+        }
+        const bytes = new Uint8Array(buffer);
+        if (response.status === 206) return bytes;
+        // Older bridges ignore Range. Preserve compatibility for sub-cap files,
+        // but copy the slice so the whole response can be collected.
+        return new Uint8Array(bytes.subarray(start, end));
+      },
+      { headers: { Range: `bytes=${start}-${end - 1}` } }
+    );
+  }
+
   async writeFile(path: string, body: Uint8Array): Promise<void> {
     if (body.byteLength > HOSTFS_MAX_BODY_BYTES) {
       throw new FsError('EFBIG', 'body exceeds the hostfs body cap', path);

@@ -175,16 +175,41 @@ enum HostFSRoutes {
         router.get("/api/hostfs/read") { request, _ in
             try run {
                 let path = try target(for: request)
-                let (isDirectory, size, _) = try statAt(path)
+                let (isDirectory, rawSize, _) = try statAt(path)
                 if isDirectory {
                     throw FsFailure.code("EISDIR", .conflict, "is a directory")
                 }
-                if size > Double(maxBodyBytes) {
+                let size = Int(rawSize)
+                let rangeHeader = request.headers[HTTPField.Name("Range")!]
+                if let rangeHeader {
+                    guard let range = byteRange(rangeHeader, size: size) else {
+                        throw FsFailure.code(
+                            "EINVAL", .rangeNotSatisfiable,
+                            "unsupported byte range: \(rangeHeader)")
+                    }
+                    if range.count > maxBodyBytes {
+                        throw FsFailure.code(
+                            "EFBIG", .contentTooLarge,
+                            "requested range exceeds the hostfs cap")
+                    }
+                    let data = try readRange(path, range: range)
+                    var headers = HTTPFields()
+                    headers[.contentType] = "application/octet-stream"
+                    headers[HTTPField.Name("Accept-Ranges")!] = "bytes"
+                    headers[HTTPField.Name("Content-Range")!] =
+                        "bytes \(range.lowerBound)-\(range.lowerBound + data.count - 1)/\(size)"
+                    headers[HTTPField.Name("Content-Length")!] = "\(data.count)"
+                    return Response(
+                        status: .partialContent, headers: headers,
+                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+                }
+                if size > maxBodyBytes {
                     throw FsFailure.code("EFBIG", .contentTooLarge, "file exceeds the hostfs cap")
                 }
                 let data = try wrapErrno { try Data(contentsOf: URL(fileURLWithPath: path)) }
                 var headers = HTTPFields()
                 headers[.contentType] = "application/octet-stream"
+                headers[HTTPField.Name("Accept-Ranges")!] = "bytes"
                 return Response(
                     status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(bytes: data)))
             }
@@ -330,6 +355,27 @@ enum HostFSRoutes {
     }
 
     // MARK: - Helpers
+
+    /// Parse one bounded HTTP byte range. Suffix and multipart ranges are unsupported.
+    private static func byteRange(_ header: String, size: Int) -> Range<Int>? {
+        guard header.hasPrefix("bytes=") else { return nil }
+        let pieces = header.dropFirst("bytes=".count).split(
+            separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard pieces.count == 2, let start = Int(pieces[0]), let inclusiveEnd = Int(pieces[1]),
+            start >= 0, start < size, inclusiveEnd >= start
+        else { return nil }
+        return start..<min(inclusiveEnd + 1, size)
+    }
+
+    /// Read only the requested bytes rather than materializing the complete file.
+    private static func readRange(_ path: String, range: Range<Int>) throws -> Data {
+        try wrapErrno {
+            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(range.lowerBound))
+            return try handle.read(upToCount: range.count) ?? Data()
+        }
+    }
 
     /// Identity/permission fields of a host `stat(2)`, mirroring node-server's
     /// `statIdentity` in `src/hostfs.ts`.

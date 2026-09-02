@@ -14,6 +14,7 @@
  */
 
 import 'fake-indexeddb/auto';
+import * as git from 'isomorphic-git';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
   MountBackend,
@@ -205,5 +206,45 @@ describe('isomorphic-git adapter stats (issue #2708)', () => {
     const dir = await fs.lstat('/');
     expect(dir.isDirectory()).toBe(true);
     expect(dir.mode >> 12).toBe(0o4);
+  });
+
+  it('lets isomorphic-git read packed objects through bounded ranges', async () => {
+    const dir = '/packed-repo';
+    const base = createIsomorphicGitFs(vfs);
+    await git.init({ fs: base, dir, defaultBranch: 'main' });
+    await vfs.writeFile(`${dir}/file.txt`, 'packed content\n');
+    await git.add({ fs: base, dir, filepath: 'file.txt' });
+    const oid = await git.commit({
+      fs: base,
+      dir,
+      message: 'packed commit',
+      author: { name: 'Range Test', email: 'range@example.com' },
+    });
+    const { filename } = await git.packObjects({ fs: base, dir, oids: [oid], write: true });
+    const packPath = `${dir}/.git/objects/pack/${filename}`;
+    await git.indexPack({ fs: base, dir, filepath: `.git/objects/pack/${filename}` });
+    await vfs.rm(`${dir}/.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`);
+
+    let wholePackReads = 0;
+    const ranges: Array<{ start: number; end: number }> = [];
+    const ranged = {
+      promises: {
+        ...base.promises,
+        readFile: async (path: string, options?: unknown) => {
+          if (path === packPath) wholePackReads += 1;
+          return base.promises.readFile(path, options);
+        },
+        readFileRange: async (path: string, range: { start: number; end: number }) => {
+          if (path === packPath) ranges.push(range);
+          return base.promises.readFileRange?.(path, range) as Promise<Uint8Array>;
+        },
+      },
+    };
+
+    const result = await git.readCommit({ fs: ranged, dir, oid, cache: {} });
+    expect(result.commit.message).toBe('packed commit\n');
+    expect(wholePackReads).toBe(0);
+    expect(ranges.length).toBeGreaterThan(0);
+    expect(ranges.every(({ start, end }) => start >= 0 && end > start)).toBe(true);
   });
 });

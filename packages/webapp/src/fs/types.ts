@@ -86,6 +86,10 @@ export interface RmOptions {
 /** Options for readFile. */
 export interface ReadFileOptions {
   encoding?: Encoding;
+  /** Zero-based byte offset. Used with `end` for bounded binary reads. */
+  start?: number;
+  /** Exclusive byte offset, matching `Uint8Array.subarray`. */
+  end?: number;
 }
 
 /** Filesystem error codes, mirroring common POSIX errno values. */

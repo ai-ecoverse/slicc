@@ -91,6 +91,8 @@ export interface MountBackend {
 
   readDir(path: string): Promise<MountDirEntry[]>;
   readFile(path: string): Promise<Uint8Array>;
+  /** Optional bounded read that avoids materializing the whole backing file. */
+  readFileRange?(path: string, range: { start: number; end: number }): Promise<Uint8Array>;
   writeFile(path: string, body: Uint8Array): Promise<void>;
   stat(path: string): Promise<MountStat>;
   /** Always a no-op on S3 / DA / AEM — all three materialize paths on first write. */

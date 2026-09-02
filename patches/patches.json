@@ -24,6 +24,14 @@
     "removeWhen": "Remove once kerium bounds its log backlog upstream (ring buffer or opt-in retention).",
     "verify": "npm run test -w @slicc/webapp -- kerium-log-cap-patch"
   },
+  "isomorphic-git": {
+    "patchedVersion": "1.41.9",
+    "upstream": "https://github.com/isomorphic-git/isomorphic-git",
+    "issue": null,
+    "reason": "#2711: packed-object reads always called fs.read(packFile), materializing the complete pack before inflating one object. The patch recognizes SLICC's optional readFileRange filesystem extension, verifies the pack in bounded 8 MiB chunks, and reads each object's compressed bytes from its index offset to the next object offset. Filesystems without the extension keep the upstream whole-file behavior.",
+    "removeWhen": "Remove once isomorphic-git supports a bounded/random-access filesystem reader for indexed packfiles without materializing the complete pack.",
+    "verify": "npm run test -w @slicc/webapp -- vfs-fs-adapter-stats"
+  },
   "just-bash": {
     "patchedVersion": "3.4.2",
     "upstream": "https://github.com/vercel-labs/just-bash",

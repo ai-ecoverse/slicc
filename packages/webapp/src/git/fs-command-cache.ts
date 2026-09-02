@@ -278,6 +278,11 @@ export function createCommandScopedReadCache(
 
   return {
     readFile,
+    // Pack ranges are already object-sized and owned by isomorphic-git's
+    // pack cache; preserve the capability without memoizing them here.
+    readFileRange: inner.readFileRange
+      ? (path, range) => inner.readFileRange?.(path, range) as Promise<Uint8Array>
+      : undefined,
     readdir,
     stat: statLike(scope.stats, (p) => inner.stat(p)),
     lstat: statLike(scope.lstats, (p) => inner.lstat(p)),

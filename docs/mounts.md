@@ -163,6 +163,7 @@ The server serves each mapped folder over its local `/api/hostfs` bridge (loopba
 - **Real stats**: `/api/hostfs/stat` and each file row of `/api/hostfs/list` — through either transport, since the stable `POST /api/hostfs` dispatcher shares the same handlers — report the host's `ctime`, `ino`, `uid`, `gid` and full `st_mode` alongside `kind`/`size`/`mtime`. `VirtualFS` carries them through as optional `Stats` fields, so a mounted path has a real inode and a real executable bit. Git needs all of them: isomorphic-git's `compareStats` calls a file stale unless every one matches its index entry, and a permanently stale comparison re-hashes the whole tree on every command (#2708). Timestamps are sent **unrounded** — isomorphic-git derives the seconds it compares with `Math.floor(ms / 1000)`, so rounding a `.9996 s` stat up would push it into the next second and leave that file stale on every walk. Remote backends (S3/DA/AEM) have nothing to report and keep the synthesized defaults.
 - **Containment**: only paths under a mapped folder are reachable; `..` traversal and symlinks pointing outside the folder are refused, and the mount root itself cannot be removed.
 - **Config-owned**: the table is the single source of truth. Entries are not persisted in the browser; edit the table and relaunch to change them. `mount unmount` removes one for the session only. A persisted picker/S3 row at the same target is not just skipped for the boot — it is **purged from the store**, so a later launch without the table entry can't silently fall back to a stale FS-Access handle and walk a tree you thought was config-owned.
+- **Large git packs use bounded reads**: `/api/hostfs/read` accepts a single bounded `Range: bytes=start-end` request. isomorphic-git verifies packs in 8 MiB chunks and reads only the indexed object range, so a pack larger than the 100 MiB whole-body cap remains usable without materializing the complete pack in the kernel worker. Whole-file reads and any individual range over 100 MiB still fail with `EFBIG` (#2711).
 - **Transient bridge errors are retried**: a fan-out (an in-browser `git status` issues thousands of `/api/hostfs` requests) can lose a single `fetch()` to a keep-alive socket the server is closing. Idempotent ops (`list`/`stat`/`read`/`mkdir`) are retried twice before surfacing `EIO`, requests per mount are capped at 24 in flight, and node-server holds idle sockets for 120 s instead of Node's 5 s default. The surviving error names the op and says it is transient. See [`docs/pitfalls.md`](./pitfalls.md#local-bridge-keep-alive-the-5-s-default-races-bursty-fan-outs).
 - **Missing folders are skipped** at server start (with a warning) rather than failing the launch.
 - **Webapp-initiated mounts are untouched**: `mount <path>` still opens the picker and still asks for permission on each reload — the table never widens what a picker grant allowed.
@@ -174,11 +175,11 @@ The server serves each mapped folder over its local `/api/hostfs` bridge (loopba
 
 Two request shapes reach the same handlers on both servers (node-server `src/hostfs.ts`, swift-server `HostFSRoutes.swift`):
 
-| Request                                                                    | Ops                                         |
-| -------------------------------------------------------------------------- | ------------------------------------------- |
-| `POST /api/hostfs` with a JSON body `{ op, mount, path, to?, recursive? }` | `list`, `stat`, `mkdir`, `rename`, `remove` |
-| `GET /api/hostfs/read?mount=&path=` → octet-stream                         | `read`                                      |
-| `PUT /api/hostfs/write?mount=&path=` ← octet-stream                        | `write`                                     |
+| Request                                                                      | Ops                                         |
+| ---------------------------------------------------------------------------- | ------------------------------------------- |
+| `POST /api/hostfs` with a JSON body `{ op, mount, path, to?, recursive? }`   | `list`, `stat`, `mkdir`, `rename`, `remove` |
+| `GET /api/hostfs/read?mount=&path=` → octet-stream; optional bounded `Range` | `read`                                      |
+| `PUT /api/hostfs/write?mount=&path=` ← octet-stream                          | `write`                                     |
 
 The per-op routes (`GET /api/hostfs/list?mount=&path=` etc.) still work for every op; the webapp just prefers the stable one.
 

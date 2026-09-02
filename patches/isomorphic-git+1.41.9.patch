@@ -1,0 +1,305 @@
+diff --git a/node_modules/isomorphic-git/index.cjs b/node_modules/isomorphic-git/index.cjs
+index 65481d7..29c7ab4 100644
+--- a/node_modules/isomorphic-git/index.cjs
++++ b/node_modules/isomorphic-git/index.cjs
+@@ -3237,6 +3237,7 @@ class GitPackIndex {
+   constructor(stuff) {
+     Object.assign(this, stuff);
+     this.offsetCache = {};
++    this.offsetsByPosition = [...new Set(this.offsets.values())].sort((a, b) => a - b);
+   }
+ 
+   static async fromIdx({ idx, getExternalRefDelta }) {
+@@ -3481,13 +3482,26 @@ class GitPackIndex {
+       0b1100000: 'ofs_delta',
+       0b1110000: 'ref_delta',
+     };
+-    const pack = await this.pack;
+-    if (!pack) {
++    let raw;
++    if (this.readRange) {
++      let low = 0;
++      let high = this.offsetsByPosition.length;
++      while (low < high) {
++        const mid = (low + high) >>> 1;
++        if (this.offsetsByPosition[mid] <= start) low = mid + 1;
++        else high = mid;
++      }
++      const end = this.offsetsByPosition[low] ?? this.packSize - 20;
++      raw = await this.readRange({ start, end });
++    } else {
++      const pack = await this.pack;
++      raw = pack && pack.slice(start);
++    }
++    if (!raw) {
+       throw new InternalError(
+         'Could not read packfile data. The packfile may be missing, corrupted, or too large to read into memory.'
+       )
+     }
+-    const raw = pack.slice(start);
+     const reader = new BufferCursor(raw);
+     const byte = reader.readUInt8();
+     // Object type is encoded in bits 654
+@@ -3579,12 +3593,23 @@ function readPackIndex({
+ const SHA1_CHUNK_SIZE = 8 * 1024 * 1024;
+ 
+ async function shasumRange(
+-  buffer,
+-  { start = 0, end = buffer.length } = {}
++  bufferOrReader,
++  { start = 0, end = typeof bufferOrReader === 'function' ? 0 : bufferOrReader.length } = {}
+ ) {
+   const hash = crypto$1.createHash('sha1');
+-  for (let i = start; i < end; i += SHA1_CHUNK_SIZE) {
+-    hash.update(buffer.subarray(i, Math.min(i + SHA1_CHUNK_SIZE, end)));
++  if (typeof bufferOrReader !== 'function') {
++    for (let offset = start; offset < end; offset += SHA1_CHUNK_SIZE) {
++      hash.update(bufferOrReader.subarray(offset, Math.min(offset + SHA1_CHUNK_SIZE, end)));
++    }
++    return hash.digest('hex')
++  }
++  for (let offset = start; offset < end; offset += SHA1_CHUNK_SIZE) {
++    const chunk = await bufferOrReader({
++      start: offset,
++      end: Math.min(offset + SHA1_CHUNK_SIZE, end),
++    });
++    if (!chunk) return null
++    hash.update(chunk);
+   }
+   return hash.digest('hex')
+ }
+@@ -3614,11 +3639,17 @@ async function readObjectPacked({
+     if (p.offsets.has(oid)) {
+       // Derive the .pack path from the .idx path
+       const packFile = indexFile.replace(/idx$/, 'pack');
+-      if (!p.pack) {
+-        p.pack = fs.read(packFile);
++      if (!p.pack && !p.readRange) {
++        const packStat = await fs.lstat(packFile);
++        if (fs._readFileRange && packStat && packStat.isFile()) {
++          p.packSize = packStat.size;
++          p.readRange = range => fs.readRange(packFile, range);
++        } else {
++          p.pack = fs.read(packFile);
++        }
+       }
+-      const pack = await p.pack;
+-      if (!pack) {
++      const pack = p.readRange ? null : await p.pack;
++      if (!p.readRange && !pack) {
+         p.pack = null;
+         throw new InternalError(
+           `Could not read packfile at ${packFile}. The file may be missing, corrupted, or too large to read into memory.`
+@@ -3632,7 +3663,12 @@ async function readObjectPacked({
+ 
+         // 1. Fast Check: Verify packfile trailer matches index record
+         // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
+-        const packTrailer = pack.subarray(-20);
++        const packTrailer = p.readRange
++          ? await p.readRange({ start: p.packSize - 20, end: p.packSize })
++          : pack.subarray(-20);
++        if (!packTrailer) {
++          throw new InternalError(`Could not read packfile trailer at ${packFile}.`)
++        }
+         const packTrailerSha = Array.from(packTrailer)
+           .map(b => b.toString(16).padStart(2, '0'))
+           .join('');
+@@ -3644,9 +3680,9 @@ async function readObjectPacked({
+ 
+         // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
+         // The Node package build swaps in a chunked implementation for large packs.
+-        const actualPayloadSha = await shasumRange(pack, {
++        const actualPayloadSha = await shasumRange(p.readRange || pack, {
+           start: 0,
+-          end: pack.length - 20,
++          end: p.readRange ? p.packSize - 20 : pack.length - 20,
+         });
+         if (actualPayloadSha !== expectedShaFromIndex) {
+           throw new InternalError(
+@@ -5226,6 +5262,13 @@ function bindFs(target, fs) {
+     }
+   }
+ 
++  // SLICC extension: an optional bounded reader avoids loading whole packfiles.
++  if (typeof fs.readFileRange === 'function') {
++    target._readFileRange = isPromiseFs(fs)
++      ? fs.readFileRange.bind(fs)
++      : pify(fs.readFileRange.bind(fs));
++  }
++
+   // Handle the special cases of `rm` and `cp`
+   if (isPromiseFs(fs)) {
+     if (fs.cp) target._cp = fs.cp.bind(fs);
+@@ -5317,6 +5360,19 @@ class FileSystem {
+     }
+   }
+ 
++  /** Read a bounded byte range when the underlying filesystem supports it. */
++  async readRange(filepath, range) {
++    if (!this._readFileRange) return null
++    try {
++      return Buffer.from(await this._readFileRange(filepath, range))
++    } catch (err) {
++      // Preserve the actionable hostfs cap failure instead of replacing it
++      // with isomorphic-git's generic "could not read packfile" message.
++      if (err && err.code === 'EFBIG') throw err
++      return null
++    }
++  }
++
+   /**
+    * Write a file (creating missing directories if need be) without throwing errors.
+    *
+diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
+index bbdc7f0..da1e1ee 100644
+--- a/node_modules/isomorphic-git/index.js
++++ b/node_modules/isomorphic-git/index.js
+@@ -3230,6 +3230,7 @@ class GitPackIndex {
+   constructor(stuff) {
+     Object.assign(this, stuff);
+     this.offsetCache = {};
++    this.offsetsByPosition = [...new Set(this.offsets.values())].sort((a, b) => a - b);
+   }
+ 
+   static async fromIdx({ idx, getExternalRefDelta }) {
+@@ -3474,13 +3475,26 @@ class GitPackIndex {
+       0b1100000: 'ofs_delta',
+       0b1110000: 'ref_delta',
+     };
+-    const pack = await this.pack;
+-    if (!pack) {
++    let raw;
++    if (this.readRange) {
++      let low = 0;
++      let high = this.offsetsByPosition.length;
++      while (low < high) {
++        const mid = (low + high) >>> 1;
++        if (this.offsetsByPosition[mid] <= start) low = mid + 1;
++        else high = mid;
++      }
++      const end = this.offsetsByPosition[low] ?? this.packSize - 20;
++      raw = await this.readRange({ start, end });
++    } else {
++      const pack = await this.pack;
++      raw = pack && pack.slice(start);
++    }
++    if (!raw) {
+       throw new InternalError(
+         'Could not read packfile data. The packfile may be missing, corrupted, or too large to read into memory.'
+       )
+     }
+-    const raw = pack.slice(start);
+     const reader = new BufferCursor(raw);
+     const byte = reader.readUInt8();
+     // Object type is encoded in bits 654
+@@ -3569,11 +3583,25 @@ function readPackIndex({
+   return p
+ }
+ 
++const SHA1_CHUNK_SIZE = 8 * 1024 * 1024;
++
+ async function shasumRange(
+-  buffer,
+-  { start = 0, end = buffer.length } = {}
++  bufferOrReader,
++  { start = 0, end = typeof bufferOrReader === 'function' ? 0 : bufferOrReader.length } = {}
+ ) {
+-  return shasum(buffer.subarray(start, end))
++  if (typeof bufferOrReader !== 'function') {
++    return shasum(bufferOrReader.subarray(start, end))
++  }
++  const hash = new Hash();
++  for (let offset = start; offset < end; offset += SHA1_CHUNK_SIZE) {
++    const chunk = await bufferOrReader({
++      start: offset,
++      end: Math.min(offset + SHA1_CHUNK_SIZE, end),
++    });
++    if (!chunk) return null
++    hash.update(chunk);
++  }
++  return hash.digest('hex')
+ }
+ 
+ async function readObjectPacked({
+@@ -3601,11 +3629,17 @@ async function readObjectPacked({
+     if (p.offsets.has(oid)) {
+       // Derive the .pack path from the .idx path
+       const packFile = indexFile.replace(/idx$/, 'pack');
+-      if (!p.pack) {
+-        p.pack = fs.read(packFile);
++      if (!p.pack && !p.readRange) {
++        const packStat = await fs.lstat(packFile);
++        if (fs._readFileRange && packStat && packStat.isFile()) {
++          p.packSize = packStat.size;
++          p.readRange = range => fs.readRange(packFile, range);
++        } else {
++          p.pack = fs.read(packFile);
++        }
+       }
+-      const pack = await p.pack;
+-      if (!pack) {
++      const pack = p.readRange ? null : await p.pack;
++      if (!p.readRange && !pack) {
+         p.pack = null;
+         throw new InternalError(
+           `Could not read packfile at ${packFile}. The file may be missing, corrupted, or too large to read into memory.`
+@@ -3619,7 +3653,12 @@ async function readObjectPacked({
+ 
+         // 1. Fast Check: Verify packfile trailer matches index record
+         // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
+-        const packTrailer = pack.subarray(-20);
++        const packTrailer = p.readRange
++          ? await p.readRange({ start: p.packSize - 20, end: p.packSize })
++          : pack.subarray(-20);
++        if (!packTrailer) {
++          throw new InternalError(`Could not read packfile trailer at ${packFile}.`)
++        }
+         const packTrailerSha = Array.from(packTrailer)
+           .map(b => b.toString(16).padStart(2, '0'))
+           .join('');
+@@ -3631,9 +3670,9 @@ async function readObjectPacked({
+ 
+         // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
+         // The Node package build swaps in a chunked implementation for large packs.
+-        const actualPayloadSha = await shasumRange(pack, {
++        const actualPayloadSha = await shasumRange(p.readRange || pack, {
+           start: 0,
+-          end: pack.length - 20,
++          end: p.readRange ? p.packSize - 20 : pack.length - 20,
+         });
+         if (actualPayloadSha !== expectedShaFromIndex) {
+           throw new InternalError(
+@@ -5213,6 +5252,13 @@ function bindFs(target, fs) {
+     }
+   }
+ 
++  // SLICC extension: an optional bounded reader avoids loading whole packfiles.
++  if (typeof fs.readFileRange === 'function') {
++    target._readFileRange = isPromiseFs(fs)
++      ? fs.readFileRange.bind(fs)
++      : pify(fs.readFileRange.bind(fs));
++  }
++
+   // Handle the special cases of `rm` and `cp`
+   if (isPromiseFs(fs)) {
+     if (fs.cp) target._cp = fs.cp.bind(fs);
+@@ -5304,6 +5350,19 @@ class FileSystem {
+     }
+   }
+ 
++  /** Read a bounded byte range when the underlying filesystem supports it. */
++  async readRange(filepath, range) {
++    if (!this._readFileRange) return null
++    try {
++      return Buffer.from(await this._readFileRange(filepath, range))
++    } catch (err) {
++      // Preserve the actionable hostfs cap failure instead of replacing it
++      // with isomorphic-git's generic "could not read packfile" message.
++      if (err && err.code === 'EFBIG') throw err
++      return null
++    }
++  }
++
+   /**
+    * Write a file (creating missing directories if need be) without throwing errors.
+    *

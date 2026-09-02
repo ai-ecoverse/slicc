@@ -47,6 +47,7 @@ import type { Stats } from 'fs';
 import {
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   realpath,
@@ -228,6 +229,45 @@ function queryString(req: Request, name: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+interface HostFsByteRange {
+  start: number;
+  /** Exclusive, matching `Uint8Array.subarray(start, end)`. */
+  end: number;
+}
+
+/** Parse one HTTP byte range. Suffix and multipart ranges are intentionally unsupported. */
+function parseByteRange(header: string, size: number): HostFsByteRange | null {
+  const match = /^bytes=(\d+)-(\d+)$/.exec(header.trim());
+  if (!match) return null;
+  const start = Number(match[1]);
+  const inclusiveEnd = Number(match[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(inclusiveEnd)) return null;
+  if (start < 0 || start >= size || inclusiveEnd < start) return null;
+  return { start, end: Math.min(inclusiveEnd + 1, size) };
+}
+
+/** Read only the requested bytes; unlike `readFile`, this never materializes the whole file. */
+async function readByteRange(target: string, range: HostFsByteRange): Promise<Buffer> {
+  const body = Buffer.allocUnsafe(range.end - range.start);
+  const handle = await open(target, 'r');
+  let offset = 0;
+  try {
+    while (offset < body.length) {
+      const { bytesRead } = await handle.read(
+        body,
+        offset,
+        body.length - offset,
+        range.start + offset
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+  return offset === body.length ? body : body.subarray(0, offset);
+}
+
 /** Path of the stable dispatcher. */
 const HOSTFS_STABLE_PATH = '/api/hostfs';
 
@@ -367,6 +407,54 @@ async function removeOp(
   return { ok: true };
 }
 
+async function readOp(target: string, req: Request, res: Response): Promise<void> {
+  const s = await stat(target);
+  if (s.isDirectory()) {
+    sendFsError(res, Object.assign(new Error(`is a directory: ${target}`), { code: 'EISDIR' }));
+    return;
+  }
+
+  res.setHeader('Accept-Ranges', 'bytes');
+  const rangeHeader = req.get('range');
+  if (rangeHeader !== undefined) {
+    const range = parseByteRange(rangeHeader, s.size);
+    if (!range) {
+      res.setHeader('Content-Range', `bytes */${s.size}`);
+      res.status(416).json({ code: 'EINVAL', message: `unsupported byte range: ${rangeHeader}` });
+      return;
+    }
+    const length = range.end - range.start;
+    if (length > HOSTFS_MAX_BODY_BYTES) {
+      res.status(413).json({
+        code: 'EFBIG',
+        message: `requested range exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs cap`,
+      });
+      return;
+    }
+    const body = await readByteRange(target, range);
+    res.status(206);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader(
+      'Content-Range',
+      `bytes ${range.start}-${range.start + body.length - 1}/${s.size}`
+    );
+    res.setHeader('Content-Length', body.length);
+    res.send(body);
+    return;
+  }
+
+  if (s.size > HOSTFS_MAX_BODY_BYTES) {
+    res.status(413).json({
+      code: 'EFBIG',
+      message: `file exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs cap`,
+    });
+    return;
+  }
+  const body = await readFile(target);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.send(body);
+}
+
 /**
  * Register the /api/hostfs routes for the resolved mount roots. The route
  * surface mirrors `MountBackend` 1:1 (webapp `backend-hostfs.ts`):
@@ -486,23 +574,8 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
 
   app.get(
     '/api/hostfs/read',
-    withTarget(async (target, _req, res) => {
-      // lstat first so a dangling symlink is ENOENT, a directory is EISDIR.
-      const s = await stat(target);
-      if (s.isDirectory()) {
-        sendFsError(res, Object.assign(new Error(`is a directory: ${target}`), { code: 'EISDIR' }));
-        return;
-      }
-      if (s.size > HOSTFS_MAX_BODY_BYTES) {
-        res.status(413).json({
-          code: 'EFBIG',
-          message: `file exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs cap`,
-        });
-        return;
-      }
-      const body = await readFile(target);
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.send(body);
+    withTarget(async (target, req, res) => {
+      await readOp(target, req, res);
     })
   );
 
