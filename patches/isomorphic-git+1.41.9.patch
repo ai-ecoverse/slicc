@@ -1,8 +1,8 @@
 diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
-index bbdc7f0..8fcadbe 100644
+index bbdc7f0..c1abc93 100644
 --- a/node_modules/isomorphic-git/index.js
 +++ b/node_modules/isomorphic-git/index.js
-@@ -3576,6 +3576,62 @@ async function shasumRange(
+@@ -3576,6 +3576,64 @@ async function shasumRange(
    return shasum(buffer.subarray(start, end))
  }
  
@@ -27,9 +27,11 @@ index bbdc7f0..8fcadbe 100644
 + * The deep (full-payload) SHA-1 is skipped when the caller's cache object sets
 + * `skipDeepPackVerification` — the O(1) trailer check still runs, matching what
 + * canonical git does on a normal object read (it only verifies packs on
-+ * `fsck` / `index-pack`).
++ * `fsck` / `index-pack`). `deep` is passed in rather than re-read from the
++ * cache so the memoized promise and the flag it was created under cannot
++ * disagree.
 + */
-+async function verifyPackfileIntegrity({ pack, p, cache }) {
++async function verifyPackfileIntegrity({ pack, p, deep }) {
 +  const expectedShaFromIndex = p.packfileSha;
 +
 +  // 1. Fast Check: Verify packfile trailer matches index record
@@ -46,7 +48,7 @@ index bbdc7f0..8fcadbe 100644
 +
 +  // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
 +  // The Node package build swaps in a chunked implementation for large packs.
-+  if (!(cache && cache.skipDeepPackVerification)) {
++  if (deep) {
 +    const actualPayloadSha = await shasumRange(pack, {
 +      start: 0,
 +      end: pack.length - 20,
@@ -65,7 +67,7 @@ index bbdc7f0..8fcadbe 100644
  async function readObjectPacked({
    fs,
    cache,
-@@ -3613,37 +3669,16 @@ async function readObjectPacked({
+@@ -3613,37 +3671,22 @@ async function readObjectPacked({
        }
  
        // === Packfile Integrity Verification ===
@@ -101,8 +103,14 @@ index bbdc7f0..8fcadbe 100644
 -        p._checksumVerified = true;
 +      // SLICC patch (ai-ecoverse/slicc#2735): memoized as a promise on the
 +      // cached pack index so N concurrent readers verify exactly once.
-+      if (!p._verification) {
-+        p._verification = verifyPackfileIntegrity({ pack, p, cache });
++      // SLICC patch (ai-ecoverse/slicc#2710): the memo records whether it
++      // INCLUDED the deep payload hash, so a caller that wants the deep check
++      // after a skipped one (`SLICC_GIT_VERIFY_PACKS=1` later in the same
++      // shell) is not served the promise of the verification that skipped it.
++      const deepVerification = !(cache && cache.skipDeepPackVerification);
++      if (!p._verification || (deepVerification && !p._deepVerified)) {
++        p._deepVerified = deepVerification;
++        p._verification = verifyPackfileIntegrity({ pack, p, deep: deepVerification });
        }
 +      await p._verification;
 +

@@ -19,6 +19,11 @@
  *   new pack, an outside writer repacked) the cached pack entries for that
  *   gitdir are dropped. isomorphic-git's index cache self-invalidates on
  *   `lstat`, so it is deliberately left alone.
+ * - **Failure eviction.** isomorphic-git caches the in-flight PROMISE, so a
+ *   transient VFS error would otherwise be memoized forever — one `EIO` from
+ *   the hostfs bridge and `git` stays broken for the life of the shell. Every
+ *   rejected entry is dropped when the command settles, so the next one
+ *   retries for real.
  * - **A memory bound.** A pack buffer is the single largest thing a git
  *   command allocates, so at most {@link DEFAULT_MAX_RESIDENT_PACKS} of them
  *   stay resident; the least recently used ones are unloaded (their parsed
@@ -153,12 +158,55 @@ export class GitCacheManager {
       this.invalidate(dir);
       this.signatures.delete(gitdir);
     }
+    if (this.inFlight === 0) {
+      await this.evictFailedPacks();
+      await this.trimResidentPacks();
+    }
     // Fingerprint the repo the first time it has cached packs to protect, so
     // the sample describes the state those packs were read from.
     if (!this.signatures.has(gitdir) && this.hasCachedPacks(gitdir)) {
       this.signatures.set(gitdir, await this.packSignature(gitdir));
     }
-    if (this.inFlight === 0) await this.trimResidentPacks();
+  }
+
+  /**
+   * Drop every cache entry whose read FAILED, so the next command retries the
+   * filesystem instead of being served the same rejection forever.
+   *
+   * isomorphic-git stores the in-flight promise — not the result — in the pack
+   * cache, so one transient VFS error (an `EIO` from the hostfs bridge, #2720)
+   * used to be memoized: every later command awaited that same rejected
+   * promise, and because the pack directory listing had not changed,
+   * {@link beforeCommand} saw nothing to invalidate. Per-API-call caches
+   * retried by construction; a shared one has to evict deliberately. Runs only
+   * with nothing in flight, so every promise inspected here has settled.
+   */
+  private async evictFailedPacks(): Promise<void> {
+    const map = packfileCacheMap(this.cache);
+    if (!map) return;
+    for (const [key, entry] of [...map]) {
+      let index: CachedPackIndex | undefined;
+      try {
+        index = await entry;
+      } catch {
+        map.delete(key);
+        continue;
+      }
+      // `GitPackIndex.fromIdx` resolves undefined for a file that is not an
+      // IDX v2 — a half-written pack directory, not a permanent verdict.
+      if (!index) {
+        map.delete(key);
+        continue;
+      }
+      // A failed `.pack` read is memoized the same way, on the index itself.
+      if (index.pack) {
+        try {
+          if (!(await index.pack)) index.pack = null;
+        } catch {
+          index.pack = null;
+        }
+      }
+    }
   }
 
   /** Whether any pack index of this gitdir is currently cached. */
@@ -221,7 +269,7 @@ export class GitCacheManager {
       try {
         index = await entry;
       } catch {
-        // A failed .idx parse is isomorphic-git's problem, not the cache's.
+        // Already evicted by `evictFailedPacks`; nothing resident to count.
         continue;
       }
       if (!index?.pack) continue;

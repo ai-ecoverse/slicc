@@ -173,22 +173,27 @@ describe('git pack cache (issues #2710, #2735)', () => {
     expect((await git.execute(['log'], '/project')).exitCode).toBe(0);
     expect(digests.count()).toBe(0);
 
-    // Same repo, same cache: the flag only gates work that has not been done.
+    // Opting back in mid-shell must re-verify: the skipped run memoized a
+    // verification that never hashed the payload, and reusing it would make
+    // the documented opt-in silently do nothing.
+    expect((await git.execute(['log'], '/project', { SLICC_GIT_VERIFY_PACKS: '1' })).exitCode).toBe(
+      0
+    );
+    expect(digests.count()).toBe(1);
+
+    // …and it is not re-hashed on every subsequent verified command.
+    expect((await git.execute(['log'], '/project', { SLICC_GIT_VERIFY_PACKS: '1' })).exitCode).toBe(
+      0
+    );
+    expect(digests.count()).toBe(1);
+
+    // The constructor option is the same switch, from the first read on.
     const verifying = new GitCommands({
       fs: vfs,
       globalDbName: `git-pack-cache-verify-${dbCounter}`,
       verifyPackfiles: true,
     });
     expect((await verifying.execute(['log'], '/project')).exitCode).toBe(0);
-    expect(digests.count()).toBe(1);
-
-    const viaEnv = new GitCommands({
-      fs: vfs,
-      globalDbName: `git-pack-cache-env-${dbCounter}`,
-    });
-    expect(
-      (await viaEnv.execute(['log'], '/project', { SLICC_GIT_VERIFY_PACKS: '1' })).exitCode
-    ).toBe(0);
     expect(digests.count()).toBe(2);
   });
 
@@ -213,6 +218,32 @@ describe('git pack cache (issues #2710, #2735)', () => {
 
     expect(reads).toHaveLength(8);
     expect(digests.count()).toBe(1);
+  });
+
+  it('retries a pack index read that failed once, instead of caching the failure', async () => {
+    await seedRepo();
+    const pack = await packRepo();
+
+    // One transient VFS error on the .idx — the EIO class the hostfs bridge
+    // raises (#2720). isomorphic-git caches the in-flight PROMISE, so without
+    // eviction every later command awaits this same rejection.
+    let failures = 0;
+    const readFile = vfs.readFile.bind(vfs);
+    vi.spyOn(vfs, 'readFile').mockImplementation(async (path, options) => {
+      if (String(path).endsWith(`${pack}.idx`) && failures === 0) {
+        failures++;
+        throw new Error('EIO: transient bridge failure');
+      }
+      return await readFile(path, options);
+    });
+
+    const failed = await git.execute(['log'], '/project');
+    expect(failures).toBe(1);
+    expect(failed.exitCode).not.toBe(0);
+
+    const retried = await git.execute(['log'], '/project');
+    expect(retried.exitCode).toBe(0);
+    expect(retried.stdout).toContain('add c');
   });
 
   it('unloads the least recently used pack buffers past the resident bound', async () => {
