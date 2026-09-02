@@ -3,6 +3,7 @@ import {
   IDLE_COMPACTION_DEFAULTS,
   IDLE_COMPACTION_MIN_TOKENS_KEY,
   IDLE_COMPACTION_MINUTES_KEY,
+  MAX_IDLE_MINUTES,
   readIdleCompactionSettings,
   writeIdleCompactionSettings,
 } from '../../src/core/idle-compaction-settings.js';
@@ -34,6 +35,14 @@ describe('idle compaction settings', () => {
     writeIdleCompactionSettings({ idleMinutes: 25, minTokens: 80_000 });
     expect(localStorage.getItem(IDLE_COMPACTION_MINUTES_KEY)).toBe('25');
     expect(readIdleCompactionSettings()).toEqual({ idleMinutes: 25, minTokens: 80_000 });
+  });
+
+  it('caps idleMinutes at the setTimeout limit so "practically never" cannot mean "now"', () => {
+    localStorage.setItem(IDLE_COMPACTION_MINUTES_KEY, '99999999');
+    expect(readIdleCompactionSettings().idleMinutes).toBe(MAX_IDLE_MINUTES);
+    expect(MAX_IDLE_MINUTES * 60_000).toBeLessThanOrEqual(2_147_483_647);
+    writeIdleCompactionSettings({ idleMinutes: 99999999 });
+    expect(localStorage.getItem(IDLE_COMPACTION_MINUTES_KEY)).toBe(String(MAX_IDLE_MINUTES));
   });
 
   it('ignores garbage and sub-floor values, and an undefined write clears the override', () => {

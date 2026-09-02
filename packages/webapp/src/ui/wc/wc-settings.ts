@@ -11,6 +11,7 @@ import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-p
 import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
 import {
   IDLE_COMPACTION_DEFAULTS,
+  MAX_IDLE_MINUTES,
   readIdleCompactionSettings,
   writeIdleCompactionSettings,
 } from '../../core/idle-compaction-settings.js';
@@ -419,7 +420,8 @@ function buildIdleCompactionTuning(deps: {
     detail: string,
     value: number,
     min: number,
-    apply: (value: number | undefined) => void
+    apply: (value: number | undefined) => void,
+    max?: number
   ): HTMLElement => {
     const row = div('wcset__toggle-row');
     const info = div('wcset__info');
@@ -431,6 +433,7 @@ function buildIdleCompactionTuning(deps: {
     input.id = id;
     input.type = 'number';
     input.min = String(min);
+    if (max !== undefined) input.max = String(max);
     input.step = '1';
     input.value = String(value);
     input.addEventListener('change', () => {
@@ -450,7 +453,8 @@ function buildIdleCompactionTuning(deps: {
       `How long a cone must sit idle before a round starts (default ${IDLE_COMPACTION_DEFAULTS.idleMinutes}).`,
       current.idleMinutes,
       1,
-      (value) => writeIdleCompactionSettings({ idleMinutes: value })
+      (value) => writeIdleCompactionSettings({ idleMinutes: value }),
+      MAX_IDLE_MINUTES
     ),
     field(
       'wcset-idle-compaction-min-tokens',

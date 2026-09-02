@@ -95,9 +95,12 @@ export function snapshotLiveSession(
 ): Promise<LiveSessionSnapshotResult | null> {
   const folder = deps.cone.folder || PRIMARY_CONE_FOLDER;
   // The projection is pure and can be expensive on a long history: do it
-  // before taking the lock so the transaction itself stays short.
+  // before taking the lock so the transaction itself stays short. Uncapped:
+  // this is the archive of record for what compaction is about to drop, and
+  // the oversized tool payloads are exactly what it drops first.
   const chat = agentMessagesToChatMessages(deps.messages, {
     source: deps.cone.label ?? folder,
+    uncapped: true,
   });
   return serializeIndexWrite(async () => {
     if (deps.stillValid && !deps.stillValid()) {
@@ -256,7 +259,11 @@ function newestTimestamp(messages: readonly ChatMessage[]): number {
   return newest;
 }
 
-/** The archived messages, or `null` when the archive is missing or unreadable. */
+/**
+ * The archived messages, or `null` when the archive is GONE (ENOENT). Any
+ * other read fault propagates: a transient EIO must skip this round's
+ * snapshot, not rewrite the file over every earlier round.
+ */
 async function readSnapshotMessages(
   vfs: ArchiveVfs,
   entry: FrozenSessionIndexEntry
@@ -266,12 +273,12 @@ async function readSnapshotMessages(
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     return parseFrozenArchive(text).messages;
   } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
     // The row survived without its file: rewrite the archive from the whole
     // history the agent still holds rather than continue from a cursor that
     // now points past messages nobody has.
-    log.warn('Live snapshot archive unreadable; rewriting from the agent history', {
+    log.warn('Live snapshot archive missing; rewriting from the agent history', {
       filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }

@@ -30,6 +30,13 @@ export const IDLE_COMPACTION_DEFAULTS: Readonly<IdleCompactionSettings> = Object
 /** Sanity bounds so a typo cannot arm a 0-minute timer or a 0-token gate. */
 const MIN_IDLE_MINUTES = 1;
 const MIN_TOKENS_FLOOR = 1_000;
+/**
+ * `setTimeout` takes a 32-bit signed delay; anything larger is clamped to
+ * ~1 ms by every runtime, which would turn "practically never" into "right
+ * now". Cap the minutes so the largest accepted value still means a very
+ * long wait (~24.8 days).
+ */
+export const MAX_IDLE_MINUTES = Math.floor(2_147_483_647 / 60_000);
 
 interface KeyValueStorage {
   getItem(key: string): string | null;
@@ -53,12 +60,12 @@ function getStorage(): KeyValueStorage | undefined {
   }
 }
 
-function readPositive(key: string, fallback: number, floor: number): number {
+function readPositive(key: string, fallback: number, floor: number, ceiling?: number): number {
   const raw = getStorage()?.getItem(key);
   if (raw === null || raw === undefined) return fallback;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < floor) return fallback;
-  return value;
+  return ceiling !== undefined && value > ceiling ? ceiling : value;
 }
 
 /** Current settings: stored overrides where valid, defaults otherwise. */
@@ -67,7 +74,8 @@ export function readIdleCompactionSettings(): IdleCompactionSettings {
     idleMinutes: readPositive(
       IDLE_COMPACTION_MINUTES_KEY,
       IDLE_COMPACTION_DEFAULTS.idleMinutes,
-      MIN_IDLE_MINUTES
+      MIN_IDLE_MINUTES,
+      MAX_IDLE_MINUTES
     ),
     minTokens: readPositive(
       IDLE_COMPACTION_MIN_TOKENS_KEY,
@@ -85,13 +93,18 @@ export function readIdleCompactionSettings(): IdleCompactionSettings {
 export function writeIdleCompactionSettings(patch: Partial<IdleCompactionSettings>): void {
   const storage = getStorage();
   if (!storage) return;
-  const write = (key: string, value: number | undefined, floor: number): void => {
+  const write = (
+    key: string,
+    value: number | undefined,
+    floor: number,
+    ceiling = Number.POSITIVE_INFINITY
+  ): void => {
     if (value === undefined || !Number.isFinite(value) || value < floor) storage.removeItem(key);
-    else storage.setItem(key, String(value));
+    else storage.setItem(key, String(Math.min(value, ceiling)));
   };
   try {
     if ('idleMinutes' in patch) {
-      write(IDLE_COMPACTION_MINUTES_KEY, patch.idleMinutes, MIN_IDLE_MINUTES);
+      write(IDLE_COMPACTION_MINUTES_KEY, patch.idleMinutes, MIN_IDLE_MINUTES, MAX_IDLE_MINUTES);
     }
     if ('minTokens' in patch) {
       write(IDLE_COMPACTION_MIN_TOKENS_KEY, patch.minTokens, MIN_TOKENS_FLOOR);

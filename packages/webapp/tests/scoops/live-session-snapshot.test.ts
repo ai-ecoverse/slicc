@@ -215,6 +215,61 @@ describe('snapshotLiveSession', () => {
     expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).messages).toHaveLength(4);
   });
 
+  it('keeps oversized tool inputs and results whole in the archive', async () => {
+    const vfs = fakeVfs();
+    const big = 'x'.repeat(200 * 1024);
+    const withTool = {
+      ...(assistant('running', 20) as object),
+      content: [
+        { type: 'text', text: 'running' },
+        { type: 'toolCall', id: 't1', name: 'bash', arguments: { command: big } },
+      ],
+    } as unknown as AgentMessage;
+    const result = {
+      role: 'toolResult',
+      toolCallId: 't1',
+      toolName: 'bash',
+      content: [{ type: 'text', text: big }],
+      isError: false,
+      timestamp: 21,
+    } as unknown as AgentMessage;
+    const written = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q', 10), withTool, result],
+      trigger: 'threshold',
+    });
+    const [, reply] = parseFrozenArchive(vfs.files.get(written.transcriptPath)!).messages;
+    expect((reply.toolCalls?.[0].input as { command: string }).command).toHaveLength(big.length);
+    expect(reply.toolCalls?.[0].result).toHaveLength(big.length);
+  });
+
+  it('skips the round instead of rewriting the archive after a transient read fault', async () => {
+    const vfs = fakeVfs();
+    const first = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q1', 10), assistant('a1', 20)],
+      trigger: 'threshold',
+    });
+    const before = vfs.files.get(first.transcriptPath);
+    const readFile = vfs.readFile;
+    vfs.readFile = async (path: string) => {
+      if (path === first.transcriptPath) throw new FsError('EIO', 'disk on fire', path);
+      return readFile(path, { encoding: 'utf-8' });
+    };
+    await expect(
+      snapshotLiveSession({
+        vfs,
+        cone: { folder: 'cone' },
+        messages: [user('q1', 10), assistant('a1', 20), user('q2', 30)],
+        trigger: 'threshold',
+      })
+    ).rejects.toThrow('disk on fire');
+    expect(vfs.files.get(first.transcriptPath)).toBe(before);
+    expect((await indexOf(vfs))[0].liveThrough).toBe(20);
+  });
+
   it('writes nothing when stillValid says the session is gone', async () => {
     const vfs = fakeVfs();
     const result = await snapshotLiveSession({

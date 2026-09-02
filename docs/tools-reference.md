@@ -613,7 +613,10 @@ first hands the untouched history to `CompactionConfig.onBeforeCompaction`, whic
 `live: true`, at most one per cone). Rounds accumulate: `liveThrough` is the newest message timestamp
 already on disk, so the kept tail is never written twice and the previous summary shows up in the
 transcript as a checkpoint; a same-millisecond message is appended unless the archive already holds
-it, and a row whose archive file went missing is rewritten from the full history. The summary
+it, a row whose archive file went missing is rewritten from the full history, and any other read
+fault skips the round rather than rewriting the archive. The projection is UNCAPPED (tool inputs
+and results are kept whole, unlike the 64 KB transcript cap) because the oversized payloads are
+exactly what compaction elides first. The summary
 message (and the naive-drop marker) ends with a pointer to that path so the agent can read what the
 summary replaced; the UI notice shows the same path, and the pointer sentence is stripped again
 before a later round's summary/memory prompts see the previous summary. "New chat" completes the
@@ -637,7 +640,8 @@ the round's `AbortSignal`), and the round's memory extraction is deferred
 (`CompactionOptions.deferMemoryExtraction`) until the result is adopted, so a discarded round never
 writes bullets for a history that is still in the conversation. N and M live in `localStorage`
 (`slicc_idle_compaction_minutes`, `slicc_idle_compaction_min_tokens`, defaults 10 / 50 000) and are
-editable under Experimental features next to the flag.
+editable under Experimental features next to the flag; minutes are capped at `MAX_IDLE_MINUTES`
+(~24.8 days, the 32-bit `setTimeout` limit) so a huge value means "very long", never "now".
 
 ---
 

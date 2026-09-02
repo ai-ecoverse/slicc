@@ -105,10 +105,13 @@ export class IdleCompaction {
     this.disarm();
     if (this.deps.isDisposed() || !this.deps.isEnabled() || !this.deps.getAgent()) return;
     const { idleMinutes } = this.deps.getSettings();
+    // Belt to the settings' braces: a delay past the 32-bit limit would be
+    // clamped to ~1 ms by the runtime and fire at once.
+    const delay = Math.min(Math.max(1, idleMinutes) * 60_000, 2_147_483_647);
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.runNow();
-    }, Math.max(1, idleMinutes) * 60_000);
+    }, delay);
   }
 
   /** Cancel a pending window. A round already in flight settles on its own. */
