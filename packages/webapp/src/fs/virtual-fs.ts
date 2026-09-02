@@ -1693,6 +1693,42 @@ export class VirtualFS {
   }
 
   /**
+   * Read the half-open byte window `[start, end)` of a file — `subarray`
+   * semantics, so `end - start` is the length and `start === end` is empty.
+   *
+   * A backend with a native ranged read (hostfs, via HTTP `Range`) transfers
+   * only the window; everything else reads the file and slices, which is
+   * correct but saves nothing. That distinction is the whole point: git wants
+   * a packfile as one buffer, so a repo whose largest pack exceeded the hostfs
+   * whole-file cap was unreadable outright, and a pack under the cap still
+   * cost its full size in kernel-worker memory per object lookup (#2711).
+   *
+   * @throws FsError EINVAL for a non-integer or descending window.
+   */
+  async readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    const normalized = normalizePath(path);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+      throw new FsError('EINVAL', `invalid byte range ${start}-${end}`, normalized);
+    }
+    if (start === end) return new Uint8Array(0);
+    const mount = this.findMount(normalized);
+    const ranged = mount?.backend.readFileRange;
+    if (mount && ranged) {
+      if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      try {
+        return await ranged.call(mount.backend, mount.relParts.join('/'), start, end);
+      } catch (err) {
+        rebrandFsError(err, normalized);
+      }
+    }
+    const whole = (await this.readFile(normalized, { encoding: 'binary' })) as Uint8Array;
+    // Copy into a PLAIN Uint8Array: the local backend hands back a `Buffer`
+    // (a subclass), and a ranged read must return the same shape whichever
+    // side of the mount boundary it came from.
+    return new Uint8Array(whole.subarray(start, Math.min(end, whole.byteLength)));
+  }
+
+  /**
    * Write content to a file. Creates the file if it doesn't exist.
    * Parent directories are created automatically.
    * @throws FsError EISDIR if path is an existing directory

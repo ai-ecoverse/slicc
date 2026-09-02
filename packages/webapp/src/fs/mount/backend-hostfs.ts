@@ -36,6 +36,12 @@
  * keeps its `PUT` for the same reason in reverse: raw bytes, and it repeats
  * against the same path (e.g. `.git/index`).
  *
+ * `readFileRange` sends a `Range` header on that same `GET` and expects a 206.
+ * It is the only way to touch a file bigger than `HOSTFS_MAX_BODY_BYTES` —
+ * without it a repo whose largest packfile crosses the cap is unreadable by
+ * git, and every pack under it still costs its full size in worker memory on
+ * each object lookup (issue #2711).
+ *
  * A bridge without the stable route (an older node-server binary behind a
  * freshly-updated hosted UI) answers with a framework 404 that carries no
  * `{ code }`; that is the signal to fall back to the per-op routes for the
@@ -67,7 +73,13 @@ import type {
 } from './backend.js';
 import { createInflightLimiter, type InflightLimiter } from './inflight-limiter.js';
 
-/** Matches the server-side cap (node-server `HOSTFS_MAX_BODY_BYTES`). */
+/**
+ * Matches the server-side cap (node-server `HOSTFS_MAX_BODY_BYTES`). It bounds
+ * a WHOLE-file `readFile`/`writeFile`, where the caller holds the entire body
+ * in worker memory. `readFileRange` is bounded by the window it asks for
+ * instead, so it can reach into a file larger than this — that is what makes a
+ * repo with a packfile over the cap readable at all (issue #2711).
+ */
 const HOSTFS_MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 /**
@@ -131,6 +143,18 @@ const DEFAULT_MAX_INFLIGHT = 24;
  */
 const readJson = (response: Response): Promise<unknown> => response.json();
 const readBytes = (response: Response): Promise<ArrayBuffer> => response.arrayBuffer();
+/**
+ * A ranged read has to know whether the bridge honored `Range`. A bridge that
+ * predates it (or any proxy in between) answers 200 with the WHOLE file, and
+ * handing that back as if it were the window would silently give the caller
+ * bytes from the wrong offsets, which a pack reader would parse as garbage.
+ */
+const readRangedBytes = async (
+  response: Response
+): Promise<{ partial: boolean; body: ArrayBuffer }> => ({
+  partial: response.status === 206,
+  body: await response.arrayBuffer(),
+});
 const drainBody = async (response: Response): Promise<void> => {
   await response.arrayBuffer();
 };
@@ -429,6 +453,31 @@ export class HostFsMountBackend implements MountBackend {
       throw new FsError('EFBIG', 'file exceeds the hostfs body cap', path);
     }
     return new Uint8Array(buffer);
+  }
+
+  /**
+   * Read `[start, end)` as one HTTP `Range` request — half-open on the wire's
+   * inclusive `bytes=start-(end-1)`.
+   *
+   * The whole-file cap does not apply to the file, only to the window: the
+   * point of this path is to reach into a file too big to hold at once
+   * (issue #2711). A bridge that ignores `Range` answers 200 with everything,
+   * which is corrected here by slicing rather than by failing — an old
+   * launcher behind a fresh hosted UI must stay correct, just not fast.
+   */
+  async readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+      throw new FsError('EINVAL', `invalid byte range ${start}-${end}`, path);
+    }
+    if (end === start) return new Uint8Array(0);
+    if (end - start > HOSTFS_MAX_BODY_BYTES) {
+      throw new FsError('EFBIG', 'byte range exceeds the hostfs body cap', path);
+    }
+    const { partial, body } = await this.request('read', path, readRangedBytes, {
+      headers: { Range: `bytes=${start}-${end - 1}` },
+    });
+    if (partial) return new Uint8Array(body);
+    return new Uint8Array(body).slice(start, end);
   }
 
   async writeFile(path: string, body: Uint8Array): Promise<void> {

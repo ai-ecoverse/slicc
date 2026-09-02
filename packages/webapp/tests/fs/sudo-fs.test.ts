@@ -65,6 +65,25 @@ describe('SudoFS', () => {
     expect(calls).toHaveLength(1);
   });
 
+  // A window of a file is still a read of that file. The Proxy only
+  // intercepts the names it lists, so a ranged read left off that list would
+  // be a free pass around the policy (#2711).
+  it('gates a ranged read like a whole-file read', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.readFileRange('/shared/secrets/api.key', 0, 3)).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    // Non-protected path still passes straight through.
+    await expect(sfs.readFileRange('/workspace/note.txt', 0, 2)).resolves.toEqual(
+      new TextEncoder().encode('hi')
+    );
+    expect(calls).toHaveLength(1);
+  });
+
   it('throws EACCES when a gated write is denied', async () => {
     const { calls, broker } = makeBroker({ decision: 'deny' });
     const sfs = createSudoFs(vfs, { broker, getPolicy });

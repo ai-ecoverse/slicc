@@ -156,12 +156,42 @@ export function flagString(flags: GitParsedFlags, name: string): string | undefi
 }
 
 /**
+ * Rewrite isomorphic-git's two packfile `InternalError`s into something a user
+ * can act on.
+ *
+ * When `fs.read` on a `.pack` returns nothing, isomorphic-git reports "Could
+ * not read packfile at <path>. The file may be missing, corrupted, or too
+ * large to read into memory." — accurate, but it never names the one cause
+ * that actually fires over a `--mount`ed checkout: the pack is bigger than the
+ * hostfs bridge's whole-file body cap, so EVERY git command in that repo fails
+ * and nothing in the message points at the mount (issue #2711). The second
+ * form ("Could not read packfile data.") does not even carry the path.
+ *
+ * Returns `null` for anything else, so the caller keeps the original message.
+ */
+function packfileReadHint(message: string): string | null {
+  // Lazy up to the first `.` that ends a sentence — a pack path is full of
+  // dots (`.git`, `pack-<sha>.pack`), so a greedy or dot-excluding match
+  // truncates it.
+  const named = /Could not read packfile at (.+?)\.(?:\s|$)/.exec(message);
+  if (named) {
+    return `unable to read the packfile ${named[1]}: it could not be loaded in one piece — it may be missing or corrupted, or larger than the 100 MB hostfs whole-file limit if this repo is a --mount`;
+  }
+  if (message.startsWith('Could not read packfile data.')) {
+    return 'unable to read packfile data: a packfile could not be loaded in one piece — it may be missing or corrupted, or larger than the 100 MB hostfs whole-file limit if this repo is a --mount';
+  }
+  return null;
+}
+
+/**
  * Unpack an isomorphic-git error into a human-readable message. `MultipleGitError`
  * (and native `AggregateError`) hide the real per-operation failures behind the
  * cosmetic "There are multiple errors..." text, carrying them in an `.errors[]`
  * (or `.data.errors[]`) array; surface each underlying message instead (#1033-5).
  * Nested wrappers are expanded recursively; an empty errors array falls back to
- * the wrapper's own message. Plain errors return `.message`; non-Errors stringify.
+ * the wrapper's own message. Plain errors return `.message` — unless it is one
+ * of the packfile `InternalError`s {@link packfileReadHint} can say something
+ * useful about; non-Errors stringify.
  */
 export function expandGitError(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
@@ -180,7 +210,7 @@ export function expandGitError(err: unknown): string {
       return errorsList.map((inner) => expandGitError(inner)).join('\n');
     }
   }
-  return err.message;
+  return packfileReadHint(err.message) ?? err.message;
 }
 
 /**

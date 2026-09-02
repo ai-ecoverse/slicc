@@ -17,6 +17,7 @@ import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
 import {
   HOSTFS_STABLE_MAX_BODY_BYTES,
   isHostFsStableBodyRequest,
+  parseByteRange,
   registerHostFsRoutes,
   resolveHostMountRoots,
   resolveWithinRoot,
@@ -405,6 +406,217 @@ describe('stable endpoint under the production middleware order', () => {
       body: JSON.stringify({ hello: 'world' }),
     });
     expect((await res.json()) as { body: unknown }).toEqual({ body: { hello: 'world' } });
+  });
+});
+
+/**
+ * `Range` support on `read` is what makes a repo whose largest packfile
+ * exceeds the whole-file cap reachable by git at all, and it keeps the bridge
+ * from buffering a 92 MB pack per object lookup (issue #2711).
+ */
+describe('hostfs read: byte ranges', () => {
+  const readWithRange = (range: string): Promise<Response> =>
+    api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', { headers: { Range: range } });
+
+  it('answers a window with 206, Content-Range and only those bytes', async () => {
+    const res = await readWithRange('bytes=6-9');
+    expect(res.status).toBe(206);
+    // "hello host" → bytes 6..9 are "host".
+    expect(await res.text()).toBe('host');
+    expect(res.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(res.headers.get('content-length')).toBe('4');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+  });
+
+  it('runs an open-ended range to EOF and clamps an end past it', async () => {
+    expect(await (await readWithRange('bytes=6-')).text()).toBe('host');
+    const clamped = await readWithRange('bytes=6-9999');
+    expect(clamped.status).toBe(206);
+    expect(clamped.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(await clamped.text()).toBe('host');
+  });
+
+  it('serves the suffix form as the last N bytes', async () => {
+    const res = await readWithRange('bytes=-4');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 6-9/10');
+    expect(await res.text()).toBe('host');
+  });
+
+  it('rejects a range outside the file with 416 + Content-Range', async () => {
+    const res = await readWithRange('bytes=99-120');
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe('bytes */10');
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'EINVAL' });
+  });
+
+  it('ignores an unparseable Range and serves the whole file', async () => {
+    // RFC 9110 §14.2: a Range a recipient cannot make sense of is ignored.
+    const res = await readWithRange('items=0-2');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('hello host');
+    // Still advertised, so a client knows it can retry with a real range.
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('advertises Accept-Ranges and a Content-Length on an unranged read', async () => {
+    const res = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-length')).toBe('10');
+    expect(await res.text()).toBe('hello host');
+  });
+
+  it('keeps errno answers for a missing file and a directory', async () => {
+    const missing = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=missing.txt', {
+      headers: { Range: 'bytes=0-1' },
+    });
+    expect(missing.status).toBe(404);
+    expect((await missing.json()) as { code: string }).toMatchObject({ code: 'ENOENT' });
+    const dir = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=sub', {
+      headers: { Range: 'bytes=0-1' },
+    });
+    expect(dir.status).toBe(409);
+    expect((await dir.json()) as { code: string }).toMatchObject({ code: 'EISDIR' });
+  });
+});
+
+/**
+ * Streaming the body cost us the ETag express derived from the buffered one.
+ * Without a replacement the browser cannot revalidate a pack URL, so it
+ * re-transfers 92 MB on every object lookup — in the #2707 baseline 220,310 of
+ * 385,033 hostfs GETs were 304s, so this is the difference the route lives on.
+ */
+describe('hostfs read: conditional requests', () => {
+  const readWith = (headers: Record<string, string>): Promise<Response> =>
+    api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', { headers });
+
+  async function currentValidators(): Promise<{ etag: string; lastModified: string }> {
+    const res = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt');
+    const etag = res.headers.get('etag');
+    const lastModified = res.headers.get('last-modified');
+    expect(etag).toBeTruthy();
+    expect(lastModified).toBeTruthy();
+    return { etag: etag as string, lastModified: lastModified as string };
+  }
+
+  it('serves an ETag and Last-Modified on the whole-file and ranged branches', async () => {
+    const { etag } = await currentValidators();
+    // A strong tag — If-Range is only defined for one.
+    expect(etag.startsWith('W/')).toBe(false);
+    const ranged = await readWith({ Range: 'bytes=0-3' });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get('etag')).toBe(etag);
+    expect(ranged.headers.get('last-modified')).toBeTruthy();
+  });
+
+  it('answers a repeat GET carrying the ETag with 304 and no body', async () => {
+    const { etag } = await currentValidators();
+    const res = await readWith({ 'If-None-Match': etag });
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe('');
+    // The validators ride along so the client can refresh its stored metadata.
+    expect(res.headers.get('etag')).toBe(etag);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('matches a weak form of the tag and a bare *', async () => {
+    const { etag } = await currentValidators();
+    expect((await readWith({ 'If-None-Match': `W/${etag}` })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': `"other", ${etag}` })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': '*' })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': '"stale"' })).status).toBe(200);
+  });
+
+  it('revalidates with If-Modified-Since and serves 200 once mtime moves', async () => {
+    const { lastModified } = await currentValidators();
+    expect((await readWith({ 'If-Modified-Since': lastModified })).status).toBe(304);
+
+    const moved = new Date(Date.now() + 60_000);
+    await utimes(join(root, 'hello.txt'), moved, moved);
+    try {
+      const res = await readWith({ 'If-Modified-Since': lastModified });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('hello host');
+      // A changed mtime is a changed ETag, so the old one no longer matches.
+      const stale = await readWith({ 'If-None-Match': (await currentValidators()).etag });
+      expect(stale.status).toBe(304);
+    } finally {
+      const back = new Date(Date.now() - 60_000);
+      await utimes(join(root, 'hello.txt'), back, back);
+    }
+  });
+
+  it('ignores an unparseable If-Modified-Since instead of guessing', async () => {
+    expect((await readWith({ 'If-Modified-Since': 'yesterday-ish' })).status).toBe(200);
+  });
+
+  it('honors a Range when If-Range still matches', async () => {
+    const { etag } = await currentValidators();
+    const res = await readWith({ Range: 'bytes=6-9', 'If-Range': etag });
+    expect(res.status).toBe(206);
+    expect(await res.text()).toBe('host');
+  });
+
+  it('downgrades a Range to the full 200 when If-Range does not match', async () => {
+    // The client holds a DIFFERENT representation; stitching a window of the
+    // current file into that buffer would silently corrupt it.
+    const res = await readWith({ Range: 'bytes=6-9', 'If-Range': '"not-the-current-tag"' });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('hello host');
+    expect(res.headers.get('content-range')).toBeNull();
+  });
+
+  it('accepts the HTTP-date form of If-Range and rejects a stale one', async () => {
+    const { lastModified } = await currentValidators();
+    expect((await readWith({ Range: 'bytes=6-9', 'If-Range': lastModified })).status).toBe(206);
+    const older = new Date(Date.parse(lastModified) - 60_000).toUTCString();
+    expect((await readWith({ Range: 'bytes=6-9', 'If-Range': older })).status).toBe(200);
+  });
+
+  it('does not let a stale If-Range turn an out-of-range window into a 416', async () => {
+    // The Range is dropped entirely, so the file is served whole — a 416 here
+    // would be a bogus error for a client that just has an old copy.
+    const res = await readWith({ Range: 'bytes=900-999', 'If-Range': '"stale"' });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('parseByteRange', () => {
+  it('returns the inclusive window for the three well-formed shapes', () => {
+    expect(parseByteRange('bytes=0-9', 100)).toEqual({ kind: 'range', start: 0, end: 9 });
+    expect(parseByteRange('bytes=90-', 100)).toEqual({ kind: 'range', start: 90, end: 99 });
+    expect(parseByteRange('bytes=-10', 100)).toEqual({ kind: 'range', start: 90, end: 99 });
+    // A suffix longer than the file is the whole file, not an error.
+    expect(parseByteRange('bytes=-500', 100)).toEqual({ kind: 'range', start: 0, end: 99 });
+    expect(parseByteRange(' bytes=0-0 ', 100)).toEqual({ kind: 'range', start: 0, end: 0 });
+  });
+
+  it('ignores anything it cannot make sense of', () => {
+    for (const header of [undefined, '', 'bytes=', 'items=0-1', 'bytes=0-1, 5-6', 'bytes=a-b']) {
+      expect(parseByteRange(header, 100)).toEqual({ kind: 'none' });
+    }
+  });
+
+  it('reports a well-formed range outside the file as unsatisfiable', () => {
+    expect(parseByteRange('bytes=100-200', 100)).toEqual({ kind: 'unsatisfiable' });
+    expect(parseByteRange('bytes=-0', 100)).toEqual({ kind: 'unsatisfiable' });
+    // A zero-length file has no satisfiable range at all.
+    expect(parseByteRange('bytes=0-0', 0)).toEqual({ kind: 'unsatisfiable' });
+  });
+
+  it('treats a descending window as unsatisfiable, never as an empty read', () => {
+    expect(parseByteRange('bytes=9-3', 100)).toEqual({ kind: 'unsatisfiable' });
+  });
+
+  it('sizes a window past 2 GiB without clamping — packs are why this exists', () => {
+    const twoGiB = 2 * 1024 * 1024 * 1024;
+    expect(parseByteRange(`bytes=${twoGiB}-${twoGiB + 15}`, twoGiB + 64)).toEqual({
+      kind: 'range',
+      start: twoGiB,
+      end: twoGiB + 15,
+    });
   });
 });
 

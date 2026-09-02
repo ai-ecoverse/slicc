@@ -10,12 +10,15 @@ function backendWith(
   backend: HostFsMountBackend;
   calls: string[];
   bodies: unknown[];
+  headers: Record<string, string>[];
 } {
   const calls: string[] = [];
   const bodies: unknown[] = [];
+  const headers: Record<string, string>[] = [];
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(`${init?.method ?? 'GET'} ${url}`);
     bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body);
+    headers.push({ ...((init?.headers as Record<string, string> | undefined) ?? {}) });
     return respond(url, init);
   }) as unknown as typeof fetch;
   return {
@@ -29,6 +32,7 @@ function backendWith(
     }),
     calls,
     bodies,
+    headers,
   };
 }
 
@@ -410,5 +414,95 @@ describe('HostFsMountBackend', () => {
     const { backend } = backendWith(() => ok({}));
     await backend.close();
     await expect(backend.readFile('x')).rejects.toMatchObject({ code: 'EBADF' });
+  });
+});
+
+/**
+ * Ranged reads are how git reaches a packfile that does not fit under the
+ * whole-file body cap, and how a pack that does fit stops costing its full
+ * size in worker memory per object lookup (issue #2711).
+ */
+describe('HostFsMountBackend.readFileRange', () => {
+  /** A 206 carrying exactly the requested window of `whole`. */
+  const partial = (whole: Uint8Array) => (_url: string, init?: RequestInit) => {
+    const range = (init?.headers as Record<string, string> | undefined)?.Range ?? '';
+    const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(range) ?? [];
+    const slice = whole.slice(Number(from), Number(to) + 1);
+    return new Response(slice, {
+      status: 206,
+      headers: { 'Content-Range': `bytes ${from}-${to}/${whole.byteLength}` },
+    });
+  };
+
+  const pack = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+  it('asks for the inclusive wire range of a half-open window', async () => {
+    const { backend, calls, headers } = backendWith(partial(pack));
+    await expect(backend.readFileRange('objects/pack/p.pack', 4, 8)).resolves.toEqual(
+      new Uint8Array([4, 5, 6, 7])
+    );
+    // Per-file GET, never the stable POST — the browser cache keys on the URL.
+    expect(calls).toEqual(['GET /api/hostfs/read?mount=%2Fmnt%2Fkb&path=objects%2Fpack%2Fp.pack']);
+    expect(headers[0].Range).toBe('bytes=4-7');
+  });
+
+  it('never asks for the whole body — the window is the only transfer', async () => {
+    let served = 0;
+    const { backend, headers } = backendWith((_url, init) => {
+      served += 1;
+      return partial(pack)(_url, init);
+    });
+    await backend.readFileRange('big.pack', 9, 10);
+    expect(served).toBe(1);
+    expect(headers[0].Range).toBe('bytes=9-9');
+  });
+
+  it('slices client-side when a bridge without Range answers 200 with everything', async () => {
+    const { backend } = backendWith(() => new Response(pack, { status: 200 }));
+    await expect(backend.readFileRange('p.pack', 2, 5)).resolves.toEqual(new Uint8Array([2, 3, 4]));
+  });
+
+  it('returns empty for a zero-length window without touching the bridge', async () => {
+    const { backend, calls } = backendWith(() => new Response(pack, { status: 206 }));
+    await expect(backend.readFileRange('p.pack', 3, 3)).resolves.toEqual(new Uint8Array(0));
+    expect(calls).toEqual([]);
+  });
+
+  it('rejects a descending or fractional window with EINVAL', async () => {
+    const { backend, calls } = backendWith(() => new Response(pack, { status: 206 }));
+    await expect(backend.readFileRange('p.pack', 8, 2)).rejects.toMatchObject({ code: 'EINVAL' });
+    await expect(backend.readFileRange('p.pack', -1, 4)).rejects.toMatchObject({ code: 'EINVAL' });
+    await expect(backend.readFileRange('p.pack', 0, 1.5)).rejects.toMatchObject({ code: 'EINVAL' });
+    expect(calls).toEqual([]);
+  });
+
+  it('caps the WINDOW, not the file — a 100 MB+ pack stays reachable', async () => {
+    const cap = 100 * 1024 * 1024;
+    const { backend, headers } = backendWith(
+      () => new Response(new Uint8Array(4), { status: 206 })
+    );
+    // A window past the cap is refused …
+    await expect(backend.readFileRange('p.pack', 0, cap + 1)).rejects.toMatchObject({
+      code: 'EFBIG',
+    });
+    // … but an offset far beyond it is not: that is the whole point.
+    await backend.readFileRange('p.pack', 512 * 1024 * 1024, 512 * 1024 * 1024 + 4);
+    expect(headers[0].Range).toBe('bytes=536870912-536870915');
+  });
+
+  it('rethrows the bridge 416 as a faithful EINVAL', async () => {
+    const { backend } = backendWith(
+      () =>
+        new Response(JSON.stringify({ code: 'EINVAL', message: 'range not satisfiable' }), {
+          status: 416,
+        })
+    );
+    await expect(backend.readFileRange('p.pack', 0, 4)).rejects.toMatchObject({ code: 'EINVAL' });
+  });
+
+  it('refuses a ranged read after close with EBADF', async () => {
+    const { backend } = backendWith(() => new Response(pack, { status: 206 }));
+    await backend.close();
+    await expect(backend.readFileRange('p.pack', 0, 4)).rejects.toMatchObject({ code: 'EBADF' });
   });
 });

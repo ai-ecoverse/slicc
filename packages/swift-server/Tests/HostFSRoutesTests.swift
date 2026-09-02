@@ -53,6 +53,209 @@ final class HostFSRoutesTests: XCTestCase {
         return try JSONDecoder().decode(LickSystem.JSONValue.self, from: data)
     }
 
+    /// `Range` on `read` is what makes a repo whose largest packfile exceeds
+    /// the whole-file cap reachable by git at all (#2711). Mirrors
+    /// node-server's `hostfs read: byte ranges` suite.
+    func testReadHonorsByteRanges() async throws {
+        try await makeApp().test(.router) { client in
+            func read(_ range: String?, _ check: @escaping (TestResponse) throws -> Void)
+                async throws
+            {
+                var headers = HTTPFields()
+                if let range { headers[HostFSRoutes.rangeHeader] = range }
+                try await client.execute(
+                    uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get,
+                    headers: headers
+                ) { response in try check(response) }
+            }
+            // "hello host" → bytes 6..9 are "host".
+            try await read("bytes=6-9") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes 6-9/10")
+                XCTAssertEqual(response.headers[HostFSRoutes.acceptRangesHeader], "bytes")
+                var buffer = response.body
+                XCTAssertEqual(
+                    buffer.readData(length: buffer.readableBytes) ?? Data(), Data("host".utf8))
+            }
+            try await read("bytes=-4") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes 6-9/10")
+            }
+            try await read("bytes=99-120") { response in
+                XCTAssertEqual(response.status, .rangeNotSatisfiable)
+                XCTAssertEqual(response.headers[HostFSRoutes.contentRangeHeader], "bytes */10")
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad error shape")
+                }
+                XCTAssertEqual(body["code"], .string("EINVAL"))
+            }
+            // RFC 9110 §14.2: a Range the server cannot parse is ignored.
+            try await read("items=0-2") { response in
+                XCTAssertEqual(response.status, .ok)
+                var buffer = response.body
+                XCTAssertEqual(
+                    buffer.readData(length: buffer.readableBytes) ?? Data(),
+                    Data("hello host".utf8))
+            }
+            try await read(nil) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(response.headers[HostFSRoutes.acceptRangesHeader], "bytes")
+            }
+        }
+    }
+
+    /// A ranged read exists so a multi-GB pack is reachable, so the window
+    /// must be STREAMED — materializing it as one `Data` would have dropped
+    /// the 100 MiB guard without replacing it (`bytes=0-` on a huge file).
+    func testLargeAndOpenEndedRangesAreStreamed() async throws {
+        // Comfortably more than one `streamChunkBytes` so the writer loop runs
+        // several times and a single-shot read would be visible as a wrong length.
+        let bigLength = HostFSRoutes.streamChunkBytes * 2 + 12345
+        var pattern = Data(count: bigLength)
+        for index in stride(from: 0, to: bigLength, by: 4093) {
+            pattern[index] = UInt8(index % 251)
+        }
+        let bigPath = root + "/big.pack"
+        try pattern.write(to: URL(fileURLWithPath: bigPath))
+        defer { try? FileManager.default.removeItem(atPath: bigPath) }
+
+        try await makeApp().test(.router) { client in
+            func readBig(_ range: String?, _ check: @escaping (TestResponse) throws -> Void)
+                async throws
+            {
+                var headers = HTTPFields()
+                if let range { headers[HostFSRoutes.rangeHeader] = range }
+                try await client.execute(
+                    uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=big.pack", method: .get,
+                    headers: headers
+                ) { response in try check(response) }
+            }
+            // Open-ended: the whole file as one window, delivered in chunks.
+            try await readBig("bytes=0-") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                XCTAssertEqual(
+                    response.headers[HostFSRoutes.contentRangeHeader],
+                    "bytes 0-\(bigLength - 1)/\(bigLength)")
+                var buffer = response.body
+                XCTAssertEqual(buffer.readData(length: buffer.readableBytes) ?? Data(), pattern)
+            }
+            // A window that straddles several chunk boundaries.
+            let start = HostFSRoutes.streamChunkBytes - 7
+            let end = HostFSRoutes.streamChunkBytes * 2 + 11
+            try await readBig("bytes=\(start)-\(end)") { response in
+                XCTAssertEqual(response.status, .partialContent)
+                var buffer = response.body
+                XCTAssertEqual(
+                    buffer.readData(length: buffer.readableBytes) ?? Data(),
+                    pattern.subdata(in: start..<(end + 1)))
+            }
+            // The unranged read is streamed too, and still under the cap here.
+            try await readBig(nil) { response in
+                XCTAssertEqual(response.status, .ok)
+                var buffer = response.body
+                XCTAssertEqual(buffer.readData(length: buffer.readableBytes) ?? Data(), pattern)
+            }
+        }
+    }
+
+    /// Streaming cost node-server the ETag express derived from the buffered
+    /// body; both bridges now derive one from the stat instead, or the browser
+    /// re-transfers a 92 MB pack on every object lookup (#2707: 220,310 of
+    /// 385,033 hostfs GETs were 304s).
+    func testConditionalRequests() async throws {
+        try await makeApp().test(.router) { client in
+            func read(_ headers: HTTPFields, _ check: @escaping (TestResponse) throws -> Void)
+                async throws
+            {
+                try await client.execute(
+                    uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get,
+                    headers: headers
+                ) { response in try check(response) }
+            }
+            var etag = ""
+            var lastModified = ""
+            try await read(HTTPFields()) { response in
+                XCTAssertEqual(response.status, .ok)
+                etag = response.headers[HostFSRoutes.etagHeader] ?? ""
+                lastModified = response.headers[HostFSRoutes.lastModifiedHeader] ?? ""
+                XCTAssertFalse(etag.isEmpty)
+                XCTAssertFalse(lastModified.isEmpty)
+                // Strong — If-Range is only defined for a strong validator.
+                XCTAssertFalse(etag.hasPrefix("W/"))
+            }
+            // Repeat GET with the validator → 304, no body.
+            var conditional = HTTPFields()
+            conditional[HostFSRoutes.ifNoneMatchHeader] = etag
+            try await read(conditional) { response in
+                XCTAssertEqual(response.status, .notModified)
+                XCTAssertEqual(response.body.readableBytes, 0)
+                XCTAssertEqual(response.headers[HostFSRoutes.etagHeader], etag)
+            }
+            // Weak form and `*` match too; a stale tag does not.
+            var weak = HTTPFields()
+            weak[HostFSRoutes.ifNoneMatchHeader] = "W/" + etag
+            try await read(weak) { XCTAssertEqual($0.status, .notModified) }
+            var star = HTTPFields()
+            star[HostFSRoutes.ifNoneMatchHeader] = "*"
+            try await read(star) { XCTAssertEqual($0.status, .notModified) }
+            var stale = HTTPFields()
+            stale[HostFSRoutes.ifNoneMatchHeader] = "\"stale\""
+            try await read(stale) { XCTAssertEqual($0.status, .ok) }
+            // If-Modified-Since with the reported date → 304.
+            var since = HTTPFields()
+            since[HostFSRoutes.ifModifiedSinceHeader] = lastModified
+            try await read(since) { XCTAssertEqual($0.status, .notModified) }
+            // A matching If-Range keeps the window; a stale one serves it whole.
+            var withRange = HTTPFields()
+            withRange[HostFSRoutes.rangeHeader] = "bytes=6-9"
+            withRange[HostFSRoutes.ifRangeHeader] = etag
+            try await read(withRange) { XCTAssertEqual($0.status, .partialContent) }
+            var staleRange = HTTPFields()
+            staleRange[HostFSRoutes.rangeHeader] = "bytes=6-9"
+            staleRange[HostFSRoutes.ifRangeHeader] = "\"not-the-current-tag\""
+            try await read(staleRange) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertNil(response.headers[HostFSRoutes.contentRangeHeader])
+            }
+        }
+    }
+
+    /// A changed mtime must invalidate the validator, or a client keeps a
+    /// stale pack forever.
+    func testChangedMtimeInvalidatesTheValidator() throws {
+        let path = root + "/hello.txt"
+        let before = HostFSRoutes.cacheValidator(path: path, size: 10, mtimeMs: 1_700_000_000_000)
+        let after = HostFSRoutes.cacheValidator(path: path, size: 10, mtimeMs: 1_700_000_060_000)
+        XCTAssertNotEqual(before.etag, after.etag)
+        XCTAssertNotEqual(before.lastModified, after.lastModified)
+        // Size alone moves it too.
+        let resized = HostFSRoutes.cacheValidator(path: path, size: 11, mtimeMs: 1_700_000_000_000)
+        XCTAssertNotEqual(before.etag, resized.etag)
+    }
+
+    /// Byte-for-byte the cases node-server's `parseByteRange` suite pins.
+    func testParseByteRangeMatchesNodeServer() {
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-9", size: 100), .window(start: 0, end: 9))
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=90-", size: 100), .window(start: 90, end: 99))
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=-10", size: 100), .window(start: 90, end: 99))
+        // A suffix longer than the file is the whole file, not an error.
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=-500", size: 100), .window(start: 0, end: 99))
+        // An explicit end past EOF clamps.
+        XCTAssertEqual(
+            HostFSRoutes.parseByteRange("bytes=6-9999", size: 10), .window(start: 6, end: 9))
+        for header in [nil, "", "bytes=", "items=0-1", "bytes=0-1, 5-6", "bytes=a-b"] {
+            XCTAssertEqual(HostFSRoutes.parseByteRange(header, size: 100), .whole, "\(header ?? "nil")")
+        }
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=100-200", size: 100), .unsatisfiable)
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=-0", size: 100), .unsatisfiable)
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=9-3", size: 100), .unsatisfiable)
+        // A zero-length file has no satisfiable range at all.
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=0-0", size: 0), .unsatisfiable)
+    }
+
     func testListStatReadRoundTrip() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(
