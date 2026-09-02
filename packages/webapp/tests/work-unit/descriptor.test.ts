@@ -83,6 +83,7 @@ describe('work-unit descriptor', () => {
       root: '/workspace',
       access: 'shared-live',
     });
+    expect(d.onParentClose).toBe('cascade');
   });
 
   it('projects a child record and derives role from the edge, not a legacy role field', () => {
@@ -99,6 +100,13 @@ describe('work-unit descriptor', () => {
       root: '/scoops/worker-scoop/workspace',
       access: 'shared-readonly',
     });
+    expect(d.onParentClose).toBe('cascade');
+  });
+
+  it('projects detach-on-close from the record onto the descriptor', () => {
+    const d = toDescriptor(childRecord('cone_1', { onParentClose: 'detach' }));
+    expect(d.onParentClose).toBe('detach');
+    expect(d.parentId).toBe('cone_1');
   });
 
   it('is a pure projection: JSON round-trips and does not alias the record', () => {

@@ -96,4 +96,14 @@ describe('work-unit record helpers', () => {
       });
     });
   });
+
+  it('strips onParentClose from a root — the field is a child concept', () => {
+    const promoted = normalizeScoopRecord(
+      childRecord('cone_1', { parentJid: null, onParentClose: 'detach' })
+    );
+    expect(promoted.parentJid).toBeNull();
+    expect(promoted.onParentClose).toBeUndefined();
+    expect(promoted.trigger).toBeUndefined();
+    expect(promoted.requiresTrigger).toBe(false);
+  });
 });

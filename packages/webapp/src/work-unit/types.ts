@@ -133,6 +133,15 @@ export type CompletionPolicy =
   | { mode: 'notify-parent' }
   | { mode: 'silent' };
 
+/**
+ * What happens to a child when the unit that owns it closes (#2278).
+ *
+ * - `cascade` — today's default: the child is closed with its parent.
+ * - `detach` — the child is promoted to an independent root instead of
+ *   torn down (`WorkUnitManager.promote` / `detach`).
+ */
+export type OnParentClose = 'cascade' | 'detach';
+
 /** Filesystem coordinates derived once from the unit's role and folder. */
 export interface WorkUnitWorkspace {
   /** Working directory of the unit's shell and agent. */
@@ -160,6 +169,11 @@ export interface WorkUnitDescriptor {
   workspaceHandle: WorkspaceHandle;
   policy: WorkUnitPolicy;
   completion: CompletionPolicy;
+  /**
+   * Close policy of this unit relative to its parent. Roots always report
+   * `cascade` (they have no parent). Default for a child is `cascade`.
+   */
+  onParentClose: OnParentClose;
 }
 
 /** Events a unit emits to subscribers. Mirrors `ScoopObserver` 1:1. */
@@ -237,6 +251,23 @@ export interface CreateWorkUnitOptions {
     /** Parent workspaceId to share from. Defaults to the parent's own root. */
     from?: string;
   };
+  /**
+   * Child-only close policy (#2278). Ignored on a root. Absent → `cascade`,
+   * so `create` without this field preserves today's parent-close behaviour.
+   */
+  onParentClose?: OnParentClose;
+}
+
+/** Options accepted by {@link import('./manager.js').WorkUnitManager.close}. */
+export interface CloseWorkUnitOptions {
+  /**
+   * How to handle units this one owns. When omitted, each child's
+   * {@link WorkUnitDescriptor.onParentClose} is honoured (`cascade` by
+   * default). An explicit value overrides every descendant:
+   * `detach` promotes direct children (RFC detach-on-close); `cascade`
+   * tears them down even if a child asked to detach.
+   */
+  descendants?: OnParentClose;
 }
 
 /** Options accepted by `WorkUnitManager.join`. */

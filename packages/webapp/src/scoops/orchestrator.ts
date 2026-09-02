@@ -1235,6 +1235,16 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.register(scoop);
   }
 
+  /**
+   * Persist an already-registered record after an in-place mutation
+   * (`WorkUnitManager.promote` / `detach`). Does not spawn or tear down
+   * a runtime — unlike {@link registerScoop}.
+   */
+  async persistScoop(scoop: RegisteredScoop): Promise<void> {
+    this.scoops.set(scoop.jid, scoop);
+    await db.saveScoop(scoop);
+  }
+
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
   unregisterScoop(jid: string): Promise<void> {
     return this.lifecycle.unregister(jid);

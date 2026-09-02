@@ -5,6 +5,7 @@ import {
   childrenOf,
   delegatedChildPolicy,
   deriveCompletion,
+  deriveOnParentClose,
   derivePolicy,
   interactiveRootPolicy,
   isPolicySubset,
@@ -113,6 +114,17 @@ describe('work-unit policy', () => {
     expect(deriveCompletion(childRecord('cone_1', { notifyOnComplete: false }))).toEqual({
       mode: 'silent',
     });
+  });
+
+  it('derives onParentClose; roots and absent default to cascade', () => {
+    expect(deriveOnParentClose(rootRecord())).toBe('cascade');
+    expect(deriveOnParentClose(childRecord('cone_1'))).toBe('cascade');
+    expect(deriveOnParentClose(childRecord('cone_1', { onParentClose: 'cascade' }))).toBe(
+      'cascade'
+    );
+    expect(deriveOnParentClose(childRecord('cone_1', { onParentClose: 'detach' }))).toBe('detach');
+    // A root that somehow still carries the field ignores it.
+    expect(deriveOnParentClose(rootRecord({ onParentClose: 'detach' }))).toBe('cascade');
   });
 
   describe('child ⊆ parent invariant', () => {

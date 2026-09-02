@@ -273,15 +273,15 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 
 ### packages/webapp/src/work-unit/ — WorkUnit Runtime (#1666)
 
-| File            | Purpose                                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, lifecycle `WorkUnitStatus`, events                                                                                    |
-| `policy.ts`     | Root/child presets, `derivePolicy`, `isRootUnit` (`parentJid === null` — the only root test), `isPolicySubset`, `childrenOf`, `rootsOf`                                           |
-| `descriptor.ts` | Pure projection of a `RegisteredScoop` + tab state onto a descriptor; `workspaceFor` computes cwd / memory / scratch paths                                                        |
-| `runtime.ts`    | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                             |
-| `live-unit.ts`  | `LiveWorkUnit` — owning runtime per scoop (context, tab, observers); legal-transition table; `close()` single teardown. `ScoopLifecycleManager` hosts these                       |
-| `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone` for the restore backfill; session-id / process-owner / source-label helpers |
-| `manager.ts`    | `WorkUnitManager` (`Orchestrator.getWorkUnits()`): hierarchy queries (`getParent`, `getChildren`, `roots`, `resolveDefaultRoot`) replacing the global cone lookup                 |
+| File            | Purpose                                                                                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `OnParentClose`, lifecycle `WorkUnitStatus`, events                                                                                          |
+| `policy.ts`     | Root/child presets, `derivePolicy`, `deriveOnParentClose`, `isRootUnit` (`parentJid === null` — the only root test), `isPolicySubset`, `childrenOf`, `rootsOf`                                           |
+| `descriptor.ts` | Pure projection of a `RegisteredScoop` + tab state onto a descriptor; `workspaceFor` computes cwd / memory / scratch paths                                                                               |
+| `runtime.ts`    | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                                                    |
+| `live-unit.ts`  | `LiveWorkUnit` — owning runtime per scoop (context, tab, observers); legal-transition table; `close()` single teardown. `ScoopLifecycleManager` hosts these                                              |
+| `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone` for the restore backfill; session-id / process-owner / source-label helpers                        |
+| `manager.ts`    | `WorkUnitManager` (`Orchestrator.getWorkUnits()`): hierarchy queries (`getParent`, `getChildren`, `roots`, `resolveDefaultRoot`) plus `promote` / `detach` / `close` (cascade, optional detach-on-close) |
 
 Cone and scoop are roles over this one runtime; see [`docs/work-unit.md`](./work-unit.md) for the decision record and migration phases.
 
