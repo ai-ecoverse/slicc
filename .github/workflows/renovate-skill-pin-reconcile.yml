@@ -1,0 +1,92 @@
+name: Renovate Skill Pin Reconcile
+
+# When Renovate bumps an npm dep that is also hard-coded in an agent skill
+# install line (today: v86 in packages/vfs-root/workspace/skills/v86/SKILL.md),
+# the live canary fails until the skill moves with it (PR #2773). The Mend-hosted
+# app cannot run postUpgradeTasks; renovate.json's regex customManager + group
+# usually lands both sides in one PR, and this companion workflow is the
+# backstop: on a `skill-pin`-labelled Renovate PR it rewrites the skill pin from
+# package.json and, if that changed anything, commits + pushes to the PR branch.
+#
+# Mirrors renovate-format-reconcile.yml / renovate-swift-pin-reconcile.yml:
+#   - Same trigger gating: Renovate's own branch PRs in THIS repo (head here so
+#     secrets + push work) carrying the `skill-pin` label that renovate.json
+#     adds to dual-pinned npm packages with an agent-skill install line.
+#   - Same BOT_PAT push identity: a GITHUB_TOKEN-authored push is suppressed by
+#     GitHub's anti-recursion guard, so CI would NOT re-run on it; pushing with
+#     BOT_PAT fires the PR's `synchronize` event and the full suite re-runs.
+#   - Third-party actions pinned to the same immutable commit SHAs.
+#
+# No `npm ci`: the reconciler is a zero-dep Node script that only reads the
+# package.json pin and rewrites the skill markdown.
+#
+# Required secret (already present, shared with the other renovate-* reconcile
+# workflows): BOT_PAT — fine-grained PAT scoped to this repo with contents +
+# pull-requests write.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-skill-pin-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the pin-sync commit to the PR branch
+  pull-requests: write # comment the outcome on the PR
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Only Renovate's own branch PRs in this repo that carry the skill-pin
+    # label. Gate on the PR AUTHOR (pull_request.user.login), NOT github.actor:
+    # on a `labeled` event the actor is the human who added the label, so an
+    # actor gate would skip the manual "label an already-open Renovate PR to
+    # unblock it" path.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'skill-pin')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # BOT_PAT (not GITHUB_TOKEN) so the pin-sync push fires the PR's
+          # `synchronize` event and CI re-runs — see the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Reconcile skill install pins
+        id: pins
+        run: |
+          if node packages/dev-tools/skill-pin-reconcile/reconcile.mjs --write; then
+            if git diff --quiet; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Reconcile failed."
+            exit 1
+          fi
+
+      - name: Push the pin-sync if anything changed
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "fix(deps): sync agent skill install pin (renovate-skill-pin-reconcile)"
+          git push
+
+      - name: Comment the outcome
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🔗 Synced the agent-skill \`ipk add\` pin with \`package.json\` so the live canary stays green (Renovate otherwise only bumps the npm pin). See \`.github/workflows/renovate-skill-pin-reconcile.yml\`."

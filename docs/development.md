@@ -131,7 +131,7 @@ npm view <dep> version
 
 ### Companion reconcile workflows
 
-The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Three workflows
+The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Four workflows
 clean up after it, pushing as `github-actions[bot]` (listed in
 `renovate.json` `gitIgnoredAuthors` so Renovate does not treat the push as a
 foreign edit):
@@ -141,8 +141,12 @@ foreign edit):
 | `renovate-format-reconcile.yml`    | `formatter-bump`     | Runs biome + prettier after a formatter bump                            |
 | `renovate-patch-reconcile.yml`     | `patched-dependency` | Regenerates or removes an orphaned `patch-package` patch                |
 | `renovate-swift-pin-reconcile.yml` | `swift-pin`          | Syncs GitHub SPM pins across `Package.swift` and xcodegen `project.yml` |
+| `renovate-skill-pin-reconcile.yml` | `skill-pin`          | Syncs agent-skill `ipk add` pins (e.g. v86) with `package.json`         |
 
-`npm run lint:patches` and `npm run lint:swift-pins` are the CI backstops.
+`npm run lint:patches` and `npm run lint:swift-pins` are the CI backstops for
+patches and SPM dual-pins. The v86 skill pin's CI backstop is the live canary
+in `v86-wasm-live.test.ts` (it asserts the skill install line matches the npm
+pin).
 
 ### Reviewer expectations
 
