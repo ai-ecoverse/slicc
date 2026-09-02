@@ -27,9 +27,36 @@
  * the production `vite build` worker bundle resolve the glue inline.
  * Only the heavy `magick.wasm` binary stays out of the bundle — it is
  * loaded from the VFS ipk install.
+ *
+ * The glue is imported by NAMED BINDING, never as `import * as ns`. That
+ * is a bundle-size contract, not style: since 0.0.43 the package ships the
+ * Emscripten glue for BOTH memory models in one module — `x86/magick.js`
+ * (~124 kB) behind `initializeImageMagick` and `x64/magick.js` (~130 kB)
+ * behind `initializeImageMagickx64`. A namespace import references every
+ * export, so Rollup must retain both and the unused 64-bit glue rides
+ * along. Because this module sits in the kernel worker's EAGER import
+ * closure (`builtin-shadow-map.ts` pulls it in for a version string), that
+ * dead glue is cold-boot payload on every single boot: the 0.0.42 -> 0.0.43
+ * bump measured +103 kB on the worker first-load graph. Naming the members
+ * we actually use lets tree-shaking drop the initializer we never call.
+ * If a future release moves a member we need, add it to `MAGICK` below —
+ * do NOT go back to a namespace import.
  */
 
-import * as magickModule from '@imagemagick/magick-wasm';
+import {
+  AlphaAction,
+  ColorSpace,
+  Drawables,
+  Gravity,
+  ImageMagick,
+  initializeImageMagick,
+  Magick,
+  MagickColor,
+  MagickFormat,
+  MagickGeometry,
+  MagickImageCollection,
+  Percentage,
+} from '@imagemagick/magick-wasm';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
@@ -154,7 +181,7 @@ export interface IpkResolutionContext {
 
 /**
  * The `@imagemagick/magick-wasm` release whose JS glue is statically
- * bundled into this build (the `import * as magickModule` above resolves
+ * bundled into this build (the named glue imports above resolve
  * the host `node_modules` copy at build time). The Emscripten glue and the
  * runtime `magick.wasm` MUST be the same version: handing the bundled glue
  * a `magick.wasm` from a different release makes `initializeImageMagick`
@@ -243,6 +270,33 @@ export async function withInitTimeout<T>(
   }
 }
 
+/**
+ * The glue members `ImageMagickModule` promises, gathered from the named
+ * imports. This is what `getMagick` hands back — previously the module
+ * namespace object itself, which is what forced Rollup to retain every
+ * export (see the header). Property access is identical; only the set of
+ * reachable exports changes.
+ */
+const MAGICK = {
+  initializeImageMagick,
+  ImageMagick,
+  MagickImageCollection,
+  Drawables,
+  MagickColor,
+  Magick,
+  AlphaAction,
+  ColorSpace,
+  Gravity,
+  MagickFormat,
+  MagickGeometry,
+  Percentage,
+  // `satisfies` is the guard that keeps this list honest: it fails the build
+  // if a member of `ImageMagickModule` is missing here or an extra one is
+  // added, which the `as unknown as` cast below cannot catch on its own.
+  // The cast stays because the package's own types do not structurally match
+  // this hand-written interface — only the KEY SET is checkable.
+} satisfies Record<keyof ImageMagickModule, unknown> as unknown as ImageMagickModule;
+
 let magickPromise: Promise<ImageMagickModule> | null = null;
 
 /**
@@ -283,8 +337,8 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
       import.meta.url
     ).toString();
     const wasmUrl = new URL('magick.wasm', wasmBase);
-    await withInitTimeout(magickModule.initializeImageMagick(wasmUrl));
-    return magickModule as unknown as ImageMagickModule;
+    await withInitTimeout(initializeImageMagick(wasmUrl));
+    return MAGICK;
   }
   // Browser (standalone OR any non-extension browser realm): an
   // ipk-installed copy of `@imagemagick/magick-wasm/dist/magick.wasm`
@@ -311,8 +365,42 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
   // `SharedArrayBuffer | ArrayBuffer` typing union, so no buffer copy is
   // needed first.
   const wasmModule = await compileWasmModule(bytes);
-  await withInitTimeout(magickModule.initializeImageMagick(wasmModule));
-  return magickModule as unknown as ImageMagickModule;
+  await withInitTimeout(initializeImageMagick(wasmModule));
+  return MAGICK;
+}
+
+/**
+ * Candidate `magick.wasm` locations inside an ipk-installed
+ * `@imagemagick/magick-wasm`, newest layout first.
+ *
+ * 0.0.43 split the binary by memory model: what used to be a single
+ * `dist/magick.wasm` is now `dist/x86/magick.wasm` (32-bit) alongside
+ * `dist/x64/magick.wasm` (64-bit). Both layouts are supported here because
+ * `ipk add @imagemagick/magick-wasm@<version>` can put either one in the
+ * VFS depending on the pinned version.
+ *
+ * `dist/x64/magick.wasm` is deliberately NOT a candidate. It pairs with the
+ * package's `initializeImageMagickx64` entry point, which this module does
+ * not bundle (see the header — importing it would drag ~130 kB of unused
+ * glue into the kernel worker's cold-boot payload). Handing 64-bit bytes to
+ * the 32-bit glue is the same ABI mismatch `assertMagickVersionMatch`
+ * guards against by version: emscripten never fulfills a run dependency and
+ * the bring-up hangs until `withInitTimeout` fires. Falling back to it
+ * would trade a clean "not installed" error for a 30-second hang.
+ */
+const MAGICK_WASM_CANDIDATES = ['dist/x86/magick.wasm', 'dist/magick.wasm'] as const;
+
+/**
+ * First existing `magick.wasm` under `pkgDir`, or null when the install has
+ * none (a partial/pruned ipk install, or a future layout change — the
+ * caller turns that into the canonical guidance error).
+ */
+async function findMagickWasm(pkgDir: string, reader: ModuleReader): Promise<string | null> {
+  for (const candidate of MAGICK_WASM_CANDIDATES) {
+    const path = `${pkgDir}/${candidate}`;
+    if (await reader.exists(path)) return path;
+  }
+  return null;
 }
 
 /**
@@ -322,7 +410,8 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
  * (so the standard `node_modules` walk and resolution rules apply),
  * derives the package directory from the resolved file, reads the
  * package's `version` (for the glue/wasm compatibility guard), and reads
- * `dist/magick.wasm` bytes. Returns `null` on any miss — the caller
+ * the `magick.wasm` bytes (see `MAGICK_WASM_CANDIDATES` for the
+ * supported layouts). Returns `null` on any miss — the caller
  * surfaces the canonical guidance error. The `version` is `'unknown'`
  * only if the resolved `package.json` can't be read/parsed; the caller's
  * mismatch guard then surfaces that verbatim.
@@ -341,8 +430,8 @@ export async function tryLoadMagickWasmFromNodeModules(
   }
   if (resolved.type !== 'file') return null;
   const pkgDir = splitPath(resolved.path).dir;
-  const wasmPath = `${pkgDir}/dist/magick.wasm`;
-  if (!(await ipk.reader.exists(wasmPath))) return null;
+  const wasmPath = await findMagickWasm(pkgDir, ipk.reader);
+  if (!wasmPath) return null;
   let version = 'unknown';
   try {
     const pkg = JSON.parse(new TextDecoder().decode(await ipk.readBytes(resolved.path)));
