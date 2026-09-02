@@ -78,7 +78,6 @@ export const CONE_MODEL_ALT = 'fake-cone-alternate';
 /** Provider the fake models are registered under (`built-in/local-llm.ts`). */
 const LOCAL_LLM_PROVIDER_ID = 'local-llm';
 
-/** localStorage key of the feature-flag override bag (`core/feature-flags.ts`). */
 /** localStorage key the page mirrors leader tray status into (`base/tray-role.ts`). */
 const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
 
