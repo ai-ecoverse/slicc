@@ -28,7 +28,12 @@ import NIOCore
 /// `maxBodyBytes` is unreadable by git, because isomorphic-git needs the pack
 /// as one buffer and the bridge refused to serve it (issue #2711). The
 /// whole-file cap still guards an unranged read; a ranged read is bounded by
-/// the window it names, so it is exempt.
+/// the window it names, so it is exempt — and every body is STREAMED in
+/// `streamChunkBytes` pieces, so lifting the cap did not hand a `bytes=0-` on
+/// a multi-GB file a way to allocate it whole. `ETag`/`Last-Modified` come
+/// from the stat and `If-None-Match`/`If-Modified-Since`/`If-Range` are
+/// honored, matching `cacheValidator` in `hostfs.ts`: without a validator the
+/// browser re-transfers a 92 MB pack on every object lookup.
 enum HostFSRoutes {
     /// Matches the webapp's hostfs body cap (`backend-hostfs.ts`).
     static let maxBodyBytes = 100 * 1024 * 1024
@@ -161,6 +166,133 @@ enum HostFSRoutes {
         }
     }
 
+    // MARK: - Cache validators
+
+    static var etagHeader: HTTPField.Name { HTTPField.Name("ETag")! }
+    static var lastModifiedHeader: HTTPField.Name { HTTPField.Name("Last-Modified")! }
+    static var ifNoneMatchHeader: HTTPField.Name { HTTPField.Name("If-None-Match")! }
+    static var ifModifiedSinceHeader: HTTPField.Name { HTTPField.Name("If-Modified-Since")! }
+    static var ifRangeHeader: HTTPField.Name { HTTPField.Name("If-Range")! }
+
+    /// IMF-fixdate, the only `HTTP-date` form anything still emits.
+    static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return formatter
+    }()
+
+    /// Cache validators for one file, derived from its `stat`. Mirrors
+    /// node-server's `cacheValidator`.
+    ///
+    /// The ETag is STRONG (no `W/`) on purpose: `If-Range` is only defined for
+    /// a strong validator, and a ranged pack read is the case that matters most
+    /// here. What justifies "strong" is what goes into it — inode, size and an
+    /// unrounded high-resolution mtime. The honest limit: a write landing on
+    /// the same inode with an identical size AND a deliberately restored mtime
+    /// is invisible to it. Nothing git does looks like that, and the
+    /// alternative is hashing the body, which is the buffering we removed.
+    struct CacheValidator: Equatable {
+        let etag: String
+        let lastModified: String
+        /// mtime floored to the second, which is all an HTTP-date can carry.
+        let mtimeSeconds: Int
+    }
+
+    static func cacheValidator(path: String, size: Int, mtimeMs: Double) -> CacheValidator {
+        var info = stat()
+        let ino = stat(path, &info) == 0 ? UInt64(info.st_ino) : 0
+        let mtimeSeconds = Int((mtimeMs / 1000).rounded(.down))
+        // Hex, and mtime scaled to whole microseconds so the token is an
+        // integer rather than a locale-free float rendering.
+        let mtimeMicros = UInt64(max(0, (mtimeMs * 1000).rounded(.down)))
+        return CacheValidator(
+            etag: "\"\(String(size, radix: 16))-\(String(mtimeMicros, radix: 16))"
+                + "-\(String(ino, radix: 16))\"",
+            lastModified: httpDateFormatter.string(
+                from: Date(timeIntervalSince1970: Double(mtimeSeconds))),
+            mtimeSeconds: mtimeSeconds)
+    }
+
+    /// Drop a `W/` prefix so the weak comparison treats `W/"x"` and `"x"` alike.
+    private static func stripWeak(_ tag: String) -> String {
+        tag.hasPrefix("W/") ? String(tag.dropFirst(2)) : tag
+    }
+
+    /// True when the client already holds this exact representation → 304.
+    ///
+    /// RFC 9110 §13.2.1 fixes the precedence: `If-None-Match` decides on its
+    /// own whenever present, and `If-Modified-Since` is consulted only in its
+    /// absence. `If-None-Match` uses the WEAK comparison, so a cached weak form
+    /// of our tag still matches. Mirrors node-server's `isNotModified`.
+    static func isNotModified(_ headers: HTTPFields, _ validator: CacheValidator) -> Bool {
+        if let ifNoneMatch = headers[ifNoneMatchHeader] {
+            let trimmed = ifNoneMatch.trimmingCharacters(in: .whitespaces)
+            if trimmed == "*" { return true }
+            return trimmed.split(separator: ",").contains {
+                stripWeak($0.trimmingCharacters(in: .whitespaces)) == stripWeak(validator.etag)
+            }
+        }
+        guard let ifModifiedSince = headers[ifModifiedSinceHeader] else { return false }
+        // An unparseable date is not a claim about anything — serve the file.
+        guard let since = httpDateFormatter.date(from: ifModifiedSince) else { return false }
+        return Double(validator.mtimeSeconds) <= since.timeIntervalSince1970
+    }
+
+    /// Whether a `Range` may still be honored. A mismatched `If-Range`
+    /// downgrades to a plain 200 rather than erroring, which is what stops a
+    /// client stitching a window of the NEW file into a buffer holding the old
+    /// one. Comparison is STRONG (RFC 9110 §13.1.5). Mirrors node-server's
+    /// `ifRangeAllowsRange`.
+    static func ifRangeAllowsRange(_ headers: HTTPFields, _ validator: CacheValidator) -> Bool {
+        guard let ifRange = headers[ifRangeHeader] else { return true }
+        let value = ifRange.trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix("\"") || value.hasPrefix("W/") { return value == validator.etag }
+        guard let asDate = httpDateFormatter.date(from: value) else { return false }
+        return Double(validator.mtimeSeconds) == asDate.timeIntervalSince1970
+    }
+
+    // MARK: - Streaming
+
+    /// How much of a file is held in memory at once while streaming it out.
+    static let streamChunkBytes = 1024 * 1024
+
+    /// A body that reads `length` bytes from `start` in bounded chunks.
+    ///
+    /// The point of a ranged read is that a multi-GB pack becomes reachable, so
+    /// materializing the window with `Data(contentsOf:)` before handing it to a
+    /// `ByteBuffer` would have removed the 100 MiB guard without replacing it —
+    /// an open-ended `bytes=0-` on a huge file would allocate the whole thing.
+    /// Hummingbird's closure-backed `ResponseBody` lets the window go out a
+    /// chunk at a time instead, matching what node-server's `createReadStream`
+    /// does. A failure mid-body arrives after the status line is spent, so it
+    /// propagates and drops the connection — the same truncated-body signal the
+    /// client's retry path already handles.
+    private static func streamedFileBody(path: String, start: Int, length: Int) throws
+        -> ResponseBody
+    {
+        // Open eagerly so ENOENT/EACCES still becomes errno JSON, before any
+        // header is on the wire.
+        let handle = try wrapErrno {
+            try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        }
+        if start > 0 {
+            try wrapErrno { try handle.seek(toOffset: UInt64(start)) }
+        }
+        return ResponseBody(contentLength: length) { writer in
+            defer { try? handle.close() }
+            var remaining = length
+            while remaining > 0 {
+                let want = min(remaining, streamChunkBytes)
+                guard let chunk = try handle.read(upToCount: want), !chunk.isEmpty else { break }
+                try await writer.write(ByteBuffer(bytes: chunk))
+                remaining -= chunk.count
+            }
+            try await writer.finish(nil)
+        }
+    }
+
     // MARK: - Registration
 
     /// Body of the stable `POST /api/hostfs` endpoint. One URL for every
@@ -241,47 +373,7 @@ enum HostFSRoutes {
         }
 
         router.get("/api/hostfs/read") { request, _ in
-            try run {
-                let path = try target(for: request)
-                let (isDirectory, rawSize, _) = try statAt(path)
-                if isDirectory {
-                    throw FsFailure.code("EISDIR", .conflict, "is a directory")
-                }
-                let size = Int(rawSize)
-                var headers = HTTPFields()
-                headers[.contentType] = "application/octet-stream"
-                headers[acceptRangesHeader] = "bytes"
-                switch parseByteRange(request.headers[rangeHeader], size: size) {
-                case .unsatisfiable:
-                    return fsError(
-                        "EINVAL", .rangeNotSatisfiable,
-                        "range not satisfiable for a \(size) byte file",
-                        extra: [
-                            (acceptRangesHeader, "bytes"), (contentRangeHeader, "bytes */\(size)"),
-                        ])
-                case .window(let start, let end):
-                    // No size cap here on purpose: the window IS the bound, so
-                    // neither side ever holds more than the bytes asked for.
-                    // This is what lets git reach a pack larger than
-                    // `maxBodyBytes` at all (issue #2711).
-                    let data = try readWindow(path: path, start: start, length: end - start + 1)
-                    headers[contentRangeHeader] = "bytes \(start)-\(end)/\(size)"
-                    return Response(
-                        status: .partialContent, headers: headers,
-                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
-                case .whole:
-                    if size > maxBodyBytes {
-                        return fsError(
-                            "EFBIG", .contentTooLarge,
-                            "file exceeds the hostfs whole-file cap; read it with a Range request",
-                            extra: [(acceptRangesHeader, "bytes")])
-                    }
-                    let data = try wrapErrno { try Data(contentsOf: URL(fileURLWithPath: path)) }
-                    return Response(
-                        status: .ok, headers: headers,
-                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
-                }
-            }
+            try run { try readResponse(try target(for: request), request.headers) }
         }
 
         router.put("/api/hostfs/write") { request, _ in
@@ -389,6 +481,64 @@ enum HostFSRoutes {
         ]
         payload.merge(statIdentity(path)) { current, _ in current }
         return try jsonBody(.object(payload))
+    }
+
+    /// `GET /api/hostfs/read` — the whole file, the `Range` window it asked
+    /// for, or `304` when the client already holds it. Mirrors node-server's
+    /// `readOp`.
+    private static func readResponse(_ path: String, _ requestHeaders: HTTPFields) throws
+        -> Response
+    {
+        let (isDirectory, rawSize, mtimeMs) = try statAt(path)
+        if isDirectory {
+            throw FsFailure.code("EISDIR", .conflict, "is a directory")
+        }
+        let size = Int(rawSize)
+        let validator = cacheValidator(path: path, size: size, mtimeMs: mtimeMs)
+        // Every answer carries the validators, 304 included — that is how the
+        // client refreshes its stored response metadata.
+        var headers = HTTPFields()
+        headers[acceptRangesHeader] = "bytes"
+        headers[etagHeader] = validator.etag
+        headers[lastModifiedHeader] = validator.lastModified
+        if isNotModified(requestHeaders, validator) {
+            // 304 MUST NOT carry a body.
+            return Response(status: .notModified, headers: headers)
+        }
+        let validatorHeaders: [(HTTPField.Name, String)] = [
+            (acceptRangesHeader, "bytes"), (etagHeader, validator.etag),
+            (lastModifiedHeader, validator.lastModified),
+        ]
+        let range =
+            ifRangeAllowsRange(requestHeaders, validator)
+            ? parseByteRange(requestHeaders[rangeHeader], size: size) : .whole
+        switch range {
+        case .unsatisfiable:
+            return fsError(
+                "EINVAL", .rangeNotSatisfiable, "range not satisfiable for a \(size) byte file",
+                extra: validatorHeaders + [(contentRangeHeader, "bytes */\(size)")])
+        case .window(let start, let end):
+            // No size cap here on purpose: the window IS the bound, and the
+            // body is STREAMED, so neither side ever holds more than
+            // `streamChunkBytes`. That is what lets git reach a pack larger
+            // than `maxBodyBytes` at all (issue #2711).
+            headers[.contentType] = "application/octet-stream"
+            headers[contentRangeHeader] = "bytes \(start)-\(end)/\(size)"
+            return Response(
+                status: .partialContent, headers: headers,
+                body: try streamedFileBody(path: path, start: start, length: end - start + 1))
+        case .whole:
+            if size > maxBodyBytes {
+                return fsError(
+                    "EFBIG", .contentTooLarge,
+                    "file exceeds the hostfs whole-file cap; read it with a Range request",
+                    extra: validatorHeaders)
+            }
+            headers[.contentType] = "application/octet-stream"
+            return Response(
+                status: .ok, headers: headers,
+                body: try streamedFileBody(path: path, start: 0, length: size))
+        }
     }
 
     private static func mkdirResponse(_ path: String) throws -> Response {

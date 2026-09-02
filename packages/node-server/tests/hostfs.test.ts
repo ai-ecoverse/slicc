@@ -482,6 +482,107 @@ describe('hostfs read: byte ranges', () => {
   });
 });
 
+/**
+ * Streaming the body cost us the ETag express derived from the buffered one.
+ * Without a replacement the browser cannot revalidate a pack URL, so it
+ * re-transfers 92 MB on every object lookup — in the #2707 baseline 220,310 of
+ * 385,033 hostfs GETs were 304s, so this is the difference the route lives on.
+ */
+describe('hostfs read: conditional requests', () => {
+  const readWith = (headers: Record<string, string>): Promise<Response> =>
+    api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt', { headers });
+
+  async function currentValidators(): Promise<{ etag: string; lastModified: string }> {
+    const res = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=hello.txt');
+    const etag = res.headers.get('etag');
+    const lastModified = res.headers.get('last-modified');
+    expect(etag).toBeTruthy();
+    expect(lastModified).toBeTruthy();
+    return { etag: etag as string, lastModified: lastModified as string };
+  }
+
+  it('serves an ETag and Last-Modified on the whole-file and ranged branches', async () => {
+    const { etag } = await currentValidators();
+    // A strong tag — If-Range is only defined for one.
+    expect(etag.startsWith('W/')).toBe(false);
+    const ranged = await readWith({ Range: 'bytes=0-3' });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get('etag')).toBe(etag);
+    expect(ranged.headers.get('last-modified')).toBeTruthy();
+  });
+
+  it('answers a repeat GET carrying the ETag with 304 and no body', async () => {
+    const { etag } = await currentValidators();
+    const res = await readWith({ 'If-None-Match': etag });
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe('');
+    // The validators ride along so the client can refresh its stored metadata.
+    expect(res.headers.get('etag')).toBe(etag);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+  });
+
+  it('matches a weak form of the tag and a bare *', async () => {
+    const { etag } = await currentValidators();
+    expect((await readWith({ 'If-None-Match': `W/${etag}` })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': `"other", ${etag}` })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': '*' })).status).toBe(304);
+    expect((await readWith({ 'If-None-Match': '"stale"' })).status).toBe(200);
+  });
+
+  it('revalidates with If-Modified-Since and serves 200 once mtime moves', async () => {
+    const { lastModified } = await currentValidators();
+    expect((await readWith({ 'If-Modified-Since': lastModified })).status).toBe(304);
+
+    const moved = new Date(Date.now() + 60_000);
+    await utimes(join(root, 'hello.txt'), moved, moved);
+    try {
+      const res = await readWith({ 'If-Modified-Since': lastModified });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('hello host');
+      // A changed mtime is a changed ETag, so the old one no longer matches.
+      const stale = await readWith({ 'If-None-Match': (await currentValidators()).etag });
+      expect(stale.status).toBe(304);
+    } finally {
+      const back = new Date(Date.now() - 60_000);
+      await utimes(join(root, 'hello.txt'), back, back);
+    }
+  });
+
+  it('ignores an unparseable If-Modified-Since instead of guessing', async () => {
+    expect((await readWith({ 'If-Modified-Since': 'yesterday-ish' })).status).toBe(200);
+  });
+
+  it('honors a Range when If-Range still matches', async () => {
+    const { etag } = await currentValidators();
+    const res = await readWith({ Range: 'bytes=6-9', 'If-Range': etag });
+    expect(res.status).toBe(206);
+    expect(await res.text()).toBe('host');
+  });
+
+  it('downgrades a Range to the full 200 when If-Range does not match', async () => {
+    // The client holds a DIFFERENT representation; stitching a window of the
+    // current file into that buffer would silently corrupt it.
+    const res = await readWith({ Range: 'bytes=6-9', 'If-Range': '"not-the-current-tag"' });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('hello host');
+    expect(res.headers.get('content-range')).toBeNull();
+  });
+
+  it('accepts the HTTP-date form of If-Range and rejects a stale one', async () => {
+    const { lastModified } = await currentValidators();
+    expect((await readWith({ Range: 'bytes=6-9', 'If-Range': lastModified })).status).toBe(206);
+    const older = new Date(Date.parse(lastModified) - 60_000).toUTCString();
+    expect((await readWith({ Range: 'bytes=6-9', 'If-Range': older })).status).toBe(200);
+  });
+
+  it('does not let a stale If-Range turn an out-of-range window into a 416', async () => {
+    // The Range is dropped entirely, so the file is served whole — a 416 here
+    // would be a bogus error for a client that just has an old copy.
+    const res = await readWith({ Range: 'bytes=900-999', 'If-Range': '"stale"' });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('parseByteRange', () => {
   it('returns the inclusive window for the three well-formed shapes', () => {
     expect(parseByteRange('bytes=0-9', 100)).toEqual({ kind: 'range', start: 0, end: 9 });

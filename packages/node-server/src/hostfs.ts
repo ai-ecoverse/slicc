@@ -41,6 +41,13 @@
  * (issue #2711). The whole-file cap still guards an unranged read; a ranged
  * read is bounded by the window it names, so it is exempt.
  *
+ * Streaming cost the route the ETag express used to derive from the buffered
+ * body, so `cacheValidator` rebuilds one from the stat and `read` answers
+ * `If-None-Match` / `If-Modified-Since` with a `304` and honors `If-Range`.
+ * That is not a nicety: a pack URL the browser cannot revalidate is
+ * re-transferred on every object lookup, and 220,310 of the 385,033 hostfs
+ * GETs in the #2707 baseline were exactly those `304`s.
+ *
  * The hostfs surface owns its own body parsing end to end. `index.ts` skips
  * the stable dispatcher in its global `express.json()` filter (via
  * `isHostFsStableBodyRequest`) so the bounded 1 MiB parser here is the one
@@ -257,6 +264,88 @@ async function streamFileBody(
 }
 
 /**
+ * The cache validators for one file, derived from its `stat`.
+ *
+ * `res.send(body)` used to hand express a buffered body it could hash into an
+ * ETag for free. Streaming removed the buffer AND, with it, the ETag — which
+ * would have been a straight regression for exactly the files this route was
+ * changed for: in the #2707 baseline **220,310 of 385,033** hostfs GETs were
+ * answered `304`, i.e. the browser revalidating a pack instead of pulling 92 MB
+ * again. So the validator is now derived from the stat we already did.
+ *
+ * The ETag is STRONG (no `W/`) on purpose: `If-Range` is only defined for a
+ * strong validator, and a ranged pack read is the case that matters most here.
+ * Strong is justified by what goes into it — inode, size, and an unrounded
+ * high-resolution mtime — the same basis nginx and `serve-static` use. The
+ * honest limit: a write that lands on the same inode with an identical size
+ * AND an mtime deliberately restored (`utimes`) is invisible to it. Nothing
+ * git does looks like that (packs are written under a new name), and the
+ * alternative — hashing the body — is the buffering we just removed.
+ */
+interface CacheValidator {
+  etag: string;
+  lastModified: string;
+  /** mtime floored to the second, which is all an HTTP-date can carry. */
+  mtimeSeconds: number;
+}
+
+function cacheValidator(s: Stats): CacheValidator {
+  const mtimeSeconds = Math.floor(s.mtimeMs / 1000);
+  return {
+    etag: `"${s.size.toString(16)}-${s.mtimeMs.toString(16)}-${Number(s.ino).toString(16)}"`,
+    lastModified: new Date(mtimeSeconds * 1000).toUTCString(),
+    mtimeSeconds,
+  };
+}
+
+/** Drop a `W/` prefix so the weak comparison treats `W/"x"` and `"x"` alike. */
+function stripWeak(tag: string): string {
+  return tag.startsWith('W/') ? tag.slice(2) : tag;
+}
+
+/**
+ * True when the client already holds this exact representation, so the answer
+ * is `304` with no body.
+ *
+ * RFC 9110 §13.2.1 fixes the precedence: `If-None-Match` decides on its own
+ * whenever it is present, and `If-Modified-Since` is only consulted in its
+ * absence. Comparison for `If-None-Match` is the WEAK one, so a cached weak
+ * form of our tag still matches.
+ */
+function isNotModified(req: Request, v: CacheValidator): boolean {
+  const ifNoneMatch = req.header('if-none-match');
+  if (ifNoneMatch !== undefined) {
+    if (ifNoneMatch.trim() === '*') return true;
+    return ifNoneMatch.split(',').some((tag) => stripWeak(tag.trim()) === stripWeak(v.etag));
+  }
+  const ifModifiedSince = req.header('if-modified-since');
+  if (ifModifiedSince === undefined) return false;
+  const since = Date.parse(ifModifiedSince);
+  // An unparseable date is not a claim about anything — serve the file.
+  if (Number.isNaN(since)) return false;
+  return v.mtimeSeconds * 1000 <= since;
+}
+
+/**
+ * Whether a `Range` may still be honored. `If-Range` says "send me the window
+ * only if the representation is still the one I have; otherwise send the
+ * whole thing" — so a mismatch downgrades to a plain 200 rather than erroring,
+ * which is what keeps a client from stitching a window of the NEW file into a
+ * buffer holding the old one. Absent header: nothing to disagree with.
+ *
+ * Comparison here is STRONG (RFC 9110 §13.1.5): a weak tag never satisfies it.
+ */
+function ifRangeAllowsRange(req: Request, v: CacheValidator): boolean {
+  const ifRange = req.header('if-range');
+  if (ifRange === undefined) return true;
+  const value = ifRange.trim();
+  if (value.startsWith('"') || value.startsWith('W/')) return value === v.etag;
+  const asDate = Date.parse(value);
+  if (Number.isNaN(asDate)) return false;
+  return v.mtimeSeconds * 1000 === asDate;
+}
+
+/**
  * Identity/permission fields of a host `fs.Stats`, as the webapp needs them.
  *
  * isomorphic-git's `compareStats` decides whether a working-tree file is
@@ -457,13 +546,19 @@ async function statOp(target: string): Promise<ReturnType<typeof statPayload>> {
 }
 
 /**
- * `GET /api/hostfs/read` — the whole file, or the `Range` window it asked for.
+ * `GET /api/hostfs/read` — the whole file, or the `Range` window it asked for,
+ * or `304` when the client already holds it.
  *
  * Writes the response itself rather than returning a payload, because the body
  * is streamed: buffering a 92 MB packfile in express to `res.send` it was pure
  * overhead, and a pack over `HOSTFS_MAX_BODY_BYTES` had no way through at all
  * (issue #2711). The cap survives only for the unranged read, whose caller has
  * to hold the whole body.
+ *
+ * Conditional handling is not optional garnish here. Streaming cost us the
+ * ETag express derived from the buffered body, and a pack URL that cannot be
+ * revalidated is re-transferred on every object lookup — the opposite of the
+ * fix. See {@link cacheValidator}.
  */
 async function readOp(target: string, req: Request, res: Response): Promise<void> {
   const s = await stat(target);
@@ -471,15 +566,31 @@ async function readOp(target: string, req: Request, res: Response): Promise<void
     sendFsError(res, Object.assign(new Error(`is a directory: ${target}`), { code: 'EISDIR' }));
     return;
   }
-  const range = parseByteRange(req.header('range'), s.size);
+  const validator = cacheValidator(s);
+  // Every answer carries the validators, 304 included — that is how the client
+  // refreshes its stored response metadata.
+  const common = {
+    'Accept-Ranges': 'bytes',
+    ETag: validator.etag,
+    'Last-Modified': validator.lastModified,
+  };
+  if (isNotModified(req, validator)) {
+    // 304 MUST NOT carry a body; `end()` (not `json()`) keeps it that way and
+    // stops express from attaching a Content-Type for content that isn't there.
+    res.status(304).set(common).end();
+    return;
+  }
+  const range = ifRangeAllowsRange(req, validator)
+    ? parseByteRange(req.header('range'), s.size)
+    : NO_RANGE;
   if (range.kind === 'unsatisfiable') {
     res
       .status(416)
-      .set({ 'Accept-Ranges': 'bytes', 'Content-Range': `bytes */${s.size}` })
+      .set({ ...common, 'Content-Range': `bytes */${s.size}` })
       .json({ code: 'EINVAL', message: `range not satisfiable for a ${s.size} byte file` });
     return;
   }
-  const common = { 'Accept-Ranges': 'bytes', 'Content-Type': 'application/octet-stream' };
+  const bodyHeaders = { ...common, 'Content-Type': 'application/octet-stream' };
   if (range.kind === 'range') {
     // No size cap here on purpose: the window IS the bound, and the body is
     // streamed, so neither the bridge nor the caller ever holds more than the
@@ -490,7 +601,7 @@ async function readOp(target: string, req: Request, res: Response): Promise<void
       target,
       206,
       {
-        ...common,
+        ...bodyHeaders,
         'Content-Range': `bytes ${range.start}-${range.end}/${s.size}`,
         'Content-Length': String(range.end - range.start + 1),
       },
@@ -501,14 +612,14 @@ async function readOp(target: string, req: Request, res: Response): Promise<void
   if (s.size > HOSTFS_MAX_BODY_BYTES) {
     res
       .status(413)
-      .set({ 'Accept-Ranges': 'bytes' })
+      .set(common)
       .json({
         code: 'EFBIG',
         message: `file exceeds the ${HOSTFS_MAX_BODY_BYTES} byte hostfs whole-file cap; read it with a Range request`,
       });
     return;
   }
-  await streamFileBody(res, target, 200, { ...common, 'Content-Length': String(s.size) });
+  await streamFileBody(res, target, 200, { ...bodyHeaders, 'Content-Length': String(s.size) });
 }
 
 async function mkdirOp(target: string): Promise<{ ok: true }> {
