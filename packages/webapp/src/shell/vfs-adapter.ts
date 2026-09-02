@@ -15,8 +15,8 @@ import type {
   RmOptions,
 } from 'just-bash';
 import * as justBash from 'just-bash';
-import type { VirtualFS } from '../fs/index.js';
-import { FsError, joinPath, normalizePath } from '../fs/index.js';
+import type { DirEntry, Stats, VirtualFS } from '../fs/index.js';
+import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
 
 // just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
@@ -77,10 +77,142 @@ function toIdentity(ino: number | undefined): string | undefined {
   return typeof ino === 'number' && Number.isInteger(ino) && ino > 0 ? `vfs-ino:${ino}` : undefined;
 }
 
+/**
+ * How long a directory listing may answer a `stat` of an entry it just
+ * reported (issue #2716).
+ *
+ * `ls -l` is one `readdir` followed by a `stat` per name, and `du` one
+ * `readdir` followed by an `lstat` per name — just-bash's `DirentEntry`
+ * carries no size, so there is no way to hand the sizes over except through
+ * the filesystem surface it calls next. Over a hostfs mount each of those
+ * stats is a bridge round trip for numbers the `list` response already
+ * carried (a 91-entry directory cost 91 of them).
+ *
+ * A second is far longer than the microseconds between the listing and the
+ * stats that follow it, and far shorter than a person's next command — and
+ * any write through this adapter drops the whole table anyway. It bounds the
+ * one case the adapter cannot see: a change made outside it (the host
+ * filesystem, another realm) between the listing and the stat.
+ */
+const LISTING_STAT_TTL_MS = 1000;
+
+/**
+ * Hard cap on primed entries — a memory budget, not a soft target.
+ *
+ * The TTL alone bounds how long an entry may be REUSED, not how long it is
+ * RETAINED: expiry is only noticed when that exact path is looked up again,
+ * so a `du -sh` or `ls -R` over a big mount would pile every directory it
+ * ever walked into a map that lives as long as the shell does. Priming
+ * therefore sweeps what has expired and, when the cap would still be
+ * exceeded, drops the table instead of growing it.
+ *
+ * 20,000 entries is far more than the listing-plus-stats burst this exists
+ * to serve, and small enough that the worst case is a few MB.
+ */
+const MAX_LISTING_STATS = 20_000;
+
+/** Injection points for the listing cache — tests pin small ones. */
+export interface VfsAdapterOptions {
+  /** Hard cap on primed entries (default 20,000). */
+  listingStatsMax?: number;
+  /** How long a listing may answer a stat, in ms (default 1000). */
+  listingStatsTtlMs?: number;
+}
+
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
+  /**
+   * Stat answers primed by the last `readdir`/`readdirWithFileTypes`, keyed
+   * by normalized absolute path. Only entries whose listing carried the full
+   * set land here — see {@link statsFromDirEntry}.
+   *
+   * Insertion order is age order: priming DELETES a key before re-setting it
+   * (a plain `set` on an existing key keeps its old position), which is what
+   * lets {@link sweepExpiredListingStats} stop at the first live entry
+   * instead of walking the whole map.
+   */
+  private readonly listingStats = new Map<string, { stats: Stats; at: number }>();
+  private readonly listingStatsMax: number;
+  private readonly listingStatsTtlMs: number;
 
-  constructor(private vfs: VirtualFS) {}
+  constructor(
+    private vfs: VirtualFS,
+    opts?: VfsAdapterOptions
+  ) {
+    this.listingStatsMax = Math.max(1, opts?.listingStatsMax ?? MAX_LISTING_STATS);
+    this.listingStatsTtlMs = opts?.listingStatsTtlMs ?? LISTING_STAT_TTL_MS;
+  }
+
+  /** Entries primed right now. A diagnostic — an unbounded cache and a
+   * bounded one behave identically until the worker runs out of memory, so
+   * this is what makes the cap assertable. */
+  get listingStatsSize(): number {
+    return this.listingStats.size;
+  }
+
+  /**
+   * Remember what a listing reported about each entry.
+   *
+   * Entries the listing did not fully describe (a directory over hostfs, a
+   * symlink, a raced entry the bridge could not stat) are DROPPED rather
+   * than half-cached, so a later `stat` of one goes to the filesystem.
+   */
+  private primeListingStats(dir: string, entries: DirEntry[]): void {
+    const at = Date.now();
+    // One listing bigger than the whole budget: drop everything and prime
+    // nothing. Making room first and then inserting would still leave
+    // `entries.length` entries behind — no cap at all for exactly the
+    // directory that needs one.
+    if (entries.length > this.listingStatsMax) {
+      this.listingStats.clear();
+      return;
+    }
+    this.sweepExpiredListingStats(at);
+    if (this.listingStats.size + entries.length > this.listingStatsMax) {
+      this.listingStats.clear();
+    }
+    const prefix = dir === '/' ? '/' : `${dir}/`;
+    for (const entry of entries) {
+      const stats = statsFromDirEntry(entry);
+      const path = `${prefix}${entry.name}`;
+      // Delete first either way: it drops a half-described entry's stale
+      // answer AND keeps insertion order equal to age order for the sweep.
+      this.listingStats.delete(path);
+      if (stats) this.listingStats.set(path, { stats, at });
+    }
+  }
+
+  /**
+   * Evict everything already past the TTL. Cheap because insertion order is
+   * age order — the first live entry ends the scan, so the walk costs one
+   * step per entry actually removed.
+   */
+  private sweepExpiredListingStats(now: number): void {
+    for (const [path, hit] of this.listingStats) {
+      if (now - hit.at <= this.listingStatsTtlMs) break;
+      this.listingStats.delete(path);
+    }
+  }
+
+  /** The primed stats for `path`, if a recent listing reported them. */
+  private primedStats(path: string): Stats | undefined {
+    const hit = this.listingStats.get(path);
+    if (!hit) return undefined;
+    if (Date.now() - hit.at > this.listingStatsTtlMs) {
+      this.listingStats.delete(path);
+      return undefined;
+    }
+    return hit.stats;
+  }
+
+  /**
+   * Forget every primed listing. Called by every mutation this adapter
+   * performs — blunt on purpose: a shell command that writes is not the one
+   * paying the N+1, so there is nothing to lose by starting over.
+   */
+  private dropListingStats(): void {
+    this.listingStats.clear();
+  }
 
   /**
    * Set a function that returns the list of registered command names.
@@ -226,6 +358,7 @@ export class VfsAdapter implements IFileSystem {
     content: FileContent,
     _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       if (typeof content === 'string') {
@@ -270,6 +403,7 @@ export class VfsAdapter implements IFileSystem {
     content: FileContent,
     _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       const normalized = normalizePath(path);
       // Enforce POSIX EISDIR for the append target — ZenFS' InMemory backend
@@ -347,7 +481,9 @@ export class VfsAdapter implements IFileSystem {
           identity: toIdentity(fast.ino),
         };
       }
-      const s = await this.vfs.stat(normalized);
+      // What the directory listing just reported, when it reported it
+      // (#2716) — never a symlink, so `stat` and `lstat` share the answer.
+      const s = this.primedStats(normalized) ?? (await this.vfs.stat(normalized));
       return {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
@@ -381,7 +517,7 @@ export class VfsAdapter implements IFileSystem {
           identity: toIdentity(fast.ino),
         };
       }
-      const s = await this.vfs.lstat(normalized);
+      const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
       return {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
@@ -395,6 +531,7 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       await this.vfs.mkdir(normalizePath(path), options);
     });
@@ -409,6 +546,8 @@ export class VfsAdapter implements IFileSystem {
       const fast = this.vfs.readDirSync(normalized);
       if (fast !== null) return fast.map((e) => e.name);
       const entries = await this.vfs.readDir(normalized);
+      // `ls -l` stats every name this just returned (#2716).
+      this.primeListingStats(normalized, entries);
       return entries.map((e) => e.name);
     });
   }
@@ -441,6 +580,7 @@ export class VfsAdapter implements IFileSystem {
 
       // Slow path: async VirtualFS readDir for mounted paths.
       const entries = await this.vfs.readDir(normalized);
+      this.primeListingStats(normalized, entries);
       return this.mapAsyncEntriesToDirents(entries);
     });
   }
@@ -481,12 +621,14 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       await this.vfs.rm(normalizePath(path), options);
     });
   }
 
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       const normalizedSrc = normalizePath(src);
       const normalizedDest = normalizePath(dest);
@@ -519,6 +661,7 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async mv(src: string, dest: string): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       await this.vfs.rename(normalizePath(src), normalizePath(dest));
     });
@@ -540,6 +683,7 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
+    this.dropListingStats();
     return this.trusted(async () => {
       await this.vfs.symlink(target, normalizePath(linkPath));
     });
@@ -566,6 +710,7 @@ export class VfsAdapter implements IFileSystem {
   }
 
   invalidatePaths(paths: string[]): void {
+    this.dropListingStats();
     const vfs = this.vfs as { invalidatePaths?: (paths: string[]) => void };
     if (vfs.invalidatePaths) {
       vfs.invalidatePaths(paths);

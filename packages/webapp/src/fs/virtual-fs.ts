@@ -18,7 +18,7 @@
 import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsChangeEvent, FsWatcher } from './fs-watcher.js';
 import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kind-reconcile.js';
-import type { MountBackend, RefreshReport } from './mount/backend.js';
+import type { MountBackend, MountDirEntry, RefreshReport } from './mount/backend.js';
 import type { HostFsMountBackend } from './mount/backend-hostfs.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import {
@@ -138,6 +138,39 @@ interface FsSyncLike {
   statSync?(path: string): FsStatsLike;
   lstatSync?(path: string): FsStatsLike;
   readlinkSync?(path: string): string;
+}
+
+/**
+ * Project one backend listing entry onto a {@link DirEntry}, carrying the
+ * stat fields the backend already paid for.
+ *
+ * `/api/hostfs/list` stats every dirent server-side, so `size`/`lastModified`
+ * (and, since #2708, `ctime`/`ino`/`uid`/`gid`/`mode`) arrive with the
+ * listing. Dropping them here is what forced every consumer to re-stat each
+ * entry it had just listed — one bridge round trip per file (issue #2716).
+ * Fields the backend did not report stay absent; consumers fall back to a
+ * real `stat()` rather than to a placeholder.
+ *
+ * `withStats` is the backend's {@link MountBackend.listingStatsMatchStat}
+ * opt-in. A backend that answers `stat` from a different source than its
+ * listing (S3/AEM read the body cache first) keeps the historical
+ * `{name, type}` entry, because a consumer using these fields IN PLACE OF a
+ * stat must not get a different number than the stat would have returned.
+ */
+function dirEntryFromMount(entry: MountDirEntry, withStats: boolean): DirEntry {
+  const type = entry.kind === 'directory' ? 'directory' : 'file';
+  if (!withStats) return { name: entry.name, type };
+  return {
+    name: entry.name,
+    type,
+    ...(entry.size !== undefined ? { size: entry.size } : {}),
+    ...(entry.lastModified !== undefined ? { mtime: entry.lastModified } : {}),
+    ...(entry.ctime !== undefined ? { ctime: entry.ctime } : {}),
+    ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
+    ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
+    ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+  };
 }
 
 /**
@@ -1197,7 +1230,24 @@ export class VirtualFS {
             : s.isDirectory()
               ? 'directory'
               : 'file';
-          entries.push({ name, type });
+          // Same stat fields the async path carries (#2716) — this loop
+          // already lstat'd the entry, so a consumer never has to repeat it.
+          // Symlink entries stay bare: they describe the link, not its target.
+          entries.push(
+            type === 'symlink'
+              ? { name, type }
+              : {
+                  name,
+                  type,
+                  size: s.size,
+                  mtime: s.mtimeMs,
+                  ctime: s.ctimeMs,
+                  ...(s.ino !== undefined ? { ino: s.ino } : {}),
+                  ...(s.uid !== undefined ? { uid: s.uid } : {}),
+                  ...(s.gid !== undefined ? { gid: s.gid } : {}),
+                  mode: s.mode,
+                }
+          );
         } catch {
           /* skip entries we can't stat */
         }
@@ -1894,11 +1944,9 @@ export class VirtualFS {
       rebrandFsError(err, normalized);
     }
     const entries = new Map<string, DirEntry>();
+    const withStats = mount.backend.listingStatsMatchStat === true;
     for (const entry of dirEntries) {
-      entries.set(entry.name, {
-        name: entry.name,
-        type: entry.kind === 'directory' ? 'directory' : 'file',
-      });
+      entries.set(entry.name, dirEntryFromMount(entry, withStats));
     }
     this.addNestedMountEntries(entries, normalized);
     return [...entries.values()];
@@ -1924,13 +1972,31 @@ export class VirtualFS {
     }
   }
 
-  /** Stat a single directory entry, returning null if it cannot be stat'd. */
+  /**
+   * Stat a single directory entry, returning null if it cannot be stat'd.
+   *
+   * The stat fields ride along on the entry: this path already pays for an
+   * `lstat` per name, so reporting what it learned costs nothing and spares
+   * every consumer a second one (issue #2716). A symlink carries none of
+   * them — the numbers describe the LINK, while a consumer's `stat()` would
+   * describe its target, so they are not interchangeable.
+   */
   private async statDirEntry(parentResolved: string, name: string): Promise<DirEntry | null> {
     const childPath = parentResolved === '/' ? `/${name}` : `${parentResolved}/${name}`;
     try {
       const s = await this.lfs.lstat(childPath);
       if (s.isSymbolicLink()) return { name, type: 'symlink' };
-      return { name, type: s.isDirectory() ? 'directory' : 'file' };
+      return {
+        name,
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
+        ...(s.ino !== undefined ? { ino: s.ino } : {}),
+        ...(s.uid !== undefined ? { uid: s.uid } : {}),
+        ...(s.gid !== undefined ? { gid: s.gid } : {}),
+        mode: s.mode,
+      };
     } catch {
       return null;
     }

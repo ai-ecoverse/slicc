@@ -10,10 +10,29 @@
  * paths via the (now-removed) `getLightningFS()` escape hatch. The
  * fast-path shortcut is gone; `VirtualFS` itself owns symlink
  * resolution and watcher notification for every op.
+ *
+ * ## The readdir-primed stat cache (issue #2716)
+ *
+ * isomorphic-git's `readdir` contract is names-only, but almost every caller
+ * immediately stats what it listed: `FileSystem.readdirDeep` stats each name
+ * to decide whether to recurse, `GitWalkerFs` lstats every workdir entry.
+ * Over a hostfs mount each of those is a bridge round trip (plus a CORS
+ * preflight) for metadata the `list` response already carried — `git branch`
+ * cost 125 requests for 29 refs, 100 of them stats.
+ *
+ * So every real listing primes a stat cache from the `DirEntry` fields
+ * `VirtualFS` now carries, and `stat`/`lstat` answer from it. Its lifetime is
+ * the adapter's, which `GitCommands.contextFor` builds per `execute()` — the
+ * same scope as the `objectCache` memo below and #2709's read cache above.
+ * Any write through this adapter drops the affected path. What it can never
+ * do is INVENT a stat: a file is only cached when the listing carried both
+ * `size` and `mtime`, because zeroed placeholders are exactly what make
+ * `compareStats` call a file stale and rewrite `.git/index` per file (#2708).
  */
 
 import type { VirtualFS } from '../fs/index.js';
-import { FsError, type Stats } from '../fs/types.js';
+import { normalizePath } from '../fs/path-utils.js';
+import { type DirEntry, FsError, type Stats, statsFromDirEntry } from '../fs/types.js';
 
 export type PromiseFsClient = { promises: IsoGitFsPromises };
 
@@ -35,6 +54,60 @@ export interface IsoGitFsOptions {
    * object created mid-command is visible to the next read.
    */
   objectCache?: boolean;
+  /**
+   * Hard cap on entries primed by a listing for the readdir-primed stat cache
+   * (issue #2716; default {@link MAX_CACHED_ENTRIES}). `0` builds the
+   * historical BARE adapter — every listing is oversized, so nothing is ever
+   * primed and every `stat` goes to the filesystem. Two callers want that: a
+   * test measuring the uncached baseline its own assertions are calibrated
+   * against, and `GitCacheManager`'s invalidation sampler, which must see the
+   * filesystem rather than a memo.
+   */
+  statCacheMax?: number;
+}
+
+/**
+ * What {@link createIsomorphicGitFs} returns: the `PromiseFsClient`
+ * isomorphic-git takes, plus control over the readdir-primed stat cache.
+ */
+export interface IsoGitFsClient extends PromiseFsClient {
+  /**
+   * Drop everything a listing primed. The adapter is already built per git
+   * command, so this states the scope boundary rather than creating it — the
+   * cache is a within-command optimization, not a filesystem view.
+   */
+  clearStatCache(): void;
+  /**
+   * How many entries are primed right now. A diagnostic: it is what makes
+   * the cap assertable, since a bounded cache and an unbounded one behave
+   * identically until the worker runs out of memory.
+   */
+  statCacheSize(): number;
+}
+
+/**
+ * Default cap on primed entries — a hard ceiling, never a soft target. A
+ * single command lists at most the directories it walks, so this is a
+ * backstop against a pathological tree.
+ *
+ * Overflow drops the cache rather than growing it: a listing that would push
+ * it past the cap clears first (keeping the newest listing rather than
+ * pinning the oldest), and a SINGLE listing bigger than the cap clears and
+ * primes nothing at all — the cap is the memory budget, so it has to hold
+ * even for one 200k-entry directory.
+ */
+const MAX_CACHED_ENTRIES = 100_000;
+
+/**
+ * One cached listing entry. `stats` is absent for a directory the backend
+ * described by name only (what the hostfs bridge sends) — enough for the
+ * `isDirectory()` question every caller asks of a directory, and directories
+ * never appear in `.git/index`, so no stat comparison can see the
+ * placeholders {@link toStats} fills in.
+ */
+interface CachedEntry {
+  type: 'file' | 'dir';
+  stats?: Stats;
 }
 
 export interface IsoGitFsPromises {
@@ -187,16 +260,95 @@ const PACK_DIR_SUFFIX = '/objects/pack';
 const LOOSE_OBJECT_PATH = /^(.*\/objects)\/([0-9a-f]{2})\/[0-9a-f]{38,}$/;
 
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
+function cacheableEntry(entry: DirEntry): CachedEntry | undefined {
+  const stats = statsFromDirEntry(entry);
+  if (entry.type === 'directory') return stats ? { type: 'dir', stats } : { type: 'dir' };
+  return stats ? { type: 'file', stats } : undefined;
+}
+
+/** The readdir-primed stat cache of one adapter (issue #2716). */
+interface StatCache {
+  /** Record what a fresh listing of `dir` reported about each entry. */
+  prime(dir: string, entries: DirEntry[]): void;
+  /** The answer for `path`, or undefined to go to the filesystem. */
+  get(path: string): NodeLikeStats | undefined;
+  drop(path: string): void;
+  clear(): void;
+  size(): number;
+}
+
+/**
+ * Build the cache. `maxEntries` is a hard ceiling: `0` disables priming
+ * entirely (every listing counts as oversized), which is what a bare adapter
+ * and the pack-cache invalidation sampler want.
+ *
+ * Keys are normalized so a caller that spells the same path differently
+ * (`a//b`, `a/./b`) still hits — `VirtualFS` normalizes every path it is
+ * handed, so this is the same identity it uses.
+ */
+function createStatCache(maxEntries: number): StatCache {
+  const entriesByPath = new Map<string, CachedEntry>();
+  return {
+    prime(dir, entries) {
+      // One listing bigger than the whole budget: drop everything and prime
+      // nothing. Clearing to "make room" and inserting anyway would still
+      // leave `entries.length` behind — no cap for the directory needing one.
+      if (entries.length > maxEntries) {
+        entriesByPath.clear();
+        return;
+      }
+      if (entriesByPath.size + entries.length > maxEntries) entriesByPath.clear();
+      const base = normalizePath(dir);
+      const prefix = base === '/' ? '/' : `${base}/`;
+      for (const entry of entries) {
+        const cached = cacheableEntry(entry);
+        // A stale hit is worse than a miss: an entry we cannot cache honestly
+        // (symlink, half-reported file) also drops what was cached for it.
+        if (cached) entriesByPath.set(`${prefix}${entry.name}`, cached);
+        else entriesByPath.delete(`${prefix}${entry.name}`);
+      }
+    },
+    get(path) {
+      const cached = entriesByPath.get(normalizePath(path));
+      if (!cached) return undefined;
+      // `stat` and `lstat` share this: the entries that would differ between
+      // them (symlinks) are never cached.
+      return toStats(cached.type, cached.stats ? fromVfsStats(cached.stats) : {});
+    },
+    drop(path) {
+      entriesByPath.delete(normalizePath(path));
+    },
+    clear() {
+      entriesByPath.clear();
+    },
+    size() {
+      return entriesByPath.size;
+    },
+  };
+}
+
 export function createIsomorphicGitFs(
   vfs: VirtualFS,
   options: IsoGitFsOptions = {}
-): PromiseFsClient {
+): IsoGitFsClient {
   const scope: ObjectScope | undefined = options.objectCache
     ? { packDirs: new Map(), fanouts: new Map() }
     : undefined;
 
-  const listNames = async (path: string): Promise<string[]> =>
-    (await vfs.readDir(path)).map((e) => e.name);
+  const statCache = createStatCache(Math.max(0, options.statCacheMax ?? MAX_CACHED_ENTRIES));
+
+  /**
+   * Every REAL listing this adapter takes, whoever asked for it: the object
+   * memo's `objects/pack` and fan-out listings included. Each one primes the
+   * stat cache with the fields the backend already reported (#2716); a
+   * listing served from the object memo does not, because no new listing was
+   * taken.
+   */
+  const listNames = async (path: string): Promise<string[]> => {
+    const entries = await vfs.readDir(path);
+    statCache.prime(path, entries);
+    return entries.map((e) => e.name);
+  };
 
   /**
    * Names of the loose fan-out directories under `objectsDir`, listed once per
@@ -237,6 +389,16 @@ export function createIsomorphicGitFs(
   };
 
   /**
+   * Run a mutation of ONE path with both memos dropped around it: the object
+   * scope (a write may add a pack or a loose object) and that path's primed
+   * stat (its size and mtime just changed).
+   */
+  const mutatePath = async <T>(path: string, op: () => Promise<T>): Promise<T> => {
+    statCache.drop(path);
+    return await mutate(op);
+  };
+
+  /**
    * Run a mutation with the memo dropped on BOTH sides of it. Dropping it only
    * up front is not enough: a concurrent reader can repopulate the maps while
    * the write is still in flight, and that listing — taken before the write
@@ -272,11 +434,11 @@ export function createIsomorphicGitFs(
     },
 
     async writeFile(path, data, _options) {
-      await mutate(() => vfs.writeFile(path, data));
+      await mutatePath(path, () => vfs.writeFile(path, data));
     },
 
     async unlink(path) {
-      await mutate(() => vfs.rm(path));
+      await mutatePath(path, () => vfs.rm(path));
     },
 
     async readdir(path) {
@@ -291,21 +453,28 @@ export function createIsomorphicGitFs(
 
     async mkdir(path, options) {
       const opts = (options ?? undefined) as { recursive?: boolean } | undefined;
-      await mutate(() =>
+      await mutatePath(path, () =>
         vfs.mkdir(path, opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined)
       );
     },
 
     async rmdir(path) {
+      // `vfs.rm` takes the whole subtree with it, so dropping just this key
+      // would leave primed answers for children that no longer exist.
+      statCache.clear();
       await mutate(() => vfs.rm(path));
     },
 
     async stat(path) {
+      const primed = statCache.get(path);
+      if (primed) return primed;
       const s = await vfs.stat(path);
       return toStats(s.type === 'directory' ? 'dir' : 'file', fromVfsStats(s));
     },
 
     async lstat(path) {
+      const primed = statCache.get(path);
+      if (primed) return primed;
       const s = await vfs.lstat(path);
       const type: 'file' | 'dir' | 'symlink' =
         s.type === 'directory' ? 'dir' : s.type === 'symlink' ? 'symlink' : 'file';
@@ -323,9 +492,17 @@ export function createIsomorphicGitFs(
       if (vfs.isPathUnderMount(path)) {
         throw new FsError('EINVAL', 'symlinks not supported on mounted filesystems', path);
       }
-      await mutate(() => vfs.symlink(target, path));
+      await mutatePath(path, () => vfs.symlink(target, path));
     },
   };
 
-  return { promises };
+  return {
+    promises,
+    clearStatCache() {
+      statCache.clear();
+    },
+    statCacheSize() {
+      return statCache.size();
+    },
+  };
 }

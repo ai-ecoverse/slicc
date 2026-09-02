@@ -112,9 +112,55 @@ describe('buildVfsTreeItems', () => {
     const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
     const claudeMd = wsChildren.find((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md');
     expect(claudeMd?.kind).toBe('file');
-    // size comes from stat(); the content is '# memory' (9 bytes).
+    // size comes from the listing; the content is '# memory' (9 bytes).
     expect(claudeMd?.kind === 'file' && typeof claudeMd.size).toBe('number');
     expect(claudeMd?.kind === 'file' && (claudeMd.size ?? 0) > 0).toBe(true);
+  });
+
+  // #2716: over a hostfs mount, stat'ing every listed file is one bridge
+  // round trip per file. The listing already carries the size.
+  it('takes sizes from the listing instead of stat’ing every file', async () => {
+    const base = await seededFs();
+    let stats = 0;
+    const counting: LocalVfsClient = {
+      readDir: (path) => base.readDir(path),
+      readFile: (path, options) => base.readFile(path, options),
+      stat: (path) => {
+        stats++;
+        return base.stat(path);
+      },
+    };
+
+    const items = await buildVfsTreeItems(counting);
+
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
+    const claudeMd = wsChildren.find((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md');
+    expect(claudeMd?.kind === 'file' && claudeMd.size).toBe(8);
+    expect(stats).toBe(0);
+  });
+
+  it('still stats a file whose listing carried no size', async () => {
+    const base = await seededFs();
+    let stats = 0;
+    const stripped: LocalVfsClient = {
+      // What a backend that reports nothing but names looks like.
+      readDir: async (path) =>
+        (await base.readDir(path)).map((e) => ({ name: e.name, type: e.type })),
+      readFile: (path, options) => base.readFile(path, options),
+      stat: (path) => {
+        stats++;
+        return base.stat(path);
+      },
+    };
+
+    const items = await buildVfsTreeItems(stripped);
+
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
+    const claudeMd = wsChildren.find((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md');
+    expect(claudeMd?.kind === 'file' && claudeMd.size).toBe(8);
+    expect(stats).toBeGreaterThan(0);
   });
 });
 

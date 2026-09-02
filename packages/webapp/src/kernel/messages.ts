@@ -576,10 +576,27 @@ export interface LocalStorageClearMsg {
 // `vfs-rpc-host.ts` casts between the wire shape and the real `Stats` /
 // `DirEntry` types.
 
-/** Wire mirror of `DirEntry` from `webapp/src/fs/types.ts`. */
+/**
+ * Wire mirror of `DirEntry` from `webapp/src/fs/types.ts`.
+ *
+ * The stat fields are optional and additive (#2716): a backend that reported
+ * them with the listing sends them along so the panel does not have to stat
+ * every entry it just listed, and an older peer that omits them is answered
+ * exactly as before.
+ */
 export interface VfsDirEntryEnvelope {
   name: string;
   type: 'file' | 'directory' | 'symlink';
+  size?: number;
+  /** Last modification time (ms since epoch). */
+  mtime?: number;
+  /** Inode-change time (ms since epoch). */
+  ctime?: number;
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  /** Full POSIX `st_mode`, type bits included. */
+  mode?: number;
 }
 
 /** Wire mirror of `Stats` from `webapp/src/fs/types.ts`. */

@@ -59,10 +59,76 @@ export interface Stats {
   mode?: number;
 }
 
+/**
+ * Stat fields a backend reported ALONGSIDE the directory listing, so a
+ * consumer that needs them does not have to stat the entry it just listed.
+ *
+ * Every field is optional and best-effort: the hostfs bridge reports the full
+ * set for files (and nothing but the name for a directory or a raced entry),
+ * the FSA/local path reports what `lstat` gave it, and the remote mounts
+ * report only what their listing carries. A consumer that finds a field
+ * missing must fall back to a real `stat()` — never to a placeholder.
+ *
+ * The contract a backend has to keep is that these numbers are the SAME ones
+ * its `stat()` would report for that path. Consumers (the isomorphic-git
+ * adapter's readdir-primed cache, the shell's `ls -l`, the Files panel) use
+ * them IN PLACE OF a stat, so a listing that disagrees with `stat` is a bug
+ * in the backend, not something the consumer can detect. See
+ * {@link statsFromDirEntry}, which is the one place that decides whether a
+ * listing carries enough to stand in for a stat.
+ */
+export interface DirEntryStats {
+  size?: number;
+  /** Last modification time (ms since epoch). */
+  mtime?: number;
+  /** Inode-change time (ms since epoch). */
+  ctime?: number;
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  /** Full POSIX `st_mode`, type bits included. */
+  mode?: number;
+}
+
 /** A single entry returned by readDir. */
-export interface DirEntry {
+export interface DirEntry extends DirEntryStats {
   name: string;
   type: EntryType;
+}
+
+/**
+ * Promote a {@link DirEntry} to the {@link Stats} a `stat()` of that path
+ * would have returned, or `undefined` when the listing did not carry enough.
+ *
+ * This is the N+1 fix for issue #2716: `/api/hostfs/list` already stats every
+ * entry server-side, so a consumer that re-stats each listed name pays a full
+ * bridge round trip (plus a CORS preflight) per file — 100 stats for a 29-ref
+ * `git branch`, one per file for the Files panel, one per entry for `ls -l`.
+ *
+ * Two entry classes deliberately yield `undefined`:
+ *   - **symlinks**, because the listing describes the LINK and a `stat()`
+ *     would describe its target — they are not interchangeable; and
+ *   - anything without both `size` and `mtime`, because the historical
+ *     placeholders (`0`) are exactly what makes isomorphic-git call a file
+ *     stale and rewrite `.git/index` per file (issue #2708). Falling through
+ *     to a real stat is slow; answering with zeros is wrong.
+ *
+ * `ctime` falls back to `mtime`, matching what `VirtualFS.stat` does for a
+ * backend with no inode behind the entry.
+ */
+export function statsFromDirEntry(entry: DirEntry): Stats | undefined {
+  if (entry.type === 'symlink') return undefined;
+  if (entry.size === undefined || entry.mtime === undefined) return undefined;
+  return {
+    type: entry.type,
+    size: entry.size,
+    mtime: entry.mtime,
+    ctime: entry.ctime ?? entry.mtime,
+    ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
+    ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
+    ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+  };
 }
 
 /** Options for writeFile. */

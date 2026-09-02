@@ -394,7 +394,11 @@ describe('GitCommands read caching end to end (issue #2709)', () => {
     // repo. If these ever drop to 1 on their own, the tests below stop
     // proving anything.
     await git.statusMatrix({
-      fs: createIsomorphicGitFs(counting.fs),
+      // `statCacheMax: 0` is the BARE adapter: no readdir-primed stat cache
+      // either (#2716), which would otherwise answer some of these lstats
+      // from the listing of `.git` and understate the baseline these numbers
+      // exist to describe.
+      fs: createIsomorphicGitFs(counting.fs, { statCacheMax: 0 }),
       dir: CWD,
       refresh: false,
     });

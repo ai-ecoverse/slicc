@@ -111,7 +111,14 @@ describe('per-invocation git fs memos (#2709 read cache over #2712 object memo)'
   it('pays both costs without either memo (control)', async () => {
     // Guards the assertions below: this is what a bare adapter does, and if
     // these numbers ever fall on their own the tests stop proving anything.
-    await isoGit.statusMatrix({ fs: createIsomorphicGitFs(counting.fs), dir: CWD, refresh: false });
+    // `statCacheMax: 0` keeps it bare in the third dimension too — without it
+    // the readdir-primed stat cache (#2716) answers some of these lstats from
+    // the listing of `.git` and understates the baseline.
+    await isoGit.statusMatrix({
+      fs: createIsomorphicGitFs(counting.fs, { statCacheMax: 0 }),
+      dir: CWD,
+      refresh: false,
+    });
 
     expect(countOf(`lstat ${INDEX}`)).toBeGreaterThan(5);
     // One listing per object `_readObject` resolves (3 here: the commit and
@@ -119,11 +126,26 @@ describe('per-invocation git fs memos (#2709 read cache over #2712 object memo)'
     expect(countOf(`readDir ${PACK_DIR}`)).toBeGreaterThan(1);
   });
 
-  it('gives one command BOTH the read cache and the object memo', async () => {
+  it('gives one command the read cache, the object memo AND the stat cache', async () => {
     const result = await commands.execute(['status', '--short'], CWD);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('?? untracked-0.txt');
+    // #2716: the workdir walk lstats every entry it just listed, and the
+    // listing already carried size/mtime/ino — so not one of those reaches
+    // the filesystem. This is the fourth seam in the same stack: it sits
+    // UNDER the read cache and beside the object memo, and if the read cache
+    // stopped delegating through to the adapter it would go to 10.
+    for (let i = 0; i < 6; i++) {
+      expect(countOf(`lstat ${CWD}/tracked-${i}.txt`)).toBe(0);
+      expect(countOf(`stat ${CWD}/tracked-${i}.txt`)).toBe(0);
+    }
+    for (let i = 0; i < 4; i++) {
+      expect(countOf(`lstat ${CWD}/untracked-${i}.txt`)).toBe(0);
+    }
+    // …and it never answered a stat nobody listed: the walk still had to see
+    // the working tree.
+    expect(countOf(`readDir ${CWD}`)).toBeGreaterThan(0);
     // #2709: the index is stat'ed once for the whole walk, not once per file.
     expect(countOf(`lstat ${INDEX}`)).toBe(1);
     // #2712: TWO listings of `objects/pack` for the whole command, not one per
@@ -139,12 +161,19 @@ describe('per-invocation git fs memos (#2709 read cache over #2712 object memo)'
     ).toEqual([]);
   });
 
-  it('carries neither memo across two sequential commands', async () => {
+  it('carries none of the per-invocation memos across two sequential commands', async () => {
     await commands.execute(['status', '--short'], CWD);
     await commands.execute(['status', '--short'], CWD);
 
     expect(countOf(`lstat ${INDEX}`)).toBe(2);
     expect(countOf(`readDir ${PACK_DIR}`)).toBe(4);
+    // #2716's stat cache is per-invocation for the same reason, and the way
+    // to see that is the listing it primes from: the second command re-lists
+    // the working tree rather than answering from the first command's view of
+    // it. (That the adapter itself is rebuilt per call — the only thing that
+    // could let a listing outlive its command — is asserted directly in
+    // `git-commands-stat-cache.test.ts`.)
+    expect(countOf(`readDir ${CWD}`)).toBe(2);
   });
 
   it('shares neither memo between two commands running at once', async () => {

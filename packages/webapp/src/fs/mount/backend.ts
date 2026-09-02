@@ -112,6 +112,26 @@ export interface MountDescription {
 
 export interface MountBackend {
   readonly kind: MountKind;
+  /**
+   * Opt-in: this backend's `readDir` reports the SAME numbers its `stat`
+   * would report for the same path, so `VirtualFS` may carry them up on the
+   * `DirEntry` and consumers may use them in place of a stat (issue #2716).
+   *
+   * Default (absent/false) keeps the historical `{name, type}` listing. The
+   * flag exists because two backends deliberately answer `stat` from a
+   * different source than their listing, and promoting their listing fields
+   * would silently change what `stat` reports:
+   *   - S3 answers `stat` from the body cache when it has one, whose `mtime`
+   *     is `cachedAt` — when the body was cached, not the object's mtime.
+   *   - AEM does the same AND reports the *decoded* size there, while a
+   *     Source Bus listing carries the stored (compressed) size.
+   *
+   * `hostfs` (both bridges stat each dirent server-side) and `local` (both
+   * paths read `FileSystemFileHandle.getFile()`) do guarantee equivalence
+   * and set it. Aligning S3/AEM's two sources is a separate change; until
+   * then they keep costing a stat rather than answering a different number.
+   */
+  readonly listingStatsMatchStat?: boolean;
   /** URL form: 's3://bucket/prefix', 'da://org/repo', 'aem://org/site', undefined for local. */
   readonly source: string | undefined;
   readonly profile?: string;

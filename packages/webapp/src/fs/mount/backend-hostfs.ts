@@ -239,6 +239,13 @@ export interface HostFsMountBackendOptions {
 
 export class HostFsMountBackend implements MountBackend {
   readonly kind = 'hostfs' as const;
+  /**
+   * Both bridges stat every dirent inside `list` and answer `stat` from the
+   * same syscall, so a listing's numbers are the ones `stat` would report
+   * (issue #2716). A file the bridge could not stat comes back as a bare
+   * `{name, kind}` and is not promoted — see `statsFromDirEntry`.
+   */
+  readonly listingStatsMatchStat = true;
   readonly source: string;
   readonly mountId: string;
 
