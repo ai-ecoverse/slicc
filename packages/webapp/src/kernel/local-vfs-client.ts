@@ -16,13 +16,14 @@
  * `panel.someWrite(...)` call fail at compile time.
  */
 
+import type { ReadDirOptions } from '../fs/mount/backend.js';
 import type { DirEntry, FsChangeEvent, ReadFileOptions, Stats } from '../fs/types.js';
 
 export interface LocalVfsClient {
   /**
    * List entries in `path`. Same semantics as `VirtualFS.readDir`.
    */
-  readDir(path: string): Promise<DirEntry[]>;
+  readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]>;
 
   /**
    * Read a file. Same semantics as `VirtualFS.readFile` — the
@@ -61,7 +62,7 @@ export interface LocalVfsClient {
 export function createLocalVfsClient(source: LocalVfsClient): LocalVfsClient {
   const watch = source.watch?.bind(source);
   return {
-    readDir: (path) => source.readDir(path),
+    readDir: (path, opts) => source.readDir(path, opts),
     readFile: (path, options) => source.readFile(path, options),
     stat: (path) => source.stat(path),
     // Forwarded only when the source actually has it: leaving the key off

@@ -20,7 +20,7 @@
 
 import { EphemeralFdStore } from './ephemeral-fd-store.js';
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
-import type { MountBackend, RefreshReport } from './mount/backend.js';
+import type { MountBackend, ReadDirOptions, RefreshReport } from './mount/backend.js';
 import type { MountIndexEnv } from './mount-index.js';
 import { normalizePath, pathGlobToRegExp } from './path-utils.js';
 import type {
@@ -383,7 +383,7 @@ export class RestrictedFS {
     return this.vfs.readFileRange(resolved, start, end);
   }
 
-  async readDir(path: string): Promise<DirEntry[]> {
+  async readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {
     if (!this.isAllowed(path)) return [];
     // Resolve symlinks on the directory path itself when strictly allowed
     let resolvedPath = path;
@@ -394,7 +394,7 @@ export class RestrictedFS {
         return [];
       }
     }
-    const entries = await this.vfs.readDir(resolvedPath);
+    const entries = await this.vfs.readDir(resolvedPath, opts);
     // If this is a parent dir (not strictly allowed), filter to only entries
     // that lead toward allowed paths
     if (!this.isAllowedStrict(path)) {

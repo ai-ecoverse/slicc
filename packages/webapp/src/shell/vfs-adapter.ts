@@ -545,8 +545,10 @@ export class VfsAdapter implements IFileSystem {
       // Fast path: synchronous CacheFS read for non-mounted paths
       const fast = this.vfs.readDirSync(normalized);
       if (fast !== null) return fast.map((e) => e.name);
-      const entries = await this.vfs.readDir(normalized);
-      // `ls -l` stats every name this just returned (#2716).
+      // `ls -l` stats every name this just returned (#2716); ask the backend
+      // for listing stats so an FSA mount pays one getFile per entry instead
+      // of a follow-up stat (#2765).
+      const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
       return entries.map((e) => e.name);
     });
@@ -578,8 +580,10 @@ export class VfsAdapter implements IFileSystem {
         return this.mapFastEntriesToDirents(fastEntries);
       }
 
-      // Slow path: async VirtualFS readDir for mounted paths.
-      const entries = await this.vfs.readDir(normalized);
+      // Slow path: async VirtualFS readDir for mounted paths. Always ask
+      // for stats — every consumer of Dirents that cares about size/mtime
+      // (du, find -ls, …) stats each entry right after listing (#2765).
+      const entries = await this.vfs.readDir(normalized, { includeStats: true });
       this.primeListingStats(normalized, entries);
       return this.mapAsyncEntriesToDirents(entries);
     });

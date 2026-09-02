@@ -31,7 +31,10 @@ async function dirChildren(
 ): Promise<FileTreeItem[]> {
   let entries: Awaited<ReturnType<LocalVfsClient['readDir']>>;
   try {
-    entries = await fs.readDir(dir);
+    // Always ask for listing stats: every file entry is sized immediately
+    // below, and on an FSA mount that is one getFile per file rather than a
+    // listing plus a follow-up getFileHandle+getFile (#2765).
+    entries = await fs.readDir(dir, { includeStats: true });
   } catch {
     return [];
   }

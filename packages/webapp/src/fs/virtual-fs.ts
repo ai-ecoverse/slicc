@@ -18,7 +18,12 @@
 import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsChangeEvent, FsWatcher } from './fs-watcher.js';
 import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kind-reconcile.js';
-import type { MountBackend, MountDirEntry, RefreshReport } from './mount/backend.js';
+import type {
+  MountBackend,
+  MountDirEntry,
+  ReadDirOptions,
+  RefreshReport,
+} from './mount/backend.js';
 import type { HostFsMountBackend } from './mount/backend-hostfs.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import {
@@ -152,10 +157,13 @@ interface FsSyncLike {
  * real `stat()` rather than to a placeholder.
  *
  * `withStats` is the backend's {@link MountBackend.listingStatsMatchStat}
- * opt-in. A backend that answers `stat` from a different source than its
- * listing (S3/AEM read the body cache first) keeps the historical
- * `{name, type}` entry, because a consumer using these fields IN PLACE OF a
- * stat must not get a different number than the stat would have returned.
+ * opt-in: when the listing *did* report fields, they equal `stat()`. A
+ * backend that answers `stat` from a different source than its listing
+ * (S3/AEM read the body cache first) keeps the historical `{name, type}`
+ * entry, because a consumer using these fields IN PLACE OF a stat must not
+ * get a different number than the stat would have returned. Field presence
+ * itself is per-call (`ReadDirOptions.includeStats`); this flag does not
+ * invent fields the listing omitted.
  */
 function dirEntryFromMount(entry: MountDirEntry, withStats: boolean): DirEntry {
   const type = entry.kind === 'directory' ? 'directory' : 'file';
@@ -1908,13 +1916,19 @@ export class VirtualFS {
 
   /**
    * List entries in a directory.
+   *
+   * `opts.includeStats` is forwarded to the mount backend. On an FSA mount
+   * that is the difference between a names-only listing and one that paid
+   * one `getFile()` per file entry (#2733 / #2765); HTTP backends ignore it
+   * and always report the fields they already have.
+   *
    * @throws FsError ENOENT if directory doesn't exist, ENOTDIR if path is a file
    */
-  async readDir(path: string): Promise<DirEntry[]> {
+  async readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
-      return this.readDirMounted(normalized, mount);
+      return this.readDirMounted(normalized, mount, opts);
     }
     return this.readDirLocal(normalized);
   }
@@ -1922,10 +1936,16 @@ export class VirtualFS {
   /** readDir implementation for mounted paths (index fast path or backend slow path). */
   private async readDirMounted(
     normalized: string,
-    mount: { path: string; backend: MountBackend; relParts: string[] }
+    mount: { path: string; backend: MountBackend; relParts: string[] },
+    opts?: ReadDirOptions
   ): Promise<DirEntry[]> {
-    // Fast path: use MountIndex if available
-    const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
+    // Fast path: use MountIndex if available. The index stores names/types
+    // only — callers that asked for stats fall through to the backend so
+    // FSA mounts can pay the one-getFile-per-entry cost they opted into.
+    const indexedEntries =
+      opts?.includeStats === true
+        ? undefined
+        : this.mountIndex.getDirectoryEntries(mount.path, normalized);
     if (indexedEntries !== undefined) {
       const entries = new Map<string, DirEntry>();
       for (const entry of indexedEntries) {
@@ -1939,7 +1959,7 @@ export class VirtualFS {
     const relPath = mount.relParts.join('/') || '/';
     let dirEntries;
     try {
-      dirEntries = await mount.backend.readDir(relPath);
+      dirEntries = await mount.backend.readDir(relPath, opts);
     } catch (err) {
       rebrandFsError(err, normalized);
     }

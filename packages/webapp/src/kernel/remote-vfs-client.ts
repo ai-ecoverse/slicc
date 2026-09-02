@@ -26,6 +26,7 @@
  * host, and VFS host all coexist on a single port.
  */
 
+import type { ReadDirOptions } from '../fs/mount/backend.js';
 import type { DirEntry, FsChangeEvent, ReadFileOptions, Stats } from '../fs/types.js';
 import { FsError, type FsErrorCode } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
@@ -197,9 +198,14 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
   // LocalVfsClient surface
   // -------------------------------------------------------------------------
 
-  readDir(path: string): Promise<DirEntry[]> {
+  readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {
     const requestId = this.genId();
-    const req: VfsReadDirRequestMsg = { type: 'vfs-read-dir', requestId, path };
+    const req: VfsReadDirRequestMsg = {
+      type: 'vfs-read-dir',
+      requestId,
+      path,
+      ...(opts?.includeStats === true ? { includeStats: true as const } : {}),
+    };
     return this.request<DirEntry[]>(requestId, 'vfs-read-dir-result', path, req);
   }
 

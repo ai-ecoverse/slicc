@@ -259,6 +259,23 @@ const PACK_DIR_SUFFIX = '/objects/pack';
 /** `<gitdir>/objects/ab/cdef…`; captures the objects dir and the fan-out name. */
 const LOOSE_OBJECT_PATH = /^(.*\/objects)\/([0-9a-f]{2})\/[0-9a-f]{38,}$/;
 
+/**
+ * Loose fan-out directories under `.git/objects` (`…/objects/ab`). Names-only
+ * listings here are the contract: isomorphic-git only wants the names, and
+ * asking for stats would `getFile()` every loose object on an FSA mount —
+ * the same multiplier #2733 removed from `objects/pack` (#2765).
+ */
+const LOOSE_FANOUT_DIR = /\/objects\/[0-9a-f]{2}$/;
+
+/**
+ * True when a listing of `path` must stay names-only even though most
+ * worktree listings ask for stats. Pack and loose fan-out dirs are listed
+ * extremely often for names alone; carrying stats there is pure cost.
+ */
+function isObjectStoreNamesOnlyPath(path: string): boolean {
+  return path.endsWith(PACK_DIR_SUFFIX) || LOOSE_FANOUT_DIR.test(path);
+}
+
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
 function cacheableEntry(entry: DirEntry): CachedEntry | undefined {
   const stats = statsFromDirEntry(entry);
@@ -343,9 +360,17 @@ export function createIsomorphicGitFs(
    * stat cache with the fields the backend already reported (#2716); a
    * listing served from the object memo does not, because no new listing was
    * taken.
+   *
+   * Worktree / refs listings ask for stats so `GitWalkerFs` can skip a
+   * follow-up `stat` per entry. Object-store paths stay names-only — packing
+   * stats into `objects/pack` (listed ~25,000× per `log --all`) would undo
+   * #2733 (#2765).
    */
   const listNames = async (path: string): Promise<string[]> => {
-    const entries = await vfs.readDir(path);
+    const entries = await vfs.readDir(
+      path,
+      isObjectStoreNamesOnlyPath(path) ? undefined : { includeStats: true }
+    );
     statCache.prime(path, entries);
     return entries.map((e) => e.name);
   };

@@ -298,7 +298,10 @@ class VfsRpcHost {
 
   private async handleReadDir(req: VfsReadDirRequestMsg): Promise<void> {
     try {
-      const entries = await this.client.readDir(req.path);
+      const entries =
+        req.includeStats === true
+          ? await this.client.readDir(req.path, { includeStats: true })
+          : await this.client.readDir(req.path);
       // `DirEntry` from `fs/types.ts` is structurally identical to
       // `VfsDirEntryEnvelope`; cast keeps the wire decoupled from the
       // webapp fs type.
