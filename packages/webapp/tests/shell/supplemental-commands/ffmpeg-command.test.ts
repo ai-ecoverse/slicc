@@ -192,6 +192,75 @@ describe('parseFfmpegArgs', () => {
   });
 });
 
+describe('parseFfmpegArgs value-taking flags', () => {
+  it('keeps -c copy and the bitstream filter on a remux to mpegts', () => {
+    // The field regression: `-bsf:v` parsed as a toggle, so
+    // `h264_mp4toannexb` became a phantom output positional and took
+    // the pending `-c copy` with it. Both vanished from argv and the
+    // stream copy silently became a full re-encode.
+    const parsed = parseFfmpegArgs([
+      '-i',
+      'in.mp4',
+      '-c',
+      'copy',
+      '-bsf:v',
+      'h264_mp4toannexb',
+      '-f',
+      'mpegts',
+      'out.ts',
+    ]);
+    expect(parsed.inputs.map((i) => i.path)).toEqual(['in.mp4']);
+    expect(parsed.outputPath).toBe('out.ts');
+    expect(parsed.outputOpts).toEqual(['-c', 'copy', '-bsf:v', 'h264_mp4toannexb', '-f', 'mpegts']);
+  });
+
+  it('carries -bsf:a through an mp4 remux', () => {
+    const parsed = parseFfmpegArgs([
+      '-i',
+      'all.ts',
+      '-c',
+      'copy',
+      '-bsf:a',
+      'aac_adtstoasc',
+      'cut.mp4',
+    ]);
+    expect(parsed.outputPath).toBe('cut.mp4');
+    expect(parsed.outputOpts).toEqual(['-c', 'copy', '-bsf:a', 'aac_adtstoasc']);
+  });
+
+  it('lets an unrecognized option consume its value', () => {
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-totally_unknown', 'value', 'out.mp4']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-totally_unknown', 'value']);
+  });
+
+  it('does not let an unrecognized toggle swallow the output path', () => {
+    // Nothing follows `out.mp4`, so it is the output — never a value.
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-some_toggle', 'out.mp4']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-some_toggle']);
+  });
+
+  it('treats an unrecognized flag followed by another option as a toggle', () => {
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-some_toggle', '-c', 'copy', 'out.mp4']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-some_toggle', '-c', 'copy']);
+  });
+
+  it('keeps known toggles from consuming the next token', () => {
+    const parsed = parseFfmpegArgs(['-i', 'a.mp4', '-i', 'b.mp4', '-shortest', '-y', 'out.mp4']);
+    expect(parsed.inputs.map((i) => i.path)).toEqual(['a.mp4', 'b.mp4']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-shortest', '-y']);
+  });
+
+  it('binds an unknown option to the next INPUT, not the output', () => {
+    const parsed = parseFfmpegArgs(['-hwaccel', 'auto', '-i', 'in.mp4', 'out.mp4']);
+    expect(parsed.inputs[0].raw).toEqual(['-hwaccel', 'auto', '-i', 'in.mp4']);
+    expect(parsed.outputOpts).toEqual([]);
+  });
+});
+
 describe('isAvfoundationCapture', () => {
   it('detects -f avfoundation invocations', () => {
     const parsed = parseFfmpegArgs(['-f', 'avfoundation', '-i', '0', 'out.jpg']);
