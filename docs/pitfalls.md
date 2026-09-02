@@ -184,6 +184,38 @@ the closure returns.
 | `core/image-processor.ts`                        | Snapshots via `new Uint8Array(data)`                                               |
 | `cdp/browser-api.ts`                             | Consumes the view inside the callback to build base64 (no escape)                  |
 
+## A WASM Trap Poisons the Cached Instance, Not Just the Call
+
+A WebAssembly trap — `RuntimeError: memory access out of bounds`,
+`unreachable`, an emscripten `Aborted(…)` — is terminal for the **instance**.
+Linear memory is left inconsistent, so every later entry into the module
+re-traps immediately. Any loader that memoizes one instance per realm
+therefore turns a single bad call into a dead command for the rest of the
+session.
+
+`ffmpeg-wasm.ts` had exactly this shape: `getFfmpeg` caches one
+`ffmpegPromise`, and its `.catch()` covers only a _load_ failure — which never
+produced an instance in the first place. On a live leader, a 10 MB `.ts` remux
+blew the heap; from then on a 64x64 `lavfi` encode **with no inputs at all**
+failed with the identical trap, and `ffmpeg` stayed dead until the tab was
+reloaded. `ffmpeg -version` kept answering, because that gate resolves the core
+package without entering wasm — so the command looked healthy.
+
+**The rule**: a memoized WASM instance needs a recycle path. Drop the cached
+promise _and_ `terminate()` the worker (terminating is what actually releases
+the dead heap), then let the next call boot a clean core.
+
+Distinguish a fault from an ordinary failure: these commands report bad flags
+and unsupported inputs as a **non-zero exit code**, so a _throw_ out of the
+WASM call path is already exceptional and is the right trigger. Skip MEMFS
+cleanup afterwards — every `deleteFile` would re-enter the trapped module.
+
+| Site                                         | Status                                                                           |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `shell/supplemental-commands/ffmpeg-wasm.ts` | `recycleFfmpeg()` drops the promise + terminates; tests in `ffmpeg-wasm.test.ts` |
+| `shell/supplemental-commands/magick-wasm.ts` | Same memoized shape — not yet recycled                                           |
+| `shell/supplemental-commands/v86-wasm.ts`    | Same memoized shape — not yet recycled                                           |
+
 ## Python Realm: Mounts Are Async-Only Via `slicc.fs`
 
 **Files**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`,

@@ -241,9 +241,47 @@ function stringToBlobUrl(source: string, contentType: string): string {
 }
 
 /**
- * Drop the cached `FFmpeg` instance promise so the next `getFfmpeg`
- * call rebuilds from scratch. Test-only — production callers share
- * the single loaded instance for the lifetime of the realm.
+ * Drop the cached instance after an unrecoverable fault so the next
+ * `getFfmpeg` boots a fresh core.
+ *
+ * A WebAssembly trap (`RuntimeError: memory access out of bounds`,
+ * `unreachable`, an emscripten `Aborted(…)`) is terminal for the
+ * *instance*, not just the call that hit it — linear memory is left
+ * inconsistent and every later entry re-traps immediately. Because
+ * {@link ffmpegPromise} is realm-scoped, one trap used to poison
+ * `ffmpeg` for the lifetime of the tab: after a 10 MB remux blew the
+ * heap, a 64x64 `lavfi` encode with no inputs at all failed with the
+ * identical trap. Recycling makes a fault cost one command instead
+ * of the whole session.
+ *
+ * `terminate()` is what actually reclaims the dead core's heap; the
+ * `catch` above in {@link getFfmpeg} only covers a *load* failure,
+ * which never produced an instance to begin with.
+ */
+export function recycleFfmpeg(): void {
+  const stale = ffmpegPromise;
+  ffmpegPromise = null;
+  if (!stale) return;
+  // Settle out-of-band: the promise may still be pending, and a
+  // rejected one must not resurface here as an unhandled rejection.
+  void stale.then(
+    (ffmpeg) => {
+      try {
+        ffmpeg.terminate();
+      } catch {
+        /* worker already gone */
+      }
+    },
+    () => {
+      /* load failed — there is no worker to terminate */
+    }
+  );
+}
+
+/**
+ * Drop the cached `FFmpeg` instance promise without touching the
+ * worker. Test-only — production recycling goes through
+ * {@link recycleFfmpeg}.
  */
 export function resetFfmpegForTests(): void {
   ffmpegPromise = null;

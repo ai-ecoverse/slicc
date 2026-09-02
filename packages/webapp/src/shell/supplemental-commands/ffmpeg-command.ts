@@ -40,6 +40,7 @@ import {
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
   type IpkResolutionContext,
+  recycleFfmpeg,
   tryLoadFfmpegCoreFromNodeModules,
 } from './ffmpeg-wasm.js';
 
@@ -1215,6 +1216,7 @@ async function runWasmFfmpeg(
     stderr += `${event.message}\n`;
   };
   ffmpeg.on('log', logHandler);
+  let faulted = false;
   try {
     // Stage inputs into MEMFS. Virtual (lavfi) inputs have no bytes
     // and are synthesized by the core itself, so skip them.
@@ -1265,9 +1267,20 @@ async function runWasmFfmpeg(
 
     return { stdout: '', stderr, exitCode: 0 };
   } catch (err) {
+    // A *throw* out of the wasm path is not an ordinary ffmpeg
+    // failure — bad flags and unsupported codecs come back as a
+    // non-zero exit code, handled above. What lands here is the core
+    // itself faulting, which leaves the realm-shared instance
+    // unusable for every later command. Recycle it so the damage is
+    // scoped to this invocation.
+    faulted = true;
+    recycleFfmpeg();
     return {
       stdout: '',
-      stderr: `${stderr}ffmpeg: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr:
+        `${stderr}ffmpeg: ${err instanceof Error ? err.message : String(err)}\n` +
+        'ffmpeg: the wasm core faulted and was recycled; retry the command ' +
+        '(a large input may need to be split into smaller passes)\n',
       exitCode: 1,
     };
   } finally {
@@ -1276,6 +1289,8 @@ async function runWasmFfmpeg(
     } catch {
       /* noop */
     }
-    await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
+    // A terminated worker has no MEMFS left to tidy, and every
+    // `deleteFile` would re-enter the trapped module.
+    if (!faulted) await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
   }
 }
