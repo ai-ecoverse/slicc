@@ -62,7 +62,10 @@ export interface LocalVfsClient {
 export function createLocalVfsClient(source: LocalVfsClient): LocalVfsClient {
   const watch = source.watch?.bind(source);
   return {
-    readDir: (path, opts) => source.readDir(path, opts),
+    // Omit the second arg when unset so mocks that assert
+    // `toHaveBeenCalledWith(path)` keep matching (#2765).
+    readDir: (path, opts) =>
+      opts === undefined ? source.readDir(path) : source.readDir(path, opts),
     readFile: (path, options) => source.readFile(path, options),
     stat: (path) => source.stat(path),
     // Forwarded only when the source actually has it: leaving the key off

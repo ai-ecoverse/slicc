@@ -40,6 +40,13 @@ describe('LocalVfsClient', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('createLocalVfsClient forwards includeStats when set', async () => {
+    const stub = makeStubVfs();
+    const client = createLocalVfsClient(stub.vfs);
+    await client.readDir('/foo', { includeStats: true });
+    expect(stub.readDir).toHaveBeenCalledWith('/foo', { includeStats: true });
+  });
+
   it('createLocalVfsClient passes readFile through with options', async () => {
     const stub = makeStubVfs();
     const client = createLocalVfsClient(stub.vfs);
