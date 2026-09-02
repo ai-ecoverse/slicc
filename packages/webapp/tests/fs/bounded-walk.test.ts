@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { walkBounded } from '../../src/fs/bounded-walk.js';
+import { DEFAULT_SKIP_DIRS, shouldSkipNoiseDir, walkBounded } from '../../src/fs/bounded-walk.js';
 import type { DirEntry, Stats } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -29,6 +29,18 @@ async function collect(gen: AsyncGenerator<string>): Promise<string[]> {
   for await (const p of gen) out.push(p);
   return out.sort();
 }
+
+describe('shouldSkipNoiseDir', () => {
+  it('skips the shared build-output set and every dot-directory', () => {
+    for (const name of DEFAULT_SKIP_DIRS) {
+      expect(shouldSkipNoiseDir(name)).toBe(true);
+    }
+    expect(shouldSkipNoiseDir('.git')).toBe(true);
+    expect(shouldSkipNoiseDir('.build')).toBe(true);
+    expect(shouldSkipNoiseDir('src')).toBe(false);
+    expect(shouldSkipNoiseDir('README.md')).toBe(false);
+  });
+});
 
 describe('walkBounded', () => {
   it('yields files and recurses into directories', async () => {

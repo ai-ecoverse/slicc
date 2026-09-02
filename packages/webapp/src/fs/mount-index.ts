@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { shouldSkipNoiseDir } from './bounded-walk.js';
 
 const log = createLogger('mount-index');
 
@@ -116,6 +117,13 @@ async function isSameEntrySafe(
 export interface MountIndexLimits {
   maxDepth: number;
   maxEntries: number;
+  /**
+   * When true (the default), skip `node_modules` / `dist` / `build` /
+   * `coverage` and any dot-directory (`.git`, `.build`, …) while indexing —
+   * the same list sprinkle discovery uses via {@link shouldSkipNoiseDir}.
+   * Set `false` when a caller genuinely needs every path indexed.
+   */
+  skipNoiseDirs: boolean;
 }
 
 /**
@@ -132,6 +140,7 @@ export interface MountIndexLimits {
 export const RESTORED_MOUNT_INDEX_LIMITS: MountIndexLimits = {
   maxDepth: 100,
   maxEntries: 100_000,
+  skipNoiseDirs: true,
 };
 
 /**
@@ -183,6 +192,7 @@ export function resolveMountIndexLimits(env: MountIndexEnv): MountIndexLimits {
   return {
     maxDepth: resolveLimit(env, ENV_MAX_DEPTH, MAX_INDEX_DEPTH),
     maxEntries: resolveLimit(env, ENV_MAX_ENTRIES, MAX_INDEX_ENTRIES),
+    skipNoiseDirs: true,
   };
 }
 
@@ -380,9 +390,15 @@ export class MountIndex {
     }
 
     const children = data.childrenByDirectory.get(dirPath);
-    if (!children) return [];
-
-    return [...children].map(([name, type]) => ({ name, type }));
+    if (children) {
+      return [...children].map(([name, type]) => ({ name, type }));
+    }
+    // Walked directories always get an (possibly empty) child bucket via
+    // `ensureDirectoryChildren`. A missing bucket means this path was never
+    // indexed — e.g. a skipped `node_modules` reached by absolute path —
+    // so return undefined and let the caller use the slow backend path
+    // instead of claiming the directory is empty.
+    return undefined;
   }
 
   /**
@@ -408,6 +424,11 @@ export class MountIndex {
     const data = this.mounts.get(mountPath);
     if (data?.state.status !== 'ready') return;
 
+    // Do not partially populate a noise subtree the walk skipped — a child
+    // bucket created here would look complete to getDirectoryEntries and hide
+    // every sibling that still exists only on the backend.
+    if (this.isSkippedNoisePath(mountPath, absolutePath, data, 'file')) return;
+
     data.files.add(absolutePath);
     this.addPathToChildIndex(data, absolutePath, 'file');
 
@@ -432,6 +453,8 @@ export class MountIndex {
 
     const data = this.mounts.get(mountPath);
     if (data?.state.status !== 'ready') return;
+
+    if (this.isSkippedNoisePath(mountPath, absolutePath, data, 'unknown')) return;
 
     // Remove the path and all children
     data.files.delete(absolutePath);
@@ -467,8 +490,24 @@ export class MountIndex {
     const data = this.mounts.get(mountPath);
     if (data?.state.status !== 'ready') return;
 
+    const kind: 'file' | 'directory' | 'unknown' = data.files.has(oldPath)
+      ? 'file'
+      : data.directories.has(oldPath)
+        ? 'directory'
+        : 'unknown';
+    if (kind === 'unknown') return;
+
+    // Renames that stay inside (or land in) a skipped noise subtree must not
+    // invent partial child buckets. Dropping an indexed path that moves *into*
+    // noise is fine — the destination stays on the slow path.
+    if (this.isSkippedNoisePath(mountPath, oldPath, data, kind)) return;
+    if (this.isSkippedNoisePath(mountPath, newPath, data, kind)) {
+      this.notifyDelete(oldPath);
+      return;
+    }
+
     // Handle file rename
-    if (data.files.has(oldPath)) {
+    if (kind === 'file') {
       data.files.delete(oldPath);
       data.files.add(newPath);
       this.removePathFromChildIndex(data, oldPath);
@@ -477,38 +516,36 @@ export class MountIndex {
     }
 
     // Handle directory rename (move all children)
-    if (data.directories.has(oldPath)) {
-      data.directories.delete(oldPath);
-      data.directories.add(newPath);
+    data.directories.delete(oldPath);
+    data.directories.add(newPath);
 
-      const oldPrefix = oldPath + '/';
-      const newPrefix = newPath + '/';
+    const oldPrefix = oldPath + '/';
+    const newPrefix = newPath + '/';
 
-      for (const path of [...data.files]) {
-        if (path.startsWith(oldPrefix)) {
-          data.files.delete(path);
-          data.files.add(newPrefix + path.slice(oldPrefix.length));
-        }
+    for (const path of [...data.files]) {
+      if (path.startsWith(oldPrefix)) {
+        data.files.delete(path);
+        data.files.add(newPrefix + path.slice(oldPrefix.length));
       }
-      for (const path of [...data.directories]) {
-        if (path.startsWith(oldPrefix)) {
-          data.directories.delete(path);
-          data.directories.add(newPrefix + path.slice(oldPrefix.length));
-        }
+    }
+    for (const path of [...data.directories]) {
+      if (path.startsWith(oldPrefix)) {
+        data.directories.delete(path);
+        data.directories.add(newPrefix + path.slice(oldPrefix.length));
       }
+    }
 
-      this.removePathFromChildIndex(data, oldPath);
-      this.addPathToChildIndex(data, newPath, 'directory');
-      const movedDirectories = [...data.childrenByDirectory.entries()].filter(
-        ([path]) => path === oldPath || path.startsWith(oldPrefix)
-      );
-      for (const [path] of movedDirectories) {
-        data.childrenByDirectory.delete(path);
-      }
-      for (const [path, children] of movedDirectories) {
-        const renamedPath = path === oldPath ? newPath : newPrefix + path.slice(oldPrefix.length);
-        data.childrenByDirectory.set(renamedPath, children);
-      }
+    this.removePathFromChildIndex(data, oldPath);
+    this.addPathToChildIndex(data, newPath, 'directory');
+    const movedDirectories = [...data.childrenByDirectory.entries()].filter(
+      ([path]) => path === oldPath || path.startsWith(oldPrefix)
+    );
+    for (const [path] of movedDirectories) {
+      data.childrenByDirectory.delete(path);
+    }
+    for (const [path, children] of movedDirectories) {
+      const renamedPath = path === oldPath ? newPath : newPrefix + path.slice(oldPrefix.length);
+      data.childrenByDirectory.set(renamedPath, children);
     }
   }
 
@@ -548,6 +585,43 @@ export class MountIndex {
   private parentPath(absolutePath: string): string {
     const lastSlash = absolutePath.lastIndexOf('/');
     return lastSlash <= 0 ? '/' : absolutePath.slice(0, lastSlash);
+  }
+
+  /**
+   * True when indexing would have refused to enter a directory on this path
+   * (or the path itself, when it names a noise directory). File basenames are
+   * never treated as skip dirs — a top-level `.env` file is still indexed —
+   * matching {@link walkChildren}'s directory-only skip.
+   */
+  private isSkippedNoisePath(
+    mountPath: string,
+    absolutePath: string,
+    data: MountData,
+    pathKind: 'file' | 'directory' | 'unknown'
+  ): boolean {
+    if (!data.limits.skipNoiseDirs) return false;
+    if (!absolutePath.startsWith(`${mountPath}/`)) return false;
+
+    const segments = absolutePath.slice(mountPath.length + 1).split('/');
+    const kind =
+      pathKind !== 'unknown'
+        ? pathKind
+        : data.files.has(absolutePath)
+          ? 'file'
+          : data.directories.has(absolutePath)
+            ? 'directory'
+            : 'unknown';
+
+    for (let i = 0; i < segments.length; i++) {
+      const isLeaf = i === segments.length - 1;
+      if (isLeaf && kind === 'file') continue;
+      // Directory leaf, or unknown leaf whose name is itself a skip dir
+      // (unindexed `node_modules` / `.git` delete). Unknown non-skip leaves
+      // (e.g. a never-indexed normal file) are not noise.
+      if (isLeaf && kind === 'unknown' && !shouldSkipNoiseDir(segments[i]!)) continue;
+      if (shouldSkipNoiseDir(segments[i]!)) return true;
+    }
+    return false;
   }
 
   /**
@@ -777,6 +851,14 @@ export class MountIndex {
         this.addPathToChildIndex(data, childPath, 'file');
         data.state.indexed++;
       } else if (childHandle.kind === 'directory') {
+        // Default: do not ingest noise dirs (node_modules, .git, build
+        // output, …). They are omitted from the index entirely — not listed
+        // as empty children — so discovery stays O(useful files) and a
+        // later absolute-path listing falls through to the slow backend
+        // path via the missing-bucket contract in getDirectoryEntries.
+        if (data.limits.skipNoiseDirs && shouldSkipNoiseDir(name)) {
+          continue;
+        }
         this.addPathToChildIndex(data, childPath, 'directory');
         await this.walkHandle(
           childPath,

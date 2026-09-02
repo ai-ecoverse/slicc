@@ -20,6 +20,22 @@
 import type { DirEntry, EntryType } from './types.js';
 import { MAX_WALK_DEPTH, MAX_WALK_ENTRIES } from './walker.js';
 
+/**
+ * Directory basenames never entered by default discovery walks (sprinkle
+ * scan, MountIndex). Dot-directories (`.git`, `.build`, `.venv`, …) are
+ * skipped separately via {@link shouldSkipNoiseDir}. Shared so callers do
+ * not grow a third copy of the same list (issue #2764 / #2717).
+ */
+export const DEFAULT_SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage']);
+
+/**
+ * True for build-output directory names and any dot-directory. Used as the
+ * default `skip` predicate for bounded walks and MountIndex ingestion.
+ */
+export function shouldSkipNoiseDir(name: string): boolean {
+  return name.startsWith('.') || DEFAULT_SKIP_DIRS.has(name);
+}
+
 /** Minimal read surface the bounded walker needs. */
 export interface BoundedWalkReader {
   readDir(path: string): Promise<DirEntry[]>;

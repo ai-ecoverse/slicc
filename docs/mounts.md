@@ -265,10 +265,13 @@ The cache holds handles, not data: Chrome re-resolves a handle against the live 
 
 Each mount is indexed in the background so file discovery (`.jsh` / `.bsh` / skills) and listings are fast once ready. The walk is bounded so a pathologically deep, huge, or self-referential mount can't peg or OOM the kernel worker. When a bound is hit the index is **skipped** for that mount — reads still work through the slow per-`readDir` fallback, just without the fast index.
 
+By default the index also **skips noise directories** — `node_modules`, `dist`, `build`, `coverage`, and any dot-directory (`.git`, `.build`, `.venv`, …) — sharing the same `shouldSkipNoiseDir` / `DEFAULT_SKIP_DIRS` list as sprinkle discovery (`bounded-walk.ts`). Skipped subtrees are omitted from the index entirely; an absolute-path listing of a skipped directory falls through to the slow backend path rather than appearing empty. Pass `skipNoiseDirs: false` on `MountIndexLimits` when a caller genuinely needs every path indexed.
+
 Defaults (raised 10× in #1186):
 
 - Max directory depth: **400**
 - Max total entries: **2,000,000**
+- Skip noise directories: **yes**
 
 Two environment variables override the defaults. Each must parse to a positive integer; a non-numeric, zero, negative, or `NaN` value is ignored — the default is used and a warning is logged.
 
@@ -279,7 +282,7 @@ Two environment variables override the defaults. Each must parse to a positive i
 
 (The worker / browser float has no OS env, so the defaults always apply there; the overrides are read once at construction in CLI / Electron mode.)
 
-**Boot-time session restore uses a smaller budget** (`RESTORED_MOUNT_INDEX_LIMITS`: depth 100, 100,000 entries). The interactive defaults suit a folder the user just picked and is waiting on; at boot the same budget let a huge or cloud-backed tree (an iCloud folder full of dataless files) grind the kernel worker's I/O for minutes while the kernel-ready watchdog ran (2026-08-24 incident). A restored mount that hits the bound stays fully usable — only the fast-discovery index is truncated (`entries-exceeded`), and re-mounting interactively re-indexes with the full budget.
+**Boot-time session restore uses a smaller budget** (`RESTORED_MOUNT_INDEX_LIMITS`: depth 100, 100,000 entries, noise dirs still skipped). The interactive defaults suit a folder the user just picked and is waiting on; at boot the same budget let a huge or cloud-backed tree (an iCloud folder full of dataless files) grind the kernel worker's I/O for minutes while the kernel-ready watchdog ran (2026-08-24 incident). A restored mount that hits the bound stays fully usable — only the fast-discovery index is truncated (`entries-exceeded`), and re-mounting interactively re-indexes with the full budget.
 
 `mount list` renders a distinct, actionable line per skip cause:
 
