@@ -663,6 +663,20 @@ private enum PersistedSecretAPIRoutes {
                     message: "Secret \"\(name)\" must have at least one authorized domain"
                 )
             }
+            // Never report a success the masking pipeline will ignore. A
+            // startup `--env-file` entry is re-applied over the persisted store
+            // on every reload, so writing a shadowed name would leave the OLD
+            // credential in use behind a 200 — the silent-failure mode a
+            // rotation is least able to tolerate. node-server has no such state
+            // (there `--env-file` IS the store's backing file), so this refusal
+            // cannot fire on any request node would have accepted.
+            guard !injector.envFileShadows(name) else {
+                return try jsonErrorResponse(
+                    status: .conflict,
+                    message: "Secret \"\(name)\" is defined by this server's --env-file and cannot be "
+                        + "overwritten from the API; edit that file and restart instead"
+                )
+            }
             do {
                 try injector.persistedStore.save(name, value, domains)
             } catch {

@@ -177,6 +177,58 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    /// A `--env-file` entry is re-applied over the persisted store on every
+    /// reload, so a persisted write to a shadowed name could never take effect.
+    /// Refuse it instead of returning a 200 that leaves the OLD credential in
+    /// use. node-server cannot reach this state — there `--env-file` IS the
+    /// persisted store's backing file — so this rejection never fires on a
+    /// request node would have accepted.
+    func testPersistedSetRefusesNameShadowedByEnvFile() async throws {
+        let fixture = InMemoryPersistedSecrets()
+        let injector = SecretInjector(
+            sessionId: "persisted-set-envfile-fixture",
+            envFileSecrets: [Secret(name: "SHADOWED", value: "env-file-fixture-value", domains: ["env.example"])],
+            persistedStore: fixture.access
+        )
+        try await withApp(injector: injector) { client in
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"name":"SHADOWED","value":"api-fixture-value","domains":["api.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .conflict)
+                let text = String(buffer: response.body)
+                XCTAssertTrue(text.contains("--env-file"))
+                XCTAssertFalse(text.contains("env-file-fixture-value"))
+                XCTAssertFalse(text.contains("api-fixture-value"))
+            }
+            XCTAssertNil(fixture.get(name: "SHADOWED"), "A shadowed write must not reach the persisted store")
+            // The env-file value is still the one the pipeline serves.
+            try await client.execute(uri: "/api/secrets/peek?name=SHADOWED", method: .get) { response in
+                XCTAssertEqual(response.status, .notFound)
+            }
+        }
+
+        // An unshadowed name on the same injector still writes normally.
+        let injector2 = SecretInjector(
+            sessionId: "persisted-set-envfile-fixture-2",
+            envFileSecrets: [Secret(name: "SHADOWED", value: "env-file-fixture-value", domains: ["env.example"])],
+            persistedStore: fixture.access
+        )
+        try await withApp(injector: injector2) { client in
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"name":"UNSHADOWED","value":"api-fixture-value","domains":["api.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+            }
+        }
+        XCTAssertEqual(fixture.get(name: "UNSHADOWED")?.domains, ["api.example"])
+    }
+
     func testSessionDeleteWinsCollisionThenRevealsPersistedMask() async throws {
         let fixture = InMemoryPersistedSecrets([
             Secret(name: "TOKEN", value: "persisted-fixture-value", domains: ["persisted.example"])
