@@ -116,13 +116,13 @@ For dip and sprinkle interaction patterns built on `agent`, see `/workspace/skil
 
 A rarely used argument — `canCreateChildren: true` — is an explicit nested-delegation grant. The new scoop may then `scoop_scoop` / `feed_scoop` / `drop_scoop` its own children. Omit it (the default) so the scoop stays a leaf. A scoop that was not itself granted this cannot pass it on.
 
-| Param             | What it controls                        | Default                                                                                | Pure replace? |
-| ----------------- | --------------------------------------- | -------------------------------------------------------------------------------------- | ------------- |
-| `workspaceMode`   | Sharing policy for the parent workspace | `"shared-readonly"` (today's scoop). `"private"` isolates.                             | Yes           |
-| `visiblePaths`    | Read-only VFS paths the scoop can SEE   | shared-readonly: `["/workspace/"]`; private: `[]`                                      | Yes           |
-| `writablePaths`   | VFS paths the scoop can READ AND WRITE  | shared-readonly: `["/scoops/<folder>/", "/shared/"]`; private: `["/scoops/<folder>/"]` | Yes           |
-| `allowedCommands` | Shell command allow-list                | unrestricted (every built-in + `.jsh`)                                                 | Yes           |
-| `canCreateChildren` | Nested-delegation grant               | `false` (leaf scoop)                                                                   | Yes           |
+| Param               | What it controls                        | Default                                                                                | Pure replace? |
+| ------------------- | --------------------------------------- | -------------------------------------------------------------------------------------- | ------------- |
+| `workspaceMode`     | Sharing policy for the parent workspace | `"shared-readonly"` (today's scoop). `"private"` isolates.                             | Yes           |
+| `visiblePaths`      | Read-only VFS paths the scoop can SEE   | shared-readonly: `["/workspace/"]`; private: `[]`                                      | Yes           |
+| `writablePaths`     | VFS paths the scoop can READ AND WRITE  | shared-readonly: `["/scoops/<folder>/", "/shared/"]`; private: `["/scoops/<folder>/"]` | Yes           |
+| `allowedCommands`   | Shell command allow-list                | unrestricted (every built-in + `.jsh`)                                                 | Yes           |
+| `canCreateChildren` | Nested-delegation grant                 | `false` (leaf scoop)                                                                   | Yes           |
 
 "Pure replace" means what you set is what you get — the value isn't merged with the default. Pass `[]` to drop it entirely. Trailing slashes recommended on path entries (e.g. `/shared/data/`).
 

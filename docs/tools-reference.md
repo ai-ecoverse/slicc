@@ -388,11 +388,11 @@ name that is not here is an error, never a cross-cone match.
 When `policy.canCreateChildren` is true (every root, and a child given the
 nested-delegation grant). Create a new scoop owned by the caller.
 
-| Property   | Value                                                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Name**   | `scoop_scoop`                                                                                                                                      |
+| Property   | Value                                                                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Name**   | `scoop_scoop`                                                                                                                                                                                                             |
 | **Input**  | `{ name: string, canCreateChildren?: boolean, workspaceMode?: string, … }` — display name (e.g., "Andy"); `canCreateChildren: true` grants nested delegation; `workspaceMode` is `shared-readonly` (default) or `private` |
-| **Output** | `{ content: "Scoop created" }`                                                                                                                     |
+| **Output** | `{ content: "Scoop created" }`                                                                                                                                                                                            |
 
 **Behavior**:
 
