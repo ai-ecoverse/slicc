@@ -54,7 +54,29 @@ type FakeFfmpeg = {
   exec: ReturnType<typeof vi.fn>;
   readFile: ReturnType<typeof vi.fn>;
   deleteFile: ReturnType<typeof vi.fn>;
+  createDir: ReturnType<typeof vi.fn>;
+  mount: ReturnType<typeof vi.fn>;
+  unmount: ReturnType<typeof vi.fn>;
+  deleteDir: ReturnType<typeof vi.fn>;
 };
+
+/** Flat names of every input the fake was asked to mount (WORKERFS). */
+function mountedNames(fake: FakeFfmpeg): string[] {
+  return fake.mount.mock.calls.flatMap(([, opts]) =>
+    (opts as { blobs: Array<{ name: string }> }).blobs.map((b) => b.name)
+  );
+}
+
+/** Mounted `name → Blob` across every mount call. */
+function mountedBlobs(fake: FakeFfmpeg): Map<string, Blob> {
+  return new Map(
+    fake.mount.mock.calls.flatMap(([, opts]) =>
+      (opts as { blobs: Array<{ name: string; data: Blob }> }).blobs.map(
+        (b) => [b.name, b.data] as const
+      )
+    )
+  );
+}
 
 function makeFakeFfmpeg(opts: {
   exitCode?: number;
@@ -66,6 +88,10 @@ function makeFakeFfmpeg(opts: {
     writeFile: vi.fn().mockResolvedValue(undefined),
     exec: vi.fn().mockResolvedValue(opts.exitCode ?? 0),
     deleteFile: vi.fn().mockResolvedValue(undefined),
+    createDir: vi.fn().mockResolvedValue(true),
+    mount: vi.fn().mockResolvedValue(true),
+    unmount: vi.fn().mockResolvedValue(true),
+    deleteDir: vi.fn().mockResolvedValue(true),
     readFile: vi.fn(async (name: string) =>
       opts.readFile ? await opts.readFile(name) : new Uint8Array([1, 2, 3, 4])
     ),
@@ -1144,13 +1170,14 @@ describe('runWasmFfmpeg core-fault recycling', () => {
     useFakeFfmpeg(fake);
     await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
 
-    // Every deleteFile would re-enter the trapped module.
+    // Every deleteFile / unmount would re-enter the trapped module.
     expect(fake.deleteFile).not.toHaveBeenCalled();
+    expect(fake.unmount).not.toHaveBeenCalled();
   });
 
-  it('recycles when staging an input into MEMFS throws', async () => {
+  it('recycles when mounting the inputs throws', async () => {
     const fake = makeFakeFfmpeg({ exitCode: 0 });
-    fake.writeFile.mockRejectedValue(new Error('FS error: out of memory'));
+    fake.mount.mockRejectedValue(new Error('FS error: out of memory'));
     useFakeFfmpeg(fake);
 
     const result = await createFfmpegCommand().execute(
@@ -1340,33 +1367,37 @@ describe('runWasmFfmpeg concat demuxer', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    const staged = new Map(
-      fake.writeFile.mock.calls.map(([name, bytes]) => [name as string, bytes as Uint8Array])
-    );
-    // Both members reached MEMFS...
+    const staged = mountedBlobs(fake);
+    // Both members were mounted...
     const memberNames = [...staged.keys()].filter((n) => n.startsWith('__cat'));
     expect(memberNames).toHaveLength(2);
-    // ...and the list the core sees points at exactly those names,
-    // not at the original VFS paths.
+    // ...and the list the core sees points at exactly those names (inside
+    // the invocation's mount directory), not at the original VFS paths.
     const listName = [...staged.keys()].find((n) => n.endsWith('list.txt'));
-    const rewritten = new TextDecoder().decode(staged.get(listName as string));
-    for (const name of memberNames) expect(rewritten).toContain(`file '${name}'`);
+    const rewritten = await (staged.get(listName as string) as Blob).text();
+    const mountDir = (fake.mount.mock.calls[0][2] as string).replace(/^\//, '');
+    for (const name of memberNames) expect(rewritten).toContain(`file '${mountDir}/${name}'`);
     // The original directives are gone — a bare `01.mp4` would send
     // the demuxer looking for a MEMFS file that was never staged.
     expect(rewritten).not.toContain("file '01.mp4'");
     expect(rewritten).not.toContain("file '02.mp4'");
   });
 
-  it('writes members before the list so the demuxer can open them', async () => {
+  it('mounts members and the list together so the demuxer can open them', async () => {
     const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
     useFakeFfmpeg(fake);
     const ctx = concatCtx("file '01.mp4'\n", { '/clips/01.mp4': new Uint8Array([1]) });
 
     await createFfmpegCommand().execute(['-f', 'concat', '-i', 'list.txt', 'out.mp4'], ctx);
 
-    const order = fake.writeFile.mock.calls.map(([name]) => name as string);
-    expect(order[0]).toMatch(/^__cat/);
-    expect(order[1]).toMatch(/list\.txt$/);
+    // One WORKERFS mount per invocation carries every staged file, so the
+    // member exists the moment the demuxer reads the list.
+    expect(fake.mount).toHaveBeenCalledTimes(1);
+    const names = mountedNames(fake);
+    expect(names.some((n) => n.startsWith('__cat'))).toBe(true);
+    expect(names.some((n) => n.endsWith('list.txt'))).toBe(true);
+    // Nothing is copied into MEMFS any more.
+    expect(fake.writeFile).not.toHaveBeenCalled();
   });
 
   it('resolves member paths against the list file, not the shell cwd', async () => {
@@ -1413,7 +1444,7 @@ describe('runWasmFfmpeg concat demuxer', () => {
     expect(result.stderr).toContain('concat list list.txt: file not found: gone.mp4');
   });
 
-  it('cleans staged members out of MEMFS after the run', async () => {
+  it('unmounts the staged inputs after the run', async () => {
     const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([7]) });
     useFakeFfmpeg(fake);
     const ctx = concatCtx("file '01.mp4'\nfile '02.mp4'\n", {
@@ -1423,8 +1454,9 @@ describe('runWasmFfmpeg concat demuxer', () => {
 
     await createFfmpegCommand().execute(['-f', 'concat', '-i', 'list.txt', 'out.mp4'], ctx);
 
-    const deleted = fake.deleteFile.mock.calls.map(([n]) => n as string);
-    expect(deleted.filter((n) => n.startsWith('__cat'))).toHaveLength(2);
+    const mountPoint = fake.mount.mock.calls[0][2] as string;
+    expect(fake.unmount).toHaveBeenCalledWith(mountPoint);
+    expect(fake.deleteDir).toHaveBeenCalledWith(mountPoint);
   });
 
   it('rejects a parent-traversing member unless -safe 0 is given', async () => {
@@ -1470,7 +1502,7 @@ describe('runWasmFfmpeg concat demuxer', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(fake.writeFile.mock.calls.some(([n]) => (n as string).startsWith('__cat'))).toBe(true);
+    expect(mountedNames(fake).some((n) => n.startsWith('__cat'))).toBe(true);
   });
 
   it('leaves an ordinary input untouched by the concat path', async () => {
@@ -1479,7 +1511,10 @@ describe('runWasmFfmpeg concat demuxer', () => {
 
     await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
 
-    expect(fake.writeFile.mock.calls.map(([n]) => n as string)).toEqual(['__in0_in.mp4']);
+    expect(mountedNames(fake)).toEqual(['__in0_in.mp4']);
+    // argv points into the invocation's mount directory.
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    expect(execArgs[execArgs.indexOf('-i') + 1]).toMatch(/^__in\d+_[a-z0-9]+\/__in0_in\.mp4$/);
   });
 });
 
@@ -1587,7 +1622,7 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(fake.readFile).not.toHaveBeenCalled();
     expect(writeFile).not.toHaveBeenCalled();
     const execArgs = fake.exec.mock.calls[0][0] as string[];
-    expect(execArgs.at(-1)).toBe('__null_sink');
+    expect(execArgs.at(-1)).toMatch(/^__null_sink/);
     expect(execArgs).toContain('-f');
     expect(execArgs[execArgs.indexOf('-f') + 1]).toBe('null');
   });
@@ -1641,7 +1676,7 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toMatch(/Integrated loudness/);
     const execArgs = fake.exec.mock.calls[0][0] as string[];
-    expect(execArgs.at(-1)).toBe('__null_sink');
+    expect(execArgs.at(-1)).toMatch(/^__null_sink/);
     // Must include `-f null` even though the CLI omitted it — otherwise
     // the pinned core exits 1: "Unable to find a suitable output format".
     const fIdx = execArgs.lastIndexOf('-f');
@@ -1691,8 +1726,9 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(result.exitCode).toBe(0);
     expect(recycleFfmpeg).not.toHaveBeenCalled();
     expect(fake.readFile).not.toHaveBeenCalled();
-    // Health probe + input cleanup both delete from MEMFS.
+    // Health probe deletes from MEMFS; the inputs are unmounted.
     expect(fake.deleteFile).toHaveBeenCalled();
+    expect(fake.unmount).toHaveBeenCalled();
     expect(fake.writeFile).toHaveBeenCalledWith('__health_probe', expect.any(Uint8Array));
   });
 
@@ -1747,9 +1783,11 @@ describe('runWasmFfmpeg lavfi/virtual inputs (NS2b)', () => {
     const execArgs = fake.exec.mock.calls[0][0] as string[];
     const iIdx = execArgs.indexOf('-i');
     expect(execArgs[iIdx + 1]).toBe('testsrc=duration=5:size=320x240:rate=30');
-    // Virtual inputs are never resolved against the VFS nor staged.
+    // Virtual inputs are never resolved against the VFS nor staged —
+    // nothing to mount means no mount at all.
     expect(exists).not.toHaveBeenCalled();
-    expect(fake.writeFile).not.toHaveBeenCalled();
+    expect(fake.mount).not.toHaveBeenCalled();
+    expect(fake.createDir).not.toHaveBeenCalled();
     // The produced output is still written back to the VFS.
     expect(writeVfs).toHaveBeenCalledWith('/home/out.png', expect.any(Uint8Array));
   });

@@ -36,7 +36,18 @@ type FakeFfmpeg = {
   writeFile: ReturnType<typeof vi.fn>;
   exec: ReturnType<typeof vi.fn>;
   deleteFile: ReturnType<typeof vi.fn>;
+  createDir: ReturnType<typeof vi.fn>;
+  mount: ReturnType<typeof vi.fn>;
+  unmount: ReturnType<typeof vi.fn>;
+  deleteDir: ReturnType<typeof vi.fn>;
 };
+
+/** Flat names of every input the fake was asked to mount (WORKERFS). */
+function mountedNames(fake: FakeFfmpeg): string[] {
+  return fake.mount.mock.calls.flatMap(([, opts]) =>
+    (opts as { blobs: Array<{ name: string }> }).blobs.map((b) => b.name)
+  );
+}
 
 const SAMPLE_LOG = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '__probe_clip.mp4':
   Metadata:
@@ -67,6 +78,10 @@ function makeFakeFfmpeg(opts: { exitCode?: number; log?: string; execError?: Err
       return opts.exitCode ?? 1;
     }),
     deleteFile: vi.fn().mockResolvedValue(undefined),
+    createDir: vi.fn().mockResolvedValue(true),
+    mount: vi.fn().mockResolvedValue(true),
+    unmount: vi.fn().mockResolvedValue(true),
+    deleteDir: vi.fn().mockResolvedValue(true),
   };
 }
 
@@ -341,6 +356,10 @@ describe('createFfprobeCommand', () => {
         throw new Error('At least one output file must be specified');
       }),
       deleteFile: vi.fn().mockResolvedValue(undefined),
+      createDir: vi.fn().mockResolvedValue(true),
+      mount: vi.fn().mockResolvedValue(true),
+      unmount: vi.fn().mockResolvedValue(true),
+      deleteDir: vi.fn().mockResolvedValue(true),
     };
     useFakeFfmpeg(fake);
     const cmd = createFfprobeCommand();
@@ -361,7 +380,7 @@ describe('createFfprobeCommand', () => {
     expect(b.exitCode).toBe(0);
     expect(a.stdout.trim()).toBe('1');
     expect(b.stdout.trim()).toBe('1');
-    const staged = vi.mocked(fake.writeFile).mock.calls.map((c) => String(c[0]));
+    const staged = mountedNames(fake);
     expect(staged).toHaveLength(2);
     expect(staged[0]).not.toBe(staged[1]);
     expect(staged.every((n) => !n.includes("'"))).toBe(true);
@@ -385,9 +404,14 @@ describe('createFfprobeCommand', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('1');
-    const name = String(fake.writeFile.mock.calls[0][0]);
+    const [name] = mountedNames(fake);
     expect(name).not.toContain("'");
     expect(name).toMatch(/\.mp4$/);
+    // The mount point is where the core is told to read from.
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    expect(execArgs[execArgs.indexOf('-i') + 1]).toBe(
+      `${(fake.mount.mock.calls[0][2] as string).replace(/^\//, '')}/${name}`
+    );
   });
 
   it('rejects unsupported options with a clear error', async () => {
@@ -412,8 +436,9 @@ describe('createFfprobeCommand', () => {
     expect(result.stderr).toMatch(/wasm core faulted/);
     expect(recycleFfmpeg).toHaveBeenCalledWith(fake);
     // #2766 invariant: after recycle the worker is gone — do not
-    // re-enter it via deleteFile (wrapper ERROR_NOT_LOADED is not our
+    // re-enter it via unmount (wrapper ERROR_NOT_LOADED is not our
     // guarantee).
+    expect(fake.unmount).not.toHaveBeenCalled();
     expect(fake.deleteFile).not.toHaveBeenCalled();
   });
 

@@ -16,6 +16,8 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { readInputBlob } from '../ffmpeg/input-blob.js';
+import { mountStagedInputs, newStage, stagedPath, unmountStagedInputs } from '../ffmpeg/staging.js';
 import { createIpkContextFromCtx } from '../ffmpeg-command.js';
 import {
   describeFfmpegCore,
@@ -486,10 +488,9 @@ export function resetFfprobeLockForTests(): void {
 }
 
 /**
- * Opaque MEMFS staging name. Carrying the VFS basename through verbatim
+ * Opaque staging name. Carrying the VFS basename through verbatim
  * breaks when it contains `'` (ffmpeg echoes `from '…'` and our banner
- * parser only accepts `[^']*`), and two probes of files with the same
- * basename would clobber each other. Keep a sanitized extension so the
+ * parser only accepts `[^']*`). Keep a sanitized extension so the
  * demuxer still sniffs the container.
  */
 export function inferMemfsName(path: string): string {
@@ -566,8 +567,12 @@ async function runProbeExclusive(
       exitCode: 1,
     };
   }
-  const bytes = await ctx.fs.readFileBuffer(resolved);
-  const memfsName = inferMemfsName(parsed.inputPath);
+  // Lazily-read Blob mounted via WORKERFS: the probe only touches the
+  // container headers, so a multi-GB input costs the wasm heap nothing.
+  const data = await readInputBlob(ctx.fs, resolved);
+  const stage = newStage();
+  const stagedName = inferMemfsName(parsed.inputPath);
+  const memfsName = stagedPath(stage, stagedName);
 
   const loaded = await loadProbeCore(ctx);
   if ('exitCode' in loaded) return loaded;
@@ -583,7 +588,7 @@ async function runProbeExclusive(
   // is gone, so MEMFS cleanup must not re-enter the terminated core.
   let faulted = false;
   try {
-    await ffmpeg.writeFile(memfsName, bytes);
+    await mountStagedInputs(ffmpeg, stage, [{ name: stagedName, data }]);
     const fault = await execProbeBanner(ffmpeg, memfsName, probeLog);
     if (fault) {
       faulted = true;
@@ -626,11 +631,11 @@ async function runProbeExclusive(
     } catch {
       /* noop */
     }
-    // A terminated worker has no MEMFS left to tidy, and every
-    // `deleteFile` would re-enter the trapped module.
+    // A terminated worker has no FS left to tidy, and every
+    // `unmount` would re-enter the trapped module.
     if (!faulted) {
       try {
-        await ffmpeg.deleteFile(memfsName);
+        await unmountStagedInputs(ffmpeg, stage);
       } catch {
         /* noop */
       }

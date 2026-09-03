@@ -39,6 +39,18 @@ import type {
   CameraCaptureResult,
 } from '../../kernel/panel-rpc-camera-types.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
+import { bytesToBlob, readInputBlob } from './ffmpeg/input-blob.js';
+import {
+  deleteStagedFile,
+  mountStagedInputs,
+  newStage,
+  type StagedFile,
+  type StageNames,
+  stagedBasename,
+  stagedOutputName,
+  stagedPath,
+  unmountStagedInputs,
+} from './ffmpeg/staging.js';
 import {
   describeFfmpegCore,
   ffmpegCoreNotInstalledMessage,
@@ -1224,7 +1236,7 @@ async function runAvfoundationCapture(
 /**
  * Run the captured photo/video bytes through ffmpeg-core to honor
  * codec / filter / container options the browser-side capture can't
- * satisfy on its own. Inputs are staged into MEMFS under a name
+ * satisfy on its own. The capture is mounted (WORKERFS) under a name
  * matching the capture mime so ffmpeg picks the right demuxer; the
  * output path is reduced to a filename for MEMFS. `ipk` is the
  * VFS resolution context the loader uses to find the user-installed
@@ -1240,9 +1252,10 @@ async function transcodeCapturedBytes(args: {
   ipk: IpkResolutionContext;
   onLog: (line: string) => void;
 }): Promise<Uint8Array> {
-  const inputExt = captureExtensionForMime(args.captureMime);
-  const inputName = `__capture.${inputExt}`;
-  const outputName = `__out_${args.outputName.split('/').pop() || 'out.bin'}`;
+  const stage = newStage();
+  const inputBase = `capture.${captureExtensionForMime(args.captureMime)}`;
+  const inputName = stagedPath(stage, inputBase);
+  const outputName = stagedOutputName(stage, args.outputName);
 
   args.onLog('transcoding captured stream...');
   const ffmpeg = await getFfmpeg({ onProgress: args.onLog, ipk: args.ipk });
@@ -1252,7 +1265,7 @@ async function transcodeCapturedBytes(args: {
   ffmpeg.on('log', logHandler);
   let faulted = false;
   try {
-    await ffmpeg.writeFile(inputName, args.bytes);
+    await mountStagedInputs(ffmpeg, stage, [{ name: inputBase, data: bytesToBlob(args.bytes) }]);
     const argv: string[] = ['-i', inputName, ...args.outputOpts, outputName];
     const exitCode = await ffmpeg.exec(argv);
     if (exitCode !== 0) {
@@ -1280,12 +1293,8 @@ async function transcodeCapturedBytes(args: {
     }
     if (!faulted) {
       try {
-        await ffmpeg.deleteFile(inputName);
-      } catch {
-        /* noop */
-      }
-      try {
-        await ffmpeg.deleteFile(outputName);
+        await unmountStagedInputs(ffmpeg, stage);
+        await deleteStagedFile(ffmpeg, outputName);
       } catch {
         /* noop */
       }
@@ -1294,18 +1303,19 @@ async function transcodeCapturedBytes(args: {
 }
 
 interface ResolvedInput {
+  /** Path inside the core's FS the rewritten `-i` points at (or the lavfi spec). */
   ffmpegName: string;
   /** `null` for virtual (lavfi) inputs that have no backing VFS file. */
-  bytes: Uint8Array | null;
+  data: Blob | null;
   /** True for libavfilter virtual sources (`-f lavfi -i testsrc=...`). */
   virtual: boolean;
   /**
    * Files named *inside* a concat list, staged alongside it. The
    * demuxer opens these itself rather than receiving them through
-   * argv, so they must already exist in MEMFS under exactly the
-   * names the rewritten list points at.
+   * argv, so they must be mounted under exactly the names the
+   * rewritten list points at.
    */
-  extraFiles?: Array<{ ffmpegName: string; bytes: Uint8Array }>;
+  extraFiles?: Array<{ ffmpegName: string; data: Blob }>;
 }
 
 /** True for a concat-demuxer input (`-f concat -i list.txt`). */
@@ -1412,20 +1422,20 @@ function concatSafeMode(input: ParsedInput): boolean {
 }
 
 /**
- * Read every file a concat list names, and rewrite the list to point
- * at the MEMFS names they will be staged under.
+ * Resolve every file a concat list names, and rewrite the list to point
+ * at the staged names they will be mounted under.
  *
  * Without this, `-f concat` cannot work at all: only paths that
  * appear as `-i` reach the staging pass, so the demuxer opened
- * members that were never written into MEMFS. Member paths resolve
- * against the *list file's* directory, matching ffmpeg, rather than
- * the shell cwd.
+ * members that were never staged. Member paths resolve against the
+ * *list file's* directory, matching ffmpeg, rather than the shell cwd.
  */
 async function stageConcatList(
   listPath: string,
   listBytes: Uint8Array,
   inputIdx: number,
   safe: boolean,
+  stage: StageNames,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
 ): Promise<
   | { listBytes: Uint8Array; extraFiles: NonNullable<ResolvedInput['extraFiles']> }
@@ -1449,8 +1459,8 @@ async function stageConcatList(
     }
     const resolved = ctx.fs.resolvePath(listDir, line.file);
     if (!(await ctx.fs.exists(resolved))) return { error: { kind: 'missing', file: line.file } };
-    const ffmpegName = concatMemberName(line.file, inputIdx, extraFiles.length);
-    extraFiles.push({ ffmpegName, bytes: await ctx.fs.readFileBuffer(resolved) });
+    const ffmpegName = stagedPath(stage, concatMemberName(line.file, inputIdx, extraFiles.length));
+    extraFiles.push({ ffmpegName, data: await readInputBlob(ctx.fs, resolved) });
     rewritten.push(`file '${ffmpegName}'`);
   }
 
@@ -1469,13 +1479,14 @@ function isVirtualInput(input: ParsedInput): boolean {
 }
 
 /**
- * Resolve every `-i FILE` against the VFS up front and read the
- * bytes. Returns a fully-typed list of MEMFS-name + bytes pairs,
- * or a `{ error }` shell result on the first missing input.
- * Virtual (`lavfi`) inputs carry no bytes and pass through unchanged.
+ * Resolve every `-i FILE` against the VFS up front and open it as a
+ * lazily-read `Blob`. Returns a fully-typed list of staged-name + blob
+ * pairs, or a `{ error }` shell result on the first missing input.
+ * Virtual (`lavfi`) inputs carry no data and pass through unchanged.
  */
 async function loadResolvedInputs(
   parsed: ParsedFfmpegInvocation,
+  stage: StageNames,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
 ): Promise<{ inputs: ResolvedInput[] } | { error: CmdResult }> {
   const resolvedInputs: ResolvedInput[] = [];
@@ -1483,7 +1494,7 @@ async function loadResolvedInputs(
     if (isVirtualInput(input)) {
       // lavfi sources are generated by ffmpeg — keep the filter spec
       // (carried in the input's `-i` raw token) and read no file.
-      resolvedInputs.push({ ffmpegName: input.path, bytes: null, virtual: true });
+      resolvedInputs.push({ ffmpegName: input.path, data: null, virtual: true });
       continue;
     }
     const resolved = ctx.fs.resolvePath(ctx.cwd, input.path);
@@ -1496,10 +1507,19 @@ async function loadResolvedInputs(
         },
       };
     }
-    const bytes = await ctx.fs.readFileBuffer(resolved);
-    const ffmpegName = inferInputName(input, idx);
+    const ffmpegName = stagedPath(stage, inferInputName(input, idx));
     if (isConcatInput(input)) {
-      const staged = await stageConcatList(resolved, bytes, idx, concatSafeMode(input), ctx);
+      // The list itself is small and has to be rewritten, so it is the
+      // one input still read whole.
+      const listBytes = await ctx.fs.readFileBuffer(resolved);
+      const staged = await stageConcatList(
+        resolved,
+        listBytes,
+        idx,
+        concatSafeMode(input),
+        stage,
+        ctx
+      );
       if ('error' in staged) {
         const { kind, file } = staged.error;
         const detail =
@@ -1516,13 +1536,17 @@ async function loadResolvedInputs(
       }
       resolvedInputs.push({
         ffmpegName,
-        bytes: staged.listBytes,
+        data: bytesToBlob(staged.listBytes),
         virtual: false,
         extraFiles: staged.extraFiles,
       });
       continue;
     }
-    resolvedInputs.push({ ffmpegName, bytes, virtual: false });
+    resolvedInputs.push({
+      ffmpegName,
+      data: await readInputBlob(ctx.fs, resolved),
+      virtual: false,
+    });
   }
   return { inputs: resolvedInputs };
 }
@@ -1562,22 +1586,21 @@ function buildFinalFfmpegArgs(
 }
 
 /**
- * Copy every staged input into the core's MEMFS. Virtual (lavfi)
- * inputs are synthesized by ffmpeg itself, so they carry no bytes
- * and are skipped. Concat members go in before the list that names
- * them — the demuxer opens them as soon as it reads the list.
+ * Every file one invocation mounts, as WORKERFS entries. Virtual (lavfi)
+ * inputs are synthesized by ffmpeg itself, so they carry no data and are
+ * skipped. Concat members ride in the same mount as the list that names
+ * them, so the demuxer finds them the moment it reads the list.
  */
-async function stageInputsIntoMemfs(
-  ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
-  resolvedInputs: ResolvedInput[]
-): Promise<void> {
+function stagedFiles(resolvedInputs: ResolvedInput[]): StagedFile[] {
+  const files: StagedFile[] = [];
   for (const input of resolvedInputs) {
-    if (input.bytes === null) continue;
+    if (input.data === null) continue;
     for (const extra of input.extraFiles ?? []) {
-      await ffmpeg.writeFile(extra.ffmpegName, extra.bytes);
+      files.push({ name: stagedBasename(extra.ffmpegName), data: extra.data });
     }
-    await ffmpeg.writeFile(input.ffmpegName, input.bytes);
+    files.push({ name: stagedBasename(input.ffmpegName), data: input.data });
   }
+  return files;
 }
 
 /**
@@ -1600,37 +1623,18 @@ async function ensureCoreHealthy(ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>):
 }
 
 /**
- * Best-effort MEMFS cleanup so repeated invocations don't pile up
- * megabytes of stale media in the wasm heap. Ordinary `deleteFile`
+ * Best-effort cleanup so repeated invocations don't pile up stale
+ * mounts and megabytes of encoded output in the wasm heap. Ordinary
  * misses are swallowed; a core fault is rethrown so the caller can
  * recycle instead of caching a dead instance.
  */
 async function cleanupMemfs(
   ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
-  resolvedInputs: ResolvedInput[],
+  stage: StageNames,
   outputName: string
 ): Promise<void> {
-  for (const input of resolvedInputs) {
-    // Virtual (lavfi) inputs were never staged into MEMFS.
-    if (input.bytes === null) continue;
-    for (const extra of input.extraFiles ?? []) {
-      try {
-        await ffmpeg.deleteFile(extra.ffmpegName);
-      } catch (err) {
-        if (isCoreFault(err)) throw err;
-      }
-    }
-    try {
-      await ffmpeg.deleteFile(input.ffmpegName);
-    } catch (err) {
-      if (isCoreFault(err)) throw err;
-    }
-  }
-  try {
-    await ffmpeg.deleteFile(outputName);
-  } catch (err) {
-    if (isCoreFault(err)) throw err;
-  }
+  await unmountStagedInputs(ffmpeg, stage);
+  await deleteStagedFile(ffmpeg, outputName);
 }
 
 /**
@@ -1687,9 +1691,9 @@ async function readEncodedOutput(
  * readable file — stage a disposable placeholder the null muxer can
  * point at, then skip readback.
  */
-function memfsOutputName(outputPath: string, analysisSink: boolean): string {
-  if (analysisSink) return '__null_sink';
-  return `__out_${outputPath.split('/').pop() || 'out.bin'}`;
+function memfsOutputName(stage: StageNames, outputPath: string, analysisSink: boolean): string {
+  if (analysisSink) return `__null_sink${stage.id}`;
+  return stagedOutputName(stage, outputPath);
 }
 
 type FfmpegInstance = Awaited<ReturnType<typeof getFfmpeg>>;
@@ -1714,13 +1718,15 @@ async function execWasmEncode(args: {
   ffmpeg: FfmpegInstance;
   parsed: ParsedFfmpegInvocation;
   resolvedInputs: ResolvedInput[];
+  stage: StageNames;
   outputName: string;
   outputPath: string;
   analysisSink: boolean;
   stderr: string;
 }): Promise<{ early: CmdResult | null; outputBytes: Uint8Array | null }> {
-  const { ffmpeg, parsed, resolvedInputs, outputName, outputPath, analysisSink, stderr } = args;
-  await stageInputsIntoMemfs(ffmpeg, resolvedInputs);
+  const { ffmpeg, parsed, resolvedInputs, stage, outputName, outputPath, analysisSink, stderr } =
+    args;
+  await mountStagedInputs(ffmpeg, stage, stagedFiles(resolvedInputs));
 
   // Bare `/dev/null` is a sink without `-f null` on the CLI; inject
   // the muxer so the pinned core does not exit 1 looking for a
@@ -1761,12 +1767,12 @@ async function execWasmEncode(args: {
 async function detachAndCleanupMemfs(args: {
   ffmpeg: FfmpegInstance;
   logHandler: (event: { type: string; message: string }) => void;
-  resolvedInputs: ResolvedInput[];
+  stage: StageNames;
   outputName: string;
   stderr: string;
   faulted: boolean;
 }): Promise<CmdResult | null> {
-  const { ffmpeg, logHandler, resolvedInputs, outputName, stderr, faulted } = args;
+  const { ffmpeg, logHandler, stage, outputName, stderr, faulted } = args;
   try {
     ffmpeg.off('log', logHandler);
   } catch {
@@ -1776,7 +1782,7 @@ async function detachAndCleanupMemfs(args: {
   // `deleteFile` would re-enter the trapped module.
   if (faulted) return null;
   try {
-    await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
+    await cleanupMemfs(ffmpeg, stage, outputName);
     return null;
   } catch (err) {
     if (!isCoreFault(err)) return null;
@@ -1791,13 +1797,14 @@ async function runWasmFfmpeg(
 ): Promise<CmdResult> {
   // Validate inputs up front so we don't pay the cold-start cost
   // before realizing the user typo'd a path.
-  const loaded = await loadResolvedInputs(parsed, ctx);
+  const stage = newStage();
+  const loaded = await loadResolvedInputs(parsed, stage, ctx);
   if ('error' in loaded) return loaded.error;
   const resolvedInputs = loaded.inputs;
 
   const outputPath = parsed.outputPath!;
   const analysisSink = isAnalysisSink(parsed);
-  const outputName = memfsOutputName(outputPath, analysisSink);
+  const outputName = memfsOutputName(stage, outputPath, analysisSink);
 
   let stderr = '';
   let ffmpeg: FfmpegInstance;
@@ -1828,6 +1835,7 @@ async function runWasmFfmpeg(
       ffmpeg,
       parsed,
       resolvedInputs,
+      stage,
       outputName,
       outputPath,
       analysisSink,
@@ -1849,7 +1857,7 @@ async function runWasmFfmpeg(
     const cleanupFault = await detachAndCleanupMemfs({
       ffmpeg,
       logHandler,
-      resolvedInputs,
+      stage,
       outputName,
       stderr,
       faulted,

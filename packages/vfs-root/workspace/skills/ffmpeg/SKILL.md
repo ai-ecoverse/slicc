@@ -80,5 +80,7 @@ ffmpeg -y -f lavfi -i testsrc=duration=1:size=320x240:rate=30 \
   -c:v libx264 -pix_fmt yuv420p -c:a aac "$TMPDIR/clip.mp4"
 ```
 
-See `ffmpeg --help` for the supported surface. A wasm trap recycles the
-shared instance — retry once; very large inputs may need smaller passes.
+See `ffmpeg --help` for the supported surface. Inputs are mounted lazily
+(never copied into the wasm heap), so input size is bounded by disk; the
+output is buffered in the wasm heap until the run ends, so keep a single
+output under ~1.5 GB. A wasm trap recycles the shared instance — retry once.

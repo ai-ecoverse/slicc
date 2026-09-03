@@ -400,6 +400,23 @@ export class RestrictedFS {
     return this.vfs.readFileRange(resolved, start, end);
   }
 
+  /**
+   * Lazy native `File`, gated exactly like `readFile` but answering `null`
+   * instead of throwing: every caller falls back to `readFile` on `null`,
+   * and THAT call raises the sandbox's ENOENT. Virtual devices and
+   * ephemeral fds have no file behind them.
+   */
+  async getNativeFile(path: string): Promise<File | null> {
+    if (VIRTUAL_DEVICES[normalizePath(path)] || EphemeralFdStore.handles(path)) return null;
+    if (!this.isAllowedStrict(path)) return null;
+    try {
+      const resolved = await this.resolveAndCheckRead(path);
+      return await this.vfs.getNativeFile(resolved);
+    } catch {
+      return null;
+    }
+  }
+
   async readDir(path: string, opts?: ReadDirOptions): Promise<DirEntry[]> {
     if (!this.isAllowed(path)) return [];
     // Resolve symlinks on the directory path itself when strictly allowed

@@ -291,6 +291,21 @@ export class LocalMountBackend implements MountBackend {
     return new Uint8Array(await file.arrayBuffer());
   }
 
+  /**
+   * The lazy `File` behind a path — see {@link MountBackend.getNativeFile}.
+   * Same handle walk as `readFile`, minus the `arrayBuffer()` that would
+   * pull the whole file into the kernel worker.
+   */
+  async getNativeFile(path: string): Promise<File | null> {
+    this.assertOpen(path);
+    try {
+      const fh = await this.resolveFile(path);
+      return await fh.getFile();
+    } catch {
+      return null;
+    }
+  }
+
   async writeFile(path: string, body: Uint8Array): Promise<void> {
     this.assertOpen(path);
     const fh = await this.resolveFile(path, true);

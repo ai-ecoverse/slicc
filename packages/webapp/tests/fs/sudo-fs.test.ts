@@ -84,6 +84,23 @@ describe('SudoFS', () => {
     expect(calls).toHaveLength(1);
   });
 
+  // Same reasoning for the lazy native-File handle: it IS a read of that
+  // file (WORKERFS / mediabunny slice it freely once they hold it), so an
+  // ungated `getNativeFile` would hand a denied secret to any media command.
+  it('gates getNativeFile like a whole-file read', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.getNativeFile('/shared/secrets/api.key')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    // Non-protected path passes through (memory backend → null, no throw).
+    await expect(sfs.getNativeFile('/workspace/note.txt')).resolves.toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
   it('throws EACCES when a gated write is denied', async () => {
     const { calls, broker } = makeBroker({ decision: 'deny' });
     const sfs = createSudoFs(vfs, { broker, getPolicy });

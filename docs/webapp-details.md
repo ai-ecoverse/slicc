@@ -27,6 +27,31 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
 - `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
+## Media commands (`ffmpeg` / `ffprobe`)
+
+`shell/supplemental-commands/ffmpeg-command.ts`, `ffprobe/`, `ffmpeg/` (staging + input
+blobs), `ffmpeg-wasm.ts` (core loader).
+
+- **Two cores, one pin.** `@ffmpeg/core` (single-threaded) and `@ffmpeg/core-mt` (pthreads over
+  SharedArrayBuffer) are ipk-installed by the user; the loader boots `-mt` only when
+  `crossOriginIsolated` is true (the hosted leader via Document-Isolation-Policy). Every
+  not-installed message goes through `ffmpegCoreNotInstalledMessage()` so the guidance names the
+  core the loader would actually prefer; `-version` prints the `core:` line via
+  `describeFfmpegCore()`. The live canary `ffmpeg-wasm-live.test.ts` resolves BOTH real packages.
+- **Inputs never enter the wasm heap.** Each invocation gets a `StageNames` (`ffmpeg/staging.ts`):
+  one WORKERFS mount at `/__in<id>` over `Blob`s, torn down with `unmountStagedInputs`. The
+  `Blob` comes from `readInputBlob()` (`ffmpeg/input-blob.ts`): the VFS's native `File`
+  (`VirtualFS.getNativeFile` — OPFS root or FSA picker mount, lazy by slice) or, for backends
+  without a handle, a `Blob` over one whole-file read. Names are relative (`__in3_k1/x.mp4`) so
+  the concat demuxer's `safe` check still passes. The stage id also namespaces the MEMFS output
+  (`__out<id>_<basename>`), so concurrent runs on the shared core cannot clobber each other.
+- **Only the output is buffered** (MEMFS, then one read back into the VFS). A core fault
+  recycles the instance (`recycleFfmpeg`) and cleanup must NOT re-enter the dead worker; the
+  `faulted` flag guards every `unmount`/`deleteFile`.
+- `getNativeFile` is part of the VFS read surface: `RestrictedFS` gates it like `readFile`
+  (answering `null`, the caller's fallback read raises the sandbox ENOENT), `sudo-fs` lists it in
+  `READ_ASYNC`, and `VfsAdapter` exposes it beyond just-bash's `IFileSystem` for duck-typing.
+
 ## Git
 
 - Path: `packages/webapp/src/git/`; one module per subcommand under `commands/`, dispatched by `git-commands.ts`. isomorphic-git runs over `vfs-fs-adapter.ts`, so **every object read is a VFS read** — and over a `--mount`ed host repo (`docs/mounts.md`) that is an HTTP round trip through the hostfs bridge. Cost is measured in reads, not in CPU.
