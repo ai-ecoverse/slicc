@@ -980,7 +980,14 @@ export function attachWcClient(
     void openVfs()
       .then(async ({ reader, writer }) => {
         const { loadShortcutConfig } = await import('./wc-shortcut-config.js');
-        await loadShortcutConfig({ reader, writer, apply: refs.shortcuts.setKeymap });
+        await loadShortcutConfig({
+          reader,
+          writer,
+          apply: ({ keymap, trigger }) => {
+            refs.shortcuts.setKeymap(keymap);
+            refs.shortcuts.setTrigger(trigger);
+          },
+        });
       })
       .catch((err) => log.warn('WC shortcut config load failed', err));
   });
@@ -1164,7 +1171,18 @@ export function attachWcClient(
   };
   void import('./wc-nav.js')
     .then(({ wireWcNav }) =>
-      wireWcNav({ refs, client, log, onExportTranscript, shortcuts: refs.shortcuts })
+      wireWcNav({
+        refs,
+        client,
+        log,
+        onExportTranscript,
+        shortcuts: refs.shortcuts,
+        persistKeyboardTrigger: async (trigger) => {
+          const { writer, reader } = await openVfs();
+          const { writeShortcutTrigger } = await import('./wc-shortcut-config.js');
+          await writeShortcutTrigger({ reader, writer }, trigger);
+        },
+      })
     )
     .catch((err) => log.error('WC nav wiring failed', err));
 

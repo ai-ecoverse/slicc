@@ -107,9 +107,15 @@ export interface WcNavDeps {
    * Keyboard mode's handles. Two-way: the menu entry opens the help overlay
    * (the only way a user who never presses Esc discovers the mode exists),
    * and `a` inside the mode needs the account dialog this module owns —
-   * registered here because nothing below `ui/wc/` can reach it.
+   * registered here because nothing below `ui/wc/` can reach it. Trigger
+   * get/set power the Theme dialog's keyboard-mode switcher.
    */
-  shortcuts?: Pick<ShortcutHandles, 'showHelp' | 'setAction'>;
+  shortcuts?: Pick<ShortcutHandles, 'showHelp' | 'setAction' | 'trigger' | 'setTrigger'>;
+  /**
+   * Persist a Theme-dialog trigger change to `/etc/slicc/keys.json`. Optional
+   * so a float without a VFS still gets the live switch.
+   */
+  persistKeyboardTrigger?: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => Promise<void>;
 }
 
 function standardMenuItems(
@@ -279,7 +285,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   );
   // Registered, not reimplemented: `a` opens the very dialog the menu does.
   deps.shortcuts?.setAction('accounts', openSettings);
-  const openTheme = buildOpenTheme(log);
+  const openTheme = buildOpenTheme(log, themeKeyboardOpts(deps));
   const openExperimental = buildOpenExperimental(log);
   wireFollowersSegment(refs, log);
 
@@ -351,11 +357,40 @@ function buildOpenSettings(
   };
 }
 
-function buildOpenTheme(log: BootStageLogger): () => void {
+function buildOpenTheme(
+  log: BootStageLogger,
+  keyboard?: {
+    getTrigger: () => import('./wc-shortcuts.js').KeyboardTrigger;
+    setTrigger: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => void;
+    persistTrigger?: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => Promise<void>;
+  }
+): () => void {
   return () => {
     import('./wc-settings.js')
-      .then(({ showThemeSettings }) => showThemeSettings(log))
+      .then(({ showThemeSettings }) =>
+        showThemeSettings(
+          log,
+          keyboard
+            ? {
+                getTrigger: keyboard.getTrigger,
+                setTrigger: keyboard.setTrigger,
+                persistTrigger: keyboard.persistTrigger,
+              }
+            : undefined
+        )
+      )
       .catch((err) => log.error('Theme settings dialog failed', err));
+  };
+}
+
+/** Theme-dialog wiring for the live keyboard-mode trigger switcher. */
+function themeKeyboardOpts(deps: WcNavDeps): Parameters<typeof buildOpenTheme>[1] {
+  const shortcuts = deps.shortcuts;
+  if (!shortcuts) return undefined;
+  return {
+    getTrigger: () => shortcuts.trigger(),
+    setTrigger: (trigger) => shortcuts.setTrigger(trigger),
+    persistTrigger: deps.persistKeyboardTrigger,
   };
 }
 

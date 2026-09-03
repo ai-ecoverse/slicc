@@ -92,10 +92,20 @@ describe('parseKeymapDocument', () => {
    */
   it('the shipped /etc/slicc/keys.json binds nothing at all', async () => {
     const shipped = (await import('../../../../vfs-root/etc/slicc/keys.json?raw')).default;
-    const { keymap, warnings } = parseKeymapDocument(shipped);
+    const { keymap, warnings, trigger } = parseKeymapDocument(shipped);
     expect(warnings).toEqual([]);
     expect(keymap).toEqual(DEFAULT_KEYMAP);
     expect(JSON.parse(shipped).bindings).toEqual({});
+    expect(trigger).toBe('auto');
+  });
+
+  it('parses trigger null / esc / auto and warns on junk', () => {
+    expect(parseKeymapDocument('{"trigger":null,"bindings":{}}').trigger).toBeNull();
+    expect(parseKeymapDocument('{"trigger":"esc","bindings":{}}').trigger).toBe('esc');
+    expect(parseKeymapDocument('{"trigger":"auto","bindings":{}}').trigger).toBe('auto');
+    const bad = parseKeymapDocument('{"trigger":"vim","bindings":{}}');
+    expect(bad.trigger).toBe('auto');
+    expect(bad.warnings[0]).toContain('trigger');
   });
 
   /**
@@ -173,6 +183,7 @@ describe('loadShortcutConfig', () => {
     const [path, body] = h.writer.writeFile.mock.calls[0] as unknown as [string, string];
     expect(path).toBe(SHORTCUT_KEYS_PATH);
     expect(JSON.parse(body).bindings).toEqual({});
+    expect(JSON.parse(body).trigger).toBe('auto');
     // The seed IS the defaults, so there is nothing to apply.
     expect(h.apply).not.toHaveBeenCalled();
   });
@@ -182,7 +193,35 @@ describe('loadShortcutConfig', () => {
     await h.run();
     expect(h.writer.writeFile).not.toHaveBeenCalled();
     expect(h.apply).toHaveBeenCalledTimes(1);
-    expect((h.apply.mock.calls[0] as unknown as [Record<string, string>])[0].q).toBe('terminal');
+    const applied = (
+      h.apply.mock.calls[0] as unknown as [
+        { keymap: Record<string, string>; trigger: string | null },
+      ]
+    )[0];
+    expect(applied.keymap.q).toBe('terminal');
+    expect(applied.trigger).toBe('auto');
+  });
+
+  it('applies an explicit trigger from the file', async () => {
+    const h = harness({
+      file: JSON.stringify({ trigger: 'esc', bindings: { q: 'terminal' } }),
+    });
+    await h.run();
+    const applied = (
+      h.apply.mock.calls[0] as unknown as [
+        { keymap: Record<string, string>; trigger: string | null },
+      ]
+    )[0];
+    expect(applied.trigger).toBe('esc');
+    expect(applied.keymap.q).toBe('terminal');
+  });
+
+  it('applies trigger null to disable keyboard mode', async () => {
+    const h = harness({ file: JSON.stringify({ trigger: null, bindings: {} }) });
+    await h.run();
+    expect(
+      (h.apply.mock.calls[0] as unknown as [{ trigger: string | null }])[0].trigger
+    ).toBeNull();
   });
 
   it('reports what it ignored, on the line the user can fix', async () => {
@@ -272,8 +311,8 @@ describe('the v1 keymap', () => {
     await h.run();
     // The v1 keys are still applied rather than lost — a failed migration
     // must never cost the user the keyboard they had.
-    const applied = (h.apply.mock.calls[0] as unknown as [Record<string, string>])[0];
-    expect(applied.d).toBe('nextAgent');
+    const applied = (h.apply.mock.calls[0] as unknown as [{ keymap: Record<string, string> }])[0];
+    expect(applied.keymap.d).toBe('nextAgent');
     expect(h.warn).toHaveBeenCalledWith(
       'Could not replace the v1 shortcut config; keeping it',
       expect.anything()

@@ -659,6 +659,31 @@ export class SliccComposerMeta extends HTMLElement {
     this.#openMenu();
   }
 
+  /**
+   * Advance to the next model in the list (wraps). Emits `model-change` like a
+   * row click. No-op with no accounts connected.
+   */
+  cycleModel(): void {
+    if (this.#noModels) return;
+    const models = this.#normModels;
+    if (models.length === 0) return;
+    const currentId = models.find((m) => m.name === this.model)?.id ?? null;
+    const index = currentId === null ? -1 : models.findIndex((m) => m.id === currentId);
+    const next = models[(index + 1) % models.length];
+    if (next) this.#selectModel(next.id);
+  }
+
+  /**
+   * Advance to the next thinking level (wraps). Emits `thinking-change` like a
+   * menu pick. No-op when the thinking pill is hidden.
+   */
+  cycleThinking(): void {
+    if (this.noThinking) return;
+    const index = THINKING_LEVELS.indexOf(this.thinking);
+    const next = THINKING_LEVELS[(index + 1) % THINKING_LEVELS.length];
+    if (next) this.#selectThinking(next);
+  }
+
   #toggleMenu(): void {
     this.#menuOpen ? this.#closeMenu() : this.#openMenu();
   }
