@@ -103,6 +103,8 @@ export function createFollowerModelSurface(opts: {
 }): {
   onModelsList(models: TrayModelCatalogEntry[]): void;
   onModelState(state: TrayModelSelectionState): void;
+  /** Repaint after the shown unit or the roster changed. */
+  onShownUnitChanged(): void;
   reset(): void;
 } {
   let models: TrayModelCatalogEntry[] = [];
@@ -162,15 +164,45 @@ export function createFollowerModelSurface(opts: {
    * The provider-qualified id to show: the SHOWN unit's own model, else the
    * leader's `model.state` (an older leader, or a caller with no roster).
    */
+  /**
+   * Forget units the roster no longer lists. Their carry-forward can never be
+   * resolved again, and keeping it would answer for a unit that is gone.
+   */
+  const pruneForgottenUnits = (units: readonly WorkUnitSummary[]): void => {
+    if (units.length === 0) return;
+    const live = new Set(units.map((unit) => unit.id));
+    for (const jid of lastKnownModel.keys()) if (!live.has(jid)) lastKnownModel.delete(jid);
+  };
+
+  /**
+   * The provider-qualified id to show for the unit on screen.
+   *
+   * A `model.state` NAMING that unit is the freshest answer there is, and on
+   * this transport it is the ONLY one a pick produces: the leader answers
+   * `model.select` with `broadcastModelState()` and pushes no roster (that
+   * rides a 5 s interval). Preferring the roster left the pill on the previous
+   * model for the rest of the session.
+   *
+   * The roster answers when there is no frame, or the frame is about a
+   * DIFFERENT unit — a tab switch beats the next frame, because the leader
+   * answers `scoops.select` with a snapshot and no model state.
+   */
   const activeModelId = (): string | undefined => {
     const unitId = opts.getSelectedScoopJid();
-    const known = modelForUnit(
-      opts.getUnits(),
-      unitId,
-      unitId ? lastKnownModel.get(unitId) : undefined
-    );
+    const units = opts.getUnits();
+    pruneForgottenUnits(units);
+    // Nothing can beat the frame here: this caller has no roster at all (the
+    // leader-capable float follows another leader), or does not know yet which
+    // unit it is showing.
+    if (state && (units.length === 0 || !unitId)) return state.activeModelId;
+    if (state && unitId && state.scoopJid === unitId) {
+      const picked = parseQualifiedModelId(state.activeModelId);
+      if (picked) lastKnownModel.set(unitId, picked);
+      return state.activeModelId;
+    }
+    const known = modelForUnit(units, unitId, unitId ? lastKnownModel.get(unitId) : undefined);
     if (unitId && known) lastKnownModel.set(unitId, known);
-    return known ? qualifiedModelId(known) : state?.activeModelId;
+    return known ? qualifiedModelId(known) : undefined;
   };
 
   const apply = (): void => {
@@ -207,6 +239,10 @@ export function createFollowerModelSurface(opts: {
       const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
       const model = modelId ? parseQualifiedModelId(modelId) : null;
       if (model && scoopJid) {
+        // Seed the pick BEFORE the repaint: the leader's `model.state` for it
+        // is a round trip away, and until it lands the roster still names the
+        // model this unit is moving off.
+        lastKnownModel.set(scoopJid, model);
         opts.setModel(scoopJid, model);
       } else if (modelId) {
         // No unit to name (nothing selected yet), or a bare id carrying no
@@ -264,6 +300,17 @@ export function createFollowerModelSurface(opts: {
     },
     onModelState(nextState) {
       state = nextState;
+      apply();
+    },
+    /**
+     * Repaint for a new shown unit. `apply()` otherwise only runs off a
+     * catalog or `model.state` frame, and neither is sent on a selection: the
+     * leader answers `scoops.select` with a SNAPSHOT, so a tab switch left the
+     * pill on the previous cone's model until some unrelated frame arrived.
+     * Also the hook for a roster push, which is what carries a model the
+     * follower has no `model.state` for.
+     */
+    onShownUnitChanged() {
       apply();
     },
     reset,

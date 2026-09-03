@@ -84,6 +84,10 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     // the roster would be SEEDED with the previous session's transcript, which
     // the leader may since have frozen or cleared with a new session. A
     // reconnect is a fresh bootstrap; nothing the old channel said survives it.
+    // The roster too: it describes units of the session that ended, and a
+    // reader asking "what model does this unit run on" would be answered from
+    // a leader that is gone.
+    this.units = [];
     this.lastSnapshots.clear();
     // Waiters from the dead channel can never be settled by it either, and
     // leaving them would make the next `subscribe` think a fetch is in flight

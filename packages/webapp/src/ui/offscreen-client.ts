@@ -26,6 +26,7 @@ import type {
   ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
+  ScoopSnapshotConfig,
   ScoopStatusMsg,
   ScoopTranscriptMsg,
   SessionStatsMsg,
@@ -51,7 +52,12 @@ import type {
 } from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 import { isRootUnit, rootsOf } from '../work-unit/policy.js';
-import { normalizeScoopRecord, setUnitThinking } from '../work-unit/record.js';
+import {
+  modelFor,
+  normalizeScoopRecord,
+  setUnitThinking,
+  thinkingFor,
+} from '../work-unit/record.js';
 
 /**
  * How long a webhook delivery waits for the worker's disposition before the
@@ -1392,15 +1398,29 @@ export class OffscreenClient implements KernelClientFacade {
    * are what `onScoopListUpdate` is typed on, and its consumers key off `jid`.
    */
   private wireScoops(): ScoopListMsg['scoops'] {
-    return this.scoops.map((unit) => ({
-      jid: unit.jid,
-      name: unit.name,
-      folder: unit.folder,
-      parentId: unit.parentJid,
-      assistantLabel: unit.assistantLabel,
-      status: this.scoopStatuses.get(unit.jid) ?? 'ready',
-      ...(unit.config ? { config: unit.config } : {}),
-    }));
+    return this.scoops.map((unit) => {
+      // The per-unit model rides `config` on THIS boundary (the kernel projects
+      // it there and `normalizeScoopRecord` lifts it back), so a roster
+      // announcement that omitted it would not carry the very field the ack
+      // just changed. `thinking` rides the same carrier.
+      const model = modelFor(unit);
+      const thinking = thinkingFor(unit);
+      const config: ScoopSnapshotConfig = {
+        ...unit.config,
+        ...(model ? { modelId: model.id, modelProviderId: model.provider } : {}),
+        ...(thinking.level ? { thinkingLevel: thinking.level } : {}),
+        ...(thinking.effortOverride ? { effortOverride: thinking.effortOverride } : {}),
+      };
+      return {
+        jid: unit.jid,
+        name: unit.name,
+        folder: unit.folder,
+        parentId: unit.parentJid,
+        assistantLabel: unit.assistantLabel,
+        status: this.scoopStatuses.get(unit.jid) ?? 'ready',
+        ...(Object.keys(config).length > 0 ? { config } : {}),
+      };
+    });
   }
 
   private handleScoopModelAck(msg: SetScoopModelAckMsg): void {

@@ -363,29 +363,57 @@ describe('the model pill reads the shown unit, per unit (#2382 PR C)', () => {
     };
   }
 
-  it('does not carry one cone’s model into another whose model is unknown', () => {
+  it('takes the live model.state for the shown unit over the roster', () => {
     const h = harness();
     h.setUnits([
       recordToWorkUnitSummary(
         cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
         {}
       ),
-      // The second cone's record has no model yet (unbackfilled, or an older
-      // leader), but the leader's `model.state` can still answer for it.
-      recordToWorkUnitSummary(cone('cone_2', 'research'), {}),
+    ]);
+    h.surface.onModelsList(PILL_CATALOG);
+    // The pill needs a `model.state` to exist at all — the thinking level rides
+    // that frame — so this is the bootstrap one, agreeing with the roster.
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // A pick reaches a follower through `model.state` ALONE — the leader
+    // answers `model.select` with `broadcastModelState()` and pushes no
+    // roster (that rides a 5 s interval). Preferring the roster here left the
+    // pill on the old model for the rest of the session.
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Sonnet');
+
+    // …and a roster that still says Opus, arriving on its interval afterwards,
+    // must not undo it.
+    h.surface.onShownUnitChanged();
+    expect(h.composerMeta.model).toBe('Sonnet');
+  });
+
+  it('repaints for the newly shown unit on a tab switch, with no frame at all', () => {
+    const h = harness();
+    h.setUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+      recordToWorkUnitSummary(
+        cone('cone_2', 'research', { provider: 'anthropic', id: 'claude-sonnet-4-6' }),
+        {}
+      ),
     ]);
     h.surface.onModelsList(PILL_CATALOG);
     h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
     expect(h.composerMeta.model).toBe('Opus');
 
-    // Switch to the cone whose summary has no model. The carry-forward is
-    // per unit, so cone_1's model must NOT leak here — `model.state` answers.
+    // The leader answers `scoops.select` with a SNAPSHOT, not a model state,
+    // so the click is the only signal the pill will get.
     h.select('cone_2');
-    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_2' });
+    h.surface.onShownUnitChanged();
     expect(h.composerMeta.model).toBe('Sonnet');
   });
 
-  it('keeps a unit’s own last model when its summary momentarily loses it', () => {
+  it('lets a unit that is in the roster say it has no model', () => {
     const h = harness();
     const withModel = recordToWorkUnitSummary(
       cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
@@ -393,15 +421,18 @@ describe('the model pill reads the shown unit, per unit (#2382 PR C)', () => {
     );
     h.setUnits([withModel]);
     h.surface.onModelsList(PILL_CATALOG);
-    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
     expect(h.composerMeta.model).toBe('Opus');
 
-    // A later roster for the SAME unit arrives without the field. Absent is
-    // "not known yet" (#2329) — the pill keeps this unit's own last answer
-    // rather than falling back or blanking.
+    // The unit is still DESCRIBED, and now says it has no model. That is an
+    // answer, not silence: carrying the old pin forward would keep a model the
+    // record has lost, and the leader — which has no carry-forward — would
+    // then disagree about the same unit. The live frame still answers here.
     h.setUnits([{ ...withModel, model: undefined }]);
-    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
-    expect(h.composerMeta.model).toBe('Opus');
+    h.select('cone_2');
+    h.surface.onShownUnitChanged();
+    // `cone_2` is not in the roster at all and has no frame: nothing to show.
+    expect(h.composerMeta.style.display).toBe('none');
   });
 });
 

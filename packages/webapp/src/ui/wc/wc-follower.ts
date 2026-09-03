@@ -832,6 +832,11 @@ export async function mountWcUiFollower(
     getLockedEffortLevel: () => localStorage.getItem('slicc_locked_effort_level'),
   });
 
+  // A roster push can carry a model this follower has no `model.state` for
+  // (the leader broadcasts `scoops.list` on an interval, and per-unit models
+  // ride it), so the pill re-reads whenever the roster moves.
+  workUnits.subscribeList(() => modelSurface.onShownUnitChanged());
+
   follower = startPageFollowerTray(
     workUnits.wrapOptions({
       joinUrl,
@@ -1067,6 +1072,9 @@ export async function mountWcUiFollower(
       // not to seed this listener with the unit's previous transcript.
       void workUnits.snapshot(scoopJid).catch(() => undefined);
       watchUnit(scoopJid);
+      // The leader answers a selection with a snapshot, not a `model.state`,
+      // so nothing else would repaint the pill for the newly shown unit.
+      modelSurface.onShownUnitChanged();
     }
   });
 

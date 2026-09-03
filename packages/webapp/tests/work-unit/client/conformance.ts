@@ -82,29 +82,36 @@ function rosterCases(make: () => ClientHarness): void {
     expect(descriptors.find((tab) => tab.key === 'cone_1')?.phase).toBeUndefined();
   });
 
-  it('never latches an absent model — absent is "not known yet" (#2329)', async () => {
+  it('never latches on a roster that does not KNOW the unit yet (#2329)', async () => {
     const harness = make();
     harness.setRoster(ROSTER, 'cone_1');
     const known = modelForUnit(await harness.client.list(), 'cone_1');
     expect(known?.id).toBe('claude-opus-4-6');
 
-    // A later roster arrives without the field. That is a real, shipped state
-    // on both transports — a leader too old to send `ScoopSummary.model`, a
-    // record not yet backfilled, a catalog still warming up — and reading it
-    // as "this unit has no model" is what latched a follower's pill empty for
-    // a whole session.
+    // A roster that has not arrived, or that predates the unit, cannot ANSWER.
+    // Reading that silence as "this unit has no model" is what latched a
+    // follower's pill empty for a whole session.
+    expect(modelForUnit([], 'cone_1', known)?.id).toBe('claude-opus-4-6');
+    // …and with nothing to carry forward it stays absent rather than inventing
+    // one — the global selection is never a unit's answer.
+    expect(modelForUnit([], 'cone_1')).toBeUndefined();
+  });
+
+  it('lets a unit the roster DESCRIBES say it has no model', async () => {
+    const harness = make();
     harness.setRoster(
       ROSTER.map((unit) => (unit.id === 'cone_1' ? { ...unit, model: undefined } : unit)),
       'cone_1'
     );
     const units = await harness.client.list();
     expect(units.find((unit) => unit.id === 'cone_1')?.model).toBeUndefined();
-    // The SUMMARY reports the absence honestly; the READER carries the last
-    // answer forward rather than blanking.
-    expect(modelForUnit(units, 'cone_1', known)?.id).toBe('claude-opus-4-6');
-    // …and with nothing to carry forward it stays absent rather than inventing
-    // one — the global selection is never a unit's answer.
-    expect(modelForUnit(units, 'cone_1')).toBeUndefined();
+    // Described, so its answer stands — including "none". Carrying a previous
+    // pin here would keep a model the record has actually lost, and the leader
+    // (which has no carry-forward and falls to the profile default) would then
+    // disagree with the follower about the same unit.
+    expect(
+      modelForUnit(units, 'cone_1', { id: 'claude-opus-4-6', provider: 'anthropic' })
+    ).toBeUndefined();
   });
 
   it('reads a child’s model from the cone that owns it', async () => {

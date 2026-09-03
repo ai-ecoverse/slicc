@@ -66,7 +66,9 @@ export function modelForUnit(
   // The owning cone answers; a unit whose chain is unknown or broken answers
   // for itself, which is what `rootForSelection(roster, scoop) ?? scoop` did.
   const owner = ownerRootOf(units, id) ?? units.find((unit) => unit.id === id);
-  return owner?.model ?? previous;
+  // Described, so its answer stands — including "none".
+  if (owner) return owner.model;
+  return previous;
 }
 
 /**
