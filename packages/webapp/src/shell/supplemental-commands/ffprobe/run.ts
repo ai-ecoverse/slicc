@@ -35,7 +35,7 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 type OutputFormat =
   | { kind: 'json' }
-  | { kind: 'csv'; printFilename: boolean }
+  | { kind: 'csv'; printSection: boolean }
   | { kind: 'default'; noWrappers: boolean; noKey: boolean };
 
 interface ShowEntries {
@@ -105,6 +105,9 @@ Supported options:
   -show_entries SPEC      format=a,b:stream=c,d  (subset of real ffprobe)
   -select_streams SPEC    v / a / v:N / a:N  (first matching stream index N)
   -of / -print_format FMT json | csv[=p=0] | default[=nw=1:nk=1]
+                          csv: p=1 (default) prefixes each row with the
+                          section name (format|stream); p=0 prints values only.
+                          Fields containing commas/quotes are CSV-quoted.
   -v / -loglevel LEVEL    quiet|panic|fatal|error|warning|info|verbose|debug
   -version                Report that this is the wasm emulation
 
@@ -147,8 +150,9 @@ function parseOutputFormat(raw: string): OutputFormat {
   const opts = eq < 0 ? '' : raw.slice(eq + 1);
   if (name === 'json') return { kind: 'json' };
   if (name === 'csv') {
-    // `csv=p=0` suppresses the filename column (ffprobe's print_filename=0).
-    return { kind: 'csv', printFilename: !/(?:^|:)p=0(?::|$)/.test(opts) };
+    // Upstream ffprobe: `p` / `print_section` — print the section name at
+    // the start of each line. `csv=p=0` suppresses it. (Not print_filename.)
+    return { kind: 'csv', printSection: !/(?:^|:)p=0(?::|$)/.test(opts) };
   }
   if (name === 'default') {
     return {
@@ -387,21 +391,26 @@ function renderDefault(
   return `${lines.join('\n')}\n`;
 }
 
-function renderCsv(
-  sections: RenderSections,
-  fmt: Extract<OutputFormat, { kind: 'csv' }>,
-  filename: string | undefined
-): string {
+function csvEscape(value: string): string {
+  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function renderCsv(sections: RenderSections, fmt: Extract<OutputFormat, { kind: 'csv' }>): string {
   const lines: string[] = [];
-  const row = (obj: ProbeFieldBag): string => {
+  const row = (section: string, obj: ProbeFieldBag): void => {
     const values = Object.values(obj)
       .filter((v): v is string | number => v !== undefined)
-      .map(String);
-    if (fmt.printFilename) values.unshift(filename ?? '');
-    return values.join(',');
+      .map((v) => csvEscape(String(v)));
+    // Streams that lack every requested key (e.g. video under
+    // `-show_entries stream=channels`) would otherwise print a bare
+    // section name with no values — skip those empty rows.
+    if (values.length === 0) return;
+    if (fmt.printSection) values.unshift(section);
+    lines.push(values.join(','));
   };
-  if (sections.format) lines.push(row(sections.format));
-  if (sections.streams) for (const s of sections.streams) lines.push(row(s));
+  if (sections.format) row('format', sections.format);
+  if (sections.streams) for (const s of sections.streams) row('stream', s);
   return `${lines.join('\n')}\n`;
 }
 
@@ -441,14 +450,51 @@ function renderOutput(info: ProbeInfo, parsed: ParsedFfprobeArgs): string {
     return `${JSON.stringify(sections, null, 4)}\n`;
   }
   if (parsed.outputFormat.kind === 'csv') {
-    return renderCsv(sections, parsed.outputFormat, info.format.filename);
+    return renderCsv(sections, parsed.outputFormat);
   }
   return renderDefault(sections, parsed.outputFormat);
 }
 
-function inferMemfsName(path: string): string {
+/**
+ * Probe jobs share one realm-scoped `@ffmpeg/core` instance. Concurrent
+ * probes would otherwise register overlapping `log` listeners (and can
+ * clobber the same MEMFS basename), silently mixing banners. Serialize
+ * every probe through this chain — a rejected job must not poison later
+ * ones (`then(run, run)`).
+ */
+let probeChain: Promise<void> = Promise.resolve();
+
+function withProbeLock<T>(run: () => Promise<T>): Promise<T> {
+  const next = probeChain.then(run, run);
+  probeChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+/** Monotonic stem so concurrent (or sequential) probes never share a MEMFS path. */
+let probeSeq = 0;
+
+/** Test-only — reset the probe serializer between cases. */
+export function resetFfprobeLockForTests(): void {
+  probeChain = Promise.resolve();
+  probeSeq = 0;
+}
+
+/**
+ * Opaque MEMFS staging name. Carrying the VFS basename through verbatim
+ * breaks when it contains `'` (ffmpeg echoes `from '…'` and our banner
+ * parser only accepts `[^']*`), and two probes of files with the same
+ * basename would clobber each other. Keep a sanitized extension so the
+ * demuxer still sniffs the container.
+ */
+export function inferMemfsName(path: string): string {
   const base = path.split('/').pop() || 'input.bin';
-  return `__probe_${base}`;
+  const extMatch = /\.([A-Za-z0-9]{1,8})$/.exec(base);
+  const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '.bin';
+  probeSeq = (probeSeq + 1) >>> 0;
+  return `__probe_${probeSeq}_${Date.now()}${ext}`;
 }
 
 async function loadProbeCore(
@@ -495,6 +541,13 @@ async function execProbeBanner(
 }
 
 async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise<CmdResult> {
+  return withProbeLock(() => runProbeExclusive(parsed, ctx));
+}
+
+async function runProbeExclusive(
+  parsed: ParsedFfprobeArgs,
+  ctx: CommandContext
+): Promise<CmdResult> {
   if (!parsed.inputPath) {
     return {
       stdout: '',

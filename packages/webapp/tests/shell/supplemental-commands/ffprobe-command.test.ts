@@ -12,7 +12,9 @@ import {
 } from '../../../src/shell/supplemental-commands/ffprobe/log-parse.js';
 import {
   createFfprobeCommand,
+  inferMemfsName,
   parseFfprobeArgs,
+  resetFfprobeLockForTests,
   selectProbeStreams,
 } from '../../../src/shell/supplemental-commands/ffprobe/run.js';
 
@@ -94,6 +96,7 @@ function createMockCtx(
 
 afterEach(() => {
   vi.clearAllMocks();
+  resetFfprobeLockForTests();
 });
 
 describe('durationToSeconds / channelsFromLayout', () => {
@@ -102,11 +105,23 @@ describe('durationToSeconds / channelsFromLayout', () => {
     expect(durationToSeconds('01:02:03.5')).toBe('3723.500000');
   });
 
-  it('maps channel layouts to counts', () => {
+  it('maps channel layouts to counts, including parenthesised qualifiers', () => {
     expect(channelsFromLayout('mono')).toBe(1);
     expect(channelsFromLayout('stereo')).toBe(2);
     expect(channelsFromLayout('5.1')).toBe(6);
+    expect(channelsFromLayout('5.1(side)')).toBe(6);
+    expect(channelsFromLayout('7.1(wide)')).toBe(8);
     expect(channelsFromLayout('2 channels')).toBe(2);
+  });
+});
+
+describe('inferMemfsName', () => {
+  it('stages under an opaque apostrophe-safe name while keeping the extension', () => {
+    const a = inferMemfsName("/tmp/O'Brien.mp4");
+    const b = inferMemfsName("/tmp/O'Brien.mp4");
+    expect(a).toMatch(/^__probe_\d+_\d+\.mp4$/);
+    expect(a).not.toContain("'");
+    expect(a).not.toBe(b);
   });
 });
 
@@ -140,6 +155,16 @@ describe('parseFfmpegProbeLog', () => {
 
   it('returns null when the log has no Input banner', () => {
     expect(parseFfmpegProbeLog('Error opening input')).toBeNull();
+  });
+
+  it('resolves 5.1(side) channel layouts from the audio banner', () => {
+    const log = `Input #0, wav, from '__probe_x.wav':
+  Duration: 00:00:01.00, start: 0.000000, bitrate: 1411 kb/s
+  Stream #0:0: Audio: pcm_s16le, 48000 Hz, 5.1(side), s16, 4608 kb/s
+`;
+    const info = parseFfmpegProbeLog(log);
+    expect(info!.streams[0].channel_layout).toBe('5.1(side)');
+    expect(info!.streams[0].channels).toBe(6);
   });
 });
 
@@ -259,6 +284,110 @@ describe('createFfprobeCommand', () => {
     expect(json.format.format_name).toContain('mp4');
     expect(json.streams[0].codec_name).toBe('h264');
     expect(json.streams[1].channels).toBe(1);
+  });
+
+  it('prefixes CSV rows with the section name and quotes comma fields', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({}));
+    const cmd = createFfprobeCommand();
+    const withSection = await cmd.execute(
+      ['-v', 'error', '-show_entries', 'stream=channels', '-of', 'csv', 'clip.mp4'],
+      createMockCtx()
+    );
+    expect(withSection.exitCode).toBe(0);
+    expect(withSection.stdout.trim()).toBe('stream,1');
+
+    const valuesOnly = await cmd.execute(
+      ['-v', 'error', '-show_entries', 'stream=channels', '-of', 'csv=p=0', 'clip.mp4'],
+      createMockCtx()
+    );
+    expect(valuesOnly.stdout.trim()).toBe('1');
+
+    const formatCsv = await cmd.execute(
+      ['-v', 'error', '-show_entries', 'format=format_name', '-of', 'csv', 'clip.mp4'],
+      createMockCtx()
+    );
+    expect(formatCsv.stdout.trim()).toBe('format,"mov,mp4,m4a,3gp,3g2,mj2"');
+  });
+
+  it('serializes concurrent probes so log listeners never overlap', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const listeners = new Set<(e: { type: string; message: string }) => void>();
+    const fake: FakeFfmpeg = {
+      on: vi.fn((event: string, handler: (e: { type: string; message: string }) => void) => {
+        if (event === 'log') listeners.add(handler);
+      }),
+      off: vi.fn((_event: string, handler: (e: { type: string; message: string }) => void) => {
+        listeners.delete(handler);
+      }),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      exec: vi.fn(async (args: string[]) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        const input = args[args.indexOf('-i') + 1] ?? 'unknown';
+        for (const handler of listeners) {
+          handler({ type: 'stderr', message: `Input #0, mov,mp4, from '${input}':` });
+          handler({
+            type: 'stderr',
+            message: '  Duration: 00:00:01.00, start: 0.000000, bitrate: 100 kb/s',
+          });
+          handler({
+            type: 'stderr',
+            message: '  Stream #0:0: Audio: aac, 44100 Hz, mono, fltp, 70 kb/s',
+          });
+        }
+        await new Promise((r) => setTimeout(r, 25));
+        active -= 1;
+        throw new Error('At least one output file must be specified');
+      }),
+      deleteFile: vi.fn().mockResolvedValue(undefined),
+    };
+    useFakeFfmpeg(fake);
+    const cmd = createFfprobeCommand();
+    const argv = [
+      '-v',
+      'error',
+      '-show_entries',
+      'stream=channels',
+      '-of',
+      'default=nw=1:nk=1',
+    ] as const;
+    const [a, b] = await Promise.all([
+      cmd.execute([...argv, 'a.mp4'], createMockCtx()),
+      cmd.execute([...argv, 'b.mp4'], createMockCtx()),
+    ]);
+    expect(maxActive).toBe(1);
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(a.stdout.trim()).toBe('1');
+    expect(b.stdout.trim()).toBe('1');
+    const staged = vi.mocked(fake.writeFile).mock.calls.map((c) => String(c[0]));
+    expect(staged).toHaveLength(2);
+    expect(staged[0]).not.toBe(staged[1]);
+    expect(staged.every((n) => !n.includes("'"))).toBe(true);
+  });
+
+  it('probes a VFS path whose basename contains an apostrophe', async () => {
+    const fake = makeFakeFfmpeg({});
+    useFakeFfmpeg(fake);
+    const cmd = createFfprobeCommand();
+    const result = await cmd.execute(
+      [
+        '-v',
+        'error',
+        '-show_entries',
+        'stream=channels',
+        '-of',
+        'default=nw=1:nk=1',
+        "/tmp/O'Brien.mp4",
+      ],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1');
+    const name = String(fake.writeFile.mock.calls[0][0]);
+    expect(name).not.toContain("'");
+    expect(name).toMatch(/\.mp4$/);
   });
 
   it('rejects unsupported options with a clear error', async () => {

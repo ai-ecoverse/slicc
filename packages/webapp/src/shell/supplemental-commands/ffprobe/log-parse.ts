@@ -74,12 +74,18 @@ export function durationToSeconds(raw: string): string | undefined {
 }
 
 /**
- * Map a channel-layout token (`mono`, `stereo`, `5.1`, …) or an
- * explicit `N channels` phrase onto a channel count.
+ * Map a channel-layout token (`mono`, `stereo`, `5.1`, `5.1(side)`, …)
+ * or an explicit `N channels` phrase onto a channel count. ffmpeg often
+ * appends a parenthesised qualifier (`5.1(side)`, `7.1(wide)`) — strip it
+ * before the exact lookup so Remotion-style `stream=channels` probes still
+ * resolve.
  */
 export function channelsFromLayout(token: string): number | undefined {
   const layout = token.trim().toLowerCase();
   if (Object.hasOwn(CHANNEL_LAYOUTS, layout)) return CHANNEL_LAYOUTS[layout];
+  // `5.1(side)` / `7.1(wide)` — drop the parenthetical qualifier.
+  const bare = /^([0-9.]+|[a-z0-9_+-]+)\(/.exec(layout);
+  if (bare && Object.hasOwn(CHANNEL_LAYOUTS, bare[1])) return CHANNEL_LAYOUTS[bare[1]];
   const n = /^(\d+)\s+channels?$/.exec(layout);
   if (n) return Number(n[1]);
   return undefined;
