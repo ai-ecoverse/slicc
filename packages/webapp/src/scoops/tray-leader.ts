@@ -48,17 +48,17 @@ interface ControllerAttachResponse {
 }
 
 /**
- * The status registry moved to `base/tray-leader-status.ts` so `shell/` can
- * read it without importing UP the layer stack (#2537). Re-exported here
- * under the established names — this module stays the address existing
- * callers use, and the manager below still drives the very same singleton.
- */
-/**
- * `createTrayFetch` and `TrayProxyFetchError` moved to `shell/tray-fetch.ts`
- * (#2276): the realm check they need is a topology decision, which belongs
- * in the transport layer — this module no longer reads the float at all.
- * Re-exported under the established names so this stays the address
- * existing callers (and `shouldRecreateTray` below) use.
+ * Two things moved out of this module and are re-exported under their
+ * established names, so this stays the address existing callers use:
+ *
+ * - The status registry moved to `base/tray-leader-status.ts` so `shell/`
+ *   can read it without importing UP the layer stack (#2537); the manager
+ *   below still drives the very same singleton.
+ * - `createTrayFetch` and `TrayProxyFetchError` moved to
+ *   `shell/tray-fetch.ts` (#2276): the realm check they need is a topology
+ *   decision, which belongs in the transport layer — this module no longer
+ *   reads the float at all. `shouldRecreateTray` below still imports
+ *   `TrayProxyFetchError` directly, since it needs the class.
  */
 export {
   createTrayFetch,

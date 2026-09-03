@@ -39,6 +39,18 @@
  * `setChromeExtensionRealm`) rather than asking an injected `CapabilityBroker`
  * or taking a composition-time answer. One PR per domain, smallest first:
  *
+ * TODO(#2276) slice D, the lint gate — a plain identifier grep on this list is
+ * NOT sufficient by itself: `export const isTrayExtension =
+ * getChromeExtensionRealm` inside `shell/tray-fetch.ts`, imported by `scoops/`
+ * under that new name, would reintroduce the exact branch this slice removed
+ * without tripping a name-keyed gate. The gate must ban a `scoops/` / `tools/`
+ * / `kernel/` (except `kernel/host.ts`) import chain that RESOLVES to the
+ * cached realm fact, not just a literal name match — re-exports included.
+ * Two more names belong on the ban list: `hasChromeRuntimeConnect`
+ * (`base/runtime-env.ts`) and its `@slicc/shared-ts` original,
+ * `canConnectToChromeRuntime` — both are true on the thin-bridge hosted page
+ * and are float signals just like the other six.
+ *
  * secrets
  *   - scoops/scoop-context/shell-and-skills.ts `fetchSecretEnvVars`
  *   - shell/supplemental-commands/secret-command.ts

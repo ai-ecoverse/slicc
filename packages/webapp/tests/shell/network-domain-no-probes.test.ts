@@ -41,6 +41,10 @@ const FLOAT_PROBE_NAMES = [
   'resolveFloatTopology',
   'getChromeExtensionRealm',
   'setChromeExtensionRealm',
+  // True on the thin-bridge hosted page just like the six above — the same
+  // class of float signal, and belongs on the same ban list (round-2 review).
+  'hasChromeRuntimeConnect',
+  'canConnectToChromeRuntime',
 ] as const;
 
 const FLOAT_PROBE_PATTERN = new RegExp(FLOAT_PROBE_NAMES.join('|'));
@@ -67,6 +71,19 @@ describe('#2276 slice C — shell/ owns topology and may read the cached fact', 
   it('shell/tray-fetch.ts holds the realm branch createTrayFetch needs', () => {
     const source = src('shell', 'tray-fetch.ts');
     expect(source).toContain('getChromeExtensionRealm()');
+  });
+
+  it('shell/tray-fetch.ts does not re-export getChromeExtensionRealm under any name', () => {
+    // The cheapest bypass of a name-keyed gate: `export const isTrayExtension
+    // = getChromeExtensionRealm` here, imported by `scoops/` under the new
+    // name, reintroduces the exact branch this slice removed without ever
+    // matching a literal `getChromeExtensionRealm` string at the scoops/
+    // call site. This only catches the "still exported under the SAME name"
+    // half of that; the rename half is why slice D needs a dataflow-aware
+    // gate, not a name grep — see the TODO in `capability/index.ts`.
+    const source = src('shell', 'tray-fetch.ts');
+    const exportLines = [...source.matchAll(/^export .*$/gm)].map((m) => m[0]);
+    expect(exportLines.some((line) => line.includes('getChromeExtensionRealm'))).toBe(false);
   });
 
   it('shell/proxied-fetch.ts reads the same cached fact for its own extension branch', () => {
@@ -103,6 +120,8 @@ describe('#2276 slice C — redirect-uri.ts takes topology by injection', () => 
 });
 
 describe('#2276 slice C — the guard actually catches the old shape', () => {
+  const scan = (source: string) => FLOAT_PROBE_NAMES.filter((name) => source.includes(name));
+
   it('would fail if tray-leader.ts read the float again (documents the regression this guards against)', () => {
     // Not a real mutation test (that would require writing to source during a
     // test run) — this pins the exact string a regression would reintroduce,
@@ -110,5 +129,16 @@ describe('#2276 slice C — the guard actually catches the old shape', () => {
     // appears" check.
     const regressed = 'const isExtension = getChromeExtensionRealm();\nif (isExtension) {';
     expect(FLOAT_PROBE_PATTERN.test(regressed)).toBe(true);
+  });
+
+  it('catches an import of getChromeExtensionRealm from shell/tray-fetch.ts, not only from base/api-endpoint.ts', () => {
+    // The scan is a whole-source name match, not tied to an import path, so
+    // it does not matter which `shell/` module a future re-import comes
+    // from — reusing the REAL current file plus one injected import line
+    // proves that, rather than a hand-written fragment.
+    const realSource = src('scoops', 'tray-leader.ts');
+    expect(scan(realSource)).toEqual([]);
+    const withRegressedImport = `import { getChromeExtensionRealm } from '../shell/tray-fetch.js';\n${realSource}`;
+    expect(scan(withRegressedImport)).toEqual(['getChromeExtensionRealm']);
   });
 });

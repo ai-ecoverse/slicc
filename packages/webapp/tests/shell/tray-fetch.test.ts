@@ -4,7 +4,7 @@ import {
   setChromeExtensionRealm,
   setLocalApiBaseUrl,
 } from '../../src/base/api-endpoint.js';
-import { createTrayFetch } from '../../src/shell/tray-fetch.js';
+import { createTrayFetch, TrayProxyFetchError } from '../../src/shell/tray-fetch.js';
 
 describe('createTrayFetch', () => {
   // Browsers reject `fetch` calls whose `this` is not the global Window /
@@ -37,14 +37,27 @@ describe('createTrayFetch', () => {
   };
 
   it('preserves the underlying fetch when invoked as a method (extension branch)', async () => {
+    // A mock created via `vi.fn()` never throws on a rebound `this` — nothing
+    // in vitest's node environment does — so a test that only checks the
+    // RESULT can't tell a correct wrapper from a regressed one that returns
+    // `fetchImpl` bare. Assert `this` directly instead, and invoke the
+    // wrapper the way `LeaderTrayManager` actually does: as `this.fetchImpl
+    // (url)`, a method call on an object property, not a bare call.
     const restore = stubChromeRuntime('extension');
     try {
-      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      let capturedThis: unknown = 'not called';
+      const inner = function (this: unknown, url: RequestInfo | URL): Promise<Response> {
+        capturedThis = this;
+        return Promise.resolve(new Response('ok'));
+      } as typeof fetch;
       const wrapped = createTrayFetch(inner);
-      const holder = { call: wrapped };
-      await expect(holder.call('https://example.com/x')).resolves.toBeInstanceOf(Response);
-      expect(inner).toHaveBeenCalledTimes(1);
-      expect(inner.mock.calls[0]?.[0]).toBe('https://example.com/x');
+      const holder = { fetchImpl: wrapped };
+      await expect(holder.fetchImpl('https://example.com/x')).resolves.toBeInstanceOf(Response);
+      // Real `fetch()` rejects any `this` that isn't Window/WorkerGlobalScope
+      // ("Illegal invocation"). `holder` failing this assertion is exactly
+      // the regression the wrapping arrow function exists to prevent.
+      expect(capturedThis === undefined || capturedThis === globalThis).toBe(true);
+      expect(capturedThis).not.toBe(holder);
     } finally {
       restore();
     }
@@ -64,6 +77,46 @@ describe('createTrayFetch', () => {
       // Standalone branch routes off-origin requests through /api/fetch-proxy.
       expect(inner.mock.calls[0]?.[0]).toBe('/api/fetch-proxy');
     } finally {
+      restore();
+    }
+  });
+
+  it('throws TrayProxyFetchError when the response is tagged X-Proxy-Error — what shouldRecreateTray keys on', async () => {
+    const restore = stubChromeRuntime('standalone');
+    try {
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response('{"error":"tray worker unreachable"}', {
+          status: 502,
+          headers: { 'X-Proxy-Error': '1' },
+        })
+      );
+      const wrapped = createTrayFetch(inner);
+      await expect(wrapped('https://tray.example.com/tray')).rejects.toThrow(TrayProxyFetchError);
+    } finally {
+      restore();
+    }
+  });
+
+  it('calls fetchImpl directly for a same-origin target, never /api/fetch-proxy', async () => {
+    const restore = stubChromeRuntime('standalone');
+    const originalWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      location: { origin: 'https://leader.example' },
+    };
+    try {
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      const wrapped = createTrayFetch(inner);
+      const sameOriginUrl = 'https://leader.example/tray/status';
+      await expect(wrapped(sameOriginUrl)).resolves.toBeInstanceOf(Response);
+      expect(inner).toHaveBeenCalledTimes(1);
+      // Called with the ORIGINAL url — not routed through /api/fetch-proxy.
+      expect(inner.mock.calls[0]?.[0]).toBe(sameOriginUrl);
+    } finally {
+      if (originalWindow === undefined) {
+        delete (globalThis as { window?: unknown }).window;
+      } else {
+        (globalThis as { window?: unknown }).window = originalWindow;
+      }
       restore();
     }
   });

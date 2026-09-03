@@ -43,6 +43,13 @@ describe('git-http — token-in-URL clone reaches the fetch-proxy unmask path', 
   it('CLI mode: masked-cred URL is forwarded to /api/fetch-proxy via X-Target-URL', async () => {
     // CLI mode — no chrome runtime.
     (globalThis as { chrome?: unknown }).chrome = undefined;
+    // `getChromeExtensionRealm()` (#2276) caches its answer per module
+    // instance; `vi.resetModules()` above gives this test a fresh one, but
+    // don't rely on that alone to reset it — set it explicitly, same as
+    // `tray-fetch.test.ts`. Imported dynamically, AFTER resetModules, so it
+    // targets the SAME fresh instance `git-http.js` below will resolve to.
+    const { setChromeExtensionRealm } = await import('../../src/base/api-endpoint.js');
+    setChromeExtensionRealm(false);
 
     const mockFetch = vi.fn(
       async () =>
@@ -100,6 +107,10 @@ describe('git-http — token-in-URL clone reaches the fetch-proxy unmask path', 
     (globalThis as { chrome?: unknown }).chrome = {
       runtime: { connect, id: 'test-extension-id' },
     };
+    // See the CLI-mode test above for why this is explicit, not implied by
+    // `vi.resetModules()`.
+    const { setChromeExtensionRealm } = await import('../../src/base/api-endpoint.js');
+    setChromeExtensionRealm(true);
 
     const { createGitHttpClient } = await import('../../src/git/git-http.js');
     const client = createGitHttpClient();
