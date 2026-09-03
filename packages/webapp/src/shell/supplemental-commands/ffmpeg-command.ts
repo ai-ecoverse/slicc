@@ -236,6 +236,71 @@ const VALUE_TAKING_FLAGS = new Set([
   '-update',
   '-list_devices',
   '-warmup',
+  // Bitstream filters. Their absence was not cosmetic: `-c copy
+  // -bsf:v h264_mp4toannexb -f mpegts out.ts` silently lost BOTH the
+  // filter and `-c copy`, so a stream copy became a full re-encode.
+  '-bsf',
+  '-bsf:v',
+  '-bsf:a',
+  // Encoder/muxer options common in remux and concat recipes.
+  '-profile:v',
+  '-level',
+  '-g',
+  '-keyint_min',
+  '-sc_threshold',
+  '-max_muxing_queue_size',
+  '-fflags',
+  '-avoid_negative_ts',
+  '-start_number',
+  '-strict',
+  '-vsync',
+  '-fps_mode',
+  '-async',
+  '-disposition',
+  '-map_metadata',
+  '-c:s',
+  '-scodec',
+  '-ab',
+  '-aspect',
+]);
+
+/**
+ * Options that really are pure toggles. Everything else that starts
+ * with `-` and is not in {@link VALUE_TAKING_FLAGS} is treated as
+ * value-taking by {@link handleGenericOptionToken}, because in ffmpeg
+ * the value-taking options vastly outnumber the toggles — so guessing
+ * "toggle" for an unknown flag is the wrong default.
+ */
+const BOOLEAN_FLAGS = new Set([
+  '-y',
+  '-n',
+  '-vn',
+  '-an',
+  '-sn',
+  '-dn',
+  '-re',
+  '-stats',
+  '-nostats',
+  '-nostdin',
+  '-shortest',
+  '-copyts',
+  '-hide_banner',
+  '-autorotate',
+  '-noautorotate',
+  '-ignore_unknown',
+  '-exact_size',
+  '-bitexact',
+  '-xerror',
+  '-benchmark',
+  '-benchmark_all',
+  '-dump',
+  '-hex',
+  '-stdin',
+  '-noautoscale',
+  '-accurate_seek',
+  '-noaccurate_seek',
+  '-fix_sub_duration',
+  '-recast_media',
 ]);
 
 interface ParseState {
@@ -319,6 +384,53 @@ function handleWarmupToken(state: ParseState, args: string[], i: number): number
   return i + 2;
 }
 
+/**
+ * Is there another positional at or after `from`?
+ *
+ * The trailing positional is the output path, so this is how a
+ * candidate option value is told apart from the output itself. Known
+ * value-taking flags are skipped along with their values so their
+ * arguments are not mistaken for positionals.
+ */
+function hasLaterPositional(args: string[], from: number): boolean {
+  for (let i = from; i < args.length; i++) {
+    const tok = args[i];
+    if (!tok.startsWith('-')) return true;
+    if (VALUE_TAKING_FLAGS.has(tok)) i += 1;
+  }
+  return false;
+}
+
+/**
+ * Decide whether an option we do not recognize consumes the next
+ * token as its value.
+ *
+ * Guessing "toggle" is the wrong default. ffmpeg's value-taking
+ * options vastly outnumber its toggles, and a wrong guess does not
+ * degrade gracefully: the value falls through to
+ * {@link handlePositionalToken}, which makes it a phantom output path
+ * AND moves every option pending at that moment into that phantom
+ * output's options — so they never reach the real output or input.
+ * That is how `-c copy -bsf:v h264_mp4toannexb` lost both tokens and
+ * turned a stream copy into a re-encode.
+ *
+ * So an unknown flag consumes the next token unless one of the
+ * following says otherwise:
+ *  - there is no next token;
+ *  - the next token is itself an option (`-…`);
+ *  - the next token is the only positional left, making it the output
+ *    path. Testing for a later *positional* rather than for the last
+ *    argv entry is what keeps an unknown toggle from swallowing the
+ *    output when options trail it, as in
+ *    `ffmpeg -i in.mp4 -bitexact out.mp4 -y`.
+ */
+function unknownFlagTakesValue(args: string[], i: number): boolean {
+  const next = args[i + 1];
+  if (typeof next !== 'string') return false;
+  if (next.startsWith('-')) return false;
+  return hasLaterPositional(args, i + 2);
+}
+
 function handleGenericOptionToken(
   state: ParseState,
   args: string[],
@@ -328,6 +440,10 @@ function handleGenericOptionToken(
   if (VALUE_TAKING_FLAGS.has(tok)) {
     const value = requireValueAt(args, i, tok);
     state.pendingOpts.push(tok, value);
+    return i + 2;
+  }
+  if (!BOOLEAN_FLAGS.has(tok) && unknownFlagTakesValue(args, i)) {
+    state.pendingOpts.push(tok, args[i + 1]);
     return i + 2;
   }
   state.pendingOpts.push(tok);
