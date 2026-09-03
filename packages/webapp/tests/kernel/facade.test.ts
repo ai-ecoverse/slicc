@@ -222,10 +222,10 @@ describe('Kernel facade parity', () => {
     expect(snapshot.type).toBe('state-snapshot');
     expect(snapshot.scoops).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ jid: 'cone_1', isCone: true }),
+        expect.objectContaining({ jid: 'cone_1', parentId: null }),
         expect.objectContaining({
           jid: 'scoop_test',
-          isCone: false,
+          parentId: 'cone_1',
           config: { thinkingLevel: 'max' },
         }),
       ])

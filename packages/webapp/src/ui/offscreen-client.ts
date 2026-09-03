@@ -53,9 +53,6 @@ import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 import { isRootUnit, rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord, setUnitThinking } from '../work-unit/record.js';
 
-/** Placeholder owner for a scoop whose cone is not in the same wire list. */
-const UNKNOWN_PARENT_JID = 'unknown-parent';
-
 /**
  * How long a webhook delivery waits for the worker's disposition before the
  * caller falls back to the legacy receipt (#2524). Deliberately short: the tray
@@ -1366,7 +1363,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopCreated(msg: ScoopCreatedMsg): void {
-    const scoop = this.msgScoopToRegistered(msg.scoop, this.coneJidFromRecords(this.scoops));
+    const scoop = this.msgScoopToRegistered(msg.scoop);
     // Remove optimistic entry (same name, different JID) and add the real one
     this.scoops = this.scoops.filter((s) => s.name !== scoop.name || s.jid === scoop.jid);
     if (!this.scoops.find((s) => s.jid === scoop.jid)) {
@@ -1404,9 +1401,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopList(msg: ScoopListMsg): void {
-    this.scoops = msg.scoops.map((s) =>
-      this.msgScoopToRegistered(s, this.coneJidFromWire(msg.scoops))
-    );
+    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1416,9 +1411,7 @@ export class OffscreenClient implements KernelClientFacade {
   private handleStateSnapshot(msg: StateSnapshotMsg): void {
     log.info('Received state snapshot', { scoopCount: msg.scoops.length });
 
-    this.scoops = msg.scoops.map((s) =>
-      this.msgScoopToRegistered(s, this.coneJidFromWire(msg.scoops))
-    );
+    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1461,26 +1454,7 @@ export class OffscreenClient implements KernelClientFacade {
     });
   }
 
-  /** Owning cone of the records already known locally (the ownership edge). */
-  private coneJidFromRecords(scoops: readonly RegisteredScoop[]): string | null {
-    return scoops.find((s) => isRootUnit(s))?.jid ?? null;
-  }
-
-  /**
-   * Owning cone of a wire list: the edge when the leader sends one, the
-   * legacy `isCone` flag when it does not. The wire keeps `isCone` for older
-   * leaders/followers even though the record no longer carries it (#2279).
-   */
-  private coneJidFromWire(scoops: ScoopListMsg['scoops']): string | null {
-    return (
-      scoops.find((s) => (s.parentId !== undefined ? s.parentId === null : s.isCone))?.jid ?? null
-    );
-  }
-
-  private msgScoopToRegistered(
-    s: ScoopListMsg['scoops'][number],
-    coneJid: string | null
-  ): RegisteredScoop {
+  private msgScoopToRegistered(s: ScoopListMsg['scoops'][number]): RegisteredScoop {
     // `normalizeScoopRecord` lifts the wire's `config.modelId` /
     // `config.thinkingLevel` onto the record's `model` / `thinking` (#2310),
     // so panel code never reads the legacy config fields.
@@ -1488,13 +1462,12 @@ export class OffscreenClient implements KernelClientFacade {
       jid: s.jid,
       name: s.name,
       folder: s.folder,
-      // Ownership edge straight from the wire (#1666). A legacy leader that
-      // predates `parentId` gets the old inference: a scoop belongs to the
-      // list's cone, and a list without a cone must still not turn a scoop
-      // into a root, so an unknown parent is a non-null sentinel.
-      parentJid:
-        s.parentId !== undefined ? s.parentId : s.isCone ? null : (coneJid ?? UNKNOWN_PARENT_JID),
-      requiresTrigger: !s.isCone,
+      // Ownership edge straight from the wire (#1666). It is REQUIRED on this
+      // boundary — kernel and panel ship as one bundle — so there is no
+      // sentinel owner to invent and no derived `isCone` flag to fall back on
+      // (#2358).
+      parentJid: s.parentId,
+      requiresTrigger: s.parentId !== null,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),
       // Carry the persisted-per-unit model + thinking through to the

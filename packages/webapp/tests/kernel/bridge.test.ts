@@ -421,9 +421,11 @@ describe('Bridge buildStateSnapshot', () => {
     expect(snapshot.scoops.length).toBe(2);
     expect(snapshot.scoops[0].jid).toBe('cone_1');
     expect(snapshot.scoops[0].name).toBe('Cone');
-    expect(snapshot.scoops[0].isCone).toBe(true);
+    expect(snapshot.scoops[0].parentId).toBe(null);
     expect(snapshot.scoops[1].jid).toBe('scoop_test');
-    expect(snapshot.scoops[1].isCone).toBe(false);
+    expect(snapshot.scoops[1].parentId).toBe('cone_1');
+    // The panel wire never carried the tray wire's derived flag (#2358).
+    expect(snapshot.scoops[0]).not.toHaveProperty('isCone');
   });
 
   it('falls back to cone jid when no leader-active-scoop has been pushed', () => {
@@ -2283,9 +2285,9 @@ describe('Bridge handlePanelMessage dispatch', () => {
     expect(registered.folder).toBe('cone-newcone');
     expect(registered.assistantLabel).toBe('NewCone');
     const event = sentMessages.find((m: any) => m.payload?.type === 'scoop-created') as
-      | { payload: { scoop: { isCone: boolean; name: string } } }
+      | { payload: { scoop: { parentId: string | null; name: string } } }
       | undefined;
-    expect(event?.payload.scoop.isCone).toBe(true);
+    expect(event?.payload.scoop.parentId).toBeNull();
     expect(event?.payload.scoop.name).toBe('NewCone');
   });
 

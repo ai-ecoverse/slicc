@@ -2,6 +2,7 @@ import type { ScoopSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import {
   summaryIsRoot,
+  summaryRole,
   toFollowerSwitcherScoops,
   toScoopSummaries,
 } from '../../../src/ui/wc/wc-tray-scoops.js';
@@ -214,14 +215,28 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('summaryIsRoot uses the edge when sent and the flag from older leaders', () => {
+  it('summaryIsRoot uses the edge when sent and the flag when it is not', () => {
     expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
     expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
     // a lying flag loses to the edge
     expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
-    // legacy leader: no edge at all
+    // A hosted leader tab opened before `parentId` landed and never reloaded
+    // sends the flag alone. Dropping this fallback gives such a roster ZERO
+    // roots — every unit read-only — while iOS on the same bytes still roots
+    // via `isCone`. Stage 3 of #2358 deletes both halves together.
     expect(summaryIsRoot({ isCone: true })).toBe(true);
     expect(summaryIsRoot({ isCone: false })).toBe(false);
+    // Neither field at all is "owner unknown", never a second root.
+    expect(summaryIsRoot({})).toBe(false);
+  });
+
+  it('resolves the role from the edge for a summary with no isCone flag (#2358)', () => {
+    // What a v8 peer receives once the leader stops projecting the flag.
+    const { isCone: _isCone, ...rootNoFlag } = toScoopSummaries([cone], [])[0];
+    const { isCone: _childFlag, ...childNoFlag } = toScoopSummaries([a], [])[0];
+    expect(rootNoFlag).not.toHaveProperty('isCone');
+    expect(summaryRole(rootNoFlag)).toBe('cone');
+    expect(summaryRole(childNoFlag)).toBe('scoop');
   });
 
   it('lists every cone first, then scoops grouped by owner (#2272)', () => {
@@ -287,5 +302,12 @@ describe('parentId on the wire (#1666 / #2270)', () => {
       { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
     ];
     expect(toFollowerSwitcherScoops(legacy).map((d) => d.key)).toEqual(['c', 's']);
+  });
+
+  it('keeps a summary with neither edge nor flag as an unknown-owner child (#2358)', () => {
+    const edgeless = [{ jid: 'x', name: 'x', folder: 'x', assistantLabel: 'x' }];
+    expect(toFollowerSwitcherScoops(edgeless).map((d) => `${d.type}:${d.key}`)).toEqual([
+      'scoop:x',
+    ]);
   });
 });

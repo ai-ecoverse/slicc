@@ -58,8 +58,16 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build (pre-versioning); a peer with a HIGHER version than ours means this
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
+ *
+ * Version history (only what a peer must branch on):
+ *
+ * - **8** — this peer derives a unit's role from {@link ScoopSummary.parentId}
+ *   alone and does NOT need {@link ScoopSummary.isCone}. A leader may therefore
+ *   omit the flag when talking to a peer at 8 or above; it keeps sending it to
+ *   anything older, which includes every native follower shipped before the
+ *   optional-decode build ([#2358](https://github.com/ai-ecoverse/slicc/issues/2358)).
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 7;
+export const TRAY_SYNC_PROTOCOL_VERSION = 8;
 
 /**
  * An opaque Chrome DevTools Protocol payload — a `params` or `result` bag.
@@ -781,8 +789,17 @@ export interface ScoopSummary {
   jid: string;
   name: string;
   folder: string;
-  /** Derived presentation flag: `true` for a root unit (a cone). Kept for older followers. */
-  isCone: boolean;
+  /**
+   * Derived presentation flag: `true` for a root unit (a cone).
+   *
+   * @deprecated Read {@link ScoopSummary.parentId} instead — the ownership edge
+   * is the single source of the cone/scoop role (#1666). The leader still
+   * PROJECTS this flag, but only for peers below protocol version 8
+   * (`TRAY_SYNC_PROTOCOL_VERSION`); stage 3 of
+   * [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) drops it from the
+   * wire once every shipped native follower decodes it optionally.
+   */
+  isCone?: boolean;
   /**
    * Ownership edge of the work-unit tree (#1666): `null` for a root (cone),
    * the owning unit's jid for a scoop. Absent from older leaders — a follower

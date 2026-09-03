@@ -17,7 +17,13 @@ import "encoding/json"
 // selecting this follower as a teleport destination: its `tab.open` would hang
 // rather than fail, so the leader now requires the flag instead of optimistically
 // assuming an un-advertised follower can serve one.
-const TraySyncProtocolVersion = 7
+//
+// v8 says this peer derives a unit's role from `ScoopSummary.parentId` alone
+// and does not need the deprecated `isCone` flag, so a leader may stop
+// projecting it for us (#2358). Safe to announce unconditionally here: the CLI
+// is exec-only and decodes no `ScoopSummary` at all — it has neither field, so
+// the roster shape cannot reach it. Bookkeeping again, not new surface.
+const TraySyncProtocolVersion = 8
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"

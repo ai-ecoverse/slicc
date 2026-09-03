@@ -42,7 +42,9 @@ describe('leader and follower render one roster identically (#2274)', () => {
 
   it('reads a legacy leader’s role from isCone without inventing an owner', async () => {
     const remote = makeRemoteHarness();
-    // A leader too old to send `parentId` (#1666 phase 1 predates it).
+    // A hosted leader tab opened before `parentId` landed (#1666) and never
+    // reloaded sends the flag alone. Without the fallback this roster has ZERO
+    // roots and the follower composer unmounts on every unit.
     const legacy: FakeUnit[] = ROSTER.map((unit) => ({ ...unit, legacyWire: true }));
     remote.setRoster(legacy, 'cone_1');
     const units = await remote.client.list();
@@ -50,6 +52,22 @@ describe('leader and follower render one roster identically (#2274)', () => {
     // The owner stays UNKNOWN rather than being guessed as a root.
     expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBeUndefined();
     // With no edges at all the strip falls back to cones-first, leader order.
+    expect(toTabDescriptors(units, 'cone_1', color).map((tab) => tab.key)).toEqual([
+      'cone_1',
+      'cone_2',
+      'scoop_1',
+    ]);
+  });
+
+  it('resolves roles from the edge when the leader omits the isCone flag (#2358)', async () => {
+    const remote = makeRemoteHarness();
+    // A leader that saw this follower say `hello` at protocol version 8 stops
+    // projecting the deprecated flag. The edge alone must still answer.
+    const flagless: FakeUnit[] = ROSTER.map((unit) => ({ ...unit, noRoleFlag: true }));
+    remote.setRoster(flagless, 'cone_1');
+    const units = await remote.client.list();
+    expect(units.map((unit) => unit.role)).toEqual(['primary', 'primary', 'child']);
+    expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBe('cone_2');
     expect(toTabDescriptors(units, 'cone_1', color).map((tab) => tab.key)).toEqual([
       'cone_1',
       'cone_2',

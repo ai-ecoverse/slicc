@@ -57,10 +57,13 @@ export interface WorkUnitSummary {
   parentId: WorkUnitId | null | undefined;
   /**
    * Presentation role. CARRIED rather than derived by the reader, because the
-   * remote side has a legacy answer (`ScoopSummary.isCone`) for a unit whose
-   * edge it does not know. Each adapter resolves it once — `isRootUnit` on a
-   * record, `summaryIsRoot` on a wire summary — so nothing downstream
-   * branches on the transport's shape.
+   * two transports answer it from different fields on different record
+   * shapes. Each adapter resolves it once — `isRootUnit` on a record,
+   * `summaryIsRoot` on a wire summary — so nothing downstream branches on the
+   * transport's shape. `summaryIsRoot` reads the ownership edge wherever the
+   * remote sends it and falls back to the deprecated `ScoopSummary.isCone`
+   * flag only when the edge is absent entirely — the one case #2358 stage 3
+   * will delete along with the field.
    */
   role: WorkUnitRole;
   name: string;

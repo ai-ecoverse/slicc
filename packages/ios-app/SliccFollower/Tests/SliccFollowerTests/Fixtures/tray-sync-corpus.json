@@ -1,5 +1,5 @@
 {
-  "traySyncProtocolVersion": 7,
+  "traySyncProtocolVersion": 8,
   "leaderVariantCount": 42,
   "followerVariantCount": 37,
   "agentEventVariantCount": 12,

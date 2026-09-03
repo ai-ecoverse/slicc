@@ -9,7 +9,13 @@ public enum NewSessionAction: String, Codable {
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-public let traySyncProtocolVersion = 7
+///
+/// Version 8 says this peer derives a unit's role from `ScoopSummary.parentId`
+/// alone and does not need the deprecated `isCone` flag, so a leader may stop
+/// projecting it for us (#2358). Announcing 8 is only safe because
+/// `ScoopSummary.isCone` is OPTIONAL here — a build that decoded it as a
+/// required `Bool` would fail to decode the whole `scoops.list` it asked for.
+public let traySyncProtocolVersion = 8
 
 // MARK: - AgentEvent
 
@@ -176,12 +182,18 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let jid: String
     public let name: String
     public let folder: String
-    public let isCone: Bool
+    /// Derived presentation flag: `true` for a root unit (a cone).
+    ///
+    /// OPTIONAL, and it must stay that way: a leader that sees us announce
+    /// protocol version 8 stops sending it entirely (#2358), and a required
+    /// `Bool` here would turn that into a decode failure for the whole
+    /// `scoops.list`. Read `parentId` instead — see `ScoopSummary.isRootUnit`
+    /// in the app, where this flag survives only as the fallback for a leader
+    /// that predates the edge.
+    public let isCone: Bool?
     /// Ownership edge of the work-unit tree (#1666): `nil` for a cone (root) or
     /// when the leader predates the field; the owning unit's jid for a scoop.
-    /// This is the root test wherever the leader sends it — see
-    /// `ScoopSummary.isRootUnit` in the app, where `isCone` survives only as
-    /// the fallback for leaders that predate the edge.
+    /// This is the root test wherever the leader sends it.
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
@@ -210,7 +222,10 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         jid: String,
         name: String,
         folder: String,
-        isCone: Bool,
+        // No default: `isCone` stays a required LABEL even though the type is
+        // optional, so a fixture that omits both it and `parentId` cannot
+        // quietly compile into a root (#2358).
+        isCone: Bool?,
         assistantLabel: String,
         trigger: String? = nil,
         state: String? = nil,

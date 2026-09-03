@@ -86,8 +86,9 @@ export function toScoopSummaries(
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      // The wire keeps `isCone` for older followers; it is projected from the
-      // ownership edge, never read off the record (#2279).
+      // The wire keeps `isCone` for followers below protocol version 8; it is
+      // projected from the ownership edge, never read off the record (#2279).
+      // `BroadcastManager` strips it again per peer (#2358 stage 2).
       isCone: isRootUnit(scoop),
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
@@ -105,9 +106,26 @@ export function toScoopSummaries(
   });
 }
 
-/** `true` when a wire summary describes a root (cone): the edge when sent, the flag from older leaders. */
+/**
+ * `true` when a wire summary describes a root (cone).
+ *
+ * The ownership edge decides wherever the leader sends it: `null` is a root,
+ * a jid is owned. An ABSENT edge falls back to the deprecated `isCone` flag,
+ * and only that case does — the exact mirror of the Swift rule
+ * (`ScoopSummary.isRootUnit`, `parentId == nil && (isCone ?? true)`), so the
+ * two follower families never disagree about the same payload.
+ *
+ * The fallback is not hypothetical: a hosted leader tab opened before
+ * `parentId` landed and never reloaded still sends `{ isCone }` alone. Without
+ * it such a roster has ZERO roots, every unit reads as owned, and the follower
+ * composer unmounts silently while iOS on the same bytes still finds its cone.
+ *
+ * **This is the last `.isCone` read in TypeScript.** Stage 3 of
+ * [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) deletes the
+ * fallback and the wire field together.
+ */
 export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
-  return scoop.parentId === undefined ? scoop.isCone : scoop.parentId === null;
+  return scoop.parentId === undefined ? scoop.isCone === true : scoop.parentId === null;
 }
 
 /** The switcher descriptor's role for a wire summary — the follower's half of `unitRoleFor`. */
@@ -118,10 +136,11 @@ export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): U
 /**
  * Project one wire summary onto the client protocol (#2274).
  *
- * `parentId` stays possibly-`undefined` on purpose: a leader too old to send
- * the edge leaves the owner UNKNOWN, and inventing one would turn a scoop
- * into a root. `role` still answers what the unit is, from the legacy
- * `isCone` flag that same leader does send.
+ * `parentId` stays possibly-`undefined` on purpose: a leader that omits the
+ * edge leaves the owner UNKNOWN, and inventing one would turn a scoop into a
+ * root. `role` still answers what the unit is, through `summaryIsRoot` — which
+ * for that one case reads the deprecated `isCone` flag the same leader does
+ * send.
  */
 export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
   const expanded = expandWireState(scoop);

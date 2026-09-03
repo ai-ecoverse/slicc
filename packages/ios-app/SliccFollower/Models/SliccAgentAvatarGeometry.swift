@@ -222,7 +222,7 @@ extension ScoopSummary {
         eyesOverride: SliccAgentAvatarGeometry.EyeState? = nil,
         activity: AvatarExpression.Activity? = nil
     ) -> SliccAgentAvatarGeometry {
-        let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
+        let type: SliccAgentAvatarGeometry.AvatarType = isRootUnit ? .cone : .scoop
         let scoopStatus = status
         let lifecycleEyes: SliccAgentAvatarGeometry.EyeState =
             switch scoopStatus.lifecycle {
@@ -288,7 +288,7 @@ extension ScoopSummary {
     /// Mirrors `scoopColor`: JS iterates scalars, while `charCodeAt(0)` deliberately
     /// hashes only each scalar's first UTF-16 unit (dropping an astral low surrogate).
     private var avatarColor: String {
-        if isCone { return "#b07823" }
+        if isRootUnit { return "#b07823" }
         let palette = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"]
         let hash = name.unicodeScalars.reduce(UInt32.zero) { hash, scalar in
             let firstCodeUnit: UInt32 =

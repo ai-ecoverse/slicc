@@ -9,7 +9,7 @@ import XCTest
 /// composer and every interactive card belong to the cone that owns it.
 final class ReadOnlyScoopTests: XCTestCase {
     private func cone(
-        jid: String = "cone", parentId: String? = nil, isCone: Bool = true
+        jid: String = "cone", parentId: String? = nil, isCone: Bool? = true
     ) -> ScoopSummary {
         ScoopSummary(
             jid: jid, name: "cone", folder: "/workspace", isCone: isCone,
@@ -17,7 +17,7 @@ final class ReadOnlyScoopTests: XCTestCase {
     }
 
     private func scoop(
-        jid: String = "reviewer", parentId: String? = "cone", isCone: Bool = false
+        jid: String = "reviewer", parentId: String? = "cone", isCone: Bool? = false
     ) -> ScoopSummary {
         ScoopSummary(
             jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: isCone,
@@ -52,6 +52,31 @@ final class ReadOnlyScoopTests: XCTestCase {
     /// contradicts itself, which is what makes `isCone` removable (#2358).
     func testOwnershipEdgeOutranksTheLegacyFlag() {
         XCTAssertEqual(scoop(parentId: "cone", isCone: true).role, .scoop)
+    }
+
+    /// #2358: a leader that saw this app announce protocol version 8 stops
+    /// sending `isCone` altogether. The edge alone must still answer the role —
+    /// and the decoded wire, not just a hand-built struct, must reach it.
+    func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
+        XCTAssertEqual(cone(parentId: nil, isCone: nil).role, .cone)
+        XCTAssertFalse(cone(parentId: nil, isCone: nil).isReadOnly)
+        XCTAssertEqual(scoop(parentId: "cone", isCone: nil).role, .scoop)
+        XCTAssertTrue(scoop(parentId: "cone", isCone: nil).isReadOnly)
+
+        let decoder = JSONDecoder()
+        let root = try decoder.decode(
+            ScoopSummary.self,
+            from: Data(
+                #"{"jid":"c","name":"Cone","folder":"cone","assistantLabel":"sliccy","parentId":null}"#
+                    .utf8))
+        XCTAssertEqual(root.role, .cone)
+        let child = try decoder.decode(
+            ScoopSummary.self,
+            from: Data(
+                #"{"jid":"r","name":"reviewer","folder":"/scoops/r","assistantLabel":"r","parentId":"c"}"#
+                    .utf8))
+        XCTAssertEqual(child.role, .scoop)
+        XCTAssertTrue(child.isReadOnly)
     }
 
     func testScoopOfAScoopStaysReadOnly() {

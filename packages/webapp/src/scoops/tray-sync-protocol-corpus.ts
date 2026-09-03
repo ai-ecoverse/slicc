@@ -1070,6 +1070,13 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     jid: 'mirrored',
     name: 'mirrored',
     folder: 'mirrored',
+    // Still mirrored, but DEPRECATED: a leader that saw the peer announce
+    // protocol version 8 already omits it (#2358 stage 2), and stage 3 drops
+    // it from the wire. The fixture keeps it because the leader still sends it
+    // to every native build shipped before the optional-decode change; the
+    // "absent is decodable" half is proved in Swift
+    // (`ProtocolValueTypesTests.testScoopSummaryDecodesWithoutIsCone`), which a
+    // single golden sample cannot express.
     isCone: 'mirrored',
     parentId: 'mirrored',
     assistantLabel: 'mirrored',

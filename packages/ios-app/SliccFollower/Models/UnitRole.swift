@@ -27,9 +27,13 @@ extension ScoopSummary {
     /// `parentId` is the ownership edge and decides on its own wherever the
     /// leader sends it: anything owned is a scoop. `nil` covers both "this is
     /// a cone" and "this leader predates the field", so that one case falls
-    /// back to the legacy `isCone` flag — and nothing else does (the flag is
-    /// slated for wire removal in #2358).
-    var isRootUnit: Bool { parentId == nil && isCone }
+    /// back to the legacy `isCone` flag — and nothing else does.
+    ///
+    /// An ABSENT flag reads as `true`, because the only leader that omits it
+    /// is one that saw us announce protocol version 8 and therefore also sends
+    /// the edge (#2358). It is the missing-`parentId` case that still needs
+    /// the flag, and no leader produces both gaps at once.
+    var isRootUnit: Bool { parentId == nil && (isCone ?? true) }
 
     /// The role of this unit: a root is a cone, anything owned is a scoop.
     /// The follower's half of `unitRoleFor` / `summaryRole`.

@@ -37,7 +37,17 @@ export interface FakeUnit {
   /** 0–100, the protocol's scale. */
   fill?: number;
   model?: { provider: string; id: string };
-  /** Force the legacy wire shape: `isCone` only, no edge. */
+  /**
+   * Force the post-#2358 wire shape: the ownership edge only, with the
+   * deprecated `isCone` flag stripped — what a peer at protocol version 8
+   * receives.
+   */
+  noRoleFlag?: boolean;
+  /**
+   * Force the pre-#1666 wire shape: the `isCone` flag only, no edge — what a
+   * hosted leader tab opened before `parentId` landed still sends. Mutually
+   * exclusive with {@link FakeUnit.noRoleFlag}, which is the opposite gap.
+   */
   legacyWire?: boolean;
 }
 
@@ -187,11 +197,11 @@ export function makeRemoteHarness(): ClientHarness {
       const summaries: ScoopSummary[] = units.map((unit) => ({
         assistantLabel: unit.assistantLabel,
         folder: unit.folder,
-        isCone: unit.parentId === null,
         jid: unit.id,
         name: unit.name,
         state: STATE_FOR[unit.status],
         ...(unit.legacyWire ? {} : { parentId: unit.parentId }),
+        ...(unit.noRoleFlag ? {} : { isCone: unit.parentId === null }),
         ...(unit.phase ? { activity: unit.phase } : {}),
         ...(unit.awaiting ? { activity: 'awaiting' as const } : {}),
         ...(typeof unit.fill === 'number' ? { fill: unit.fill } : {}),
