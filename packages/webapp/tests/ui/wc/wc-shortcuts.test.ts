@@ -1759,6 +1759,49 @@ describe('composer chrome keeps keyboard mode off', () => {
     expect(document.activeElement).toBe(composerField);
   });
 
+  it('drops the hold without restoring when the window blurs mid-gesture', async () => {
+    const { handles, composer, composerField } = harness();
+    composerField.focus();
+    await flush();
+    const send = document.createElement('button');
+    send.textContent = 'Send';
+    composer.append(send);
+    send.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    window.dispatchEvent(new Event('blur'));
+    await flush();
+    // settle skips an unfocused document; a returning window must not find
+    // the hold still up (and must not have had the caret stolen back).
+    window.dispatchEvent(new Event('focus'));
+    await flush();
+    expect(handles.active()).toBe(true);
+    expect(document.activeElement).not.toBe(composerField);
+  });
+
+  it('drops the hold without restoring on an outside press that never saw an up', async () => {
+    const { handles, composer, composerField } = harness();
+    composerField.focus();
+    await flush();
+    const send = document.createElement('button');
+    send.textContent = 'Send';
+    composer.append(send);
+    send.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 1 })
+    );
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 2 })
+    );
+    await flush();
+    await flush();
+    expect(handles.active()).toBe(true);
+    expect(document.activeElement).not.toBe(composerField);
+  });
+
   it('still enters keyboard mode after a click that never touched the composer', async () => {
     const { handles, composerField } = harness();
     composerField.focus();

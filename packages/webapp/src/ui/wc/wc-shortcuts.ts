@@ -1824,42 +1824,57 @@ function bindComposerPointer(
   const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
   let restoreTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const onPointerDown = (event: Event): void => {
-    if (!isWithinElement(deps.composerBand, deepTarget(event) as Node | null)) return;
-    held.value = true;
-  };
-
-  const onPointerUp = (): void => {
+  const dropHold = (restore: boolean): void => {
     if (!held.value) return;
     if (restoreTimer !== undefined) return;
     restoreTimer = setTimer(() => {
       restoreTimer = undefined;
       held.value = false;
-      const focused = deepActiveElement(doc);
-      if (
-        !hasOpenOverlay(doc) &&
-        !isTypingTarget(focused) &&
-        !isWithinElement(deps.composerBand, focused)
-      ) {
-        deps.focusComposer?.();
+      if (restore) {
+        const focused = deepActiveElement(doc);
+        if (
+          !hasOpenOverlay(doc) &&
+          !isTypingTarget(focused) &&
+          !isWithinElement(deps.composerBand, focused)
+        ) {
+          deps.focusComposer?.();
+        }
       }
       settler.schedule();
     }, 0);
   };
 
+  const onPointerDown = (event: Event): void => {
+    if (isWithinElement(deps.composerBand, deepTarget(event) as Node | null)) {
+      held.value = true;
+      return;
+    }
+    // An outside press while still held: the matching up never arrived
+    // (dragged off-document). Drop without restoring, or the next mouseup
+    // anywhere would steal the caret back.
+    if (held.value) dropHold(false);
+  };
+
+  const onRelease = (): void => dropHold(true);
+  const onAbandon = (): void => dropHold(false);
+
   // Pointer is the real user path; mousedown is the CDP/harness path
   // (`Input.dispatchMouseEvent` never synthesizes pointer events).
   doc.addEventListener('pointerdown', onPointerDown, true);
   doc.addEventListener('mousedown', onPointerDown, true);
-  doc.addEventListener('pointerup', onPointerUp, true);
-  doc.addEventListener('mouseup', onPointerUp, true);
-  doc.addEventListener('pointercancel', onPointerUp, true);
+  doc.addEventListener('pointerup', onRelease, true);
+  doc.addEventListener('mouseup', onRelease, true);
+  doc.addEventListener('pointercancel', onAbandon, true);
+  deps.composerBand?.addEventListener('lostpointercapture', onAbandon);
+  view?.addEventListener('blur', onAbandon);
   return () => {
     doc.removeEventListener('pointerdown', onPointerDown, true);
     doc.removeEventListener('mousedown', onPointerDown, true);
-    doc.removeEventListener('pointerup', onPointerUp, true);
-    doc.removeEventListener('mouseup', onPointerUp, true);
-    doc.removeEventListener('pointercancel', onPointerUp, true);
+    doc.removeEventListener('pointerup', onRelease, true);
+    doc.removeEventListener('mouseup', onRelease, true);
+    doc.removeEventListener('pointercancel', onAbandon, true);
+    deps.composerBand?.removeEventListener('lostpointercapture', onAbandon);
+    view?.removeEventListener('blur', onAbandon);
     if (restoreTimer !== undefined) clearTimer(restoreTimer);
   };
 }
