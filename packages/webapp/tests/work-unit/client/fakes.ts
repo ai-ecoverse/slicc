@@ -72,8 +72,33 @@ export interface ClientHarness {
   modelWrites: Array<{ id: string | null; model: string }>;
   /** Units the transport was asked to abort. */
   stopped: string[];
+  /**
+   * Take the transport away, as a closed kernel port or a dropped data channel
+   * does. Everything that claims delivery must then FAIL rather than resolve.
+   */
+  disconnect(): void;
+  /** Units the transport was asked to SELECT, in order (remote only). */
+  selections: string[];
   /** `true` when this transport can carry a backend queue at all (#2362). */
   carriesQueue: boolean;
+  /**
+   * `true` when this transport can carry a turn's guest gate. Only a LOCAL one
+   * can: the gate is minted by a leader from its own seat record, so a remote
+   * client must refuse a gated send rather than deliver it ungated.
+   */
+  carriesGuestGate: boolean;
+  /**
+   * `true` when this transport shows exactly ONE unit at a time. A leader
+   * mirrors only the selected unit to a follower, so a snapshot for another
+   * unit is superseded; a kernel answers per jid, so it never is.
+   */
+  mirrorsOneUnit: boolean;
+  /**
+   * `true` when the backend acks a model write. The tray's `model.select` is
+   * fire-and-forget, so a remote client answers `undefined` — "nobody could
+   * answer" — and never `true`/`false`.
+   */
+  acksModelWrite: boolean;
 }
 
 const STATE_FOR: Record<ScoopStatus, NonNullable<ScoopSummary['state']>> = {
@@ -94,6 +119,7 @@ export function makeLocalHarness(): ClientHarness {
   const modelWrites: ClientHarness['modelWrites'] = [];
   const stopped: string[] = [];
 
+  let attached = true;
   const kernel = {
     getScoop: (jid: string) => roster.find((scoop) => scoop.jid === jid),
     getScoops: () => roster,
@@ -127,7 +153,7 @@ export function makeLocalHarness(): ClientHarness {
   const client = new LocalWorkUnitClient({
     fills,
     getAwaiting: () => awaiting,
-    getClient: () => kernel,
+    getClient: () => (attached ? kernel : null),
     phases,
     statuses,
   });
@@ -142,9 +168,16 @@ export function makeLocalHarness(): ClientHarness {
   const callbacks = client.wrapCallbacks(base);
 
   return {
+    acksModelWrite: true,
+    carriesGuestGate: true,
     carriesQueue: true,
+    mirrorsOneUnit: false,
     client,
+    disconnect: () => {
+      attached = false;
+    },
     modelWrites,
+    selections: [],
     emitMessage: (id, message) => {
       callbacks.onIncomingMessage(id, message as never);
     },
@@ -193,39 +226,66 @@ export function makeRemoteHarness(): ClientHarness {
   const sent: ClientHarness['sent'] = [];
   const modelWrites: ClientHarness['modelWrites'] = [];
   const stopped: string[] = [];
-  let selected: string | null = null;
+  const selections: string[] = [];
+  /**
+   * The LEADER's registry copy of this follower's selection. Seeded on join
+   * (`sendSnapshotToFollower` records the unit whose transcript it sent) and
+   * updated by `scoops.select` — the tray's `user_message` and `abort` frames
+   * carry NO unit at all, so this is the only thing that decides where a
+   * prompt lands. Modelling it here rather than stamping the client's own idea
+   * of "selected" into `sent` is what makes a routing claim testable: a client
+   * that never selects would silently keep hitting the join-time unit.
+   */
+  let leaderRoutesTo: string | null = null;
 
   const sync = {
     selectScoop: (jid: string) => {
-      selected = jid;
+      selections.push(jid);
+      // The leader's `handleScoopSelection`.
+      leaderRoutesTo = jid;
     },
     sendMessage: (
       text: string,
       messageId?: string,
       _attachments?: unknown,
       options?: { steer?: boolean }
-    ) =>
+    ) => {
+      // The wire frame is unscoped; the leader routes it.
       sent.push({
-        id: selected,
+        id: leaderRoutesTo,
         text,
         ...(messageId ? { messageId } : {}),
         ...(options?.steer ? { steer: true } : {}),
-      }),
-    // `model.select` carries the qualified id as one string and no ack.
+      });
+      return true;
+    },
+    // `model.select` is the ONE follower frame that carries a unit, and the
+    // leader honours it (`handleModelSelection`); it has no ack.
     selectModel: (modelId: string, scoopJid?: string) =>
-      modelWrites.push({ id: scoopJid ?? null, model: modelId }),
+      modelWrites.push({ id: scoopJid ?? leaderRoutesTo, model: modelId }),
     stop: () => {
-      if (selected) stopped.push(selected);
+      // `abort` is unscoped too — it aborts whatever the leader is running for
+      // THIS follower, which is the unit above.
+      if (leaderRoutesTo) stopped.push(leaderRoutesTo);
+      return true;
     },
   } as unknown as FollowerSyncManager;
 
-  const client = new RemoteWorkUnitClient({ getSync: () => sync });
+  let connected = true;
+  const client = new RemoteWorkUnitClient({ getSync: () => (connected ? sync : null) });
   const options: FollowerSyncManagerOptions = client.wrapOptions({} as FollowerSyncManagerOptions);
 
   return {
+    acksModelWrite: false,
+    carriesGuestGate: false,
     carriesQueue: false,
+    mirrorsOneUnit: true,
     client,
+    disconnect: () => {
+      connected = false;
+    },
     modelWrites,
+    selections,
     emitMessage: () => {
       // The tray wire has no per-unit incoming-message frame: routed messages
       // reach a follower inside the leader's next snapshot. Nothing to emit —
@@ -252,8 +312,10 @@ export function makeRemoteHarness(): ClientHarness {
         ...(typeof unit.fill === 'number' ? { fill: unit.fill } : {}),
         ...(unit.model ? { model: unit.model } : {}),
       }));
-      selected = selectedId ?? summaries[0]?.jid ?? null;
-      options.onScoopsList?.(summaries, selected ?? '');
+      // Join-time seeding: the leader records the unit whose transcript it
+      // just sent this follower.
+      leaderRoutesTo = selectedId ?? summaries[0]?.jid ?? null;
+      options.onScoopsList?.(summaries, leaderRoutesTo ?? '');
     },
     stopped,
   };

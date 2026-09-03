@@ -77,6 +77,18 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     return this.selectedId;
   }
 
+  /**
+   * Forget which unit this client is showing, for a channel that went away.
+   *
+   * A reconnect is a fresh bootstrap: the leader may have dropped the unit we
+   * were viewing, and it re-answers with its own. Keeping the previous
+   * session's id would make {@link wrapOptions}'s staleness rule judge the new
+   * session's first snapshot against a unit that no longer exists and drop it.
+   */
+  resetSelection(): void {
+    this.selectedId = null;
+  }
+
   /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
   private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
     const waiters = this.pendingSnapshots.get(id);
@@ -129,8 +141,11 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
    * sync manager's — the shell hands the whole thing to
    * `startPageFollowerTray`, which forwards these three through.
    *
-   * The base handler runs first on every frame, so the shell still sees each
-   * event exactly when and as it did before.
+   * This adapter runs BEFORE the base handler on every frame, unlike the local
+   * one: there the page-side status maps the adapter reads are mutated by the
+   * base handlers, while here the frame IS the state and the shell's handler
+   * publishes the strip from the roster this one has just folded in. It is
+   * also what lets a stale snapshot be dropped for both of them at once.
    */
   wrapOptions<T extends FollowerCallbackSlice>(base: T): T {
     return {
@@ -138,7 +153,10 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       onScoopsList: (scoops: ScoopSummary[], activeScoopJid: string) => {
         this.units = scoops.map(summaryToWorkUnit);
         if (!this.selectedId || !this.units.some((unit) => unit.id === this.selectedId)) {
-          this.selectedId = activeScoopJid;
+          // An empty `activeScoopJid` is a leader that could not name a unit,
+          // not a unit called `''`. Keeping it would make this client claim to
+          // be mirroring something and let a send name the empty string.
+          this.selectedId = activeScoopJid.length > 0 ? activeScoopJid : null;
         }
         // Before the shell's handler: it publishes the strip from this roster.
         this.drainEarlySnapshots();
@@ -146,6 +164,15 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
         base.onScoopsList?.(scoops, activeScoopJid);
       },
       onSnapshot: (messages: ChatMessage[], scoopJid: string) => {
+        // A snapshot for a unit we are no longer showing is STALE, and applying
+        // it is worse than dropping it: a tab click asks the leader for B while
+        // A's snapshot is still in flight, and A would replace the transcript,
+        // re-point `selectedId`, and make the NEXT SEND name A while the strip
+        // shows B. Same rule `shouldApplyFollowerStatus` applies to status
+        // frames. `null` is still "fresh join, take whatever the leader sends"
+        // — which is also what a reconnect resets to (`resetSelection`), so a
+        // new session is never judged against the previous one's unit.
+        if (this.selectedId !== null && this.selectedId !== scoopJid) return;
         this.selectedId = scoopJid;
         const transcript = messages as unknown as readonly WorkUnitChatMessage[];
         const summary = this.summaryOf(scoopJid);
@@ -280,12 +307,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
       this.selectedId = id;
       sync.selectScoop(id);
     }
-    sync.sendMessage(
+    // The channel's own answer, not a hope: `TraySyncChannel.send` refuses a
+    // closed or closing data channel, and resolving anyway would report a
+    // delivered send for a message that never left the device — after the
+    // controller had already rendered its bubble and cleared the input.
+    const accepted = sync.sendMessage(
       input.text,
       input.messageId,
       input.attachments as Parameters<FollowerSyncManager['sendMessage']>[2],
       input.steer ? { steer: true } : undefined
     );
+    if (!accepted) return Promise.reject(new Error('the leader channel refused the message'));
     return Promise.resolve();
   }
 
@@ -308,14 +340,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
   signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void> {
     if (signal !== 'stop') return Promise.resolve();
     const sync = this.deps.getSync();
-    if (!sync) return Promise.resolve();
+    // Not connected means the turn was NOT stopped. Resolving here reported a
+    // stop that never happened, and the composer would have dropped its busy
+    // state on the strength of it.
+    if (!sync) return Promise.reject(new Error('not connected to a leader'));
     // The tray's `abort` frame carries no unit either: it aborts whatever the
     // leader is running for this follower, which is the selected unit.
     if (this.selectedId !== id) {
       this.selectedId = id;
       sync.selectScoop(id);
     }
-    sync.stop();
+    if (!sync.stop()) return Promise.reject(new Error('the leader channel refused the abort'));
     return Promise.resolve();
   }
 }

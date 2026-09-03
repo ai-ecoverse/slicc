@@ -153,6 +153,38 @@ function transcriptCases(make: () => ClientHarness): void {
     expect(first?.type === 'snapshot' && first.snapshot.messages).toHaveLength(1);
   });
 
+  it('ignores a snapshot for a unit it is no longer showing', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const first = harness.client.snapshot('cone_1');
+    harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
+    await first;
+    const stale: WorkUnitClientEvent[] = [];
+    harness.client.subscribe('cone_1', (event) => stale.push(event));
+    const second = harness.client.snapshot('cone_2');
+    const staleBefore = stale.length;
+    const selectionsBefore = harness.selections.length;
+    // The tab moved to `cone_2` while `cone_1`'s reply was still in flight.
+    harness.emitSnapshot('cone_1', [{ content: 'late', id: 'm9', role: 'user', timestamp: 9 }]);
+    harness.emitSnapshot('cone_2', [{ content: 'b', id: 'm2', role: 'user', timestamp: 2 }]);
+    const snapshot = await second;
+    expect(snapshot.summary.id).toBe('cone_2');
+    expect(snapshot.messages.map((message) => message.id)).toEqual(['m2']);
+    // On a single-mirror transport the superseded reply is not just ignorable,
+    // it is WRONG: publishing it would re-point the mirror at `cone_1`, and the
+    // proof is that a send to the unit on screen then needs a fresh selection
+    // round trip. A transport that mirrors every unit at once (a kernel replay
+    // is per-jid) has nothing to supersede, so it re-selects nothing either.
+    await harness.client.send('cone_2', { text: 'go' });
+    expect(harness.selections.slice(selectionsBefore)).toEqual([]);
+    // …and on that transport the superseded transcript never reaches a
+    // subscriber as if it were still current. A per-jid transport answers for
+    // `cone_1` whether or not it is on screen, so its late reply is a real
+    // answer and is delivered.
+    if (harness.mirrorsOneUnit) expect(stale.slice(staleBefore)).toEqual([]);
+    else expect(stale.slice(staleBefore)).toHaveLength(1);
+  });
+
   it('replays a snapshot that arrived before the roster named its unit', () => {
     const harness = make();
     const seen: WorkUnitClientEvent[] = [];
@@ -223,10 +255,20 @@ function composerCases(make: () => ClientHarness): void {
     const harness = make();
     harness.setRoster(ROSTER, 'cone_1');
     harness.emitStatus('cone_2', 'processing');
+    const selectionsBefore = harness.selections.length;
     await harness.client.signal('cone_2', 'stop');
     expect(harness.stopped).toEqual(['cone_2']);
     // The signal is the whole effect: nothing was sent to get there.
     expect(harness.sent).toEqual([]);
+    if (harness.carriesQueue) {
+      // The kernel's `abort` names the unit, so nothing has to be selected.
+      expect(harness.selections.slice(selectionsBefore)).toEqual([]);
+    } else {
+      // The tray's `abort` frame carries NO unit — it aborts whatever the
+      // leader is running for this follower — so naming `cone_2` has to mean
+      // selecting it first. Without that the abort would hit `cone_1`.
+      expect(harness.selections.slice(selectionsBefore)).toEqual(['cone_2']);
+    }
   });
 
   it('never delivers a guest-gated send ungated', async () => {
@@ -237,11 +279,34 @@ function composerCases(make: () => ClientHarness): void {
       .send('cone_1', { guestGate: gate, text: 'guest words' })
       .then(() => true)
       .catch(() => false);
-    // A gate is minted by a LEADER from its own seat record. A transport
-    // that cannot carry one REFUSES the send; dropping the gate and
-    // delivering the message anyway is the one outcome that must not happen.
-    if (delivered) expect(harness.sent.at(-1)?.guestGate).toBe(gate);
+    // A gate is minted by a LEADER from its own seat record. The expectation
+    // is per transport rather than "either is fine": a local client that
+    // refused, or a remote one that delivered, would both pass an if/else and
+    // both are wrong.
+    expect(delivered).toBe(harness.carriesGuestGate);
+    if (harness.carriesGuestGate) expect(harness.sent.at(-1)?.guestGate).toBe(gate);
+    // Dropping the gate and delivering the message anyway is the one outcome
+    // that must not happen.
     else expect(harness.sent).toEqual([]);
+  });
+
+  it('fails a send, a stop and a model write once the transport is gone', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    harness.disconnect();
+
+    // Each of these CLAIMS something reached the backend. Resolving with no
+    // transport reports a delivered prompt, a stopped turn and an applied
+    // model that never happened — and the composer has already rendered its
+    // bubble and cleared the input by then.
+    await expect(harness.client.send('cone_1', { text: 'go' })).rejects.toThrow();
+    await expect(harness.client.signal('cone_1', 'stop')).rejects.toThrow();
+    await expect(
+      harness.client.setModel('cone_1', { id: 'claude-opus-4-6', provider: 'anthropic' })
+    ).rejects.toThrow();
+    expect(harness.sent).toEqual([]);
+    expect(harness.stopped).toEqual([]);
+    expect(harness.modelWrites).toEqual([]);
   });
 
   it('writes a model pick to the unit it names', async () => {
@@ -252,9 +317,23 @@ function composerCases(make: () => ClientHarness): void {
       provider: 'anthropic',
     });
     expect(harness.modelWrites).toEqual([{ id: 'cone_2', model: 'anthropic:claude-opus-4-6' }]);
-    // `undefined` is "nobody could answer" (no ack frame on the tray wire),
-    // never a refusal — same absent-is-not-empty rule as `queuedIds`.
-    expect(confirmed === true || confirmed === undefined).toBe(true);
+    // Per transport, not "either": `undefined` is "nobody could answer" (no ack
+    // frame on the tray wire) and is the ONLY answer a remote client may give,
+    // while a local one always has the kernel's real ack. Accepting both from
+    // both would pass an adapter that invented an ack.
+    expect(confirmed).toBe(harness.acksModelWrite ? true : undefined);
+  });
+
+  it('answers a model write for an unknown unit without inventing a refusal', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const confirmed = await harness.client.setModel('cone_gone', {
+      id: 'claude-opus-4-6',
+      provider: 'anthropic',
+    });
+    // `false` is a REFUSAL the backend actually made; only a transport with an
+    // ack can report one. Same absent-is-not-empty rule as `queuedIds`.
+    expect(confirmed).toBe(harness.acksModelWrite ? false : undefined);
   });
 
   it('names a child on a model pick rather than resolving its owner', async () => {

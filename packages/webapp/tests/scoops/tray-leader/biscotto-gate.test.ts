@@ -219,7 +219,9 @@ describe('FollowerDispatch biscotto boundary', () => {
   it('leaves a full follower message on the historical three-argument path', () => {
     const { dispatch, options } = createHarness('full');
     dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
-    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined);
+    // This peer never selected a unit, so the options bag carries no target and
+    // the adapter falls back to the leader's own selection (#2382).
+    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined, {});
   });
 
   it('reviews a steering send too, rather than letting it interrupt the cone', () => {

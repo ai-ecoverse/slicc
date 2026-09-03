@@ -312,7 +312,11 @@ export class LocalWorkUnitClient implements WorkUnitClient {
 
   signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void> {
     if (signal !== 'stop') return Promise.resolve();
-    this.deps.getClient()?.stopScoop(id);
+    const client = this.deps.getClient();
+    // No kernel means the turn was NOT stopped. Resolving would report a stop
+    // that never happened and let the composer drop its busy state on it.
+    if (!client) return Promise.reject(new Error('kernel client not attached'));
+    client.stopScoop(id);
     return Promise.resolve();
   }
 }

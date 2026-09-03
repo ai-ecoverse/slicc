@@ -1085,6 +1085,7 @@ export function attachWcClient(
           getController: () => boot.getController(),
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
           agentHandle,
+          workUnits,
           openFs: openReader,
           openWriter: async () => (await openVfs()).writer,
           window,

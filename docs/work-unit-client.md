@@ -53,7 +53,7 @@ interface WorkUnitClient {
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void>;
   /** Pin `id`'s own model (#2310). See `setModel` below for the tri-state answer. */
   setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined>;
-  /** Per-unit event stream (status, replays, incoming messages, errors). */
+  /** Per-unit event stream (status, replays, incoming messages — no errors). */
   subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe;
   /** Interrupt `id`'s current turn. */
   signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void>;
