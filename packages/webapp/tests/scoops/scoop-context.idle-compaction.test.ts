@@ -6,15 +6,18 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ enabledFlags: new Set<string>() }));
+const mocks = vi.hoisted(() => ({
+  enabledFlags: new Set<string>(),
+  settings: { idleMinutes: 1, minTokens: 1000 },
+}));
 vi.mock('../../src/core/feature-flags.js', () => ({
   isFeatureEnabled: (id: string) => mocks.enabledFlags.has(id),
 }));
+vi.mock('../../src/core/idle-compaction-settings.js', () => ({
+  IDLE_COMPACTION_DEFAULTS: { idleMinutes: 30, minTokens: 200_000 },
+  readIdleCompactionSettings: () => mocks.settings,
+}));
 
-import {
-  IDLE_COMPACTION_MIN_TOKENS_KEY,
-  IDLE_COMPACTION_MINUTES_KEY,
-} from '../../src/core/idle-compaction-settings.js';
 import type { Agent, AgentMessage } from '../../src/core/index.js';
 import {
   IdleCompaction,
@@ -23,7 +26,7 @@ import {
 import { ScoopContext, type ScoopContextCallbacks } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
-/** The node test environment has no `localStorage`; the settings module wants a Map-backed one. */
+/** The node test environment has no `localStorage`; ScoopContext boot paths may touch it. */
 const storage = new Map<string, string>();
 beforeAll(() => {
   Object.defineProperty(globalThis, 'localStorage', {
@@ -304,13 +307,10 @@ describe('ScoopContext wiring', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.enabledFlags.clear();
-    localStorage.setItem(IDLE_COMPACTION_MINUTES_KEY, '1');
-    localStorage.setItem(IDLE_COMPACTION_MIN_TOKENS_KEY, '1000');
+    mocks.settings = { idleMinutes: 1, minTokens: 1000 };
   });
   afterEach(() => {
     vi.useRealTimers();
-    localStorage.removeItem(IDLE_COMPACTION_MINUTES_KEY);
-    localStorage.removeItem(IDLE_COMPACTION_MIN_TOKENS_KEY);
   });
 
   it('arms on ready for a root with the flag on and adopts the compacted history', async () => {

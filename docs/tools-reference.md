@@ -636,18 +636,16 @@ it writes nothing. The cursor (`liveThrough`) and round count also ride the arch
 a corrupt-index rebuild restores them. Scoops write no snapshot.
 
 **Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
-`ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after N idle minutes and
+`ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after 30 idle minutes and
 the estimated context (`estimateConversationTokens`, the same pricing the threshold uses) is at
-least M tokens, the ordinary forced compaction runs in the background with `trigger: 'idle'`. The
-result is adopted only if the thread stood still for the whole round — same array, same length,
+least 200 000 tokens, the ordinary forced compaction runs in the background with `trigger: 'idle'`.
+The result is adopted only if the thread stood still for the whole round — same array, same length,
 same last message, no prompt in flight; otherwise it is discarded and the conversation continues
 untouched. A prompt, `stop()`, `clear-chat` or dispose ABORTS a round in flight (the LLM calls get
 the round's `AbortSignal`), and the round's memory extraction is deferred
 (`CompactionOptions.deferMemoryExtraction`) until the result is adopted, so a discarded round never
-writes bullets for a history that is still in the conversation. N and M live in `localStorage`
-(`slicc_idle_compaction_minutes`, `slicc_idle_compaction_min_tokens`, defaults 10 / 50 000) and are
-editable under Experimental features next to the flag; minutes are capped at `MAX_IDLE_MINUTES`
-(~24.8 days, the 32-bit `setTimeout` limit) so a huge value means "very long", never "now".
+writes bullets for a history that is still in the conversation. Idle minutes and the minimum context
+size are fixed (`core/idle-compaction-settings.ts`); the experimental dialog only exposes the flag.
 
 ---
 
