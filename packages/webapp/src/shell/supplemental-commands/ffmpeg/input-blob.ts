@@ -14,10 +14,14 @@
 
 import type { IFileSystem } from 'just-bash';
 
-/** `VfsAdapter` adds this beyond just-bash's `IFileSystem`; mocks may not. */
+/** `VfsAdapter` adds these beyond just-bash's `IFileSystem`; mocks may not. */
 interface NativeFileFs {
   getNativeFile?(path: string): Promise<File | null>;
+  readFileRange?(path: string, start: number, end: number): Promise<Uint8Array>;
 }
+
+/** Bytes compared between the lazy `File` and the VFS before trusting the File. */
+const VERIFY_HEAD_BYTES = 64;
 
 /**
  * Bytes of `absPath` as a `Blob`: the VFS's native `File` when it has one,
@@ -29,16 +33,56 @@ export async function readInputBlob(
   absPath: string,
   note?: (line: string) => void
 ): Promise<Blob> {
-  const native = (fs as IFileSystem & NativeFileFs).getNativeFile;
-  if (typeof native === 'function') {
+  const nativeFs = fs as IFileSystem & NativeFileFs;
+  if (typeof nativeFs.getNativeFile === 'function') {
     try {
-      const file = await native.call(fs, absPath);
-      if (file) return await cloneableBlob(file, absPath, note);
+      const file = await nativeFs.getNativeFile(absPath);
+      if (file) {
+        const lazy = await cloneableBlob(file, absPath, note);
+        if (await matchesVfs(nativeFs, absPath, lazy, note)) return lazy;
+      }
     } catch {
       /* no handle for this path — read it instead */
     }
   }
   return bytesToBlob(await fs.readFileBuffer(absPath));
+}
+
+/**
+ * A native `File` is a snapshot of whatever the browser's handle pointed at
+ * when it was taken. Seen live: a `File` for a freshly written OPFS path
+ * whose bytes did not match what the VFS itself reads (ffmpeg sniffed it as
+ * a lyrics file). So before a lazy `File` is trusted, its size and first
+ * {@link VERIFY_HEAD_BYTES} bytes are compared with the VFS's own view; a
+ * mismatch falls back to the whole-file read and is reported. Backends
+ * without a ranged read cannot be checked and are trusted.
+ */
+export async function matchesVfs(
+  fs: IFileSystem & NativeFileFs,
+  absPath: string,
+  lazy: Blob,
+  note?: (line: string) => void
+): Promise<boolean> {
+  if (typeof fs.readFileRange !== 'function') return true;
+  let expected: Uint8Array;
+  let size: number | undefined;
+  try {
+    expected = await fs.readFileRange(absPath, 0, VERIFY_HEAD_BYTES);
+    size = (await fs.stat(absPath)).size;
+  } catch {
+    return true;
+  }
+  const actual = new Uint8Array(await lazy.slice(0, VERIFY_HEAD_BYTES).arrayBuffer());
+  const same =
+    (size === undefined || size === lazy.size) &&
+    actual.byteLength === expected.byteLength &&
+    actual.every((b, i) => b === expected[i]);
+  if (!same) {
+    note?.(
+      `ffmpeg: ${absPath}: native File (${lazy.size} bytes) does not match the VFS (${size ?? '?'} bytes, head differs=${actual.byteLength !== expected.byteLength || actual.some((b, i) => b !== expected[i])}); reading it through the VFS instead`
+    );
+  }
+  return same;
 }
 
 /** Seam for tests: the structured-clone probe. */
@@ -59,18 +103,22 @@ export async function cloneableBlob(
   note?: (line: string) => void,
   probe: CloneProbe = (v) => void structuredClone(v)
 ): Promise<Blob> {
+  let failure = '';
   const clones = (value: Blob): boolean => {
     try {
       probe(value);
       return true;
-    } catch {
+    } catch (err) {
+      failure = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       return false;
     }
   };
   if (clones(file)) return file;
   const wrapped = new Blob([file], { type: file.type });
   if (clones(wrapped)) {
-    note?.(`ffmpeg: ${label}: native File is not transferable to the worker; wrapped it in a Blob`);
+    note?.(
+      `ffmpeg: ${label}: native File is not transferable to the worker (${describeBlob(file)}; ${failure}); wrapped it in a Blob`
+    );
     return wrapped;
   }
   note?.(
@@ -82,4 +130,12 @@ export async function cloneableBlob(
 /** Wrap bytes without copying. VFS reads are ArrayBuffer-backed. */
 export function bytesToBlob(bytes: Uint8Array): Blob {
   return new Blob([bytes as Uint8Array<ArrayBuffer>]);
+}
+
+/** What kind of object a backend handed out — for the stderr note when it misbehaves. */
+function describeBlob(value: Blob): string {
+  const ctor = (value as { constructor?: { name?: string } }).constructor?.name ?? 'unknown';
+  const isFile = typeof File !== 'undefined' && value instanceof File;
+  const isBlob = value instanceof Blob;
+  return `${ctor}, instanceof File=${isFile}, instanceof Blob=${isBlob}, size=${value.size}, type=${JSON.stringify(value.type)}`;
 }
