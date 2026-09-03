@@ -109,12 +109,23 @@ export function getExtensionDelegateId(): string | null {
  * side panel — `chrome.runtime.id` truthy), lazily probed via
  * `isChromeExtensionRealm()` on first read and cached. The fact is stable for
  * a realm's lifetime (the extension page never becomes a different page), so
- * re-probing on every call is pure waste — and every reader (`shell/proxied-
- * fetch.ts`, `scoops/tray-leader.ts`) is the SAME fact, asked repeatedly, not
- * an independent probe each needs to make. `null` means "not yet resolved";
- * `setChromeExtensionRealm` overrides it, mainly for tests that toggle
- * `globalThis.chrome` per test case after this module has already run its
- * first lazy probe.
+ * re-probing on every call is pure waste — and every reader is the SAME fact,
+ * asked repeatedly, not an independent probe each needs to make. `null` means
+ * "not yet resolved"; `setChromeExtensionRealm` overrides it, mainly for
+ * tests that toggle `globalThis.chrome` per test case after this module has
+ * already run its first lazy probe.
+ *
+ * THIS IS STILL A FLOAT PROBE — caching it does not relocate the decision, it
+ * only dedupes the read. `scoops/`, `tools/` and `kernel/` (except
+ * `kernel/host.ts`, the one composition root) must never call
+ * `getChromeExtensionRealm()`: business logic there asks an injected
+ * `CapabilityBroker` or takes a composition-time answer, it never asks "am I
+ * in the extension?" itself (#2276, review-patterns category 10). Only
+ * `shell/` and `base/` — the layers that OWN topology — may read it; see
+ * `shell/proxied-fetch.ts` and `shell/tray-fetch.ts`. Slice D's lint gate
+ * bans this name (and `setChromeExtensionRealm`) for those directories
+ * alongside `isExtensionRealm` / `hasLocalNodeServer` / `resolveFloatTopology`
+ * — see `work-unit/capability/index.ts`.
  */
 let chromeExtensionRealm: boolean | null = null;
 
@@ -128,7 +139,11 @@ export function setChromeExtensionRealm(value: boolean | null): void {
   chromeExtensionRealm = value;
 }
 
-/** Whether this realm is the real Chrome extension page. Cached after first read. */
+/**
+ * Whether this realm is the real Chrome extension page. Cached after first
+ * read — a float probe, not a business-logic call; see the field doc above
+ * for who may read it.
+ */
 export function getChromeExtensionRealm(): boolean {
   if (chromeExtensionRealm === null) {
     chromeExtensionRealm = isChromeExtensionRealm();

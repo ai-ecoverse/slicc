@@ -1,19 +1,28 @@
 /**
- * #2276 slice C, network domain: `scoops/tray-leader.ts` (`createTrayFetch`),
- * `shell/proxied-fetch.ts` (`createProxiedFetch`'s extension-realm branch)
- * and `shell/mcp/redirect-uri.ts` (`resolveMcpRedirectUri`) no longer probe
- * the float themselves.
+ * #2276 slice C, network domain (review-patterns category 10): business
+ * logic in `scoops/` never asks "am I in the extension?" — runtime detection
+ * happens at composition time in the transport layer that owns topology.
  *
- * All three asked the same question — "is this realm the real Chrome
- * extension page?" / "what float am I on?" — at call time, each with its own
- * import of `isExtensionRealm` / `isChromeExtensionRealm` /
- * `resolveFloatTopology`. They now take the answer by injection:
- * `tray-leader.ts` and `proxied-fetch.ts` read `getChromeExtensionRealm()`
- * (`base/api-endpoint.ts`'s lazily-cached, per-realm answer — the same fact,
- * asked once, not re-probed per call); `redirect-uri.ts` takes `topology` as
- * a parameter, resolved by its two callers (`shell/mcp/provider.ts`,
- * `shell/supplemental-commands/mcp-command.ts`) at the point they actually
- * need a redirect URI.
+ * `scoops/tray-leader.ts` used to answer that question itself inside
+ * `createTrayFetch`. Caching the probe in `base/api-endpoint.ts` and reading
+ * the cache from `tray-leader.ts` would have been the SAME probe under a new
+ * name, still in `scoops/` — a slice-D lint gate keyed on probe names would
+ * be bypassed by exactly that move. So `createTrayFetch` (and its
+ * `TrayProxyFetchError`) moved to `shell/tray-fetch.ts`, a sibling of
+ * `proxied-fetch.ts`: `scoops/tray-leader.ts` now asks for a fetch
+ * implementation and gets one, with NO realm or topology read anywhere in
+ * the file, re-exporting the factory under its established name so existing
+ * callers keep this module as their address.
+ *
+ * `shell/proxied-fetch.ts` and `shell/tray-fetch.ts` are where topology is
+ * OWNED (`shell/float-topology.ts`'s header says so), so they may read the
+ * cached fact — `getChromeExtensionRealm()` in `base/api-endpoint.ts`, which
+ * is itself still a probe (see its doc comment), just a deduped one.
+ *
+ * `shell/mcp/redirect-uri.ts` takes `topology` as a parameter; its two
+ * callers (`shell/mcp/provider.ts`, `shell/supplemental-commands/mcp-
+ * command.ts`) resolve `resolveFloatTopology()` at their own call site —
+ * that is fine, `shell/` owns topology, this is not a relocation to fix.
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,48 +34,64 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = (...parts: string[]): string =>
   readFileSync(join(here, '..', '..', 'src', ...parts), 'utf8');
 
-/** Import statements only — prose may still mention a probe while explaining why it's gone. */
-function staticImports(source: string): string {
-  return [...source.matchAll(/^import[\s\S]*?from\s+'[^']+';$/gm)].map((m) => m[0]).join('\n');
-}
+const FLOAT_PROBE_NAMES = [
+  'isExtensionRealm',
+  'isChromeExtensionRealm',
+  'hasLocalNodeServer',
+  'resolveFloatTopology',
+  'getChromeExtensionRealm',
+  'setChromeExtensionRealm',
+] as const;
 
-const BANNED_PROBE_PATTERN =
-  /isExtensionRealm|isChromeExtensionRealm|hasLocalNodeServer|resolveFloatTopology/;
+const FLOAT_PROBE_PATTERN = new RegExp(FLOAT_PROBE_NAMES.join('|'));
 
-describe('#2276 slice C — network domain call sites no longer probe the float', () => {
-  it.each([
-    ['scoops/tray-leader.ts', ['scoops', 'tray-leader.ts']],
-    ['shell/proxied-fetch.ts', ['shell', 'proxied-fetch.ts']],
-    ['shell/mcp/redirect-uri.ts', ['shell', 'mcp', 'redirect-uri.ts']],
-  ] as const)('%s no longer imports a float probe', (file, parts) => {
-    const imports = staticImports(src(...parts));
-    expect({ file, probes: BANNED_PROBE_PATTERN.test(imports) }).toEqual({ file, probes: false });
+describe('#2276 slice C — scoops/tray-leader.ts has no float/topology read at all', () => {
+  it('contains none of the float-probe names, anywhere in the file — not just its imports', () => {
+    // The whole file, not just import statements: a call site that imports
+    // the name under an alias, or re-derives it inline, would still be a
+    // probe in the wrong layer. Comments ARE allowed to name a probe while
+    // explaining it moved away — none of the current file's comments do,
+    // so this stays a whole-source scan rather than carving out prose.
+    const source = src('scoops', 'tray-leader.ts');
+    const found = FLOAT_PROBE_NAMES.filter((name) => source.includes(name));
+    expect(found).toEqual([]);
   });
 
-  it('tray-leader.ts reads the shared cached answer instead of probing', () => {
+  it('gets its fetch factory from shell/, a downward import', () => {
     const source = src('scoops', 'tray-leader.ts');
+    expect(source).toContain("from '../shell/tray-fetch.js'");
+  });
+});
+
+describe('#2276 slice C — shell/ owns topology and may read the cached fact', () => {
+  it('shell/tray-fetch.ts holds the realm branch createTrayFetch needs', () => {
+    const source = src('shell', 'tray-fetch.ts');
     expect(source).toContain('getChromeExtensionRealm()');
   });
 
-  it('proxied-fetch.ts reads the shared cached answer instead of probing', () => {
+  it('shell/proxied-fetch.ts reads the same cached fact for its own extension branch', () => {
     const source = src('shell', 'proxied-fetch.ts');
     expect(source).toContain('getChromeExtensionRealm()');
   });
 
-  it('base/api-endpoint.ts is the one place left that imports the probe, and caches it', () => {
+  it('base/api-endpoint.ts is the one place that imports the live probe, and caches it', () => {
     const source = src('base', 'api-endpoint.ts');
-    const imports = staticImports(source);
+    const imports = [...source.matchAll(/^import[\s\S]*?from\s+'[^']+';$/gm)]
+      .map((m) => m[0])
+      .join('\n');
     expect(imports).toMatch(/isChromeExtensionRealm/);
     // Cached (read once, reused), not re-probed on every getter call.
     expect(source).toContain('let chromeExtensionRealm: boolean | null = null;');
   });
+});
 
-  it('redirect-uri.ts takes topology as a parameter, not a return of its own probe', () => {
+describe('#2276 slice C — redirect-uri.ts takes topology by injection', () => {
+  it('resolveMcpRedirectUri takes topology as a parameter, not a return of its own probe', () => {
     const source = src('shell', 'mcp', 'redirect-uri.ts');
     expect(source).toContain('resolveMcpRedirectUri(topology: FloatTopology)');
   });
 
-  it('resolveMcpRedirectUri callers resolve topology at their own call site', () => {
+  it('its two callers resolve topology at their own call site — shell/ owns it, this is not a relocation to fix', () => {
     for (const parts of [
       ['shell', 'mcp', 'provider.ts'],
       ['shell', 'supplemental-commands', 'mcp-command.ts'],
@@ -74,5 +99,16 @@ describe('#2276 slice C — network domain call sites no longer probe the float'
       const source = src(...parts);
       expect(source).toContain('resolveMcpRedirectUri(resolveFloatTopology())');
     }
+  });
+});
+
+describe('#2276 slice C — the guard actually catches the old shape', () => {
+  it('would fail if tray-leader.ts read the float again (documents the regression this guards against)', () => {
+    // Not a real mutation test (that would require writing to source during a
+    // test run) — this pins the exact string a regression would reintroduce,
+    // so the assertion above is provably not a vacuous "innocuous term never
+    // appears" check.
+    const regressed = 'const isExtension = getChromeExtensionRealm();\nif (isExtension) {';
+    expect(FLOAT_PROBE_PATTERN.test(regressed)).toBe(true);
   });
 });
