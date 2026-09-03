@@ -3,7 +3,7 @@ import {
   isProxyError,
   parseProxyErrorBody,
   readProxyErrorMessage,
-} from '../../src/core/proxy-error.js';
+} from '../../src/shell/proxy-error.js';
 
 function makeResponse(body: string, init: ResponseInit & { headers?: HeadersInit } = {}): Response {
   return new Response(body, init);
