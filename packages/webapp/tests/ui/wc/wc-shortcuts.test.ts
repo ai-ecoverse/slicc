@@ -1698,6 +1698,16 @@ describe('keyboard trigger modes', () => {
     expect(escape()).toBe(false);
     expect(handles.active()).toBe(false);
   });
+
+  it('switching to esc clears a mode that Auto already entered', async () => {
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    handles.setTrigger('esc');
+    expect(handles.active()).toBe(false);
+    await flush();
+    expect(handles.active()).toBe(false);
+  });
 });
 
 describe('composer chrome keeps keyboard mode off', () => {

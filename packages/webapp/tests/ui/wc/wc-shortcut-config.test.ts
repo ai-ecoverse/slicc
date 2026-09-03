@@ -12,6 +12,7 @@ import {
   loadShortcutConfig,
   parseKeymapDocument,
   SHORTCUT_KEYS_PATH,
+  writeShortcutTrigger,
 } from '../../../src/ui/wc/wc-shortcut-config.js';
 import { COMMAND_IDS, DEFAULT_KEYMAP, V1_KEYMAP } from '../../../src/ui/wc/wc-shortcuts.js';
 
@@ -324,5 +325,43 @@ describe('the v1 keymap', () => {
     await h.run();
     expect(h.writer.writeFile).not.toHaveBeenCalled();
     expect(h.apply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('writeShortcutTrigger', () => {
+  it('patches trigger while preserving custom bindings and comments', async () => {
+    const existing = JSON.stringify({
+      '//': ['mine'],
+      trigger: 'auto',
+      bindings: { q: 'terminal' },
+    });
+    const h = harness({ file: existing });
+    await writeShortcutTrigger({ reader: h.reader as never, writer: h.writer as never }, 'esc');
+    expect(h.writer.writeFile).toHaveBeenCalledTimes(1);
+    const [, body] = h.writer.writeFile.mock.calls[0] as unknown as [string, string];
+    const written = JSON.parse(body) as {
+      '//': string[];
+      trigger: string;
+      bindings: Record<string, string>;
+    };
+    expect(written.trigger).toBe('esc');
+    expect(written.bindings).toEqual({ q: 'terminal' });
+    expect(written['//']).toEqual(['mine']);
+  });
+
+  it('refuses to replace a malformed file', async () => {
+    const h = harness({ file: '{ not json' });
+    await expect(
+      writeShortcutTrigger({ reader: h.reader as never, writer: h.writer as never }, null)
+    ).rejects.toThrow(/not valid JSON/);
+    expect(h.writer.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-object JSON root', async () => {
+    const h = harness({ file: '[]' });
+    await expect(
+      writeShortcutTrigger({ reader: h.reader as never, writer: h.writer as never }, 'auto')
+    ).rejects.toThrow(/must be a JSON object/);
+    expect(h.writer.writeFile).not.toHaveBeenCalled();
   });
 });

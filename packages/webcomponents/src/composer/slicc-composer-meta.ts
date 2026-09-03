@@ -306,6 +306,8 @@ export class SliccComposerMeta extends HTMLElement {
   #twrapEl: HTMLElement | null = null;
   #listEl: HTMLElement | null = null;
   #models: (string | ModelOption)[] | null = null;
+  /** Provider-qualified id of the active model (`providerId:modelId`). */
+  #selectedId: string | null = null;
   #menuOpen = false;
   #thinkingMenuOpen = false;
   #query = '';
@@ -358,6 +360,19 @@ export class SliccComposerMeta extends HTMLElement {
   set model(value: string | null) {
     if (value == null) this.removeAttribute('model');
     else this.setAttribute('model', value);
+  }
+
+  /**
+   * Provider-qualified id of the active model (`providerId:modelId`). Hosts set
+   * this alongside `model` so {@link cycleModel} can disambiguate duplicate
+   * display names. Updated automatically on a row pick.
+   */
+  get selectedModelId(): string | null {
+    return this.#selectedId;
+  }
+
+  set selectedModelId(value: string | null | undefined) {
+    this.#selectedId = value ?? null;
   }
 
   /**
@@ -583,7 +598,7 @@ export class SliccComposerMeta extends HTMLElement {
     const current = this.model;
     const nodes: HTMLElement[] = [];
     for (const m of rows) {
-      const selected = m.name === current;
+      const selected = this.#selectedId ? m.id === this.#selectedId : m.name === current;
       const row = h(
         'button',
         {
@@ -661,14 +676,18 @@ export class SliccComposerMeta extends HTMLElement {
 
   /**
    * Advance to the next model in the list (wraps). Emits `model-change` like a
-   * row click. No-op with no accounts connected.
+   * row click. No-op with no accounts connected. Tracks by qualified id (not
+   * display name) so two providers offering the same label advance correctly.
    */
   cycleModel(): void {
     if (this.#noModels) return;
     const models = this.#normModels;
     if (models.length === 0) return;
-    const currentId = models.find((m) => m.name === this.model)?.id ?? null;
-    const index = currentId === null ? -1 : models.findIndex((m) => m.id === currentId);
+    let index = this.#selectedId ? models.findIndex((m) => m.id === this.#selectedId) : -1;
+    if (index < 0) {
+      // Legacy hosts that only set the display name — first name match.
+      index = models.findIndex((m) => m.name === this.model);
+    }
     const next = models[(index + 1) % models.length];
     if (next) this.#selectModel(next.id);
   }
@@ -729,6 +748,7 @@ export class SliccComposerMeta extends HTMLElement {
       id,
       provider: undefined,
     };
+    this.#selectedId = picked.id;
     this.#closeMenu();
     if (picked.name !== this.model) this.model = picked.name; // re-renders via attributeChangedCallback
     this.dispatchEvent(

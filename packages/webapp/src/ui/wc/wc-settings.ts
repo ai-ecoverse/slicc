@@ -34,7 +34,6 @@ import type { SimplifiedSlots, SliccTheme, ThemeComponents } from '../theme-type
 import { TOKEN_GROUPS } from '../theme-types.js';
 import { getShowTimestamps, setShowTimestamps } from '../timestamp-preference.js';
 import type { KeyboardTrigger } from './wc-shortcuts.js';
-import { DEFAULT_TRIGGER } from './wc-shortcuts.js';
 
 type ProviderSettingsModule = typeof import('../provider-settings.js');
 
@@ -414,7 +413,8 @@ function buildKeyboardModeSection(
     },
   ];
   const name = 'wcset-keyboard-trigger';
-  const current = keyboard.getTrigger() ?? DEFAULT_TRIGGER;
+  // `null` is Off — never coalesce with `??` or the Off radio appears as Auto.
+  const current = keyboard.getTrigger();
   for (const opt of options) {
     const row = document.createElement('label');
     row.className = 'wcset__radio-row';
@@ -429,7 +429,6 @@ function buildKeyboardModeSection(
       keyboard.setTrigger(next);
       setStatus('Saved.');
       void keyboard.persistTrigger?.(next).catch((err) => {
-        log.warn?.('Could not persist keyboard trigger', err);
         log.error('Could not persist keyboard trigger', err);
         setStatus('Applied for this session; could not write /etc/slicc/keys.json.', true);
       });

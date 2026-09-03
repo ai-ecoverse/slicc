@@ -620,6 +620,44 @@ describe('slicc-composer-meta', () => {
     });
   });
 
+  describe('cycleModel / cycleThinking', () => {
+    it('advances by qualified id when two providers share a display name', () => {
+      const el = mount((e) => {
+        e.models = [
+          { name: 'Opus', provider: 'Adobe', id: 'adobe:claude-opus' },
+          { name: 'Opus', provider: 'GitHub', id: 'github:claude-opus' },
+          { name: 'Sonnet', provider: 'Adobe', id: 'adobe:claude-sonnet' },
+        ];
+        e.model = 'Opus';
+        e.selectedModelId = 'github:claude-opus';
+      });
+      const picked: string[] = [];
+      el.addEventListener('model-change', (event) => {
+        picked.push((event as CustomEvent<{ id: string }>).detail.id);
+      });
+      el.cycleModel();
+      expect(picked).toEqual(['adobe:claude-sonnet']);
+      expect(el.selectedModelId).toBe('adobe:claude-sonnet');
+      el.cycleModel();
+      expect(picked).toEqual(['adobe:claude-sonnet', 'adobe:claude-opus']);
+    });
+
+    it('cycles thinking levels and wraps', () => {
+      const el = mount((e) => {
+        e.thinking = 'off';
+      });
+      const levels: string[] = [];
+      el.addEventListener('thinking-change', (event) => {
+        levels.push((event as CustomEvent<{ thinking: string }>).detail.thinking);
+      });
+      el.cycleThinking();
+      el.cycleThinking();
+      expect(levels[0]).toBeTruthy();
+      expect(levels[0]).not.toBe('off');
+      expect(el.thinking).not.toBe('off');
+    });
+  });
+
   describe('lifecycle cleanup', () => {
     it('detaches click listeners on disconnect', () => {
       const el = mount();

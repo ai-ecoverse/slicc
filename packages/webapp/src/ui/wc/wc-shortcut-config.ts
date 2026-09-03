@@ -333,15 +333,21 @@ export async function writeShortcutTrigger(
     await deps.writer.mkdir('/etc/slicc', { recursive: true });
     doc = JSON.parse(defaultKeysDoc) as KeysJsonDocument;
   } else {
+    // Refuse to overwrite a corrupt/malformed file — the loader warns and
+    // keeps it; Theme must not silently replace custom bindings with the seed.
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(text) as unknown;
-      doc =
-        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as KeysJsonDocument)
-          : (JSON.parse(defaultKeysDoc) as KeysJsonDocument);
-    } catch {
-      doc = JSON.parse(defaultKeysDoc) as KeysJsonDocument;
+      parsed = JSON.parse(text);
+    } catch (err) {
+      throw new Error(
+        `${SHORTCUT_KEYS_PATH} is not valid JSON; fix or remove it before changing trigger`,
+        { cause: err }
+      );
     }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${SHORTCUT_KEYS_PATH} must be a JSON object`);
+    }
+    doc = parsed as KeysJsonDocument;
   }
 
   doc.trigger = trigger;

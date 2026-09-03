@@ -1917,7 +1917,11 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     trigger: () => trigger,
     setTrigger: (next) => {
       trigger = next;
-      if (next === null) mode.set(false);
+      // Off always clears. Esc must also clear: the shell boots under Auto and
+      // may already be in keyboard mode before keys.json / Theme applies Esc,
+      // and Esc's settle deliberately does not auto-enter — so without this
+      // clear, bare shortcuts would keep working until the composer is focused.
+      if (next === null || next === 'esc') mode.set(false);
       settler.schedule();
     },
   };
