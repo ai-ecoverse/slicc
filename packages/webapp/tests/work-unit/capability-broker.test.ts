@@ -157,10 +157,35 @@ describe('composition-time injection (#2276)', () => {
     expect(source).toContain('broker.network.localNodeServer');
   });
 
+  it("keeps the adapters' wire code off the boot graph — ops are only ever lazy", () => {
+    // `kernel/host.ts` composes a broker before scoops are restored, so the
+    // adapter shells are boot-critical. A STATIC import of an ops module
+    // would hoist the whole transport (and, for the extension, the bridge
+    // clients and sudo brokers underneath it) into the kernel worker's eager
+    // closure for a float that may never call a privileged operation. The
+    // first-load gate measures the result; this names the cause.
+    for (const [file, ops] of [
+      ['rest-adapter.ts', 'rest-ops.js'],
+      ['extension-adapter.ts', 'extension-ops.js'],
+    ]) {
+      const source = src('work-unit', 'capability', file);
+      const staticImports = [
+        ...source.matchAll(/^(?:import|export)(?! type)[\s\S]*?from\s+'([^']+)';$/gm),
+      ].map((match) => match[1]);
+      expect({ file, staticallyImportsOps: staticImports.includes(`./${ops}`) }).toEqual({
+        file,
+        staticallyImportsOps: false,
+      });
+      expect(source).toContain(`import('./${ops}')`);
+    }
+  });
+
   it('no adapter imports a float probe — the host is the only place that resolves one', () => {
     for (const file of [
       'rest-adapter.ts',
+      'rest-ops.ts',
       'extension-adapter.ts',
+      'extension-ops.ts',
       'connect-adapter.ts',
       'compose.ts',
       'for-topology.ts',
