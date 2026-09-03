@@ -329,10 +329,11 @@ export class SliccAgentTabs extends HTMLElement {
     this.removeEventListener('keydown', this.#onKeyDown);
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string, previous: string | null, next: string | null): void {
     if (!this.#initialized || !this.isConnected) return;
     this.#render();
     this.reflow();
+    if (name === 'active' && next !== null && next !== previous) this.#followSelection(next);
   }
 
   get scoops(): ScoopDescriptor[] {
@@ -390,6 +391,30 @@ export class SliccAgentTabs extends HTMLElement {
   set gazeTarget(value: string | null) {
     if (value == null) this.removeAttribute('gaze-target');
     else this.setAttribute('gaze-target', value);
+  }
+
+  /**
+   * Who owns ←/→ while a segment holds the focus: the strip's own roving walk
+   * (`on`, the default) or whoever is listening above it (`off`).
+   *
+   * The walk `preventDefault()`s the arrows, so a host that binds them
+   * globally — the shell's keyboard mode, where they switch units — reads that
+   * as "something closer to the key already claimed it" and stands down. A
+   * segment is where the focus RESTS after a click, which is exactly where the
+   * user is most likely to press an arrow next, so the two would disagree in
+   * the commonest state of all: the strip would shuffle its focus ring and the
+   * unit would never change.
+   *
+   * `off` yields those two keys and keeps the rest of the tablist keyboard —
+   * Home / End and Enter / Space activation — which nothing above binds.
+   */
+  get arrowKeys(): 'on' | 'off' {
+    return this.getAttribute('arrow-keys') === 'off' ? 'off' : 'on';
+  }
+
+  set arrowKeys(value: 'on' | 'off') {
+    if (value === 'off') this.setAttribute('arrow-keys', 'off');
+    else this.removeAttribute('arrow-keys');
   }
 
   /**
@@ -697,6 +722,12 @@ export class SliccAgentTabs extends HTMLElement {
       return;
     }
 
+    // Yielded to the host (see {@link arrowKeys}): returning without
+    // `preventDefault()` is the whole handover, because the shell's keyboard
+    // mode only stands down for a key another handler already claimed.
+    const isArrow = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+    if (isArrow && this.arrowKeys === 'off') return;
+
     const tabs = [
       ...this.querySelectorAll<HTMLButtonElement>(`.${PREFIX}__segment:not(.hide)`),
     ].filter((segment) => !segment.disabled);
@@ -710,6 +741,26 @@ export class SliccAgentTabs extends HTMLElement {
     else return;
     event.preventDefault();
     next?.focus();
+  }
+
+  /**
+   * Follow a selection that moved while the strip held the focus.
+   *
+   * The roving tabindex hands `tabIndex = 0` to whichever segment is selected,
+   * so a focus ring left on the previous one names the wrong agent — and its
+   * Enter would activate that agent and undo the switch. It happens whenever
+   * the selection is made by something OTHER than this keyboard: the host's
+   * ←/→ while `arrow-keys` is off, its digits, a freezer card.
+   *
+   * Only focus already inside the strip is moved: a selection made from
+   * anywhere else must not steal the caret out of the composer. The roving
+   * walk itself is unaffected, since moving focus does not move the selection
+   * (manual activation) and so never reaches here.
+   */
+  #followSelection(key: string): void {
+    const focused = this.#focusedSegmentKey();
+    if (focused === null || focused === key) return;
+    this.#segmentFor(key)?.focus();
   }
 
   #focusedSegmentKey(): string | null {

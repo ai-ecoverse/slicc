@@ -305,6 +305,32 @@ Non-obvious rules:
   (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
   use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
+## Tablist arrows vs a host keyboard
+
+`<slicc-agent-tabs>` implements the ARIA tablist keyboard: with a segment
+focused, ←/→ walk the roving tabindex (Home/End jump to the ends) and Enter or
+Space activates — manual activation, so moving the focus never switches the
+whole thread view. The walk `preventDefault()`s the arrows, which is a problem
+for a host that binds ←/→ globally: the webapp's keyboard mode stands down for
+any key something closer to it already claimed, and a segment is exactly where
+the focus rests after a click, so the strip would shuffle its focus ring while
+the host's unit switch never ran.
+
+A selection the strip did not make itself — the host's yielded ←/→, its
+digits, a freezer card — moves the focus ring with it when the focus is already
+on a segment (`#followSelection`, on the `active` attribute change). The roving
+tabindex has handed `tabIndex = 0` to the newly selected segment, so a ring left
+behind would name the wrong agent and its Enter would switch straight back.
+Focus that is anywhere else is never touched, and the roving walk itself is
+unaffected: moving focus does not move the selection.
+
+`arrow-keys="off"` (property `arrowKeys`) hands those two keys back: the
+handler returns without preventing the event, and Home/End and Enter/Space stay
+with the strip because nothing above binds them. The host owns the toggle —
+the webapp sets it for as long as keyboard mode is up — rather than the
+component reading app state, so a float that has no such mode keeps the plain
+tablist behaviour.
+
 ## Monitor meter markers
 
 A `MonitorVital` with a `ratio` renders a meter. When that ratio is an
