@@ -388,6 +388,94 @@ final class SignAndForwardTests: XCTestCase {
         }
     }
 
+    // MARK: - DA origin allow-list (Helix 6 / issue #2811)
+
+    func testResolveDaOriginDefaultsWhenOmitted() {
+        // Production default.
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: nil),
+            .origin(SignAndForward.defaultDaOrigin)
+        )
+        // Tests inject a localhost stub via `daOrigin`; an omitted envelope
+        // origin must still honour that so we never hit production.
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: nil, defaultOrigin: "http://127.0.0.1:9"),
+            .origin("http://127.0.0.1:9")
+        )
+    }
+
+    func testResolveDaOriginHonoursApiAemLive() {
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: SignAndForward.aemSourceBusOrigin),
+            .origin(SignAndForward.aemSourceBusOrigin)
+        )
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: SignAndForward.defaultDaOrigin),
+            .origin(SignAndForward.defaultDaOrigin)
+        )
+    }
+
+    func testResolveDaOriginRejectsHostOutsideAllowList() {
+        // Empty string is explicit, not nullish — matches the TS `??` default.
+        XCTAssertEqual(SignAndForward.resolveDaOrigin(envelopeOrigin: ""), .rejected(""))
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: "https://evil.example"),
+            .rejected("https://evil.example")
+        )
+        // Trailing slash is a different origin than the allow-list entry.
+        XCTAssertEqual(
+            SignAndForward.resolveDaOrigin(envelopeOrigin: "https://api.aem.live/"),
+            .rejected("https://api.aem.live/")
+        )
+    }
+
+    func testBuildDaURLPreservesSourceBusTrailingSlash() {
+        // The trailing slash is what makes `GET …/source/` a listing; without
+        // it the Source Bus 404s. Mirrors the shared-ts assertion on
+        // `https://api.aem.live/adobe/sites/aem-website/source/`.
+        let url = SignAndForward.buildDaURL(
+            origin: SignAndForward.aemSourceBusOrigin,
+            path: "/adobe/sites/aem-website/source/",
+            query: nil
+        )
+        XCTAssertEqual(url?.absoluteString, "https://api.aem.live/adobe/sites/aem-website/source/")
+    }
+
+    func testBuildDaURLAppendsQuery() {
+        let url = SignAndForward.buildDaURL(
+            origin: SignAndForward.defaultDaOrigin,
+            path: "/list/org/site",
+            query: ["b": "2", "a": "1"]
+        )
+        XCTAssertEqual(url?.absoluteString, "https://admin.da.live/list/org/site?a=1&b=2")
+    }
+
+    func testDaHandlerRejectsOriginOutsideAllowListWithoutFetching() async throws {
+        // A hostile origin must 400 as invalid_request (not 502 fetch_failed),
+        // proving we never forwarded the caller's IMS token.
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/da-sign-and-forward",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(
+                        string: #"{"imsToken":"t","method":"GET","path":"/source/o/r/k","origin":"https://evil.example"}"#
+                    )
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                    let envelope = try self.decodeJSONObject(from: response.body)
+                    XCTAssertEqual(envelope["ok"], .bool(false))
+                    XCTAssertEqual(envelope["errorCode"], .string("invalid_request"))
+                    XCTAssertTrue(envelope["error"]?.stringValue?.contains("evil.example") ?? false)
+                }
+            }
+        }
+    }
+
     // MARK: - Wire-level success-path tests
     //
     // These tests close the gap the node-server suite uses

@@ -10,8 +10,8 @@ errors. Flag unbounded `fetch()`, E2B calls, async work.
 
 ## 2. Cross-runtime parity (often Critical)
 
-Shared behavior needs peer updates or explicit exclusion. Check Node ↔ Swift servers and
-browser ↔ extension, especially endpoints, signing, mounts, VFS, secrets.
+Shared behavior needs peer updates or explicit exclusion. Check Node ↔ Swift (endpoints,
+signing, DA `origin` allow-list / `aem://` #2811) and browser ↔ extension (mounts, VFS, secrets).
 
 ## 3. UI state preservation
 

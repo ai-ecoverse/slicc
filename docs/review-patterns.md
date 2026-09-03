@@ -101,7 +101,10 @@ rebuilds where state lives in the DOM.
 
 **Historical precedent** — **PR #565** (`feat(swift-server): server-side signing for S3 +
 DA mounts (Sliccstart parity)`): `node-server` already signed mount requests; `swift-server`
-lagged until this PR brought it to parity. A reviewer who knows the parity model flags that
+lagged until this PR brought it to parity. **Issue #2811** (`aem://` mounts empty on
+Sliccstart): `#2227` added an `origin` allow-list to `executeDaSignAndForward` so Helix 6
+Source Bus traffic can reach `api.aem.live`; swift-server kept hard-coding `admin.da.live`,
+so Source Bus paths 404'd as `ENOENT '/'`. A reviewer who knows the parity model flags that
 gap _when the first runtime changes_, not a release later.
 
 **Remediation** — apply the change to every applicable runtime in the parity matrix, or

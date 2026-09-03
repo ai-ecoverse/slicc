@@ -65,7 +65,7 @@ Full route + follower internals: [`docs/swift-server-details.md`](../../docs/swi
 - `GET /api/runtime-config`, `/api/tray-status`, `/auth/callback`, `GET|POST /api/oauth-result`, `GET|POST|DELETE /api/webhooks...` / `/api/crontasks...`
 - `POST /api/handoff` (`Handoff.swift`) — validates payload, broadcasts `navigate_event` on the lick WS.
 - Secrets: `GET /api/secrets`, `GET|POST /api/secrets/session`, `/api/secrets/masked`, `/api/secrets/peek`, `POST /api/secrets/scope`, session-first `DELETE /api/secrets/:name`, `POST /api/secrets/scrub`. See below.
-- `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` (`SignAndForward.swift`) — S3 creds from Keychain, transient IMS bearer for DA.
+- `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` (`SignAndForward.swift`) — S3 creds from Keychain, transient IMS bearer for DA. DA `origin` allow-list is `admin.da.live` (default) + `api.aem.live` (Helix 6); keep in lockstep with `@slicc/shared-ts` `DA_ALLOWED_ORIGINS` (#2811).
 - `POST /api/sudo-approve` (`SudoApprove.swift`) — native `osascript` via `Process`; loopback-only; fail-closed to `deny`.
 - `ALL /api/fetch-proxy` — HTTP verbs plus WebDAV/CalDAV (`PROPFIND`, `MKCOL`, `MKCALENDAR`, `REPORT`, `COPY`, `MOVE`, `LOCK`, …). Unknown → AsyncHTTPClient via `HTTPMethod.RAW(value:)`.
 
