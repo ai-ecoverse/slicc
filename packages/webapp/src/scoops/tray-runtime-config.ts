@@ -11,7 +11,7 @@ import {
   TRAY_LEGACY_LEAD_QUERY_PARAM,
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
-} from '../../../node-server/src/tray-url-shared.js';
+} from '@slicc/shared-ts';
 import {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,

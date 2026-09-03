@@ -89,7 +89,6 @@ Each instance gets its own browser profile and CDP port.
 - `src/electron-controller.ts` — Electron app attach and overlay management
 - `src/qa-setup.ts` — isolated QA profile scaffolding
 - `src/release-package.ts` — release packaging
-- `src/tray-url-shared.ts` — tray URL helpers shared with browser runtime code
 
 ## API Routes
 

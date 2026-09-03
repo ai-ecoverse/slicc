@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
-import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { parseTrayJoinUrl, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -82,7 +82,6 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
-import { parseTrayJoinUrl } from './tray-url-shared.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');

@@ -1,9 +1,9 @@
-import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-security.js';
 import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
-} from './tray-url-shared.js';
+} from '@slicc/shared-ts';
+import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-security.js';
 
 export interface CliLaunchUrlOptions {
   serveOrigin: string;
