@@ -99,12 +99,21 @@ grammars convert); the local adapter reads the page-side maps it reads today.
 
 ```ts
 interface WorkUnitSnapshot {
-  summary: WorkUnitSummary;
+  summary?: WorkUnitSummary; // absent when the transport cannot describe the unit
   messages: readonly WorkUnitChatMessage[];
   /** #2362: the backend's pending queue in delivery order. ABSENT ≠ EMPTY. */
   queuedIds?: readonly string[];
 }
 ```
+
+`summary` is optional because a transport can be mirroring a unit it genuinely
+cannot describe, and that state is permanent rather than a race: a **biscotto
+seat is pinned to one thread and is deliberately never sent `scoops.list`**
+(`sendScoopsListToFollower` refuses it — the inventory's labels would leak what
+else the owner is working on), so no roster entry for its unit will ever
+arrive. Holding such a snapshot back until a summary showed up left every guest
+with a blank thread. The transcript is the part that matters; a reader that
+needs the strip's view asks `list()`.
 
 `queuedIds` rides the snapshot for the same reason it rides
 `scoop-messages-replaced`: the replay and the queue must describe **one
@@ -140,11 +149,13 @@ must not do that. `snapshot(id)` is that call.
 
 **A snapshot can arrive before the roster does.** `LeaderSyncManager.addFollower()`
 sends the initial transcript ahead of `scoops.list`, and the kernel can answer
-for a unit the page has not listed yet. Both adapters HOLD such a snapshot and
-publish it as soon as the roster names the unit; dropping it would leave a
-subscriber with no transcript until some later selection asked for one. That is what makes
-subscribe-during-turn testable on both sides — today the leader gets a replay
-and the follower gets `onSnapshot`, and nothing states they must agree.
+for a unit the page has not listed yet. The two adapters answer that
+differently, and the difference is the transports': the LOCAL one holds the
+orphan and publishes it once the roster names the unit, because a kernel
+roster always arrives; the REMOTE one publishes immediately with no `summary`,
+because for a guest seat the roster never arrives at all. Neither drops it —
+that would leave a subscriber with no transcript until some later selection
+asked for one.
 
 ### `send` — what a prompt carries
 
@@ -350,9 +361,41 @@ drifted:
 6. **composer parity** — a send names its unit and carries the caller's
    `messageId` and the `steer` flag; a gated send is carried or refused, never
    delivered ungated; `stop` names its unit and sends nothing to get there.
-7. **model write parity** — `setModel` reaches the transport naming the unit
+7. **transcript parity** — a queue answer is reconciled only from an answer
+   the transport actually made (`[]` locally, `undefined` remotely); a second
+   snapshot for the same unit supersedes the first; a snapshot that precedes
+   the roster is still delivered; and a subscribe that joins an in-flight
+   snapshot does not make the transport answer twice.
+8. **model write parity** — `setModel` reaches the transport naming the unit
    the caller named, including a child, and answers `true` or `undefined` but
    never a refusal the transport did not hear.
+
+## Mounting the shell on the client (#2382)
+
+**PR A** put the composer, the stop and the model write on the protocol.
+**PR B** does the transcript and the selection:
+
+- Selection IS `snapshot(id)` on both sides. It was
+  `setSelectedScoopJid` + `requestScoopMessages` on the leader and
+  `sync.selectScoop` on the follower; those calls are what the adapters make.
+- The transcript is rendered from `subscribe(id)`, not from the awaited
+  `snapshot(id)`. Awaiting it would paint the SAME replay the subscription
+  already delivers, and the local adapter's no-answer fallback resolves with an
+  empty transcript — which must never be allowed to wipe a live thread. The
+  subscription only ever sees snapshots the transport really published.
+- `onScoopMessagesReplaced` (leader) and `onSnapshot` (follower) are no longer
+  handled in the mounts. The adapters still consume both — that is where a
+  kernel envelope or a tray frame becomes a snapshot event.
+- **The leader suppresses the seeded snapshot on a re-point; the follower takes
+  it.** `subscribe` seeds a new listener synchronously with the last snapshot
+  it published. On the leader that seed is the previous transcript of a unit
+  being re-selected, and painting it would consume the one-shot held-queue
+  restore against a stale `queuedIds` (#2354). On the follower there is no
+  backend queue to mis-reconcile, and the seed is often the only snapshot that
+  unit will get (see the guest-seat case above).
+- `subscribe` does not re-ask for a transcript a `snapshot(id)` is already
+  fetching. Two asks meant two replays and therefore two `loadMessages`, and
+  each one consumes the held-queue restore.
 
 ## Sequencing and scope
 
