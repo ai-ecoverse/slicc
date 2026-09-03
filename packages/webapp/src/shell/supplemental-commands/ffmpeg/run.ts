@@ -1484,7 +1484,8 @@ async function stageConcatList(
   inputIdx: number,
   safe: boolean,
   stage: StageNames,
-  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1],
+  note: (line: string) => void
 ): Promise<
   | { listBytes: Uint8Array; extraFiles: NonNullable<ResolvedInput['extraFiles']> }
   | { error: ConcatListError }
@@ -1508,7 +1509,7 @@ async function stageConcatList(
     const resolved = ctx.fs.resolvePath(listDir, line.file);
     if (!(await ctx.fs.exists(resolved))) return { error: { kind: 'missing', file: line.file } };
     const ffmpegName = stagedPath(stage, concatMemberName(line.file, inputIdx, extraFiles.length));
-    extraFiles.push({ ffmpegName, data: await readInputBlob(ctx.fs, resolved) });
+    extraFiles.push({ ffmpegName, data: await readInputBlob(ctx.fs, resolved, note) });
     rewritten.push(`file '${ffmpegName}'`);
   }
 
@@ -1535,7 +1536,8 @@ function isVirtualInput(input: ParsedInput): boolean {
 async function loadResolvedInputs(
   parsed: ParsedFfmpegInvocation,
   stage: StageNames,
-  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1],
+  note: (line: string) => void = () => {}
 ): Promise<{ inputs: ResolvedInput[] } | { error: CmdResult }> {
   const resolvedInputs: ResolvedInput[] = [];
   for (const [idx, input] of parsed.inputs.entries()) {
@@ -1566,7 +1568,8 @@ async function loadResolvedInputs(
         idx,
         concatSafeMode(input),
         stage,
-        ctx
+        ctx,
+        note
       );
       if ('error' in staged) {
         const { kind, file } = staged.error;
@@ -1592,7 +1595,7 @@ async function loadResolvedInputs(
     }
     resolvedInputs.push({
       ffmpegName,
-      data: await readInputBlob(ctx.fs, resolved),
+      data: await readInputBlob(ctx.fs, resolved, note),
       virtual: false,
     });
   }
@@ -1657,8 +1660,8 @@ function mtMultiInputRefusal(stderr: string): CmdResult {
     stderr:
       `${stderr}ffmpeg: the multi-threaded core deadlocks with more than one input ` +
       '(ffmpeg starts a demux thread per input; emscripten proxies their pthread_create ' +
-      'to a main thread blocked in exec). Run without FFMPEG_CORE=mt so the single-threaded ' +
-      '@ffmpeg/core handles this job.\n',
+      'to a main thread blocked in exec; see #2810). Run without FFMPEG_CORE=mt so the ' +
+      'single-threaded @ffmpeg/core handles this job.\n',
     exitCode: 1,
   };
 }
@@ -1956,7 +1959,8 @@ async function runWasmFfmpeg(
   // Validate inputs up front so we don't pay the cold-start cost
   // before realizing the user typo'd a path.
   const stage = newStage();
-  const loaded = await loadResolvedInputs(parsed, stage, ctx);
+  const notes: string[] = [];
+  const loaded = await loadResolvedInputs(parsed, stage, ctx, (line) => notes.push(line));
   if ('error' in loaded) return loaded.error;
   const resolvedInputs = loaded.inputs;
 
@@ -1976,7 +1980,10 @@ async function runWasmFfmpeg(
   // Say why the fast path stepped aside, ahead of the core's own log — but
   // only once the run is over, so the "core printed nothing" defaults inside
   // still see an empty log.
-  return fast.note ? { ...result, stderr: `ffmpeg: ${fast.note}\n${result.stderr}` } : result;
+  const prefix = [...(fast.note ? [`ffmpeg: ${fast.note}`] : []), ...notes]
+    .map((l) => `${l}\n`)
+    .join('');
+  return prefix ? { ...result, stderr: `${prefix}${result.stderr}` } : result;
 }
 
 /** The wasm core leg: boot (or reuse) the shared instance, stage, exec, read back. */

@@ -39,7 +39,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
   Document-Isolation-Policy). It is not the default because ffmpeg starts a demux thread per input
   when there are several, and emscripten proxies those threads' `pthread_create` to a main thread
   blocked in `exec` — every multi-input job deadlocks (verified live 2026-09-03: single-input x264 at
-  8 threads fine; any two-input lavfi job hangs, two workers past the 32-worker pool). `ffmpeg/run.ts`
+  8 threads fine; any two-input lavfi job hangs, two workers past the 32-worker pool; tracked in #2810). `ffmpeg/run.ts`
   refuses multi-input jobs on the mt core and injects `MT_THREAD_BUDGET` (`-threads 8`,
   `-filter_threads 2`) unless the caller set them, because ffmpeg's defaults (1.5 × cores encoder
   threads, one filter thread per core per graph) also exhaust the pool. The loader tracks which core
