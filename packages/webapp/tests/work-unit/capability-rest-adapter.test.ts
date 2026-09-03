@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createRestCapabilityBroker,
   isCapabilityFailure,
+  isCapabilityUnavailable,
   REST_CAPABILITY_PATHS,
 } from '../../src/work-unit/capability/index.js';
 import {
@@ -133,19 +134,27 @@ describe('node-rest adapter emits the contract wire', () => {
   it('reads secrets from the masked route only — a real value can never be requested', async () => {
     const { log, broker } = harness();
     const listed = await broker.secrets.listMaskedEnv();
-    const got = await broker.secrets.get({ name: 'GITHUB_TOKEN' });
+    const got = await broker.secrets.getMasked({ name: 'GITHUB_TOKEN' });
     expect(log.every((r) => r.path === REST_CAPABILITY_PATHS.secretsMasked)).toBe(true);
     expect(listed.ok && listed.value.entries.length).toBe(2);
+    // The scope comes back with the entry: `secret` prints it, and a caller
+    // that had to re-fetch the list for it would double the round trips.
     expect(got).toEqual({
       ok: true,
-      value: { name: 'GITHUB_TOKEN', maskedValue: 'ghp_25243876bf81' },
+      value: {
+        name: 'GITHUB_TOKEN',
+        maskedValue: 'ghp_25243876bf81',
+        domains: ['api.github.com'],
+      },
     });
   });
 
-  it('routes a session set away from the persisted store', async () => {
+  it('defaults a set to the session store — persisting takes an explicit scope', async () => {
     const { log, broker } = harness();
-    await broker.secrets.set({ name: 'A', value: 'x', domains: ['a.test'], scope: 'session' });
-    await broker.secrets.set({ name: 'B', value: 'y' });
+    await broker.secrets.set({ name: 'A', value: 'x', domains: ['a.test'] });
+    await broker.secrets.set({ name: 'B', value: 'y', scope: 'persisted' });
+    // A durable write is never something a caller gets by omitting a field —
+    // `secret set` likewise needs `--persist`.
     expect(log.map((r) => r.path)).toEqual([
       REST_CAPABILITY_PATHS.secretsSession,
       REST_CAPABILITY_PATHS.secretsPersisted,
@@ -154,18 +163,44 @@ describe('node-rest adapter emits the contract wire', () => {
     expect(log[1].body).toEqual({ name: 'B', value: 'y', domains: [] });
   });
 
-  it('treats a 404 delete as the requested end state, and a 500 as a failure', async () => {
-    const status = { code: 404 };
-    const broker = createRestCapabilityBroker({
+  it('reports the Swift persisted-write gap as unavailable, not as a retryable failure', async () => {
+    const notFound = createRestCapabilityBroker({
       resolveUrl: (path) => path,
       fetchImpl: (async () =>
-        new Response(JSON.stringify({ error: 'nope' }), { status: status.code })) as typeof fetch,
+        new Response(JSON.stringify({ error: 'not found' }), { status: 404 })) as typeof fetch,
     });
-    expect(await broker.secrets.delete({ name: 'GONE' })).toEqual({ ok: true, value: undefined });
-    status.code = 500;
-    const failed = await broker.secrets.delete({ name: 'BOOM' });
-    expect(isCapabilityFailure(failed)).toBe(true);
-    if (isCapabilityFailure(failed)) expect(failed.status).toBe(500);
+    // swift-server has no `POST /api/secrets` (#2806). A caller that retried
+    // that 404 would retry forever, so it is a permanent shape fact.
+    const persisted = await notFound.secrets.set({ name: 'A', value: 'x', scope: 'persisted' });
+    expect(isCapabilityUnavailable(persisted)).toBe(true);
+    if (isCapabilityUnavailable(persisted)) {
+      expect(persisted.message).toContain('#2806');
+      expect(persisted.message).toContain('session');
+    }
+    // The session route exists on both servers, so its 404 stays a failure —
+    // which is also why `set` keeps its allowlist entry.
+    const session = await notFound.secrets.set({ name: 'A', value: 'x' });
+    expect(isCapabilityFailure(session)).toBe(true);
+  });
+
+  it('surfaces a delete 404 rather than swallowing it, and reports provenance', async () => {
+    const { log, broker } = harness();
+    // Whether "already gone" counts as success is the CALLER's policy, so the
+    // broker reports what the server said instead of deciding for it.
+    const missing = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ error: 'no secret named "GONE"' }), {
+          status: 404,
+        })) as typeof fetch,
+    });
+    const gone = await missing.secrets.delete({ name: 'GONE' });
+    expect(isCapabilityFailure(gone)).toBe(true);
+    if (isCapabilityFailure(gone)) expect(gone.status).toBe(404);
+
+    const removed = await broker.secrets.delete({ name: 'A' });
+    expect(log[0].method).toBe('DELETE');
+    expect(removed).toEqual({ ok: true, value: { removed: true, fromSession: false } });
   });
 
   it('picks the S3 or DA route from the envelope backend', async () => {
@@ -251,6 +286,91 @@ describe('node-rest adapter emits the contract wire', () => {
     await broker.approvals.request({ kind: 'guest-message', detail: 'hi' });
     expect(log[0].body).toHaveProperty('requester', 'seat-7');
     expect(log[1].body).not.toHaveProperty('requester');
+  });
+
+  it('bounds a control-plane call so a wedged server cannot hang a scoop', async () => {
+    // A wedged server never rejects — it just never answers — so without the
+    // deadline `initShellAndSkills` would await its masked env forever and the
+    // terminal would never finish mounting.
+    const broker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      // Production is 10s, longer than a test should sit for; the budget is a
+      // composition seam, not a per-request knob.
+      controlTimeoutMs: 25,
+      fetchImpl: ((_url: unknown, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }));
+          });
+        })) as typeof fetch,
+    });
+    const result = await broker.secrets.listMaskedEnv();
+    expect(isCapabilityFailure(result)).toBe(true);
+    if (isCapabilityFailure(result)) expect(result.message).toContain('no answer within');
+  });
+
+  it('carries a caller signal into the fetch instead of imposing its own deadline', async () => {
+    // A multi-MB download is not a hang, so `crossOriginFetch` takes the
+    // caller's budget rather than the 10s control-plane one.
+    const seen: Array<AbortSignal | null | undefined> = [];
+    const controller = new AbortController();
+    const broker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        seen.push(init?.signal);
+        return new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
+      }) as typeof fetch,
+    });
+    await broker.network.crossOriginFetch({
+      url: 'https://example.test/',
+      signal: controller.signal,
+    });
+    await broker.network.crossOriginFetch({ url: 'https://example.test/' });
+    expect(seen[0]).toBe(controller.signal);
+    expect(seen[1]).toBeUndefined();
+  });
+
+  it('refuses a request or response body past the proxy ceilings', async () => {
+    const { REQUEST_BODY_CAP } = await import('../../src/shell/proxied-fetch.js');
+    const calls: number[] = [];
+    const broker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      fetchImpl: (async () => {
+        calls.push(1);
+        return new Response('x', {
+          status: 200,
+          headers: { 'content-type': 'text/plain', 'content-length': String(1024 ** 4) },
+        });
+      }) as typeof fetch,
+    });
+
+    const tooBig = await broker.network.crossOriginFetch({
+      url: 'https://example.test/',
+      method: 'POST',
+      body: 'a'.repeat(REQUEST_BODY_CAP + 1),
+    });
+    expect(isCapabilityFailure(tooBig)).toBe(true);
+    if (isCapabilityFailure(tooBig)) expect(tooBig.message).toContain('proxy limit');
+    // Refused before anything was sent — the point of a request-side cap.
+    expect(calls).toHaveLength(0);
+
+    const tooLarge = await broker.network.crossOriginFetch({ url: 'https://example.test/' });
+    expect(isCapabilityFailure(tooLarge)).toBe(true);
+    if (isCapabilityFailure(tooLarge)) expect(tooLarge.message).toContain('download limit');
+  });
+
+  it('forwards an approver directive so a delegated request keeps its routing', async () => {
+    const { log, broker } = harness();
+    await broker.approvals.request({
+      kind: 'guest-tool',
+      detail: 'rm -rf /',
+      requester: 'seat-7',
+      approver: { kind: 'cone', unitJid: 'cone_a' },
+    });
+    expect(log[0].body).toMatchObject({
+      requester: 'seat-7',
+      approver: { kind: 'cone', unitJid: 'cone_a' },
+    });
   });
 
   it('every contract path the adapter can reach is answered by the scripted server', async () => {

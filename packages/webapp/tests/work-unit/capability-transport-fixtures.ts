@@ -12,9 +12,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SignAndForwardReply } from '@slicc/shared-ts';
 import type {
-  ApprovalDecision,
   ApprovalRequest,
-  ExtensionFetchResult,
+  ExtensionCapabilityTransports,
   NetworkFetchRequest,
   SecretsControlMessage,
 } from '../../src/work-unit/capability/index.js';
@@ -133,15 +132,34 @@ export function scriptedRestFetch(log?: RecordedRequest[]): typeof fetch {
   }) as typeof fetch;
 }
 
-/** Extension-side script: the same answers over the service-worker channels. */
+/** What the scripted extension transports were handed, in order. */
+export interface CapturedExtensionCalls {
+  secrets: SecretsControlMessage[];
+  mounts: Array<{ type: string; envelope: unknown }>;
+  fetches: NetworkFetchRequest[];
+  approvals: ApprovalRequest[];
+}
+
+/**
+ * Extension-side script: the same answers over the service-worker channels.
+ *
+ * `captured` records every payload, so a test can assert what the adapter
+ * ACTUALLY sent (the body-encoding parity test reads the bytes off it) rather
+ * than re-deriving them through a bypass that could itself be wrong.
+ */
 export function scriptedRestTransports(): {
-  callSecrets: (message: SecretsControlMessage) => Promise<unknown>;
-  callMount: (type: string, envelope: unknown) => Promise<SignAndForwardReply>;
-  crossOriginFetch: (request: NetworkFetchRequest) => Promise<ExtensionFetchResult>;
-  requestApproval: (request: ApprovalRequest) => Promise<ApprovalDecision>;
+  transports: ExtensionCapabilityTransports;
+  captured: CapturedExtensionCalls;
 } {
-  return {
+  const captured: CapturedExtensionCalls = {
+    secrets: [],
+    mounts: [],
+    fetches: [],
+    approvals: [],
+  };
+  const transports: ExtensionCapabilityTransports = {
     callSecrets: (message) => {
+      captured.secrets.push(message);
       switch (message.type) {
         case 'secrets.list-masked-entries':
           return Promise.resolve({ entries: MASKED_ENTRIES });
@@ -149,17 +167,26 @@ export function scriptedRestTransports(): {
         case 'secrets.session.set':
           return Promise.resolve({ ok: true });
         case 'secrets.delete':
-          return Promise.resolve({ ok: true, removed: true });
+          return Promise.resolve({ ok: true, removed: true, fromSession: false });
       }
     },
-    callMount: () => Promise.resolve(SIGN_REPLY),
-    crossOriginFetch: (request) =>
-      Promise.resolve({
+    callMount: (type, envelope) => {
+      captured.mounts.push({ type, envelope });
+      return Promise.resolve(SIGN_REPLY);
+    },
+    crossOriginFetch: (request) => {
+      captured.fetches.push(request);
+      return Promise.resolve({
         status: 200,
         statusText: 'OK',
         headers: { 'content-type': 'text/plain' },
         bytes: new TextEncoder().encode(`upstream:${request.url}`),
-      }),
-    requestApproval: () => Promise.resolve({ decision: 'allow' }),
+      });
+    },
+    requestApproval: (request) => {
+      captured.approvals.push(request);
+      return Promise.resolve({ decision: 'allow' });
+    },
   };
+  return { transports, captured };
 }

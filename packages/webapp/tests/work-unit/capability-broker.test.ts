@@ -34,26 +34,45 @@ const src = (...parts: string[]): string =>
 /** Every op rejects — the "transport is there but broken" half of each pair. */
 const brokenRestFetch: typeof fetch = () => Promise.reject(new Error('socket closed'));
 
-runCapabilityBrokerConformance('node-rest (scripted server)', () =>
-  createRestCapabilityBroker({ fetchImpl: scriptedRestFetch(), resolveUrl: (p) => p })
+runCapabilityBrokerConformance(
+  'node-rest (scripted server)',
+  () => createRestCapabilityBroker({ fetchImpl: scriptedRestFetch(), resolveUrl: (p) => p }),
+  { transport: 'answering' }
 );
-runCapabilityBrokerConformance('node-rest (transport down)', () =>
-  createRestCapabilityBroker({ fetchImpl: brokenRestFetch, resolveUrl: (p) => p })
+runCapabilityBrokerConformance(
+  'node-rest (transport down)',
+  () => createRestCapabilityBroker({ fetchImpl: brokenRestFetch, resolveUrl: (p) => p }),
+  { transport: 'failing' }
 );
-runCapabilityBrokerConformance('extension-direct (scripted service worker)', () =>
-  createExtensionCapabilityBroker({ adapter: 'extension-direct', ...scriptedRestTransports() })
+runCapabilityBrokerConformance(
+  'extension-direct (scripted service worker)',
+  () =>
+    createExtensionCapabilityBroker({
+      adapter: 'extension-direct',
+      ...scriptedRestTransports().transports,
+    }),
+  { transport: 'answering' }
 );
-runCapabilityBrokerConformance('extension-delegate (scripted port)', () =>
-  createExtensionCapabilityBroker({ adapter: 'extension-delegate', ...scriptedRestTransports() })
+runCapabilityBrokerConformance(
+  'extension-delegate (scripted port)',
+  () =>
+    createExtensionCapabilityBroker({
+      adapter: 'extension-delegate',
+      ...scriptedRestTransports().transports,
+    }),
+  { transport: 'answering' }
 );
-runCapabilityBrokerConformance('extension-delegate (transport down)', () =>
-  createExtensionCapabilityBroker({
-    adapter: 'extension-delegate',
-    callSecrets: () => Promise.reject(new Error('port disconnected')),
-    callMount: () => Promise.reject(new Error('port disconnected')),
-    crossOriginFetch: () => Promise.reject(new Error('port disconnected')),
-    requestApproval: () => Promise.reject(new Error('port disconnected')),
-  })
+runCapabilityBrokerConformance(
+  'extension-delegate (transport down)',
+  () =>
+    createExtensionCapabilityBroker({
+      adapter: 'extension-delegate',
+      callSecrets: () => Promise.reject(new Error('port disconnected')),
+      callMount: () => Promise.reject(new Error('port disconnected')),
+      crossOriginFetch: () => Promise.reject(new Error('port disconnected')),
+      requestApproval: () => Promise.reject(new Error('port disconnected')),
+    }),
+  { transport: 'failing' }
 );
 runCapabilityBrokerConformance('connect (hosted, nothing privileged)', () =>
   createConnectCapabilityBroker()
@@ -188,6 +207,8 @@ describe('composition-time injection (#2276)', () => {
       'extension-ops.ts',
       'connect-adapter.ts',
       'compose.ts',
+      'boundary.ts',
+      'request-body.ts',
       'for-topology.ts',
       'types.ts',
     ]) {

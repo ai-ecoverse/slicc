@@ -14,6 +14,7 @@
  * reaches for off the kernel worker's eager closure.
  */
 
+import { createLazyOps, guardCapability } from './boundary.js';
 import { composeCapabilityBroker } from './compose.js';
 import type { ExtensionCapabilityTransports, ExtensionOps } from './extension-ops.js';
 import type { CapabilityBroker, PageGestureChannel } from './types.js';
@@ -34,23 +35,42 @@ export interface ExtensionCapabilityBrokerOptions extends Partial<ExtensionCapab
 export function createExtensionCapabilityBroker(
   options: ExtensionCapabilityBrokerOptions
 ): CapabilityBroker {
-  let ops: Promise<ExtensionOps> | null = null;
-  const load = (): Promise<ExtensionOps> => {
-    ops ??= import('./extension-ops.js').then((module) => module.createExtensionOps(options));
-    return ops;
-  };
+  const load = createLazyOps<ExtensionOps>(() =>
+    import('./extension-ops.js').then((module) => module.createExtensionOps(options))
+  );
 
   return composeCapabilityBroker({
     adapter: options.adapter,
     pageGestures: options.pageGestures,
-    network: { crossOriginFetch: async (request) => (await load()).crossOriginFetch(request) },
-    secrets: {
-      listMaskedEnv: async () => (await load()).secrets.listMaskedEnv(),
-      get: async (request) => (await load()).secrets.get(request),
-      set: async (request) => (await load()).secrets.set(request),
-      delete: async (request) => (await load()).secrets.delete(request),
+    network: {
+      crossOriginFetch: (request) =>
+        guardCapability('network', 'crossOriginFetch', async () =>
+          (await load()).crossOriginFetch(request)
+        ),
     },
-    mounts: { signRequest: async (request) => (await load()).signRequest(request) },
-    approvals: { request: async (request) => (await load()).requestApproval(request) },
+    secrets: {
+      listMaskedEnv: () =>
+        guardCapability('secrets', 'listMaskedEnv', async () =>
+          (await load()).secrets.listMaskedEnv()
+        ),
+      getMasked: (request) =>
+        guardCapability('secrets', 'getMasked', async () =>
+          (await load()).secrets.getMasked(request)
+        ),
+      set: (request) =>
+        guardCapability('secrets', 'set', async () => (await load()).secrets.set(request)),
+      delete: (request) =>
+        guardCapability('secrets', 'delete', async () => (await load()).secrets.delete(request)),
+    },
+    mounts: {
+      signRequest: (request) =>
+        guardCapability('mounts', 'signRequest', async () => (await load()).signRequest(request)),
+    },
+    approvals: {
+      request: (request) =>
+        guardCapability('approvals', 'request', async () =>
+          (await load()).requestApproval(request)
+        ),
+    },
   });
 }

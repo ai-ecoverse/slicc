@@ -18,6 +18,7 @@ import type {
   SignAndForwardReply,
   TraySudoKind,
 } from '@slicc/shared-ts';
+import type { SudoApproverDirective } from '../../sudo/types.js';
 
 /**
  * Which float transport an adapter speaks.
@@ -60,7 +61,7 @@ export type BrowserOperation = (typeof BROWSER_OPERATIONS)[number];
 export const NETWORK_OPERATIONS = ['localNodeServer', 'crossOriginFetch', 'websocket'] as const;
 export type NetworkOperation = (typeof NETWORK_OPERATIONS)[number];
 
-export const SECRET_OPERATIONS = ['listMaskedEnv', 'get', 'set', 'delete'] as const;
+export const SECRET_OPERATIONS = ['listMaskedEnv', 'getMasked', 'set', 'delete'] as const;
 export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
 
 export const DEVICE_OPERATIONS = ['usbRequest', 'serialRequest', 'hidRequest'] as const;
@@ -193,6 +194,12 @@ export interface NetworkFetchRequest {
   body?: string;
   /** Defaults to `'text'`. Binary bodies MUST say `'base64'`. */
   bodyEncoding?: NetworkBodyEncoding;
+  /**
+   * Cancels the request. A cross-origin fetch has no meaningful fixed
+   * deadline — a multi-MB download is not a hang — so the caller owns the
+   * budget here, unlike the small control-plane calls which carry their own.
+   */
+  signal?: AbortSignal;
 }
 
 export interface NetworkFetchResponse {
@@ -230,11 +237,6 @@ export interface SecretGetRequest {
   name: string;
 }
 
-export interface SecretValue {
-  name: string;
-  maskedValue: string;
-}
-
 export interface SecretSetRequest {
   name: string;
   value: string;
@@ -244,14 +246,29 @@ export interface SecretSetRequest {
    */
   domains?: readonly string[];
   /**
-   * `'session'` keeps the value in the trusted realm's memory only;
-   * `'persisted'` (the default) writes it to the float's secret store.
+   * `'session'` (the DEFAULT) keeps the value in the trusted realm's memory
+   * only; `'persisted'` writes it durably (`~/.slicc/secrets.env` on the Node
+   * server, extension storage in the extension).
+   *
+   * Session-by-default matches `secret set`, where persisting takes an
+   * explicit `--persist`. A durable write is not something a caller should
+   * get by omitting a field.
    */
   scope?: 'session' | 'persisted';
 }
 
 export interface SecretDeleteRequest {
   name: string;
+}
+
+export interface SecretDeleteResult {
+  /** Whether a secret with that name existed before the call. */
+  removed: boolean;
+  /**
+   * Which store it came out of. The `secret` command prints this, so it is
+   * part of the result rather than something the caller re-derives.
+   */
+  fromSession: boolean;
 }
 
 export interface DeviceRequest {
@@ -308,6 +325,21 @@ export interface ApprovalRequest {
    * falls back to `detail`; it never suggests.
    */
   suggestedPattern?: string;
+  /**
+   * Route this request to a non-human approver (a cone, a delegated scoop, a
+   * bounded approver agent). Absent keeps the owner's own native gesture.
+   * Carried whole because "who decides" is part of what is being asked, and
+   * set from trusted state only — for a biscotto it comes from the seat
+   * record the tray hub stamped, never from anything the guest sent.
+   */
+  approver?: SudoApproverDirective;
+  /**
+   * Cancels the adapter's transport hop. This is NOT the human-decision
+   * budget: that lives in `sudo/`'s `withApprovalTimeout` (see
+   * {@link ApprovalCapability}). Aborting here abandons the relay, not the
+   * prompt.
+   */
+  signal?: AbortSignal;
 }
 
 export type ApprovalDenialReason = 'user-timeout' | 'cone-timeout';
@@ -342,13 +374,24 @@ export interface NetworkCapability {
   websocket(request: NetworkWebsocketRequest): Promise<CapabilityResult<NetworkWebsocketHandle>>;
 }
 
+/**
+ * Secrets, as the AGENT realm may see them: masked values only. There is no
+ * operation that returns plaintext, and there will not be one — the real
+ * value never leaves the trusted realm.
+ *
+ * Deliberately smaller than the `secret` command's backend. `peek`, `scope`
+ * and `test` are NOT here: allowlists are explicit, so slice C's secrets PR
+ * adds each operation as it migrates that call site, and until then a caller
+ * asking for one gets a compile error rather than a silent miss.
+ */
 export interface SecretCapability {
   readonly allowlist: readonly SecretOperation[];
   supports(op: SecretOperation): boolean;
   listMaskedEnv(): Promise<CapabilityResult<SecretListResult>>;
-  get(request: SecretGetRequest): Promise<CapabilityResult<SecretValue>>;
+  /** Named `getMasked`, not `get`, because plaintext is not on offer. */
+  getMasked(request: SecretGetRequest): Promise<CapabilityResult<SecretMaskedEnvEntry>>;
   set(request: SecretSetRequest): Promise<CapabilityResult<void>>;
-  delete(request: SecretDeleteRequest): Promise<CapabilityResult<void>>;
+  delete(request: SecretDeleteRequest): Promise<CapabilityResult<SecretDeleteResult>>;
 }
 
 export interface DeviceCapability {
@@ -367,6 +410,21 @@ export interface MountCapability {
   recover(): Promise<CapabilityResult<void>>;
 }
 
+/**
+ * The NATIVE-GESTURE HOP, and only that: "put this in front of whoever
+ * decides on this float, and give me their answer".
+ *
+ * Everything around that hop is POLICY and stays in `sudo/`, above the
+ * broker — tray-first delegation to a follower's human
+ * (`createTrayFirstSudoBroker`), the 5-minute human-decision budget and its
+ * `reason: 'user-timeout'` deny (`withApprovalTimeout`), cone/scoop/agent
+ * routing (`createConeApprovalBroker`), and pattern suggestion. Slice C's
+ * approvals PR WRAPS this capability inside `createSudoBroker`; it does not
+ * replace `createSudoBroker` with it. An adapter that grew a human-decision
+ * timeout would silently shorten every one of those policies.
+ *
+ * `ApprovalRequest.signal` is therefore a transport deadline only.
+ */
 export interface ApprovalCapability {
   readonly allowlist: readonly ApprovalOperation[];
   supports(op: ApprovalOperation): boolean;

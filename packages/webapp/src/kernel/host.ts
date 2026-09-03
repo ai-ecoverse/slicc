@@ -15,8 +15,9 @@
  * What the factory wires up:
  *
  *  1. `Orchestrator` with the supplied callbacks + `getBrowserAPI`, and
- *     one `CapabilityBroker` (page adapter by default) injected before
- *     `orchestrator.init()` so restored scoops never probe the float (#2276).
+ *     one `CapabilityBroker` — the adapter for this float's resolved
+ *     topology — injected before `orchestrator.init()` so restored scoops
+ *     never probe the float (#2276).
  *  2. `bridge.bind(orchestrator, browser)`.
  *  3. Tray-runtime subscription so leader/follower status pushes to the
  *     panel via `bridge.emitTrayRuntimeStatus()`.

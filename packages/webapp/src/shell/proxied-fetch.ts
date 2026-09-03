@@ -35,7 +35,12 @@ import {
   headersToRecord as _headersToRecord,
 } from './proxy-headers.js';
 
-const REQUEST_BODY_CAP = 32 * 1024 * 1024;
+/**
+ * Ceiling on a proxied REQUEST body. Exported so the CapabilityBroker's REST
+ * adapter (#2276) enforces the same number as the Port legs below rather than
+ * inventing a second one.
+ */
+export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
 /**
  * Ceiling on a single proxied response body. Every realm branch buffers the
@@ -266,10 +271,16 @@ async function withProgressEnd<T>(
  * a Blob so the binary survives intact.
  */
 export function prepareRequestBody(
-  body: string | undefined,
+  body: string | Uint8Array | undefined,
   headers?: Record<string, string>
 ): BodyInit | undefined {
   if (!body) return undefined;
+  // Already bytes: the caller resolved the encoding itself (the
+  // CapabilityBroker adapters do, so both of their transports send the same
+  // bytes), leaving nothing to infer from the content type. The cast is the
+  // `ArrayBufferLike` / `ArrayBuffer` gap only — every `BufferSource` is a
+  // `BodyInit`.
+  if (typeof body !== 'string') return body as BodyInit;
   const ct =
     Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? '';
   if (ct && !isTextContentType(ct)) {
@@ -307,6 +318,16 @@ function concatChunks(chunks: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer
 }
 
 type ProxyHead = { status: number; statusText: string; headers: Record<string, string> };
+
+/**
+ * `SecureFetch` request options, widened so a caller may supply pre-resolved
+ * request BYTES. `just-bash`'s own `body` is a `string` (binary threaded as
+ * latin1); the CapabilityBroker adapters resolve their bytes up front so both
+ * of their transports send the same ones.
+ */
+export type ProxyRequestOptions = Omit<NonNullable<Parameters<SecureFetch>[1]>, 'body'> & {
+  body?: string | Uint8Array;
+};
 
 /**
  * Build the `SecureFetch` result from a completed streamed response: apply
@@ -360,9 +381,7 @@ interface PreparedPortRequest {
  * `fetch()` (the CLI proxy uses the same wire format), and base64 the
  * prepared body honoring `REQUEST_BODY_CAP`.
  */
-async function buildPortRequest(
-  options?: Parameters<SecureFetch>[1]
-): Promise<PreparedPortRequest> {
+async function buildPortRequest(options?: ProxyRequestOptions): Promise<PreparedPortRequest> {
   const plainHeaders = headersToRecord(options?.headers);
   const method = options?.method ?? 'GET';
   const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
@@ -399,7 +418,7 @@ async function buildPortRequest(
 async function collectViaPort(
   connect: () => FetchProxyPort,
   url: string,
-  options?: Parameters<SecureFetch>[1],
+  options?: ProxyRequestOptions,
   progress?: FetchProgressObserver
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const { method, transportHeaders, bodyBase64, requestBodyTooLarge } =
@@ -498,7 +517,7 @@ async function collectViaPort(
  */
 export function collectViaExtensionPort(
   url: string,
-  options?: Parameters<SecureFetch>[1],
+  options?: ProxyRequestOptions,
   progress?: FetchProgressObserver
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   return collectViaPort(
@@ -535,7 +554,7 @@ async function extensionPortFetch(
  */
 export async function collectViaExtensionDelegate(
   url: string,
-  options?: Parameters<SecureFetch>[1],
+  options?: ProxyRequestOptions,
   progress?: FetchProgressObserver
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const id = getExtensionDelegateId();

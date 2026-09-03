@@ -18,7 +18,10 @@
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
 import { isTextContentType, uint8ToBase64 } from '@slicc/shared-ts';
+import { SUDO_REQUEST_TYPE } from '../../sudo/types.js';
+import { normalizeApprovalDecision } from './approval-decision.js';
 import type { ExtensionCapabilityBrokerOptions } from './extension-adapter.js';
+import { capabilityRequestBytes } from './request-body.js';
 import {
   type ApprovalDecision,
   type ApprovalRequest,
@@ -30,12 +33,24 @@ import {
   type NetworkFetchResponse,
   type SecretCapability,
   type SecretDeleteRequest,
+  type SecretDeleteResult,
   type SecretGetRequest,
   type SecretListResult,
   type SecretMaskedEnvEntry,
   type SecretSetRequest,
-  type SecretValue,
 } from './types.js';
+
+/**
+ * Deadline on the approval RELAY hop.
+ *
+ * NOT the human-decision budget — that is `withApprovalTimeout` in `sudo/`,
+ * five minutes, and shortening it here would silently shorten it everywhere.
+ * This only guards a relay that is not there at all: a side panel that never
+ * loaded leaves `chrome.runtime.sendMessage`'s callback unfired forever, and
+ * the agent turn blocks on a prompt no human will ever see. Same 10s as the
+ * REST control-plane calls; a caller's `signal` overrides it.
+ */
+const RELAY_TIMEOUT_MS = 10_000;
 
 /** The `SECRETS_HANDLERS` control messages this adapter sends. */
 export type SecretsControlMessage =
@@ -66,7 +81,7 @@ export interface ExtensionCapabilityTransports {
 /** Everything `extension-adapter.ts` defers until an operation is first called. */
 export interface ExtensionOps {
   crossOriginFetch(request: NetworkFetchRequest): Promise<CapabilityResult<NetworkFetchResponse>>;
-  secrets: Required<Pick<SecretCapability, 'listMaskedEnv' | 'get' | 'set' | 'delete'>>;
+  secrets: Required<Pick<SecretCapability, 'listMaskedEnv' | 'getMasked' | 'set' | 'delete'>>;
   signRequest(request: MountSignRequest): Promise<CapabilityResult<MountSignResult>>;
   requestApproval(request: ApprovalRequest): Promise<CapabilityResult<ApprovalDecision>>;
 }
@@ -105,7 +120,7 @@ export function createExtensionOps(options: ExtensionCapabilityBrokerOptions): E
   }
 
   async function maskedEntries(
-    operation: 'listMaskedEnv' | 'get'
+    operation: 'listMaskedEnv' | 'getMasked'
   ): Promise<CapabilityResult<readonly SecretMaskedEnvEntry[]>> {
     const call = await attempt('secrets', operation, () =>
       transports.callSecrets({ type: 'secrets.list-masked-entries' })
@@ -122,7 +137,8 @@ export function createExtensionOps(options: ExtensionCapabilityBrokerOptions): E
   async function setSecret(request: SecretSetRequest): Promise<CapabilityResult<void>> {
     const call = await attempt('secrets', 'set', () =>
       transports.callSecrets({
-        type: request.scope === 'session' ? 'secrets.session.set' : 'secrets.set',
+        // Session unless the caller explicitly asked for a durable write.
+        type: request.scope === 'persisted' ? 'secrets.set' : 'secrets.session.set',
         name: request.name,
         value: request.value,
         domains: [...(request.domains ?? [])],
@@ -136,16 +152,25 @@ export function createExtensionOps(options: ExtensionCapabilityBrokerOptions): E
     return { ok: true, value: undefined };
   }
 
-  async function deleteSecret(request: SecretDeleteRequest): Promise<CapabilityResult<void>> {
+  async function deleteSecret(
+    request: SecretDeleteRequest
+  ): Promise<CapabilityResult<SecretDeleteResult>> {
     const call = await attempt('secrets', 'delete', () =>
       transports.callSecrets({ type: 'secrets.delete', name: request.name })
     );
     if (!call.ok) return call;
-    const reply = call.value as { ok?: boolean; error?: string } | undefined;
+    const reply = call.value as
+      | { ok?: boolean; removed?: boolean; fromSession?: boolean; error?: string }
+      | undefined;
     if (!reply?.ok) {
       return capabilityFailed('secrets', 'delete', reply?.error ?? 'secrets.delete failed');
     }
-    return { ok: true, value: undefined };
+    // Older service workers answer `{ ok: true }` with no `removed`; the end
+    // state they report is "gone", so treat the omission as removed.
+    return {
+      ok: true,
+      value: { removed: reply.removed ?? true, fromSession: reply.fromSession === true },
+    };
   }
 
   async function crossOriginFetch(
@@ -192,12 +217,14 @@ export function createExtensionOps(options: ExtensionCapabilityBrokerOptions): E
         const entries = await maskedEntries('listMaskedEnv');
         return entries.ok ? { ok: true, value: { entries: entries.value } } : entries;
       },
-      async get(request: SecretGetRequest): Promise<CapabilityResult<SecretValue>> {
-        const entries = await maskedEntries('get');
+      async getMasked(request: SecretGetRequest): Promise<CapabilityResult<SecretMaskedEnvEntry>> {
+        const entries = await maskedEntries('getMasked');
         if (!entries.ok) return entries;
         const found = entries.value.find((entry) => entry.name === request.name);
-        if (!found) return capabilityFailed('secrets', 'get', `no secret named "${request.name}"`);
-        return { ok: true, value: { name: found.name, maskedValue: found.maskedValue } };
+        if (!found) {
+          return capabilityFailed('secrets', 'getMasked', `no secret named "${request.name}"`);
+        }
+        return { ok: true, value: found };
       },
       set: setSecret,
       delete: deleteSecret,
@@ -240,14 +267,24 @@ async function defaultFetch(
   direct: boolean,
   request: NetworkFetchRequest
 ): Promise<ExtensionFetchResult> {
-  const { collectViaExtensionDelegate, collectViaExtensionPort } = await import(
+  const { collectViaExtensionDelegate, collectViaExtensionPort, REQUEST_BODY_CAP } = await import(
     '../../shell/proxied-fetch.js'
   );
+  // Bytes are resolved HERE, by the same helper the REST leg uses, so the two
+  // adapters send identical bytes for identical requests. Handing the raw
+  // string to the collector would re-decide the encoding from the content
+  // type and diverge.
+  const bytes = capabilityRequestBytes(request);
+  if (bytes !== undefined && bytes.byteLength > REQUEST_BODY_CAP) {
+    throw new Error(
+      `request body is ${bytes.byteLength} bytes, over the ${REQUEST_BODY_CAP}-byte proxy limit`
+    );
+  }
   const collect = direct ? collectViaExtensionPort : collectViaExtensionDelegate;
   const { head, body } = await collect(request.url, {
     method: request.method ?? 'GET',
     headers: request.headers,
-    body: request.body,
+    ...(bytes === undefined ? {} : { body: bytes }),
   });
   return {
     status: head.status,
@@ -257,22 +294,76 @@ async function defaultFetch(
   };
 }
 
+/** Reject once `signal` aborts, so a relay that never answers still settles. */
+function withDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('approval relay cancelled before it was sent'));
+      return;
+    }
+    const onAbort = () => reject(new Error('approval relay did not answer'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+/**
+ * Relay one approval to whoever raises the native modal on this topology.
+ *
+ * Speaks the two relay wires directly rather than going through
+ * `createExtensionSudoBroker` / `createPanelRpcSudoBroker`, for two reasons —
+ * both of which follow from this being the gesture hop and nothing else:
+ *
+ *   - Those brokers fail CLOSED to `{ decision: 'deny' }` on a transport
+ *     error, which is right for `sudo/` but wrong here: an enforcement layer
+ *     that reads a broken relay as a refusal tells the agent it was REFUSED
+ *     and stops retrying, when nobody was ever asked. A dead relay is a
+ *     `CapabilityFailure`, so this throws and lets `attempt` classify it.
+ *   - They call `suggestPattern`, which can cost an LLM round trip. Pattern
+ *     suggestion is policy; the broker forwards what it is given.
+ *
+ * A relay that never answers is bounded by {@link RELAY_TIMEOUT_MS} (a side
+ * panel that never loaded leaves MV3's callback unfired forever). That is a
+ * TRANSPORT guard — the human's own budget is `withApprovalTimeout` in
+ * `sudo/`, far above this hop.
+ */
 async function defaultRequestApproval(
   direct: boolean,
   request: ApprovalRequest
 ): Promise<ApprovalDecision> {
-  const broker = direct
-    ? (await import('../../sudo/extension-broker.js')).createExtensionSudoBroker()
-    : (await import('../../sudo/panel-rpc-broker.js')).createPanelRpcSudoBroker();
-  const decision = await broker.requestApproval({
+  const suggested = request.suggestedPattern ?? request.detail;
+  const relayed = {
     kind: request.kind,
     detail: request.detail,
+    suggestedPattern: suggested,
     ...(request.requester ? { requester: request.requester } : {}),
-    ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
-  });
-  return {
-    decision: decision.decision,
-    ...(decision.pattern ? { pattern: decision.pattern } : {}),
-    ...(decision.reason ? { reason: decision.reason } : {}),
+    ...(request.approver ? { approver: request.approver } : {}),
   };
+  const signal = request.signal ?? AbortSignal.timeout(RELAY_TIMEOUT_MS);
+
+  if (direct) {
+    // Offscreen → side panel. `panel-responder.ts` answers
+    // `{ ok, decision, error }`; only `ok` with a decision is an answer.
+    const reply = (await withDeadline(
+      sendToServiceWorker({
+        source: 'offscreen' as const,
+        payload: { type: SUDO_REQUEST_TYPE, request: relayed },
+      }),
+      signal
+    )) as { ok?: boolean; decision?: unknown; error?: string } | undefined;
+    if (!reply?.ok || reply.decision === undefined) {
+      throw new Error(reply?.error ?? 'sudo relay returned no decision');
+    }
+    return normalizeApprovalDecision(reply.decision, suggested);
+  }
+
+  // Kernel worker → page realm, where the native modal lives.
+  const { getPanelRpcClient } = await import('../../kernel/panel-rpc.js');
+  const client = getPanelRpcClient();
+  if (!client) throw new Error('panel-RPC client unavailable in this realm');
+  const { decision } = await withDeadline(
+    client.call('sudo-request', { request: relayed }, { timeoutMs: RELAY_TIMEOUT_MS }),
+    signal
+  );
+  return normalizeApprovalDecision(decision, suggested);
 }

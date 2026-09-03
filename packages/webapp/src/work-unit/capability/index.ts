@@ -110,10 +110,10 @@ export {
   SECRET_OPERATIONS,
   type SecretCapability,
   type SecretDeleteRequest,
+  type SecretDeleteResult,
   type SecretGetRequest,
   type SecretListResult,
   type SecretMaskedEnvEntry,
   type SecretOperation,
   type SecretSetRequest,
-  type SecretValue,
 } from './types.js';

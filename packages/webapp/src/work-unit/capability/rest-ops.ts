@@ -6,36 +6,73 @@
  * SHAPE (which operations exist) is needed at composition time, the bytes
  * that talk HTTP are not needed until an operation is actually called.
  *
- * Every operation is fail-closed: a non-2xx status, an unreachable transport
- * or a malformed body is a {@link CapabilityFailure}, never a
- * silently-degraded success and never a throw.
+ * Every operation is fail-closed and total: a non-2xx status, an unreachable
+ * or wedged transport, a body that fails mid-read, or a malformed reply is a
+ * {@link CapabilityFailure} — never a silently-degraded success, and never a
+ * throw.
  */
 
-import { base64ToUint8, isTextContentType, uint8ToBase64 } from '@slicc/shared-ts';
+import { isTextContentType, uint8ToBase64 } from '@slicc/shared-ts';
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
+import { getResponseBodyCap, REQUEST_BODY_CAP } from '../../shell/proxied-fetch.js';
 import {
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
 } from '../../shell/proxy-headers.js';
+import { normalizeApprovalDecision } from './approval-decision.js';
+import { capabilityRequestBytes } from './request-body.js';
 import type { RestCapabilityBrokerOptions } from './rest-adapter.js';
 import { REST_CAPABILITY_PATHS } from './rest-paths.js';
 import {
   type ApprovalDecision,
   type ApprovalRequest,
+  type CapabilityDomain,
   type CapabilityResult,
   capabilityFailed,
+  capabilityUnavailable,
   type MountSignRequest,
   type MountSignResult,
   type NetworkFetchRequest,
   type NetworkFetchResponse,
   type SecretCapability,
   type SecretDeleteRequest,
+  type SecretDeleteResult,
   type SecretGetRequest,
   type SecretListResult,
   type SecretMaskedEnvEntry,
   type SecretSetRequest,
-  type SecretValue,
 } from './types.js';
+
+/**
+ * Deadline on every small control-plane call (secrets, sign-and-forward,
+ * approvals).
+ *
+ * A wedged server does not reject — it simply never answers — so without a
+ * deadline `callJson` waits until the tab dies, and a scoop that asked for its
+ * masked env at shell init never finishes mounting. Matches
+ * `MASKED_SECRETS_TIMEOUT_MS` in `core/secret-env.ts`, the same budget the
+ * other cross-origin bridge fetches use.
+ *
+ * `network.crossOriginFetch` deliberately does NOT take this: a multi-MB
+ * download is not a hang, so its caller owns the budget via `request.signal`.
+ */
+const CONTROL_CALL_TIMEOUT_MS = 10_000;
+
+/** Whether a rejection is a cancellation rather than a transport error. */
+function isAbort(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+/**
+ * A deadline for one control-plane call, cancelled early if the caller
+ * aborts. `AbortSignal.any` is unavailable in older runtimes, in which case
+ * the fixed deadline alone still bounds the call.
+ */
+function callSignal(timeoutMs: number, caller: AbortSignal | undefined): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  if (!caller) return deadline;
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any([deadline, caller]) : deadline;
+}
 
 interface JsonCall {
   /** HTTP status, or `0` when the request never reached the server. */
@@ -46,7 +83,7 @@ interface JsonCall {
 
 /** The bound HTTP surface every operation below shares. */
 interface RestTransport {
-  callJson(method: string, path: string, body?: unknown): Promise<JsonCall>;
+  callJson(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<JsonCall>;
   send(path: string, init: RequestInit): Promise<Response | Error>;
   headers(extra?: Record<string, string>): Record<string, string>;
 }
@@ -55,6 +92,7 @@ function createTransport(options: RestCapabilityBrokerOptions): RestTransport {
   const fetchImpl = options.fetchImpl ?? ((...args) => globalThis.fetch(...args));
   const resolveUrl = options.resolveUrl ?? resolveApiUrl;
   const headers = options.headers ?? apiHeaders;
+  const timeoutMs = options.controlTimeoutMs ?? CONTROL_CALL_TIMEOUT_MS;
 
   async function send(path: string, init: RequestInit): Promise<Response | Error> {
     try {
@@ -67,17 +105,26 @@ function createTransport(options: RestCapabilityBrokerOptions): RestTransport {
   return {
     headers,
     send,
-    async callJson(method, path, body) {
+    async callJson(method, path, body, signal) {
       const init: RequestInit = {
         method,
         headers: headers({ 'Content-Type': 'application/json' }),
+        signal: callSignal(timeoutMs, signal),
       };
       if (body !== undefined) init.body = JSON.stringify(body);
       const resp = await send(path, init);
       if (resp instanceof Error) {
-        return { status: 0, ok: false, body: { error: resp.message } };
+        return {
+          status: 0,
+          ok: false,
+          body: {
+            error: isAbort(resp) ? `no answer within ${timeoutMs}ms` : resp.message,
+          },
+        };
       }
-      return { status: resp.status, ok: resp.ok, body: await resp.json().catch(() => undefined) };
+      // A body that fails mid-read is a failed call, not a thrown one.
+      const parsed = await resp.json().catch(() => undefined);
+      return { status: resp.status, ok: resp.ok, body: parsed };
     },
   };
 }
@@ -96,19 +143,22 @@ function statusOf(call: JsonCall): number | undefined {
   return call.status === 0 ? undefined : call.status;
 }
 
+/** The typed miss for a call that did not succeed. */
+function failed(
+  capability: CapabilityDomain,
+  operation: string,
+  call: JsonCall,
+  fallback: string
+): CapabilityResult<never> {
+  return capabilityFailed(capability, operation, errorText(call, fallback), statusOf(call));
+}
+
 async function maskedEntries(
   transport: RestTransport,
-  operation: 'listMaskedEnv' | 'get'
+  operation: 'listMaskedEnv' | 'getMasked'
 ): Promise<CapabilityResult<readonly SecretMaskedEnvEntry[]>> {
   const call = await transport.callJson('GET', REST_CAPABILITY_PATHS.secretsMasked);
-  if (!call.ok) {
-    return capabilityFailed(
-      'secrets',
-      operation,
-      errorText(call, 'masked secrets request failed'),
-      statusOf(call)
-    );
-  }
+  if (!call.ok) return failed('secrets', operation, call, 'masked secrets request failed');
   if (!Array.isArray(call.body)) {
     return capabilityFailed('secrets', operation, 'masked secrets response is not an array');
   }
@@ -122,48 +172,56 @@ function restSecrets(transport: RestTransport): Partial<SecretCapability> {
       const entries = await maskedEntries(transport, 'listMaskedEnv');
       return entries.ok ? { ok: true, value: { entries: entries.value } } : entries;
     },
-    async get(request: SecretGetRequest): Promise<CapabilityResult<SecretValue>> {
-      const entries = await maskedEntries(transport, 'get');
+    async getMasked(request: SecretGetRequest): Promise<CapabilityResult<SecretMaskedEnvEntry>> {
+      const entries = await maskedEntries(transport, 'getMasked');
       if (!entries.ok) return entries;
       const found = entries.value.find((entry) => entry.name === request.name);
       if (!found) {
-        return capabilityFailed('secrets', 'get', `no secret named "${request.name}"`, 404);
+        return capabilityFailed('secrets', 'getMasked', `no secret named "${request.name}"`, 404);
       }
-      return { ok: true, value: { name: found.name, maskedValue: found.maskedValue } };
+      return { ok: true, value: found };
     },
     async set(request: SecretSetRequest): Promise<CapabilityResult<void>> {
-      const path =
-        request.scope === 'session'
-          ? REST_CAPABILITY_PATHS.secretsSession
-          : REST_CAPABILITY_PATHS.secretsPersisted;
+      const persisted = request.scope === 'persisted';
+      const path = persisted
+        ? REST_CAPABILITY_PATHS.secretsPersisted
+        : REST_CAPABILITY_PATHS.secretsSession;
       const call = await transport.callJson('POST', path, {
         name: request.name,
         value: request.value,
         domains: [...(request.domains ?? [])],
       });
-      if (!call.ok) {
-        return capabilityFailed(
+      // swift-server does not register `POST /api/secrets` (issue #2806), so
+      // its 404 means "this float can never persist a secret" — permanent,
+      // not retryable. Reporting it as a failure would have a caller retry
+      // forever. The session route exists on both servers, which is why the
+      // operation stays on the allowlist.
+      if (persisted && call.status === 404) {
+        return capabilityUnavailable(
           'secrets',
           'set',
-          errorText(call, 'set secret failed'),
-          statusOf(call)
+          'this server has no persisted-secret write route (see issue #2806); ' +
+            "retry with scope: 'session'"
         );
       }
+      if (!call.ok) return failed('secrets', 'set', call, 'set secret failed');
       return { ok: true, value: undefined };
     },
-    async delete(request: SecretDeleteRequest): Promise<CapabilityResult<void>> {
+    async delete(request: SecretDeleteRequest): Promise<CapabilityResult<SecretDeleteResult>> {
       const call = await transport.callJson(
         'DELETE',
         `${REST_CAPABILITY_PATHS.secretsPersisted}/${encodeURIComponent(request.name)}`
       );
-      // Deleting what is already gone is the requested end state.
-      if (call.ok || call.status === 404) return { ok: true, value: undefined };
-      return capabilityFailed(
-        'secrets',
-        'delete',
-        errorText(call, 'delete secret failed'),
-        statusOf(call)
-      );
+      // A 404 is the server saying "no such secret" — surfaced, not swallowed.
+      // Whether that is acceptable is the CALLER's policy (`secret rm` may
+      // want it to be idempotent; a scrub may not), and a broker that decided
+      // it here would take the choice away.
+      if (!call.ok) return failed('secrets', 'delete', call, 'delete secret failed');
+      const body = call.body as { removed?: boolean; fromSession?: boolean } | undefined;
+      return {
+        ok: true,
+        value: { removed: body?.removed ?? true, fromSession: body?.fromSession === true },
+      };
     },
   };
 }
@@ -178,30 +236,82 @@ async function restCrossOriginFetch(
     'X-Target-URL': request.url,
   });
   const init: RequestInit = { method, headers, cache: 'no-store' };
-  if (request.body !== undefined && method !== 'GET' && method !== 'HEAD') {
-    init.body =
-      request.bodyEncoding === 'base64' ? (base64ToUint8(request.body) as BodyInit) : request.body;
+  if (request.signal) init.signal = request.signal;
+
+  // Same ceilings the Port legs enforce (`proxied-fetch.ts`): a body past
+  // them is far likelier to take the tab down than to finish.
+  const bytes = capabilityRequestBytes(request);
+  if (bytes !== undefined) {
+    if (bytes.byteLength > REQUEST_BODY_CAP) {
+      return capabilityFailed(
+        'network',
+        'crossOriginFetch',
+        `request body is ${bytes.byteLength} bytes, over the ${REQUEST_BODY_CAP}-byte proxy limit`
+      );
+    }
+    init.body = bytes as BodyInit;
   }
+
   const resp = await transport.send(REST_CAPABILITY_PATHS.fetchProxy, init);
   if (resp instanceof Error) {
-    return capabilityFailed('network', 'crossOriginFetch', resp.message);
+    return capabilityFailed(
+      'network',
+      'crossOriginFetch',
+      isAbort(resp) ? 'request cancelled' : resp.message
+    );
   }
   // `X-Proxy-Error` marks a failure of the PROXY, not of the upstream — an
   // upstream 4xx/5xx is a legitimate result the caller must still see.
   if (resp.headers.get('x-proxy-error') === '1') {
+    const detail = await resp.text().catch(() => '');
     return capabilityFailed(
       'network',
       'crossOriginFetch',
-      await resp.text().catch(() => 'fetch-proxy reported an error'),
+      detail || 'fetch-proxy reported an error',
       resp.status
     );
   }
+
+  const cap = getResponseBodyCap();
+  const hinted = Number(resp.headers.get('content-length') ?? '');
+  if (Number.isFinite(hinted) && hinted > cap) {
+    return capabilityFailed(
+      'network',
+      'crossOriginFetch',
+      `response body is ${hinted} bytes, over the ${cap}-byte download limit`,
+      resp.status
+    );
+  }
+  // A body can stall or reset after the headers land, so consuming it is
+  // inside the non-throwing contract too.
+  let body: Uint8Array;
+  try {
+    body = new Uint8Array(await resp.arrayBuffer());
+  } catch (err) {
+    return capabilityFailed(
+      'network',
+      'crossOriginFetch',
+      isAbort(err)
+        ? 'response body cancelled'
+        : `response body failed: ${err instanceof Error ? err.message : String(err)}`,
+      resp.status
+    );
+  }
+  // The hint can be absent or wrong, so re-check against what actually arrived.
+  if (body.byteLength > cap) {
+    return capabilityFailed(
+      'network',
+      'crossOriginFetch',
+      `response body is ${body.byteLength} bytes, over the ${cap}-byte download limit`,
+      resp.status
+    );
+  }
+
   const raw: Record<string, string> = {};
   resp.headers.forEach((value, key) => {
     raw[key] = value;
   });
   const responseHeaders = decodeForbiddenResponseHeaders(raw);
-  const bytes = new Uint8Array(await resp.arrayBuffer());
   const textual = isTextContentType(responseHeaders['content-type'] ?? '');
   return {
     ok: true,
@@ -210,7 +320,7 @@ async function restCrossOriginFetch(
       ok: resp.ok,
       statusText: resp.statusText,
       headers: responseHeaders,
-      body: textual ? new TextDecoder().decode(bytes) : uint8ToBase64(bytes),
+      body: textual ? new TextDecoder().decode(body) : uint8ToBase64(body),
       bodyEncoding: textual ? 'text' : 'base64',
       url: request.url,
     },
@@ -232,12 +342,7 @@ async function restSignRequest(
   if (reply && typeof reply === 'object' && typeof reply.ok === 'boolean') {
     return { ok: true, value: reply };
   }
-  return capabilityFailed(
-    'mounts',
-    'signRequest',
-    errorText(call, 'sign-and-forward response is not an envelope'),
-    statusOf(call)
-  );
+  return failed('mounts', 'signRequest', call, 'sign-and-forward response is not an envelope');
 }
 
 async function restRequestApproval(
@@ -245,49 +350,31 @@ async function restRequestApproval(
   request: ApprovalRequest
 ): Promise<CapabilityResult<ApprovalDecision>> {
   const suggestedPattern = request.suggestedPattern ?? request.detail;
-  const call = await transport.callJson('POST', REST_CAPABILITY_PATHS.sudoApprove, {
-    kind: request.kind,
-    detail: request.detail,
-    suggestedPattern,
-    // Authenticated identity. Dropping it leaves the OS / TTY prompt showing
-    // nothing but `detail`, which for a guest message is prose the requester
-    // wrote about themselves.
-    ...(request.requester ? { requester: request.requester } : {}),
-  });
+  const call = await transport.callJson(
+    'POST',
+    REST_CAPABILITY_PATHS.sudoApprove,
+    {
+      kind: request.kind,
+      detail: request.detail,
+      suggestedPattern,
+      // Authenticated identity. Dropping it leaves the OS / TTY prompt showing
+      // nothing but `detail`, which for a guest message is prose the requester
+      // wrote about themselves.
+      ...(request.requester ? { requester: request.requester } : {}),
+      ...(request.approver ? { approver: request.approver } : {}),
+    },
+    request.signal
+  );
   if (!call.ok) {
-    return capabilityFailed(
-      'approvals',
-      'request',
-      errorText(call, 'approval endpoint returned non-OK'),
-      statusOf(call)
-    );
+    return failed('approvals', 'request', call, 'approval endpoint returned non-OK');
   }
-  return { ok: true, value: normalizeDecision(call.body, suggestedPattern) };
-}
-
-/**
- * Coerce an untrusted endpoint body into an {@link ApprovalDecision}. Anything
- * that is not a recognized `allow` / `always` shape becomes `deny` (fail
- * closed); an `always` without a pattern falls back to the suggested default.
- * Mirrors `sudo/http-broker.ts` so the two cannot drift.
- */
-function normalizeDecision(body: unknown, suggested: string): ApprovalDecision {
-  if (!body || typeof body !== 'object') return { decision: 'deny' };
-  const decision = (body as { decision?: unknown }).decision;
-  if (decision === 'allow') return { decision: 'allow' };
-  if (decision === 'always') {
-    const pattern = (body as { pattern?: unknown }).pattern;
-    const resolved =
-      typeof pattern === 'string' && pattern.trim().length > 0 ? pattern.trim() : suggested;
-    return { decision: 'always', pattern: resolved };
-  }
-  return { decision: 'deny' };
+  return { ok: true, value: normalizeApprovalDecision(call.body, suggestedPattern) };
 }
 
 /** Everything `rest-adapter.ts` defers until an operation is first called. */
 export interface RestOps {
   crossOriginFetch(request: NetworkFetchRequest): Promise<CapabilityResult<NetworkFetchResponse>>;
-  secrets: Required<Pick<SecretCapability, 'listMaskedEnv' | 'get' | 'set' | 'delete'>>;
+  secrets: Required<Pick<SecretCapability, 'listMaskedEnv' | 'getMasked' | 'set' | 'delete'>>;
   signRequest(request: MountSignRequest): Promise<CapabilityResult<MountSignResult>>;
   requestApproval(request: ApprovalRequest): Promise<CapabilityResult<ApprovalDecision>>;
 }

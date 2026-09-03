@@ -9,6 +9,22 @@
  * `CapabilityUnavailable` (it succeeds, or it reports a `CapabilityFailure`).
  * That is what lets a caller branch on `supports()` once at composition time
  * instead of re-deciding on every call.
+ *
+ * `transport` says which half of an adapter's pair is running, and turns two
+ * otherwise-untested holes into failures:
+ *
+ *   - `'failing'` — every transport-backed op must report a
+ *     `CapabilityFailure`. Without this an adapter could swallow a dead
+ *     socket into `{ ok: true, value: { entries: [] } }` and pass, and
+ *     `fetchSecretEnvVars` would then seed a scoop with an empty env instead
+ *     of reporting that secrets are unreachable.
+ *   - `'answering'` — every transport-backed op must succeed AND return a
+ *     value of its declared shape, so `{ ok: true, value: undefined }` from a
+ *     half-wired op cannot pass either.
+ *
+ * Composition-time answers (`network.localNodeServer`) and page-gesture ops
+ * are exempt: they never touch the adapter's transport, so a broken transport
+ * says nothing about them.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -73,7 +89,11 @@ async function invokeEveryOperation(broker: CapabilityBroker): Promise<Invocatio
       result: await broker.network.websocket({ url: 'wss://example.test/' }),
     },
     { domain: 'secrets', operation: 'listMaskedEnv', result: await broker.secrets.listMaskedEnv() },
-    { domain: 'secrets', operation: 'get', result: await broker.secrets.get({ name: 'X' }) },
+    {
+      domain: 'secrets',
+      operation: 'getMasked',
+      result: await broker.secrets.getMasked({ name: 'X' }),
+    },
     {
       domain: 'secrets',
       operation: 'set',
@@ -122,7 +142,103 @@ function allowlistOf(broker: CapabilityBroker): Set<string> {
   return allowed;
 }
 
-export function runCapabilityBrokerConformance(name: string, make: () => CapabilityBroker): void {
+/** Which half of an adapter's transport pair a run exercises. */
+export type ConformanceTransport = 'answering' | 'failing' | 'none';
+
+export interface ConformanceOptions {
+  /**
+   * `'answering'` — the transport replies to everything.
+   * `'failing'` — every transport call rejects.
+   * `'none'` (the default) — the adapter has no transport-backed ops.
+   */
+  transport?: ConformanceTransport;
+}
+
+/** Ops answered without ever touching the adapter's transport. */
+const COMPOSITION_TIME_OPS = new Set([
+  'network.localNodeServer',
+  'mounts.pickDirectory',
+  'devices.usbRequest',
+  'devices.serialRequest',
+  'devices.hidRequest',
+]);
+
+/** A value that could carry named fields. */
+function isRecord(candidate: unknown): candidate is Record<string, unknown> {
+  return typeof candidate === 'object' && candidate !== null;
+}
+
+/**
+ * The declared shape of each operation's success value, one predicate per
+ * operation. A value that does not match is as much a bug as a rejected
+ * promise — it is what a caller reads, and `{ ok: true, value: undefined }`
+ * from a half-wired op would otherwise pass every other assertion here.
+ */
+const VALUE_SHAPES: Record<string, { label: string; matches: (value: unknown) => boolean }> = {
+  localNodeServer: {
+    label: 'LocalNodeServerStatus',
+    matches: (v) => isRecord(v) && v.available === true,
+  },
+  crossOriginFetch: {
+    label: 'NetworkFetchResponse',
+    matches: (v) =>
+      isRecord(v) &&
+      typeof v.status === 'number' &&
+      typeof v.body === 'string' &&
+      (v.bodyEncoding === 'text' || v.bodyEncoding === 'base64'),
+  },
+  listMaskedEnv: {
+    label: 'SecretListResult',
+    matches: (v) => isRecord(v) && Array.isArray(v.entries),
+  },
+  getMasked: {
+    label: 'SecretMaskedEnvEntry',
+    matches: (v) => isRecord(v) && typeof v.name === 'string' && typeof v.maskedValue === 'string',
+  },
+  set: { label: 'no value', matches: (v) => v === undefined },
+  delete: {
+    label: 'SecretDeleteResult',
+    matches: (v) =>
+      isRecord(v) && typeof v.removed === 'boolean' && typeof v.fromSession === 'boolean',
+  },
+  signRequest: {
+    label: 'SignAndForwardReply',
+    matches: (v) => isRecord(v) && typeof v.ok === 'boolean',
+  },
+  request: {
+    label: 'ApprovalDecision',
+    matches: (v) => isRecord(v) && typeof v.decision === 'string',
+  },
+  resolve: {
+    label: 'ApprovalDecision',
+    matches: (v) => isRecord(v) && typeof v.decision === 'string',
+  },
+  pickDirectory: {
+    label: 'MountDirectoryHandle',
+    matches: (v) => isRecord(v) && typeof v.id === 'string',
+  },
+  usbRequest: { label: 'DeviceHandle', matches: (v) => isRecord(v) && typeof v.kind === 'string' },
+  serialRequest: {
+    label: 'DeviceHandle',
+    matches: (v) => isRecord(v) && typeof v.kind === 'string',
+  },
+  hidRequest: { label: 'DeviceHandle', matches: (v) => isRecord(v) && typeof v.kind === 'string' },
+};
+
+/** `'ok'`, or what the value should have been. */
+function describeValue(operation: string, value: unknown): string {
+  const shape = VALUE_SHAPES[operation];
+  if (!shape) return 'ok';
+  return shape.matches(value) ? 'ok' : `bad ${shape.label}`;
+}
+
+export function runCapabilityBrokerConformance(
+  name: string,
+  make: () => CapabilityBroker,
+  options: ConformanceOptions = {}
+): void {
+  const transport = options.transport ?? 'none';
+
   describe(`CapabilityBroker conformance: ${name}`, () => {
     it('names one of the four float-topology adapters', () => {
       const broker = make();
@@ -247,5 +363,47 @@ export function runCapabilityBrokerConformance(name: string, make: () => Capabil
         });
       }
     });
+
+    if (transport === 'failing') {
+      it('reports a dead transport as a failure — never as an empty success', async () => {
+        const broker = make();
+        const allowed = allowlistOf(broker);
+        const rows = await invokeEveryOperation(broker);
+        const transportBacked = rows.filter(
+          ({ domain, operation }) =>
+            allowed.has(`${domain}.${operation}`) &&
+            !COMPOSITION_TIME_OPS.has(`${domain}.${operation}`)
+        );
+        expect(transportBacked.length).toBeGreaterThan(0);
+        for (const { domain, operation, result } of transportBacked) {
+          expect({ domain, operation, failure: isCapabilityFailure(result) }).toEqual({
+            domain,
+            operation,
+            failure: true,
+          });
+        }
+      });
+    }
+
+    if (transport === 'answering') {
+      it('returns a value of the declared shape for every answered operation', async () => {
+        const broker = make();
+        const allowed = allowlistOf(broker);
+        const rows = await invokeEveryOperation(broker);
+        const answered = rows.filter(({ domain, operation }) =>
+          allowed.has(`${domain}.${operation}`)
+        );
+        expect(answered.length).toBeGreaterThan(0);
+        for (const { domain, operation, result } of answered) {
+          expect({ domain, operation, ok: result.ok }).toEqual({ domain, operation, ok: true });
+          if (!result.ok) continue;
+          expect({ domain, operation, shape: describeValue(operation, result.value) }).toEqual({
+            domain,
+            operation,
+            shape: 'ok',
+          });
+        }
+      });
+    }
   });
 }

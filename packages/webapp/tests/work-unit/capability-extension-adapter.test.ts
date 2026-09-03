@@ -47,14 +47,16 @@ let reply: unknown = { ok: true };
 
 const originalChrome = (globalThis as { chrome?: unknown }).chrome;
 
-function installChrome(options: { connect?: boolean } = {}): void {
+function installChrome(options: { connect?: boolean; silent?: boolean } = {}): void {
   const runtime: Record<string, unknown> = {
     get lastError() {
       return lastError;
     },
     sendMessage: (message: Record<string, unknown>, callback?: (r: unknown) => void) => {
       sent.push({ message });
-      callback?.(reply);
+      // `silent` models a side panel that never loaded: MV3 leaves the
+      // callback unfired rather than erroring.
+      if (!options.silent) callback?.(reply);
     },
   };
   if (options.connect) {
@@ -119,11 +121,13 @@ describe('extension-direct default transports', () => {
     installChrome();
     const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
     await broker.secrets.set({ name: 'TOK', value: 'v', domains: ['api.test'] });
-    await broker.secrets.set({ name: 'TOK', value: 'v', scope: 'session' });
+    await broker.secrets.set({ name: 'TOK', value: 'v', scope: 'persisted' });
     await broker.secrets.delete({ name: 'TOK' });
+    // Session unless the caller explicitly asked to persist — a durable write
+    // is never something you get by omitting a field.
     expect(sent.map((s) => s.message)).toEqual([
-      { type: 'secrets.set', name: 'TOK', value: 'v', domains: ['api.test'] },
-      { type: 'secrets.session.set', name: 'TOK', value: 'v', domains: [] },
+      { type: 'secrets.session.set', name: 'TOK', value: 'v', domains: ['api.test'] },
+      { type: 'secrets.set', name: 'TOK', value: 'v', domains: [] },
       { type: 'secrets.delete', name: 'TOK' },
     ]);
   });
@@ -216,12 +220,40 @@ describe('approvals over the extension sudo relay', () => {
     expect(result).toEqual({ ok: true, value: { decision: 'always', pattern: 'git *' } });
   });
 
-  it('fails an approval closed when the panel returns an error envelope', async () => {
+  it('reports a broken relay as a failure — a dead panel is not a human saying no', async () => {
     installChrome();
     reply = { ok: false, error: 'no responder' };
     const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
-    const result = await broker.approvals.request({ kind: 'command', detail: 'ls' });
-    expect(result).toEqual({ ok: true, value: { decision: 'deny' } });
+    const result = await broker.approvals.request({
+      kind: 'command',
+      detail: 'ls',
+      suggestedPattern: 'ls',
+    });
+    // A `deny` here would be indistinguishable from a refusal, so an
+    // enforcement layer would tell the agent it was REFUSED and stop
+    // retrying — when in fact nobody was ever asked.
+    expect(isCapabilityFailure(result)).toBe(true);
+    if (isCapabilityFailure(result)) {
+      expect(result.capability).toBe('approvals');
+      expect(result.message).toContain('no responder');
+    }
+  });
+
+  it('does not wait forever on a relay whose callback never fires', async () => {
+    installChrome({ silent: true });
+    const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
+    const result = await broker.approvals.request({
+      kind: 'command',
+      detail: 'ls',
+      suggestedPattern: 'ls',
+      // The adapter's own 10s relay guard is the production default; the test
+      // supplies its own so it does not sit for ten seconds. The HUMAN's
+      // budget is `withApprovalTimeout` in `sudo/`, well above this hop.
+      signal: AbortSignal.timeout(20),
+    });
+    // Also a failure, not a deny: nobody was asked, so nobody refused.
+    expect(isCapabilityFailure(result)).toBe(true);
+    if (isCapabilityFailure(result)) expect(result.message).toContain('did not answer');
   });
 });
 
@@ -230,7 +262,12 @@ describe('extension-delegate default transports', () => {
     installChrome({ connect: true });
     await setDelegateId('delegate-extension-id');
     const broker = createExtensionCapabilityBroker({ adapter: 'extension-delegate' });
-    const result = await broker.secrets.set({ name: 'TOK', value: 'v', domains: ['api.test'] });
+    const result = await broker.secrets.set({
+      name: 'TOK',
+      value: 'v',
+      domains: ['api.test'],
+      scope: 'persisted',
+    });
     expect(openedPorts).toEqual(['secrets.crud']);
     expect(sent[0].message).toEqual({
       id: 1,

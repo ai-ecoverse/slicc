@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { registerSecretRoutes } from '../../src/routes/secrets.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
@@ -75,6 +76,14 @@ async function start(): Promise<Harness> {
 
   const app = express();
   registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: false });
+  // Mounted so the contract covers `/api/fetch-proxy` too: without it the
+  // route-existence loop below would skip the one route the browser adapter
+  // uses most, and a rename on this server would stay green here while the
+  // Swift replay caught it.
+  registerFetchProxyRoute(app, {
+    secretProxy,
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
   // A backend that would throw if it were ever reached: every contract case
   // for this route is a rejected payload, so a real prompt must never fire.
   registerSudoApproveEndpoint(app, {
@@ -114,14 +123,11 @@ describe('CapabilityBroker REST contract — node-server', () => {
 
   it('registers a route for every contract operation', async () => {
     for (const op of contract.operations) {
-      // Two exclusions, both covered by `serverCases` instead:
-      //   - `/api/fetch-proxy` is mounted by index.ts (it needs the whole
-      //     proxy pipeline), not by the route modules this harness composes.
-      //   - `DELETE /api/secrets/{name}` legitimately 404s for a name that
-      //     does not exist, so "404" cannot distinguish it from a missing
-      //     route here; the `{{unknownSecret}}` case asserts a JSON handler
-      //     body, which a missing route would not produce.
-      if (op.path.startsWith('/api/fetch-proxy') || op.path.includes('{name}')) continue;
+      // One exclusion: `DELETE /api/secrets/{name}` legitimately 404s for a
+      // name that does not exist, so "404" cannot distinguish it from a
+      // missing route here. The `{{unknownSecret}}` case asserts a JSON
+      // handler body instead, which a missing route would not produce.
+      if (op.path.includes('{name}')) continue;
       const res = await fetch(`${h.base}${op.path}`, {
         method: op.method === '*' ? 'GET' : op.method,
         headers: { 'Content-Type': 'application/json' },

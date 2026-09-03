@@ -21,6 +21,7 @@
  * phase 6b).
  */
 
+import { createLazyOps, guardCapability } from './boundary.js';
 import { composeCapabilityBroker } from './compose.js';
 import type { RestOps } from './rest-ops.js';
 import type {
@@ -45,6 +46,12 @@ export interface RestCapabilityBrokerOptions {
    * token only when a cross-origin bridge base is configured.
    */
   headers?: (extra?: Record<string, string>) => Record<string, string>;
+  /**
+   * Deadline on the small control-plane calls (secrets, sign-and-forward,
+   * approvals). Defaults to 10s — see `rest-ops.ts`. Not a per-request knob;
+   * `network.crossOriginFetch` takes its caller's `signal` instead.
+   */
+  controlTimeoutMs?: number;
   pageGestures?: PageGestureChannel;
 }
 
@@ -52,11 +59,9 @@ export interface RestCapabilityBrokerOptions {
 export function createRestCapabilityBroker(
   options: RestCapabilityBrokerOptions = {}
 ): CapabilityBroker {
-  let ops: Promise<RestOps> | null = null;
-  const load = (): Promise<RestOps> => {
-    ops ??= import('./rest-ops.js').then((module) => module.createRestOps(options));
-    return ops;
-  };
+  const load = createLazyOps<RestOps>(() =>
+    import('./rest-ops.js').then((module) => module.createRestOps(options))
+  );
 
   return composeCapabilityBroker({
     adapter: 'node-rest',
@@ -67,15 +72,34 @@ export function createRestCapabilityBroker(
       // and no transport module load either.
       localNodeServer: (): Promise<CapabilityResult<LocalNodeServerStatus>> =>
         Promise.resolve({ ok: true, value: { available: true } }),
-      crossOriginFetch: async (request) => (await load()).crossOriginFetch(request),
+      crossOriginFetch: (request) =>
+        guardCapability('network', 'crossOriginFetch', async () =>
+          (await load()).crossOriginFetch(request)
+        ),
     },
     secrets: {
-      listMaskedEnv: async () => (await load()).secrets.listMaskedEnv(),
-      get: async (request) => (await load()).secrets.get(request),
-      set: async (request) => (await load()).secrets.set(request),
-      delete: async (request) => (await load()).secrets.delete(request),
+      listMaskedEnv: () =>
+        guardCapability('secrets', 'listMaskedEnv', async () =>
+          (await load()).secrets.listMaskedEnv()
+        ),
+      getMasked: (request) =>
+        guardCapability('secrets', 'getMasked', async () =>
+          (await load()).secrets.getMasked(request)
+        ),
+      set: (request) =>
+        guardCapability('secrets', 'set', async () => (await load()).secrets.set(request)),
+      delete: (request) =>
+        guardCapability('secrets', 'delete', async () => (await load()).secrets.delete(request)),
     },
-    mounts: { signRequest: async (request) => (await load()).signRequest(request) },
-    approvals: { request: async (request) => (await load()).requestApproval(request) },
+    mounts: {
+      signRequest: (request) =>
+        guardCapability('mounts', 'signRequest', async () => (await load()).signRequest(request)),
+    },
+    approvals: {
+      request: (request) =>
+        guardCapability('approvals', 'request', async () =>
+          (await load()).requestApproval(request)
+        ),
+    },
   });
 }
