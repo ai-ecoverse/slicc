@@ -425,6 +425,37 @@ drifted:
   race, so a seed from the previous session could paint a transcript the leader
   has since frozen or cleared.
 
+### The model pill: one per-unit read (PR C)
+
+`summary.model` is the only place the shell asks what model a unit runs on.
+`modelForUnit(units, id, previous)` in `presentation.ts` is that read, and it
+carries the two rules each call site used to re-derive:
+
+- **The owning cone answers** (#2310). Selecting a scoop shows its cone's
+  model, because the cone is what the picker writes to. A unit whose chain is
+  unknown answers for itself.
+- **Absent is "not known yet", never "no model"** (#2329). A roster can
+  legitimately arrive without the field — a leader too old to send
+  `ScoopSummary.model`, a record not yet backfilled, a catalog still warming
+  up — and reading that as an answer is what latched a follower's pill empty
+  for a whole session. `previous` is carried forward instead.
+
+Four reads moved onto it: the leader's pill (`wc-live-thinking-hydration.ts`),
+its telemetry context (`wc-live-controller.ts`), a new cone's seed
+(`wc-cone-actions.ts`) and the `model.state` a follower is sent
+(`wc-tray.ts`) — so that frame and the leader's own pill cannot drift.
+
+`toScoopSummaries` keeps `modelFor(record)` and is the only one left in `ui/`:
+it is the leader PROJECTING a record onto the wire, the thing that _produces_
+`ScoopSummary.model`, so reading a summary there would be circular. It sits
+upstream of the protocol exactly as `recordToWorkUnitSummary` does.
+
+**The catalog stays off the protocol.** `summary.model` is an identity
+(`{ provider, id }`); the display NAME and the reasoning capability come from
+a catalog that is leader-global on both sides — `resolveModelById` locally,
+`models.list` remotely. That is why `wc-follower-model-surface.ts` still
+exists: it is the catalog, and nothing else.
+
 ## Sequencing and scope
 
 This lands in two steps:

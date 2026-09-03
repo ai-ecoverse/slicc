@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { toTabDescriptors } from '../../../src/work-unit/client/presentation.js';
+import { modelForUnit, toTabDescriptors } from '../../../src/work-unit/client/presentation.js';
 import type { WorkUnitClientEvent } from '../../../src/work-unit/client/types.js';
 import type { ClientHarness, FakeUnit } from './fakes.js';
 
@@ -80,6 +80,48 @@ function rosterCases(make: () => ClientHarness): void {
     expect(scoop?.state).toBe('working');
     expect(scoop?.phase).toBe('tool');
     expect(descriptors.find((tab) => tab.key === 'cone_1')?.phase).toBeUndefined();
+  });
+
+  it('never latches on a roster that does not KNOW the unit yet (#2329)', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const known = modelForUnit(await harness.client.list(), 'cone_1');
+    expect(known?.id).toBe('claude-opus-4-6');
+
+    // A roster that has not arrived, or that predates the unit, cannot ANSWER.
+    // Reading that silence as "this unit has no model" is what latched a
+    // follower's pill empty for a whole session.
+    expect(modelForUnit([], 'cone_1', known)?.id).toBe('claude-opus-4-6');
+    // …and with nothing to carry forward it stays absent rather than inventing
+    // one — the global selection is never a unit's answer.
+    expect(modelForUnit([], 'cone_1')).toBeUndefined();
+  });
+
+  it('lets a unit the roster DESCRIBES say it has no model', async () => {
+    const harness = make();
+    harness.setRoster(
+      ROSTER.map((unit) => (unit.id === 'cone_1' ? { ...unit, model: undefined } : unit)),
+      'cone_1'
+    );
+    const units = await harness.client.list();
+    expect(units.find((unit) => unit.id === 'cone_1')?.model).toBeUndefined();
+    // Described, so its answer stands — including "none". Carrying a previous
+    // pin here would keep a model the record has actually lost, and the leader
+    // (which has no carry-forward and falls to the profile default) would then
+    // disagree with the follower about the same unit.
+    expect(
+      modelForUnit(units, 'cone_1', { id: 'claude-opus-4-6', provider: 'anthropic' })
+    ).toBeUndefined();
+  });
+
+  it('reads a child’s model from the cone that owns it', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_2');
+    const units = await harness.client.list();
+    // `scoop_1` has no model of its own; the picker writes to its cone, so the
+    // pill shows the cone's — one rule, both transports (#2310).
+    expect(units.find((unit) => unit.id === 'scoop_1')?.model).toBeUndefined();
+    expect(modelForUnit(units, 'scoop_1')?.id).toBe('claude-sonnet-5');
   });
 
   it('carries each unit’s own model, and never invents one', async () => {

@@ -1,8 +1,8 @@
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
-import type { WorkUnitClient } from '../../work-unit/client/types.js';
-import { modelFor } from '../../work-unit/record.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { AgentHandle } from '../types.js';
@@ -41,6 +41,19 @@ export function createWcController(
   // `createWorkUnitAgentHandle`). One selection rule for both: the unit the
   // panel says it is showing.
   const kernelEvents = client.createAgentHandle();
+  /**
+   * The roster, kept fresh from the protocol's push. Held rather than fetched
+   * because the telemetry context below is read synchronously, on a path that
+   * cannot await — and `subscribeList` fires once immediately, so it is never
+   * empty for longer than the client itself is.
+   *
+   * Never unsubscribed: this controller lives as long as the shell does.
+   */
+  let units: readonly WorkUnitSummary[] = [];
+  workUnits.subscribeList((next) => {
+    units = next;
+  });
+
   const agentHandle = createWorkUnitAgentHandle(workUnits, {
     getSelectedId: () => client.selectedScoopJid,
     onError: (error) => client.emitAgentError(error),
@@ -64,7 +77,9 @@ export function createWcController(
       if (!scoop) return null;
       const scoopName = unitSlugFor(scoop);
       try {
-        const pinned = modelFor(scoop);
+        // One per-unit model read (#2382 PR C): the client's summary, which is
+        // the same answer the pill and the picker use.
+        const pinned = modelForUnit(units, scoop.jid);
         const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
         return { scoopName, model: model.id };
       } catch {

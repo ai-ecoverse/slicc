@@ -22,6 +22,8 @@ import type {
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { createFollowerModelSurface } from '../../../src/ui/wc/wc-follower-model-surface.js';
 import { createLeaderOptionsFactory } from '../../../src/ui/wc/wc-tray.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 vi.mock('../../../src/ui/provider-settings.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>(
@@ -57,6 +59,8 @@ function cone(jid: string, folder: string, model?: RegisteredScoop['model']): Re
 }
 
 function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = true) {
+  type UnitsListener = (units: readonly WorkUnitSummary[]) => void;
+  let pushUnits: UnitsListener | undefined;
   const setScoopModel = vi.fn().mockResolvedValue(applied);
   const composerMeta = document.createElement('div') as HTMLElement & { model?: string };
   const modelChanges: string[] = [];
@@ -73,6 +77,15 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     window,
     getSelectedJid: () => selectedJid,
     sprinkleManager: { opened: () => [], available: () => [] },
+    // The leader's own client protocol: the model a follower is told about is
+    // read from the same summary the leader's pill renders (#2382 PR C).
+    workUnits: {
+      subscribeList: (listener: UnitsListener) => {
+        pushUnits = listener;
+        listener(scoops.map((scoop) => recordToWorkUnitSummary(scoop, {})));
+        return () => undefined;
+      },
+    },
   } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
   const state = {
     leader: null,
@@ -85,7 +98,15 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     state,
     {} as Parameters<typeof createLeaderOptionsFactory>[2]
   )('https://tray.example');
-  return { options, setScoopModel, modelChanges, composerMeta };
+  return {
+    options,
+    setScoopModel,
+    modelChanges,
+    composerMeta,
+    pushUnits: (units: readonly WorkUnitSummary[]) => {
+      pushUnits?.(units);
+    },
+  };
 }
 
 describe('follower model selection is per cone (#2310)', () => {
@@ -159,6 +180,31 @@ describe('follower model selection is per cone (#2310)', () => {
 
     expect(modelChanges).toEqual([]);
     expect(composerMeta.getAttribute('model')).toBeNull();
+  });
+
+  it('answers a follower from the latest roster push, not the one it started with', () => {
+    // These callbacks hold the roster from `subscribeList` so a follower's
+    // `model.state` can be answered synchronously. `setScoopModel` mutates the
+    // record in place, so the ack has to ANNOUNCE the change — otherwise the
+    // broadcast that runs right after it reports the model the unit ran on
+    // BEFORE the pick (#2382 PR C).
+    const harness = makeOptions([cone('cone_1', 'cone')], 'cone_1');
+    expect(harness.options.getModelSelectionState?.('cone_1').activeModelId).toBe(
+      'anthropic:claude-sonnet-4-6'
+    );
+
+    // The push `OffscreenClient.handleScoopModelAck` now makes after it writes
+    // the record (that it makes one is pinned in `offscreen-client.test.ts`).
+    harness.pushUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+    ]);
+
+    expect(harness.options.getModelSelectionState?.('cone_1').activeModelId).toBe(
+      'anthropic:claude-opus-4-6'
+    );
   });
 
   it('rejects a model id that is not in the advertised catalogue', () => {
@@ -257,6 +303,8 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
   const surface = createFollowerModelSurface({
     composerMeta,
     getSync: () => sync,
+    // The wc-tray wiring: no remote roster, so `model.state` answers.
+    getUnits: () => [],
     // The wc-tray wiring: the pick goes out as the raw frame, unit named.
     setModel: (unitId, model) => sync.selectModel(`${model.provider}:${model.id}`, unitId),
     getSelectedScoopJid: () => 'cone_1',
@@ -270,6 +318,123 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
   };
   return { composerMeta, surface, requestModels, deliver };
 }
+
+describe('the model pill reads the shown unit, per unit (#2382 PR C)', () => {
+  /** Two models the tray catalog advertises, so both picks can resolve a name. */
+  const PILL_CATALOG: TrayModelCatalogEntry[] = [
+    { providerName: 'A', modelId: 'anthropic:claude-opus-4-6', modelName: 'Opus', reasoning: true },
+    {
+      providerName: 'A',
+      modelId: 'anthropic:claude-sonnet-4-6',
+      modelName: 'Sonnet',
+      reasoning: true,
+    },
+  ];
+
+  /** A follower surface with a roster and a movable selection. */
+  function harness() {
+    const composerMeta = document.createElement('div') as FollowerComposerMeta;
+    const sync = {
+      selectModel: vi.fn(),
+      setThinkingLevel: vi.fn(),
+      selectScoop: vi.fn(),
+      requestModels: vi.fn(),
+    } as unknown as NonNullable<
+      ReturnType<Parameters<typeof createFollowerModelSurface>[0]['getSync']>
+    >;
+    let selected = 'cone_1';
+    let units: WorkUnitSummary[] = [];
+    const surface = createFollowerModelSurface({
+      composerMeta,
+      getSync: () => sync,
+      getUnits: () => units,
+      setModel: vi.fn(),
+      getSelectedScoopJid: () => selected,
+    });
+    return {
+      composerMeta,
+      surface,
+      select: (jid: string) => {
+        selected = jid;
+      },
+      setUnits: (next: WorkUnitSummary[]) => {
+        units = next;
+      },
+    };
+  }
+
+  it('takes the live model.state for the shown unit over the roster', () => {
+    const h = harness();
+    h.setUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+    ]);
+    h.surface.onModelsList(PILL_CATALOG);
+    // The pill needs a `model.state` to exist at all — the thinking level rides
+    // that frame — so this is the bootstrap one, agreeing with the roster.
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // A pick reaches a follower through `model.state` ALONE — the leader
+    // answers `model.select` with `broadcastModelState()` and pushes no
+    // roster (that rides a 5 s interval). Preferring the roster here left the
+    // pill on the old model for the rest of the session.
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Sonnet');
+
+    // …and a roster that still says Opus, arriving on its interval afterwards,
+    // must not undo it.
+    h.surface.onShownUnitChanged();
+    expect(h.composerMeta.model).toBe('Sonnet');
+  });
+
+  it('repaints for the newly shown unit on a tab switch, with no frame at all', () => {
+    const h = harness();
+    h.setUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+      recordToWorkUnitSummary(
+        cone('cone_2', 'research', { provider: 'anthropic', id: 'claude-sonnet-4-6' }),
+        {}
+      ),
+    ]);
+    h.surface.onModelsList(PILL_CATALOG);
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // The leader answers `scoops.select` with a SNAPSHOT, not a model state,
+    // so the click is the only signal the pill will get.
+    h.select('cone_2');
+    h.surface.onShownUnitChanged();
+    expect(h.composerMeta.model).toBe('Sonnet');
+  });
+
+  it('lets a unit that is in the roster say it has no model', () => {
+    const h = harness();
+    const withModel = recordToWorkUnitSummary(
+      cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+      {}
+    );
+    h.setUnits([withModel]);
+    h.surface.onModelsList(PILL_CATALOG);
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // The unit is still DESCRIBED, and now says it has no model. That is an
+    // answer, not silence: carrying the old pin forward would keep a model the
+    // record has lost, and the leader — which has no carry-forward — would
+    // then disagree about the same unit. The live frame still answers here.
+    h.setUnits([{ ...withModel, model: undefined }]);
+    h.select('cone_2');
+    h.surface.onShownUnitChanged();
+    // `cone_2` is not in the roster at all and has no frame: nothing to show.
+    expect(h.composerMeta.style.display).toBe('none');
+  });
+});
 
 describe('an empty model catalog is warm-up, not an answer (#2329)', () => {
   beforeEach(() => {

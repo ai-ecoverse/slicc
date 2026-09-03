@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { applyThreadContext } from '../../../src/ui/wc/wc-live-thinking-hydration.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 
 vi.mock('../../../src/ui/provider-settings.js', () => ({
   resolveCurrentModel: () => ({ id: 'global-fallback', name: 'Global Fallback', reasoning: true }),
@@ -68,16 +69,21 @@ const scoop: RegisteredScoop = {
   thinking: { level: 'high' },
 };
 
+/** The roster as the client protocol carries it — what the leader mount passes. */
+function summaries(records: readonly RegisteredScoop[]) {
+  return records.map((record) => recordToWorkUnitSummary(record, {}));
+}
+
 describe('composer model pill per selected unit (#2310)', () => {
   it('shows the selected cone’s own model', async () => {
     const r = refs();
-    await applyThreadContext(r, cone, [cone, scoop]);
+    await applyThreadContext(r, cone, summaries([cone, scoop]));
     expect(r.composerMeta.getAttribute('model')).toBe('anthropic/claude-opus-4-6');
   });
 
   it('shows the owning cone’s model for a selected scoop, with the scoop’s own thinking', async () => {
     const r = refs();
-    await applyThreadContext(r, scoop, [cone, scoop]);
+    await applyThreadContext(r, scoop, summaries([cone, scoop]));
     expect(r.composerMeta.getAttribute('model')).toBe('anthropic/claude-opus-4-6');
     expect(r.composerMeta.getAttribute('thinking')).toBe('high');
     // …but the user never sees it: the whole band is hidden for a scoop
@@ -86,9 +92,11 @@ describe('composer model pill per selected unit (#2310)', () => {
     expect(r.composer.hasAttribute('hidden')).toBe(true);
   });
 
-  it('falls back to the selected unit when no roster is given', async () => {
+  it('falls back to the selected unit when its owning cone is not in the roster', async () => {
     const r = refs();
-    await applyThreadContext(r, scoop);
+    // A roster the scoop's cone is missing from: the chain cannot be walked,
+    // so the unit answers for itself rather than the pill going blank.
+    await applyThreadContext(r, scoop, summaries([scoop]));
     expect(r.composerMeta.getAttribute('model')).toBe('adobe/claude-sonnet-4-6');
   });
 });

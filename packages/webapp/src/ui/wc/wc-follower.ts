@@ -820,6 +820,9 @@ export async function mountWcUiFollower(
 
   const modelSurface = createFollowerModelSurface({
     composerMeta,
+    // The shown unit's own model, from the roster the leader sends (#2382 PR
+    // C). The catalog stays with the surface; only the identity comes from here.
+    getUnits: () => workUnits.currentUnits(),
     setModel: (unitId, model) => {
       void workUnits.setModel(unitId, model).catch(() => undefined);
     },
@@ -828,6 +831,11 @@ export async function mountWcUiFollower(
     modelPickerEnabled: features.modelPicker,
     getLockedEffortLevel: () => localStorage.getItem('slicc_locked_effort_level'),
   });
+
+  // A roster push can carry a model this follower has no `model.state` for
+  // (the leader broadcasts `scoops.list` on an interval, and per-unit models
+  // ride it), so the pill re-reads whenever the roster moves.
+  workUnits.subscribeList(() => modelSurface.onShownUnitChanged());
 
   follower = startPageFollowerTray(
     workUnits.wrapOptions({
@@ -1064,6 +1072,9 @@ export async function mountWcUiFollower(
       // not to seed this listener with the unit's previous transcript.
       void workUnits.snapshot(scoopJid).catch(() => undefined);
       watchUnit(scoopJid);
+      // The leader answers a selection with a snapshot, not a `model.state`,
+      // so nothing else would repaint the pill for the newly shown unit.
+      modelSurface.onShownUnitChanged();
     }
   });
 

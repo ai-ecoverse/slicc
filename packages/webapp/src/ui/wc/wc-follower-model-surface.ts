@@ -4,7 +4,9 @@ import type {
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
 import type { ThinkingLevel, WorkUnitModel } from '../../scoops/types.js';
-import { parseQualifiedModelId } from '../../work-unit/record.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
+import { parseQualifiedModelId, qualifiedModelId } from '../../work-unit/record.js';
 
 const PI_FROM_META: Readonly<Record<string, ThinkingLevel>> = {
   off: 'off',
@@ -79,6 +81,18 @@ export function createFollowerModelSurface(opts: {
    * surface itself only ever knows "this unit, this model".
    */
   setModel(unitId: string, model: WorkUnitModel): void;
+  /**
+   * The client protocol's roster, from which the SHOWN unit's model is read
+   * (#2382 PR C). `summary.model` is the one per-unit model read on both
+   * sides; this surface keeps only the catalog, which is leader-global and
+   * deliberately not on the protocol.
+   *
+   * An empty roster means "this caller has none" — the leader-capable float in
+   * `wc-tray.ts` follows another leader and has no `RemoteWorkUnitClient` yet
+   * — and falls back to the leader's `model.state` frame, which is also the
+   * fallback for a leader too old to send `ScoopSummary.model`.
+   */
+  getUnits: () => readonly WorkUnitSummary[];
   getSelectedScoopJid: () => string | null;
   modelPickerEnabled?: boolean;
   interceptLocalHandlers?: boolean;
@@ -89,10 +103,24 @@ export function createFollowerModelSurface(opts: {
 }): {
   onModelsList(models: TrayModelCatalogEntry[]): void;
   onModelState(state: TrayModelSelectionState): void;
+  /** Repaint after the shown unit or the roster changed. */
+  onShownUnitChanged(): void;
   reset(): void;
 } {
   let models: TrayModelCatalogEntry[] = [];
   let state: TrayModelSelectionState | null = null;
+  /**
+   * The last model this surface could name, PER UNIT. Absent is "not known
+   * yet", never "no model" (#2329): a roster can arrive before the unit has
+   * one, and reading that as an answer is what latched the pill empty for a
+   * whole session. Carried into {@link modelForUnit} as `previous`.
+   *
+   * Keyed by unit because the carry-forward is only ever about the unit it
+   * came from — a single slot would show the PREVIOUS cone's model after a
+   * switch to one whose model is momentarily unknown, and would suppress that
+   * cone's own `model.state` answer.
+   */
+  const lastKnownModel = new Map<string, WorkUnitModel>();
   const enabled = opts.modelPickerEnabled !== false;
   const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
   const retryMaxDelayMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
@@ -132,10 +160,54 @@ export function createFollowerModelSurface(opts: {
     retryDeadline = null;
   };
 
+  /**
+   * The provider-qualified id to show: the SHOWN unit's own model, else the
+   * leader's `model.state` (an older leader, or a caller with no roster).
+   */
+  /**
+   * Forget units the roster no longer lists. Their carry-forward can never be
+   * resolved again, and keeping it would answer for a unit that is gone.
+   */
+  const pruneForgottenUnits = (units: readonly WorkUnitSummary[]): void => {
+    if (units.length === 0) return;
+    const live = new Set(units.map((unit) => unit.id));
+    for (const jid of lastKnownModel.keys()) if (!live.has(jid)) lastKnownModel.delete(jid);
+  };
+
+  /**
+   * The provider-qualified id to show for the unit on screen.
+   *
+   * A `model.state` NAMING that unit is the freshest answer there is, and on
+   * this transport it is the ONLY one a pick produces: the leader answers
+   * `model.select` with `broadcastModelState()` and pushes no roster (that
+   * rides a 5 s interval). Preferring the roster left the pill on the previous
+   * model for the rest of the session.
+   *
+   * The roster answers when there is no frame, or the frame is about a
+   * DIFFERENT unit — a tab switch beats the next frame, because the leader
+   * answers `scoops.select` with a snapshot and no model state.
+   */
+  const activeModelId = (): string | undefined => {
+    const unitId = opts.getSelectedScoopJid();
+    const units = opts.getUnits();
+    pruneForgottenUnits(units);
+    // Nothing can beat the frame here: this caller has no roster at all (the
+    // leader-capable float follows another leader), or does not know yet which
+    // unit it is showing.
+    if (state && (units.length === 0 || !unitId)) return state.activeModelId;
+    if (state && unitId && state.scoopJid === unitId) {
+      const picked = parseQualifiedModelId(state.activeModelId);
+      if (picked) lastKnownModel.set(unitId, picked);
+      return state.activeModelId;
+    }
+    const known = modelForUnit(units, unitId, unitId ? lastKnownModel.get(unitId) : undefined);
+    if (unitId && known) lastKnownModel.set(unitId, known);
+    return known ? qualifiedModelId(known) : undefined;
+  };
+
   const apply = (): void => {
-    const active = state
-      ? models.find((model) => model.modelId === state?.activeModelId)
-      : undefined;
+    const wanted = activeModelId();
+    const active = wanted ? models.find((model) => model.modelId === wanted) : undefined;
     if (!enabled || !state || !active) {
       opts.composerMeta.style.display = 'none';
       scheduleCatalogRetry();
@@ -167,6 +239,10 @@ export function createFollowerModelSurface(opts: {
       const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
       const model = modelId ? parseQualifiedModelId(modelId) : null;
       if (model && scoopJid) {
+        // Seed the pick BEFORE the repaint: the leader's `model.state` for it
+        // is a round trip away, and until it lands the roster still names the
+        // model this unit is moving off.
+        lastKnownModel.set(scoopJid, model);
         opts.setModel(scoopJid, model);
       } else if (modelId) {
         // No unit to name (nothing selected yet), or a bare id carrying no
@@ -205,6 +281,7 @@ export function createFollowerModelSurface(opts: {
   const reset = (): void => {
     models = [];
     state = null;
+    lastKnownModel.clear();
     clearCatalogRetry();
     opts.composerMeta.models = [];
     opts.composerMeta.style.display = 'none';
@@ -223,6 +300,17 @@ export function createFollowerModelSurface(opts: {
     },
     onModelState(nextState) {
       state = nextState;
+      apply();
+    },
+    /**
+     * Repaint for a new shown unit. `apply()` otherwise only runs off a
+     * catalog or `model.state` frame, and neither is sent on a selection: the
+     * leader answers `scoops.select` with a SNAPSHOT, so a tab switch left the
+     * pill on the previous cone's model until some unrelated frame arrived.
+     * Also the hook for a roster push, which is what carries a model the
+     * follower has no `model.state` for.
+     */
+    onShownUnitChanged() {
       apply();
     },
     reset,

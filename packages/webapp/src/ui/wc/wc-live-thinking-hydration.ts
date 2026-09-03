@@ -1,7 +1,9 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { isRootUnit } from '../../work-unit/policy.js';
-import { chatSessionIdFor, modelFor, thinkingFor } from '../../work-unit/record.js';
+import { chatSessionIdFor, thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
@@ -10,7 +12,6 @@ import { applyComposerAvailability, applyShellContext, type WcShellRefs } from '
 import {
   isReadOnlyRole,
   rootFolderForContext,
-  rootForSelection,
   threadContextFor,
   unitRoleFor,
 } from './wc-unit-context.js';
@@ -58,15 +59,21 @@ export function shouldSkipSessionHydration(
  * leaving a stale pill inside it would surface the moment any future path
  * shows the band without a fresh `applyThreadContext`.
  *
- * `roster` lets the model pill follow the unit the PICKER edits (#2310): a
+ * `units` lets the model pill follow the unit the PICKER edits (#2310): a
  * pick made while a scoop is selected lands on the cone that owns it, and
- * scoops are never retargeted. Thinking stays per selected unit. Without a
- * roster (older callers) the selected unit answers for itself.
+ * scoops are never retargeted. Thinking stays per selected unit; a unit whose
+ * owning cone is not in the roster answers for itself.
+ *
+ * The roster arrives as the client protocol's SUMMARIES rather than as
+ * records, because `summary.model` is the one per-unit model read on both
+ * sides now (#2382 PR C). It is required for that reason: an empty roster
+ * used to mean "read the record instead", and there is no record to read
+ * here — it would silently mean "this unit has no model".
  */
 export async function applyThreadContext(
   refs: WcShellRefs,
   scoop: RegisteredScoop,
-  roster: readonly RegisteredScoop[] = []
+  units: readonly WorkUnitSummary[]
 ): Promise<void> {
   const role = unitRoleFor(scoop);
   const readOnly = isReadOnlyRole(role);
@@ -91,8 +98,9 @@ export async function applyThreadContext(
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     // The pill follows the model of the cone the picker writes to (#2310) —
-    // switching cones switches the model shown.
-    const pinned = modelFor(rootForSelection(roster, scoop) ?? scoop);
+    // switching cones switches the model shown. Absent is "not known yet",
+    // so the profile default answers rather than the pill going blank (#2329).
+    const pinned = modelForUnit(units, scoop.jid);
     const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
     refs.composerMeta.toggleAttribute(

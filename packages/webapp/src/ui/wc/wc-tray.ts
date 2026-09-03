@@ -33,7 +33,7 @@ import type {
   TrayModelCatalogEntry,
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
-import type { RegisteredScoop } from '../../scoops/types.js';
+import type { WorkUnitModel } from '../../scoops/types.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
   setFollowerSprinkleInstancesGetter,
@@ -51,13 +51,9 @@ import {
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { toKernelSudoRequest } from '../../sudo/leader-request.js';
-import type { WorkUnitClient } from '../../work-unit/client/types.js';
-import {
-  modelFor,
-  parseQualifiedModelId,
-  qualifiedModelId,
-  thinkingFor,
-} from '../../work-unit/record.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
+import { parseQualifiedModelId, qualifiedModelId, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -193,9 +189,8 @@ function modelCatalogForTray(): TrayModelCatalogEntry[] {
  */
 function qualifiedModelIdForUnit(
   catalog: readonly TrayModelCatalogEntry[],
-  unit: RegisteredScoop | undefined
+  pinned: WorkUnitModel | undefined
 ): string {
-  const pinned = unit ? modelFor(unit) : undefined;
   if (!pinned) return currentQualifiedModelId(catalog);
   const qualified = qualifiedModelId(pinned);
   return (
@@ -311,6 +306,12 @@ export function buildFollowerOptions(
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
     getSync,
+    // This float FOLLOWS another leader and has no `RemoteWorkUnitClient` of
+    // its own, so it has no roster for the remote units — the leader's
+    // `model.state` frame answers, as it always did. Collapses in #2382 PR D
+    // along with the rest of this wiring. Passing `deps.client.getScoops()`
+    // here would be the LOCAL kernel's roster and would name the wrong models.
+    getUnits: () => [],
     // This float follows someone else's tray but has no `RemoteWorkUnitClient`
     // of its own (the mounts collapse onto one client in #2382 PR D), so the
     // pick goes out as the raw frame it always did — still naming the unit.
@@ -443,16 +444,28 @@ function leaderModelCallbacks(
   deps: WcTrayDeps
 ): Pick<StartPageLeaderTrayOptions, 'getModelSelectionState' | 'onFollowerModelSelect'> {
   const { client, refs } = deps;
+  /**
+   * The roster, kept fresh from the protocol's push. Held because a follower's
+   * `model.state` is answered synchronously; `subscribeList` fires once
+   * immediately, so it is never emptier than the client itself. Never
+   * unsubscribed — these callbacks live as long as the leader tray does.
+   */
+  let units: readonly WorkUnitSummary[] = [];
+  deps.workUnits.subscribeList((next) => {
+    units = next;
+  });
   return {
     getModelSelectionState: (scoopJid): TrayModelSelectionState => {
       const catalog = modelCatalogForTray();
       const unit = client.getScoop(scoopJid);
       // The model of the cone the follower is looking at (a scoop shows its
-      // owning cone's), plus that unit's own thinking level.
-      const root = rootForSelection(client.getScoops(), unit ?? null);
+      // owning cone's), plus that unit's own thinking level. The model comes
+      // from the leader's OWN summary (#2382 PR C) — this answer and the
+      // leader's pill must not be able to disagree — while the thinking level
+      // stays on the record, which is the only place that carries it.
       const thinking = unit ? thinkingFor(unit) : {};
       return {
-        activeModelId: qualifiedModelIdForUnit(catalog, root),
+        activeModelId: qualifiedModelIdForUnit(catalog, modelForUnit(units, scoopJid)),
         scoopJid,
         thinkingLevel: thinking.level === 'max' ? 'xhigh' : thinking.level,
         effortOverride:

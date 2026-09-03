@@ -555,6 +555,73 @@ describe('mountWcUiFollower', () => {
     loadMessages.mockRestore();
   });
 
+  it('repaints the model pill for the unit a tab click shows (#2382 PR C)', async () => {
+    // The e2e "drives one cone's model" spec never reads the FOLLOWER pill, so
+    // this is the mounted-follower guard for it: the leader answers a
+    // selection with a SNAPSHOT and no `model.state`, so the click is the only
+    // signal the pill gets.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop: vi.fn(),
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+    };
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement & { model?: string };
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+
+    opts.onConnectionChange?.(true);
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          jid: 'cone_a',
+          model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+          name: 'a',
+          parentId: null,
+          state: 'idle',
+        },
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone-b',
+          jid: 'cone_b',
+          model: { provider: 'anthropic', id: 'claude-sonnet-4-6' },
+          name: 'b',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_a'
+    );
+    opts.onModelsList?.([
+      {
+        providerName: 'A',
+        modelId: 'anthropic:claude-opus-4-6',
+        modelName: 'Opus',
+        reasoning: true,
+      },
+      {
+        providerName: 'A',
+        modelId: 'anthropic:claude-sonnet-4-6',
+        modelName: 'Sonnet',
+        reasoning: true,
+      },
+    ]);
+    opts.onModelState?.({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_a' });
+    expect(meta.model).toBe('Opus');
+
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone_b' } }));
+    // No frame follows the click; the roster is what answers for cone_b.
+    expect(meta.model).toBe('Sonnet');
+
+    // …and a live pick for the shown unit still wins over that roster.
+    opts.onModelState?.({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_b' });
+    expect(meta.model).toBe('Opus');
+  });
+
   it('keeps the composer shut after a reconnect until the NEW session names a unit', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

@@ -569,6 +569,9 @@ describe('OffscreenClient', () => {
       scoopJid: 'cone_2',
       model: { provider: 'anthropic', id: 'claude-opus-4-6' },
     });
+    // Cleared so the assertion below is about a push the ACK made, not the
+    // one the `scoop-list` above already made.
+    callbacks.onScoopListUpdate.mockClear();
     simulateMessage('offscreen', {
       type: 'set-scoop-model-ack',
       requestId: envelope.payload.requestId,
@@ -584,6 +587,54 @@ describe('OffscreenClient', () => {
     });
     // The cone that was NOT named keeps whatever model it had.
     expect(client.getScoop('cone_1')?.model).toBeUndefined();
+    // The ack ANNOUNCES the change. Mutating the record in place and telling
+    // nobody left every reader that holds a roster — the tab strip, the model
+    // pill, and the `model.state` a follower is answered with (#2382 PR C) —
+    // describing the model this unit ran on before the pick.
+    expect(callbacks.onScoopListUpdate).toHaveBeenCalledTimes(1);
+    const pushed = callbacks.onScoopListUpdate.mock.calls[0]?.[0] as Array<{
+      jid: string;
+      config?: { modelId?: string; modelProviderId?: string };
+    }>;
+    expect(pushed.map((unit) => unit.jid)).toEqual(['cone_1', 'cone_2']);
+    // …and it CARRIES the field that changed. On this boundary the per-unit
+    // model rides `config`, so a payload without it would announce a roster
+    // change while omitting the only thing that moved.
+    expect(pushed.find((unit) => unit.jid === 'cone_2')?.config).toMatchObject({
+      modelId: 'claude-opus-4-6',
+      modelProviderId: 'anthropic',
+    });
+    expect(pushed.find((unit) => unit.jid === 'cone_1')?.config?.modelId).toBeUndefined();
+  });
+
+  it('does not announce a roster change for a model pick the kernel refused', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
+    });
+    callbacks.onScoopListUpdate.mockClear();
+    const pending = client.setScoopModel('cone_1', { provider: 'anthropic', id: 'nope' });
+    const envelope = sentMessages.at(-1) as { payload: { requestId: string } };
+    simulateMessage('offscreen', {
+      type: 'set-scoop-model-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_1',
+      applied: false,
+    });
+
+    await expect(pending).resolves.toBe(false);
+    // Nothing changed, so nothing is announced — a refused pick must not make
+    // every roster reader repaint.
+    expect(callbacks.onScoopListUpdate).not.toHaveBeenCalled();
   });
 
   it('bounds a thinking update when the worker does not acknowledge it', async () => {
