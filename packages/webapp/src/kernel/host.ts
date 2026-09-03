@@ -686,13 +686,31 @@ async function buildWsSubscriberRegistry(deps: {
 async function startLickWsBridgeForHost(
   lickManager: LickManager,
   log: KernelHostLogger,
-  localLickWsUrl: string | null | undefined
+  localLickWsUrl: string | null | undefined,
+  sharedFs: VirtualFS | null
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
+    const { HostFsMountBackend } = await import('../fs/mount/backend-hostfs.js');
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
       lickWsUrl: localLickWsUrl ?? null,
+      onHostfsInvalidate: (event) => {
+        if (!sharedFs) return;
+        const backend = sharedFs.getMountBackend(event.mount);
+        if (!(backend instanceof HostFsMountBackend)) {
+          log.debug?.('hostfs_invalidate for unknown/non-hostfs mount', {
+            mount: event.mount,
+          });
+          return;
+        }
+        void backend.applyHostInvalidation(event.paths).catch((err) => {
+          log.warn('hostfs_invalidate apply failed', {
+            mount: event.mount,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      },
     });
     return handle.stop;
   } catch (err) {
@@ -1068,7 +1086,8 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     lickWsBridgeStop = await startLickWsBridgeForHost(
       lickManager,
       log,
-      config.localLickWsUrl ?? null
+      config.localLickWsUrl ?? null,
+      sharedFs
     );
   }
 

@@ -158,7 +158,7 @@ export async function resolveWithinRoot(root: string, relPath: string): Promise<
   return target;
 }
 
-interface HostMountRoot {
+export interface HostMountRoot {
   /** SLICC target path, e.g. /mnt/project. */
   path: string;
   /** realpath()'d OS root. */

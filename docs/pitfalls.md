@@ -707,6 +707,13 @@ in waves — will eventually write a request onto a pooled socket in the same
 instant the server closes it, and the browser surfaces that as a rejected
 `fetch()` indistinguishable from a dead server.
 
+Related coherence trap: hostfs `GET /api/hostfs/read` used to be served from the
+browser HTTP cache after `PUT /write` while `POST /stat` stayed live — `ls`
+showed the new size and `cat` the old bytes. Bodies now live in
+`RemoteMountCache` (TTL + ETag) and are fetched with `cache: 'no-store'`; own
+writes seed/invalidate that cache, and the launcher pushes `hostfs_invalidate`
+over `/licks-ws` for external host edits.
+
 Two halves, both required (#2720):
 
 - **Server**: `applyBridgeKeepAlive()`

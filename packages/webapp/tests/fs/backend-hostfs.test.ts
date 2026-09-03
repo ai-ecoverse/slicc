@@ -1,24 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { HostFsMountBackend } from '../../src/fs/mount/backend-hostfs.js';
+import { RemoteMountCache } from '../../src/fs/mount/remote-cache.js';
 import { FsError } from '../../src/fs/types.js';
+
+function uniqueDbName(): string {
+  return `hostfs-cache-${Math.random().toString(36).slice(2)}`;
+}
 
 function backendWith(
   respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
-  opts: { maxInflight?: number; maxAttempts?: number } = {}
+  opts: { maxInflight?: number; maxAttempts?: number; cacheTtlMs?: number } = {}
 ): {
   backend: HostFsMountBackend;
   calls: string[];
   bodies: unknown[];
   headers: Record<string, string>[];
+  caches: Array<RequestCache | undefined>;
 } {
   const calls: string[] = [];
   const bodies: unknown[] = [];
   const headers: Record<string, string>[] = [];
+  const caches: Array<RequestCache | undefined> = [];
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(`${init?.method ?? 'GET'} ${url}`);
     bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body);
     headers.push({ ...((init?.headers as Record<string, string> | undefined) ?? {}) });
+    caches.push(init?.cache);
     return respond(url, init);
   }) as unknown as typeof fetch;
   return {
@@ -26,6 +35,11 @@ function backendWith(
       targetPath: '/mnt/kb',
       hostPath: '/h/kb',
       fetchImpl,
+      cache: new RemoteMountCache({
+        mountId: 'test-hostfs',
+        ttlMs: opts.cacheTtlMs ?? 30_000,
+        dbName: uniqueDbName(),
+      }),
       // Keep retry tests instant; production waits 25 ms then 50 ms.
       retryDelayMs: 0,
       ...opts,
@@ -33,6 +47,7 @@ function backendWith(
     calls,
     bodies,
     headers,
+    caches,
   };
 }
 
@@ -129,6 +144,58 @@ describe('HostFsMountBackend', () => {
       'GET /api/hostfs/read?mount=%2Fmnt%2Fkb&path=pack%2Fbig.pack',
       'PUT /api/hostfs/write?mount=%2Fmnt%2Fkb&path=pack%2Fidx',
     ]);
+  });
+
+  it('serves bodies from RemoteMountCache and fetches with cache:no-store', async () => {
+    // Opaque browser HTTP cache is out of the coherence path; the app-owned
+    // cache + hostfs_invalidate (and write-time putBody) keep bodies fresh.
+    let reads = 0;
+    const { backend, caches } = backendWith((url, init) => {
+      if (String(url).includes('/write') || init?.method === 'PUT') {
+        return new Response(null, { status: 200 });
+      }
+      reads += 1;
+      return new Response(new Uint8Array([reads]).buffer, {
+        headers: { etag: `"e${reads}"` },
+      });
+    });
+    const first = await backend.readFile('/a.txt');
+    const second = await backend.readFile('/a.txt');
+    expect(first).toEqual(new Uint8Array([1]));
+    expect(second).toEqual(new Uint8Array([1])); // IDB hit — no second network
+    expect(reads).toBe(1);
+    expect(caches[0]).toBe('no-store');
+
+    await backend.writeFile('/a.txt', new Uint8Array([9]));
+    const afterWrite = await backend.readFile('/a.txt');
+    expect(afterWrite).toEqual(new Uint8Array([9])); // seeded on write
+    expect(reads).toBe(1); // still no network read
+  });
+
+  it('drops cached bodies after recursive remove and host invalidation', async () => {
+    let reads = 0;
+    const { backend } = backendWith((url, init) => {
+      if (
+        init?.method === 'DELETE' ||
+        String(url).includes('/remove') ||
+        String(url).endsWith('/api/hostfs')
+      ) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      reads += 1;
+      return new Response(new Uint8Array([reads]).buffer, { headers: { etag: `"e${reads}"` } });
+    });
+    await backend.readFile('/dir/child.txt');
+    expect(reads).toBe(1);
+    await backend.remove('/dir', { recursive: true });
+    await backend.readFile('/dir/child.txt');
+    expect(reads).toBe(2);
+
+    await backend.readFile('/other.txt');
+    expect(reads).toBe(3);
+    await backend.applyHostInvalidation(['other.txt']);
+    await backend.readFile('/other.txt');
+    expect(reads).toBe(4);
   });
 
   it('falls back to the per-op routes when the bridge has no stable endpoint', async () => {

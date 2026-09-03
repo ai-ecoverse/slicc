@@ -407,6 +407,37 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
+  it('forwards hostfs_invalidate to onHostfsInvalidate and drops bad payloads', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const onHostfsInvalidate = vi.fn();
+    const lm = buildLickManagerMock();
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      onHostfsInvalidate,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'hostfs_invalidate',
+      mount: '/mnt/kb',
+      paths: ['notes.md', 'sub/a.txt'],
+      timestamp: '2026-09-03T00:00:00.000Z',
+    });
+    expect(onHostfsInvalidate).toHaveBeenCalledWith({
+      type: 'hostfs_invalidate',
+      mount: '/mnt/kb',
+      paths: ['notes.md', 'sub/a.txt'],
+      timestamp: '2026-09-03T00:00:00.000Z',
+    });
+
+    onHostfsInvalidate.mockClear();
+    ws.emit({ type: 'hostfs_invalidate', paths: ['x'] }); // missing mount
+    expect(onHostfsInvalidate).not.toHaveBeenCalled();
+    handle.stop();
+  });
+
   it('forwards upskill navigate_event with branch + path', async () => {
     const { startLickWsBridge } = await loadBridge();
     const emitEvent = vi.fn();
