@@ -296,7 +296,6 @@ describe('WorkUnitManager', () => {
     expect(host.unregisterScoop).toHaveBeenCalledOnce();
   });
 
-
   it('createMany registers several roots and returns descriptors in caller order', async () => {
     const { manager } = tree();
     const created = await manager.createMany([
@@ -439,7 +438,6 @@ describe('WorkUnitManager', () => {
     expect(results).toEqual([{ id: 'ghost', summary: null, timedOut: true }]);
     expect(host.waitForScoops).toHaveBeenCalledWith(['ghost'], undefined);
   });
-
 
   describe('promote / detach (#2278)', () => {
     it('turns a child into an independent root and updates the descriptor', async () => {
@@ -586,5 +584,4 @@ describe('WorkUnitManager', () => {
       expect(manager.rootOf(deep.jid)?.descriptor.id).toBe(mid.jid);
     });
   });
-
 });
