@@ -1,3 +1,19 @@
+/**
+ * Tray URL grammar — canonical, platform-agnostic parsing and building.
+ *
+ * The join URL (`https://host[/base]/join/<trayId>.<secret>`) and the three
+ * launch query params are the one string format every float has to agree on:
+ * the browser reads them out of `location`, the Node CLI reads them off argv
+ * and hands them to Chrome/Electron. Both sides parse with the functions here
+ * so a leader and a follower can never disagree about what a URL means.
+ *
+ * Pure `URL` string helpers only — no `node:` builtins, no DOM, no fetch — so
+ * this is safe in the kernel worker, the extension, and the CLI alike. It lives
+ * in `@slicc/shared-ts` beside the sibling tray wire contracts
+ * (`tray-signaling.ts`, `tray-sync-protocol.ts`); it used to sit in
+ * `@slicc/node-server`, which made the browser-first webapp reach DOWN into the
+ * Node CLI package for it (#2798).
+ */
 export const TRAY_QUERY_PARAM = 'tray';
 export const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
 export const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';

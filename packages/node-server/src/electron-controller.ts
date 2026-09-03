@@ -5,6 +5,7 @@ import {
   type CDPPayload,
   ELECTRON_OVERLAY_APP_PATH,
   SLICC_HOSTED_ORIGIN,
+  TRAY_QUERY_PARAM,
 } from '@slicc/shared-ts';
 import { type ChildProcess, execFile as nodeExecFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
@@ -22,7 +23,6 @@ import {
   getElectronOverlayEntryDistPath,
   selectBestOverlayTargets,
 } from './electron-runtime.js';
-import { TRAY_QUERY_PARAM } from './tray-url-shared.js';
 
 const execFile = promisify(nodeExecFile);
 const ELECTRON_OVERLAY_SYNC_INTERVAL_MS = 1500;

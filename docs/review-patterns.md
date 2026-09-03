@@ -302,6 +302,10 @@ Test in both CLI and extension floats.
   import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
 - `packages/dev-tools/tools/layer-back-edge-baseline.json` growing in a diff — someone is
   trying to grandfather a new violation instead of fixing it.
+- A relative specifier in `packages/webapp/src/` that climbs out of the package
+  (`../../../node-server/src/…`). This is the cross-**package** form of the same mistake and
+  the ranked layers cannot see it, since they are webapp-internal directories. Shared code
+  travels through `@slicc/shared-ts`, never a deep path into a sibling package.
 - A new `isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
   `resolveFloatTopology` call in `scoops/` or `tools/` business logic. Privileged
   float detection belongs on the injected `CapabilityBroker`
@@ -330,6 +334,11 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   right tool: four of the six modules had no upward dependency at all and simply moved to
   `base/`, which preserves per-realm behavior exactly because the module global stays a
   single ESM singleton. Prefer moving state DOWN over injecting it SIDEWAYS.
+- **Issue #2798** — the cross-package form, and an object lesson in fixing one back-edge by
+  creating another: the #2537 relocation landed the tray URL parser in `base/` but pointed
+  `base/` at `node-server/src/tray-url-shared.ts`, so the webapp's _bottom_ rung depended on
+  the Node CLI package. Pure helpers, wrong package. Moving them to `@slicc/shared-ts` flipped
+  the arrow; the gate now scans for the escape so the class cannot recur.
 
 **Class size** — 152 grandfathered back-edges across 92 files at full-stack baseline freeze
 (2026-08); 34 across 27 files at the original ui-only freeze (2026-07).
@@ -342,9 +351,15 @@ singleton with a `localStorage` fallback (`base/tray-leader-status.ts`,
 `base/permissions-surface-registry.ts`) relocates safely as long as it moves WHOLESALE and
 is re-exported, never re-declared: two copies of the `let` would silently split the realms.
 Reach for setter injection only when the registering layer runs in every realm that reads.
+When the higher "layer" is a different package, the fix is the same move with a different
+destination: relocate the pure helper into `@slicc/shared-ts` and import it by package name
+from both sides, so one wrong-direction edge becomes two correct ones.
 Deterministic enforcement: `npm run lint:layer-back-edges`
 (`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
-frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.
+frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it. The same gate
+fails on any relative import that escapes `packages/webapp/src` into a sibling package —
+zero tolerance, no baseline (only the inert `?raw`/`?url` asset queries are exempt —
+`?worker` executes its target, so it is still an escape).
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
 
 ### 11. Untyped string-keyed bags (`Record<string, unknown>`)

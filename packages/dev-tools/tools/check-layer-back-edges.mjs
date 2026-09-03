@@ -22,6 +22,14 @@
  * Directories not named in LAYER_RANK (kernel/, providers/, speech/, …) sit
  * outside the documented stack; they are scanned as importers only when a
  * ranked layer is the target, and are never a target themselves.
+ *
+ * The same pass also catches the *cross-package* form of the same mistake: a
+ * relative specifier that climbs out of packages/webapp/src into a sibling
+ * package's source. Ranked layers are webapp-internal directories, so a
+ * `../../../node-server/src/x.js` lands in no layer at all and the ratchet
+ * above cannot see it — yet it is the worse violation, since the browser-first
+ * webapp then roots its bundle in a Node CLI package (#2798). That check is
+ * zero-tolerance rather than baselined: the tree is clean today.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -102,6 +110,45 @@ export function findLayerBackEdges(importerRel, source) {
 }
 
 /**
+ * Vite queries that make an import INERT: the bundler hands back the file's
+ * bytes or a URL string, so `vfs-root/etc/sudoers?raw` creates no module edge
+ * to another package's code. Deliberately an allowlist rather than "any query"
+ * — `?worker` / `?sharedworker` bundle and EXECUTE the target, so exempting
+ * them would let a wrong-direction package dependency straight back through
+ * this gate. A new asset mode should be a conscious decision: fail closed.
+ */
+const INERT_ASSET_QUERIES = new Set(['raw', 'url']);
+
+/**
+ * Find every relative import in `source` that climbs OUT of
+ * `packages/webapp/src` into another package. Returns
+ * `[{ line, specifier, to }]` where `to` is the repo-relative target.
+ *
+ * Imports carrying an inert asset query (see `INERT_ASSET_QUERIES`) are allowed.
+ * Shared *code* must travel through a package entry point (`@slicc/shared-ts`),
+ * which makes the dependency direction explicit in package.json.
+ */
+export function findCrossPackageEscapes(importerRel, source) {
+  const importerDir = dirname(importerRel);
+  const hits = [];
+  const stripped = stripComments(source);
+  for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
+    const specifier = m[1];
+    const queryAt = specifier.indexOf('?');
+    if (queryAt >= 0 && INERT_ASSET_QUERIES.has(specifier.slice(queryAt + 1))) continue;
+    const abs = resolve(
+      SCAN_ROOT,
+      importerDir,
+      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
+    );
+    if (!relative(SCAN_ROOT, abs).startsWith('..')) continue;
+    const line = stripped.slice(0, m.index).split('\n').length;
+    hits.push({ line, specifier, to: relative(repoRoot, abs).split('\\').join('/') });
+  }
+  return hits;
+}
+
+/**
  * File paths listed in a parsed baseline object (its keys). Used by the
  * boy-scout gate (check-touched-exemptions.mjs) to treat the baseline as a
  * debt list. Non-object input yields [].
@@ -131,6 +178,17 @@ export function scanBackEdges() {
     if (hits.length > 0) counts[relative(repoRoot, abs).split('\\').join('/')] = hits.length;
   }
   return counts;
+}
+
+/** Scan the tree; returns `{ 'packages/webapp/src/...': [hit] }` for files that escape. */
+export function scanCrossPackageEscapes() {
+  const escapes = {};
+  for (const abs of collect(SCAN_ROOT)) {
+    const srcRel = relative(SCAN_ROOT, abs).split('\\').join('/');
+    const hits = findCrossPackageEscapes(srcRel, readFileSync(abs, 'utf8'));
+    if (hits.length > 0) escapes[relative(repoRoot, abs).split('\\').join('/')] = hits;
+  }
+  return escapes;
 }
 
 /**
@@ -170,6 +228,7 @@ function sortedCounts(counts) {
 
 function main() {
   const current = scanBackEdges();
+  const escapes = scanCrossPackageEscapes();
 
   if (argv.includes('--update')) {
     writeFileSync(BASELINE_PATH, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
@@ -178,6 +237,19 @@ function main() {
       `baseline updated: ${total} grandfathered layer back-edge(s) in ${Object.keys(current).length} file(s)\n`
     );
     return;
+  }
+
+  if (Object.keys(escapes).length > 0) {
+    for (const [file, hits] of Object.entries(escapes)) {
+      for (const h of hits) {
+        process.stderr.write(
+          `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ` +
+            `a relative import out of packages/webapp/src into ${h.to}. Move the shared code ` +
+            'into @slicc/shared-ts and import it by package name instead.\n'
+        );
+      }
+    }
+    process.exit(1);
   }
 
   const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
@@ -207,7 +279,8 @@ function main() {
 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   process.stdout.write(
-    `ok: no new layer back-edges in packages/webapp/src (${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
+    `ok: no new layer back-edges and no cross-package escapes in packages/webapp/src ` +
+      `(${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
   );
 }
 

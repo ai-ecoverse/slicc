@@ -7,10 +7,12 @@ import {
   BASELINE_PATH,
   baselineFiles,
   compareToBaseline,
+  findCrossPackageEscapes,
   findLayerBackEdges,
   isWebappSource,
   layerOf,
   scanBackEdges,
+  scanCrossPackageEscapes,
 } from './check-layer-back-edges.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -127,6 +129,67 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
   });
 });
 
+describe('check-layer-back-edges: findCrossPackageEscapes', () => {
+  it('flags a relative import that climbs into a sibling package', () => {
+    expect(
+      findCrossPackageEscapes(
+        'base/tray-url-config.ts',
+        "import { parseTrayJoinUrl } from '../../../node-server/src/tray-url-shared.js';"
+      )
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../../../node-server/src/tray-url-shared.js',
+        to: 'packages/node-server/src/tray-url-shared.js',
+      },
+    ]);
+  });
+
+  it('allows imports that stay inside packages/webapp/src', () => {
+    const source = [
+      "import { createLogger } from '../base/logger.js';",
+      "import { CDPClient } from './cdp-client.js';",
+      "import x from '../../fs/index.js';",
+    ].join('\n');
+    expect(findCrossPackageEscapes('cdp/nested/browser-api.ts', source)).toEqual([]);
+  });
+
+  it('allows inert asset imports (?raw / ?url) that carry the bytes, not the module', () => {
+    const source = [
+      "import sudoers from '../../../vfs-root/etc/sudoers?raw';",
+      "import fontUrl from '../../../../assets/fonts/AdobeClean-Regular.otf?url';",
+    ].join('\n');
+    expect(findCrossPackageEscapes('sudo/sudo-manager.ts', source)).toEqual([]);
+  });
+
+  it('still flags escapes whose query EXECUTES the target (?worker et al.)', () => {
+    // The exemption is an allowlist, not "any query": Vite bundles and runs a
+    // `?worker` target, so waving it through would reopen the very
+    // wrong-direction package dependency this gate exists to stop.
+    for (const query of ['?worker', '?sharedworker', '?inline', '?raw&inline']) {
+      const source = `import W from '../../../node-server/src/tray-url-shared.js${query}';`;
+      expect(findCrossPackageEscapes('base/tray-url-config.ts', source)).toEqual([
+        {
+          line: 1,
+          specifier: `../../../node-server/src/tray-url-shared.js${query}`,
+          to: 'packages/node-server/src/tray-url-shared.js',
+        },
+      ]);
+    }
+  });
+
+  it('ignores bare package specifiers', () => {
+    expect(
+      findCrossPackageEscapes('base/x.ts', "import { parseTrayJoinUrl } from '@slicc/shared-ts';")
+    ).toEqual([]);
+  });
+
+  it('ignores escapes inside comments', () => {
+    const source = "// import x from '../../../node-server/src/tray-url-shared.js';";
+    expect(findCrossPackageEscapes('base/x.ts', source)).toEqual([]);
+  });
+});
+
 describe('check-layer-back-edges: isWebappSource', () => {
   it('accepts .ts and .tsx source', () => {
     expect(isWebappSource('export-service.ts')).toBe(true);
@@ -189,9 +252,13 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
     expect(compareToBaseline(scanBackEdges(), baseline)).toEqual([]);
   });
 
+  it('no webapp source escapes into a sibling package (zero tolerance)', () => {
+    expect(scanCrossPackageEscapes()).toEqual({});
+  });
+
   it('guard entry script passes and reports the grandfathered count', () => {
     const { code, out } = runGuard();
     expect(code).toBe(0);
-    expect(out).toMatch(/ok: no new layer back-edges in packages\/webapp\/src/);
+    expect(out).toMatch(/ok: no new layer back-edges and no cross-package escapes/);
   });
 });

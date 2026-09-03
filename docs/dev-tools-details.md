@@ -449,6 +449,18 @@ paying debt down with `--update`). The baseline doubles as a debt list
 for the boy-scout gate. Chained into `npm run lint`, `lint:ci`,
 pre-commit (webapp-source commits), and the pre-push gate.
 
+The same pass also fails on any relative import that climbs OUT of
+`packages/webapp/src` into a sibling package
+(`../../../node-server/src/tray-url-shared.js`, #2798). Ranked layers are
+webapp-internal directories, so such a specifier lands in no layer and the
+ratchet above cannot see it. Zero tolerance, no baseline — the tree is clean.
+Exempt: the inert asset queries `?raw` and `?url`, which hand back bytes or a
+URL string rather than creating a module edge. That is an allowlist, not "any
+query" — `?worker` / `?sharedworker` bundle and EXECUTE the target, so waving
+them through would reopen the same wrong-direction dependency. A new asset mode
+is a conscious decision; the gate fails closed. Shared code belongs in
+`@slicc/shared-ts`, imported by package name.
+
 ## record-string-unknown-ratchet
 
 `check-record-string-unknown.mjs` fails on any NEW `Record<string, unknown>`

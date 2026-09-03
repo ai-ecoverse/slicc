@@ -22,3 +22,4 @@ export * from './transcript-export.js';
 export * from './transcript-redaction.js';
 export * from './tray-signaling.js';
 export * from './tray-sync-protocol.js';
+export * from './tray-url-shared.js';

@@ -14,14 +14,12 @@
  * `shell/proxied-fetch.js` and `kernel/messages.js`).
  *
  * The canonical `normalizeTrayWorkerBaseUrl` / `parseTrayJoinUrl`
- * implementations live in `node-server/src/tray-url-shared.ts`, shared with
- * the CLI; this module re-exports the former and builds on the latter.
+ * implementations live in `@slicc/shared-ts` (`tray-url-shared.ts`), shared
+ * with the CLI float; this module re-exports the former and builds on the
+ * latter.
  */
 
-import {
-  normalizeTrayWorkerBaseUrl,
-  parseTrayJoinUrl,
-} from '../../../node-server/src/tray-url-shared.js';
+import { normalizeTrayWorkerBaseUrl, parseTrayJoinUrl } from '@slicc/shared-ts';
 
 export { normalizeTrayWorkerBaseUrl };
 
