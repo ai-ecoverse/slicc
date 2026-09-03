@@ -6,6 +6,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 - `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-aware, URL-credential-aware, byte-safe body unmask.
+- `content-type.ts` — fetch-proxy body classifiers. `isTextContentType` gates response scrub and body caching; `isTextRequestContentType` adds `urlencoded` and gates request-body unmask ONLY, because form POSTs (OAuth token exchange, many provider APIs) carry secrets that must reach upstream unmasked (#2821). Swift mirror: `packages/swift-server/Sources/Server/ContentType.swift`, pinned against the same table in both cross-impl test files.
 - `secret-env-schema.ts` — canonical `NAME=value` / `NAME_DOMAINS=csv` normalized and value-preserving parsers, pairing walk, and S3 profile validation shared by secret-storage consumers.
 - `oauth-extra-domains-storage.ts` — pure-JS read/write helpers over the `slicc_oauth_extra_domains` localStorage key. Lets the extension options page (`secrets.html`) share the per-provider extra-domains store with the webapp's `provider-settings.ts` without dragging in the heavier provider module.
 - `sigv4.ts` — pure SigV4 v4 request signer over Web Crypto (`crypto.subtle`), no AWS SDK. Verified against the canonical AWS test vectors in `tests/sigv4.test.ts`.

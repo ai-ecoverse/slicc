@@ -173,6 +173,51 @@ describe('registerFetchProxyRoute', () => {
     expect(received).not.toContain(masked);
   });
 
+  it('unmasks a masked token in a form-urlencoded request body (#2821)', async () => {
+    let received = '';
+    await setup((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        received = Buffer.concat(chunks).toString('utf-8');
+        res.setHeader('content-type', 'text/plain');
+        res.end('done');
+      });
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: {
+        'x-target-url': upstreamUrl,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: `token=${masked}&grant_type=client_credentials`,
+    });
+    expect(res.status).toBe(200);
+    expect(received).toContain(`token=${REAL_TOKEN}`);
+    expect(received).not.toContain(masked);
+  });
+
+  it('leaves a binary request body byte-identical', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff]);
+    let received = Buffer.alloc(0);
+    await setup((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        received = Buffer.concat(chunks);
+        res.setHeader('content-type', 'text/plain');
+        res.end('done');
+      });
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: { 'x-target-url': upstreamUrl, 'content-type': 'image/jpeg' },
+      body: jpeg,
+    });
+    expect(res.status).toBe(200);
+    expect(received.equals(jpeg)).toBe(true);
+  });
+
   it('signs the request body via x-slicc-hmac-sign and strips the sentinel header', async () => {
     let receivedBody = '';
     let receivedHeaders: import('node:http').IncomingHttpHeaders = {};

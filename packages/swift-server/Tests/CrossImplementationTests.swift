@@ -76,6 +76,46 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
+    // MARK: - Request content-type parity (mirrors the table in
+    // packages/shared-ts/tests/cross-impl-vectors.test.ts)
+    //
+    // Node's fetch proxy and this one must agree on which request bodies get a
+    // masked→real unmask pass; when they drift, a form POST that works on
+    // Sliccstart ships the masked token upstream on the Node CLI (#2821).
+
+    private static let requestContentTypeTable: [(contentType: String, isText: Bool)] = [
+        ("application/x-www-form-urlencoded", true),
+        ("application/x-www-form-urlencoded;charset=UTF-8", true),
+        ("Application/X-WWW-Form-Urlencoded", true),
+        ("application/json", true),
+        ("application/json; charset=utf-8", true),
+        ("text/plain", true),
+        ("application/xml", true),
+        ("image/svg+xml", true),
+        ("application/javascript", true),
+        ("application/ecmascript", true),
+        ("text/html", true),
+        ("text/css", true),
+        // Unlabeled bodies are binary on both floats: the byte-safe unmask path
+        // handles them without a lossy UTF-8 round-trip.
+        ("", false),
+        ("image/jpeg", false),
+        ("application/octet-stream", false),
+        ("application/pdf", false),
+        ("multipart/form-data; boundary=x", false),
+        ("application/x-git-receive-pack-request", false),
+    ]
+
+    func testIsTextRequestContentTypeMatchesPinnedTable() {
+        for row in Self.requestContentTypeTable {
+            XCTAssertEqual(
+                isTextRequestContentType(row.contentType),
+                row.isText,
+                "request content-type classification drift for \(row.contentType.isEmpty ? "(empty)" : row.contentType)"
+            )
+        }
+    }
+
     // MARK: - CDP frame unmask parity (mirrors packages/shared-ts/tests/cdp-frame-unmask.test.ts)
     //
     // Pins the same fixture (sessionId='session-fixed', API_KEY='sk-realValue123'

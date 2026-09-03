@@ -493,9 +493,11 @@ func registerAPIRoutes(
                     }
                 }
 
-                // Inject secrets into request body. Text bodies (json, form, etc.)
-                // go through the string-replace `injectBody` path; binary bodies
-                // (git packfiles, octet-stream, images) go through byte-safe
+                // Inject secrets into request body. Text bodies (json, form, etc.
+                // — `isTextRequestContentType`, shared with node-server via
+                // shared-ts) go through the string-replace `injectBody` path;
+                // binary and unlabeled bodies (git packfiles, octet-stream,
+                // images) go through byte-safe
                 // `unmaskBodyBytes` so non-UTF-8 byte sequences don't get
                 // corrupted by the `String` round-trip. injectBody/unmaskBodyBytes
                 // both leave masked values intact on domain mismatch (safe,
@@ -868,24 +870,6 @@ private func decodeWebhookBody(from request: Request) async throws -> LickSystem
     } catch {
         return .object(["raw": .string(String(buffer: body))])
     }
-}
-
-/// Request-body classifier for secret unmask. Mirrors `@slicc/shared-ts`
-/// `isTextContentType`, plus `urlencoded` (form bodies carry secrets).
-/// Empty is binary — a JPEG posted with no Content-Type must not take the
-/// UTF-8 `String` path (`FF D8` must not become `C3 BF C3 98`).
-private func isTextRequestContentType(_ contentType: String) -> Bool {
-    if contentType.isEmpty { return false }
-    let normalized = contentType.lowercased()
-    return normalized.hasPrefix("text/")
-        || normalized.contains("json")
-        || normalized.contains("xml")
-        || normalized.contains("urlencoded")
-        || normalized.contains("javascript")
-        || normalized.contains("ecmascript")
-        || normalized.contains("html")
-        || normalized.contains("css")
-        || normalized.contains("svg")
 }
 
 private func collectBody(from request: Request) async throws -> ByteBuffer {

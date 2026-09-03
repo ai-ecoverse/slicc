@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isTextRequestContentType } from '../src/content-type.js';
 import { mask } from '../src/secret-masking.js';
 
 /**
@@ -57,6 +58,47 @@ describe('cross-implementation mask vectors', () => {
     'mask($sessionId, $name) is stable',
     async ({ sessionId, name, value, expected }) => {
       expect(await mask(sessionId, name, value)).toBe(expected);
+    }
+  );
+});
+
+/**
+ * Pinned request-body text/binary classification table.
+ *
+ * The same table is pinned in `CrossImplementationTests.swift`
+ * (`testIsTextRequestContentTypeMatchesPinnedTable`). Node's fetch proxy and
+ * swift-server's must agree on which request bodies get a masked→real unmask
+ * pass; when they drift, a form POST that works on Sliccstart ships the masked
+ * token upstream on the Node CLI (#2821).
+ */
+const REQUEST_CONTENT_TYPE_TABLE: [contentType: string, isText: boolean][] = [
+  ['application/x-www-form-urlencoded', true],
+  ['application/x-www-form-urlencoded;charset=UTF-8', true],
+  ['Application/X-WWW-Form-Urlencoded', true],
+  ['application/json', true],
+  ['application/json; charset=utf-8', true],
+  ['text/plain', true],
+  ['application/xml', true],
+  ['image/svg+xml', true],
+  ['application/javascript', true],
+  ['application/ecmascript', true],
+  ['text/html', true],
+  ['text/css', true],
+  // Unlabeled bodies are binary on both floats: the byte-safe unmask path
+  // handles them without a lossy UTF-8 round-trip.
+  ['', false],
+  ['image/jpeg', false],
+  ['application/octet-stream', false],
+  ['application/pdf', false],
+  ['multipart/form-data; boundary=x', false],
+  ['application/x-git-receive-pack-request', false],
+];
+
+describe('cross-implementation request content-type table', () => {
+  it.each(REQUEST_CONTENT_TYPE_TABLE)(
+    'isTextRequestContentType(%j) is %s',
+    (contentType, isText) => {
+      expect(isTextRequestContentType(contentType)).toBe(isText);
     }
   );
 });
