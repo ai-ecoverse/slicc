@@ -83,6 +83,7 @@ export function fsSudoMessage(decision: SudoDecision): string {
 const READ_ASYNC = [
   'readFile',
   'readFileRange',
+  'getNativeFile',
   'readTextFile',
   'readDir',
   'exists',

@@ -161,6 +161,14 @@ export interface MountBackend {
    * backend that implements it actually saves the bytes.
    */
   readFileRange?(path: string, start: number, end: number): Promise<Uint8Array>;
+  /**
+   * Optional native `File` for a path — present only on backends that hold a
+   * `FileSystemFileHandle` for it (the FSA picker mount). A `File` reads
+   * lazily by slice, so `VirtualFS.getNativeFile` can hand media consumers
+   * (ffmpeg's WORKERFS, mediabunny) an input that never enters memory whole.
+   * Return `null` (do not throw) when the path is not a plain file.
+   */
+  getNativeFile?(path: string): Promise<File | null>;
   stat(path: string): Promise<MountStat>;
   /** Always a no-op on S3 / DA / AEM — all three materialize paths on first write. */
   mkdir(path: string): Promise<void>;

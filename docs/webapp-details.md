@@ -27,6 +27,53 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
 - `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
+## Media commands (`ffmpeg` / `ffprobe`)
+
+`shell/supplemental-commands/ffmpeg-command.ts` (registration stub; the body is `ffmpeg/run.ts`,
+`import()`ed on first use like `ffprobe/run.ts`), `ffmpeg/` (staging, input blobs, both engines),
+`ffmpeg-wasm.ts` (core loader).
+
+- **Two cores, one pin.** `@ffmpeg/core` (single-threaded, the default) and `@ffmpeg/core-mt`
+  (pthreads over SharedArrayBuffer) are ipk-installed by the user. The mt core is OPT-IN:
+  `FFMPEG_CORE=mt` (`ffmpeg/engine.ts`) on a `crossOriginIsolated` runtime (the hosted leader via
+  Document-Isolation-Policy). It is not the default because ffmpeg starts a demux thread per input
+  when there are several, and emscripten proxies those threads' `pthread_create` to a main thread
+  blocked in `exec` — every multi-input job deadlocks (verified live 2026-09-03: single-input x264 at
+  8 threads fine; any two-input lavfi job hangs, two workers past the 32-worker pool; tracked in #2810). `ffmpeg/run.ts`
+  refuses multi-input jobs on the mt core and injects `MT_THREAD_BUDGET` (`-threads 8`,
+  `-filter_threads 2`) unless the caller set them, because ffmpeg's defaults (1.5 × cores encoder
+  threads, one filter thread per core per graph) also exhaust the pool. The loader tracks which core
+  booted (`loadedFfmpegCorePackage()`); the first command's preference decides for the session.
+  Every not-installed message goes through `ffmpegCoreNotInstalledMessage(preferMt)`; `-version`
+  prints the `core:` line via `describeFfmpegCore()`. The live canary `ffmpeg-wasm-live.test.ts`
+  resolves BOTH real packages.
+- **Inputs never enter the wasm heap.** Each invocation gets a `StageNames` (`ffmpeg/staging.ts`):
+  one WORKERFS mount at `/__in<id>` over `Blob`s, torn down with `unmountStagedInputs`. The
+  `Blob` comes from `readInputBlob()` (`ffmpeg/input-blob.ts`): the VFS's native `File`
+  (`VirtualFS.getNativeFile` — OPFS root or FSA picker mount, lazy by slice) or, for backends
+  without a handle, a `Blob` over one whole-file read. Names are relative (`__in3_k1/x.mp4`) so
+  the concat demuxer's `safe` check still passes. The stage id also namespaces the MEMFS output
+  (`__out<id>_<basename>`), so concurrent runs on the shared core cannot clobber each other.
+- **Only the output is buffered** (MEMFS, then one read back into the VFS). A core fault
+  recycles the instance (`recycleFfmpeg`) and cleanup must NOT re-enter the dead worker; the
+  `faulted` flag guards every `unmount`/`deleteFile`.
+- **mediabunny fast path** (`ffmpeg/bunny-translate.ts` → `bunny-run.ts`, `bunny-probe.ts`,
+  `fast-path.ts`, `engine.ts`). `translateToMediabunny(parsed)` is pure: one real input, one
+  output in a container mediabunny writes, and every option either maps onto a `Conversion`
+  (`BunnyPlan`) or REJECTS with the option named — never a silent drop, because a wrong accept
+  produces a file the agent did not ask for. `runViaMediabunny` distinguishes `declined`
+  (pre-flight: unreadable container, a track mediabunny would drop on its own — fall back to
+  wasm, which then reports ffmpeg's own error) from `failed` (mid-run — the command's exit
+  code). `FFMPEG_ENGINE` (`auto` | `wasm` | `mediabunny`) is read from the shell env. mediabunny
+  is reached only via `import()` from these modules, so it never rides the boot graph; Vite dev
+  pre-bundles it (`optimizeDeps.include`). Output is still a `BufferTarget` (kernel-worker JS
+  heap, not the wasm heap) — streaming it to disk needs a VFS write stream, which does not exist
+  yet. Under Node/vitest PCM WAV round-trips for real (`bunny-run.test.ts`); WebCodecs codecs
+  decline and fall back, which is the same path a browser without an encoder takes.
+- `getNativeFile` is part of the VFS read surface: `RestrictedFS` gates it like `readFile`
+  (answering `null`, the caller's fallback read raises the sandbox ENOENT), `sudo-fs` lists it in
+  `READ_ASYNC`, and `VfsAdapter` exposes it beyond just-bash's `IFileSystem` for duck-typing.
+
 ## Git
 
 - Path: `packages/webapp/src/git/`; one module per subcommand under `commands/`, dispatched by `git-commands.ts`. isomorphic-git runs over `vfs-fs-adapter.ts`, so **every object read is a VFS read** — and over a `--mount`ed host repo (`docs/mounts.md`) that is an HTTP round trip through the hostfs bridge. Cost is measured in reads, not in CPU.

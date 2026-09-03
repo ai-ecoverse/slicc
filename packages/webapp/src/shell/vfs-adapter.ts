@@ -353,6 +353,25 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
+  /**
+   * Lazy native `File` for a VFS path, or `null` when the backend has no
+   * handle for it (see `VirtualFS.getNativeFile`). Not part of just-bash's
+   * `IFileSystem`; media commands duck-type for it and fall back to
+   * {@link readFileBuffer}.
+   */
+  async getNativeFile(path: string): Promise<File | null> {
+    return this.trusted(() => this.vfs.getNativeFile(normalizePath(path)));
+  }
+
+  /**
+   * Byte window `[start, end)` of a VFS file (see `VirtualFS.readFileRange`).
+   * Also outside just-bash's `IFileSystem`; media commands use it to check a
+   * lazy native `File` against the VFS's own view of the bytes.
+   */
+  async readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    return this.trusted(() => this.vfs.readFileRange(normalizePath(path), start, end));
+  }
+
   async writeFile(
     path: string,
     content: FileContent,

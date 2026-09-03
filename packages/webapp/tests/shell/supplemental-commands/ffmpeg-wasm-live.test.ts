@@ -19,8 +19,9 @@
  * What it does NOT cover: the `@ffmpeg/ffmpeg` wrapper itself. It needs a
  * real `Worker`, which Node lacks, so `getFfmpeg` (blob-URL materialization,
  * postMessage plumbing) is not on this path and stays unit-tested with
- * fakes. `@ffmpeg/core-mt` is not covered either: it is not a devDependency,
- * and its pthread pool needs real workers too.
+ * fakes. `@ffmpeg/core-mt` gets a layout-only canary below (glue + wasm +
+ * pthread worker resolved from the real devDependency); booting it needs
+ * real Workers for its pthread pool, which Node lacks.
  *
  * Cost is ~1 s under vitest (~100 ms in bare Node): the 31 MB wasm is read
  * once and compiled lazily, and the encode is a 10 ms silent clip.
@@ -36,10 +37,12 @@ import {
   selectFfmpegCore,
 } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 
-const PKG_DIR = resolve(
+const NODE_MODULES = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../../../node_modules/@ffmpeg/core'
+  '../../../../../node_modules'
 );
+const PKG_DIR = join(NODE_MODULES, '@ffmpeg/core');
+const MT_PKG_DIR = join(NODE_MODULES, '@ffmpeg/core-mt');
 
 const VFS_ROOT = '/workspace';
 const VFS_PKG = `${VFS_ROOT}/node_modules/@ffmpeg/core`;
@@ -75,14 +78,17 @@ function walk(dir: string, prefix = ''): string[] {
  * its assets is reflected faithfully and the loader is the only thing left
  * that can be wrong about where they are.
  */
-function mirrorInstalledPackage(): { ipk: IpkResolutionContext; files: string[] } {
-  const files = walk(PKG_DIR);
-  const vfsFiles = new Set(files.map((file) => `${VFS_PKG}/${file}`));
+function mirrorInstalledPackage(
+  pkgDir = PKG_DIR,
+  vfsPkg = VFS_PKG
+): { ipk: IpkResolutionContext; files: string[] } {
+  const files = walk(pkgDir);
+  const vfsFiles = new Set(files.map((file) => `${vfsPkg}/${file}`));
   const dirs = new Set([VFS_ROOT, `${VFS_ROOT}/node_modules`, `${VFS_ROOT}/node_modules/@ffmpeg`]);
   for (const file of vfsFiles) {
     for (let dir = posix.dirname(file); !dirs.has(dir); dir = posix.dirname(dir)) dirs.add(dir);
   }
-  const onDisk = (vfsPath: string) => join(PKG_DIR, vfsPath.slice(VFS_PKG.length + 1));
+  const onDisk = (vfsPath: string) => join(pkgDir, vfsPath.slice(vfsPkg.length + 1));
   const mustExist = (vfsPath: string) => {
     if (!vfsFiles.has(vfsPath)) throw new Error(`ENOENT: ${vfsPath}`);
   };
@@ -203,5 +209,45 @@ describe('ffmpeg-core live boot (real installed package)', () => {
     // The worker reads `ret` after every exec and clears it with `reset`.
     core.reset();
     expect(core.ret).toBe(-1);
+  });
+});
+
+/**
+ * The multi-threaded core is what an isolated leader actually boots, so its
+ * layout gets the same canary as the single-threaded one: resolved from the
+ * REAL installed package, not a hand-written file map. Booting it is out of
+ * reach here (its pthread pool spawns real Workers), so the check stops at
+ * the three artifacts the wrapper needs plus the glue's default export.
+ */
+describe('ffmpeg-core-mt layout canary (real installed package)', () => {
+  it('resolves glue + wasm + pthread worker at the pinned version on an isolated runtime', async () => {
+    const { ipk, files } = mirrorInstalledPackage(
+      MT_PKG_DIR,
+      `${VFS_ROOT}/node_modules/@ffmpeg/core-mt`
+    );
+    const resolved = await selectFfmpegCore(ipk, true);
+    expect(
+      resolved,
+      `the loader found no usable @ffmpeg/core-mt in the installed package; it contains ` +
+        `[${files.join(', ')}] — update FFMPEG_CORE_LAYOUTS in ffmpeg-wasm.ts`
+    ).not.toBeNull();
+    const mt = resolved as LoadedFfmpegCore;
+    expect(mt.pkg).toBe('@ffmpeg/core-mt');
+    expect(mt.workerSource, 'the -mt core is unusable without ffmpeg-core.worker.js').toMatch(/\S/);
+    expect(mt.wasmBytes.byteLength).toBeGreaterThan(1_000_000);
+    // Same ESM-glue contract the wrapper worker relies on for the ST core.
+    expect(mt.coreSource).toMatch(/export default/);
+    const manifest = JSON.parse(readFileSync(join(MT_PKG_DIR, 'package.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(manifest.version).toBe(BUNDLED_FFMPEG_CORE_VERSION);
+  });
+
+  it('is NOT preferred on a non-isolated runtime even when it is the only core present', async () => {
+    const { ipk } = mirrorInstalledPackage(MT_PKG_DIR, `${VFS_ROOT}/node_modules/@ffmpeg/core-mt`);
+    // Without SharedArrayBuffer the pthread core cannot boot; the loader
+    // must report "not installed" rather than hand the wrapper a core
+    // that dies inside its worker.
+    expect(await selectFfmpegCore(ipk, false)).toBeNull();
   });
 });

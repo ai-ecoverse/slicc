@@ -1,13 +1,14 @@
 /**
- * `ffprobe` shell command — media introspection backed by the same
- * `@ffmpeg/core` wasm instance that powers `ffmpeg`.
+ * `ffprobe` shell command — media introspection.
  *
- * `@ffmpeg/core` 0.12.x ships the ffmpeg entry point only; there is no
- * separate ffprobe wasm / ipk artifact for this pin. We therefore
- * emulate by staging the input into MEMFS, running
- * `ffmpeg -hide_banner -i <file>` (which exits non-zero with "At least
- * one output file must be specified" after printing the Input #N
- * banner), and parsing that banner into structured fields.
+ * Two engines, same output: mediabunny reads the container index from a
+ * lazily-read `Blob` and answers with typed fields (`../ffmpeg/bunny-probe.ts`,
+ * no wasm boot); containers it does not read fall back to the shared
+ * `@ffmpeg/core` wasm instance that powers `ffmpeg`. `@ffmpeg/core` 0.12.x
+ * ships the ffmpeg entry point only — no separate ffprobe binary — so the
+ * fallback mounts the input via WORKERFS, runs `ffmpeg -hide_banner -i <file>`
+ * (which exits non-zero with "At least one output file must be specified"
+ * after printing the Input #N banner), and parses that banner.
  *
  * This is an honest subset: duration, container/format name, and
  * per-stream codec/type/sample rate/channels/resolution/fps. Flags we
@@ -16,9 +17,13 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { createIpkContextFromCtx } from '../ffmpeg-command.js';
+import { ffmpegCoreFromEnv } from '../ffmpeg/engine.js';
+import { readInputBlob } from '../ffmpeg/input-blob.js';
+import { createIpkContextFromCtx } from '../ffmpeg/run.js';
+import { mountStagedInputs, newStage, stagedPath, unmountStagedInputs } from '../ffmpeg/staging.js';
 import {
-  FFMPEG_CORE_NOT_INSTALLED,
+  describeFfmpegCore,
+  ffmpegCoreNotInstalledMessage,
   getFfmpeg,
   isCoreFault,
   recycleFfmpeg,
@@ -82,16 +87,17 @@ const BOOL_FLAGS = new Set([
 
 function ffprobeHelp(): CmdResult {
   return {
-    stdout: `ffprobe - media probe via ffmpeg-wasm (emulated)
+    stdout: `ffprobe - media probe (mediabunny, with a wasm fallback)
 
 Usage:
   ffprobe [options] -i <input>
   ffprobe [options] <input>
 
-SLICC does not ship a real ffprobe binary. @ffmpeg/core provides the
-ffmpeg entry point only, so this command runs the shared wasm core
-with \`-i <input>\` (no output), parses the Input #N banner from the
-core log, and formats the fields we can source reliably:
+SLICC does not ship a real ffprobe binary. Containers mediabunny reads
+(mp4/mov, webm/mkv, mp3, wav, ogg, flac, aac, mpegts) are probed from
+their index — typed fields, no wasm boot, nothing to install. Anything
+else falls back to the shared @ffmpeg/core wasm, run with \`-i <input>\`
+(no output) and its Input #N banner parsed. Either way the fields are:
 
   format:  filename, format_name, duration, start_time, bit_rate
   streams: index, codec_type, codec_name, profile, width/height,
@@ -109,10 +115,13 @@ Supported options:
                           section name (format|stream); p=0 prints values only.
                           Fields containing commas/quotes are CSV-quoted.
   -v / -loglevel LEVEL    quiet|panic|fatal|error|warning|info|verbose|debug
-  -version                Report that this is the wasm emulation
+  -version                Report the wasm core that would back the fallback
 
 Unsupported options are rejected with a non-zero exit (never silently
-ignored). Install the core first with the same pin as \`ffmpeg\`:
+ignored). FFMPEG_ENGINE=wasm forces the emulation; FFMPEG_ENGINE=mediabunny
+refuses containers it cannot read instead of falling back. The fallback
+needs the same core pin as \`ffmpeg\` (\`@ffmpeg/core\`, or
+\`@ffmpeg/core-mt\` with FFMPEG_CORE=mt on a cross-origin-isolated leader):
   ipk add -g @ffmpeg/core@<pinned>
 
 Examples:
@@ -125,12 +134,21 @@ Examples:
 }
 
 async function ffprobeVersion(ctx: CommandContext): Promise<CmdResult> {
-  const loaded = await tryLoadFfmpegCoreFromNodeModules(createIpkContextFromCtx(ctx));
+  const preferMt = ffmpegCoreFromEnv(ctx.env) === 'mt';
+  const loaded = await tryLoadFfmpegCoreFromNodeModules(
+    createIpkContextFromCtx(ctx),
+    undefined,
+    preferMt
+  );
   if (!loaded) {
-    return { stdout: '', stderr: `ffprobe: ${FFMPEG_CORE_NOT_INSTALLED}\n`, exitCode: 1 };
+    return {
+      stdout: '',
+      stderr: `ffprobe: ${ffmpegCoreNotInstalledMessage(preferMt)}\n`,
+      exitCode: 1,
+    };
   }
   return {
-    stdout: 'ffprobe (emulated via @ffmpeg/ffmpeg — not a real ffprobe binary)\n',
+    stdout: `ffprobe (emulated via @ffmpeg/ffmpeg — not a real ffprobe binary)\ncore: ${describeFfmpegCore(loaded)}\n`,
     stderr: '',
     exitCode: 0,
   };
@@ -483,10 +501,9 @@ export function resetFfprobeLockForTests(): void {
 }
 
 /**
- * Opaque MEMFS staging name. Carrying the VFS basename through verbatim
+ * Opaque staging name. Carrying the VFS basename through verbatim
  * breaks when it contains `'` (ffmpeg echoes `from '…'` and our banner
- * parser only accepts `[^']*`), and two probes of files with the same
- * basename would clobber each other. Keep a sanitized extension so the
+ * parser only accepts `[^']*`). Keep a sanitized extension so the
  * demuxer still sniffs the container.
  */
 export function inferMemfsName(path: string): string {
@@ -507,6 +524,7 @@ async function loadProbeCore(
         loadLog += `${msg}\n`;
       },
       ipk: createIpkContextFromCtx(ctx),
+      preferMt: ffmpegCoreFromEnv(ctx.env) === 'mt',
     });
     return { ffmpeg, loadLog };
   } catch (err) {
@@ -540,14 +558,50 @@ async function execProbeBanner(
   return null;
 }
 
-async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise<CmdResult> {
-  return withProbeLock(() => runProbeExclusive(parsed, ctx));
+/** Render `info` the way the user asked, or the usual exit-1 shell error. */
+function renderResult(info: ProbeInfo, parsed: ParsedFfprobeArgs, stderr: string): CmdResult {
+  info.format.filename = parsed.inputPath ?? info.format.filename;
+  try {
+    const stdout = renderOutput(info, parsed);
+    return { stdout, stderr: parsed.quiet ? '' : stderr, exitCode: 0 };
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `ffprobe: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
 }
 
-async function runProbeExclusive(
+/**
+ * mediabunny reads the container index lazily and answers with typed
+ * fields — no 31 MB wasm boot, no banner scraping. `null` hands the probe
+ * to the wasm emulation (container mediabunny does not read, or
+ * `FFMPEG_ENGINE=wasm`). The module is `import()`ed so mediabunny never
+ * rides the boot graph.
+ */
+async function tryMediabunnyProbe(
   parsed: ParsedFfprobeArgs,
+  data: Blob,
   ctx: CommandContext
-): Promise<CmdResult> {
+): Promise<CmdResult | null> {
+  const { ffmpegEngineFromEnv } = await import('../ffmpeg/engine.js');
+  const engine = ffmpegEngineFromEnv(ctx.env);
+  if (engine === 'wasm') return null;
+  const { probeViaMediabunny } = await import('../ffmpeg/bunny-probe.js');
+  const info = await probeViaMediabunny(data, parsed.inputPath ?? '');
+  if (info) return renderResult(info, parsed, '');
+  if (engine === 'mediabunny') {
+    return {
+      stdout: '',
+      stderr: 'ffprobe: FFMPEG_ENGINE=mediabunny: input is not a container mediabunny reads\n',
+      exitCode: 1,
+    };
+  }
+  return null;
+}
+
+async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise<CmdResult> {
   if (!parsed.inputPath) {
     return {
       stdout: '',
@@ -563,8 +617,23 @@ async function runProbeExclusive(
       exitCode: 1,
     };
   }
-  const bytes = await ctx.fs.readFileBuffer(resolved);
-  const memfsName = inferMemfsName(parsed.inputPath);
+  // Lazily-read Blob: mediabunny slices it; the wasm path mounts it via
+  // WORKERFS. Either way the probe only touches the container headers, so
+  // a multi-GB input costs no heap.
+  const data = await readInputBlob(ctx.fs, resolved);
+  const fast = await tryMediabunnyProbe(parsed, data, ctx);
+  if (fast) return fast;
+  return withProbeLock(() => runProbeExclusive(parsed, data, ctx));
+}
+
+async function runProbeExclusive(
+  parsed: ParsedFfprobeArgs,
+  data: Blob,
+  ctx: CommandContext
+): Promise<CmdResult> {
+  const stage = newStage();
+  const stagedName = inferMemfsName(parsed.inputPath ?? '');
+  const memfsName = stagedPath(stage, stagedName);
 
   const loaded = await loadProbeCore(ctx);
   if ('exitCode' in loaded) return loaded;
@@ -580,14 +649,14 @@ async function runProbeExclusive(
   // is gone, so MEMFS cleanup must not re-enter the terminated core.
   let faulted = false;
   try {
-    await ffmpeg.writeFile(memfsName, bytes);
+    await mountStagedInputs(ffmpeg, stage, [{ name: stagedName, data }]);
     const fault = await execProbeBanner(ffmpeg, memfsName, probeLog);
     if (fault) {
       faulted = true;
       return fault;
     }
 
-    const info = parseFfmpegProbeLog(probeLog.text, parsed.inputPath);
+    const info = parseFfmpegProbeLog(probeLog.text, parsed.inputPath ?? '');
     if (!info) {
       return {
         stdout: '',
@@ -595,18 +664,7 @@ async function runProbeExclusive(
         exitCode: 1,
       };
     }
-    info.format.filename = parsed.inputPath;
-
-    try {
-      const stdout = renderOutput(info, parsed);
-      return { stdout, stderr: parsed.quiet ? '' : loadLog, exitCode: 0 };
-    } catch (err) {
-      return {
-        stdout: '',
-        stderr: `ffprobe: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
+    return renderResult(info, parsed, loadLog);
   } catch (err) {
     if (isCoreFault(err)) {
       faulted = true;
@@ -623,11 +681,11 @@ async function runProbeExclusive(
     } catch {
       /* noop */
     }
-    // A terminated worker has no MEMFS left to tidy, and every
-    // `deleteFile` would re-enter the trapped module.
+    // A terminated worker has no FS left to tidy, and every
+    // `unmount` would re-enter the trapped module.
     if (!faulted) {
       try {
-        await ffmpeg.deleteFile(memfsName);
+        await unmountStagedInputs(ffmpeg, stage);
       } catch {
         /* noop */
       }

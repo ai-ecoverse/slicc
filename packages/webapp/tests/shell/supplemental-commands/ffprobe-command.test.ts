@@ -36,7 +36,18 @@ type FakeFfmpeg = {
   writeFile: ReturnType<typeof vi.fn>;
   exec: ReturnType<typeof vi.fn>;
   deleteFile: ReturnType<typeof vi.fn>;
+  createDir: ReturnType<typeof vi.fn>;
+  mount: ReturnType<typeof vi.fn>;
+  unmount: ReturnType<typeof vi.fn>;
+  deleteDir: ReturnType<typeof vi.fn>;
 };
+
+/** Flat names of every input the fake was asked to mount (WORKERFS). */
+function mountedNames(fake: FakeFfmpeg): string[] {
+  return fake.mount.mock.calls.flatMap(([, opts]) =>
+    (opts as { blobs: Array<{ name: string }> }).blobs.map((b) => b.name)
+  );
+}
 
 const SAMPLE_LOG = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '__probe_clip.mp4':
   Metadata:
@@ -67,6 +78,10 @@ function makeFakeFfmpeg(opts: { exitCode?: number; log?: string; execError?: Err
       return opts.exitCode ?? 1;
     }),
     deleteFile: vi.fn().mockResolvedValue(undefined),
+    createDir: vi.fn().mockResolvedValue(true),
+    mount: vi.fn().mockResolvedValue(true),
+    unmount: vi.fn().mockResolvedValue(true),
+    deleteDir: vi.fn().mockResolvedValue(true),
   };
 }
 
@@ -221,12 +236,14 @@ describe('selectProbeStreams', () => {
 });
 
 describe('createFfprobeCommand', () => {
-  it('prints help that discloses the emulation', async () => {
+  it('prints help that names both engines and discloses the emulation', async () => {
     const cmd = createFfprobeCommand();
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/emulated/i);
+    expect(result.stdout).toMatch(/mediabunny/);
+    expect(result.stdout).toMatch(/wasm fallback/i);
     expect(result.stdout).toMatch(/not ship a real ffprobe/i);
+    expect(result.stdout).toMatch(/FFMPEG_ENGINE=wasm/);
   });
 
   it('gates -version on an installed core', async () => {
@@ -341,6 +358,10 @@ describe('createFfprobeCommand', () => {
         throw new Error('At least one output file must be specified');
       }),
       deleteFile: vi.fn().mockResolvedValue(undefined),
+      createDir: vi.fn().mockResolvedValue(true),
+      mount: vi.fn().mockResolvedValue(true),
+      unmount: vi.fn().mockResolvedValue(true),
+      deleteDir: vi.fn().mockResolvedValue(true),
     };
     useFakeFfmpeg(fake);
     const cmd = createFfprobeCommand();
@@ -361,7 +382,7 @@ describe('createFfprobeCommand', () => {
     expect(b.exitCode).toBe(0);
     expect(a.stdout.trim()).toBe('1');
     expect(b.stdout.trim()).toBe('1');
-    const staged = vi.mocked(fake.writeFile).mock.calls.map((c) => String(c[0]));
+    const staged = mountedNames(fake);
     expect(staged).toHaveLength(2);
     expect(staged[0]).not.toBe(staged[1]);
     expect(staged.every((n) => !n.includes("'"))).toBe(true);
@@ -385,9 +406,14 @@ describe('createFfprobeCommand', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('1');
-    const name = String(fake.writeFile.mock.calls[0][0]);
+    const [name] = mountedNames(fake);
     expect(name).not.toContain("'");
     expect(name).toMatch(/\.mp4$/);
+    // The mount point is where the core is told to read from.
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    expect(execArgs[execArgs.indexOf('-i') + 1]).toBe(
+      `${(fake.mount.mock.calls[0][2] as string).replace(/^\//, '')}/${name}`
+    );
   });
 
   it('rejects unsupported options with a clear error', async () => {
@@ -412,8 +438,9 @@ describe('createFfprobeCommand', () => {
     expect(result.stderr).toMatch(/wasm core faulted/);
     expect(recycleFfmpeg).toHaveBeenCalledWith(fake);
     // #2766 invariant: after recycle the worker is gone — do not
-    // re-enter it via deleteFile (wrapper ERROR_NOT_LOADED is not our
+    // re-enter it via unmount (wrapper ERROR_NOT_LOADED is not our
     // guarantee).
+    expect(fake.unmount).not.toHaveBeenCalled();
     expect(fake.deleteFile).not.toHaveBeenCalled();
   });
 
@@ -425,6 +452,79 @@ describe('createFfprobeCommand', () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/input file not found/);
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  });
+});
+
+describe('ffprobe via mediabunny', () => {
+  async function wavCtx() {
+    const { makeWav } = await import('./ffmpeg/wav-fixture.js');
+    const wav = makeWav({ channels: 2, sampleRate: 44100, seconds: 0.5 });
+    return createMockCtx({
+      fs: {
+        exists: vi.fn(async (p: string) => p === '/home/tone.wav'),
+        readFileBuffer: vi.fn(async () => wav),
+      },
+    });
+  }
+
+  it('answers a Remotion-style channel query from mediabunny, no wasm boot', async () => {
+    const result = await createFfprobeCommand().execute(
+      [
+        '-v',
+        'error',
+        '-select_streams',
+        'a:0',
+        '-show_entries',
+        'stream=channels',
+        '-of',
+        'default=nw=1:nk=1',
+        'tone.wav',
+      ],
+      await wavCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('2');
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('emits typed JSON with the wav format and pcm stream', async () => {
+    const result = await createFfprobeCommand().execute(
+      ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', 'tone.wav'],
+      await wavCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      format: { format_name: string; duration: string; filename: string };
+      streams: Array<{ codec_name: string; sample_rate: string; channels: number }>;
+    };
+    expect(parsed.format.format_name).toBe('wav');
+    expect(parsed.format.filename).toBe('tone.wav');
+    expect(Number(parsed.format.duration)).toBeCloseTo(0.5, 2);
+    expect(parsed.streams[0]).toMatchObject({
+      codec_name: 'pcm_s16le',
+      sample_rate: '44100',
+      channels: 2,
+    });
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('FFMPEG_ENGINE=wasm takes the emulated path even for a readable container', async () => {
+    const fake = makeFakeFfmpeg({});
+    useFakeFfmpeg(fake);
+    const ctx = await wavCtx();
+    (ctx as unknown as { env: Map<string, string> }).env.set('FFMPEG_ENGINE', 'wasm');
+    const result = await createFfprobeCommand().execute(['-of', 'json', 'tone.wav'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(getFfmpeg).toHaveBeenCalledTimes(1);
+  });
+
+  it('FFMPEG_ENGINE=mediabunny refuses an unreadable container instead of emulating', async () => {
+    const ctx = createMockCtx();
+    (ctx as unknown as { env: Map<string, string> }).env.set('FFMPEG_ENGINE', 'mediabunny');
+    const result = await createFfprobeCommand().execute(['-of', 'json', 'clip.mp4'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/not a container mediabunny reads/);
     expect(getFfmpeg).not.toHaveBeenCalled();
   });
 });

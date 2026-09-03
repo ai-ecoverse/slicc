@@ -39,6 +39,7 @@ import {
   removeMountEntry,
   saveMountEntry,
 } from './mount-table-store.js';
+import { fileFromDirectoryHandle } from './native-file.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
 import {
   mergeSidecarEntries,
@@ -1793,6 +1794,41 @@ export class VirtualFS {
     // (a subclass), and a ranged read must return the same shape whichever
     // side of the mount boundary it came from.
     return new Uint8Array(whole.subarray(start, Math.min(end, whole.byteLength)));
+  }
+
+  /**
+   * Native `File` for a path whose bytes live behind a browser filesystem
+   * handle: the OPFS root, or an FSA picker mount (`LocalMountBackend`).
+   *
+   * A `File` reads lazily by slice, so a consumer that can mount one
+   * (ffmpeg's WORKERFS, mediabunny's `BlobSource`) never holds the whole
+   * file in memory — the point for media inputs that would not fit the wasm
+   * heap even once. Returns `null` wherever there is no handle to hand out
+   * (memory backend, hostfs / S3 / DA / AEM mounts, directories, missing
+   * paths) so callers fall back to `readFile`; it never throws. The `File`
+   * is a snapshot: a write to the path after this call makes later reads
+   * of it fail, which is what a media consumer wants over silently mixing
+   * two versions.
+   */
+  async getNativeFile(path: string): Promise<File | null> {
+    const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      const native = mount.backend.getNativeFile;
+      if (!native || mount.relParts.length === 0) return null;
+      try {
+        return await native.call(mount.backend, mount.relParts.join('/'));
+      } catch {
+        return null;
+      }
+    }
+    const root = this.opfsHandle;
+    if (!root) return null;
+    try {
+      return await fileFromDirectoryHandle(root, await this.resolveSymlinks(normalized));
+    } catch {
+      return null;
+    }
   }
 
   /**

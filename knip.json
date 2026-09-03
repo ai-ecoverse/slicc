@@ -65,7 +65,8 @@
         "@ai-ecoverse/spoon",
         "@biomejs/wasm-web",
         "@biomejs/js-api",
-        "@ffmpeg/core"
+        "@ffmpeg/core",
+        "@ffmpeg/core-mt"
       ]
     },
     "packages/chrome-extension": {
