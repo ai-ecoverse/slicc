@@ -215,12 +215,19 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('summaryIsRoot reads the ownership edge alone (#2358)', () => {
-    expect(summaryIsRoot({ parentId: null })).toBe(true);
-    expect(summaryIsRoot({ parentId: 'cone' })).toBe(false);
-    // No edge at all is "owner unknown", never a second root.
+  it('summaryIsRoot uses the edge when sent and the flag when it is not', () => {
+    expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
+    expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
+    // a lying flag loses to the edge
+    expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
+    // A hosted leader tab opened before `parentId` landed and never reloaded
+    // sends the flag alone. Dropping this fallback gives such a roster ZERO
+    // roots — every unit read-only — while iOS on the same bytes still roots
+    // via `isCone`. Stage 3 of #2358 deletes both halves together.
+    expect(summaryIsRoot({ isCone: true })).toBe(true);
+    expect(summaryIsRoot({ isCone: false })).toBe(false);
+    // Neither field at all is "owner unknown", never a second root.
     expect(summaryIsRoot({})).toBe(false);
-    expect(summaryIsRoot({ parentId: undefined })).toBe(false);
   });
 
   it('resolves the role from the edge for a summary with no isCone flag (#2358)', () => {
@@ -289,15 +296,18 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('keeps a summary with no edge at all, as an unknown-owner child (#2358)', () => {
-    // No leader produces this any more — `parentId` rides every `scoops.list`
-    // this build sends. It must still render rather than disappear, and it must
-    // not be promoted to a second root on the strength of a stale flag.
-    const edgeless = [
+  it('keeps the legacy cone-first order when a leader sends no parentId', () => {
+    const legacy = [
       { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
       { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
     ];
-    const descriptors = toFollowerSwitcherScoops(edgeless);
-    expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual(['scoop:s', 'scoop:c']);
+    expect(toFollowerSwitcherScoops(legacy).map((d) => d.key)).toEqual(['c', 's']);
+  });
+
+  it('keeps a summary with neither edge nor flag as an unknown-owner child (#2358)', () => {
+    const edgeless = [{ jid: 'x', name: 'x', folder: 'x', assistantLabel: 'x' }];
+    expect(toFollowerSwitcherScoops(edgeless).map((d) => `${d.type}:${d.key}`)).toEqual([
+      'scoop:x',
+    ]);
   });
 });

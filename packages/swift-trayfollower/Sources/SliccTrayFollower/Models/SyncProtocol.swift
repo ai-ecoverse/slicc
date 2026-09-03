@@ -222,7 +222,10 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         jid: String,
         name: String,
         folder: String,
-        isCone: Bool? = nil,
+        // No default: `isCone` stays a required LABEL even though the type is
+        // optional, so a fixture that omits both it and `parentId` cannot
+        // quietly compile into a root (#2358).
+        isCone: Bool?,
         assistantLabel: String,
         trigger: String? = nil,
         state: String? = nil,

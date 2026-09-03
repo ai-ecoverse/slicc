@@ -60,9 +60,10 @@ export interface WorkUnitSummary {
    * two transports answer it from different fields on different record
    * shapes. Each adapter resolves it once — `isRootUnit` on a record,
    * `summaryIsRoot` on a wire summary — so nothing downstream branches on the
-   * transport's shape. Since #2358 `summaryIsRoot` reads the ownership edge
-   * and nothing else, so an unknown owner presents as a child rather than as
-   * a second root.
+   * transport's shape. `summaryIsRoot` reads the ownership edge wherever the
+   * remote sends it and falls back to the deprecated `ScoopSummary.isCone`
+   * flag only when the edge is absent entirely — the one case #2358 stage 3
+   * will delete along with the field.
    */
   role: WorkUnitRole;
   name: string;

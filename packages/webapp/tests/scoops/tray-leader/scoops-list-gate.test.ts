@@ -15,6 +15,8 @@ import type {
   LeaderToFollowerMessage,
   ScoopSummary,
 } from '../../../src/scoops/tray-sync-protocol.js';
+import type { RegisteredScoop } from '../../../src/scoops/types.js';
+import { toScoopSummaries } from '../../../src/ui/wc/wc-tray-scoops.js';
 
 /** What `toScoopSummaries` projects today: the edge PLUS the deprecated flag. */
 const ROSTER: ScoopSummary[] = [
@@ -166,5 +168,59 @@ describe('BroadcastManager scoops.list per-peer gating (#2358 stage 2)', () => {
       'Broadcast send to follower failed',
       expect.objectContaining({ bootstrapId: 'modern', messageType: 'scoops.list' })
     );
+  });
+});
+
+describe('the leader projection feeds the gate (#2358 stage 2)', () => {
+  /** The records the leader actually holds — no hand-written wire fields. */
+  const RECORDS: RegisteredScoop[] = [
+    {
+      jid: 'cone_1',
+      name: 'sliccy',
+      folder: 'cone',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-09-01T00:00:00.000Z',
+    },
+    {
+      jid: 'scoop_1',
+      name: 'helper',
+      folder: 'helper',
+      parentJid: 'cone_1',
+      requiresTrigger: true,
+      assistantLabel: 'helper',
+      addedAt: '2026-09-02T00:00:00.000Z',
+    },
+  ];
+
+  /**
+   * The gate is only half the contract: an older peer needs the flag to be
+   * PRESENT and correct, which is the projection's job. Asserting that here,
+   * over real records, is what makes deleting `isCone: isRootUnit(scoop)` from
+   * `toScoopSummaries` a test failure rather than a silent break of every
+   * shipped native follower — the field is optional now, so the compiler will
+   * not say a word.
+   */
+  it('projects an explicit isCone for a peer below v8', () => {
+    for (const version of [undefined, 7]) {
+      const projected = scoopsListForPeer(toScoopSummaries(RECORDS, []), version);
+      expect(projected.map((scoop) => [scoop.jid, scoop.isCone])).toEqual([
+        ['cone_1', true],
+        ['scoop_1', false],
+      ]);
+    }
+  });
+
+  it('leaves a v8 peer no isCone property at all, edge intact', () => {
+    const projected = scoopsListForPeer(
+      toScoopSummaries(RECORDS, []),
+      PARENT_ID_ONLY_PROTOCOL_VERSION_MIN
+    );
+    expect(projected.every((scoop) => !('isCone' in scoop))).toBe(true);
+    expect(projected.map((scoop) => [scoop.jid, scoop.parentId])).toEqual([
+      ['cone_1', null],
+      ['scoop_1', 'cone_1'],
+    ]);
   });
 });

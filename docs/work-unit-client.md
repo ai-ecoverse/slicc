@@ -83,9 +83,10 @@ answer it from different fields on different record shapes. The adapters
 resolve that once — `isRootUnit(record)` locally, `summaryIsRoot(summary)`
 remotely — so nothing downstream branches on the wire shape, and
 `parentId: undefined` means exactly "owner unknown", which the ordering rule
-below already has a place for. Since #2358 `summaryIsRoot` reads the ownership
-edge and nothing else: an unknown owner presents as a child, never as a second
-root.
+below already has a place for. `summaryIsRoot` reads the ownership edge
+wherever the leader sends it and falls back to the deprecated `isCone` flag
+only when the edge is absent entirely — the last `.isCone` read in TypeScript,
+which #2358 stage 3 deletes with the field.
 
 `state`/`phase`/`awaiting`/`fill` are the shell's expression model, not the
 wire's. The remote adapter expands `state` + `activity` through the existing
@@ -265,8 +266,9 @@ drifted:
    transports' native shapes, produces byte-identical `SwitcherScoop[]`:
    cones-first, selected cone's scoops next, unknown owners at the tail.
 2. **read-only role parity** — a child resolves to `role: 'child'` and
-   `isReadOnlyRole` on both sides, including from a leader that has already
-   stopped projecting the deprecated `isCone` flag for a v8 peer (#2358).
+   `isReadOnlyRole` on both sides, from a leader that sends both fields, from
+   one that has already stopped projecting `isCone` for a v8 peer, and from an
+   old one that sends only `isCone` (#2358).
 3. **model surface parity** — `summary.model` is the unit's own
    provider-qualified model on both sides; an empty catalog is warm-up, not an
    answer (#2329), so a summary with no model never latches.

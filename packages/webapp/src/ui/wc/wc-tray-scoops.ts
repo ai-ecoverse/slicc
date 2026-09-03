@@ -109,19 +109,27 @@ export function toScoopSummaries(
 /**
  * `true` when a wire summary describes a root (cone).
  *
- * The ownership edge decides on its own: `null` is a root, anything else is
- * owned. There is no `isCone` fallback because there is no leader that could
- * need one — every TS float loads the webapp from the hosted origin, so a
- * leader too old for `parentId` (#1666) cannot be on the other end of this
- * wire. An absent edge therefore reads as "owned", which is the safe
- * direction: it never promotes a scoop to a root (#2358).
+ * The ownership edge decides wherever the leader sends it: `null` is a root,
+ * a jid is owned. An ABSENT edge falls back to the deprecated `isCone` flag,
+ * and only that case does — the exact mirror of the Swift rule
+ * (`ScoopSummary.isRootUnit`, `parentId == nil && (isCone ?? true)`), so the
+ * two follower families never disagree about the same payload.
+ *
+ * The fallback is not hypothetical: a hosted leader tab opened before
+ * `parentId` landed and never reloaded still sends `{ isCone }` alone. Without
+ * it such a roster has ZERO roots, every unit reads as owned, and the follower
+ * composer unmounts silently while iOS on the same bytes still finds its cone.
+ *
+ * **This is the last `.isCone` read in TypeScript.** Stage 3 of
+ * [#2358](https://github.com/ai-ecoverse/slicc/issues/2358) deletes the
+ * fallback and the wire field together.
  */
-export function summaryIsRoot(scoop: Pick<ScoopSummary, 'parentId'>): boolean {
-  return scoop.parentId === null;
+export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
+  return scoop.parentId === undefined ? scoop.isCone === true : scoop.parentId === null;
 }
 
 /** The switcher descriptor's role for a wire summary — the follower's half of `unitRoleFor`. */
-export function summaryRole(scoop: Pick<ScoopSummary, 'parentId'>): UnitRole {
+export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): UnitRole {
   return summaryIsRoot(scoop) ? 'cone' : 'scoop';
 }
 
@@ -130,8 +138,9 @@ export function summaryRole(scoop: Pick<ScoopSummary, 'parentId'>): UnitRole {
  *
  * `parentId` stays possibly-`undefined` on purpose: a leader that omits the
  * edge leaves the owner UNKNOWN, and inventing one would turn a scoop into a
- * root. `role` reads that same edge, so an unknown owner presents as a child
- * rather than as a second cone (#2358).
+ * root. `role` still answers what the unit is, through `summaryIsRoot` — which
+ * for that one case reads the deprecated `isCone` flag the same leader does
+ * send.
  */
 export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
   const expanded = expandWireState(scoop);

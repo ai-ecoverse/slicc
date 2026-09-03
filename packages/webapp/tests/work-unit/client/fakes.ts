@@ -43,6 +43,12 @@ export interface FakeUnit {
    * receives.
    */
   noRoleFlag?: boolean;
+  /**
+   * Force the pre-#1666 wire shape: the `isCone` flag only, no edge — what a
+   * hosted leader tab opened before `parentId` landed still sends. Mutually
+   * exclusive with {@link FakeUnit.noRoleFlag}, which is the opposite gap.
+   */
+  legacyWire?: boolean;
 }
 
 export interface ClientHarness {
@@ -193,8 +199,8 @@ export function makeRemoteHarness(): ClientHarness {
         folder: unit.folder,
         jid: unit.id,
         name: unit.name,
-        parentId: unit.parentId,
         state: STATE_FOR[unit.status],
+        ...(unit.legacyWire ? {} : { parentId: unit.parentId }),
         ...(unit.noRoleFlag ? {} : { isCone: unit.parentId === null }),
         ...(unit.phase ? { activity: unit.phase } : {}),
         ...(unit.awaiting ? { activity: 'awaiting' as const } : {}),

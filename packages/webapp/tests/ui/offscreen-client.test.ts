@@ -377,8 +377,7 @@ describe('OffscreenClient', () => {
         jid: 'scoop_test_1',
         name: 'Test',
         folder: 'test-scoop',
-        isCone: false,
-        parentJid: 'cone_1',
+        parentId: 'cone_1',
         assistantLabel: 'test-scoop',
         status: 'ready',
       },
@@ -387,6 +386,9 @@ describe('OffscreenClient', () => {
     expect(callbacks.onScoopCreated).toHaveBeenCalled();
     expect(client.getScoops().length).toBe(1);
     expect(client.getScoop('scoop_test_1')?.name).toBe('Test');
+    // The record's owner comes from the wire's edge, nothing else (#2358).
+    expect(client.getScoop('scoop_test_1')?.parentJid).toBe('cone_1');
+    expect(client.getScoop('scoop_test_1')?.requiresTrigger).toBe(true);
   });
 
   it('handles state-snapshot', () => {
@@ -397,8 +399,7 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
-          parentJid: null,
+          parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },
@@ -406,8 +407,7 @@ describe('OffscreenClient', () => {
           jid: 'scoop_1',
           name: 'Worker',
           folder: 'worker-scoop',
-          isCone: false,
-          parentJid: 'cone_1',
+          parentId: 'cone_1',
           assistantLabel: 'worker-scoop',
           status: 'processing',
         },
@@ -416,6 +416,7 @@ describe('OffscreenClient', () => {
     });
 
     expect(client.getScoops().length).toBe(2);
+    expect(client.getScoops().map((s) => s.parentJid)).toEqual([null, 'cone_1']);
     expect(client.isProcessing('scoop_1')).toBe(true);
     expect(client.isProcessing('cone_1')).toBe(false);
     expect(callbacks.onScoopListUpdate).toHaveBeenCalled();
@@ -502,8 +503,7 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
-          parentJid: null,
+          parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
           config: { thinkingLevel: 'off' },
@@ -545,8 +545,6 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
-          parentJid: null,
           parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
@@ -555,8 +553,6 @@ describe('OffscreenClient', () => {
           jid: 'cone_2',
           name: 'Research',
           folder: 'cone-research',
-          isCone: true,
-          parentJid: null,
           parentId: null,
           assistantLabel: 'Research',
           status: 'ready',
@@ -710,8 +706,7 @@ describe('OffscreenClient', () => {
           jid: 'scoop_1',
           name: 'Test',
           folder: 'test',
-          isCone: false,
-          parentJid: 'cone_1',
+          parentId: 'cone_1',
           assistantLabel: 'test',
           status: 'ready',
         },
@@ -734,7 +729,6 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
           parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
@@ -743,7 +737,6 @@ describe('OffscreenClient', () => {
           jid: 'cone_2',
           name: 'Two',
           folder: 'cone-two',
-          isCone: true,
           parentId: null,
           assistantLabel: 'Two',
           status: 'ready',
@@ -752,7 +745,6 @@ describe('OffscreenClient', () => {
           jid: 'scoop_b',
           name: 'b',
           folder: 'b-scoop',
-          isCone: false,
           parentId: 'cone_2',
           assistantLabel: 'b',
           status: 'ready',
@@ -789,7 +781,6 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
           parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
@@ -808,7 +799,7 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
+          parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },
@@ -816,13 +807,15 @@ describe('OffscreenClient', () => {
           jid: 'cone_2',
           name: 'Two',
           folder: 'cone-two',
-          isCone: true,
+          parentId: null,
           assistantLabel: 'Two',
           status: 'ready',
         },
       ],
       activeScoopJid: null,
     });
+    // Both entries are roots, so the guard is the thing being exercised.
+    expect(client.getScoops().map((s) => s.parentJid)).toEqual([null, null]);
     await client.unregisterScoop('cone_2');
     expect(client.getScoops().map((s) => s.jid)).toEqual(['cone_1']);
     expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-drop')).toBe(true);
@@ -844,8 +837,7 @@ describe('OffscreenClient', () => {
           jid: 'cone_1',
           name: 'Cone',
           folder: 'cone',
-          isCone: true,
-          parentJid: null,
+          parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },
