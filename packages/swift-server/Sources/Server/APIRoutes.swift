@@ -17,6 +17,13 @@ private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
     "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
+    // CLI binary-body marker (`X-Slicc-Raw-Body: 1`) — consumed by Node's
+    // express.json bypass. Internal to the browser→bridge hop; never forwarded
+    // to third-party APIs (signature validation / unexpected-header rejection).
+    // Mirrors `FETCH_PROXY_SKIP_HEADERS` in node-server fetch-proxy-headers.ts.
+    "x-slicc-raw-body",
+    // Thin-bridge auth header — authenticates the browser→local hop only.
+    "x-bridge-token",
     // Proxy-side HMAC body-signing directive (mirrors `HMAC_SIGN_HEADER` in
     // @slicc/shared-ts secrets-pipeline.ts) — consumed by the handler below
     // to compute and attach a real signature header; never forwarded as-is.

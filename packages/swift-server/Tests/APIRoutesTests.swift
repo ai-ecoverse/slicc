@@ -384,6 +384,63 @@ final class APIRoutesTests: XCTestCase {
         try await self.runBinaryBodyRoundTrip(contentType: nil, probe: probe)
     }
 
+    /// `X-Slicc-Raw-Body` and `X-Bridge-Token` are browser→bridge markers.
+    /// Node's `FETCH_PROXY_SKIP_HEADERS` already drops them; Swift must too,
+    /// or Sliccstart leaks them to third-party APIs (signature validation,
+    /// unexpected-header rejection).
+    func testFetchProxyStripsRawBodyAndBridgeTokenHeaders() async throws {
+        let captured = InternalHeaderCaptureBox()
+        let upstreamRouter = Router()
+        upstreamRouter.post("/upstream") { request, _ in
+            await captured.record(
+                rawBodyPresent: request.headers[HTTPField.Name("x-slicc-raw-body")!] != nil,
+                bridgeTokenPresent: request.headers[HTTPField.Name("x-bridge-token")!] != nil
+            )
+            return Response(status: .ok, body: .init(byteBuffer: ByteBuffer(string: "ok")))
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port, "live test framework must expose a port")
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+                            .contentType: "image/jpeg",
+                            HTTPField.Name("x-slicc-raw-body")!: "1",
+                            HTTPField.Name("x-bridge-token")!: "session-scoped-bridge-token",
+                        ],
+                        body: ByteBuffer(bytes: [0xff, 0xd8, 0xff, 0x98])
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+
+        let snapshot = await captured.snapshot()
+        XCTAssertFalse(snapshot.rawBodyPresent, "x-slicc-raw-body must never reach upstream")
+        XCTAssertFalse(snapshot.bridgeTokenPresent, "x-bridge-token must never reach upstream")
+    }
+
     // The fetch proxy must accept WebDAV (RFC 4918) and CalDAV (RFC 4791)
     // verbs in addition to the standard HTTP methods so the agent can
     // talk to CalDAV / WebDAV servers from the Sliccstart float. The four
@@ -996,5 +1053,26 @@ private actor HeaderCaptureBox {
 
     func snapshot() -> Snapshot {
         .init(body: self.body, jobSignature: self.jobSignature, sentinelStillPresent: self.sentinelStillPresent)
+    }
+}
+
+/// Thread-safe holder for hop-by-hop header leak observations. Same
+/// rationale as `HeaderCaptureBox`.
+private actor InternalHeaderCaptureBox {
+    struct Snapshot {
+        let rawBodyPresent: Bool
+        let bridgeTokenPresent: Bool
+    }
+
+    private var rawBodyPresent = false
+    private var bridgeTokenPresent = false
+
+    func record(rawBodyPresent: Bool, bridgeTokenPresent: Bool) {
+        self.rawBodyPresent = rawBodyPresent
+        self.bridgeTokenPresent = bridgeTokenPresent
+    }
+
+    func snapshot() -> Snapshot {
+        .init(rawBodyPresent: self.rawBodyPresent, bridgeTokenPresent: self.bridgeTokenPresent)
     }
 }
