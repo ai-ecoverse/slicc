@@ -316,6 +316,14 @@ any key something closer to it already claimed, and a segment is exactly where
 the focus rests after a click, so the strip would shuffle its focus ring while
 the host's unit switch never ran.
 
+A selection the strip did not make itself — the host's yielded ←/→, its
+digits, a freezer card — moves the focus ring with it when the focus is already
+on a segment (`#followSelection`, on the `active` attribute change). The roving
+tabindex has handed `tabIndex = 0` to the newly selected segment, so a ring left
+behind would name the wrong agent and its Enter would switch straight back.
+Focus that is anywhere else is never touched, and the roving walk itself is
+unaffected: moving focus does not move the selection.
+
 `arrow-keys="off"` (property `arrowKeys`) hands those two keys back: the
 handler returns without preventing the event, and Home/End and Enter/Space stay
 with the strip because nothing above binds them. The host owns the toggle —

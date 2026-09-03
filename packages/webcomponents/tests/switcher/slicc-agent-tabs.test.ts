@@ -628,6 +628,51 @@ describe('slicc-agent-tabs', () => {
       expect(document.activeElement).toBe(segment(element, 'researcher'));
     });
 
+    /**
+     * The host switching the unit (its yielded ←/→, its digits, a freezer
+     * card) must not leave the ring on the old segment: `tabIndex = 0` has
+     * moved to the new one, and an Enter there would switch straight back.
+     */
+    it('follows a selection made elsewhere while the strip holds the focus', () => {
+      const element = mount();
+      element.active = 'cone';
+      segment(element, 'cone').focus();
+
+      element.select('designer');
+
+      expect(document.activeElement).toBe(segment(element, 'designer'));
+      expect(segment(element, 'designer').tabIndex).toBe(0);
+      expect(segment(element, 'cone').tabIndex).toBe(-1);
+    });
+
+    it('leaves focus alone when it is not on the strip', () => {
+      const element = mount();
+      const outside = document.createElement('button');
+      document.body.append(outside);
+      outside.focus();
+
+      element.select('designer');
+
+      expect(document.activeElement).toBe(outside);
+    });
+
+    it('does not fight the roving walk, which moves focus without selecting', () => {
+      const element = mount();
+      element.active = 'cone';
+      segment(element, 'cone').focus();
+      keydown(segment(element, 'cone'), 'ArrowRight');
+      expect(document.activeElement).toBe(segment(element, 'researcher'));
+
+      // A repaint for something else (a status change) must not yank the ring
+      // back to the selected segment mid-walk.
+      element.scoops = ROSTER.map((scoop) =>
+        scoop.key === 'designer' ? { ...scoop, state: 'working' as const } : scoop
+      );
+
+      expect(document.activeElement).toBe(segment(element, 'researcher'));
+      expect(element.active).toBe('cone');
+    });
+
     it('manually activates the focused segment with Enter or Space', () => {
       const element = mount();
       const listener = vi.fn();

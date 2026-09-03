@@ -329,10 +329,11 @@ export class SliccAgentTabs extends HTMLElement {
     this.removeEventListener('keydown', this.#onKeyDown);
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string, previous: string | null, next: string | null): void {
     if (!this.#initialized || !this.isConnected) return;
     this.#render();
     this.reflow();
+    if (name === 'active' && next !== null && next !== previous) this.#followSelection(next);
   }
 
   get scoops(): ScoopDescriptor[] {
@@ -740,6 +741,26 @@ export class SliccAgentTabs extends HTMLElement {
     else return;
     event.preventDefault();
     next?.focus();
+  }
+
+  /**
+   * Follow a selection that moved while the strip held the focus.
+   *
+   * The roving tabindex hands `tabIndex = 0` to whichever segment is selected,
+   * so a focus ring left on the previous one names the wrong agent — and its
+   * Enter would activate that agent and undo the switch. It happens whenever
+   * the selection is made by something OTHER than this keyboard: the host's
+   * ←/→ while `arrow-keys` is off, its digits, a freezer card.
+   *
+   * Only focus already inside the strip is moved: a selection made from
+   * anywhere else must not steal the caret out of the composer. The roving
+   * walk itself is unaffected, since moving focus does not move the selection
+   * (manual activation) and so never reaches here.
+   */
+  #followSelection(key: string): void {
+    const focused = this.#focusedSegmentKey();
+    if (focused === null || focused === key) return;
+    this.#segmentFor(key)?.focus();
   }
 
   #focusedSegmentKey(): string | null {
