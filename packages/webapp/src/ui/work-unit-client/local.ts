@@ -233,7 +233,11 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     this.unitListeners.set(id, listeners);
     const known = this.lastSnapshots.get(id);
     if (known) listener({ snapshot: known, type: 'snapshot' });
-    else this.deps.getClient()?.requestScoopMessages(id);
+    // Nothing held, and nobody already waiting: ask. A `snapshot(id)` in
+    // flight has ALREADY asked and will publish to this listener when it
+    // lands, so asking again would replay the same transcript twice — once as
+    // the answer to that call and once as the answer to this one.
+    else if (!this.pendingSnapshots.has(id)) this.deps.getClient()?.requestScoopMessages(id);
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);

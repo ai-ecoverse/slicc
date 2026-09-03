@@ -24,6 +24,7 @@ installWcDomStubs();
 
 import type { ChatMessage } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
+import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
 import { createWcLiveCallbacks } from '../../../src/ui/wc/wc-live-callbacks.js';
 
 function prompt(id: string): ChatMessage {
@@ -250,38 +251,67 @@ describe('one-shot', () => {
 });
 
 describe('replay envelope plumbing', () => {
-  function wiringFor(loadMessages: (messages: unknown[], queuedIds?: string[]) => void) {
-    return {
-      getSelected: () => ({ jid: 'cone-1' }),
-      getController: () => ({ loadMessages }),
-      statuses: new Map(),
-      fills: new Map(),
-      phases: new Map(),
-      lickBackpressure: new Map(),
-      lastActivity: new Map(),
-      refs: {},
-      getClient: () => null,
-      selectScoop: vi.fn(),
+  /**
+   * The replay reaches the thread through the client protocol now (#2382), not
+   * through an `onScoopMessagesReplaced` handler in the callback bag — so these
+   * drive the real mount: `prepareWcShell` selects a unit (which subscribes),
+   * and the kernel callback the ADAPTER decorates delivers the envelope.
+   */
+  function mountedShell(loadMessages: (messages: unknown[], queuedIds?: string[]) => void) {
+    const app = document.createElement('div');
+    document.body.append(app);
+    const boot = prepareWcShell(app, 'test');
+    const unit = {
+      jid: 'cone-1',
+      name: 'sliccy',
+      folder: 'cone',
+      parentJid: null,
+      assistantLabel: 'sliccy',
+      config: {},
     } as never;
+    boot.setClient({
+      selectedScoopJid: 'cone-1',
+      setSelectedScoopJid: vi.fn(),
+      requestScoopMessages: vi.fn(),
+      isProcessing: () => false,
+      deleteQueuedMessage: async () => undefined,
+      getScoops: () => [unit],
+    } as never);
+    boot.setController({
+      loadMessages,
+      getQueuedMessages: () => [],
+      setLickBackpressure: vi.fn(),
+      setProcessing: vi.fn(),
+      setReadOnly: vi.fn(),
+      stashQueued: () => [],
+    } as never);
+    // The adapter decorates the bag; firing a wrapped callback is what a kernel
+    // replay does.
+    const callbacks = createWcLiveCallbacks(boot.wiring);
+    boot.selectScoop(unit);
+    return { callbacks };
   }
 
   it('hands queuedIds to the controller alongside the messages', () => {
     const loadMessages = vi.fn();
-    const callbacks = createWcLiveCallbacks(wiringFor(loadMessages));
+    const { callbacks } = mountedShell(loadMessages);
     callbacks.onScoopMessagesReplaced?.('cone-1', [] as never, ['q2', 'q1']);
+    // Delivery order preserved, and the ids ride the SAME envelope as the
+    // messages so the reconcile cannot race the consume (#2354/#2362).
     expect(loadMessages).toHaveBeenCalledWith([], ['q2', 'q1']);
   });
 
   it('passes undefined through untouched when the sender could not answer', () => {
     const loadMessages = vi.fn();
-    const callbacks = createWcLiveCallbacks(wiringFor(loadMessages));
+    const { callbacks } = mountedShell(loadMessages);
     callbacks.onScoopMessagesReplaced?.('cone-1', [] as never);
+    // Absent is not empty: `undefined` leaves the held order standing.
     expect(loadMessages).toHaveBeenCalledWith([], undefined);
   });
 
   it('ignores a replay for a unit that is not selected', () => {
     const loadMessages = vi.fn();
-    const callbacks = createWcLiveCallbacks(wiringFor(loadMessages));
+    const { callbacks } = mountedShell(loadMessages);
     callbacks.onScoopMessagesReplaced?.('someone-else', [] as never, ['q1']);
     expect(loadMessages).not.toHaveBeenCalled();
   });

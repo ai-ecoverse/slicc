@@ -10,7 +10,6 @@ import type {
   OffscreenClientCallbacks,
   ScoopBusyPhase,
 } from '../offscreen-client.js';
-import type { ChatMessage } from '../types.js';
 import { LocalWorkUnitClient } from '../work-unit-client/local.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
@@ -220,13 +219,11 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         wiring.getController()?.updateLickState(update.lickId, update.lickState);
       }
     },
-    onScoopMessagesReplaced: (jid, messages, queuedIds) => {
-      if (wiring.getSelected()?.jid !== jid) return;
-      // `queuedIds` rides the SAME envelope as `messages`, so the two are a
-      // consistent snapshot of the backend at one instant — which is what a
-      // queue held across a read-only detour is reconciled against (#2354).
-      wiring.getController()?.loadMessages(messages as unknown as ChatMessage[], queuedIds);
-    },
+    // No `onScoopMessagesReplaced` here any more (#2382): the transcript is
+    // rendered from `WorkUnitClient.subscribe` in the mount, so a replay
+    // reaches the thread through the protocol on both sides. The ADAPTER still
+    // consumes this callback — `wrapCallbacks` turns it into the snapshot
+    // event — which is why the kernel wiring below is unchanged.
     onReady: () => {
       refreshScoops();
       ensureSelection();

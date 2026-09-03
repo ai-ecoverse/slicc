@@ -79,6 +79,12 @@ export interface ClientHarness {
   disconnect(): void;
   /** Units the transport was asked to SELECT, in order (remote only). */
   selections: string[];
+  /**
+   * Units the transport was asked for a TRANSCRIPT, in order. The kernel path
+   * has an explicit request (`requestScoopMessages`); on the tray a selection
+   * IS the request, so the two lists coincide there.
+   */
+  transcriptRequests: string[];
   /** `true` when this transport can carry a backend queue at all (#2362). */
   carriesQueue: boolean;
   /**
@@ -118,12 +124,13 @@ export function makeLocalHarness(): ClientHarness {
   const sent: ClientHarness['sent'] = [];
   const modelWrites: ClientHarness['modelWrites'] = [];
   const stopped: string[] = [];
+  const transcriptRequests: string[] = [];
 
   let attached = true;
   const kernel = {
     getScoop: (jid: string) => roster.find((scoop) => scoop.jid === jid),
     getScoops: () => roster,
-    requestScoopMessages: () => {},
+    requestScoopMessages: (jid: string) => transcriptRequests.push(jid),
     sendRaw: (message: {
       scoopJid?: string;
       text?: string;
@@ -178,6 +185,7 @@ export function makeLocalHarness(): ClientHarness {
     },
     modelWrites,
     selections: [],
+    transcriptRequests,
     emitMessage: (id, message) => {
       callbacks.onIncomingMessage(id, message as never);
     },
@@ -286,6 +294,7 @@ export function makeRemoteHarness(): ClientHarness {
     },
     modelWrites,
     selections,
+    transcriptRequests: selections,
     emitMessage: () => {
       // The tray wire has no per-unit incoming-message frame: routed messages
       // reach a follower inside the leader's next snapshot. Nothing to emit —

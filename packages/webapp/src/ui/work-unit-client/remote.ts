@@ -56,15 +56,6 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
    * mid-turn, so a `message` never reaches a listener that has not seen one.
    */
   private readonly lastSnapshots = new Map<WorkUnitId, WorkUnitSnapshot>();
-  /**
-   * A leader snapshot that arrived BEFORE the roster it belongs to.
-   * `LeaderSyncManager.addFollower()` sends the initial snapshot ahead of
-   * `scoops.list`, so on every fresh join the first transcript lands with no
-   * summary to attach it to. Held here and published as soon as the roster
-   * names the unit; dropping it would leave a subscriber with no transcript
-   * until some later selection asked for one.
-   */
-  private readonly earlySnapshots = new Map<WorkUnitId, readonly WorkUnitChatMessage[]>();
   private readonly pendingSnapshots = new Map<
     WorkUnitId,
     Set<(snapshot: WorkUnitSnapshot) => void>
@@ -121,16 +112,6 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     for (const resolve of waiters) resolve(snapshot);
   }
 
-  /** Publish any snapshot that arrived before the roster named its unit. */
-  private drainEarlySnapshots(): void {
-    for (const [id, messages] of this.earlySnapshots) {
-      const summary = this.summaryOf(id);
-      if (!summary) continue;
-      this.earlySnapshots.delete(id);
-      this.publishSnapshot(id, { messages, summary });
-    }
-  }
-
   /**
    * Wrap the follower's options bag so leader frames reach this adapter
    * before they reach `wc-follower.ts`. Same decoration as the local
@@ -159,7 +140,6 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
           this.selectedId = activeScoopJid.length > 0 ? activeScoopJid : null;
         }
         // Before the shell's handler: it publishes the strip from this roster.
-        this.drainEarlySnapshots();
         this.emitList();
         base.onScoopsList?.(scoops, activeScoopJid);
       },
@@ -176,11 +156,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
         this.selectedId = scoopJid;
         const transcript = messages as unknown as readonly WorkUnitChatMessage[];
         const summary = this.summaryOf(scoopJid);
-        // A follower never reports a queue: its leader does not send one and
-        // its own orchestrator is deliberately idle, so `[]` would reorder the
-        // pile against a lie. `undefined` says "nobody could answer".
-        if (summary) this.publishSnapshot(scoopJid, { messages: transcript, summary });
-        else this.earlySnapshots.set(scoopJid, transcript);
+        // Published whether or not the roster describes the unit. It often will
+        // not: a leader sends the initial transcript AHEAD of `scoops.list`,
+        // and a biscotto seat never receives that frame at all — holding the
+        // snapshot back for a summary left a guest's thread permanently blank.
+        // A follower never reports a queue either: its leader does not send one
+        // and its own orchestrator is deliberately idle, so `[]` would reorder
+        // the pile against a lie. `undefined` says "nobody could answer".
+        this.publishSnapshot(scoopJid, {
+          messages: transcript,
+          ...(summary ? { summary } : {}),
+        });
         base.onSnapshot?.(messages, scoopJid);
       },
       onStatus: (scoopStatus: string, scoopJid?: string) => {

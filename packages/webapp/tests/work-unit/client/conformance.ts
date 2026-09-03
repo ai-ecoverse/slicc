@@ -102,7 +102,7 @@ function transcriptCases(make: () => ClientHarness): void {
     const pending = harness.client.snapshot('cone_1');
     harness.emitSnapshot('cone_1', [{ content: 'hi', id: 'm1', role: 'user', timestamp: 1 }]);
     const snapshot = await pending;
-    expect(snapshot.summary.id).toBe('cone_1');
+    expect(snapshot.summary?.id).toBe('cone_1');
     expect(snapshot.messages).toHaveLength(1);
   });
 
@@ -153,6 +153,88 @@ function transcriptCases(make: () => ClientHarness): void {
     expect(first?.type === 'snapshot' && first.snapshot.messages).toHaveLength(1);
   });
 
+  it('reconciles the backend queue only from an answer the transport made', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const empty = harness.client.snapshot('cone_1');
+    harness.emitSnapshot('cone_1', [], []);
+    const emptied = await empty;
+    if (harness.carriesQueue) {
+      // `[]` is a REAL answer — the backend has nothing pending — and the held
+      // pile is reconciled against it.
+      expect(emptied.queuedIds).toEqual([]);
+    } else {
+      // A follower cannot tell a queued prompt from a consumed one, so it says
+      // "nobody could answer" and the held order stands. Reporting `[]` here
+      // would reorder the pile against a lie (#2362).
+      expect(emptied.queuedIds).toBeUndefined();
+    }
+    // Whatever the transport answers, `messages` and `queuedIds` describe ONE
+    // instant: they ride the same envelope, so a reader can never reconcile a
+    // queue against a transcript from a different moment.
+    expect(emptied.messages).toEqual([]);
+  });
+
+  it('does not ask the transport twice when a subscribe joins an in-flight snapshot', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const asksBefore = harness.transcriptRequests.length;
+    const pending = harness.client.snapshot('cone_1');
+    // The mount subscribes right after selecting, which is the same unit the
+    // snapshot is already fetching. Asking again would replay the SAME
+    // transcript twice — once per caller — and each `loadMessages` consumes
+    // the one-shot held-queue restore (#2354).
+    harness.client.subscribe('cone_1', () => undefined);
+    harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
+    await pending;
+    expect(harness.transcriptRequests.length - asksBefore).toBeLessThanOrEqual(1);
+  });
+
+  it('lets a second snapshot supersede the first for the same unit', async () => {
+    const harness = make();
+    harness.setRoster(ROSTER, 'cone_1');
+    const seen: WorkUnitClientEvent[] = [];
+    harness.client.subscribe('cone_1', (event) => seen.push(event));
+    const first = harness.client.snapshot('cone_1');
+    harness.emitSnapshot('cone_1', [{ content: 'one', id: 'm1', role: 'user', timestamp: 1 }]);
+    expect((await first).messages.map((m) => m.id)).toEqual(['m1']);
+    const second = harness.client.snapshot('cone_1');
+    harness.emitSnapshot('cone_1', [{ content: 'two', id: 'm2', role: 'user', timestamp: 2 }]);
+    expect((await second).messages.map((m) => m.id)).toEqual(['m2']);
+    // Both reached the subscriber in order, and the LAST one is what the shell
+    // renders — a re-selection of the same unit is a full replacement, not a
+    // merge.
+    const snapshots = seen.filter((event) => event.type === 'snapshot');
+    expect(snapshots.at(-1)?.snapshot.messages.map((m) => m.id)).toEqual(['m2']);
+  });
+
+  it('delivers a snapshot that arrives before the roster names its unit', async () => {
+    const harness = make();
+    // No `setRoster` first: a leader sends the initial transcript AHEAD of
+    // `scoops.list`, and a guest seat is never sent one at all. The transcript
+    // is the part that matters, so it must not wait for a summary that may
+    // never come.
+    const seen: WorkUnitClientEvent[] = [];
+    harness.client.subscribe('cone_1', (event) => seen.push(event));
+    harness.emitSnapshot('cone_1', [{ content: 'early', id: 'm1', role: 'user', timestamp: 1 }]);
+    const snapshots = seen.filter((event) => event.type === 'snapshot');
+    if (harness.mirrorsOneUnit) {
+      expect(snapshots.at(-1)?.snapshot.messages.map((m) => m.id)).toEqual(['m1']);
+      // …and it says so honestly rather than inventing a strip entry.
+      expect(snapshots.at(-1)?.snapshot.summary).toBeUndefined();
+    } else {
+      // The kernel path answers per jid and its roster always arrives, so it
+      // holds the orphan until the unit is listed rather than describing it.
+      harness.setRoster(ROSTER, 'cone_1');
+      const published = seen.filter((event) => event.type === 'snapshot');
+      expect(published.at(-1)?.snapshot.messages.map((m) => m.id)).toEqual(['m1']);
+      expect(published.at(-1)?.snapshot.summary?.id).toBe('cone_1');
+    }
+  });
+}
+
+/** Snapshot ordering and supersession — the rules a re-selection depends on. */
+function snapshotOrderingCases(make: () => ClientHarness): void {
   it('ignores a snapshot for a unit it is no longer showing', async () => {
     const harness = make();
     harness.setRoster(ROSTER, 'cone_1');
@@ -168,7 +250,7 @@ function transcriptCases(make: () => ClientHarness): void {
     harness.emitSnapshot('cone_1', [{ content: 'late', id: 'm9', role: 'user', timestamp: 9 }]);
     harness.emitSnapshot('cone_2', [{ content: 'b', id: 'm2', role: 'user', timestamp: 2 }]);
     const snapshot = await second;
-    expect(snapshot.summary.id).toBe('cone_2');
+    expect(snapshot.summary?.id).toBe('cone_2');
     expect(snapshot.messages.map((message) => message.id)).toEqual(['m2']);
     // On a single-mirror transport the superseded reply is not just ignorable,
     // it is WRONG: publishing it would re-point the mirror at `cone_1`, and the
@@ -183,21 +265,6 @@ function transcriptCases(make: () => ClientHarness): void {
     // answer and is delivered.
     if (harness.mirrorsOneUnit) expect(stale.slice(staleBefore)).toEqual([]);
     else expect(stale.slice(staleBefore)).toHaveLength(1);
-  });
-
-  it('replays a snapshot that arrived before the roster named its unit', () => {
-    const harness = make();
-    const seen: WorkUnitClientEvent[] = [];
-    harness.client.subscribe('cone_1', (event) => seen.push(event));
-    // A leader sends the first transcript BEFORE its scoop list on a fresh
-    // join; the kernel can answer for a unit the page has not listed yet.
-    harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
-    harness.setRoster(ROSTER);
-    const snapshots = seen.filter((event) => event.type === 'snapshot');
-    expect(snapshots).toHaveLength(1);
-    const only = snapshots[0];
-    expect(only?.type === 'snapshot' && only.snapshot.summary.id).toBe('cone_1');
-    expect(only?.type === 'snapshot' && only.snapshot.messages).toHaveLength(1);
   });
 
   it('pushes the roster when a unit changes state', () => {
@@ -362,6 +429,7 @@ export function runWorkUnitClientConformance(name: string, make: () => ClientHar
   describe(`WorkUnitClient conformance: ${name}`, () => {
     rosterCases(make);
     transcriptCases(make);
+    snapshotOrderingCases(make);
     composerCases(make);
   });
 }
