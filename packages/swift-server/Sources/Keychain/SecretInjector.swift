@@ -93,6 +93,20 @@ public final class SecretInjector: @unchecked Sendable {
     let persistedStore: SecretStoreAccess
     let sessionStore: SessionSecretStore
 
+    /// True when a startup `--env-file` entry shadows `name`.
+    ///
+    /// `_envFileSecrets` is a snapshot parsed once at launch and re-applied
+    /// OVER the persisted store on every `reload()`, so a persisted write to a
+    /// shadowed name can never take effect — the env-file value keeps winning.
+    /// Routes that mutate the persisted store must refuse such a write rather
+    /// than report a success the masking pipeline will ignore. node-server
+    /// cannot reach this state: there, `--env-file` IS the persisted store's
+    /// backing file (`new EnvSecretStore(RUNTIME_FLAGS.envFile ?? …)`), so a
+    /// write always lands in the active source.
+    func envFileShadows(_ name: String) -> Bool {
+        _envFileSecrets.contains { $0.name == name }
+    }
+
     private let lock = NSLock()
     private nonisolated(unsafe) var _secrets: [LoadedSecret]
     private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String

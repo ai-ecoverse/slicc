@@ -1,5 +1,6 @@
 import AsyncHTTPClient
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import XCTest
@@ -52,25 +53,148 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
-    func testPostSecretRouteIsRemoved() async throws {
+    // MARK: - Persisted set (POST /api/secrets)
+
+    /// Happy path: the write lands in the Keychain blob with its domains, the
+    /// response is node-server's `{ ok: true }`, and the masking pipeline picks
+    /// the new secret up without a restart (the `reload()` the node route's
+    /// `secretProxy.reload()` mirrors). The real value never appears on the wire.
+    func testPostSecretWritesThroughToKeychainAndReloadsMasking() async throws {
+        let name = secretName("SET_TOK")
+        let value = "persisted-set-fixture-value"
+        let injector = SecretInjector(sessionId: "persisted-set-fixture")
+
         try await withHTTPClient { httpClient in
             let router = Router()
-            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector
+            )
 
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
-                let body = #"{"name":"SHOULD_FAIL","value":"v","domains":["d.com"]}"#
+                try await client.execute(
+                    uri: "/api/secrets",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"name":"\#(name)","value":"\#(value)","domains":["api.example.com"]}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    XCTAssertEqual(try self.decodeJSONObject(from: response.body)["ok"], .bool(true))
+                    XCTAssertFalse(String(buffer: response.body).contains(value))
+                }
+
+                let stored = SecretStore.get(name: name)
+                XCTAssertEqual(stored?.value, value)
+                XCTAssertEqual(stored?.domains, ["api.example.com"])
+
+                // Reload happened: the new secret is maskable now, and the
+                // masked list still never carries the real value.
+                try await client.execute(uri: "/api/secrets/masked", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let text = String(buffer: response.body)
+                    XCTAssertTrue(text.contains(name))
+                    XCTAssertFalse(text.contains(value))
+                }
+
+                try await client.execute(uri: "/api/secrets", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    XCTAssertTrue(String(buffer: response.body).contains(name))
+                }
+            }
+        }
+    }
+
+    /// The `persisted set rejects a body without domains` case of the shared
+    /// REST contract: a missing `domains` key is a 400, not a secret scoped to
+    /// everything by default.
+    func testPostSecretRejectsBodyWithoutDomains() async throws {
+        let name = secretName("SET_NO_DOMAINS")
+        try await expectPostSecretRejected(
+            body: #"{"name":"\#(name)","value":"v"}"#,
+            status: .badRequest,
+            unwrittenName: name
+        )
+    }
+
+    /// Fail-closed: an explicitly empty `domains` array is scoped to nothing,
+    /// not to everything. node-server surfaces the same rejection as a 500 out
+    /// of `EnvSecretStore.set`, so the status and message are mirrored.
+    func testPostSecretRejectsEmptyDomainsFailClosed() async throws {
+        let name = secretName("SET_EMPTY_DOMAINS")
+        let error = try await expectPostSecretRejected(
+            body: #"{"name":"\#(name)","value":"v","domains":[]}"#,
+            status: .internalServerError,
+            unwrittenName: name
+        )
+        XCTAssertEqual(error, "Secret \"\(name)\" must have at least one authorized domain")
+    }
+
+    func testPostSecretRejectsMissingValue() async throws {
+        let name = secretName("SET_NO_VALUE")
+        try await expectPostSecretRejected(
+            body: #"{"name":"\#(name)","domains":["api.example.com"]}"#,
+            status: .badRequest,
+            unwrittenName: name
+        )
+    }
+
+    /// A non-string `domains` decodes as a type mismatch rather than a missing
+    /// key — both must land on the same 400 node-server's `isStringArray` gives.
+    func testPostSecretRejectsNonArrayDomains() async throws {
+        let name = secretName("SET_BAD_DOMAINS")
+        try await expectPostSecretRejected(
+            body: #"{"name":"\#(name)","value":"v","domains":"api.example.com"}"#,
+            status: .badRequest,
+            unwrittenName: name
+        )
+    }
+
+    func testPostSecretRejectsMalformedJSON() async throws {
+        try await expectPostSecretRejected(body: "not json", status: .badRequest, unwrittenName: nil)
+    }
+
+    /// Posts `body` to `/api/secrets`, asserts the rejection status, and proves
+    /// nothing reached the Keychain. Returns the `error` string for callers that
+    /// pin the exact message.
+    @discardableResult
+    private func expectPostSecretRejected(
+        body: String,
+        status: HTTPResponse.Status,
+        unwrittenName: String?
+    ) async throws -> String? {
+        var errorMessage: String?
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: SecretInjector(sessionId: "persisted-set-reject-fixture")
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
                 try await client.execute(
                     uri: "/api/secrets",
                     method: .post,
                     headers: [.contentType: "application/json"],
                     body: ByteBuffer(string: body)
                 ) { response in
-                    // Route no longer exists — expect 404
-                    XCTAssertEqual(response.status, .notFound)
+                    XCTAssertEqual(response.status, status)
+                    errorMessage = try self.decodeJSONObject(from: response.body)["error"]?.stringValue
+                    XCTAssertNotNil(errorMessage)
                 }
             }
         }
+        if let unwrittenName {
+            XCTAssertNil(SecretStore.get(name: unwrittenName), "A rejected set must not reach the Keychain")
+        }
+        return errorMessage
     }
 
     func testDeleteSecretRemovesEntryFromKeychainBlob() async throws {
