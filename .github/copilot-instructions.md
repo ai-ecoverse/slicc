@@ -63,8 +63,8 @@ Flag new `Record<string, unknown>` in source when the shape is known. Require a 
 boundary validation, or a justified suppression; never grow the frozen baseline.
 Cone and scoop are roles over one `WorkUnit` (#1666); the record carries no role
 field — route on the unit's policy / `isRootUnit` / `getWorkUnits()`. `isCone` exists
-only on the follower wire, write-only leader-side; flag any read of it in `scoops/` or
-`kernel/` — the compiler cannot catch it.
+only on the tray wire, write-only and stripped for peers at protocol v8+ (#2358);
+flag any read of it — the compiler cannot catch it yet.
 
 ## 12. Agent skill freshness
 

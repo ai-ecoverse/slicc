@@ -370,12 +370,30 @@ export class FollowerRegistry {
    * @returns bootstrapIds of followers whose send failed.
    */
   broadcastToAllFollowers(message: LeaderToFollowerMessage): string[] {
+    return this.broadcastPerFollower(() => message);
+  }
+
+  /**
+   * {@link broadcastToAllFollowers} for a payload that DIFFERS per follower —
+   * same fan-out, same failure reporting and throttling, one message built per
+   * peer.
+   *
+   * It exists because per-peer gating (a field withheld from a follower whose
+   * `hello` version does not need it, #2358) otherwise forces the caller to
+   * hand-roll the loop and silently lose the failure bookkeeping this method
+   * owns.
+   *
+   * @returns bootstrapIds of followers whose send failed.
+   */
+  broadcastPerFollower(build: (follower: ConnectedFollower) => LeaderToFollowerMessage): string[] {
     const now = performance.now();
     const failed: string[] = [];
     for (const [bootstrapId, follower] of this.followers) {
       let sent = false;
       let thrown: unknown;
+      let message: LeaderToFollowerMessage | undefined;
       try {
+        message = build(follower);
         sent = follower.sync.send(message);
       } catch (err) {
         // Backstop, not the primary signal: `TraySyncChannel.send` reports
@@ -394,7 +412,7 @@ export class FollowerRegistry {
         this.followerBroadcastErrorLogAt.set(bootstrapId, now);
         this.options.log.error('Broadcast send to follower failed', {
           bootstrapId,
-          messageType: message.type,
+          messageType: message?.type ?? 'unknown',
           ...(thrown ? { error: thrown instanceof Error ? thrown.message : String(thrown) } : {}),
         });
       }

@@ -114,8 +114,8 @@ describe('role-switch follower model controls', () => {
 
     options.onScoopsList?.(
       [
-        { jid: 'cone-a', name: 'cone', isCone: true },
-        { jid: 'cone-b', name: 'research', isCone: true },
+        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
+        { jid: 'cone-b', name: 'research', isCone: true, parentId: null },
         { jid: 'scoop-a', name: 'helper-a', isCone: false, parentId: 'cone-a' },
         { jid: 'scoop-b', name: 'helper-b', isCone: false, parentId: 'cone-b' },
       ] as never,
@@ -152,8 +152,8 @@ describe('role-switch follower model controls', () => {
 
     options.onScoopsList?.(
       [
-        { jid: 'cone', name: 'cone', isCone: true },
-        { jid: 'research', name: 'research', isCone: false },
+        { jid: 'cone', name: 'cone', isCone: true, parentId: null },
+        { jid: 'research', name: 'research', isCone: false, parentId: 'cone' },
       ] as never,
       'cone'
     );
@@ -161,7 +161,10 @@ describe('role-switch follower model controls', () => {
     options.onConnectionChange?.(false);
     expect(options.getSelectedScoopJid?.()).toBe('research');
 
-    options.onScoopsList?.([{ jid: 'cone', name: 'cone', isCone: true }] as never, 'cone');
+    options.onScoopsList?.(
+      [{ jid: 'cone', name: 'cone', isCone: true, parentId: null }] as never,
+      'cone'
+    );
     expect(options.getSelectedScoopJid?.()).toBe('cone');
     expect(switcher.getAttribute('active')).toBe('cone');
   });

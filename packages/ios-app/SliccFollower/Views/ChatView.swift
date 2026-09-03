@@ -1199,7 +1199,7 @@ struct ScoopSwitcher: View {
     /// closed control only speaks about the one you are looking at. State and
     /// fullness stay textual because native Menu rows cannot host the avatar.
     private func menuTitle(for scoop: ScoopSummary) -> String {
-        let kind = scoop.isCone ? "cone" : "scoop"
+        let kind = scoop.isRootUnit ? "cone" : "scoop"
         let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
         return scoop.jid == appState.leaderActiveScoopJid
             ? "\(status) · \(kind) · active"

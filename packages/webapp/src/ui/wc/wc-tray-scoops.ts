@@ -86,8 +86,9 @@ export function toScoopSummaries(
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      // The wire keeps `isCone` for older followers; it is projected from the
-      // ownership edge, never read off the record (#2279).
+      // The wire keeps `isCone` for followers below protocol version 8; it is
+      // projected from the ownership edge, never read off the record (#2279).
+      // `BroadcastManager` strips it again per peer (#2358 stage 2).
       isCone: isRootUnit(scoop),
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
@@ -105,23 +106,32 @@ export function toScoopSummaries(
   });
 }
 
-/** `true` when a wire summary describes a root (cone): the edge when sent, the flag from older leaders. */
-export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
-  return scoop.parentId === undefined ? scoop.isCone : scoop.parentId === null;
+/**
+ * `true` when a wire summary describes a root (cone).
+ *
+ * The ownership edge decides on its own: `null` is a root, anything else is
+ * owned. There is no `isCone` fallback because there is no leader that could
+ * need one — every TS float loads the webapp from the hosted origin, so a
+ * leader too old for `parentId` (#1666) cannot be on the other end of this
+ * wire. An absent edge therefore reads as "owned", which is the safe
+ * direction: it never promotes a scoop to a root (#2358).
+ */
+export function summaryIsRoot(scoop: Pick<ScoopSummary, 'parentId'>): boolean {
+  return scoop.parentId === null;
 }
 
 /** The switcher descriptor's role for a wire summary — the follower's half of `unitRoleFor`. */
-export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): UnitRole {
+export function summaryRole(scoop: Pick<ScoopSummary, 'parentId'>): UnitRole {
   return summaryIsRoot(scoop) ? 'cone' : 'scoop';
 }
 
 /**
  * Project one wire summary onto the client protocol (#2274).
  *
- * `parentId` stays possibly-`undefined` on purpose: a leader too old to send
- * the edge leaves the owner UNKNOWN, and inventing one would turn a scoop
- * into a root. `role` still answers what the unit is, from the legacy
- * `isCone` flag that same leader does send.
+ * `parentId` stays possibly-`undefined` on purpose: a leader that omits the
+ * edge leaves the owner UNKNOWN, and inventing one would turn a scoop into a
+ * root. `role` reads that same edge, so an unknown owner presents as a child
+ * rather than as a second cone (#2358).
  */
 export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
   const expanded = expandWireState(scoop);

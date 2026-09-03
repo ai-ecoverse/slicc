@@ -325,7 +325,7 @@ final class WidgetTrayObserverTests: XCTestCase {
 /// The launcher's own `ScoopSummary` → `WidgetUnit` mapping.
 final class SliccstartWidgetUnitTests: XCTestCase {
     private func summary(
-        isCone: Bool = false, parentId: String? = "cone", state: String? = "working",
+        isCone: Bool? = false, parentId: String? = "cone", state: String? = "working",
         activity: String? = nil, trigger: String? = nil
     ) -> ScoopSummary {
         ScoopSummary(
@@ -339,6 +339,24 @@ final class SliccstartWidgetUnitTests: XCTestCase {
             summary(isCone: true, parentId: nil).widgetUnit(isActive: false).role, .cone)
         XCTAssertEqual(
             summary(isCone: false, parentId: nil).widgetUnit(isActive: false).role, .scoop)
+    }
+
+    /// #2358: a leader that saw Sliccstart announce protocol version 8 sends no
+    /// `isCone` at all. The edge alone must still place the unit — and the
+    /// widget must not silently turn every scoop into a cone.
+    func testRoleResolvesFromTheEdgeWhenIsConeIsAbsent() throws {
+        XCTAssertEqual(
+            summary(isCone: nil, parentId: nil).widgetUnit(isActive: false).role, .cone)
+        XCTAssertEqual(
+            summary(isCone: nil, parentId: "cone").widgetUnit(isActive: false).role, .scoop)
+
+        let decoded = try JSONDecoder().decode(
+            ScoopSummary.self,
+            from: Data(
+                #"{"jid":"j","name":"folder","folder":"/","assistantLabel":"Label","parentId":"cone"}"#
+                    .utf8))
+        XCTAssertNil(decoded.isCone)
+        XCTAssertEqual(decoded.widgetUnit(isActive: false).role, .scoop)
     }
 
     func testUnknownWireValuesDegradeTheUnitNotTheSnapshot() {

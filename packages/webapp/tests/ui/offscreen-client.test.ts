@@ -726,7 +726,7 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('scoop-drop');
   });
 
-  it('uses the wire parentId for ownership and only infers it from legacy leaders', () => {
+  it('takes ownership straight from the wire parentId (#2358)', () => {
     simulateMessage('offscreen', {
       type: 'state-snapshot',
       scoops: [
@@ -757,13 +757,15 @@ describe('OffscreenClient', () => {
           assistantLabel: 'b',
           status: 'ready',
         },
-        // legacy leader entry (no parentId): inferred as the list's first cone
+        // A scoop of the FIRST cone — the case the deleted inference used to
+        // guess at. The edge is required on this boundary, so nothing is
+        // inferred and a second cone's scoop cannot be reassigned.
         {
-          jid: 'scoop_old',
-          name: 'old',
-          folder: 'old-scoop',
-          isCone: false,
-          assistantLabel: 'old',
+          jid: 'scoop_a',
+          name: 'a',
+          folder: 'a-scoop',
+          parentId: 'cone_1',
+          assistantLabel: 'a',
           status: 'ready',
         },
       ],
@@ -773,8 +775,10 @@ describe('OffscreenClient', () => {
       ['cone_1', null],
       ['cone_2', null],
       ['scoop_b', 'cone_2'],
-      ['scoop_old', 'cone_1'],
+      ['scoop_a', 'cone_1'],
     ]);
+    // `requiresTrigger` now follows the same edge, not the derived flag.
+    expect(client.getScoops().map((s) => s.requiresTrigger)).toEqual([false, false, true, true]);
   });
 
   it('unregisterScoop refuses to drop the last cone and drops an extra cone', async () => {
@@ -786,6 +790,7 @@ describe('OffscreenClient', () => {
           name: 'Cone',
           folder: 'cone',
           isCone: true,
+          parentId: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },

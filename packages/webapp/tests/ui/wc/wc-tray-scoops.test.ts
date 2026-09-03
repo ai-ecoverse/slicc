@@ -2,6 +2,7 @@ import type { ScoopSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import {
   summaryIsRoot,
+  summaryRole,
   toFollowerSwitcherScoops,
   toScoopSummaries,
 } from '../../../src/ui/wc/wc-tray-scoops.js';
@@ -214,14 +215,21 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('summaryIsRoot uses the edge when sent and the flag from older leaders', () => {
-    expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
-    expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
-    // a lying flag loses to the edge
-    expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
-    // legacy leader: no edge at all
-    expect(summaryIsRoot({ isCone: true })).toBe(true);
-    expect(summaryIsRoot({ isCone: false })).toBe(false);
+  it('summaryIsRoot reads the ownership edge alone (#2358)', () => {
+    expect(summaryIsRoot({ parentId: null })).toBe(true);
+    expect(summaryIsRoot({ parentId: 'cone' })).toBe(false);
+    // No edge at all is "owner unknown", never a second root.
+    expect(summaryIsRoot({})).toBe(false);
+    expect(summaryIsRoot({ parentId: undefined })).toBe(false);
+  });
+
+  it('resolves the role from the edge for a summary with no isCone flag (#2358)', () => {
+    // What a v8 peer receives once the leader stops projecting the flag.
+    const { isCone: _isCone, ...rootNoFlag } = toScoopSummaries([cone], [])[0];
+    const { isCone: _childFlag, ...childNoFlag } = toScoopSummaries([a], [])[0];
+    expect(rootNoFlag).not.toHaveProperty('isCone');
+    expect(summaryRole(rootNoFlag)).toBe('cone');
+    expect(summaryRole(childNoFlag)).toBe('scoop');
   });
 
   it('lists every cone first, then scoops grouped by owner (#2272)', () => {
@@ -281,11 +289,15 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     ]);
   });
 
-  it('keeps the legacy cone-first order when a leader sends no parentId', () => {
-    const legacy = [
+  it('keeps a summary with no edge at all, as an unknown-owner child (#2358)', () => {
+    // No leader produces this any more — `parentId` rides every `scoops.list`
+    // this build sends. It must still render rather than disappear, and it must
+    // not be promoted to a second root on the strength of a stale flag.
+    const edgeless = [
       { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
       { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
     ];
-    expect(toFollowerSwitcherScoops(legacy).map((d) => d.key)).toEqual(['c', 's']);
+    const descriptors = toFollowerSwitcherScoops(edgeless);
+    expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual(['scoop:s', 'scoop:c']);
   });
 });

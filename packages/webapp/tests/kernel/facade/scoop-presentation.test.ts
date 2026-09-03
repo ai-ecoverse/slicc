@@ -72,7 +72,7 @@ describe('ScoopPresentation', () => {
 });
 
 describe('ScoopPresentation parentId projection (#2270)', () => {
-  it('projects the ownership edge next to the derived isCone flag', () => {
+  it('projects the ownership edge, and only the edge (#2358)', () => {
     const presentation = new ScoopPresentation();
     const root = scoop();
     const child = scoop({
@@ -80,7 +80,10 @@ describe('ScoopPresentation parentId projection (#2270)', () => {
       folder: 'nine',
       parentJid: 'cone-1',
     });
-    expect(presentation.projectScoop(root)).toMatchObject({ isCone: true, parentId: null });
-    expect(presentation.projectScoop(child)).toMatchObject({ isCone: false, parentId: 'cone-1' });
+    expect(presentation.projectScoop(root)).toMatchObject({ parentId: null });
+    expect(presentation.projectScoop(child)).toMatchObject({ parentId: 'cone-1' });
+    // The tray wire's derived flag is not on the panel boundary (#2358).
+    expect(presentation.projectScoop(root)).not.toHaveProperty('isCone');
+    expect(presentation.projectScoop(child)).not.toHaveProperty('isCone');
   });
 });

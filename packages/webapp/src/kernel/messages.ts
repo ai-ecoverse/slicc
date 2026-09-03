@@ -1085,15 +1085,16 @@ export interface ScoopListMsg {
     jid: string;
     name: string;
     folder: string;
-    /** Derived presentation flag (`parentId === null`). */
-    isCone: boolean;
     /**
      * Ownership edge: `null` for a cone, the owning unit's jid for a scoop
-     * (#1666). Optional to match the additive wire contract (`ScoopSummary`,
-     * Swift) — a snapshot from a kernel older than this field has none, and
-     * the panel must not invent one.
+     * (#1666). REQUIRED, unlike the tray wire's `ScoopSummary.parentId`: the
+     * kernel and the panel are one bundle loaded from one origin, so there is
+     * no version skew across this boundary and no older kernel to tolerate.
+     * For the same reason the tray wire's derived `isCone` flag no longer
+     * rides here at all (#2358): the edge is the only role input the panel
+     * needs, and the panel has nothing older to be kind to.
      */
-    parentId?: string | null;
+    parentId: string | null;
     assistantLabel: string;
     status: ScoopTabState['status'];
     /**

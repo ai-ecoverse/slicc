@@ -1,5 +1,5 @@
 import type { RegisteredScoop, ScoopTabState } from '../../scoops/types.js';
-import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
+import { rootsOf } from '../../work-unit/policy.js';
 import { modelIdFor, modelProviderFor, thinkingFor } from '../../work-unit/record.js';
 import type {
   ScoopListMsg,
@@ -37,8 +37,8 @@ export class ScoopPresentation {
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      // Wire fields for followers: the derived flag plus the edge it derives from (#1666).
-      isCone: isRootUnit(scoop),
+      // The ownership edge (#1666) — the panel's only role input, since the
+      // tray wire's derived `isCone` flag is not on this boundary (#2358).
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       status: this.statuses.get(scoop.jid) ?? 'ready',

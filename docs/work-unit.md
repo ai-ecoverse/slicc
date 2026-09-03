@@ -26,7 +26,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 ### Decisions taken (2026-08-21)
 
 1. **Name**: `WorkUnit`. Neutral and architecture-facing; `AgentContext` collided with `ScoopContext`.
-2. **Root test**: `parentJid === null`, nothing else. `isCone` / `type` were deleted from `RegisteredScoop` in #2279 — the compiler now enforces the rule, because a role branch has no field to read. `isCone` survives only on the follower wire (`ScoopSummary`), projected from `isRootUnit`.
+2. **Root test**: `parentJid === null`, nothing else. `isCone` / `type` were deleted from `RegisteredScoop` in #2279 — the compiler now enforces the rule, because a role branch has no field to read. `isCone` survives only on the tray wire (`ScoopSummary`), projected write-only from `isRootUnit` and, since #2358, sent only to peers below protocol version 8.
 3. **Field name**: the edge stays `parentJid` (jid is this codebase's id vocabulary) but is **required** `string | null`. `WorkUnitDescriptor.parentId` maps to it.
 4. **Ordering**: structural cleanup first. Multiple concurrent roots are the payoff of Phases 1–3, not a UI deliverable of them.
 5. **Default root**: the oldest root (`WorkUnitManager.resolveDefaultRoot()`) receives unaddressed events. A UI-selected root comes with the client protocol phase.
@@ -86,19 +86,20 @@ Topology helpers live in `tests/e2e/two-instance-helpers.ts`.
 
 A strangler migration, each phase a separate PR with deletion criteria:
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                                                  | Status                    |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                                                       | done                      |
-| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                                                          | done                      |
-| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                                                      | done                      |
-| 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                                                         | done                      |
-| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts.                                   | done                      |
-| 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                                                            | done                      |
-| 6a    | CapabilityBroker protocol + composition-time injection (#2276 slice A): per-operation allowlists, `CapabilityUnavailable`, page/Node stubs, one host-injected broker, one migrated scoops call site (`network.localNodeServer`), conformance suite. Full Node/Swift/extension/hosted adapters and remaining call sites are follow-ups. | done                      |
-| 8a    | Generic parallel APIs, slice A (#2278): `WorkUnitManager.createMany` (atomic, fail closed if any parent is missing) and `join` (reuses the scoop-wait completion bus). `scoop_wait` / `feed_scoop` stay product aliases.                                                                                                               | done                      |
-| 7a    | Explicit workspace isolation modes (#2277): `private` + `shared-readonly` on child create; `snapshot` / `shared-live` typed stubs; `RestrictedFS` mount gating; `scoop_scoop` / `agent --workspace-mode`. Copy-on-write snapshots deferred (RFC open question 4).                                                                      | done                      |
-| 8c    | Promote / detach (#2278 slice C): `WorkUnitManager.promote` / `detach`, `onParentClose: 'detach'`, `close({ descendants })`; live reinit + conversation rekey on promote. Nested `canCreateChildren` is #2784.                                                                                                                         | done (this PR)            |
-| 5–9   | `WorkUnitClient`, remaining CapabilityBroker adapters, snapshot COW / `shared-live`, deletion of legacy paths.                                                                                                                                                                                                                         | deferred; separate issues |
+| Phase | Scope                                                                                                                                                                                                                                                                                                                                                | Status                    |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                                                                     | done                      |
+| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                                                                        | done                      |
+| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                                                                    | done                      |
+| 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                                                                       | done                      |
+| 9b    | Wire removal of `isCone` (#2358), stages 1–2: Swift decodes it optionally, `TRAY_SYNC_PROTOCOL_VERSION` is 8, every TS read collapses to the edge, the panel wire drops the field outright, and the leader strips it per peer (`scoopsListForPeer`). Stage 3 — deleting the field, the projection and the gate — waits on the native support window. | stages 1–2 done           |
+| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts.                                                 | done                      |
+| 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                                                                          | done                      |
+| 6a    | CapabilityBroker protocol + composition-time injection (#2276 slice A): per-operation allowlists, `CapabilityUnavailable`, page/Node stubs, one host-injected broker, one migrated scoops call site (`network.localNodeServer`), conformance suite. Full Node/Swift/extension/hosted adapters and remaining call sites are follow-ups.               | done                      |
+| 8a    | Generic parallel APIs, slice A (#2278): `WorkUnitManager.createMany` (atomic, fail closed if any parent is missing) and `join` (reuses the scoop-wait completion bus). `scoop_wait` / `feed_scoop` stay product aliases.                                                                                                                             | done                      |
+| 7a    | Explicit workspace isolation modes (#2277): `private` + `shared-readonly` on child create; `snapshot` / `shared-live` typed stubs; `RestrictedFS` mount gating; `scoop_scoop` / `agent --workspace-mode`. Copy-on-write snapshots deferred (RFC open question 4).                                                                                    | done                      |
+| 8c    | Promote / detach (#2278 slice C): `WorkUnitManager.promote` / `detach`, `onParentClose: 'detach'`, `close({ descendants })`; live reinit + conversation rekey on promote. Nested `canCreateChildren` is #2784.                                                                                                                                       | done (this PR)            |
+| 5–9   | `WorkUnitClient`, remaining CapabilityBroker adapters, snapshot COW / `shared-live`, deletion of legacy paths.                                                                                                                                                                                                                                       | deferred; separate issues |
 
 ### Phase 4 detail
 
@@ -108,9 +109,46 @@ A strangler migration, each phase a separate PR with deletion criteria:
 - The panel's existing `cone-create` message now creates _additional_ roots: `Bridge.handleConeCreate` allocates the folder with `coneFolderFor` (`cone` for the first root, `cone-<slug>` afterwards, de-duplicated) and labels extra cones by the user's name; the primary keeps `sliccy`.
 - Chat sessions are keyed per folder (`chatSessionIdFor` → `session-<folder>`), so the primary cone keeps `session-cone` and every other cone gets its own history. Session-level actions follow the **selected** cone — see "Per-cone sessions" below.
 - `scoop-drop` of a root goes through `WorkUnitManager.close()` (cascades to its scoops, forgets every dropped buffer/session) and refuses the last root; the rail hides ✕ on the last cone for the same rule.
-- The tray wire carries the edge: `ScoopSummary.parentId` / `ScoopListMsg.scoops[].parentId` (`null` for a cone; absent from leaders older than this). Browser followers group each cone with its own scoops (`toFollowerSwitcherScoops`), the extension panel takes ownership from the wire (`OffscreenClient`) and only infers it for legacy leaders; iOS derives the role from the edge in `ScoopSummary.isRootUnit` and keeps `isCone` only as the legacy fallback.
+- The tray wire carries the edge: `ScoopSummary.parentId` (`null` for a cone) and, on the panel wire, the REQUIRED `ScoopListMsg.scoops[].parentId` — required there because kernel and panel ship as one bundle from one origin, so that boundary has no version skew to tolerate. Browser followers group each cone with its own scoops (`toFollowerSwitcherScoops`), the extension panel takes ownership straight from the wire (`OffscreenClient`); iOS derives the role from the edge in `ScoopSummary.isRootUnit`, with `isCone` only as the fallback for a leader that predates `parentId`. See "Retiring `isCone` from the wire" below.
 - Presentation lives in `ui/wc/wc-unit-context.ts`: chip label = `assistantLabel` for roots, thread/URL context `cone` (primary) / `cone:<folder>` (extra) / `scoop:<name>`, default root = primary else oldest. Followers render every cone from the unchanged wire.
 - Per-cone workspaces landed separately (#2271) — see below.
+
+### Retiring `isCone` from the wire ([#2358](https://github.com/ai-ecoverse/slicc/issues/2358))
+
+The record lost its role field in #2279, but `ScoopSummary.isCone` stayed on the
+tray wire. It cannot simply be deleted: `swift-trayfollower`'s `ScoopSummary`
+decoded it as a REQUIRED `Bool`, so a leader that stopped sending it would make
+every already-installed iOS / Sliccstart build fail to decode the whole
+`scoops.list` — not degrade, lose the roster. Every TS float loads the webapp
+from the hosted origin, so only the native followers can be out of date here.
+
+Three stages:
+
+| Stage | What                                                                                                                                                                                                                                                                                                                       |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Make removal survivable. `isCone` becomes `Bool?` in Swift and `isCone?: boolean` (`@deprecated`) in TS; `isRootUnit` reads `parentId == nil && (isCone ?? true)`. `TRAY_SYNC_PROTOCOL_VERSION` → 8, meaning "this peer derives the role from `parentId` and does not need the flag". Every TS read collapses to the edge. |
+| 2     | Gate the projection per peer. `toScoopSummaries` still projects the flag, but `BroadcastManager` strips it for a follower whose `hello` reported version ≥ 8 (`scoopsListForPeer`). A peer that never said `hello`, or said < 8, keeps receiving it.                                                                       |
+| 3     | Remove. Delete the field from `ScoopSummary`, the Swift struct, the corpus entry, the projection and the stage-2 gate. A native build older than stage 1 stops seeing scoops — the accepted cost, which is why stage 3 waits for the support window.                                                                       |
+
+Stages 1 and 2 shipped together; **stage 3 is a separate PR** and is blocked on
+an iOS TestFlight build and a Sliccstart release carrying the stage-1 optional
+decode.
+
+Consequences already banked:
+
+- `summaryIsRoot` / `summaryRole` (`ui/wc/wc-tray-scoops.ts`) read `parentId`
+  alone. An absent edge reads as "owned", the safe direction — it never
+  promotes a scoop to a second root.
+- The PANEL wire (`kernel/messages.ts` `ScoopListMsg`) dropped `isCone`
+  outright and made `parentId` required. Kernel and panel are one bundle from
+  one origin, so there is no skew to tolerate — which also retired
+  `OffscreenClient`'s `coneJidFromWire` inference and its `unknown-parent`
+  sentinel.
+- `broadcastScoopsList` is a per-follower loop (`broadcastPerFollower`) rather
+  than one `broadcast()`, because the payload now differs per peer. It keeps
+  the registry's failure reporting and throttling.
+- After stage 3 the compiler is the ratchet again: a `summaries.find(s => s.isCone)`
+  will not typecheck.
 
 ### One conversation record per work unit ([#2275](https://github.com/ai-ecoverse/slicc/issues/2275))
 
@@ -413,7 +451,7 @@ own.
     (`ui/wc/wc-unit-context.ts`), over the role the switcher descriptors
     already carry. The leader reaches it through `unitRoleFor(scoop)` and the
     follower through `summaryRole(summary)` (`wc-tray-scoops.ts`, over
-    `parentId` / legacy `isCone`) — one flag, no second code path. On the
+    `parentId` alone since #2358) — one flag, no second code path. On the
     follower the read-only state outranks the connection state, so a
     reconnect while a scoop is viewed cannot hand back its composer.
   - **Every request that needs a human goes to the owning cone.** `sudo_request`
@@ -473,7 +511,7 @@ own.
   - `feed_scoop` from the cone stays the only way to send a scoop input, and
     the `scoop:<name>` URL context still opens this read-only view.
   - **iOS is not wired yet.** The wire already carries what it needs
-    (`ScoopSummary.parentId` / `isCone`); the app still renders its composer
+    (`ScoopSummary.parentId`); the app still renders its composer
     for a selected scoop.
 - **The welcome flow stays primary-cone-only, deliberately.** It is a first-run flow for the _user_, not a per-conversation greeting: someone creating a second cone has already been onboarded. `welcome-detection.ts` therefore reads only `chatSessionIdFor({ folder: PRIMARY_CONE_FOLDER })`, and a welcome lick in an extra cone's history neither fires nor suppresses it.
 

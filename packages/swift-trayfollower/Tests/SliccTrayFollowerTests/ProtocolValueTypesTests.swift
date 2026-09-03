@@ -11,7 +11,7 @@ final class ProtocolValueTypesTests: XCTestCase {
     // MARK: - Globals
 
     func testProtocolVersionMatchesSharedTs() {
-        XCTAssertEqual(traySyncProtocolVersion, 7)
+        XCTAssertEqual(traySyncProtocolVersion, 8)
     }
 
     func testAdvertisedFollowerCapabilities() {
@@ -61,6 +61,41 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(scoop.parentId)
     }
 
+    /// #2358: a leader that saw us announce protocol version 8 stops sending
+    /// `isCone`. The summary must still DECODE — a required `Bool` here would
+    /// fail the whole `scoops.list` and cost the app its entire roster.
+    func testScoopSummaryDecodesWithoutIsCone() throws {
+        let decoder = JSONDecoder()
+        let root = try decoder.decode(
+            ScoopSummary.self,
+            from: Data(
+                #"{"jid":"c","name":"Cone","folder":"cone","assistantLabel":"sliccy","parentId":null}"#
+                    .utf8))
+        XCTAssertNil(root.isCone)
+        XCTAssertNil(root.parentId)
+
+        let child = try decoder.decode(
+            ScoopSummary.self,
+            from: Data(
+                #"{"jid":"s","name":"reviewer","folder":"/scoops/reviewer","assistantLabel":"Reviewer","parentId":"c"}"#
+                    .utf8))
+        XCTAssertNil(child.isCone)
+        XCTAssertEqual(child.parentId, "c")
+
+        // The whole envelope, which is what actually reaches the app.
+        let list = try decoder.decode(
+            LeaderToFollowerMessage.self,
+            from: Data(
+                #"{"type":"scoops.list","scoops":[{"jid":"c","name":"Cone","folder":"cone","assistantLabel":"sliccy","parentId":null}],"activeScoopJid":"c"}"#
+                    .utf8))
+        guard case .scoopsList(let scoops, let active) = list else {
+            return XCTFail("expected scoops.list, got \(list)")
+        }
+        XCTAssertEqual(active, "c")
+        XCTAssertEqual(scoops.count, 1)
+        XCTAssertNil(scoops[0].isCone)
+    }
+
     /// #1666 / #2270: the ownership edge rides the wire next to the derived
     /// `isCone` flag. A scoop carries its cone's jid; a cone carries `null`;
     /// a leader that predates the field sends nothing — all three decode.
@@ -76,13 +111,13 @@ final class ProtocolValueTypesTests: XCTestCase {
             #"{"jid":"c","name":"Cone","folder":"cone","isCone":true,"assistantLabel":"sliccy","parentId":null}"#
                 .utf8)
         let cone = try decoder.decode(ScoopSummary.self, from: explicitNull)
-        XCTAssertTrue(cone.isCone)
+        XCTAssertEqual(cone.isCone, true)
         XCTAssertNil(cone.parentId)
 
         let legacy = Data(
             #"{"jid":"s","name":"old","folder":"/scoops/old","isCone":false,"assistantLabel":"old"}"#.utf8)
         let old = try decoder.decode(ScoopSummary.self, from: legacy)
-        XCTAssertFalse(old.isCone)
+        XCTAssertEqual(old.isCone, false)
         XCTAssertNil(old.parentId)
     }
 
