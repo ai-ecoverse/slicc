@@ -116,6 +116,11 @@ start/resume flows:
     because it is not derivable: the join URL carries the join token, a delivery needs the
     webhook token. It is optional on `/supersede`, so a leader that predates it leaves the
     webhook surface on its old `410`. An unparseable value is refused at write time.
+  - **`?redirect=manual` does not apply here**, unlike on `/join`. That opt-out exists so
+    a client which cannot suppress redirects can be _told_ about a hop instead, and a
+    webhook sender has no channel to be told through: it will not read a `Link` header or
+    parse a SLICC body, and a query string it happens to carry is not a request for
+    different semantics. The redirect is the only thing that saves the delivery.
   - **Ordering in the relay is load-bearing: capability token → supersede → expiry gate →
     live-leader check.** After the token because `Location` names the replacement's webhook
     _capability_, which is a secret — an unauthenticated redirect would hand it to anyone

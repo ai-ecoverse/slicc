@@ -140,6 +140,21 @@ describe('WebhookRelay.handle', () => {
       expect(response.headers.get('Location')).toBe(`${replacement}/build-done?attempt=2`);
     });
 
+    it('redirects even when the delivery carries ?redirect=manual', async () => {
+      // The /join opt-out (#1957) has no meaning here: a webhook sender has no
+      // channel to be told about a hop through — it reads no Link header and
+      // parses no SLICC body — so the redirect is the only thing that saves the
+      // delivery. A query string it happens to carry is not a protocol request.
+      h.tray.supersededByWebhookUrl = replacement;
+      const request = new Request('https://hub.example/webhook/t/build-done?redirect=manual', {
+        method: 'POST',
+        body: '{}',
+      });
+      const response = await h.relay.handle(TOKEN, request, 'build-done');
+      expect(response.status).toBe(308);
+      expect(response.headers.get('Location')).toBe(`${replacement}/build-done?redirect=manual`);
+    });
+
     it('redirects even once the tray has expired', async () => {
       // The whole point: supersession is checked before the expiry gate, so a
       // callback arriving after a long render still lands on the live tray.
