@@ -118,7 +118,7 @@
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "11.0.1",
     "@size-limit/file": "13.0.3",
-    "@tessl/cli": "0.100.0",
+    "@tessl/cli": "0.101.0",
     "@types/node": "24.13.3",
     "@vitest/browser": "4.1.11",
     "@vitest/browser-playwright": "4.1.11",
