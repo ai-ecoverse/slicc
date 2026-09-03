@@ -41,16 +41,20 @@ import {
 } from './types.js';
 
 /**
- * Deadline on the approval RELAY hop.
+ * Transport backstop on the panel-RPC approval relay.
  *
- * NOT the human-decision budget — that is `withApprovalTimeout` in `sudo/`,
- * five minutes, and shortening it here would silently shorten it everywhere.
- * This only guards a relay that is not there at all: a side panel that never
- * loaded leaves `chrome.runtime.sendMessage`'s callback unfired forever, and
- * the agent turn blocks on a prompt no human will ever see. Same 10s as the
- * REST control-plane calls; a caller's `signal` overrides it.
+ * NOT a decision deadline. On this wire the reply IS the human's answer, so
+ * any budget short enough to catch a dead relay would also deny a person who
+ * took a moment to read the prompt — the two are indistinguishable from here.
+ * The real budget is the caller's `signal` (`withApprovalTimeout` in `sudo/`,
+ * five minutes), which settles first in practice.
+ *
+ * This exists only because `PanelRpcClient.call` has its own 15s default,
+ * which WOULD deny a slow human. Ten minutes matches
+ * `createPanelRpcSudoBroker`'s `DEFAULT_SUDO_RPC_TIMEOUT_MS` and releases a
+ * request whose page realm has gone away for good.
  */
-const RELAY_TIMEOUT_MS = 10_000;
+const RELAY_BACKSTOP_MS = 600_000;
 
 /** The `SECRETS_HANDLERS` control messages this adapter sends. */
 export type SecretsControlMessage =
@@ -294,8 +298,13 @@ async function defaultFetch(
   };
 }
 
-/** Reject once `signal` aborts, so a relay that never answers still settles. */
-function withDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+/**
+ * Settle `work` when the CALLER gives up, since neither relay wire below
+ * accepts an `AbortSignal` of its own. With no caller signal the relay waits
+ * as long as the human does, which is the point.
+ */
+function withCallerBudget<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
   return new Promise<T>((resolve, reject) => {
     if (signal.aborted) {
       reject(new Error('approval relay cancelled before it was sent'));
@@ -322,10 +331,12 @@ function withDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
  *   - They call `suggestPattern`, which can cost an LLM round trip. Pattern
  *     suggestion is policy; the broker forwards what it is given.
  *
- * A relay that never answers is bounded by {@link RELAY_TIMEOUT_MS} (a side
- * panel that never loaded leaves MV3's callback unfired forever). That is a
- * TRANSPORT guard — the human's own budget is `withApprovalTimeout` in
- * `sudo/`, far above this hop.
+ * There is no default deadline. On all three approval wires the transport
+ * reply IS the human's decision — the `sendMessage` callback fires once
+ * `panel-responder.ts` has resolved the native modals — so a dead relay is
+ * indistinguishable from a slow human, and any timeout short enough to catch
+ * the first would deny the second. The only budget is the caller's `signal`,
+ * which is `withApprovalTimeout`'s five minutes.
  */
 async function defaultRequestApproval(
   direct: boolean,
@@ -339,17 +350,15 @@ async function defaultRequestApproval(
     ...(request.requester ? { requester: request.requester } : {}),
     ...(request.approver ? { approver: request.approver } : {}),
   };
-  const signal = request.signal ?? AbortSignal.timeout(RELAY_TIMEOUT_MS);
-
   if (direct) {
     // Offscreen → side panel. `panel-responder.ts` answers
     // `{ ok, decision, error }`; only `ok` with a decision is an answer.
-    const reply = (await withDeadline(
+    const reply = (await withCallerBudget(
       sendToServiceWorker({
         source: 'offscreen' as const,
         payload: { type: SUDO_REQUEST_TYPE, request: relayed },
       }),
-      signal
+      request.signal
     )) as { ok?: boolean; decision?: unknown; error?: string } | undefined;
     if (!reply?.ok || reply.decision === undefined) {
       throw new Error(reply?.error ?? 'sudo relay returned no decision');
@@ -361,9 +370,9 @@ async function defaultRequestApproval(
   const { getPanelRpcClient } = await import('../../kernel/panel-rpc.js');
   const client = getPanelRpcClient();
   if (!client) throw new Error('panel-RPC client unavailable in this realm');
-  const { decision } = await withDeadline(
-    client.call('sudo-request', { request: relayed }, { timeoutMs: RELAY_TIMEOUT_MS }),
-    signal
+  const { decision } = await withCallerBudget(
+    client.call('sudo-request', { request: relayed }, { timeoutMs: RELAY_BACKSTOP_MS }),
+    request.signal
   );
   return normalizeApprovalDecision(decision, suggested);
 }

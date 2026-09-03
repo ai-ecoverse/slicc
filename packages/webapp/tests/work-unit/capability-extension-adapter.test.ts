@@ -43,11 +43,15 @@ let proxyResponse = {
 };
 
 let lastError: { message?: string } | null = null;
+/** Fires a `deferReply` relay's callback, standing in for the human answering. */
+let deferredReply: (() => void) | undefined;
 let reply: unknown = { ok: true };
 
 const originalChrome = (globalThis as { chrome?: unknown }).chrome;
 
-function installChrome(options: { connect?: boolean; silent?: boolean } = {}): void {
+function installChrome(
+  options: { connect?: boolean; silent?: boolean; deferReply?: boolean } = {}
+): void {
   const runtime: Record<string, unknown> = {
     get lastError() {
       return lastError;
@@ -55,8 +59,14 @@ function installChrome(options: { connect?: boolean; silent?: boolean } = {}): v
     sendMessage: (message: Record<string, unknown>, callback?: (r: unknown) => void) => {
       sent.push({ message });
       // `silent` models a side panel that never loaded: MV3 leaves the
-      // callback unfired rather than erroring.
-      if (!options.silent) callback?.(reply);
+      // callback unfired rather than erroring. `deferReply` models a human
+      // taking their time — the callback fires when the test says so.
+      if (options.silent) return;
+      if (options.deferReply) {
+        deferredReply = () => callback?.(reply);
+        return;
+      }
+      callback?.(reply);
     },
   };
   if (options.connect) {
@@ -102,6 +112,7 @@ beforeEach(() => {
   sent.length = 0;
   openedPorts.length = 0;
   lastError = null;
+  deferredReply = undefined;
   reply = { ok: true };
   proxyResponse = {
     status: 200,
@@ -239,21 +250,43 @@ describe('approvals over the extension sudo relay', () => {
     }
   });
 
-  it('does not wait forever on a relay whose callback never fires', async () => {
+  it('settles a silent relay on the CALLER budget, and only on that', async () => {
     installChrome({ silent: true });
     const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
     const result = await broker.approvals.request({
       kind: 'command',
       detail: 'ls',
       suggestedPattern: 'ls',
-      // The adapter's own 10s relay guard is the production default; the test
-      // supplies its own so it does not sit for ten seconds. The HUMAN's
-      // budget is `withApprovalTimeout` in `sudo/`, well above this hop.
+      // The adapter adds NO deadline of its own: on this wire the callback
+      // fires once `panel-responder.ts` has resolved the native modals, so a
+      // dead relay and a slow human look identical from here. This stands in
+      // for `withApprovalTimeout`'s five minutes.
       signal: AbortSignal.timeout(20),
     });
-    // Also a failure, not a deny: nobody was asked, so nobody refused.
+    // A failure, not a deny: nobody was asked, so nobody refused.
     expect(isCapabilityFailure(result)).toBe(true);
     if (isCapabilityFailure(result)) expect(result.message).toContain('did not answer');
+  });
+
+  it('waits as long as the human does when the caller sets no budget', async () => {
+    // The regression this guards: a 10s adapter deadline would have denied
+    // every approval a person took longer than that to answer.
+    installChrome({ deferReply: true });
+    const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
+    reply = { ok: true, decision: { decision: 'allow' } };
+    const pending = broker.approvals.request({
+      kind: 'command',
+      detail: 'ls',
+      suggestedPattern: 'ls',
+    });
+    // Nothing has settled it, and nothing will until the "human" answers.
+    const raced = await Promise.race([
+      pending.then(() => 'settled'),
+      new Promise((resolve) => setTimeout(() => resolve('still waiting'), 30)),
+    ]);
+    expect(raced).toBe('still waiting');
+    deferredReply?.();
+    expect(await pending).toEqual({ ok: true, value: { decision: 'allow' } });
   });
 });
 

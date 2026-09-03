@@ -423,7 +423,14 @@ export interface MountCapability {
  * replace `createSudoBroker` with it. An adapter that grew a human-decision
  * timeout would silently shorten every one of those policies.
  *
- * `ApprovalRequest.signal` is therefore a transport deadline only.
+ * `ApprovalRequest.signal` is therefore the ONLY deadline on this hop, and
+ * the adapters add none of their own. On all three wires the transport reply
+ * IS the human's decision — `/api/sudo-approve` returns once the OS dialog
+ * has been answered, the offscreen relay's callback fires once
+ * `panel-responder.ts` has resolved the native modals — so a dead relay is
+ * indistinguishable from a slow human, and any timeout short enough to catch
+ * the first would deny the second. The budget belongs to the caller, which is
+ * `withApprovalTimeout`'s five minutes.
  */
 export interface ApprovalCapability {
   readonly allowlist: readonly ApprovalOperation[];

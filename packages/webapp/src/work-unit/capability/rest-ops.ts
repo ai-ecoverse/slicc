@@ -44,17 +44,23 @@ import {
 } from './types.js';
 
 /**
- * Deadline on every small control-plane call (secrets, sign-and-forward,
- * approvals).
+ * Deadline on a MACHINE-paced control-plane call — secrets and
+ * sign-and-forward, where the server answers as fast as it can.
  *
- * A wedged server does not reject — it simply never answers — so without a
- * deadline `callJson` waits until the tab dies, and a scoop that asked for its
+ * A wedged server does not reject, it simply never answers, so without a
+ * deadline `callJson` waits until the tab dies and a scoop that asked for its
  * masked env at shell init never finishes mounting. Matches
- * `MASKED_SECRETS_TIMEOUT_MS` in `core/secret-env.ts`, the same budget the
- * other cross-origin bridge fetches use.
+ * `MASKED_SECRETS_TIMEOUT_MS` in `core/secret-env.ts`.
  *
- * `network.crossOriginFetch` deliberately does NOT take this: a multi-MB
- * download is not a hang, so its caller owns the budget via `request.signal`.
+ * Two operations deliberately do NOT take it, both because a slow answer is
+ * not a broken one:
+ *
+ *   - `network.crossOriginFetch` — a multi-MB download is not a hang.
+ *   - `approvals.request` — `/api/sudo-approve` returns only once the OS
+ *     dialog has been ANSWERED, so this deadline would deny every approval a
+ *     person took more than ten seconds to think about. Its budget is the
+ *     caller's `signal` (the 5-minute `withApprovalTimeout` in `sudo/`),
+ *     exactly as `sudo/http-broker.ts` does it today.
  */
 const CONTROL_CALL_TIMEOUT_MS = 10_000;
 
@@ -64,11 +70,19 @@ function isAbort(err: unknown): boolean {
 }
 
 /**
- * A deadline for one control-plane call, cancelled early if the caller
- * aborts. `AbortSignal.any` is unavailable in older runtimes, in which case
- * the fixed deadline alone still bounds the call.
+ * The signal for one call: the machine deadline, cancelled early if the
+ * caller aborts. `AbortSignal.any` is unavailable in older runtimes, in which
+ * case the fixed deadline alone still bounds the call.
+ *
+ * `humanPaced` drops the deadline entirely and honours only the caller — see
+ * {@link CONTROL_CALL_TIMEOUT_MS}.
  */
-function callSignal(timeoutMs: number, caller: AbortSignal | undefined): AbortSignal {
+function callSignal(
+  timeoutMs: number,
+  caller: AbortSignal | undefined,
+  humanPaced: boolean
+): AbortSignal | undefined {
+  if (humanPaced) return caller;
   const deadline = AbortSignal.timeout(timeoutMs);
   if (!caller) return deadline;
   return typeof AbortSignal.any === 'function' ? AbortSignal.any([deadline, caller]) : deadline;
@@ -81,9 +95,25 @@ interface JsonCall {
   body: unknown;
 }
 
+/** Per-call knobs for {@link RestTransport.callJson}. */
+interface JsonCallOptions {
+  /** The caller's own cancellation, if it has one. */
+  signal?: AbortSignal;
+  /**
+   * True when the reply waits on a PERSON, so the machine deadline must not
+   * apply. Only `approvals.request` sets it.
+   */
+  humanPaced?: boolean;
+}
+
 /** The bound HTTP surface every operation below shares. */
 interface RestTransport {
-  callJson(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<JsonCall>;
+  callJson(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: JsonCallOptions
+  ): Promise<JsonCall>;
   send(path: string, init: RequestInit): Promise<Response | Error>;
   headers(extra?: Record<string, string>): Record<string, string>;
 }
@@ -105,11 +135,12 @@ function createTransport(options: RestCapabilityBrokerOptions): RestTransport {
   return {
     headers,
     send,
-    async callJson(method, path, body, signal) {
+    async callJson(method, path, body, options) {
+      const signal = callSignal(timeoutMs, options?.signal, options?.humanPaced === true);
       const init: RequestInit = {
         method,
         headers: headers({ 'Content-Type': 'application/json' }),
-        signal: callSignal(timeoutMs, signal),
+        ...(signal ? { signal } : {}),
       };
       if (body !== undefined) init.body = JSON.stringify(body);
       const resp = await send(path, init);
@@ -363,7 +394,8 @@ async function restRequestApproval(
       ...(request.requester ? { requester: request.requester } : {}),
       ...(request.approver ? { approver: request.approver } : {}),
     },
-    request.signal
+    // The reply IS the human's decision, so the only budget is the caller's.
+    { humanPaced: true, ...(request.signal ? { signal: request.signal } : {}) }
   );
   if (!call.ok) {
     return failed('approvals', 'request', call, 'approval endpoint returned non-OK');

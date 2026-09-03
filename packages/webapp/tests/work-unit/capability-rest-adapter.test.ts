@@ -309,6 +309,43 @@ describe('node-rest adapter emits the contract wire', () => {
     if (isCapabilityFailure(result)) expect(result.message).toContain('no answer within');
   });
 
+  it('never puts a machine deadline on an approval — a slow human is not a failure', async () => {
+    // `/api/sudo-approve` returns only once the OS dialog has been ANSWERED,
+    // so the control deadline must not reach it: at 10s it would deny every
+    // approval a person took a moment to read. The budget is the caller's
+    // `signal`, i.e. `withApprovalTimeout`'s five minutes.
+    const signals: Array<AbortSignal | null | undefined> = [];
+    let answer: (() => void) | undefined;
+    const broker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      controlTimeoutMs: 25,
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        signals.push(init?.signal);
+        // A human "thinking" for well past the control deadline.
+        await new Promise<void>((resolve) => {
+          answer = resolve;
+          setTimeout(resolve, 60);
+        });
+        return new Response(JSON.stringify({ decision: 'allow' }), { status: 200 });
+      }) as typeof fetch,
+    });
+    const decision = await broker.approvals.request({ kind: 'command', detail: 'ls' });
+    expect(answer).toBeDefined();
+    // No signal at all when the caller supplied none: nothing can cut it short.
+    expect(signals[0]).toBeUndefined();
+    expect(decision).toEqual({ ok: true, value: { decision: 'allow' } });
+
+    // A caller's signal IS honoured, and is the only thing that is.
+    const controller = new AbortController();
+    controller.abort();
+    await broker.approvals.request({
+      kind: 'command',
+      detail: 'ls',
+      signal: controller.signal,
+    });
+    expect(signals[1]).toBe(controller.signal);
+  });
+
   it('carries a caller signal into the fetch instead of imposing its own deadline', async () => {
     // A multi-MB download is not a hang, so `crossOriginFetch` takes the
     // caller's budget rather than the 10s control-plane one.
