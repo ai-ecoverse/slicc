@@ -15,6 +15,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
+import { createFakeCapabilityBroker } from '../helpers/fake-capability-broker.js';
 
 type AgentCtorOptions = {
   streamFn?: unknown;
@@ -110,11 +111,6 @@ vi.mock('../../src/scoops/scoop-management-tools.js', () => ({
   createScoopManagementTools: () => [],
 }));
 
-vi.mock('../../src/core/secret-env.js', () => ({
-  fetchSecretEnvVars: async () => ({}),
-  buildEnvFromMaskedEntries: () => ({}),
-}));
-
 const { ScoopContext } = await import('../../src/scoops/scoop-context.js');
 
 const baseScoop: RegisteredScoop = {
@@ -168,7 +164,14 @@ describe('ScoopContext Adobe X-Session-Id wiring', () => {
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
-      createMockFs() as never
+      createMockFs() as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 
@@ -185,7 +188,14 @@ describe('ScoopContext Adobe X-Session-Id wiring', () => {
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
-      createMockFs() as never
+      createMockFs() as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 
@@ -199,7 +209,14 @@ describe('ScoopContext Adobe X-Session-Id wiring', () => {
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
-      createMockFs() as never
+      createMockFs() as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 
@@ -226,7 +243,14 @@ describe('ScoopContext Adobe X-Session-Id wiring', () => {
     const ctx = new ScoopContext(
       baseScoop,
       createMockCallbacks() as never,
-      createMockFs() as never
+      createMockFs() as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 

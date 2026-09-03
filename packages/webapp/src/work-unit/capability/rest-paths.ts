@@ -14,3 +14,13 @@ export const REST_CAPABILITY_PATHS = {
   s3SignAndForward: '/api/s3-sign-and-forward',
   daSignAndForward: '/api/da-sign-and-forward',
 } as const;
+
+/**
+ * Deadline on the small control-plane calls (secrets, sign-and-forward,
+ * approvals) `rest-ops.ts` makes once loaded. Named here — not in
+ * `rest-ops.ts` — so `rest-adapter.ts` (boot-critical, statically imported)
+ * can bound the LOAD of that lazy chunk with the same number without
+ * statically importing the chunk itself, which would defeat the point of
+ * lazy-loading it (#2276 slice C).
+ */
+export const REST_CONTROL_CALL_TIMEOUT_MS = 10_000;

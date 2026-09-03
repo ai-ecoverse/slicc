@@ -22,7 +22,7 @@ import {
 import { normalizeApprovalDecision } from './approval-decision.js';
 import { capabilityRequestBytes } from './request-body.js';
 import type { RestCapabilityBrokerOptions } from './rest-adapter.js';
-import { REST_CAPABILITY_PATHS } from './rest-paths.js';
+import { REST_CAPABILITY_PATHS, REST_CONTROL_CALL_TIMEOUT_MS } from './rest-paths.js';
 import {
   type ApprovalDecision,
   type ApprovalRequest,
@@ -62,7 +62,7 @@ import {
  *     caller's `signal` (the 5-minute `withApprovalTimeout` in `sudo/`),
  *     exactly as `sudo/http-broker.ts` does it today.
  */
-const CONTROL_CALL_TIMEOUT_MS = 10_000;
+const CONTROL_CALL_TIMEOUT_MS = REST_CONTROL_CALL_TIMEOUT_MS;
 
 /** Whether a rejection is a cancellation rather than a transport error. */
 function isAbort(err: unknown): boolean {

@@ -24,6 +24,7 @@
 import { createLazyOps, guardCapability } from './boundary.js';
 import { composeCapabilityBroker } from './compose.js';
 import type { RestOps } from './rest-ops.js';
+import { REST_CONTROL_CALL_TIMEOUT_MS } from './rest-paths.js';
 import type {
   CapabilityBroker,
   CapabilityResult,
@@ -59,8 +60,13 @@ export interface RestCapabilityBrokerOptions {
 export function createRestCapabilityBroker(
   options: RestCapabilityBrokerOptions = {}
 ): CapabilityBroker {
-  const load = createLazyOps<RestOps>(() =>
-    import('./rest-ops.js').then((module) => module.createRestOps(options))
+  // Bounded so a stalled chunk fetch (evicted asset, dead network) cannot
+  // block the FIRST privileged call forever — for `shell-and-skills.ts`,
+  // that's `initShellAndSkills` and therefore kernel-ready (#2276 slice C).
+  // Same budget as the control-plane calls this chunk makes once loaded.
+  const load = createLazyOps<RestOps>(
+    () => import('./rest-ops.js').then((module) => module.createRestOps(options)),
+    options.controlTimeoutMs ?? REST_CONTROL_CALL_TIMEOUT_MS
   );
 
   return composeCapabilityBroker({

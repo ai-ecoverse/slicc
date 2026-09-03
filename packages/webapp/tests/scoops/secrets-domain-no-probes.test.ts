@@ -50,6 +50,19 @@ const FLOAT_PROBE_NAMES = [
   // — not a generic probe name, but the same class of thing for this
   // domain: business logic deciding its own transport by float.
   'fetchSecretEnvVars',
+  // `resolveSecretTopology` (`core/secret-topology.ts`) is a back-compat
+  // ALIAS for `resolveFloatTopology` — importing it directly would bypass
+  // the literal `resolveFloatTopology` scan while reintroducing the exact
+  // branch this slice removed (round-1 review finding 4).
+  'resolveSecretTopology',
+  // The extension-direct transport this slice's removed branch called
+  // directly; a regression that inlines it (rather than importing a named
+  // probe) would otherwise slip past every name above.
+  'chrome.runtime',
+  // The extension-delegate transport `fetchSecretEnvVars()` used — same
+  // reasoning: a regression could call this directly from `scoops/` without
+  // tripping any of the names above.
+  'callSecretsBridge',
 ] as const;
 // `hasLocalNodeServer` is deliberately NOT in this list: it is a local
 // `() => localNode.ok` wrapper name in shell-and-skills.ts (matching the
@@ -66,14 +79,11 @@ describe('#2276 slice C — scoops/scoop-context/shell-and-skills.ts has no floa
 
   it('gets masked secrets from the injected broker, not a topology-branching helper', () => {
     const source = src('scoops', 'scoop-context', 'shell-and-skills.ts');
-    expect(source).toContain('broker.secrets.listMaskedEnv()');
-    expect(source).toContain("from '../../core/secret-env.js'");
+    // Pinned on the call, not the `core/secret-env.js` import path: extracting
+    // `buildEnvFromMaskedEntries` to its own module later must not fail this
+    // guard for an unrelated reason (round-1 review finding 4).
+    expect(source).toContain('broker.secrets.listMaskedEnv(');
     expect(source).toContain('buildEnvFromMaskedEntries');
-  });
-
-  it('would fail if the file went back to calling fetchSecretEnvVars (documents the regression this guards against)', () => {
-    const regressed = "import { fetchSecretEnvVars } from '../../core/secret-env.js';";
-    expect(FLOAT_PROBE_NAMES.some((name) => regressed.includes(name))).toBe(true);
   });
 });
 

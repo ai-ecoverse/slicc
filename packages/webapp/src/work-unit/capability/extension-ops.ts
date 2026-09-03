@@ -132,7 +132,7 @@ export function createExtensionOps(options: ExtensionCapabilityBrokerOptions): E
     if (!call.ok) return call;
     const reply = call.value as { entries?: SecretMaskedEnvEntry[]; error?: string } | undefined;
     if (reply?.error) return capabilityFailed('secrets', operation, reply.error);
-    if (!reply?.entries) {
+    if (!Array.isArray(reply?.entries)) {
       return capabilityFailed('secrets', operation, 'secrets bridge returned no entries');
     }
     return { ok: true, value: reply.entries };
