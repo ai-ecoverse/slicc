@@ -114,9 +114,15 @@ const STYLE = `
 
    The height is FIXED, so the resting hint and a run of key caps are the same
    bar: it is up for as long as the mode is, and one that grew a few pixels on
-   every keystroke would twitch under the composer all session. */
-:host{position:absolute;left:0;right:0;bottom:0;z-index:4;box-sizing:border-box;}
-.hud{justify-content:space-between;height:34px;padding:0 16px;background:color-mix(in srgb,var(--ctx) 12%,color-mix(in srgb,var(--bg) 88%,transparent));border-top:1px solid color-mix(in srgb,var(--ctx) 28%,var(--line));backdrop-filter:blur(8px) saturate(1.3);-webkit-backdrop-filter:blur(8px) saturate(1.3);}
+   every keystroke would twitch under the composer all session.
+
+   z-index 2 matches the composer band (tool tiles and the dock rail sit at 3)
+   so the rightward bleed can run UNDER the open pane the way the composer's
+   ::before does, instead of covering it. The host stays column-width; only
+   the ::after paint extends. */
+:host{position:absolute;left:0;right:0;bottom:0;z-index:2;box-sizing:border-box;overflow:visible;height:34px;background:color-mix(in srgb,var(--ctx) 12%,color-mix(in srgb,var(--bg) 88%,transparent));border-top:1px solid color-mix(in srgb,var(--ctx) 28%,var(--line));backdrop-filter:blur(8px) saturate(1.3);-webkit-backdrop-filter:blur(8px) saturate(1.3);}
+:host::after{content:"";position:absolute;top:-1px;bottom:0;left:100%;width:100vw;background:inherit;border-top:inherit;backdrop-filter:inherit;-webkit-backdrop-filter:inherit;pointer-events:none;}
+.hud{justify-content:space-between;height:34px;padding:0 16px;}
 /* The name and the hint read as one phrase on the left; the caps answer from
    the right, where they land in the same place every time instead of shunting
    the phrase sideways as the strip grows. */
@@ -144,7 +150,8 @@ const SHEET = sheet(STYLE);
  * It pins itself to the bottom of the nearest positioned ancestor, which the
  * shell makes the chat column: with a composer there it lands on the band's
  * bottom edge, and without one (a read-only scoop) it stays where the band
- * would have been.
+ * would have been. A `::after` bleed extends the bar under an open tool pane
+ * the same way the composer's own band does.
  *
  * Presses arrive either imperatively (`record()`, which also arms the linger
  * that brings the hint back) or declaratively (`presses`, which does not — a

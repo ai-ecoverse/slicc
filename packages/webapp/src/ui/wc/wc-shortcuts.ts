@@ -14,7 +14,9 @@
  * With the default {@link KeyboardTrigger} of `auto`, keyboard mode is not a
  * place you visit — it is where you are whenever you are not typing:
  * {@link settle} turns it on the moment no text field (and no composer chrome)
- * holds the focus, and off the moment one does. Escape is therefore a shortcut
+ * holds the focus — including a pointer currently down on the band, because
+ * send / + / the model pill often blur the textarea without keeping focus —
+ * and off the moment one does. Escape is therefore a shortcut
  * for "leave the field", not a toggle, and `i` / Enter — which put the caret
  * back in the composer — are the only way out. That is vim's grammar rather
  * than a pair of modes with a switch between them, and it means the answer to
@@ -1397,7 +1399,8 @@ function createSettler(
   doc: Document,
   mode: ReturnType<typeof createMode>,
   deps: ShortcutDeps,
-  readTrigger: () => KeyboardTrigger
+  readTrigger: () => KeyboardTrigger,
+  keepExtra?: () => boolean
 ): {
   /** Reconcile the mode with the focus, after the current task. */
   schedule(): void;
@@ -1421,8 +1424,9 @@ function createSettler(
    * Bring the mode in line with where the focus actually is.
    *
    * Under `auto`, on unless something typable — or any composer chrome — holds
-   * focus. Under `esc`, only leave the mode when focus is in the composer;
-   * never auto-enter. Under `null`, always off.
+   * focus, or a pointer is currently down on the band. Under `esc`, only leave
+   * the mode when focus is in the composer; never auto-enter. Under `null`,
+   * always off.
    */
   const settle = (): void => {
     // A modal owns the keyboard while it is up. The mode settles again when
@@ -1436,7 +1440,7 @@ function createSettler(
     const focused = deepActiveElement(doc);
     applyTriggerSettle(
       readTrigger(),
-      isTypingTarget(focused) || isWithinElement(deps.composerBand, focused),
+      isTypingTarget(focused) || isWithinElement(deps.composerBand, focused) || !!keepExtra?.(),
       composerAvailable(),
       mode,
       (next) => {
@@ -1744,6 +1748,122 @@ function createChord(doc: Document): {
  */
 const INSTALLED = new WeakMap<Document, ShortcutHandles>();
 
+function handleModeKeyDown(
+  event: KeyboardEvent,
+  ctx: {
+    doc: Document;
+    mode: ReturnType<typeof createMode>;
+    settler: ReturnType<typeof createSettler>;
+    chord: ReturnType<typeof createChord>;
+    helpOpen: () => boolean;
+    deps: ShortcutDeps;
+    dispatch: Dispatch;
+    commandFor: (key: string) => Command | undefined;
+    trigger: KeyboardTrigger;
+  }
+): void {
+  // Something closer to the key already claimed it (a component's own
+  // handler, an overlay's Escape).
+  if (event.defaultPrevented || event.isComposing) return;
+  if (event.key === 'Escape') {
+    ctx.chord.clear();
+    handleEscape(event, ctx.doc, ctx.mode, ctx.settler, ctx.trigger);
+    return;
+  }
+  if (!ctx.mode.on()) return;
+  if (passesThrough(event)) return;
+
+  // A chord is one key wide: whatever this key turns out to be, it is not
+  // the digit the prefix was waiting for unless it is consumed below.
+  const armed = ctx.chord.take();
+
+  const command = ctx.commandFor(event.key);
+  if (suspendedByModal(ctx.doc, command, ctx.helpOpen())) {
+    // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
+    // dialog reads as "not now" rather than as a dead keyboard.
+    ctx.mode.record(describeKey(event), false);
+    return;
+  }
+
+  const digit = digitFor(event);
+  if (digit !== null) {
+    // Shown either way: a digit past the end of its list did nothing, and a
+    // HUD that stays blank for it reads as a dropped keystroke.
+    const { hit, index } = selectByDigit(ctx.deps, armed, digit);
+    ctx.mode.record(describeKey(event), hit);
+    if (!hit) return;
+    event.preventDefault();
+    // Stay armed where the digit landed, so the step keys walk on from it —
+    // `f 3 j` is the fourth file.
+    if (armed && index !== null) ctx.chord.arm(armed.list, index);
+    return;
+  }
+
+  ctx.mode.record(describeKey(event), !!command);
+  // An unbound key is not an exit: the mode is sticky, like vim's.
+  if (command) runCommand(command, event, armed, ctx.dispatch);
+}
+
+/**
+ * A click on composer chrome (send, +, model, thinking) blurs the textarea
+ * without leaving focus on the control: send re-renders itself as stop,
+ * a padding click lands on nothing. Under `auto` that used to look like
+ * "left the composer" and flipped keyboard mode on mid-gesture.
+ *
+ * Hold the composer for the duration of the pointer, then put the caret back
+ * if focus did not land in a field, a composer control, or an overlay.
+ */
+function bindComposerPointer(
+  doc: Document,
+  deps: ShortcutDeps,
+  settler: { schedule(): void },
+  held: { value: boolean }
+): () => void {
+  const view = doc.defaultView;
+  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
+  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const onPointerDown = (event: Event): void => {
+    if (!isWithinElement(deps.composerBand, deepTarget(event) as Node | null)) return;
+    held.value = true;
+  };
+
+  const onPointerUp = (): void => {
+    if (!held.value) return;
+    if (restoreTimer !== undefined) return;
+    restoreTimer = setTimer(() => {
+      restoreTimer = undefined;
+      held.value = false;
+      const focused = deepActiveElement(doc);
+      if (
+        !hasOpenOverlay(doc) &&
+        !isTypingTarget(focused) &&
+        !isWithinElement(deps.composerBand, focused)
+      ) {
+        deps.focusComposer?.();
+      }
+      settler.schedule();
+    }, 0);
+  };
+
+  // Pointer is the real user path; mousedown is the CDP/harness path
+  // (`Input.dispatchMouseEvent` never synthesizes pointer events).
+  doc.addEventListener('pointerdown', onPointerDown, true);
+  doc.addEventListener('mousedown', onPointerDown, true);
+  doc.addEventListener('pointerup', onPointerUp, true);
+  doc.addEventListener('mouseup', onPointerUp, true);
+  doc.addEventListener('pointercancel', onPointerUp, true);
+  return () => {
+    doc.removeEventListener('pointerdown', onPointerDown, true);
+    doc.removeEventListener('mousedown', onPointerDown, true);
+    doc.removeEventListener('pointerup', onPointerUp, true);
+    doc.removeEventListener('mouseup', onPointerUp, true);
+    doc.removeEventListener('pointercancel', onPointerUp, true);
+    if (restoreTimer !== undefined) clearTimer(restoreTimer);
+  };
+}
+
 /**
  * Install the shell's modal key handling, replacing any previous installation
  * on the same document. Safe on any float: only the switcher is required, and
@@ -1777,7 +1897,15 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     const id = keymap[key];
     return id ? COMMANDS[id] : undefined;
   };
-  const settler = createSettler(doc, mode, deps, () => trigger);
+  const composerPointer = { value: false };
+  const settler = createSettler(
+    doc,
+    mode,
+    deps,
+    () => trigger,
+    () => composerPointer.value
+  );
+  const unbindComposerPointer = bindComposerPointer(doc, deps, settler, composerPointer);
   const chord = createChord(doc);
   const dispatch: Dispatch = {
     deps,
@@ -1789,48 +1917,18 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     toggleHelp: () => help.toggle(),
   };
 
-  const onKeyDown = (event: KeyboardEvent): void => {
-    // Something closer to the key already claimed it (a component's own
-    // handler, an overlay's Escape).
-    if (event.defaultPrevented || event.isComposing) return;
-    if (event.key === 'Escape') {
-      chord.clear();
-      handleEscape(event, doc, mode, settler, trigger);
-      return;
-    }
-    if (!mode.on()) return;
-    if (passesThrough(event)) return;
-
-    // A chord is one key wide: whatever this key turns out to be, it is not
-    // the digit the prefix was waiting for unless it is consumed below.
-    const armed = chord.take();
-
-    const command = commandFor(event.key);
-    if (suspendedByModal(doc, command, !!help.element())) {
-      // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
-      // dialog reads as "not now" rather than as a dead keyboard.
-      mode.record(describeKey(event), false);
-      return;
-    }
-
-    const digit = digitFor(event);
-    if (digit !== null) {
-      // Shown either way: a digit past the end of its list did nothing, and a
-      // HUD that stays blank for it reads as a dropped keystroke.
-      const { hit, index } = selectByDigit(deps, armed, digit);
-      mode.record(describeKey(event), hit);
-      if (!hit) return;
-      event.preventDefault();
-      // Stay armed where the digit landed, so the step keys walk on from it —
-      // `f 3 j` is the fourth file.
-      if (armed && index !== null) chord.arm(armed.list, index);
-      return;
-    }
-
-    mode.record(describeKey(event), !!command);
-    // An unbound key is not an exit: the mode is sticky, like vim's.
-    if (command) runCommand(command, event, armed, dispatch);
-  };
+  const onKeyDown = (event: KeyboardEvent): void =>
+    handleModeKeyDown(event, {
+      doc,
+      mode,
+      settler,
+      chord,
+      helpOpen: () => !!help.element(),
+      deps,
+      dispatch,
+      commandFor,
+      trigger,
+    });
 
   /**
    * Focus reaching a text field ends the mode. Applied INLINE rather than left
@@ -1889,6 +1987,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       doc.removeEventListener('fullscreenchange', onFullscreenChange);
       view?.removeEventListener('focus', onWindowFocus);
       view?.removeEventListener('blur', onWindowBlur);
+      unbindComposerPointer();
       stopWatchingUnit();
       settler.dispose();
       // An armed chord that outlived its wiring would fire into a dead shell.

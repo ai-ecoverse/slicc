@@ -47,6 +47,17 @@ describe('slicc-key-hud', () => {
     const style = getComputedStyle(el);
     expect(style.position).toBe('absolute');
     expect(style.bottom).toBe('0px');
+    // Under the open tool pane (z-index 3), matching the composer band.
+    expect(style.zIndex).toBe('2');
+  });
+
+  it('bleeds its bar to the right so it can match a full-bleed composer band', () => {
+    const el = mount();
+    const bleed = getComputedStyle(el, '::after');
+    expect(bleed.content).toBe('""');
+    expect(bleed.pointerEvents).toBe('none');
+    // 100vw — used value is the viewport, never a collapsed 0.
+    expect(Number.parseFloat(bleed.width)).toBeGreaterThan(0);
   });
 
   it('announces the mode but never the typing', () => {

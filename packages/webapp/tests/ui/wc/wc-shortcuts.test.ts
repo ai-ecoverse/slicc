@@ -1723,6 +1723,52 @@ describe('composer chrome keeps keyboard mode off', () => {
     expect(handles.active()).toBe(false);
     expect(handles.intent()).toBe('composer');
   });
+
+  it('does not enter keyboard mode when a chrome click drops focus off the band', async () => {
+    const { handles, composer, composerField } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    const send = document.createElement('button');
+    send.textContent = 'Send';
+    composer.append(send);
+    send.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    send.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, composed: true }));
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(document.activeElement).toBe(composerField);
+  });
+
+  it('does not enter keyboard mode on a composer-chrome mousedown either', async () => {
+    const { handles, composer, composerField } = harness();
+    composerField.focus();
+    await flush();
+    const send = document.createElement('button');
+    send.textContent = 'Send';
+    composer.append(send);
+    send.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    send.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, composed: true }));
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(document.activeElement).toBe(composerField);
+  });
+
+  it('still enters keyboard mode after a click that never touched the composer', async () => {
+    const { handles, composerField } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
 });
 
 describe('cycleModel / cycleThinking', () => {

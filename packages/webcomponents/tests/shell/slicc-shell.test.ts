@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SliccShell } from '../../src/shell/slicc-shell.js';
 // Composed children (by tag) — import so they are registered when tests run.
 import '../../src/composer/slicc-composer.js';
+import '../../src/composer/slicc-key-hud.js';
 import '../../src/dock/slicc-dock.js';
 import '../../src/shell/slicc-chatpane.js';
 import '../../src/workbench/slicc-surface.js';
@@ -103,7 +104,8 @@ describe('slicc-shell', () => {
     chatSurface.setAttribute('surface-id', 'chat');
     const pane = document.createElement('slicc-chatpane');
     const composer = document.createElement('slicc-composer');
-    pane.append(composer);
+    const hud = document.createElement('slicc-key-hud');
+    pane.append(composer, hud);
     chatSurface.append(pane);
     const term = document.createElement('slicc-surface');
     term.setAttribute('surface-id', 'term');
@@ -137,5 +139,10 @@ describe('slicc-shell', () => {
     expect(getComputedStyle(termTile).zIndex).toBe('3');
     expect(getComputedStyle(dock).zIndex).toBe('3');
     expect(getComputedStyle(composer).zIndex).toBe('2');
+    // The HUD matches the band: same stack, a rightward bleed under the pane.
+    expect(getComputedStyle(hud).zIndex).toBe('2');
+    const hudBleed = getComputedStyle(hud, '::after');
+    expect(hudBleed.content).toBe('""');
+    expect(hudBleed.pointerEvents).toBe('none');
   });
 });
