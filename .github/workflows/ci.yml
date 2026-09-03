@@ -36,6 +36,7 @@ jobs:
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
       dev-tools: ${{ steps.filter.outputs.dev-tools }}
+      capability-contract: ${{ steps.filter.outputs.capability-contract }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
       swift-traysession: ${{ steps.filter.outputs.swift-traysession }}
@@ -81,6 +82,13 @@ jobs:
               - 'packages/cherry/**'
             dev-tools:
               - 'packages/dev-tools/**'
+            # The CapabilityBroker REST contract (#2276). Replayed by BOTH
+            # servers' suites, so a change to it alone must run both jobs —
+            # the `shared` filter already pulls in node-server, this pulls in
+            # swift-server, which would otherwise skip and leave the Swift
+            # replay unrun.
+            capability-contract:
+              - 'packages/shared-ts/fixtures/capability-rest-contract.json'
             swift-server:
               - 'packages/swift-server/**'
             swift-optel:
@@ -1269,6 +1277,7 @@ jobs:
       (needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
       needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.capability-contract == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
