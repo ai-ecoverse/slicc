@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -105,11 +106,22 @@ type Client struct {
 }
 
 // New builds a signaling client for the given join URL.
+//
+// Redirect-following is suppressed on the copy of the caller's client: the 308
+// a superseded tray answers with (#1957) is a hop this package reports to
+// tray.Dial, which owns the five-hop bound and the OnJoinURLChanged
+// persistence. Letting net/http follow it would re-POST to the replacement and
+// connect, but leave the caller's stored join URL naming a dead tray — so every
+// later reconnect would start from the redirect again.
 func New(joinURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultRequestTimeout}
 	}
-	return &Client{joinURL: joinURL, http: httpClient}
+	client := *httpClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &Client{joinURL: joinURL, http: &client}
 }
 
 // JoinURL returns the URL this client posts to.
@@ -139,16 +151,20 @@ type rawBootstrapResponse struct {
 // Attach performs the first join call.
 func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*AttachPlan, error) {
 	body := map[string]any{"controllerId": controllerID, "runtime": runtime}
-	data, header, err := c.postWithHeader(ctx, body)
+	data, meta, err := c.postWithMeta(ctx, body)
 	if err != nil {
 		return nil, err
 	}
-	// #1957: a superseded tray states the replacement twice — in the body, and
-	// as an RFC 5829 `successor-version` link. The header is the channel that
-	// survives a body-shape change, so it wins when both are present, and it
-	// alone is enough to follow the hop: a body this build cannot decode is
+	// #1957: a superseded tray states the replacement three times — as the 308's
+	// Location, as an RFC 5829 `successor-version` link, and in the body. The
+	// link is preferred: it is the canonical join URL (Location carries the
+	// hub's json=true) and it survives a body-shape change. Any one of them
+	// alone is enough to follow the hop, so a body this build cannot decode is
 	// not a dead end when the hub told us where the tray went.
-	successor := SuccessorVersionFromLinkHeader(header)
+	successor := firstNonEmpty(
+		SuccessorVersionFromLinkHeader(meta.Header),
+		RedirectLocation(meta.Status, meta.Header.Get("Location")),
+	)
 	var raw rawAttachResponse
 	if err := json.Unmarshal(data, &raw); err != nil {
 		if successor != "" {
@@ -244,32 +260,60 @@ func (c *Client) postBootstrap(ctx context.Context, body map[string]any) (*Boots
 }
 
 func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) {
-	data, _, err := c.postWithHeader(ctx, body)
+	data, _, err := c.postWithMeta(ctx, body)
 	return data, err
 }
 
-// postWithHeader is post plus the response headers, for the callers that read
-// the RFC 8288 Link header (the `successor-version` supersede hop, #1957).
-func (c *Client) postWithHeader(ctx context.Context, body map[string]any) ([]byte, http.Header, error) {
+// responseMeta is the part of a signaling response that outlives its body: the
+// status and headers the supersede hop is read from (#1957).
+type responseMeta struct {
+	Status int
+	Header http.Header
+}
+
+// postWithMeta is post plus the response status and headers, for the callers
+// that read the RFC 8288 Link header and the 308 Location.
+func (c *Client) postWithMeta(ctx context.Context, body map[string]any) ([]byte, responseMeta, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, err
+		return nil, responseMeta{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.joinURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, nil, err
+		return nil, responseMeta{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tray signaling network error: %w", err)
+		return nil, responseMeta{}, fmt.Errorf("tray signaling network error: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, nil, err
+		return nil, responseMeta{}, err
 	}
-	return data, resp.Header, nil
+	return data, responseMeta{Status: resp.StatusCode, Header: resp.Header}, nil
+}
+
+// RedirectLocation returns the replacement join URL named by a suppressed 3xx,
+// or "". The hub's Location carries json=true so that clients which let their
+// platform follow the redirect still reach the API rather than the SPA fallback
+// (#1957); this client re-appends what it needs, so the parameter is dropped
+// rather than persisted as part of the session's join URL. A relative or
+// unparseable target yields "" — a hop to an address this client had to guess
+// at is worse than reporting none.
+func RedirectLocation(status int, location string) string {
+	if status < 300 || status >= 400 || location == "" {
+		return ""
+	}
+	parsed, err := url.Parse(location)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return ""
+	}
+	query := parsed.Query()
+	query.Del("json")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func truncate(b []byte) string {

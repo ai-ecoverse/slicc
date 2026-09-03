@@ -99,7 +99,21 @@ public actor TraySignalingClient {
     public let joinUrl: URL
     private let transport: Transport
 
-    public init(joinUrl: URL, session: URLSession = .shared) {
+    /// A session that reports the hub's supersede 308 instead of following it
+    /// (#1957). `SupersedeRedirect` owns the five-hop bound and the consumer
+    /// persists the replacement (`activeJoinUrl` on iOS) so a later reconnect
+    /// dials the live tray; a silently-followed redirect would connect once and
+    /// leave the stored address dead. Shared across clients — the delegate is
+    /// stateless, and `URLSession` retains it for the process lifetime either
+    /// way.
+    private static let redirectSuppressingSession = URLSession(
+        configuration: .default, delegate: NoRedirectDelegate(), delegateQueue: nil)
+
+    /// `session: nil` takes the redirect-suppressing default above. A caller
+    /// that supplies its own is responsible for suppressing redirects itself,
+    /// or it will silently lose the supersede hop.
+    public init(joinUrl: URL, session: URLSession? = nil) {
+        let session = session ?? Self.redirectSuppressingSession
         self.init(joinUrl: joinUrl) { try await session.data(for: $0) }
     }
 
@@ -116,11 +130,15 @@ public actor TraySignalingClient {
         let (data, response) = try await post(body: body)
         let rawText = String(data: data, encoding: .utf8) ?? "(empty)"
 
-        // #1957: a superseded tray states the replacement twice — in the body,
-        // and as an RFC 5829 `successor-version` link. The link alone is enough
-        // to follow the hop, so an unreadable or unrecognized body is no longer
-        // a dead end (that was #1956).
-        let successor = SupersedeLink.successor(in: response)?.absoluteString
+        // #1957: a superseded tray states the replacement three times — in the
+        // body, as an RFC 5829 `successor-version` link, and as the 308's
+        // `Location`. The link is preferred (it is the canonical join URL;
+        // `Location` carries the hub's `json=true`), and any one of them alone
+        // is enough to follow the hop, so an unreadable or unrecognized body is
+        // no longer a dead end (that was #1956).
+        let successor =
+            (SupersedeLink.successor(in: response)
+            ?? SupersedeLink.redirectTarget(in: response))?.absoluteString
 
         guard let raw = try? JSONDecoder().decode(RawFollowerAttachResponse.self, from: data) else {
             if let successor {
@@ -280,11 +298,21 @@ public actor TraySignalingClient {
             guard r.code == "LEADER_CONNECTED", r.bootstrap != nil else {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
+        case "redirect":
+            // The 308 supersede shape (#1957). Same requirements as the `fail`
+            // spelling below: without a replacement address there is nothing to
+            // redirect to, which makes it a malformed reply rather than a hop.
+            guard r.code == "TRAY_SUPERSEDED", r.error != nil,
+                r.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            else {
+                throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
+            }
         case "fail":
-            // A superseded tray is a redirect dressed as a failure: the leader
-            // reconnected into a fresh tray and this one will never come back.
-            // Callers follow `joinUrl` (see `SupersedeRedirect`), so the URL is
-            // as load-bearing as `error` and its absence is a malformed reply.
+            // A superseded tray on a pre-#1957 hub is a redirect dressed as a
+            // failure: the leader reconnected into a fresh tray and this one will
+            // never come back. Callers follow `joinUrl` (see `SupersedeRedirect`),
+            // so the URL is as load-bearing as `error` and its absence is a
+            // malformed reply.
             if r.code == "TRAY_SUPERSEDED" {
                 let replacement = r.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard r.error != nil, replacement?.isEmpty == false else {
@@ -307,6 +335,10 @@ public actor TraySignalingClient {
     private func normalizeAttachResponse(
         _ raw: RawFollowerAttachResponse, successorFromLink: String? = nil
     ) -> FollowerAttachPlan {
+        // `redirect` has no `AttachAction` case on purpose: it always carries a
+        // replacement, so it is normalized into the supersede plan below and the
+        // plan keeps the three actions every consumer already switches over —
+        // the same collapse `normalizeFollowerAttachResponse` does in TS.
         let action = AttachAction(rawValue: raw.result.action) ?? .fail
         return FollowerAttachPlan(
             trayId: raw.trayId,

@@ -487,6 +487,24 @@ export type FollowerAttachResult =
       error: string;
     }
   | {
+      /**
+       * The tray moved. Rides on an HTTP 308 whose `Location` and
+       * `successor-version` link both name `joinUrl` (#1957), so this body is
+       * only ever observed by a client that suppressed redirect-following.
+       */
+      action: 'redirect';
+      code: 'TRAY_SUPERSEDED';
+      error: string;
+      joinUrl: string;
+    }
+  | {
+      /**
+       * The pre-#1957 supersede shape, on HTTP 409. Still emitted when the
+       * stored replacement does not parse as a URL — there is nowhere to
+       * redirect to, so the outcome really is terminal — and still accepted
+       * because a current client may be talking to a hub that predates the
+       * flip.
+       */
       action: 'fail';
       code: 'TRAY_SUPERSEDED';
       error: string;

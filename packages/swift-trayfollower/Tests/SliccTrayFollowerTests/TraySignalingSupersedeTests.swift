@@ -41,6 +41,50 @@ final class TraySignalingSupersedeTests: XCTestCase {
         XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/from-body.beef")
     }
 
+    /// The 308 shape (#1957): `action: "redirect"` validates, and the hop is
+    /// reported rather than followed by URLSession.
+    func testAcceptsThe308RedirectBody() async throws {
+        let body = #"""
+            {"trayId":"t1","controllerId":"c1","role":"follower","leader":null,
+             "participantCount":1,
+             "result":{"action":"redirect","code":"TRAY_SUPERSEDED","error":"moved",
+                       "joinUrl":"https://www.sliccy.ai/join/fresh.beef"}}
+            """#
+        let plan = try await client(
+            status: 308, body: body,
+            headers: ["Location": "https://www.sliccy.ai/join/fresh.beef?json=true"]
+        ).attach(controllerId: "c1")
+        XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
+        // No `redirect` case on the enum: it always carries a replacement, so it
+        // collapses into the terminal action every consumer already handles.
+        XCTAssertEqual(plan.action, .fail)
+    }
+
+    /// A 308 whose only account of the move is `Location` — no link, and a body
+    /// this build cannot validate.
+    func testFollowsThe308LocationAlone() async throws {
+        let plan = try await client(
+            status: 308, body: "",
+            headers: ["Location": "https://www.sliccy.ai/join/fresh.beef?json=true"]
+        ).attach(controllerId: "c1")
+        XCTAssertEqual(plan.supersededByJoinUrl, "https://www.sliccy.ai/join/fresh.beef")
+    }
+
+    /// A `redirect` with no replacement address is malformed, not a hop.
+    func testRejectsARedirectBodyWithoutAJoinUrl() async {
+        let body = #"""
+            {"trayId":"t1","controllerId":"c1","role":"follower","leader":null,
+             "participantCount":1,
+             "result":{"action":"redirect","code":"TRAY_SUPERSEDED","error":"moved"}}
+            """#
+        do {
+            _ = try await client(status: 308, body: body).attach(controllerId: "c1")
+            XCTFail("expected an invalid-attach-response error")
+        } catch {
+            // Expected: nothing named a replacement.
+        }
+    }
+
     /// The link is the channel that survives a body-shape change, so it wins.
     func testPrefersTheLinkOverTheBodyJoinUrl() async throws {
         let plan = try await client(

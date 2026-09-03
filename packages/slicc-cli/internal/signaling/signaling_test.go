@@ -99,6 +99,94 @@ func TestAttachWaitAndSupersede(t *testing.T) {
 	}
 }
 
+// A 308 supersede must be reported as a hop, not followed by net/http: the
+// caller owns the hop bound and the persistence of the replacement (#1957).
+func TestAttachReadsSupersede308WithoutFollowingIt(t *testing.T) {
+	fresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("net/http followed the 308; the hop must be reported to the caller")
+		writeJSON(w, map[string]any{})
+	}))
+	defer fresh.Close()
+
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", fresh.URL+"/join/new?json=true")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPermanentRedirect)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"trayId": "t1", "controllerId": "ctrl", "role": "follower", "participantCount": 0,
+			"result": map[string]any{
+				"action": "redirect", "code": "TRAY_SUPERSEDED", "error": "moved",
+				"joinUrl": fresh.URL + "/join/new",
+			},
+		})
+	}))
+	defer stale.Close()
+
+	plan, err := New(stale.URL, nil).Attach(context.Background(), "ctrl", "slicc-cli")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if plan.JoinURL != fresh.URL+"/join/new" {
+		t.Fatalf("joinURL = %q, want %q", plan.JoinURL, fresh.URL+"/join/new")
+	}
+	if plan.Code != "TRAY_SUPERSEDED" {
+		t.Fatalf("code = %q, want TRAY_SUPERSEDED", plan.Code)
+	}
+}
+
+// A hub that sends only Location — no link, no body — is still a redirect.
+func TestAttachFallsBackToLocationHeader(t *testing.T) {
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "https://hub.example/join/new?json=true")
+		w.WriteHeader(http.StatusPermanentRedirect)
+	}))
+	defer stale.Close()
+
+	plan, err := New(stale.URL, nil).Attach(context.Background(), "ctrl", "slicc-cli")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	// json=true is the hub's auto-follow guard, not part of the join URL.
+	if plan.JoinURL != "https://hub.example/join/new" {
+		t.Fatalf("joinURL = %q", plan.JoinURL)
+	}
+}
+
+func TestRedirectLocation(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		location string
+		want     string
+	}{
+		{"308 strips the probe param", 308, "https://h/join/n?json=true", "https://h/join/n"},
+		{"307 is a hop too", 307, "https://h/join/n", "https://h/join/n"},
+		{"other query params survive", 308, "https://h/join/n?a=1&json=true", "https://h/join/n?a=1"},
+		{"not a redirect", 200, "https://h/join/n", ""},
+		{"409 is terminal", 409, "https://h/join/n", ""},
+		{"no location", 308, "", ""},
+		{"relative target", 308, "/join/n", ""},
+		{"schemeless target", 308, "//h/join/n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedirectLocation(tc.status, tc.location); got != tc.want {
+				t.Fatalf("RedirectLocation(%d, %q) = %q, want %q", tc.status, tc.location, got, tc.want)
+			}
+		})
+	}
+}
+
+// The caller's client must come back unmodified — New copies it before
+// installing CheckRedirect.
+func TestNewDoesNotMutateCallerClient(t *testing.T) {
+	caller := &http.Client{}
+	New("https://hub.example/join/t", caller)
+	if caller.CheckRedirect != nil {
+		t.Fatal("New mutated the caller's http.Client")
+	}
+}
+
 func TestPollDecodesEvents(t *testing.T) {
 	srv := newMock(t, func(action string, body map[string]any) any {
 		base := map[string]any{"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1, "bootstrap": bootstrapObj("b1", 2)}

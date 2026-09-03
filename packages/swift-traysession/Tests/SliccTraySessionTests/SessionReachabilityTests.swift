@@ -269,6 +269,51 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(requests.count, 3)  // initial + 2 hops, then the cap
     }
 
+    /// A hub that answers 308 + `Location` and nothing else — no link, no
+    /// decodable body — is still a hop (#1957). The probe suppresses
+    /// redirect-following, so it has to read the header itself.
+    func testFollowsA308LocationWithNoLinkOrBody() async {
+        let transport = RecordingTransport { request, index in
+            index == 0
+                ? self.response(
+                    to: request, status: 308, json: "",
+                    headers: ["Location": "https://example.invalid/next?json=true"])
+                : self.response(to: request, status: 200, json: #"{"leader":{"connected":true}}"#)
+        }
+        let reachability = SessionReachability(maxSupersedeRedirects: 5, transport: transport.call)
+        let tray = makeSession(path: "original")
+
+        reachability.probe([tray])
+        await waitForVerdict(tray.id, in: reachability)
+
+        XCTAssertEqual(reachability.verdicts[tray.id], .reachable)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 2)
+        // The hop target keeps exactly one `json=true`: the hub's copy is
+        // stripped and the probe appends its own.
+        let query = URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertEqual(query, [URLQueryItem(name: "json", value: "true")])
+        XCTAssertEqual(requests[1].url?.path, "/next")
+    }
+
+    /// A redirect the probe cannot resolve is not a hop it should guess at.
+    func testIgnoresARelativeOr3xxLessLocation() async {
+        let cases: [(Int, String)] = [
+            (308, "/next"),  // relative: no base to resolve against
+            (200, "https://example.invalid/next"),  // Location without a redirect
+        ]
+        for (index, item) in cases.enumerated() {
+            let reachability = makeReachability { request in
+                self.response(
+                    to: request, status: item.0, json: "{}", headers: ["Location": item.1])
+            }
+            let tray = makeSession(path: "no-hop-\(index)")
+            reachability.probe([tray])
+            await waitForVerdict(tray.id, in: reachability)
+            XCTAssertEqual(reachability.verdicts[tray.id], .unreachable)
+        }
+    }
+
     private func makeReachability(
         transport: @escaping SessionReachability.Transport
     ) -> SessionReachability {

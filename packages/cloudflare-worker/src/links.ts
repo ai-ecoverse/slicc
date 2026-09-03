@@ -78,3 +78,56 @@ export function supersededLinkHeaders(joinUrl: string): Record<string, string> {
   const link = successorVersionLink(joinUrl);
   return link ? { Link: link } : {};
 }
+
+/**
+ * `Location` value for the 308 a superseded tray answers with (#1957).
+ *
+ * Carries `json=true` over from the superseded request when it had it. Every
+ * client platform follows a 308 by default, and a followed request that lost
+ * the parameter lands on the worker's SPA fallback — which answers 200 + HTML
+ * for a `GET` probe (`index.ts` serveSPA short-circuit), making a live
+ * replacement look dead to any follower that has not yet learned to suppress
+ * redirects. The `successor-version` link deliberately keeps the bare URL: it
+ * is what clients persist as the session's join URL, and a stored `json=true`
+ * would leak the probe parameter into every later use.
+ *
+ * Returns `null` when the stored replacement does not parse, in which case the
+ * caller must not emit a redirect at all — a 3xx without a target is worse
+ * than the terminal response it replaced. `URL.href` is percent-encoded, so
+ * the result can never smuggle CR/LF into the field value.
+ */
+export function supersededLocation(joinUrl: string, requestUrl: URL): string | null {
+  let target: URL;
+  try {
+    target = new URL(joinUrl);
+  } catch {
+    return null;
+  }
+  if (requestUrl.searchParams.get('json') === 'true') {
+    target.searchParams.set('json', 'true');
+  }
+  return target.href;
+}
+
+/**
+ * Whether the caller asked to be told about a supersede instead of redirected
+ * through it — `?redirect=manual`, spelled after `RequestInit.redirect`.
+ *
+ * Exists for exactly one client: a browser. Every other follower suppresses
+ * redirect-following itself and counts hops one at a time, but `fetch` cannot
+ * be made to hand a 308 back (`redirect: 'manual'` yields an opaque-redirect
+ * filtered response — no status, headers, or body, even same-origin). Left to
+ * the platform, a chain of superseded trays is followed end to end and arrives
+ * as ONE observable hop, so `MAX_SUPERSEDE_REDIRECTS` counts 1 for a chain of
+ * any length and a cycle burns the browser's own redirect limit in immediate
+ * re-POSTs before failing as a generic network error.
+ *
+ * A client that sets it gets the pre-#1957 terminal shape (409 + the
+ * `successor-version` link + the body), which is exactly enough to take one hop
+ * and come back for the next. The parameter is a per-request probe detail: it
+ * is never stored, never copied onto `Location`, and a client must strip it
+ * from any URL it persists.
+ */
+export function prefersManualRedirect(requestUrl: URL): boolean {
+  return requestUrl.searchParams.get('redirect') === 'manual';
+}

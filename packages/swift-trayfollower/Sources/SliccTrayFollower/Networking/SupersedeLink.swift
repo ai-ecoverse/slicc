@@ -3,8 +3,8 @@ import Foundation
 /// The RFC 8288 `Link` header a superseded tray answers with (#1957).
 ///
 /// The tray hub stamps `Link: <replacement>; rel="successor-version"` — the
-/// relation registered by RFC 5829 §3.4 — alongside the 409 and the JSON body
-/// that already carried the same address. The header is the channel that
+/// relation registered by RFC 5829 §3.4 — alongside the 308 `Location` and the
+/// JSON body that carry the same address. The header is the channel that
 /// survives a body-shape change, so a follower that reads it keeps working when
 /// the body stops saying `action: "fail"` / `code: "TRAY_SUPERSEDED"`, and when
 /// it cannot be decoded at all. Reading only the body is what stranded this
@@ -52,6 +52,26 @@ public enum SupersedeLink {
     /// Read the link straight off an HTTP response.
     public static func successor(in response: HTTPURLResponse) -> URL? {
         successor(in: response.value(forHTTPHeaderField: "Link"))
+    }
+
+    /// The replacement named by a suppressed 3xx's `Location`, or nil.
+    ///
+    /// Read after `successor(in:)`, never instead of it: the hub puts
+    /// `json=true` on `Location` so that a client which lets `URLSession`
+    /// follow the redirect still reaches the tray API rather than the SPA
+    /// fallback, while the link stays the canonical join URL. The parameter is
+    /// dropped here for the same reason — callers append their own and persist
+    /// what this returns. A relative or scheme-less target yields nil rather
+    /// than an address resolved against a guessed base.
+    public static func redirectTarget(in response: HTTPURLResponse) -> URL? {
+        guard (300..<400).contains(response.statusCode),
+            let raw = response.value(forHTTPHeaderField: "Location"),
+            var components = URLComponents(string: raw),
+            components.scheme != nil, components.host != nil
+        else { return nil }
+        let remaining = (components.queryItems ?? []).filter { $0.name != "json" }
+        components.queryItems = remaining.isEmpty ? nil : remaining
+        return components.url
     }
 
     /// Split on `separator` at the top level — separators inside a
