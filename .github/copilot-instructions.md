@@ -5,13 +5,12 @@ spots. Flag only genuine risks. Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
-External calls need bounded failure: timeouts, retry/backoff where appropriate, surfaced
-errors. Flag unbounded `fetch()`, E2B calls, async work.
+External calls need bounded failure: timeouts, retry/backoff, surfaced errors. Flag unbounded `fetch()`, E2B calls, async work.
 
 ## 2. Cross-runtime parity (often Critical)
 
 Shared behavior needs peer updates or explicit exclusion. Check Node ↔ Swift (endpoints,
-signing, DA `origin` allow-list / `aem://` #2811) and browser ↔ extension (mounts, VFS, secrets).
+signing, DA `origin` allow-list / `aem://` #2811), browser ↔ extension (mounts, VFS, secrets).
 
 ## 3. UI state preservation
 
@@ -25,25 +24,25 @@ capture. Validate the CDP target and port before trusting them; handle disconnec
 ## 5. Native / macOS permissions
 
 Native protected-resource access needs entitlements/usage descriptions, TCC checks,
-graceful denial. A File Provider appex must embed and sign every `@rpath` framework it
-links (host `Resources/` is invisible) and declare the network entitlements its transport uses.
+graceful denial. A File Provider appex must embed+sign every `@rpath` framework it
+links (host `Resources/` is invisible) and declare its transport's network entitlements.
 No `keychain-access-groups` on the macOS File Provider: that restricted entitlement needs
 an appex-specific Developer ID profile, else AMFI refuses launch (extensionKit error 2).
 
 ## 6. Model metadata / provider pipeline
 
-When model IDs or provider metadata change, verify reasoning, input, cost, and
-thinking levels forward through discovery, enrichment, account storage, API effort mapping.
+When model IDs or provider metadata change, verify reasoning, input, cost,
+thinking levels through discovery, enrichment, account storage, API effort mapping.
 
 ## 7. Test coverage
 
-New `src/` files need mirrored tests; changed logic needs updated tests; bug fixes a
-regression test. Do not lower coverage floors.
+New `src/` files need mirrored tests; changed logic updated tests; bug fixes a
+regression test. Don't lower coverage floors.
 
 ## 8. Follower surface wiring parity (often Critical)
 
 Leader broadcasts need follower handlers and UI actions. Check live, follower, and extension
-boot paths; preserve shared fallbacks and prefer capability checks to float names.
+boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
 ## 9. Origin / bridge routing contract (often Major)
 
@@ -53,9 +52,10 @@ origins, comparisons without slash normalization.
 ## 10. Layer import direction (Major)
 
 Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
-(even types/helpers); move down, never grow the baseline. Registries: move wholesale,
-never re-declare. Setter injection needs a registrar in every reading realm.
-`isExtensionRealm` in `scoops/`/`tools/` belongs on `CapabilityBroker` (#2276).
+(even types/helpers) and relative imports out of `packages/webapp/src` (→
+`@slicc/shared-ts`); move down, never grow baselines. Registries move wholesale,
+never re-declare; setter injection needs a registrar in each reading realm.
+`isExtensionRealm` in `scoops/`/`tools/` → `CapabilityBroker` (#2276).
 
 ## 11. Untyped string-keyed bags
 
@@ -69,7 +69,7 @@ flag any read of it — the compiler cannot catch it yet.
 ## 12. Agent skill freshness
 
 Capability, command, argument, or workflow changes must update the matching runtime and
-developer `SKILL.md` files. Run skill-router and sync checks.
+developer `SKILL.md` files. Run skill-router + sync checks.
 
 ## 13. Transcript export — redaction boundary (Critical)
 

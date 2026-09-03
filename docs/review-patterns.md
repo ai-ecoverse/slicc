@@ -358,7 +358,8 @@ Deterministic enforcement: `npm run lint:layer-back-edges`
 (`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
 frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it. The same gate
 fails on any relative import that escapes `packages/webapp/src` into a sibling package —
-zero tolerance, no baseline (asset imports carrying a `?raw`/`?url` query are exempt).
+zero tolerance, no baseline (only the inert `?raw`/`?url` asset queries are exempt —
+`?worker` executes its target, so it is still an escape).
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
 
 ### 11. Untyped string-keyed bags (`Record<string, unknown>`)

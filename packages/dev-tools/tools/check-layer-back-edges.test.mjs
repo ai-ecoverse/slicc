@@ -154,12 +154,28 @@ describe('check-layer-back-edges: findCrossPackageEscapes', () => {
     expect(findCrossPackageEscapes('cdp/nested/browser-api.ts', source)).toEqual([]);
   });
 
-  it('allows asset-pipeline imports that carry a query', () => {
+  it('allows inert asset imports (?raw / ?url) that carry the bytes, not the module', () => {
     const source = [
       "import sudoers from '../../../vfs-root/etc/sudoers?raw';",
       "import fontUrl from '../../../../assets/fonts/AdobeClean-Regular.otf?url';",
     ].join('\n');
     expect(findCrossPackageEscapes('sudo/sudo-manager.ts', source)).toEqual([]);
+  });
+
+  it('still flags escapes whose query EXECUTES the target (?worker et al.)', () => {
+    // The exemption is an allowlist, not "any query": Vite bundles and runs a
+    // `?worker` target, so waving it through would reopen the very
+    // wrong-direction package dependency this gate exists to stop.
+    for (const query of ['?worker', '?sharedworker', '?inline', '?raw&inline']) {
+      const source = `import W from '../../../node-server/src/tray-url-shared.js${query}';`;
+      expect(findCrossPackageEscapes('base/tray-url-config.ts', source)).toEqual([
+        {
+          line: 1,
+          specifier: `../../../node-server/src/tray-url-shared.js${query}`,
+          to: 'packages/node-server/src/tray-url-shared.js',
+        },
+      ]);
+    }
   });
 
   it('ignores bare package specifiers', () => {

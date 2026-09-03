@@ -110,15 +110,23 @@ export function findLayerBackEdges(importerRel, source) {
 }
 
 /**
+ * Vite queries that make an import INERT: the bundler hands back the file's
+ * bytes or a URL string, so `vfs-root/etc/sudoers?raw` creates no module edge
+ * to another package's code. Deliberately an allowlist rather than "any query"
+ * — `?worker` / `?sharedworker` bundle and EXECUTE the target, so exempting
+ * them would let a wrong-direction package dependency straight back through
+ * this gate. A new asset mode should be a conscious decision: fail closed.
+ */
+const INERT_ASSET_QUERIES = new Set(['raw', 'url']);
+
+/**
  * Find every relative import in `source` that climbs OUT of
  * `packages/webapp/src` into another package. Returns
  * `[{ line, specifier, to }]` where `to` is the repo-relative target.
  *
- * Specifiers carrying a query (`?raw`, `?url`, …) are asset-pipeline imports —
- * the bundler inlines the file's bytes, so `vfs-root/etc/sudoers?raw` creates
- * no module edge to another package's code — and are allowed. Shared *code*
- * must travel through a package entry point (`@slicc/shared-ts`), which makes
- * the dependency direction explicit in package.json.
+ * Imports carrying an inert asset query (see `INERT_ASSET_QUERIES`) are allowed.
+ * Shared *code* must travel through a package entry point (`@slicc/shared-ts`),
+ * which makes the dependency direction explicit in package.json.
  */
 export function findCrossPackageEscapes(importerRel, source) {
   const importerDir = dirname(importerRel);
@@ -126,17 +134,16 @@ export function findCrossPackageEscapes(importerRel, source) {
   const stripped = stripComments(source);
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const specifier = m[1];
-    if (specifier.includes('?')) continue;
-    const target = relative(SCAN_ROOT, resolve(SCAN_ROOT, importerDir, specifier));
-    if (!target.startsWith('..')) continue;
+    const queryAt = specifier.indexOf('?');
+    if (queryAt >= 0 && INERT_ASSET_QUERIES.has(specifier.slice(queryAt + 1))) continue;
+    const abs = resolve(
+      SCAN_ROOT,
+      importerDir,
+      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
+    );
+    if (!relative(SCAN_ROOT, abs).startsWith('..')) continue;
     const line = stripped.slice(0, m.index).split('\n').length;
-    hits.push({
-      line,
-      specifier,
-      to: relative(repoRoot, resolve(SCAN_ROOT, importerDir, specifier))
-        .split('\\')
-        .join('/'),
-    });
+    hits.push({ line, specifier, to: relative(repoRoot, abs).split('\\').join('/') });
   }
   return hits;
 }
