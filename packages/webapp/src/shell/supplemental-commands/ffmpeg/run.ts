@@ -1770,7 +1770,7 @@ async function readEncodedOutput(
   ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
   outputName: string,
   outputPath: string,
-  stderr: string
+  readStderr: () => string
 ): Promise<{ bytes: Uint8Array } | { error: CmdResult }> {
   let outputData: Awaited<ReturnType<typeof ffmpeg.readFile>>;
   try {
@@ -1780,7 +1780,7 @@ async function readEncodedOutput(
     return {
       error: {
         stdout: '',
-        stderr: stderr || `ffmpeg: produced no output file for ${outputPath}\n`,
+        stderr: readStderr() || `ffmpeg: produced no output file for ${outputPath}\n`,
         exitCode: 1,
       },
     };
@@ -1793,7 +1793,7 @@ async function readEncodedOutput(
     return {
       error: {
         stdout: '',
-        stderr: stderr || `ffmpeg: produced an empty output file for ${outputPath}\n`,
+        stderr: readStderr() || `ffmpeg: produced an empty output file for ${outputPath}\n`,
         exitCode: 1,
       },
     };
@@ -1837,13 +1837,27 @@ async function execWasmEncode(args: {
   outputName: string;
   outputPath: string;
   analysisSink: boolean;
-  stderr: string;
+  /**
+   * Live view of the run's stderr. The core's log lines arrive DURING
+   * `exec`, so a string snapshot taken before it would drop exactly the
+   * output a failing run needs to explain itself (and the filter
+   * measurements an analysis sink exists to return).
+   */
+  readStderr: () => string;
 }): Promise<{ early: CmdResult | null; outputBytes: Uint8Array | null }> {
-  const { ffmpeg, parsed, resolvedInputs, stage, outputName, outputPath, analysisSink, stderr } =
-    args;
+  const {
+    ffmpeg,
+    parsed,
+    resolvedInputs,
+    stage,
+    outputName,
+    outputPath,
+    analysisSink,
+    readStderr,
+  } = args;
   const mt = loadedFfmpegCorePackage() === FFMPEG_CORE_MT_PACKAGE;
   if (mt && parsed.inputs.length > 1) {
-    return { early: mtMultiInputRefusal(stderr), outputBytes: null };
+    return { early: mtMultiInputRefusal(readStderr()), outputBytes: null };
   }
   await mountStagedInputs(ffmpeg, stage, stagedFiles(resolvedInputs));
 
@@ -1860,7 +1874,7 @@ async function execWasmEncode(args: {
     return {
       early: {
         stdout: '',
-        stderr: stderr || `ffmpeg: exited with code ${exitCode}\n`,
+        stderr: readStderr() || `ffmpeg: exited with code ${exitCode}\n`,
         exitCode: exitCode || 1,
       },
       outputBytes: null,
@@ -1873,9 +1887,9 @@ async function execWasmEncode(args: {
     // call readEncodedOutput, so this is the health gate that keeps
     // a stale exit-0 after Aborted() from poisoning later commands.
     await ensureCoreHealthy(ffmpeg);
-    return { early: { stdout: '', stderr, exitCode: 0 }, outputBytes: null };
+    return { early: { stdout: '', stderr: readStderr(), exitCode: 0 }, outputBytes: null };
   }
-  const read = await readEncodedOutput(ffmpeg, outputName, outputPath, stderr);
+  const read = await readEncodedOutput(ffmpeg, outputName, outputPath, readStderr);
   if ('error' in read) return { early: read.error, outputBytes: null };
   return { early: null, outputBytes: read.bytes };
 }
@@ -1889,10 +1903,10 @@ async function detachAndCleanupMemfs(args: {
   logHandler: (event: { type: string; message: string }) => void;
   stage: StageNames;
   outputName: string;
-  stderr: string;
+  readStderr: () => string;
   faulted: boolean;
 }): Promise<CmdResult | null> {
-  const { ffmpeg, logHandler, stage, outputName, stderr, faulted } = args;
+  const { ffmpeg, logHandler, stage, outputName, readStderr, faulted } = args;
   try {
     ffmpeg.off('log', logHandler);
   } catch {
@@ -1907,7 +1921,7 @@ async function detachAndCleanupMemfs(args: {
   } catch (err) {
     if (!isCoreFault(err)) return null;
     recycleFfmpeg(ffmpeg);
-    return coreFaultResult(stderr, err);
+    return coreFaultResult(readStderr(), err);
   }
 }
 
@@ -2032,7 +2046,7 @@ async function runOnWasmCore(args: {
       outputName,
       outputPath,
       analysisSink,
-      stderr,
+      readStderr: () => stderr,
     });
     early = encoded.early;
     outputBytes = encoded.outputBytes;
@@ -2052,7 +2066,7 @@ async function runOnWasmCore(args: {
       logHandler,
       stage,
       outputName,
-      stderr,
+      readStderr: () => stderr,
       faulted,
     });
     if (cleanupFault) early = cleanupFault;

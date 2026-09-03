@@ -2014,3 +2014,57 @@ describe('applyMtThreadBudget', () => {
     expect(explicit.outputOpts.filter((t) => t.startsWith('-threads'))).toEqual(['-threads:v']);
   });
 });
+
+describe('wasm core log capture', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+    vi.mocked(loadedFfmpegCorePackage).mockReset();
+    vi.mocked(loadedFfmpegCorePackage).mockReturnValue(null);
+  });
+
+  /** A core whose log lines arrive DURING exec, like the real worker's do. */
+  function loggingFfmpeg(exitCode: number, lines: string[]): FakeFfmpeg {
+    const fake = makeFakeFfmpeg({ exitCode, readFile: () => new Uint8Array([1]) });
+    let handler: ((e: { type: string; message: string }) => void) | null = null;
+    fake.on.mockImplementation(
+      (event: string, h: (e: { type: string; message: string }) => void) => {
+        if (event === 'log') handler = h;
+      }
+    );
+    fake.exec.mockImplementation(async () => {
+      for (const message of lines) handler?.({ type: 'stderr', message });
+      return exitCode;
+    });
+    return fake;
+  }
+
+  it('returns the core’s own error output when it exits non-zero', async () => {
+    useFakeFfmpeg(
+      loggingFfmpeg(1, ['ffmpeg version 5.1.4', 'in.mp4: Invalid data found when processing input'])
+    );
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'wasm');
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/Invalid data found when processing input/);
+    expect(result.stderr).not.toMatch(/exited with code/);
+  });
+
+  it('returns the filter measurements an analysis sink emits during exec', async () => {
+    useFakeFfmpeg(
+      loggingFfmpeg(0, [
+        '[silencedetect @ 0x1] silence_start: 0.5',
+        '[silencedetect @ 0x1] silence_end: 1.2 | silence_duration: 0.7',
+      ])
+    );
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'wasm');
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+      ctx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/silence_start: 0\.5/);
+    expect(result.stderr).toMatch(/silence_duration: 0\.7/);
+  });
+});
