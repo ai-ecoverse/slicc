@@ -219,6 +219,21 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(script).toContain('"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"');
   });
 
+  it('round-trips JPEG high bytes (Uint8Array) without UTF-8 expansion', async () => {
+    // Same probe as the jsh fetch regression: `ff d8 ff 98 00 41 7f 80 fe`
+    // must not become `c3 bf c3 98 …` across the page-side reconstruction.
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const captured: { body?: unknown } = {};
+    const fakeFetch = async (_u: string, init: RequestInit) => {
+      captured.body = init.body;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const script = await buildBrowserFetchScript('/upload', { method: 'POST', body: probe });
+    await new Function('fetch', `return ${script};`)(fakeFetch);
+    expect(captured.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(captured.body as Uint8Array)).toEqual(Array.from(probe));
+  });
+
   it('round-trips a binary request body (Uint8Array) through base64 reconstruction', async () => {
     const bytes = new Uint8Array([0, 1, 2, 250, 255, 128]);
     const captured: { body?: unknown } = {};
@@ -259,6 +274,22 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(file).toBeInstanceOf(Blob);
     expect((file as File).name).toBe('f.bin');
     expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual([9, 8, 7]);
+  });
+
+  it('round-trips a FormData JPEG file part without UTF-8 expansion', async () => {
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const form = new FormData();
+    form.append('file', new Blob([probe], { type: 'image/jpeg' }), 'probe.jpg');
+    const captured: { body?: unknown } = {};
+    const fakeFetch = async (_u: string, init: RequestInit) => {
+      captured.body = init.body;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const script = await buildBrowserFetchScript('/multipart', { method: 'POST', body: form });
+    await new Function('fetch', `return ${script};`)(fakeFetch);
+    const rebuilt = captured.body as FormData;
+    const file = rebuilt.get('file') as File;
+    expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual(Array.from(probe));
   });
 
   // ---- Binary response detection + base64 return ----

@@ -37,7 +37,7 @@ export async function serializeRequestInit(
       headers[k] = v;
     });
   }
-  let body: string | undefined;
+  let body: string | Uint8Array | undefined;
   let defaultContentType: string | undefined;
   // GET/HEAD cannot carry a body. The host-side adapter drops it downstream,
   // so serializing here would only leave behind a Content-Type describing a
@@ -54,12 +54,17 @@ export async function serializeRequestInit(
   ) {
     headers['Content-Type'] = defaultContentType;
   }
-  return { method, headers, body };
+  return {
+    method,
+    headers,
+    // Uint8Array is a valid BodyInit at runtime; lib.dom.d.ts omits it.
+    body: body as BodyInit | undefined,
+  };
 }
 
 async function serializeRequestBody(
   body: BodyInit
-): Promise<{ body: string; defaultContentType?: string }> {
+): Promise<{ body: string | Uint8Array; defaultContentType?: string }> {
   if (typeof body === 'string') return { body };
   if (body instanceof URLSearchParams) {
     // The host adapter sees only a string and can no longer tell this apart
@@ -72,26 +77,26 @@ async function serializeRequestBody(
   }
   if (body instanceof Blob) {
     return {
-      body: bytesToLatin1(new Uint8Array(await body.arrayBuffer())),
+      body: new Uint8Array(await body.arrayBuffer()),
       defaultContentType: body.type || 'application/octet-stream',
     };
   }
   if (body instanceof ArrayBuffer) {
     return {
-      body: bytesToLatin1(new Uint8Array(body)),
+      body: new Uint8Array(body).slice(),
       defaultContentType: 'application/octet-stream',
     };
   }
   if (ArrayBuffer.isView(body)) {
     const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
-    return { body: bytesToLatin1(bytes), defaultContentType: 'application/octet-stream' };
+    return { body: bytes.slice(), defaultContentType: 'application/octet-stream' };
   }
   if (isFormDataBody(body)) {
     // The boundary is minted alongside the bytes and travels as the default
-    // Content-Type; `multipart/form-data` is not a text content type, so the
-    // proxy decodes this latin1 string back to raw bytes before sending.
+    // Content-Type. Bytes stay a `Uint8Array` across the RPC so native
+    // `fetch` cannot UTF-8-expand high bytes (JPEG `FF D8` → `C3 BF C3 98`).
     const multipart = await encodeMultipartFormData(body);
-    return { body: bytesToLatin1(multipart.bytes), defaultContentType: multipart.contentType };
+    return { body: multipart.bytes, defaultContentType: multipart.contentType };
   }
   if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
     throw new Error(
@@ -101,14 +106,6 @@ async function serializeRequestBody(
   throw new Error(
     `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, FormData, or URLSearchParams`
   );
-}
-
-function bytesToLatin1(bytes: Uint8Array): string {
-  const chunks: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
-  }
-  return chunks.join('');
 }
 
 // ---------------------------------------------------------------------------

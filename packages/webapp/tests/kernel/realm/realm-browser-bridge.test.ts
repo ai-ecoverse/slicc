@@ -22,12 +22,13 @@ describe('serializeRequestInit', () => {
     ['Blob', () => new Blob([new Uint8Array(expectedBytes)])],
   ];
 
-  it.each(binaryBodies)('round-trips a %s body through latin1', async (_name, makeBody) => {
+  it.each(binaryBodies)('round-trips a %s body as raw bytes', async (_name, makeBody) => {
     const serialized = await serializeRequestInit({ method: 'post', body: makeBody() }, '/upload');
 
     expect(serialized?.method).toBe('POST');
     expect(serialized?.headers).toEqual({ 'Content-Type': 'application/octet-stream' });
-    expect(Array.from(getFetchBodyBytes(serialized?.body as string))).toEqual(expectedBytes);
+    expect(serialized?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(getFetchBodyBytes(serialized?.body as Uint8Array))).toEqual(expectedBytes);
   });
 
   it.each([
@@ -40,7 +41,8 @@ describe('serializeRequestInit', () => {
     );
 
     expect(serialized?.headers).toEqual({ 'Content-Type': contentType });
-    expect(Array.from(getFetchBodyBytes(serialized?.body as string))).toEqual(expectedBytes);
+    expect(serialized?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(getFetchBodyBytes(serialized?.body as Uint8Array))).toEqual(expectedBytes);
   });
 
   it('preserves a caller-provided Blob Content-Type case-insensitively', async () => {
@@ -118,8 +120,9 @@ describe('serializeRequestInit', () => {
 
     // Reparse with the platform's multipart parser: this proves the header's
     // boundary matches the body's delimiters AND that the high bytes survived
-    // the latin1 hop the fetch proxy decodes back to raw bytes.
-    const bytes = getFetchBodyBytes(serialized?.body as string) as Uint8Array;
+    // as raw bytes (not UTF-8-expanded).
+    expect(serialized?.body).toBeInstanceOf(Uint8Array);
+    const bytes = getFetchBodyBytes(serialized?.body as Uint8Array) as Uint8Array;
     const parsed = await new Response(bytes as unknown as BodyInit, {
       headers: { 'content-type': contentType['Content-Type'] },
     }).formData();
@@ -143,6 +146,13 @@ describe('serializeRequestInit', () => {
     );
 
     expect(serialized?.headers).toEqual({ 'CONTENT-TYPE': 'multipart/form-data; boundary=mine' });
+  });
+
+  it('does not UTF-8-expand JPEG high bytes', async () => {
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const serialized = await serializeRequestInit({ method: 'post', body: probe }, '/upload');
+    expect(serialized?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(serialized?.body as Uint8Array)).toEqual(Array.from(probe));
   });
 
   it('rejects unsupported ReadableStream bodies explicitly', async () => {

@@ -2,6 +2,13 @@ import type { SecureFetch } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { createNodeFetchAdapter } from '../../../src/shell/supplemental-commands/node-fetch-adapter.js';
 
+/** Bytes as seen by SecureFetch: a `Uint8Array`, or a latin1 string. */
+function bodyBytes(body: unknown): number[] {
+  if (body instanceof Uint8Array) return Array.from(body);
+  if (typeof body === 'string') return Array.from(body, (c) => c.charCodeAt(0));
+  throw new Error(`unexpected SecureFetch body type: ${typeof body}`);
+}
+
 const okResult = (
   overrides: Partial<{
     status: number;
@@ -134,7 +141,7 @@ describe('createNodeFetchAdapter', () => {
       (bytes: Uint8Array) =>
         new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) as BodyInit,
     ],
-  ])('encodes %s body as latin1 and defaults its Content-Type', async (_name, makeBody) => {
+  ])('passes %s body as raw bytes and defaults its Content-Type', async (_name, makeBody) => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
 
@@ -142,10 +149,11 @@ describe('createNodeFetchAdapter', () => {
     await fetch('https://api.example.com/x', { method: 'POST', body: makeBody(bytes) });
 
     const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
-      body: string;
+      body: Uint8Array;
       headers: Record<string, string>;
     };
-    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.body).toBeInstanceOf(Uint8Array);
+    expect(bodyBytes(opts.body)).toEqual(Array.from(bytes));
     expect(opts.headers['Content-Type']).toBe('application/octet-stream');
   });
 
@@ -220,7 +228,7 @@ describe('createNodeFetchAdapter', () => {
   it.each([
     ['image/png', 'image/png'],
     ['', 'application/octet-stream'],
-  ])('encodes a Blob with type %j as latin1 and defaults to %s', async (type, contentType) => {
+  ])('passes a Blob with type %j as raw bytes and defaults to %s', async (type, contentType) => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
     const bytes = new Uint8Array([0x00, 0x80, 0xff]);
@@ -231,10 +239,11 @@ describe('createNodeFetchAdapter', () => {
     });
 
     const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
-      body: string;
+      body: Uint8Array;
       headers: Record<string, string>;
     };
-    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.body).toBeInstanceOf(Uint8Array);
+    expect(bodyBytes(opts.body)).toEqual(Array.from(bytes));
     expect(opts.headers['Content-Type']).toBe(contentType);
   });
 
@@ -264,17 +273,17 @@ describe('createNodeFetchAdapter', () => {
     await fetch('https://api.example.com/x', { method: 'POST', body: fd });
 
     const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
-      body: string;
+      body: Uint8Array;
       headers: Record<string, string>;
     };
     const contentType = opts.headers['Content-Type'];
     expect(contentType).toMatch(/^multipart\/form-data; boundary=.+/);
 
-    // The boundary in the header must delimit the body, and the latin1
-    // string must carry the file's high bytes intact — parse it back with
-    // the platform's own multipart parser to prove both at once.
-    const bytes = Uint8Array.from(opts.body, (char) => char.charCodeAt(0));
-    const parsed = await new Response(bytes as unknown as BodyInit, {
+    // The boundary in the header must delimit the body, and the file's high
+    // bytes must survive intact — parse it back with the platform's own
+    // multipart parser to prove both at once.
+    expect(opts.body).toBeInstanceOf(Uint8Array);
+    const parsed = await new Response(opts.body as unknown as BodyInit, {
       headers: { 'content-type': contentType },
     }).formData();
     expect(parsed.get('purpose')).toBe('assistants');
@@ -356,7 +365,7 @@ describe('createNodeFetchAdapter', () => {
     expect(opts.body).toBe('from-request-body');
   });
 
-  it('encodes a binary Request body as latin1 and defaults its Content-Type', async () => {
+  it('passes a binary Request body as raw bytes and defaults its Content-Type', async () => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
     const bytes = new Uint8Array([0x00, 0x7f, 0x80, 0xff]);
@@ -368,11 +377,49 @@ describe('createNodeFetchAdapter', () => {
     await fetch(request);
 
     const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
-      body: string;
+      body: Uint8Array;
       headers: Record<string, string>;
     };
-    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.body).toBeInstanceOf(Uint8Array);
+    expect(bodyBytes(opts.body)).toEqual(Array.from(bytes));
     expect(opts.headers['Content-Type']).toBe('application/octet-stream');
+  });
+
+  it('does not UTF-8-expand JPEG high bytes on any binary body type', async () => {
+    // Reproduction: `ff d8 ff 98 00 41 7f 80 fe` must not become
+    // `c3 bf c3 98 c3 bf c2 98 00 41 7f c2 80 c3 be`.
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const expanded = Array.from(new TextEncoder().encode(String.fromCharCode(...probe)));
+    expect(expanded).not.toEqual(Array.from(probe));
+
+    const bodies: BodyInit[] = [
+      probe,
+      probe.buffer.slice(probe.byteOffset, probe.byteOffset + probe.byteLength),
+      new Blob([probe], { type: 'image/jpeg' }),
+    ];
+    const form = new FormData();
+    form.set('file', new Blob([probe], { type: 'image/jpeg' }), 'probe.jpg');
+    bodies.push(form);
+
+    for (const body of bodies) {
+      const secureFetch: SecureFetch = vi.fn(async () => okResult());
+      const fetch = createNodeFetchAdapter(secureFetch);
+      await fetch('https://api.example.com/x', { method: 'POST', body });
+      const sent = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        body: Uint8Array;
+        headers: Record<string, string>;
+      };
+      expect(sent.body).toBeInstanceOf(Uint8Array);
+      if (body instanceof FormData) {
+        const parsed = await new Response(sent.body as unknown as BodyInit, {
+          headers: { 'content-type': sent.headers['Content-Type'] },
+        }).formData();
+        const file = parsed.get('file') as File;
+        expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual(Array.from(probe));
+      } else {
+        expect(bodyBytes(sent.body)).toEqual(Array.from(probe));
+      }
+    }
   });
 
   it('lets init override method, headers, and body from a Request input', async () => {

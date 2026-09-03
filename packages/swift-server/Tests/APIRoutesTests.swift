@@ -374,6 +374,73 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    /// JPEG SOI + high bytes (`FF D8 FF 98 00 41 7F 80 FE`) must reach
+    /// upstream unchanged — the UTF-8 expansion (`C3 BF C3 98 …`) is the
+    /// jsh fetch regression. Covers an explicit image type and a missing
+    /// Content-Type (empty used to take the UTF-8 String unmask path).
+    func testFetchProxyForwardsJpegRequestBytesUnchanged() async throws {
+        let probe: [UInt8] = [0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]
+        try await self.runBinaryBodyRoundTrip(contentType: "image/jpeg", probe: probe)
+        try await self.runBinaryBodyRoundTrip(contentType: nil, probe: probe)
+    }
+
+    /// `X-Slicc-Raw-Body` and `X-Bridge-Token` are browser→bridge markers.
+    /// Node's `FETCH_PROXY_SKIP_HEADERS` already drops them; Swift must too,
+    /// or Sliccstart leaks them to third-party APIs (signature validation,
+    /// unexpected-header rejection).
+    func testFetchProxyStripsRawBodyAndBridgeTokenHeaders() async throws {
+        let captured = InternalHeaderCaptureBox()
+        let upstreamRouter = Router()
+        upstreamRouter.post("/upstream") { request, _ in
+            await captured.record(
+                rawBodyPresent: request.headers[HTTPField.Name("x-slicc-raw-body")!] != nil,
+                bridgeTokenPresent: request.headers[HTTPField.Name("x-bridge-token")!] != nil
+            )
+            return Response(status: .ok, body: .init(byteBuffer: ByteBuffer(string: "ok")))
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port, "live test framework must expose a port")
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+                            .contentType: "image/jpeg",
+                            HTTPField.Name("x-slicc-raw-body")!: "1",
+                            HTTPField.Name("x-bridge-token")!: "session-scoped-bridge-token",
+                        ],
+                        body: ByteBuffer(bytes: [0xff, 0xd8, 0xff, 0x98])
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+
+        let snapshot = await captured.snapshot()
+        XCTAssertFalse(snapshot.rawBodyPresent, "x-slicc-raw-body must never reach upstream")
+        XCTAssertFalse(snapshot.bridgeTokenPresent, "x-bridge-token must never reach upstream")
+    }
+
     // The fetch proxy must accept WebDAV (RFC 4918) and CalDAV (RFC 4791)
     // verbs in addition to the standard HTTP methods so the agent can
     // talk to CalDAV / WebDAV servers from the Sliccstart float. The four
@@ -665,6 +732,59 @@ final class APIRoutesTests: XCTestCase {
     /// - The upstream stub is its own live `Application`; the proxy itself is
     ///   exercised through `.router` mode so the test client invokes the
     ///   proxy handler directly without depending on a second listener.
+    private func runBinaryBodyRoundTrip(contentType: String?, probe: [UInt8]) async throws {
+        let captured = BinaryCaptureBox()
+        let upstreamRouter = Router()
+        upstreamRouter.post("/upstream") { request, _ in
+            let body = try await request.body.collect(upTo: 1 * 1024 * 1024)
+            await captured.record(bytes: body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? [])
+            return Response(status: .ok, body: .init(byteBuffer: ByteBuffer(string: "ok")))
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port, "live test framework must expose a port")
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                let headers: HTTPFields = {
+                    var fields: HTTPFields = [
+                        HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream"
+                    ]
+                    if let contentType {
+                        fields[.contentType] = contentType
+                    }
+                    return fields
+                }()
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: headers,
+                        body: ByteBuffer(bytes: probe)
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+        let seen = await captured.snapshot()
+        XCTAssertEqual(seen, probe, "JPEG probe bytes must reach upstream unchanged")
+    }
+
     private func runDavRoundTripTest(
         method: String,
         davHeaderName: String?,
@@ -872,6 +992,20 @@ final class APIRoutesTests: XCTestCase {
     }
 }
 
+/// Thread-safe holder for a binary request body captured by the JPEG
+/// round-trip test. Same rationale as `CapturedRequestBox`.
+private actor BinaryCaptureBox {
+    private var bytes: [UInt8] = []
+
+    func record(bytes: [UInt8]) {
+        self.bytes = bytes
+    }
+
+    func snapshot() -> [UInt8] {
+        self.bytes
+    }
+}
+
 /// Thread-safe holder for upstream-side request observations captured by
 /// the DAV round-trip tests. The stub upstream route runs on the live
 /// server's task; the test assertions run on the test task — so a plain
@@ -919,5 +1053,26 @@ private actor HeaderCaptureBox {
 
     func snapshot() -> Snapshot {
         .init(body: self.body, jobSignature: self.jobSignature, sentinelStillPresent: self.sentinelStillPresent)
+    }
+}
+
+/// Thread-safe holder for hop-by-hop header leak observations. Same
+/// rationale as `HeaderCaptureBox`.
+private actor InternalHeaderCaptureBox {
+    struct Snapshot {
+        let rawBodyPresent: Bool
+        let bridgeTokenPresent: Bool
+    }
+
+    private var rawBodyPresent = false
+    private var bridgeTokenPresent = false
+
+    func record(rawBodyPresent: Bool, bridgeTokenPresent: Bool) {
+        self.rawBodyPresent = rawBodyPresent
+        self.bridgeTokenPresent = bridgeTokenPresent
+    }
+
+    func snapshot() -> Snapshot {
+        .init(rawBodyPresent: self.rawBodyPresent, bridgeTokenPresent: self.bridgeTokenPresent)
     }
 }

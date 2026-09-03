@@ -2023,26 +2023,29 @@ Network requests are proxied to handle CORS and cross-origin restrictions.
 
 ### Request Bodies
 
-`SecureFetch` carries a `body: string`, so every non-text payload rides the
-**latin1 convention** (one character per byte) and `prepareRequestBody` decodes
-it back to raw bytes whenever the Content-Type is not text-shaped. Both the
-`.jsh` `fetch` global and the kernel realm's `fetch` RPC accept:
+`SecureFetch` historically carried a `body: string`. just-bash `curl` and git
+still thread binary through the **latin1 convention** (one character per byte);
+`prepareRequestBody` decodes that back to raw bytes whenever the Content-Type
+is not text-shaped. The `.jsh` `fetch` global and the kernel realm's `fetch`
+RPC do **not** use latin1 for binary — they send a `Uint8Array` so native
+`fetch` cannot UTF-8-expand bytes ≥0x80 (a JPEG SOI `FF D8` must not become
+`C3 BF C3 98`). Both accept:
 
-| Body                                       | Wire form        | Default `Content-Type` (caller always wins)            |
-| ------------------------------------------ | ---------------- | ------------------------------------------------------ |
-| `string`                                   | verbatim         | none                                                   |
-| `URLSearchParams`                          | `toString()`     | `application/x-www-form-urlencoded;charset=UTF-8`      |
-| `Uint8Array` / `ArrayBuffer` / typed array | latin1           | `application/octet-stream`                             |
-| `Blob` / `File`                            | latin1           | the blob's own `type`, else `application/octet-stream` |
-| `FormData`                                 | latin1 multipart | `multipart/form-data; boundary=<token>`                |
-| `ReadableStream`                           | —                | rejected; collect it into a `Uint8Array` first         |
+| Body                                       | Wire form     | Default `Content-Type` (caller always wins)            |
+| ------------------------------------------ | ------------- | ------------------------------------------------------ |
+| `string`                                   | verbatim      | none                                                   |
+| `URLSearchParams`                          | `toString()`  | `application/x-www-form-urlencoded;charset=UTF-8`      |
+| `Uint8Array` / `ArrayBuffer` / typed array | raw bytes     | `application/octet-stream`                             |
+| `Blob` / `File`                            | raw bytes     | the blob's own `type`, else `application/octet-stream` |
+| `FormData`                                 | raw multipart | `multipart/form-data; boundary=<token>`                |
+| `ReadableStream`                           | —             | rejected; collect it into a `Uint8Array` first         |
 
 The defaults above hold on **both** paths. The realm's `serializeRequestInit`
-has to decide them itself rather than leaning on the host adapter: everything
-crosses the RPC boundary as a string, so by the time the adapter sees the body
-it can no longer tell a `URLSearchParams` from a `text/plain` payload. A
-`GET`/`HEAD` request drops the body on both paths and advertises no
-Content-Type for it.
+has to decide them itself rather than leaning on the host adapter: text still
+crosses the RPC boundary as a string, so by the time the adapter sees a string
+body it can no longer tell a `URLSearchParams` from a `text/plain` payload.
+Binary crosses as a `Uint8Array`. A `GET`/`HEAD` request drops the body on
+both paths and advertises no Content-Type for it.
 
 `multipart/form-data` is serialized by `webapp/src/base/multipart-form-data.ts`
 — the single encoder, also used by the DA mount backend. **The boundary token

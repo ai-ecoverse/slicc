@@ -380,7 +380,9 @@ function buildProxiedFetchHandler() {
       const { head, body: respBody } = await collectViaExtensionDelegate(url, {
         method,
         headers,
-        body,
+        // Uint8Array binary bodies are structured-clone-safe; prepareRequestBody
+        // wraps them as a Blob. The SecureFetch type still says `string`.
+        body: body as string | undefined,
       });
       return { head, body: respBody };
     },

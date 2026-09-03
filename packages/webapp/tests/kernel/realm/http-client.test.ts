@@ -199,6 +199,29 @@ describe('http.client — body + response parsing', () => {
     expect((init.headers as Record<string, string>)['Content-Type']).toBe('text/plain');
   });
 
+  it('passes Uint8Array bodies through without UTF-8 expansion', async () => {
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const deps = makeDeps(() => jsonResponse({}));
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    await client.post('/upload', {
+      body: probe,
+      headers: { 'Content-Type': 'image/jpeg' },
+    });
+    const init = deps.fetch.calls[0].init!;
+    expect(init.body).toBe(probe);
+    expect(Array.from(init.body as Uint8Array)).toEqual(Array.from(probe));
+  });
+
+  it('passes FormData bodies through unchanged', async () => {
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const form = new FormData();
+    form.set('file', new Blob([probe], { type: 'image/jpeg' }), 'probe.jpg');
+    const deps = makeDeps(() => jsonResponse({}));
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    await client.post('/upload', { body: form });
+    expect(deps.fetch.calls[0].init!.body).toBe(form);
+  });
+
   it('parses JSON responses based on content-type', async () => {
     const deps = makeDeps(() => jsonResponse({ a: 1 }));
     const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });

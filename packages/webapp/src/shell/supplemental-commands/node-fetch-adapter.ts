@@ -19,6 +19,7 @@
 
 import type { SecureFetch } from 'just-bash';
 import { encodeMultipartFormData, isFormDataBody } from '../../base/multipart-form-data.js';
+import { copyUint8, type SecureFetchRequestBody } from '../fetch-body.js';
 import { isTextContentType } from '../proxied-fetch.js';
 
 /**
@@ -56,7 +57,7 @@ export function createNodeFetchAdapter(secureFetch: SecureFetch): typeof globalT
     const result = await secureFetch(url, {
       method,
       headers,
-      body: encoded.body,
+      body: encoded.body as string | undefined,
     });
 
     const responseHeaders = new Headers();
@@ -174,7 +175,7 @@ function getHeader(headers: Record<string, string>, name: string): string | unde
 }
 
 interface EncodedRequestBody {
-  body?: string;
+  body?: SecureFetchRequestBody;
   defaultContentType?: string;
 }
 
@@ -199,7 +200,7 @@ async function resolveRequestBody(
         bytes.byteLength === 0
           ? undefined
           : isBinary
-            ? bytesToLatin1(bytes)
+            ? copyUint8(bytes)
             : new TextDecoder('utf-8').decode(bytes),
       defaultContentType: isBinary ? 'application/octet-stream' : undefined,
     };
@@ -212,7 +213,8 @@ async function resolveRequestBody(
  * Encode an `init.body` together with the Content-Type it implies. The two
  * are produced in one call because a `FormData` body's Content-Type carries
  * the multipart boundary that also delimits the bytes — computing them
- * separately would let the header and the body disagree.
+ * separately would let the header and the body disagree. Binary payloads
+ * stay a `Uint8Array`; text stays a string.
  */
 async function encodeInitBody(
   body: BodyInit | null | undefined,
@@ -223,7 +225,7 @@ async function encodeInitBody(
     // and no boundary to advertise.
     if (method === 'GET' || method === 'HEAD') return {};
     const multipart = await encodeMultipartFormData(body);
-    return { body: bytesToLatin1(multipart.bytes), defaultContentType: multipart.contentType };
+    return { body: multipart.bytes, defaultContentType: multipart.contentType };
   }
   return {
     body: await encodeBody(body, method),
@@ -232,28 +234,28 @@ async function encodeInitBody(
 }
 
 /**
- * SecureFetch's body type is `string | undefined`, so we coerce common
- * BodyInit shapes into a string. Binary shapes use the proxy's latin1
- * convention (one character per byte). `FormData` is handled ahead of this
- * by {@link encodeInitBody}, which owns the boundary; ReadableStream remains
+ * Coerce common BodyInit shapes for SecureFetch. Binary shapes stay a
+ * `Uint8Array` so native `fetch` cannot UTF-8-expand high bytes; text
+ * stays a Unicode string. `FormData` is handled ahead of this by
+ * {@link encodeInitBody}, which owns the boundary; ReadableStream remains
  * unsupported because it needs streaming wire semantics.
  */
 async function encodeBody(
   body: BodyInit | null | undefined,
   method: string
-): Promise<string | undefined> {
+): Promise<SecureFetchRequestBody | undefined> {
   if (body == null) return undefined;
   if (method === 'GET' || method === 'HEAD') return undefined;
   if (typeof body === 'string') return body;
   if (body instanceof URLSearchParams) return body.toString();
-  if (body instanceof Uint8Array) return bytesToLatin1(body);
-  if (body instanceof ArrayBuffer) return bytesToLatin1(new Uint8Array(body));
+  if (body instanceof Uint8Array) return copyUint8(body);
+  if (body instanceof ArrayBuffer) return new Uint8Array(body).slice();
   if (ArrayBuffer.isView(body)) {
     const view = body as ArrayBufferView;
-    return bytesToLatin1(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice();
   }
   if (typeof Blob !== 'undefined' && body instanceof Blob) {
-    return bytesToLatin1(new Uint8Array(await body.arrayBuffer()));
+    return new Uint8Array(await body.arrayBuffer());
   }
   if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
     throw new Error(
@@ -287,13 +289,4 @@ function getDefaultContentType(
   if (method === 'GET' || method === 'HEAD' || !isRawBinaryBody(body)) return undefined;
   if (typeof Blob !== 'undefined' && body instanceof Blob && body.type) return body.type;
   return 'application/octet-stream';
-}
-
-function bytesToLatin1(bytes: Uint8Array): string {
-  const chunkSize = 0x8000;
-  let latin1 = '';
-  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
-    latin1 += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return latin1;
 }
