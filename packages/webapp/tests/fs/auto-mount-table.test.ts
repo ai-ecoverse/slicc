@@ -8,7 +8,7 @@ import {
   mountConfiguredHostMounts,
   withoutHostMountedTargets,
 } from '../../src/fs/auto-mount-table.js';
-import { HostFsMountBackend } from '../../src/fs/mount/backend-hostfs.js';
+import { HostFsMountBackend, hostFsMountId } from '../../src/fs/mount/backend-hostfs.js';
 
 function fakeFetch(body: unknown, ok = true): typeof fetch {
   return vi.fn(async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
@@ -77,6 +77,7 @@ describe('mountConfiguredHostMounts', () => {
     expect(backend).toBeInstanceOf(HostFsMountBackend);
     expect(backend.kind).toBe('hostfs');
     expect(backend.source).toBe('hostfs:///h/a');
+    expect(backend.mountId).toBe(hostFsMountId('/mnt/a', '/h/a'));
   });
 
   it('skips already-mounted targets', async () => {

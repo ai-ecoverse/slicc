@@ -18,8 +18,9 @@ describe('toMountRelativePath', () => {
     expect(toMountRelativePath('/Users/me/kb', '')).toBe('');
   });
 
-  it('rejects escapes outside the root', () => {
-    expect(toMountRelativePath('/Users/me/kb', '../secret')).toBeNull();
+  it('clears on true escapes but keeps child names beginning with two dots', () => {
+    expect(toMountRelativePath('/Users/me/kb', '../secret')).toBe('');
+    expect(toMountRelativePath('/Users/me/kb', '..data')).toBe('..data');
   });
 });
 

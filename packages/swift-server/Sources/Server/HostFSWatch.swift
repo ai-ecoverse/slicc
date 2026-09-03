@@ -5,6 +5,18 @@ import Foundation
 /// over `/licks-ws` so the webapp can drop RemoteMountCache keys when the
 /// OS changes a file outside SLICC. Mirrors node-server `hostfs-watch.ts`.
 final class HostFSWatch: @unchecked Sendable {
+    private final class StreamContext {
+        unowned let watch: HostFSWatch
+        let mount: String
+        let root: String
+
+        init(watch: HostFSWatch, mount: String, root: String) {
+            self.watch = watch
+            self.mount = mount
+            self.root = root
+        }
+    }
+
     /// Process-lifetime retain so FSEventStream unretained callbacks stay valid.
     static var shared: HostFSWatch?
 
@@ -14,9 +26,10 @@ final class HostFSWatch: @unchecked Sendable {
     private let lickSystem: LickSystem
     private let queue = DispatchQueue(label: "slicc.hostfs-watch")
     private var streams: [FSEventStreamRef] = []
+    /// Retains the unretained pointers installed in each FSEventStream context.
+    private var streamContexts: [StreamContext] = []
     private var pending: [String: Set<String>] = [:]
-    private var flushWorkItem: DispatchWorkItem?
-    private var rootByMount: [String: String] = [:]
+    private var flushWorkItems: [String: DispatchWorkItem] = [:]
 
     init(lickSystem: LickSystem) {
         self.lickSystem = lickSystem
@@ -27,8 +40,8 @@ final class HostFSWatch: @unchecked Sendable {
         queue.sync {
             stopLocked()
             for root in roots {
-                self.rootByMount[root.path] = root.root
-                guard let stream = Self.makeStream(root: root.root, mount: root.path, watch: self) else {
+                let context = StreamContext(watch: self, mount: root.path, root: root.root)
+                guard let stream = Self.makeStream(context: context) else {
                     print("[hostfs-watch] failed to watch \(root.root) (\(root.path))")
                     continue
                 }
@@ -40,6 +53,7 @@ final class HostFSWatch: @unchecked Sendable {
                     continue
                 }
                 self.streams.append(stream)
+                self.streamContexts.append(context)
                 print("[hostfs-watch] watching \(root.root) → \(root.path)")
             }
         }
@@ -50,8 +64,10 @@ final class HostFSWatch: @unchecked Sendable {
     }
 
     private func stopLocked() {
-        flushWorkItem?.cancel()
-        flushWorkItem = nil
+        for work in flushWorkItems.values {
+            work.cancel()
+        }
+        flushWorkItems.removeAll()
         pending.removeAll()
         for stream in streams {
             FSEventStreamStop(stream)
@@ -59,32 +75,28 @@ final class HostFSWatch: @unchecked Sendable {
             FSEventStreamRelease(stream)
         }
         streams.removeAll()
-        rootByMount.removeAll()
+        streamContexts.removeAll()
     }
 
-    fileprivate func note(mount: String, absolutePath: String) {
-        let root = rootByMount[mount] ?? ""
+    fileprivate func note(mount: String, root: String, absolutePath: String) {
         let rel = Self.toMountRelativePath(root: root, absolutePath: absolutePath)
         var set = pending[mount] ?? []
         set.insert(rel)
         pending[mount] = set
 
-        flushWorkItem?.cancel()
+        flushWorkItems[mount]?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.flush()
+            self?.flush(mount: mount)
         }
-        flushWorkItem = work
+        flushWorkItems[mount] = work
         queue.asyncAfter(deadline: .now() + .milliseconds(Self.debounceMs), execute: work)
     }
 
-    private func flush() {
-        flushWorkItem = nil
-        let batch = pending
-        pending.removeAll()
-        for (mount, paths) in batch {
-            let event = Self.buildEvent(mount: mount, paths: paths)
-            Task { await lickSystem.broadcastLickEvent(event) }
-        }
+    private func flush(mount: String) {
+        flushWorkItems.removeValue(forKey: mount)
+        guard let paths = pending.removeValue(forKey: mount) else { return }
+        let event = Self.buildEvent(mount: mount, paths: paths)
+        Task { await lickSystem.broadcastLickEvent(event) }
     }
 
     /// Map an absolute host path onto a mount-relative POSIX path. Empty string
@@ -109,15 +121,15 @@ final class HostFSWatch: @unchecked Sendable {
         ]
     }
 
-    private static func makeStream(root: String, mount: String, watch: HostFSWatch) -> FSEventStreamRef? {
+    private static func makeStream(context streamContext: StreamContext) -> FSEventStreamRef? {
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(watch).toOpaque(),
+            info: Unmanaged.passUnretained(streamContext).toOpaque(),
             retain: nil,
             release: nil,
             copyDescription: nil
         )
-        let paths = [root] as CFArray
+        let paths = [streamContext.root] as CFArray
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagFileEvents
                 | kFSEventStreamCreateFlagUseCFTypes
@@ -125,14 +137,16 @@ final class HostFSWatch: @unchecked Sendable {
         )
         let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
             guard let info else { return }
-            let watch = Unmanaged<HostFSWatch>.fromOpaque(info).takeUnretainedValue()
+            let context = Unmanaged<StreamContext>.fromOpaque(info).takeUnretainedValue()
             // With UseCFTypes, eventPaths is a CFArray of CFString paths.
             let cfPaths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
             let paths = cfPaths as? [String] ?? []
             for path in paths.prefix(numEvents) {
-                if let mount = watch.mountFor(absolutePath: path) {
-                    watch.note(mount: mount, absolutePath: path)
-                }
+                context.watch.note(
+                    mount: context.mount,
+                    root: context.root,
+                    absolutePath: path
+                )
             }
         }
         return FSEventStreamCreate(
@@ -144,16 +158,5 @@ final class HostFSWatch: @unchecked Sendable {
             0.1,
             flags
         )
-    }
-
-    fileprivate func mountFor(absolutePath: String) -> String? {
-        let normalized = (absolutePath as NSString).standardizingPath
-        for (mount, root) in rootByMount {
-            let normalizedRoot = (root as NSString).standardizingPath
-            if normalized == normalizedRoot { return mount }
-            let prefix = normalizedRoot.hasSuffix("/") ? normalizedRoot : normalizedRoot + "/"
-            if normalized.hasPrefix(prefix) { return mount }
-        }
-        return nil
     }
 }

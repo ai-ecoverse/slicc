@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
-import { HostFsMountBackend } from '../../src/fs/mount/backend-hostfs.js';
+import { HostFsMountBackend, hostFsMountId } from '../../src/fs/mount/backend-hostfs.js';
 import { RemoteMountCache } from '../../src/fs/mount/remote-cache.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -11,7 +11,12 @@ function uniqueDbName(): string {
 
 function backendWith(
   respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
-  opts: { maxInflight?: number; maxAttempts?: number; cacheTtlMs?: number } = {}
+  opts: {
+    maxInflight?: number;
+    maxAttempts?: number;
+    cacheTtlMs?: number;
+    maxCachedBodyBytes?: number;
+  } = {}
 ): {
   backend: HostFsMountBackend;
   calls: string[];
@@ -72,6 +77,22 @@ const bodyDrops = () =>
   }) as unknown as Response;
 
 describe('HostFsMountBackend', () => {
+  it('derives a stable mount id from the configured target and host paths', () => {
+    const first = new HostFsMountBackend({
+      targetPath: '/mnt/kb',
+      hostPath: '/h/kb',
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+    });
+    const second = new HostFsMountBackend({
+      targetPath: '/mnt/kb',
+      hostPath: '/h/kb',
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+    });
+    expect(first.mountId).toBe(hostFsMountId('/mnt/kb', '/h/kb'));
+    expect(second.mountId).toBe(first.mountId);
+    expect(hostFsMountId('/mnt/other', '/h/kb')).not.toBe(first.mountId);
+  });
+
   it('routes rename through the stable endpoint with mount + to in the body', async () => {
     const { backend, calls, bodies } = backendWith(() => ok({ ok: true }));
     await backend.rename('/a/old.txt', '/a/new.txt');
@@ -196,6 +217,47 @@ describe('HostFsMountBackend', () => {
     await backend.applyHostInvalidation(['other.txt']);
     await backend.readFile('/other.txt');
     expect(reads).toBe(4);
+  });
+
+  it('does not restore a body invalidated while its read is in flight', async () => {
+    let releaseFetch!: () => void;
+    const fetchReleased = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const { backend } = backendWith(async () => {
+      await fetchReleased;
+      return new Response(new Uint8Array([1]).buffer, { headers: { etag: '"old"' } });
+    });
+
+    const read = backend.readFile('/race.txt');
+    await tick();
+    await backend.applyHostInvalidation(['race.txt']);
+    releaseFetch();
+
+    await expect(read).resolves.toEqual(new Uint8Array([1]));
+    await expect(backend.getCache().getBody('race.txt')).resolves.toBeNull();
+  });
+
+  it('invalidates cached descendants on both sides of a directory rename', async () => {
+    const { backend } = backendWith(() => ok({ ok: true }));
+    const cache = backend.getCache();
+    await cache.putBody('old/child.txt', new Uint8Array([1]), '"old"');
+    await cache.putBody('new/replaced.txt', new Uint8Array([2]), '"replaced"');
+
+    await backend.rename('/old', '/new');
+
+    await expect(cache.getBody('old/child.txt')).resolves.toBeNull();
+    await expect(cache.getBody('new/replaced.txt')).resolves.toBeNull();
+  });
+
+  it('serves bodies over the cache size cap without memoizing them', async () => {
+    const { backend } = backendWith(
+      () => new Response(new Uint8Array([1, 2]).buffer, { headers: { etag: '"large"' } }),
+      { maxCachedBodyBytes: 1 }
+    );
+
+    await expect(backend.readFile('/large.pack')).resolves.toEqual(new Uint8Array([1, 2]));
+    await expect(backend.getCache().getBody('large.pack')).resolves.toBeNull();
   });
 
   it('falls back to the per-op routes when the bridge has no stable endpoint', async () => {

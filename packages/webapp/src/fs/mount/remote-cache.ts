@@ -175,13 +175,24 @@ export class RemoteMountCache {
    * directory events. An empty `dirPath` clears the whole mount.
    */
   async invalidatePrefix(dirPath: string): Promise<void> {
-    const clean = dirPath.replace(/^\/+/, '').replace(/\/+$/, '');
-    if (clean.length === 0) {
+    await this.invalidatePrefixes([dirPath]);
+  }
+
+  /**
+   * Drop exact keys and descendants for several paths in one scan per store.
+   * An empty path clears the whole mount. Host-watcher batches use this rather
+   * than paying one full `getAllKeys()` scan for every changed path.
+   */
+  async invalidatePrefixes(paths: readonly string[]): Promise<void> {
+    const prefixes = [
+      ...new Set(paths.map((path) => path.replace(/^\/+/, '').replace(/\/+$/, ''))),
+    ];
+    if (prefixes.length === 0 || prefixes.includes('')) {
       await this.clearMount();
       return;
     }
     const db = await this.openDb();
-    const keyPrefix = `${this.mountId}::${clean}`;
+    const mountPrefix = `${this.mountId}::`;
     const dropMatching = (storeName: string): Promise<void> =>
       new Promise((resolve, reject) => {
         const tx = db.transaction(storeName, 'readwrite');
@@ -189,10 +200,15 @@ export class RemoteMountCache {
         const req = store.getAllKeys();
         req.onsuccess = () => {
           for (const key of req.result as IDBValidKey[]) {
-            if (typeof key !== 'string' || !key.startsWith(keyPrefix)) continue;
-            // Exact dir (`mountId::foo`) or a child (`mountId::foo/...`).
-            const rest = key.slice(keyPrefix.length);
-            if (rest.length === 0 || rest.startsWith('/')) store.delete(key);
+            if (typeof key !== 'string' || !key.startsWith(mountPrefix)) continue;
+            const relativeKey = key.slice(mountPrefix.length);
+            if (
+              prefixes.some(
+                (prefix) => relativeKey === prefix || relativeKey.startsWith(`${prefix}/`)
+              )
+            ) {
+              store.delete(key);
+            }
           }
         };
         tx.oncomplete = () => resolve();

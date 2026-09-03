@@ -46,8 +46,8 @@ export interface StartHostFsWatchersOptions {
 
 /**
  * Map an `fs.watch` filename (relative to the watched root, or absolute on
- * some platforms) onto a mount-relative POSIX path, or `null` when the event
- * cannot be attributed (root-level rename with no name, escape, etc.).
+ * some platforms) onto a mount-relative POSIX path. Empty string asks the
+ * client to clear the mount when the event cannot be attributed safely.
  */
 export function toMountRelativePath(
   root: string,
@@ -56,7 +56,10 @@ export function toMountRelativePath(
   if (filename == null || filename.length === 0) return '';
   const abs = filename.startsWith(root) ? filename : `${root}${sep}${filename}`;
   let rel = relative(root, abs);
-  if (rel.startsWith('..') || rel === '') return rel === '' ? '' : null;
+  if (rel === '') return '';
+  // `..data` is a valid child name; only a whole `..` segment escapes.
+  // Clear on a true escape rather than dropping the invalidation.
+  if (rel === '..' || rel.startsWith(`..${sep}`)) return '';
   // Watchers may report Windows separators; the VFS / cache keys are POSIX.
   rel = rel.split(sep).join('/');
   return rel;

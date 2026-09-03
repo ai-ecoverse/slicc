@@ -143,8 +143,24 @@ const DEFAULT_MAX_INFLIGHT = 24;
 /** Default body-cache TTL — matches S3/DA; the host watcher is the fast path. */
 const DEFAULT_CACHE_TTL_MS = 30_000;
 
+/**
+ * Do not structured-clone git packfiles and other large host files into IDB.
+ * Four MiB keeps normal source/doc assets hot without competing with the VFS
+ * for tens or hundreds of MiB of origin quota.
+ */
+const DEFAULT_MAX_CACHED_BODY_BYTES = 4 * 1024 * 1024;
+
 /** Fetch init so the browser HTTP cache never answers a hostfs read. */
 const NO_STORE: RequestCache = 'no-store';
+
+/**
+ * Hostfs mappings are launcher-owned rather than persisted mount-table rows,
+ * so derive a stable cache namespace from their two stable identifiers.
+ * encodeURIComponent keeps the `::` RemoteMountCache separator unambiguous.
+ */
+export function hostFsMountId(targetPath: string, hostPath: string): string {
+  return `hostfs:${encodeURIComponent(targetPath)}:${encodeURIComponent(hostPath)}`;
+}
 
 /**
  * Body consumers. Every op reads its body INSIDE the retried, limiter-held
@@ -238,12 +254,14 @@ export interface HostFsMountBackendOptions {
   mountId?: string;
   /**
    * App-owned body cache (IndexedDB). When omitted, one is created for this
-   * mountId — production always passes an explicit cache so remounts share
-   * the same `mountId` namespace.
+   * mountId. Auto-mounted hostfs mappings derive a stable mountId so remounts
+   * reuse the namespace without leaking one random prefix per boot.
    */
   cache?: RemoteMountCache;
   /** Override cache TTL when auto-creating (default 30s). */
   cacheTtlMs?: number;
+  /** Largest body worth memoizing in IDB (default 4 MiB). */
+  maxCachedBodyBytes?: number;
   /** Injectable for tests; production uses the realm's fetch. */
   fetchImpl?: typeof fetch;
   /** Concurrent bridge requests (default 24). Injectable for tests. */
@@ -275,6 +293,13 @@ export class HostFsMountBackend implements MountBackend {
   private readonly maxAttempts: number;
   private readonly retryDelayMs: number;
   private readonly cache: RemoteMountCache;
+  private readonly maxCachedBodyBytes: number;
+  /**
+   * Incremented before every cache invalidation/mutation. A read captures the
+   * generation before fetching and cannot restore a key invalidated while its
+   * response was in flight.
+   */
+  private cacheGeneration = 0;
   private closed = false;
   /**
    * Whether this bridge answers `POST /api/hostfs`. Optimistic: flipped off
@@ -287,11 +312,12 @@ export class HostFsMountBackend implements MountBackend {
     this.targetPath = opts.targetPath;
     this.hostPath = opts.hostPath;
     this.source = `hostfs://${opts.hostPath}`;
-    this.mountId = opts.mountId ?? crypto.randomUUID();
+    this.mountId = opts.mountId ?? hostFsMountId(opts.targetPath, opts.hostPath);
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.limiter = createInflightLimiter(opts.maxInflight ?? DEFAULT_MAX_INFLIGHT);
     this.maxAttempts = Math.max(1, opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
     this.retryDelayMs = opts.retryDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+    this.maxCachedBodyBytes = Math.max(0, opts.maxCachedBodyBytes ?? DEFAULT_MAX_CACHED_BODY_BYTES);
     this.cache =
       opts.cache ??
       new RemoteMountCacheImpl({
@@ -309,24 +335,44 @@ export class HostFsMountBackend implements MountBackend {
     return path.replace(/^\/+/, '');
   }
 
+  private async invalidateCachePrefixes(paths: readonly string[]): Promise<void> {
+    this.cacheGeneration += 1;
+    await this.cache.invalidatePrefixes(paths);
+  }
+
+  /**
+   * Cache only when no invalidation landed during the fetch or IDB write.
+   * The post-write check closes the window where an invalidation deletes the
+   * old key while `putBody` is still pending and that put later restores it.
+   */
+  private async cacheBodyIfCurrent(
+    generation: number,
+    path: string,
+    body: Uint8Array,
+    etag: string
+  ): Promise<void> {
+    if (generation !== this.cacheGeneration || body.byteLength > this.maxCachedBodyBytes) return;
+    await this.cache.putBody(path, body, etag);
+    if (generation !== this.cacheGeneration) {
+      await this.cache.invalidateBody(path);
+    }
+  }
+
   /**
    * Drop cached bodies for paths the host watcher reported (or `[]` / `['']`
    * to clear the whole mount). Safe to call from the lick-ws bridge.
    */
   async applyHostInvalidation(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) {
-      await this.cache.clearMount();
+      await this.invalidateCachePrefixes([]);
       return;
     }
-    for (const raw of paths) {
-      const rel = raw.replace(/^\/+/, '');
-      if (rel.length === 0 || rel === '.') {
-        await this.cache.clearMount();
-        return;
-      }
-      await this.cache.invalidateBody(rel);
-      await this.cache.invalidatePrefix(rel);
+    const relativePaths = paths.map((raw) => raw.replace(/^\/+/, ''));
+    if (relativePaths.some((rel) => rel.length === 0 || rel === '.')) {
+      await this.invalidateCachePrefixes([]);
+      return;
     }
+    await this.invalidateCachePrefixes(relativePaths);
   }
 
   /** Test/introspection access to the body cache. */
@@ -513,6 +559,8 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   async readFile(path: string): Promise<Uint8Array> {
+    this.assertOpen(path);
+    const generation = this.cacheGeneration;
     const rel = this.bodyKey(path);
     const cached = await this.cache.getBody(rel);
     if (cached && !this.cache.isStale(cached.cachedAt)) {
@@ -542,14 +590,14 @@ export class HostFsMountBackend implements MountBackend {
       if (!cached) {
         throw new FsError('EIO', 'hostfs read got 304 without a cached body', path);
       }
-      await this.cache.putBody(rel, cached.body, cached.etag);
+      await this.cacheBodyIfCurrent(generation, rel, cached.body, cached.etag);
       return cached.body;
     }
 
     if (result.bytes.byteLength > HOSTFS_MAX_BODY_BYTES) {
       throw new FsError('EFBIG', 'file exceeds the hostfs body cap', path);
     }
-    await this.cache.putBody(rel, result.bytes, result.etag);
+    await this.cacheBodyIfCurrent(generation, rel, result.bytes, result.etag);
     return result.bytes;
   }
 
@@ -594,10 +642,15 @@ export class HostFsMountBackend implements MountBackend {
       body: new Uint8Array(body),
     });
     const rel = this.bodyKey(path);
+    const generation = ++this.cacheGeneration;
     // Seed the app cache with what we just wrote so the next read is coherent
     // without waiting on the host watcher. ETag is empty until a later revalidate
     // fills the real validator from the bridge.
-    await this.cache.putBody(rel, new Uint8Array(body), '');
+    if (body.byteLength <= this.maxCachedBodyBytes) {
+      await this.cacheBodyIfCurrent(generation, rel, new Uint8Array(body), '');
+    } else {
+      await this.cache.invalidateBody(rel);
+    }
   }
 
   async stat(path: string): Promise<MountStat> {
@@ -625,13 +678,9 @@ export class HostFsMountBackend implements MountBackend {
     });
     const fromRel = this.bodyKey(fromPath);
     const toRel = this.bodyKey(toPath);
-    const cached = await this.cache.getBody(fromRel);
-    await this.cache.invalidateBody(fromRel);
-    if (cached) {
-      await this.cache.putBody(toRel, cached.body, cached.etag);
-    } else {
-      await this.cache.invalidateBody(toRel);
-    }
+    // The backend can rename either a file or a directory. Prefix invalidation
+    // handles both and prevents descendants surviving under the old path.
+    await this.invalidateCachePrefixes([fromRel, toRel]);
   }
 
   async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -641,8 +690,9 @@ export class HostFsMountBackend implements MountBackend {
     });
     const rel = this.bodyKey(path);
     if (opts?.recursive) {
-      await this.cache.invalidatePrefix(rel);
+      await this.invalidateCachePrefixes([rel]);
     } else {
+      this.cacheGeneration += 1;
       await this.cache.invalidateBody(rel);
     }
   }
@@ -653,7 +703,7 @@ export class HostFsMountBackend implements MountBackend {
    */
   async refresh(opts?: { bodies?: boolean }): Promise<RefreshReport> {
     this.assertOpen(this.targetPath);
-    await this.cache.clearMount();
+    await this.invalidateCachePrefixes([]);
     return {
       added: [],
       removed: [],

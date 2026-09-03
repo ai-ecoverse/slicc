@@ -79,6 +79,12 @@ Chrome reopens previous session tabs minus the SLICC tab (dead token; `clearChro
 
 Repeatable `--mount <os-path>:<slicc-path>` (`ServerCommand.mount` → `ServerConfig.mounts`, parsed by `parseMountMapping`; parity with node-server's `parseMountTableMapping`). `HostFSRoutes.swift` serves mapped folders over `/api/hostfs`, mirroring `hostfs.ts` byte-for-byte (routes — including the stable `POST /api/hostfs` dispatcher for list/stat/mkdir/rename/remove — errno JSON, traversal/symlink containment, mount-root delete refusal, 100 MiB body cap, `Range` support on `read` — 206 + `Content-Range`, 416 outside the file, cap applies to the unranged read only; windows stream through a closure-backed `ResponseBody` in `streamChunkBytes` pieces so `bytes=0-` on a huge file never materializes; strong `ETag`/`Last-Modified` from the stat with `If-None-Match`/`If-Modified-Since`/`If-Range` handling, mirroring `cacheValidator` in `hostfs.ts` (#2711)). `BridgeSecurity.preflightMaxAge` mirrors node-server's: `/api/hostfs*` preflights get Chrome's 7200 s cap, the rest 600 s (#2715). Advertised as `autoMounts` on `GET /api/runtime-config`; the webapp auto-mounts at boot, no picker/permission. Sliccstart feeds the flags from Settings → Mounts (`MountTablePreference`). Docs: [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
 
+`HostFSWatch.swift` owns one FSEventStream and debounce timer per configured mount. Each stream
+retains its mount/root identity so overlapping host roots broadcast invalidations to the correct
+cache namespace. It emits batched `hostfs_invalidate` events over `/licks-ws`; the webapp bypasses
+the opaque HTTP cache, memoizes bodies up to 4 MiB under a stable target + host namespace, and
+invalidates matching prefixes. Node parity: `hostfs-watch.ts`.
+
 ## Secrets Architecture
 
 `OAuthSecretStore.swift` handles OAuth replicas (`POST /api/secrets/oauth-update`, `DELETE /api/secrets/oauth/:providerId`). `SessionSecretStore.swift` owns process-memory session records for the session/list/peek/scope/delete APIs. Pipeline `SecretInjector.swift` layers sessions after persisted/env/OAuth data without a session collision shadowing those sources (so persisted/OAuth keep masking precedence on name collisions; no persisted `POST /api/secrets` route). Masks match `@slicc/shared-ts` byte-for-byte (`Tests/CrossImplementationTests.swift`). `SecretStore.swift` reads `ai.sliccy.slicc / __envfile__` at startup via `SecItemCopyMatching`.
