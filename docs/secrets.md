@@ -31,7 +31,7 @@ Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A 
 
 ### Extending OAuth-token allowed domains
 
-Each provider hardcodes a sane default list of domains its OAuth token may be unmasked for (e.g. Adobe defaults to `*.adobelogin.com`, `*.adobe.io`, `firefall.adobe.io`). To use that token against other services — for example, `admin.da.live` for Document Authoring — you can **layer extra domains on top per-provider** without code changes. Provider defaults remain immutable.
+Each provider hardcodes a sane default list of domains its OAuth token may be unmasked for (e.g. Adobe defaults to `*.adobelogin.com`, `*.adobe.io`, `firefall.adobe.io`, the Helix admin hosts, and `api.aem.live` for the Helix 6 Source Bus). To use that token against other services — for example, `admin.da.live` for Document Authoring — you can **layer extra domains on top per-provider** without code changes. Provider defaults remain immutable.
 
 Manage with the `oauth-domain` shell command:
 
