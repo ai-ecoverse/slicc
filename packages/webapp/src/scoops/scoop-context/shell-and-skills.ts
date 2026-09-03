@@ -12,7 +12,7 @@
 
 import type { BrowserAPI } from '../../cdp/index.js';
 import { createLogger } from '../../core/index.js';
-import { fetchSecretEnvVars } from '../../core/secret-env.js';
+import { buildEnvFromMaskedEntries } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { RestrictedFS } from '../../fs/restricted-fs.js';
@@ -80,10 +80,11 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
   }
 
   const effectiveSkillsFs = (skillsFs ?? fs) as VirtualFS;
-  const secretEnv = await fetchSecretEnvVars();
-  // #2276: webhook topology comes from the injected broker, never a probe.
-  // Remaining call sites: `work-unit/capability/index.ts`.
+  // #2276: secrets + webhook topology come from the injected broker, never a
+  // probe. Remaining call sites: `work-unit/capability/index.ts`.
   const broker = deps.capabilityBroker ?? createRestCapabilityBroker();
+  const maskedSecrets = await broker.secrets.listMaskedEnv();
+  const secretEnv = maskedSecrets.ok ? buildEnvFromMaskedEntries(maskedSecrets.value.entries) : {};
   const localNode = await broker.network.localNodeServer();
   const hasLocalNodeServer = () => localNode.ok;
 

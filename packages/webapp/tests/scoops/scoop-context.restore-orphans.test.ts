@@ -89,6 +89,7 @@ vi.mock('../../src/scoops/scoop-management-tools.js', () => ({
 
 vi.mock('../../src/core/secret-env.js', () => ({
   fetchSecretEnvVars: async () => ({}),
+  buildEnvFromMaskedEntries: () => ({}),
 }));
 
 const { ScoopContext } = await import('../../src/scoops/scoop-context.js');

@@ -59,6 +59,16 @@ export interface MaskedSecretEntry {
  * AWS-shaped access keys — would be shell-visible.
  */
 /**
+ * Structurally compatible with both {@link MaskedSecretEntry} and the
+ * CapabilityBroker's `SecretMaskedEnvEntry` (#2276) — neither `domains`
+ * field is read below, so callers on either type pass their array as-is.
+ */
+export interface MaskedEnvEntryLike {
+  name: string;
+  maskedValue: string;
+}
+
+/**
  * Build the shell env map from a list of masked secret entries.
  *
  * Applies the POSIX-identifier filter so dot-namespaced internal secrets
@@ -71,8 +81,14 @@ export interface MaskedSecretEntry {
  * Any user-provided `GITHUB_TOKEN` / `GH_TOKEN` secret takes precedence
  * over the alias (we do not overwrite an existing entry). A user `export`
  * inside the live shell session still wins via bash's own env semantics.
+ *
+ * Exported so `scoops/scoop-context/shell-and-skills.ts` can apply the same
+ * filter/alias logic to the CapabilityBroker's `secrets.listMaskedEnv()`
+ * result (#2276) without duplicating it.
  */
-function buildEnvFromMaskedEntries(entries: MaskedSecretEntry[]): Record<string, string> {
+export function buildEnvFromMaskedEntries(
+  entries: readonly MaskedEnvEntryLike[]
+): Record<string, string> {
   const env: Record<string, string> = {};
   let githubOAuthMasked: string | undefined;
   for (const entry of entries) {

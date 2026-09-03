@@ -5,9 +5,10 @@
  * with real adapters keyed by float topology (`node-rest`, `extension-direct`,
  * `extension-delegate`, `connect`), composed once in `kernel/host.ts`. Slice C
  * removes float probes from `scoops/` / `tools/` / `kernel/` business logic
- * (review-patterns category 10), one domain per PR — network is done.
+ * (review-patterns category 10), one domain per PR — network and secrets are
+ * done.
  *
- * `network` (#2276 slice C, done): none of `scoops/tray-leader.ts`
+ * `network` (#2276 slice C, done, #2829): none of `scoops/tray-leader.ts`
  * (`createTrayFetch`), `shell/proxied-fetch.ts` (`createProxiedFetch`) or
  * `shell/mcp/redirect-uri.ts` (`resolveMcpRedirectUri`) is now `broker.network
  * .crossOriginFetch` — none of the three is a privileged operation behind an
@@ -32,6 +33,23 @@
  * URI — the same ownership rule, not a relocation to fix. See
  * `docs/work-unit.md` phase 6c.
  *
+ * `secrets` (#2276 slice C, done): unlike `network`, this domain's call site
+ * WAS a privileged operation with a broker equivalent —
+ * `scoops/scoop-context/shell-and-skills.ts` now calls
+ * `broker.secrets.listMaskedEnv()` (already implemented by every slice-B
+ * adapter) instead of `core/secret-env.ts`'s topology-branching
+ * `fetchSecretEnvVars()`. `buildEnvFromMaskedEntries` — the POSIX-name filter
+ * + `GITHUB_TOKEN`/`GH_TOKEN` alias — is exported from `core/secret-env.ts`
+ * and reused as-is, so the shell env shape is unchanged; any
+ * `CapabilityResult.ok === false` degrades to `{}`, matching the old
+ * fail-silent contract. `fetchSecretEnvVars()` stays exported for `ui/wc/
+ * wc-live.ts` (`ui/` is not a banned layer). `shell/supplemental-commands/
+ * secret-command.ts` keeps reading `resolveFloatTopology()` directly — that
+ * file is `shell/`, which owns topology (same rule as `redirect-uri.ts`'s
+ * callers), and its CRUD surface (`set`/`get`/`peek`/`scope`/`list`/`delete`/
+ * `test`/`edit`) has no `broker.secrets` equivalent, so no allowlist op was
+ * added. See `docs/work-unit.md` phase 6d.
+ *
  * TODO(#2276) slice C, remaining domains — privileged call sites in `scoops/`
  * / `tools/` / `kernel/` that still branch on float / topology
  * (`isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
@@ -51,9 +69,6 @@
  * `canConnectToChromeRuntime` — both are true on the thin-bridge hosted page
  * and are float signals just like the other six.
  *
- * secrets
- *   - scoops/scoop-context/shell-and-skills.ts `fetchSecretEnvVars`
- *   - shell/supplemental-commands/secret-command.ts
  * mounts
  *   - fs/mount-commands.ts, fs/mount/signed-fetch.ts, fs/picker-popup.ts
  * approvals
