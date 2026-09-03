@@ -11,6 +11,9 @@
  *     invoked with the user's args, and the output file is read
  *     back into the VFS. Log lines from `ffmpeg.on('log')` are
  *     forwarded to stderr so timing and progress are visible.
+ *     **Analysis sinks** (`-f null` with `-` or `/dev/null`, or a
+ *     bare `/dev/null`) skip VFS writeback — the product is the
+ *     filter log on stderr (`silencedetect`, `loudnorm`, …).
  *
  *  2. **`-f avfoundation` capture**: when the input format is
  *     `avfoundation` we route through the browser's `getUserMedia`
@@ -90,6 +93,15 @@ invocation. Output options like -c:v, -c:a, -crf, -preset, -pix_fmt,
 -vf, -b:v, -b:a, and a mismatched output extension all trigger a
 post-capture wasm pass so the produced file matches what the user asked
 for (e.g. real H.264 mp4 instead of webm bytes in a .mp4 wrapper).
+
+Analysis sinks (no output file — results are on stderr):
+  ffmpeg -i in.mp4 -af silencedetect=noise=-30dB:d=0.5 -f null -
+  ffmpeg -i in.mp4 -af loudnorm=print_format=json -f null /dev/null
+  ffmpeg -i in.mp4 -af loudnorm /dev/null
+  With output \`-\` or \`/dev/null\`, the wrapper skips VFS writeback
+  and returns the core log (filter measurements) on stderr. \`-\`
+  requires \`-f null\` (stdout is not emulated). Bare \`/dev/null\`
+  is accepted and gets \`-f null\` injected (MEMFS has no /dev/null).
 
 Notes:
   - First run downloads ~31 MB of ffmpeg-core; subsequent runs reuse
@@ -395,7 +407,12 @@ function handleWarmupToken(state: ParseState, args: string[], i: number): number
 function hasLaterPositional(args: string[], from: number): boolean {
   for (let i = from; i < args.length; i++) {
     const tok = args[i];
-    if (!tok.startsWith('-')) return true;
+    // A lone `-` is ffmpeg's stdin/stdout filename, so it is a
+    // positional despite starting with `-`. Missing that let an
+    // unknown option before a null sink lose its value:
+    // `-unknown_opt val -f null -` saw no later positional, treated
+    // `-unknown_opt` as a toggle, and dropped both tokens from argv.
+    if (!tok.startsWith('-') || tok === '-') return true;
     if (VALUE_TAKING_FLAGS.has(tok)) i += 1;
   }
   return false;
@@ -509,6 +526,19 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
       i += 1;
       continue;
     }
+    // Lone `-` is ffmpeg's stdin/stdout filename. Accept it as an
+    // output positional ONLY when `-f null` is already pending —
+    // analysis sinks (`… -f null -`). Without the null muxer we do
+    // not emulate stdout; treating `-` as a generic positional would
+    // silently write a VFS file named `-` (e.g. `ffmpeg -i in -f mp3 -`).
+    // Falling through to the flag branch leaves outputPath unset so
+    // the command reports "at least one output file must be specified".
+    // `-i -` is unaffected: `-i` consumes the next token via
+    // VALUE_TAKING_FLAGS before this branch runs.
+    if (tok === '-' && hasNullMuxer(state.pendingOpts)) {
+      i = handlePositionalToken(state, tok, i);
+      continue;
+    }
     if (tok.startsWith('-')) {
       i = handleGenericOptionToken(state, args, i, tok);
       continue;
@@ -533,6 +563,51 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
  */
 export function isAvfoundationCapture(parsed: ParsedFfmpegInvocation): boolean {
   return parsed.inputs.some((input) => input.format === 'avfoundation');
+}
+
+/** Output tokens that discard media rather than naming a VFS artifact. */
+const ANALYSIS_SINK_TOKENS = new Set(['-', '/dev/null']);
+
+/** True when `outputOpts` contain an explicit `-f null` (null muxer). */
+function hasNullMuxer(outputOpts: string[]): boolean {
+  for (let i = 0; i < outputOpts.length - 1; i++) {
+    if (outputOpts[i] === '-f' && outputOpts[i + 1] === 'null') return true;
+  }
+  return false;
+}
+
+/**
+ * An analysis sink discards encoded media; the caller's product is
+ * what filters print on stderr (`silencedetect`, `loudnorm`, …).
+ *
+ * Detection (deliberately narrow so a failed encode cannot report
+ * success):
+ * - Output token is `-` or `/dev/null`, AND
+ * - either `-f null` is in the output options, OR the token is
+ *   `/dev/null` itself (MEMFS has no `/dev/null` device — treating a
+ *   bare `/dev/null` as a sink avoids a guaranteed empty-artifact
+ *   failure; {@link ensureNullMuxerOpts} injects `-f null` before exec).
+ *
+ * A bare `-` without `-f null` is NOT a sink and is not accepted as an
+ * output positional at all (stdout is not emulated) — see the `-`
+ * branch in {@link parseFfmpegArgs}.
+ */
+export function isAnalysisSink(parsed: ParsedFfmpegInvocation): boolean {
+  const out = parsed.outputPath;
+  if (out === null || !ANALYSIS_SINK_TOKENS.has(out)) return false;
+  if (out === '/dev/null') return true;
+  return hasNullMuxer(parsed.outputOpts);
+}
+
+/**
+ * Ensure output opts carry `-f null` for an analysis sink. Bare
+ * `/dev/null` is recognized as a sink without the flag on the
+ * command line; without injecting the muxer the pinned core exits 1
+ * with "Unable to find a suitable output format for '__null_sink'".
+ */
+export function ensureNullMuxerOpts(outputOpts: string[]): string[] {
+  if (hasNullMuxer(outputOpts)) return outputOpts;
+  return [...outputOpts, '-f', 'null'];
 }
 
 /**
@@ -1520,9 +1595,29 @@ async function stageInputsIntoMemfs(
 }
 
 /**
+ * Cheap post-exec touch of the shared core. Analysis sinks skip
+ * {@link readEncodedOutput} (the only other place that rethrows
+ * {@link isCoreFault}), so without a probe a stale exit-0 after an
+ * internal `Aborted()` would report success and leave the poisoned
+ * instance cached for every later command — defeating the recycle
+ * invariant. A disposable write+delete traps the same way readback
+ * would; ordinary FS noise is ignored.
+ */
+async function ensureCoreHealthy(ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>): Promise<void> {
+  const probe = '__health_probe';
+  try {
+    await ffmpeg.writeFile(probe, new Uint8Array([0]));
+    await ffmpeg.deleteFile(probe);
+  } catch (err) {
+    if (isCoreFault(err)) throw err;
+  }
+}
+
+/**
  * Best-effort MEMFS cleanup so repeated invocations don't pile up
- * megabytes of stale media in the wasm heap. Swallow each
- * `deleteFile` error individually.
+ * megabytes of stale media in the wasm heap. Ordinary `deleteFile`
+ * misses are swallowed; a core fault is rethrown so the caller can
+ * recycle instead of caching a dead instance.
  */
 async function cleanupMemfs(
   ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>,
@@ -1535,20 +1630,20 @@ async function cleanupMemfs(
     for (const extra of input.extraFiles ?? []) {
       try {
         await ffmpeg.deleteFile(extra.ffmpegName);
-      } catch {
-        /* noop */
+      } catch (err) {
+        if (isCoreFault(err)) throw err;
       }
     }
     try {
       await ffmpeg.deleteFile(input.ffmpegName);
-    } catch {
-      /* noop */
+    } catch (err) {
+      if (isCoreFault(err)) throw err;
     }
   }
   try {
     await ffmpeg.deleteFile(outputName);
-  } catch {
-    /* noop */
+  } catch (err) {
+    if (isCoreFault(err)) throw err;
   }
 }
 
@@ -1601,6 +1696,109 @@ async function readEncodedOutput(
   return { bytes };
 }
 
+/**
+ * MEMFS name for the encode artifact. Analysis sinks never produce a
+ * readable file — stage a disposable placeholder the null muxer can
+ * point at, then skip readback.
+ */
+function memfsOutputName(outputPath: string, analysisSink: boolean): string {
+  if (analysisSink) return '__null_sink';
+  return `__out_${outputPath.split('/').pop() || 'out.bin'}`;
+}
+
+type FfmpegInstance = Awaited<ReturnType<typeof getFfmpeg>>;
+
+/** Shared recycle message when the realm-cached core has to be retired. */
+function coreFaultResult(stderr: string, err: unknown): CmdResult {
+  return {
+    stdout: '',
+    stderr:
+      `${stderr}ffmpeg: ${err instanceof Error ? err.message : String(err)}\n` +
+      'ffmpeg: the wasm core faulted and was recycled; retry the command ' +
+      '(a large input may need to be split into smaller passes)\n',
+    exitCode: 1,
+  };
+}
+
+/**
+ * Run exec + sink health probe or encode readback. Throws on core
+ * traps so the caller can recycle.
+ */
+async function execWasmEncode(args: {
+  ffmpeg: FfmpegInstance;
+  parsed: ParsedFfmpegInvocation;
+  resolvedInputs: ResolvedInput[];
+  outputName: string;
+  outputPath: string;
+  analysisSink: boolean;
+  stderr: string;
+}): Promise<{ early: CmdResult | null; outputBytes: Uint8Array | null }> {
+  const { ffmpeg, parsed, resolvedInputs, outputName, outputPath, analysisSink, stderr } = args;
+  await stageInputsIntoMemfs(ffmpeg, resolvedInputs);
+
+  // Bare `/dev/null` is a sink without `-f null` on the CLI; inject
+  // the muxer so the pinned core does not exit 1 looking for a
+  // container format for `__null_sink`.
+  const execParsed = analysisSink
+    ? { ...parsed, outputOpts: ensureNullMuxerOpts(parsed.outputOpts) }
+    : parsed;
+  const finalArgs = buildFinalFfmpegArgs(execParsed, resolvedInputs, outputName);
+  const exitCode = await ffmpeg.exec(finalArgs);
+  if (exitCode !== 0) {
+    return {
+      early: {
+        stdout: '',
+        stderr: stderr || `ffmpeg: exited with code ${exitCode}\n`,
+        exitCode: exitCode || 1,
+      },
+      outputBytes: null,
+    };
+  }
+  if (analysisSink) {
+    // Product is the filter log on stderr (silencedetect / loudnorm / …).
+    // Skip MEMFS readback and the VFS write below — including not
+    // writing a literal `/dev/null` path. Probe first: sinks never
+    // call readEncodedOutput, so this is the health gate that keeps
+    // a stale exit-0 after Aborted() from poisoning later commands.
+    await ensureCoreHealthy(ffmpeg);
+    return { early: { stdout: '', stderr, exitCode: 0 }, outputBytes: null };
+  }
+  const read = await readEncodedOutput(ffmpeg, outputName, outputPath, stderr);
+  if ('error' in read) return { early: read.error, outputBytes: null };
+  return { early: null, outputBytes: read.bytes };
+}
+
+/**
+ * Detach the log handler and tidy MEMFS. If cleanup is the first place
+ * a stale-zero poison surfaces, recycle and return a fault result.
+ */
+async function detachAndCleanupMemfs(args: {
+  ffmpeg: FfmpegInstance;
+  logHandler: (event: { type: string; message: string }) => void;
+  resolvedInputs: ResolvedInput[];
+  outputName: string;
+  stderr: string;
+  faulted: boolean;
+}): Promise<CmdResult | null> {
+  const { ffmpeg, logHandler, resolvedInputs, outputName, stderr, faulted } = args;
+  try {
+    ffmpeg.off('log', logHandler);
+  } catch {
+    /* noop */
+  }
+  // A terminated worker has no MEMFS left to tidy, and every
+  // `deleteFile` would re-enter the trapped module.
+  if (faulted) return null;
+  try {
+    await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
+    return null;
+  } catch (err) {
+    if (!isCoreFault(err)) return null;
+    recycleFfmpeg(ffmpeg);
+    return coreFaultResult(stderr, err);
+  }
+}
+
 async function runWasmFfmpeg(
   parsed: ParsedFfmpegInvocation,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
@@ -1612,10 +1810,11 @@ async function runWasmFfmpeg(
   const resolvedInputs = loaded.inputs;
 
   const outputPath = parsed.outputPath!;
-  const outputName = `__out_${outputPath.split('/').pop() || 'out.bin'}`;
+  const analysisSink = isAnalysisSink(parsed);
+  const outputName = memfsOutputName(outputPath, analysisSink);
 
   let stderr = '';
-  let ffmpeg: Awaited<ReturnType<typeof getFfmpeg>>;
+  let ffmpeg: FfmpegInstance;
   try {
     ffmpeg = await getFfmpeg({
       onProgress: (msg) => {
@@ -1639,21 +1838,17 @@ async function runWasmFfmpeg(
   let early: CmdResult | null = null;
   let outputBytes: Uint8Array | null = null;
   try {
-    await stageInputsIntoMemfs(ffmpeg, resolvedInputs);
-
-    const finalArgs = buildFinalFfmpegArgs(parsed, resolvedInputs, outputName);
-    const exitCode = await ffmpeg.exec(finalArgs);
-    if (exitCode !== 0) {
-      early = {
-        stdout: '',
-        stderr: stderr || `ffmpeg: exited with code ${exitCode}\n`,
-        exitCode: exitCode || 1,
-      };
-    } else {
-      const read = await readEncodedOutput(ffmpeg, outputName, outputPath, stderr);
-      if ('error' in read) early = read.error;
-      else outputBytes = read.bytes;
-    }
+    const encoded = await execWasmEncode({
+      ffmpeg,
+      parsed,
+      resolvedInputs,
+      outputName,
+      outputPath,
+      analysisSink,
+      stderr,
+    });
+    early = encoded.early;
+    outputBytes = encoded.outputBytes;
   } catch (err) {
     // A *throw* out of the wasm path is not an ordinary ffmpeg
     // failure — bad flags and unsupported codecs come back as a
@@ -1663,23 +1858,17 @@ async function runWasmFfmpeg(
     // damage is scoped to this invocation.
     faulted = true;
     recycleFfmpeg(ffmpeg);
-    early = {
-      stdout: '',
-      stderr:
-        `${stderr}ffmpeg: ${err instanceof Error ? err.message : String(err)}\n` +
-        'ffmpeg: the wasm core faulted and was recycled; retry the command ' +
-        '(a large input may need to be split into smaller passes)\n',
-      exitCode: 1,
-    };
+    early = coreFaultResult(stderr, err);
   } finally {
-    try {
-      ffmpeg.off('log', logHandler);
-    } catch {
-      /* noop */
-    }
-    // A terminated worker has no MEMFS left to tidy, and every
-    // `deleteFile` would re-enter the trapped module.
-    if (!faulted) await cleanupMemfs(ffmpeg, resolvedInputs, outputName);
+    const cleanupFault = await detachAndCleanupMemfs({
+      ffmpeg,
+      logHandler,
+      resolvedInputs,
+      outputName,
+      stderr,
+      faulted,
+    });
+    if (cleanupFault) early = cleanupFault;
   }
   if (early) return early;
 
