@@ -18,8 +18,8 @@ DOM rebuilds (`innerHTML`, `replaceChildren`, reflow) must capture and restore l
 
 ## 4. CDP / Chrome edge cases
 
-Foreground the page (`Page.bringToFront()` / wake the renderer) before screenshots or
-capture. Validate the CDP target and port before trusting them; handle disconnects.
+Foreground the page (`Page.bringToFront()` / wake renderer) before screenshots or capture.
+Validate CDP target + port before trusting them; handle disconnects.
 
 ## 5. Native / macOS permissions
 
@@ -46,7 +46,7 @@ boot paths; preserve shared fallbacks; prefer capability checks to float names.
 
 ## 9. Origin / bridge routing contract (often Major)
 
-Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hard-coded
+Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hardcoded
 origins, comparisons without slash normalization.
 
 ## 10. Layer import direction (Major)
@@ -55,7 +55,7 @@ Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Fla
 (even types/helpers) and relative imports out of `packages/webapp/src` (→
 `@slicc/shared-ts`); move down, never grow baselines. Registries move wholesale,
 never re-declare; setter injection needs a registrar in each reading realm.
-`isExtensionRealm` in `scoops/`/`tools/` → `CapabilityBroker` (#2276).
+`isExtensionRealm`/`getChromeExtensionRealm` in `scoops/`/`tools/` → `CapabilityBroker` (#2276).
 
 ## 11. Untyped string-keyed bags
 
@@ -68,8 +68,8 @@ flag any read of it — the compiler cannot catch it yet.
 
 ## 12. Agent skill freshness
 
-Capability, command, argument, or workflow changes must update the matching runtime and
-developer `SKILL.md` files. Run skill-router + sync checks.
+Capability/command/argument/workflow changes must update matching runtime + developer
+`SKILL.md` files. Run skill-router + sync checks.
 
 ## 13. Transcript export — redaction boundary (Critical)
 
@@ -85,5 +85,5 @@ dispatch, scanning all args.
 
 ## Severity
 
-🔴 Critical = likely production issue · 🟡 Major = scenario-specific · 🔵 Minor = quality.
+🔴 Critical = likely prod issue · 🟡 Major = scenario-specific · 🔵 Minor = quality.
 Stay high-signal; prefer no comment to a speculative one.

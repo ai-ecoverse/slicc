@@ -9,9 +9,7 @@ import {
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
 } from '../base/tray-leader-status.js';
-import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
-import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
+import { createTrayFetch, TrayProxyFetchError } from '../shell/tray-fetch.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 
@@ -50,12 +48,20 @@ interface ControllerAttachResponse {
 }
 
 /**
- * The status registry moved to `base/tray-leader-status.ts` so `shell/` can
- * read it without importing UP the layer stack (#2537). Re-exported here
- * under the established names — this module stays the address existing
- * callers use, and the manager below still drives the very same singleton.
+ * Two things moved out of this module and are re-exported under their
+ * established names, so this stays the address existing callers use:
+ *
+ * - The status registry moved to `base/tray-leader-status.ts` so `shell/`
+ *   can read it without importing UP the layer stack (#2537); the manager
+ *   below still drives the very same singleton.
+ * - `createTrayFetch` and `TrayProxyFetchError` moved to
+ *   `shell/tray-fetch.ts` (#2276): the realm check they need is a topology
+ *   decision, which belongs in the transport layer — this module no longer
+ *   reads the float at all. `shouldRecreateTray` below still imports
+ *   `TrayProxyFetchError` directly, since it needs the class.
  */
 export {
+  createTrayFetch,
   getLeaderStatusWithFallback,
   getLeaderTrayRuntimeStatus,
   LEADER_STATUS_STORAGE_KEY,
@@ -63,6 +69,7 @@ export {
   type LeaderTraySession,
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
+  TrayProxyFetchError,
 };
 
 export interface LeaderTraySessionStore {
@@ -637,20 +644,6 @@ class LeaderTrayHttpError extends Error {
   }
 }
 
-/**
- * Thrown by {@link createTrayFetch} when the node-server `/api/fetch-proxy`
- * itself failed to reach the tray worker (a tagged proxy/transport error, not a
- * real upstream HTTP status). Typed so `shouldRecreateTray` can recognise it
- * and mint a fresh tray instead of leaving the leader inactive — a dead stored
- * tray surfaces here as "Proxy fetch failed", not as a LeaderTrayHttpError.
- */
-export class TrayProxyFetchError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'TrayProxyFetchError';
-  }
-}
-
 function shouldRecreateTray(error: unknown): boolean {
   // A stored tray session is just a cache. If reusing it fails because the tray
   // is gone (403/404/410), the worker is failing (5xx), or the proxy transport
@@ -676,47 +669,4 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
   } catch {
     return null;
   }
-}
-
-export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
-  const isExtension = isExtensionRealm();
-  if (isExtension) {
-    // Wrap so calling `this.fetchImpl(...)` doesn't rebind `this` to the
-    // LeaderTrayManager instance and trigger "Illegal invocation" against
-    // the global fetch.
-    return (url, init) => fetchImpl(url, init);
-  }
-
-  return async (url, init = {}) => {
-    const targetUrl = typeof url === 'string' ? url : url.toString();
-
-    // Skip the proxy for same-origin requests (e.g. when served from the worker)
-    try {
-      const target = new URL(targetUrl);
-      if (target.origin === window.location.origin) {
-        return fetchImpl(targetUrl, { ...init, cache: 'no-store' as RequestCache });
-      }
-    } catch {
-      // If URL parsing fails, fall through to proxy
-    }
-
-    const headers = new Headers(init.headers);
-    headers.set('X-Target-URL', targetUrl);
-    // Thin-bridge mode (UI hosted, /api on the local node-server) requires
-    // the per-process bridge token on cross-origin /api/* calls; same-origin
-    // / loopback returns an empty record so the legacy path is unchanged.
-    for (const [k, v] of Object.entries(apiHeaders())) headers.set(k, v);
-
-    const response = await fetchImpl(resolveApiUrl('/api/fetch-proxy'), {
-      ...init,
-      headers,
-      cache: 'no-store',
-    });
-    // Only treat as proxy infrastructure failure when the proxy tagged it.
-    // Upstream 4xx/5xx (e.g. tray-worker auth/quotas) must flow through.
-    if (isProxyError(response)) {
-      throw new TrayProxyFetchError(await readProxyErrorMessage(response));
-    }
-    return response;
-  };
 }

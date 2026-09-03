@@ -2,10 +2,12 @@
  * Bridge endpoint configuration — where a same-origin `/api/*` call actually
  * goes, and what capability it carries.
  *
- * Three module-level singletons, each set once per realm during boot: the
- * local node-server origin, the per-process bridge token, and the thin-bridge
- * extension delegate id. `resolveApiUrl` and `apiHeaders` are the two readers
- * every `/api/*` caller goes through.
+ * Four module-level singletons, each set once per realm: the local
+ * node-server origin, the per-process bridge token, and the thin-bridge
+ * extension delegate id (each set explicitly during boot), plus the
+ * real-extension-realm answer (lazily probed once, see
+ * `getChromeExtensionRealm`). `resolveApiUrl` and `apiHeaders` are the two
+ * readers every `/api/*` caller goes through.
  *
  * This lives in `base/` rather than next to `createProxiedFetch` because the
  * readers are needed a rung below the shell — `fs/mount/` builds its
@@ -16,6 +18,8 @@
  * State is per module instance: the page realm and the kernel-worker realm
  * hold independent copies and each configures its own.
  */
+
+import { isChromeExtensionRealm } from '@slicc/shared-ts';
 
 /**
  * Optional absolute origin (e.g. `http://localhost:5710`) the CLI mode
@@ -98,6 +102,53 @@ export function setExtensionDelegateId(id: string | null): void {
 /** Test-only accessor for the currently configured extension delegate id. */
 export function getExtensionDelegateId(): string | null {
   return extensionDelegateId;
+}
+
+/**
+ * Whether this realm IS the real Chrome extension page (offscreen / options /
+ * side panel — `chrome.runtime.id` truthy), lazily probed via
+ * `isChromeExtensionRealm()` on first read and cached. The fact is stable for
+ * a realm's lifetime (the extension page never becomes a different page), so
+ * re-probing on every call is pure waste — and every reader is the SAME fact,
+ * asked repeatedly, not an independent probe each needs to make. `null` means
+ * "not yet resolved"; `setChromeExtensionRealm` overrides it, mainly for
+ * tests that toggle `globalThis.chrome` per test case after this module has
+ * already run its first lazy probe.
+ *
+ * THIS IS STILL A FLOAT PROBE — caching it does not relocate the decision, it
+ * only dedupes the read. `scoops/`, `tools/` and `kernel/` (except
+ * `kernel/host.ts`, the one composition root) must never call
+ * `getChromeExtensionRealm()`: business logic there asks an injected
+ * `CapabilityBroker` or takes a composition-time answer, it never asks "am I
+ * in the extension?" itself (#2276, review-patterns category 10). Only
+ * `shell/` and `base/` — the layers that OWN topology — may read it; see
+ * `shell/proxied-fetch.ts` and `shell/tray-fetch.ts`. Slice D's lint gate
+ * bans this name (and `setChromeExtensionRealm`) for those directories
+ * alongside `isExtensionRealm` / `hasLocalNodeServer` / `resolveFloatTopology`
+ * — see `work-unit/capability/index.ts`.
+ */
+let chromeExtensionRealm: boolean | null = null;
+
+/**
+ * Override (or, with `null`, clear) the cached extension-realm answer so the
+ * next `getChromeExtensionRealm()` call re-probes. Production code never
+ * calls this — the lazy probe is the real answer and it never changes mid
+ * realm; it exists for tests that stub `globalThis.chrome` per test case.
+ */
+export function setChromeExtensionRealm(value: boolean | null): void {
+  chromeExtensionRealm = value;
+}
+
+/**
+ * Whether this realm is the real Chrome extension page. Cached after first
+ * read — a float probe, not a business-logic call; see the field doc above
+ * for who may read it.
+ */
+export function getChromeExtensionRealm(): boolean {
+  if (chromeExtensionRealm === null) {
+    chromeExtensionRealm = isChromeExtensionRealm();
+  }
+  return chromeExtensionRealm;
 }
 
 /**

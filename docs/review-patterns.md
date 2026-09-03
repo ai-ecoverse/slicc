@@ -307,11 +307,15 @@ Test in both CLI and extension floats.
   the ranked layers cannot see it, since they are webapp-internal directories. Shared code
   travels through `@slicc/shared-ts`, never a deep path into a sibling package.
 - A new `isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
-  `resolveFloatTopology` call in `scoops/` or `tools/` business logic. Privileged
-  float detection belongs on the injected `CapabilityBroker`
-  (`work-unit/capability/`), composed once in `kernel/host.ts` (#2276). See
-  [`work-unit.md`](work-unit.md) Phase 6. The tell is the same as a back-edge:
-  the call site is in the wrong layer.
+  `resolveFloatTopology` / `getChromeExtensionRealm` / `setChromeExtensionRealm`
+  / `hasChromeRuntimeConnect` / `canConnectToChromeRuntime` call in `scoops/` or
+  `tools/` business logic — including one reached through a re-export under a
+  different name (`export const isTrayExtension = getChromeExtensionRealm` and
+  the like); a plain identifier grep does not catch a rename, so read the
+  import chain, not just the literal names. Privileged float detection belongs
+  on the injected `CapabilityBroker` (`work-unit/capability/`), composed once
+  in `kernel/host.ts` (#2276). See [`work-unit.md`](work-unit.md) Phase 6. The
+  tell is the same as a back-edge: the call site is in the wrong layer.
 
 **Historical precedents**
 
