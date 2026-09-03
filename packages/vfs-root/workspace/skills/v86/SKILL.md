@@ -14,7 +14,7 @@ The `v86` shell command boots x86 guests (ISO, raw disk, floppy, or direct Linux
 ## Install prerequisites
 
 ```bash
-ipk add -g v86@0.5.441
+ipk add -g v86@0.5.445
 mkdir -p /workspace/.v86
 curl -o /workspace/.v86/seabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/seabios.bin
 curl -o /workspace/.v86/vgabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin
