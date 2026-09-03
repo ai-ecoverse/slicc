@@ -61,6 +61,11 @@ function harness(
    */
   const composerField = document.createElement('textarea');
   document.body.append(composerField);
+  /** The chat column the HUD pins to, with the band it dims inside it. */
+  const chatPane = document.createElement('slicc-chatpane');
+  const composer = document.createElement('slicc-composer');
+  chatPane.append(composer);
+  document.body.append(chatPane);
   const focusComposer = vi.fn(() => composerField.focus());
   const toggle = vi.fn();
   const accounts = vi.fn();
@@ -145,6 +150,8 @@ function harness(
     ...(options.noFreezer ? {} : { freezer }),
     ...(options.noComposer ? {} : { focusComposer }),
     ...(options.composerAvailable ? { composerAvailable: options.composerAvailable } : {}),
+    hudHost: chatPane,
+    composerBand: composer,
     doc: document,
   });
   handles.setAction('accounts', accounts);
@@ -153,6 +160,8 @@ function harness(
     handles,
     dock,
     composerField,
+    chatPane,
+    composer,
     switcher,
     select,
     selectItem,
@@ -183,6 +192,31 @@ function harness(
       await flush();
     },
   };
+}
+
+/**
+ * A stand-in for `<slicc-key-hud>`. The real element lives in
+ * `@slicc/webcomponents` (whose barrel needs a `CSSStyleSheet` jsdom will not
+ * give us), and what the SHELL owes it is exactly this: mount it, set the
+ * hint, forward every press. How a press then draws — dimming, depth, the
+ * linger — is the component's own contract, tested in its own suite.
+ */
+class KeyHudStub extends HTMLElement {
+  readonly calls: Array<{ caps: string[]; bound: boolean }> = [];
+  record(caps: readonly string[], bound: boolean): void {
+    this.calls.push({ caps: [...caps], bound });
+  }
+}
+customElements.define('slicc-key-hud', KeyHudStub);
+
+/** The mounted HUD, or `null` when the mode is off. */
+function hud(): KeyHudStub | null {
+  return document.querySelector<KeyHudStub>('slicc-key-hud');
+}
+
+/** Every press the shell has forwarded to the HUD. */
+function presses(): Array<{ caps: string[]; bound: boolean }> {
+  return hud()?.calls ?? [];
 }
 
 /** Dispatch a keydown on `target` (bubbling, so the document listener sees it). */
@@ -458,15 +492,24 @@ describe('the Escape contract', () => {
     expect(handles.active()).toBe(false);
   });
 
-  it('shows a mode badge while it is on', () => {
-    const { handles } = harness();
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
+  it('mounts the HUD on the chat column while it is on', () => {
+    const { handles, chatPane } = harness();
+    expect(hud()).toBeNull();
     escape();
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')?.textContent).toContain(
-      'Keyboard mode'
-    );
+    // The COLUMN, not the band: a read-only scoop hides the composer (#2312)
+    // and the mode has to keep its indicator there.
+    expect(hud()?.parentElement).toBe(chatPane);
     handles.setActive(false);
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
+    expect(hud()).toBeNull();
+  });
+
+  it('marks the composer band while it owns the keyboard, and unmarks it after', () => {
+    const { handles, composer } = harness();
+    expect(composer.hasAttribute('keys')).toBe(false);
+    escape();
+    expect(composer.hasAttribute('keys')).toBe(true);
+    handles.setActive(false);
+    expect(composer.hasAttribute('keys')).toBe(false);
   });
 });
 
@@ -753,103 +796,60 @@ describe('inside keyboard mode', () => {
 });
 
 describe('the key HUD', () => {
-  const caps = () =>
-    [...document.querySelectorAll('[data-wc-shortcuts="keys"] .wcsc-badge__press')].map((p) => ({
-      keys: [...p.querySelectorAll('kbd')].map((k) => k.textContent).join(''),
-      bound: (p as HTMLElement).dataset.bound,
-      age: (p as HTMLElement).dataset.age,
-    }));
-  const hint = () => document.querySelector<HTMLElement>('.wcsc-badge__hint');
-
-  it('prints the press that opened the mode', () => {
+  it('forwards the press that opened the mode', () => {
     harness();
     escape();
-    expect(caps()).toEqual([{ keys: 'Esc', bound: 'true', age: undefined }]);
-    // The hint gives way to the strip; they never share the pill.
-    expect(hint()?.hidden).toBe(true);
+    expect(presses()).toEqual([{ caps: ['Esc'], bound: true }]);
   });
 
-  it('accumulates presses left to right, staling everything but the newest', () => {
+  it('forwards every press in order, bound or not', () => {
     harness();
     escape();
     press({ key: 's', code: 'KeyS' });
-    press({ key: '2', code: 'Digit2' });
-    expect(caps()).toEqual([
-      { keys: 'Esc', bound: 'true', age: 'stale' },
-      { keys: 's', bound: 'true', age: 'stale' },
-      { keys: '2', bound: 'true', age: undefined },
+    press({ key: 'q', code: 'KeyQ' });
+    expect(presses()).toEqual([
+      { caps: ['Esc'], bound: true },
+      { caps: ['s'], bound: true },
+      // Unbound, and still forwarded: "that key did nothing" is what someone
+      // learning the mode needs to see, and silence reads as a dropped press.
+      { caps: ['q'], bound: false },
     ]);
   });
 
-  it('shows an unbound key dimmed rather than not at all', () => {
-    harness();
-    escape();
-    press({ key: 'q', code: 'KeyQ' });
-    expect(caps().at(-1)).toEqual({ keys: 'q', bound: 'false', age: undefined });
-  });
-
-  it('shows a digit past the end of the strip as unbound', () => {
+  it('forwards a digit past the end of the strip as unbound', () => {
     harness({ tabs: ['only'] });
     escape();
     press({ key: '4', code: 'Digit4' });
-    expect(caps().at(-1)).toEqual({ keys: '4', bound: 'false', age: undefined });
+    expect(presses().at(-1)).toEqual({ caps: ['4'], bound: false });
   });
 
-  it('marks a press suspended behind a modal as unbound', () => {
+  it('forwards a press suspended behind a modal as unbound', () => {
     harness();
     escape();
     const dialog = document.createElement('slicc-dialog');
     dialog.setAttribute('open', '');
     document.body.append(dialog);
     press({ key: 'f', code: 'KeyF' });
-    expect(caps().at(-1)).toEqual({ keys: 'f', bound: 'false', age: undefined });
+    expect(presses().at(-1)).toEqual({ caps: ['f'], bound: false });
   });
 
-  it('keeps only the last few presses', () => {
-    harness();
-    escape();
-    for (const key of ['s', 'q', 's', 'q', 's']) press({ key, code: `Key${key.toUpperCase()}` });
-    expect(caps()).toHaveLength(4);
-    expect(caps().at(-1)?.keys).toBe('s');
-  });
-
-  it('clears itself after a quiet spell and the hint returns', () => {
-    vi.useFakeTimers();
-    try {
-      harness();
-      escape();
-      press({ key: 's', code: 'KeyS' });
-      expect(caps()).toHaveLength(2);
-      vi.advanceTimersByTime(1000);
-      // Still within the linger window, and a new press restarts it.
-      press({ key: 's', code: 'KeyS' });
-      vi.advanceTimersByTime(1000);
-      expect(caps()).toHaveLength(3);
-      vi.advanceTimersByTime(1000);
-      expect(caps()).toHaveLength(0);
-      expect(hint()?.hidden).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('goes away with the mode', () => {
+  it('goes away with the mode, so nothing outlives it to draw into', () => {
     const { handles } = harness();
     escape();
     press({ key: 's', code: 'KeyS' });
     handles.setActive(false);
-    expect(document.querySelector('[data-wc-shortcuts="keys"]')).toBeNull();
+    expect(hud()).toBeNull();
   });
 
-  it('never announces the typing — only the mode is a live region', () => {
+  /**
+   * The chord window and the HUD's linger are the same number by design — a
+   * chord is live exactly while its caps are on screen — so the shell writes
+   * it onto the element rather than letting two packages each keep a default.
+   */
+  it('pins the linger to the chord window', () => {
     harness();
     escape();
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')?.getAttribute('aria-live')).toBe(
-      'polite'
-    );
-    expect(document.querySelector('[data-wc-shortcuts="keys"]')?.getAttribute('aria-hidden')).toBe(
-      'true'
-    );
+    expect(hud()?.getAttribute('linger')).toBe('1600');
   });
 });
 
@@ -1117,7 +1117,7 @@ describe('the mode is the resting state', () => {
     vi.mocked(document.hasFocus).mockReturnValue(false);
     window.dispatchEvent(new Event('blur'));
     expect(handles.active()).toBe(false);
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
+    expect(hud()).toBeNull();
     // A suspension, not a decision: the intent the user left is untouched.
     expect(handles.intent()).toBe('keyboard');
     vi.mocked(document.hasFocus).mockReturnValue(true);
@@ -1239,13 +1239,13 @@ describe('one installation per document', () => {
 });
 
 describe('dispose', () => {
-  it('removes the listeners, the badge and any overlay', () => {
+  it('removes the listeners, the HUD and any overlay', () => {
     const { handles, select } = harness();
     escape();
     handles.showHelp();
     handles.dispose();
     expect(document.querySelector('slicc-dialog')).toBeNull();
-    expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
+    expect(hud()).toBeNull();
     expect(handles.active()).toBe(false);
     escape();
     press({ key: '1', code: 'Digit1' });
@@ -1592,32 +1592,42 @@ describe('helpKeyLabel', () => {
   });
 });
 
-describe('the badge hint', () => {
-  const hint = () => document.querySelector<HTMLElement>('.wcsc-badge__hint')?.textContent;
+describe('the HUD hint', () => {
+  const hint = () => hud()?.getAttribute('hint');
 
   /**
    * The regression this exists to prevent: the hint hard-coded `h for help`,
    * and the shipped map moved help to `?` — so the very first thing the mode
    * told a new user to press did nothing.
    */
-  it('names the key that is actually bound', () => {
+  it('names the keys that are actually bound', () => {
     harness();
     escape();
-    expect(hint()).toBe('? for help · ⏎ to type');
+    // `[x]` is the element's cap notation. Both ways back to typing are named:
+    // the mode is the resting state, so "how do I type again?" is the question
+    // it has to answer.
+    expect(hint()).toBe('[?] help · [i] or [⏎] to type');
   });
 
-  it('follows a rebind, because it is read when the badge appears', () => {
+  it('follows a rebind, because it is read when the HUD appears', () => {
     const { handles } = harness();
-    handles.setKeymap({ x: 'help' });
+    handles.setKeymap({ x: 'help', e: 'composer' });
     escape();
-    expect(hint()).toBe('x for help · ⏎ to type');
+    expect(hint()).toBe('[x] help · [e] to type');
   });
 
   it('says nothing about help when a config has unbound it', () => {
     const { handles } = harness();
+    handles.setKeymap({ f: 'files', i: 'composer' });
+    escape();
+    expect(hint()).toBe('[i] to type');
+  });
+
+  it('is empty when a config has unbound both', () => {
+    const { handles } = harness();
     handles.setKeymap({ f: 'files' });
     escape();
-    expect(hint()).toBe('⏎ to type');
+    expect(hint()).toBe('');
   });
 });
 

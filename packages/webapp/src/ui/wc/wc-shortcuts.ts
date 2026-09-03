@@ -193,6 +193,19 @@ export interface ShortcutDeps {
    * "wherever a composer can be focused at all".
    */
   composerAvailable?: () => boolean;
+  /**
+   * The chat column the HUD pins to — `<slicc-chatpane>` in the shell, which
+   * is `position: relative` for exactly this. Defaults to `<body>`, which is
+   * also positioned enough to keep a float without a column from losing its
+   * mode indicator.
+   */
+  hudHost?: HTMLElement;
+  /**
+   * The composer band, marked `keys` while the mode owns the keyboard so it
+   * recedes: a dimmed card is the difference between "there is no caret here"
+   * and "the caret is somewhere you cannot see".
+   */
+  composerBand?: HTMLElement;
   /** Injected for tests; defaults to the switcher's own document. */
   doc?: Document;
 }
@@ -252,21 +265,6 @@ slicc-dialog.wcsc-dialog::part(dialog){width:min(440px,92vw);}
 .wcsc__keys{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
 .wcsc__key{font:600 11px/1 var(--mono,ui-monospace,monospace);color:var(--txt-2);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:4px 6px;white-space:nowrap;}
 .wcsc__sep{font-size:11px;color:var(--txt-3);}
-.wcsc-badge{position:fixed;left:50%;bottom:18px;z-index:90;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;pointer-events:none;font:600 11.5px/1 var(--ui);color:var(--ink);background:color-mix(in srgb,var(--canvas) 88%,transparent);border:1px solid var(--line);box-shadow:0 6px 20px -8px rgba(10,10,10,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
-.wcsc-badge__dot{width:7px;height:7px;border-radius:50%;background:var(--ctx,var(--waffle,#e6a03c));box-shadow:0 0 0 3px color-mix(in srgb,var(--ctx,#e6a03c) 22%,transparent);}
-.wcsc-badge__hint{color:var(--txt-3);font-weight:500;}
-.wcsc-badge__hint[hidden]{display:none;}
-.wcsc-badge__keys{display:none;align-items:center;gap:5px;}
-.wcsc-badge__keys:not(:empty){display:flex;}
-.wcsc-badge__press{display:flex;align-items:center;gap:2px;}
-.wcsc-badge__cap{min-width:20px;padding:3px 6px;border-radius:5px;text-align:center;font:600 12px/1 var(--mono,ui-monospace,monospace);color:var(--ink);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;}
-.wcsc-badge__press[data-bound='false'] .wcsc-badge__cap{color:var(--txt-3);opacity:.55;border-bottom-width:1px;}
-.wcsc-badge__press[data-age='stale'] .wcsc-badge__cap{opacity:.4;}
-.wcsc-badge__press[data-age='stale'][data-bound='false'] .wcsc-badge__cap{opacity:.25;}
-@media (prefers-reduced-motion:no-preference){.wcsc-badge__press{animation:wcsc-press-in .12s ease-out;}}
-@keyframes wcsc-press-in{from{opacity:0;transform:translateY(2px) scale(.94);}to{opacity:1;transform:none;}}
-@media (prefers-reduced-motion:no-preference){.wcsc-badge{animation:wcsc-badge-in .14s ease-out;}}
-@keyframes wcsc-badge-in{from{opacity:0;transform:translateX(-50%) translateY(4px);}to{opacity:1;transform:translateX(-50%);}}
 `;
 
 /**
@@ -955,6 +953,28 @@ export function helpKeyLabel(keymap: Readonly<Record<string, CommandId>>): strin
   return key === undefined ? null : keyLabel(key);
 }
 
+/**
+ * What the HUD says at rest, in the element's cap notation (`[x]` draws a
+ * cap): the help key, then every key that puts the caret back in the composer.
+ *
+ * Derived from the keymap in force for the same reason {@link helpKeyLabel} is
+ * — the hint must never name a key that does nothing — and it names the way
+ * BACK to typing rather than a way out of the mode, because there is no way
+ * out: the mode is the resting state, and Escape enters it.
+ */
+export function hudHint(keymap: Readonly<Record<string, CommandId>>): string {
+  const help = helpKeyLabel(keymap);
+  const typing = Object.keys(keymap)
+    .filter((key) => keymap[key] === 'composer')
+    .map((key) => `[${keyLabel(key)}]`);
+  return [
+    help === null ? null : `[${help}] help`,
+    typing.length === 0 ? null : `${typing.join(' or ')} to type`,
+  ]
+    .filter((part) => part !== null)
+    .join(' · ');
+}
+
 export function shortcutRows(
   keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP
 ): ShortcutRow[] {
@@ -1014,7 +1034,13 @@ function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement
   return list;
 }
 
-/** How long a pressed key stays on the HUD before the strip clears. */
+/**
+ * How long a pressed key stays on the HUD before the strip clears.
+ *
+ * Written onto the element rather than left to its default, because
+ * {@link CHORD_WINDOW_MS} is the same number BY DESIGN and two defaults in two
+ * packages would drift apart the first time either was tuned.
+ */
 const HUD_LINGER_MS = 1600;
 
 /**
@@ -1027,8 +1053,6 @@ const HUD_LINGER_MS = 1600;
  * list never expires under the user mid-walk; stopping ends both together.
  */
 const CHORD_WINDOW_MS = HUD_LINGER_MS;
-/** How many presses the HUD keeps before dropping the oldest. */
-const HUD_DEPTH = 4;
 
 /** How a key prints on a cap. Anything unlisted prints as itself. */
 const KEY_CAPS: Readonly<Record<string, string>> = {
@@ -1065,90 +1089,39 @@ export function describeKey(
 }
 
 /**
- * The mode indicator and key HUD: one non-interactive pill above the composer.
+ * The mode indicator and key HUD: `<slicc-key-hud>`, pinned to the bottom edge
+ * of the chat column, where a visible composer band puts it over the meta row.
  *
- * It has two states rather than two elements. Idle, it explains the mode
- * ("? for help · ⏎ to type" — the key comes from the live keymap, never from
- * a string here); the moment a key is pressed the hint gives
- * way to a strip of key caps, which is both the "did that register?" feedback
- * and — because presses accumulate left to right — the readout a multi-key
- * chord will need when one exists. The strip clears itself after
- * {@link HUD_LINGER_MS} of quiet and the hint comes back.
+ * The element owns the chrome and the strip's own rules (a press dims as the
+ * next one lands, the oldest falls off, quiet brings the hint back); this
+ * function owns only what the SHELL knows — where it mounts and what the live
+ * keymap says the hint should be.
  *
- * A press that ran nothing is still shown, dimmed: "that key did nothing" is
- * exactly what someone learning the mode needs to see, and silence would read
- * as a dropped keystroke.
+ * Mounted on the column rather than on the band because a read-only scoop
+ * hides its composer entirely (#2312), and a mode indicator that disappears
+ * exactly where the keyboard is the only way to drive is worse than none.
  */
-function createBadge(
+function createHud(
   doc: Document,
+  host: HTMLElement,
   keymap: Readonly<Record<string, CommandId>>
 ): {
-  element: HTMLElement;
   record(parts: readonly string[], bound: boolean): void;
   destroy(): void;
 } {
-  const badge = doc.createElement('div');
-  badge.className = 'wcsc-badge';
-  badge.dataset.wcShortcuts = 'badge';
-  badge.setAttribute('role', 'status');
-  badge.setAttribute('aria-live', 'polite');
-  const dot = doc.createElement('span');
-  dot.className = 'wcsc-badge__dot';
-  const label = doc.createElement('span');
-  label.textContent = 'Keyboard mode';
-  const hint = doc.createElement('span');
-  hint.className = 'wcsc-badge__hint';
-  // Not "Esc to leave": the mode IS the resting state, so the way out is to
-  // start typing again. The help key is read from the keymap in force, so a
-  // rebind — or the shipped map moving it — can never leave the badge
-  // advertising a key that does nothing.
-  const help = helpKeyLabel(keymap);
-  hint.textContent = help ? `${help} for help · ⏎ to type` : '⏎ to type';
-  const keys = doc.createElement('div');
-  keys.className = 'wcsc-badge__keys';
-  keys.dataset.wcShortcuts = 'keys';
-  // The live region announces the MODE, not the typing: a cap per keystroke
-  // would turn a screen reader into a telegraph.
-  keys.setAttribute('aria-hidden', 'true');
-  badge.append(dot, label, hint, keys);
-
-  const view = doc.defaultView;
-  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
-  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const clear = (): void => {
-    keys.replaceChildren();
-    hint.hidden = false;
+  // Typed structurally rather than imported: the element upgrades only where
+  // the component library has been loaded (every float does, via the shell),
+  // and a float that has not is better off with an inert node than a crash.
+  const hud = doc.createElement('slicc-key-hud') as HTMLElement & {
+    record?(caps: readonly string[], bound: boolean): void;
   };
-
+  hud.dataset.wcShortcuts = 'hud';
+  hud.setAttribute('hint', hudHint(keymap));
+  hud.setAttribute('linger', String(HUD_LINGER_MS));
+  host.append(hud);
   return {
-    element: badge,
-    record: (parts, bound) => {
-      const press = doc.createElement('span');
-      press.className = 'wcsc-badge__press';
-      press.dataset.bound = String(bound);
-      for (const part of parts) {
-        const cap = doc.createElement('kbd');
-        cap.className = 'wcsc-badge__cap';
-        cap.textContent = part;
-        press.append(cap);
-      }
-      // Everything already on the strip is history the moment a new press
-      // lands, so it dims — the newest cap is the one being answered.
-      for (const previous of keys.children) {
-        (previous as HTMLElement).dataset.age = 'stale';
-      }
-      keys.append(press);
-      while (keys.children.length > HUD_DEPTH) keys.firstElementChild?.remove();
-      hint.hidden = true;
-      if (timer !== undefined) clearTimer(timer);
-      timer = setTimer(clear, HUD_LINGER_MS);
-    },
-    destroy: () => {
-      if (timer !== undefined) clearTimer(timer);
-      badge.remove();
-    },
+    record: (parts, bound) => hud.record?.(parts, bound),
+    destroy: () => hud.remove(),
   };
 }
 
@@ -1225,6 +1198,7 @@ function syncKeyboardLock(doc: Document): void {
 function createMode(
   doc: Document,
   keymap: () => Readonly<Record<string, CommandId>>,
+  hudHost: () => HTMLElement,
   onToggle: (on: boolean) => void
 ): {
   on(): boolean;
@@ -1232,28 +1206,27 @@ function createMode(
   record(parts: readonly string[], bound: boolean): void;
 } {
   let modeOn = false;
-  let badge: ReturnType<typeof createBadge> | null = null;
+  let hud: ReturnType<typeof createHud> | null = null;
   return {
     on: () => modeOn,
-    // Only while the mode is on: the badge IS the HUD, so there is nowhere to
-    // draw a key otherwise (and nothing outside the mode to draw).
-    record: (parts, bound) => badge?.record(parts, bound),
+    // Only while the mode is on: the HUD is mounted with the mode, so there is
+    // nowhere to draw a key otherwise (and nothing outside the mode to draw).
+    record: (parts, bound) => hud?.record(parts, bound),
     set: (next: boolean) => {
       if (next === modeOn) return;
       modeOn = next;
       doc.documentElement.toggleAttribute('data-slicc-keyboard-mode', next);
       onToggle(next);
       if (!next) {
-        badge?.destroy();
-        badge = null;
+        hud?.destroy();
+        hud = null;
         return;
       }
       ensureStyle(doc);
-      // Read at the moment the badge appears, so a keymap applied after the
+      // Read at the moment the HUD appears, so a keymap applied after the
       // shell wired itself (the config load is deliberately late) is the one
       // the hint names.
-      badge = createBadge(doc, keymap());
-      doc.body.append(badge.element);
+      hud = createHud(doc, hudHost(), keymap());
       // The caret would otherwise keep blinking in a composer that no longer
       // receives what is typed.
       const focused = doc.activeElement as HTMLElement | null;
@@ -1636,10 +1609,12 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   const mode = createMode(
     doc,
     () => keymap,
+    () => deps.hudHost ?? doc.body,
     (on) => {
       // The strip's tablist walk and the mode both want ←/→, and the strip is
       // closer to the key. It stands aside for as long as the mode is up.
       deps.switcher.arrowKeys = on ? 'off' : 'on';
+      deps.composerBand?.toggleAttribute('keys', on);
     }
   );
   const state: ModeState = { lastDockSurface: 'files' };

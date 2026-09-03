@@ -50,10 +50,11 @@ Co-located `src/**/<name>.stories.ts` (dist-excluded) + `tests/**/<name>.test.ts
 - **Public API:** export the class; expose attributes (reflected to properties), `::part` hooks, named slots, `CustomEvent`s (composed + bubbling) — never reach into another component's internals.
 - **Theming:** reference prototype tokens (`var(--canvas)`, `--ink`, `--ctx`, `--rainbow`, …); they inherit through shadow roots — don't re-declare. Light default; dark is `body.dark`/`.dark`/`[data-theme="dark"]`.
 
-Three specialized components carry non-obvious host contracts — full tables/rules in `docs/webcomponents-details.md`:
+Four specialized components carry non-obvious host contracts — full tables/rules in `docs/webcomponents-details.md`:
 
 - **Agent-avatar expression kit** (`<slicc-agent-avatar activity>`): shape/brows/lids/gaze over four channels (point/scalar/event; grammar in `switcher/avatar-expression.ts`). No `activity` = legacy pointer-tracking face; static outranks every channel; brows paint OUTSIDE the tile crop, so hosts must not clip the avatar.
 - **Monitor meter markers**: a `MonitorVital` `ratio` also takes `markers` (`MonitorMeterMarker[]`), one dot each; `color` is a resolved CSS color the HOST supplies (webapp passes `scoopColor()`). Deep-copied by the `model` getter.
+- **Keyboard-mode HUD** (`<slicc-key-hud>`): pins itself to the bottom of the nearest positioned ancestor — the shell makes that `<slicc-chatpane>`, the COLUMN, so it survives a read-only unit hiding the composer band (#2312). `hint` takes a `[x]` cap notation so the host names the keys its live keymap binds; `slicc-composer[keys]` is the band's half (everything but the HUD recedes).
 - **Composer push-to-talk** (`<slicc-composer ptt>`): owns the hold-to-dictate gesture, not the audio stack — hosts inject a `ComposerSpeech` via `speech` (DOM-free subpath `.../composer/speech`); dictated submits carry `detail.source === 'dictation'`.
 
 ## Tests + Stories

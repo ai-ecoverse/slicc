@@ -50,6 +50,22 @@ slicc-composer {
 slicc-composer[hidden] {
   display: none;
 }
+/* Keyboard mode: the band is not taking typing, and it says so by receding.
+   A dimmed card is the difference between "there is no caret here" and "the
+   caret is somewhere you cannot see" — the question the mode exists to answer.
+   The HUD keeps full strength by living OUTSIDE this subtree: it is pinned to
+   the chat column, a sibling of the band, so the one thing at full contrast is
+   the one thing the keyboard is talking to. Pointer events stay live: clicking
+   into the composer is still how you leave the mode. */
+slicc-composer[keys] > .slicc-composer__inner > * {
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  slicc-composer[keys] > .slicc-composer__inner > * {
+    transition: none;
+  }
+}
 /* Full-bleed band inside the dock-tree shell: the VISUAL band extends past
    the chat column's right edge — under the floating tool pane, up to the
    frame clip — while the composer's content column is untouched (an open

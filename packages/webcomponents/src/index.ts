@@ -50,6 +50,7 @@ export {
 } from './composer/slicc-composer-capture.js';
 export { SliccComposerMeta } from './composer/slicc-composer-meta.js';
 export { SliccInputCard } from './composer/slicc-input-card.js';
+export { type KeyPress, SliccKeyHud } from './composer/slicc-key-hud.js';
 export { type QueuedMessage, SliccQueuedStack } from './composer/slicc-queued-stack.js';
 export {
   type ComposerSpeech,

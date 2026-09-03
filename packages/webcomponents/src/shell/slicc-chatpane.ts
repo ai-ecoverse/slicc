@@ -45,6 +45,12 @@ const STYLE = `
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* The anchor for column-pinned chrome — today the keyboard-mode HUD, which
+     sits on the column's bottom edge rather than the composer's so it survives
+     a read-only unit hiding the whole band (#2312). Nothing else resolves
+     here: the composer and the capture surface are positioned themselves, so
+     they keep their own anchors. */
+  position: relative;
   font-family: var(--ui);
   color: var(--ink);
   background: var(--bg);

@@ -59,6 +59,12 @@ export interface ShortcutSurfaceDeps {
   /** The composer band, for the dictation turn `v` starts and ends. */
   composer: HTMLElement;
   /**
+   * The chat column the keyboard-mode HUD pins to. The COLUMN, not the band:
+   * a read-only scoop hides its composer entirely (#2312) and the mode has to
+   * keep its indicator there.
+   */
+  chatPane: HTMLElement;
+  /**
    * The file tree. `visibleIds()` is the list a positional key addresses —
    * the rows on screen, in order, which is NOT the `items` array: that is a
    * nested shape whose top level is `/workspace` and `/shared` with every
@@ -309,6 +315,8 @@ export function wireShellKeyboard(deps: ShellKeyboardDeps): ShortcutHandles {
     dock: deps.dock,
     freezer: deps.freezer,
     composerMeta: deps.composerMeta,
+    hudHost: deps.chatPane,
+    composerBand: deps.composer,
     focusComposer: () => deps.inputCard.focus(),
     /**
      * What `applyComposerAvailability` writes, read back: a scoop's band is
