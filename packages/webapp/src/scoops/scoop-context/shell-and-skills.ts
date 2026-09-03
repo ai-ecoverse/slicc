@@ -12,7 +12,7 @@
 
 import type { BrowserAPI } from '../../cdp/index.js';
 import { createLogger } from '../../core/index.js';
-import { fetchSecretEnvVars } from '../../core/secret-env.js';
+import { buildEnvFromMaskedEntries } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { RestrictedFS } from '../../fs/restricted-fs.js';
@@ -68,6 +68,45 @@ export interface ShellAndSkills {
   skills: Skill[];
 }
 
+/**
+ * Masked secrets for the shell env, via the injected broker (#2276).
+ *
+ * Total by construction: a rejected `listMaskedEnv()`, an `ok: false`
+ * result, or a reply whose `entries` is not an array all degrade to `{}`
+ * rather than throwing — this sits on `initShellAndSkills`'s hot path, so an
+ * unhandled rejection here would fail `ScoopContext.init()` and the unit
+ * would never reach `ready`, over an optional convenience. Every non-`{}`
+ * outcome still logs, so a broken masked-secrets path stays visible instead
+ * of silently degrading like `core/secret-env.ts`'s old helper's inner
+ * catches did.
+ */
+async function loadSecretEnv(broker: CapabilityBroker): Promise<Record<string, string>> {
+  try {
+    const maskedSecrets = await broker.secrets.listMaskedEnv();
+    if (!maskedSecrets.ok) {
+      log.warn('Failed to fetch masked secrets', {
+        capability: maskedSecrets.capability,
+        operation: maskedSecrets.operation,
+        message: maskedSecrets.message,
+        status: 'status' in maskedSecrets ? maskedSecrets.status : undefined,
+      });
+      return {};
+    }
+    if (!Array.isArray(maskedSecrets.value.entries)) {
+      log.warn('Masked secrets response was not an array', {
+        entriesType: typeof maskedSecrets.value.entries,
+      });
+      return {};
+    }
+    return buildEnvFromMaskedEntries(maskedSecrets.value.entries);
+  } catch (err) {
+    log.warn('Failed to fetch masked secrets', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {};
+  }
+}
+
 /** Create shell and load skills. */
 export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<ShellAndSkills> {
   const { scoop, unit, fs, skillsFs } = deps;
@@ -80,10 +119,10 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
   }
 
   const effectiveSkillsFs = (skillsFs ?? fs) as VirtualFS;
-  const secretEnv = await fetchSecretEnvVars();
-  // #2276: webhook topology comes from the injected broker, never a probe.
-  // Remaining call sites: `work-unit/capability/index.ts`.
+  // #2276: secrets + webhook topology come from the injected broker, never a
+  // probe. Remaining call sites: `work-unit/capability/index.ts`.
   const broker = deps.capabilityBroker ?? createRestCapabilityBroker();
+  const secretEnv = await loadSecretEnv(broker);
   const localNode = await broker.network.localNodeServer();
   const hasLocalNodeServer = () => localNode.ok;
 

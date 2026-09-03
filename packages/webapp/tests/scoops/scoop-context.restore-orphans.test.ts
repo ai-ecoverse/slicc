@@ -14,6 +14,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
+import { createFakeCapabilityBroker } from '../helpers/fake-capability-broker.js';
 
 type AgentCtorOptions = { initialState?: { messages?: AgentMessage[] } };
 
@@ -85,10 +86,6 @@ vi.mock('../../src/scoops/skills.js', () => ({
 
 vi.mock('../../src/scoops/scoop-management-tools.js', () => ({
   createScoopManagementTools: () => [],
-}));
-
-vi.mock('../../src/core/secret-env.js', () => ({
-  fetchSecretEnvVars: async () => ({}),
 }));
 
 const { ScoopContext } = await import('../../src/scoops/scoop-context.js');
@@ -186,7 +183,11 @@ describe('ScoopContext session restore — orphan healing', () => {
       createMockFs() as never,
       sessionStore as never,
       undefined,
-      'cone_test_1'
+      'cone_test_1',
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 
@@ -214,7 +215,11 @@ describe('ScoopContext session restore — orphan healing', () => {
       createMockFs() as never,
       sessionStore as never,
       undefined,
-      'cone_test_1'
+      'cone_test_1',
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 
@@ -236,7 +241,11 @@ describe('ScoopContext session restore — orphan healing', () => {
       createMockFs() as never,
       sessionStore as never,
       undefined,
-      'cone_test_1'
+      'cone_test_1',
+      undefined,
+      undefined,
+      undefined,
+      createFakeCapabilityBroker()
     );
     await ctx.init();
 

@@ -164,6 +164,21 @@ describe('extension-direct default transports', () => {
       expect(result.message).toBe('service worker inactive');
     }
   });
+
+  it('turns a malformed (non-array entries) masked-secrets reply into a typed failure, not a crash at the caller', async () => {
+    // A truthy-but-not-an-array `entries` would previously pass the old
+    // `!reply?.entries` check and hand a non-array to a caller expecting
+    // `readonly SecretMaskedEnvEntry[]` (round-1 review finding 1).
+    installChrome();
+    reply = { entries: 'not-an-array' };
+    const broker = createExtensionCapabilityBroker({ adapter: 'extension-direct' });
+    const result = await broker.secrets.listMaskedEnv();
+    expect(isCapabilityFailure(result)).toBe(true);
+    if (isCapabilityFailure(result)) {
+      expect(result.capability).toBe('secrets');
+      expect(result.operation).toBe('listMaskedEnv');
+    }
+  });
 });
 
 describe('cross-origin fetch over the fetch-proxy Port', () => {
