@@ -34,6 +34,16 @@ func isTextContentType(_ contentType: String) -> Bool {
         || normalized.contains("svg")
 }
 
+/// Whether a content type is `application/x-www-form-urlencoded`.
+///
+/// Callers need this on top of `isTextRequestContentType` because a form body is
+/// not just text: substituting a secret into one has to respect the
+/// percent-encoding (see `unmaskFormBody`).
+func isFormContentType(_ contentType: String) -> Bool {
+    if contentType.isEmpty { return false }
+    return contentType.lowercased().contains("urlencoded")
+}
+
 /// Request-side variant of `isTextContentType`, additionally matching
 /// `application/x-www-form-urlencoded`.
 ///
@@ -55,5 +65,5 @@ func isTextContentType(_ contentType: String) -> Bool {
 /// `packages/shared-ts/tests/cross-impl-vectors.test.ts`.
 func isTextRequestContentType(_ contentType: String) -> Bool {
     if contentType.isEmpty { return false }
-    return isTextContentType(contentType) || contentType.lowercased().contains("urlencoded")
+    return isTextContentType(contentType) || isFormContentType(contentType)
 }

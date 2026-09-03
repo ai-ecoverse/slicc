@@ -18,6 +18,9 @@ import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 
 const REAL_TOKEN = 'ghp_realtoken123456789abcdefghij';
 const HMAC_SECRET = 'job-signing-secret-abcdefghijklmnop';
+// Base64-shaped: `+`, `/` and `=` are all reserved in a form body, so splicing
+// this in raw would corrupt the request instead of authenticating it.
+const FORM_SECRET = 'ab+cd/ef=gh&ij';
 
 function expectedSignature(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex');
@@ -34,6 +37,7 @@ let proxy: Server;
 let upstreamUrl = '';
 let proxyBase = '';
 let masked = '';
+let maskedForm = '';
 type LogMock = Mock<(...args: unknown[]) => void>;
 let logger: { log: LogMock; warn: LogMock; error: LogMock };
 
@@ -48,6 +52,8 @@ function tempSecrets(domains = '127.0.0.1'): string {
       `GITHUB_TOKEN_DOMAINS=${domains}`,
       `SIGNING_KEY=${HMAC_SECRET}`,
       `SIGNING_KEY_DOMAINS=${domains}`,
+      `FORM_SECRET=${FORM_SECRET}`,
+      `FORM_SECRET_DOMAINS=${domains}`,
     ].join('\n'),
     {
       mode: 0o600,
@@ -73,6 +79,7 @@ async function setup(handler: UpstreamHandler, secretDomains?: string): Promise<
   );
   await proxyManager.reload();
   masked = proxyManager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!.maskedValue;
+  maskedForm = proxyManager.getMaskedEntries().find((e) => e.name === 'FORM_SECRET')!.maskedValue;
 
   const app = express();
   app.use(express.json({ type: () => false })); // never parse — proxy collects raw body
@@ -195,6 +202,34 @@ describe('registerFetchProxyRoute', () => {
     expect(res.status).toBe(200);
     expect(received).toContain(`token=${REAL_TOKEN}`);
     expect(received).not.toContain(masked);
+  });
+
+  it('percent-encodes a form secret so reserved characters survive upstream', async () => {
+    let received = '';
+    await setup((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        received = Buffer.concat(chunks).toString('utf-8');
+        res.setHeader('content-type', 'text/plain');
+        res.end('done');
+      });
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: {
+        'x-target-url': upstreamUrl,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: `client_secret=${maskedForm}&grant_type=client_credentials`,
+    });
+    expect(res.status).toBe(200);
+    // The upstream parse must see the real secret verbatim, and the `&`/`=`
+    // inside it must not have split the body into extra fields.
+    const parsed = new URLSearchParams(received);
+    expect(parsed.get('client_secret')).toBe(FORM_SECRET);
+    expect(parsed.get('grant_type')).toBe('client_credentials');
+    expect([...parsed.keys()]).toEqual(['client_secret', 'grant_type']);
   });
 
   it('leaves a binary request body byte-identical', async () => {

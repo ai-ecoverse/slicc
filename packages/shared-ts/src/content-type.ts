@@ -15,6 +15,18 @@ export function isTextContentType(contentType: string): boolean {
 }
 
 /**
+ * Whether a content type is `application/x-www-form-urlencoded`.
+ *
+ * Callers need this on top of {@link isTextRequestContentType} because a form
+ * body is not just text: substituting a secret into one has to respect the
+ * percent-encoding (see `unmaskFormBody`).
+ */
+export function isFormContentType(contentType: string): boolean {
+  if (!contentType) return false;
+  return contentType.toLowerCase().includes('urlencoded');
+}
+
+/**
  * Request-side variant of {@link isTextContentType}, additionally matching
  * `application/x-www-form-urlencoded`.
  *
@@ -31,5 +43,5 @@ export function isTextContentType(contentType: string): boolean {
  */
 export function isTextRequestContentType(contentType: string): boolean {
   if (!contentType) return false;
-  return isTextContentType(contentType) || contentType.toLowerCase().includes('urlencoded');
+  return isTextContentType(contentType) || isFormContentType(contentType);
 }

@@ -509,7 +509,13 @@ func registerAPIRoutes(
                     if isTextRequestContentType(contentType),
                         let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
                     {
-                        let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
+                        // A form body takes the encoding-aware path: a plain
+                        // substring splice corrupts it whenever the real secret
+                        // carries a form-reserved character (base64 + / =).
+                        let replaced =
+                            isFormContentType(contentType)
+                            ? unmaskFormBody(text: bodyString, hostname: targetHostname, injector: secretInjector)
+                            : secretInjector.injectBody(text: bodyString, hostname: targetHostname)
                         if replaced != bodyString {
                             rawBody = ByteBuffer(string: replaced)
                         }

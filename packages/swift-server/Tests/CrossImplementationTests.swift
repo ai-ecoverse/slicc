@@ -116,6 +116,54 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
+    // MARK: - Form-body unmask parity (mirrors the table in
+    // packages/shared-ts/tests/cross-impl-vectors.test.ts)
+    //
+    // Both floats must percent-encode a substituted secret identically. The real
+    // value carries every form-reserved character, so a drift in either the
+    // encoder's allowed set or the field walk changes an expected string.
+    // `%MASKED%` stands for the masked token, derived from the pinned `mask()`.
+
+    private static let formSessionId = "session-form-parity"
+    private static let formReal = "ab+cd/ef=gh&ij kl%mn"
+    private static let formEncoded = "ab%2Bcd%2Fef%3Dgh%26ij%20kl%25mn"
+
+    private static let formBodyTable: [(input: String, expected: String)] = [
+        (
+            "token=%MASKED%&grant_type=client_credentials",
+            "token=\(formEncoded)&grant_type=client_credentials"
+        ),
+        ("%MASKED%", formEncoded),
+        ("a=%MASKED%&b=keep&c=%MASKED%", "a=\(formEncoded)&b=keep&c=\(formEncoded)"),
+        // No masked token: forwarded byte-identical, `+` and `%2F` untouched.
+        ("a=1&b=hello+world&c=%2Fpath", "a=1&b=hello+world&c=%2Fpath"),
+        ("a=&b=", "a=&b="),
+    ]
+
+    func testUnmaskFormBodyMatchesPinnedTable() {
+        let masked = mask(
+            sessionId: Self.formSessionId,
+            secretName: "FORM_SECRET",
+            realValue: Self.formReal
+        )
+        let injector = SecretInjector(secrets: [
+            SecretInjector.LoadedSecret(
+                name: "FORM_SECRET",
+                realValue: Self.formReal,
+                maskedValue: masked,
+                domains: ["api.example.com"]
+            )
+        ])
+        for row in Self.formBodyTable {
+            let body = row.input.replacingOccurrences(of: "%MASKED%", with: masked)
+            XCTAssertEqual(
+                unmaskFormBody(text: body, hostname: "api.example.com", injector: injector),
+                row.expected,
+                "form-body unmask drift for \(row.input)"
+            )
+        }
+    }
+
     // MARK: - CDP frame unmask parity (mirrors packages/shared-ts/tests/cdp-frame-unmask.test.ts)
     //
     // Pins the same fixture (sessionId='session-fixed', API_KEY='sk-realValue123'

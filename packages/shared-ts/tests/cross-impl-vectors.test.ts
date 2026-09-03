@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isTextRequestContentType } from '../src/content-type.js';
+import { unmaskFormBody } from '../src/form-body-unmask.js';
 import { mask } from '../src/secret-masking.js';
+import { type FetchProxySecretSource, SecretsPipeline } from '../src/secrets-pipeline.js';
 
 /**
  * Pinned cross-implementation mask vectors.
@@ -101,4 +103,48 @@ describe('cross-implementation request content-type table', () => {
       expect(isTextRequestContentType(contentType)).toBe(isText);
     }
   );
+});
+
+/**
+ * Pinned form-body unmask substitution table.
+ *
+ * The same table is pinned in `CrossImplementationTests.swift`
+ * (`testUnmaskFormBodyMatchesPinnedTable`). Both floats must percent-encode a
+ * substituted secret identically — the real value below carries every
+ * form-reserved character, so a drift in either the encoder's allowed set or
+ * the field walk shows up as a different expected string.
+ *
+ * `%MASKED%` stands for the masked token, which is derived at runtime from the
+ * already-pinned `mask()`.
+ */
+const FORM_SESSION = 'session-form-parity';
+const FORM_REAL = 'ab+cd/ef=gh&ij kl%mn';
+const FORM_ENCODED = 'ab%2Bcd%2Fef%3Dgh%26ij%20kl%25mn';
+
+const FORM_BODY_TABLE: [input: string, expected: string][] = [
+  [
+    'token=%MASKED%&grant_type=client_credentials',
+    `token=${FORM_ENCODED}&grant_type=client_credentials`,
+  ],
+  ['%MASKED%', FORM_ENCODED],
+  ['a=%MASKED%&b=keep&c=%MASKED%', `a=${FORM_ENCODED}&b=keep&c=${FORM_ENCODED}`],
+  // No masked token: forwarded byte-identical, `+` and `%2F` untouched.
+  ['a=1&b=hello+world&c=%2Fpath', 'a=1&b=hello+world&c=%2Fpath'],
+  ['a=&b=', 'a=&b='],
+];
+
+describe('cross-implementation form-body unmask table', () => {
+  const source: FetchProxySecretSource = {
+    get: async (name) => (name === 'FORM_SECRET' ? FORM_REAL : undefined),
+    listAll: async () => [{ name: 'FORM_SECRET', value: FORM_REAL, domains: ['api.example.com'] }],
+  };
+
+  it.each(FORM_BODY_TABLE)('unmaskFormBody(%j)', async (input, expected) => {
+    const pipeline = new SecretsPipeline({ sessionId: FORM_SESSION, source });
+    await pipeline.reload();
+    const masked = await mask(FORM_SESSION, 'FORM_SECRET', FORM_REAL);
+    const body = input.split('%MASKED%').join(masked);
+    const { text } = unmaskFormBody(pipeline, body, 'api.example.com');
+    expect(text).toBe(expected);
+  });
 });
