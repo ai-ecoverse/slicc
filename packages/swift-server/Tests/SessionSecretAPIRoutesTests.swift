@@ -116,9 +116,9 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
                 uri: "/api/secrets",
                 method: .post,
                 headers: [.contentType: "application/json"],
-                body: ByteBuffer(string: #"{"name":"TOKEN","value":"fixture-value","domains":["api.example"]}"#)
+                body: ByteBuffer(string: #"{"name":"TOKEN","value":"fixture-value"}"#)
             ) { response in
-                XCTAssertEqual(response.status, .notFound)
+                XCTAssertEqual(response.status, .badRequest)
             }
             try await client.execute(uri: "/api/secrets/peek", method: .get) { response in
                 XCTAssertEqual(response.status, .badRequest)
@@ -133,6 +133,46 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
                 body: ByteBuffer(string: #"{"name":"UNKNOWN","domains":[]}"#)
             ) { response in
                 XCTAssertEqual(response.status, .notFound)
+            }
+        }
+    }
+
+    /// The persisted set writes through whatever `SecretStoreAccess` is
+    /// injected — the Keychain in production, this fixture under test — and
+    /// reloads masking so the new secret is usable without a restart. A session
+    /// record of the same name still shadows it for peek/delete (asserted by
+    /// `testSessionDeleteWinsCollisionThenRevealsPersistedMask`).
+    func testPersistedSetWritesThroughInjectedStore() async throws {
+        let fixture = InMemoryPersistedSecrets()
+        let injector = SecretInjector(sessionId: "persisted-set-store-fixture", persistedStore: fixture.access)
+        try await withApp(injector: injector) { client in
+            let value = "persisted-store-fixture-value"
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"name":"TOKEN","value":"\#(value)","domains":["api.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(try self.decodeJSONObject(response.body)["ok"], .bool(true))
+            }
+            XCTAssertEqual(fixture.get(name: "TOKEN"), Secret(name: "TOKEN", value: value, domains: ["api.example"]))
+
+            try await client.execute(uri: "/api/secrets", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+                let entries = try self.decodeJSONArray(response.body)
+                XCTAssertEqual(entries.count, 1)
+                guard case .object(let entry) = entries[0] else { return XCTFail("Expected object") }
+                XCTAssertEqual(entry["name"]?.stringValue, "TOKEN")
+                XCTAssertEqual(entry["domains"], .array([.string("api.example")]))
+                XCTAssertNil(entry["value"], "Secret value must never be returned")
+            }
+
+            try await client.execute(uri: "/api/secrets/masked", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+                let text = String(buffer: response.body)
+                XCTAssertTrue(text.contains("TOKEN"))
+                XCTAssertFalse(text.contains(value))
             }
         }
     }
@@ -229,6 +269,34 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
                 XCTAssertEqual(response.status, .ok)
                 XCTAssertEqual(response.headers[Self.allowOrigin], "https://www.sliccy.ai")
             }
+            // The persisted write is the most privileged secret route, so pin
+            // that it sits behind the same token gate rather than assuming the
+            // `/api/*` prefix match covers it.
+            let persistedBody = ByteBuffer(
+                string: #"{"name":"PERSISTED","value":"cors-fixture-value","domains":["api.example"]}"#)
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.origin: "https://www.sliccy.ai", .contentType: "application/json"],
+                body: persistedBody
+            ) { response in
+                XCTAssertEqual(response.status, .forbidden)
+                XCTAssertEqual(response.headers[Self.allowOrigin], "https://www.sliccy.ai")
+            }
+            XCTAssertNil(fixture.get(name: "PERSISTED"), "A token-gated rejection must not reach the store")
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [
+                    .origin: "https://www.sliccy.ai",
+                    .contentType: "application/json",
+                    Self.bridgeTokenHeader: "fixture-token",
+                ],
+                body: persistedBody
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+            }
+            XCTAssertEqual(fixture.get(name: "PERSISTED")?.domains, ["api.example"])
         }
     }
 

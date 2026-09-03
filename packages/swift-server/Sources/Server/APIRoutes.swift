@@ -277,16 +277,7 @@ func registerAPIRoutes(
     }
 
     // Secret management API — injected persisted access (Keychain in production)
-    router.get("/api/secrets") { _, _ in
-        let entries = secretInjector.persistedStore.list()
-        let items: [LickSystem.JSONValue] = entries.map { entry in
-            .object([
-                "name": .string(entry.name),
-                "domains": .array(entry.domains.map { .string($0) }),
-            ])
-        }
-        return try jsonResponse(.array(items))
-    }
+    PersistedSecretAPIRoutes.register(router: router, injector: secretInjector)
 
     SessionSecretAPIRoutes.register(router: router, injector: secretInjector)
 
@@ -611,6 +602,78 @@ private struct SessionSecretPayload: Decodable {
 private struct SecretScopePayload: Decodable {
     let name: String?
     let domains: [String]?
+}
+
+/// Body of POST /api/secrets (persisted create/replace). Every field is
+/// optional so a missing key, a JSON `null`, and a wrong type all surface as
+/// the same 400 that node-server's `typeof` / `isStringArray` guards produce
+/// in `packages/node-server/src/routes/secrets.ts`.
+private struct PersistedSecretPayload: Decodable {
+    let name: String?
+    let value: String?
+    let domains: [String]?
+}
+
+/// Persisted (Keychain-backed) secret routes — the list + create/replace half
+/// of the secret API. Byte-mirrors `registerSecretRoutes` in
+/// `packages/node-server/src/routes/secrets.ts` so the single `node-rest`
+/// CapabilityBroker adapter drives either privileged server (#2806).
+private enum PersistedSecretAPIRoutes {
+    static func register(router: Router<some RequestContext>, injector: SecretInjector) {
+        registerList(router: router, injector: injector)
+        registerSet(router: router, injector: injector)
+    }
+
+    private static func registerList(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets") { _, _ in
+            let items: [LickSystem.JSONValue] = injector.persistedStore.list().map { entry in
+                .object([
+                    "name": .string(entry.name),
+                    "domains": .array(entry.domains.map { .string($0) }),
+                ])
+            }
+            return try jsonResponse(.array(items))
+        }
+    }
+
+    /// Persisted set — writes through the injected `SecretStoreAccess` (the
+    /// `ai.sliccy.slicc / __envfile__` Keychain blob in production, an isolated
+    /// fixture under test). Reached only by an explicit `scope: "persisted"`;
+    /// the agent's intrinsic sudo prompt gates the request before it is sent.
+    private static func registerSet(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.post("/api/secrets") { request, _ in
+            let payload: PersistedSecretPayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: PersistedSecretPayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let value = payload.value, let domains = payload.domains else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            // Fail closed: a secret with no declared domains is scoped to
+            // nothing, not to everything. Enforced here rather than left to the
+            // store so the wire contract does not depend on which
+            // `SecretStoreAccess` is injected. node-server surfaces the same
+            // rejection as a 500 out of `EnvSecretStore.set`, so mirror its
+            // status and message instead of "improving" it into a 400.
+            guard !domains.isEmpty else {
+                return try jsonErrorResponse(
+                    status: .internalServerError,
+                    message: "Secret \"\(name)\" must have at least one authorized domain"
+                )
+            }
+            do {
+                try injector.persistedStore.save(name, value, domains)
+            } catch {
+                return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+            }
+            // Pick the new secret up in the masking pipeline without a restart
+            // — node-server's `secretProxy.reload()` does the same.
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
 }
 
 private enum SessionSecretAPIRoutes {
