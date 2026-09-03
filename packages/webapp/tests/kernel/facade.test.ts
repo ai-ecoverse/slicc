@@ -154,6 +154,9 @@ function makeOrchestratorMock() {
     resetFilesystem: vi.fn().mockResolvedValue(undefined),
     reloadAllSkills: vi.fn().mockResolvedValue(undefined),
     getSessionCosts: vi.fn(() => ({})),
+    getWorkUnits: vi.fn(() => ({
+      close: vi.fn().mockResolvedValue(undefined),
+    })),
   };
 }
 
@@ -252,6 +255,61 @@ describe('Kernel facade parity', () => {
     const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
     expect(sessionStore.delete).toHaveBeenCalledWith('session-test-scoop');
     expect(orchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
+  });
+
+  // 2c. Dropping a cone with an onParentClose:'detach' child must not forget
+  //     the promoted survivor's session (#2278).
+  it('cone drop with detach survivor keeps the survivor session', async () => {
+    const keeper = {
+      jid: 'scoop_keeper',
+      name: 'Keeper',
+      folder: 'keeper',
+      parentJid: 'cone_1' as string | null,
+      requiresTrigger: true,
+      assistantLabel: 'keeper',
+      addedAt: new Date().toISOString(),
+      onParentClose: 'detach' as const,
+    };
+    const otherRoot = {
+      jid: 'cone_2',
+      name: 'Other',
+      folder: 'cone-other',
+      parentJid: null as string | null,
+      requiresTrigger: false,
+      assistantLabel: 'Other',
+      addedAt: new Date().toISOString(),
+    };
+    let scoops: RegisteredScoop[] = [
+      {
+        jid: 'cone_1',
+        name: 'Cone',
+        folder: 'cone',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'sliccy',
+        addedAt: new Date().toISOString(),
+      },
+      keeper,
+      otherRoot,
+    ];
+    orchestrator.getScoops.mockImplementation(() => scoops);
+    orchestrator.getWorkUnits.mockReturnValue({
+      close: vi.fn(async (jid: string) => {
+        // Promote detach child, drop the cone.
+        scoops = scoops
+          .filter((s) => s.jid !== jid)
+          .map((s) =>
+            s.jid === keeper.jid ? { ...s, parentJid: null, requiresTrigger: false } : s
+          );
+      }),
+    });
+
+    await client.unregisterScoop('cone_1');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-keeper');
   });
 
   // 2b. delete-queued-message: dismissing a queued card on the panel

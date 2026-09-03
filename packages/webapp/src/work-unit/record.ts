@@ -55,6 +55,8 @@ export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
     // there is meaningless and would be a second, divergent source of truth for
     // the same capability.
     scoop.approvesGuestRequests = undefined;
+    // A root has no parent, so detach-on-close cannot apply.
+    scoop.onParentClose = undefined;
   }
   return scoop;
 }

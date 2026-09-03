@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildWorkUnitRecord, WorkUnitManager } from '../../src/work-unit/manager.js';
+import { interactiveRootPolicy } from '../../src/work-unit/policy.js';
 import { childRecord, makeFakeHost, rootRecord } from './fixtures.js';
 
 describe('buildWorkUnitRecord', () => {
@@ -41,6 +42,20 @@ describe('buildWorkUnitRecord', () => {
   it('honours a caller-supplied id', () => {
     expect(buildWorkUnitRecord({ parentId: null, name: 'x', id: 'custom' }).jid).toBe('custom');
   });
+
+  it('records detach-on-close only on a child that asked for it', () => {
+    expect(
+      buildWorkUnitRecord({ parentId: 'cone_1', name: 'keeper', onParentClose: 'detach' })
+        .onParentClose
+    ).toBe('detach');
+    expect(
+      buildWorkUnitRecord({ parentId: 'cone_1', name: 'plain' }).onParentClose
+    ).toBeUndefined();
+    // A root has no parent; the flag is ignored.
+    expect(
+      buildWorkUnitRecord({ parentId: null, name: 'Cone', onParentClose: 'detach' }).onParentClose
+    ).toBeUndefined();
+  });
 });
 
 describe('WorkUnitManager', () => {
@@ -51,7 +66,9 @@ describe('WorkUnitManager', () => {
   const c = childRecord(other.jid, { folder: 'c' });
 
   function tree() {
-    const host = makeFakeHost([root, a, b, other, c]);
+    // Clone: promote/close mutate `parentJid` in place, and these records are
+    // shared across the suite.
+    const host = makeFakeHost([root, a, b, other, c].map((s) => ({ ...s })));
     return { host, manager: new WorkUnitManager(host) };
   }
 
@@ -420,5 +437,151 @@ describe('WorkUnitManager', () => {
     const results = await manager.join(['ghost']);
     expect(results).toEqual([{ id: 'ghost', summary: null, timedOut: true }]);
     expect(host.waitForScoops).toHaveBeenCalledWith(['ghost'], undefined);
+  });
+
+  describe('promote / detach (#2278)', () => {
+    it('turns a child into an independent root and updates the descriptor', async () => {
+      const { host, manager } = tree();
+      const before = manager.get(a.jid)!.descriptor;
+      expect(before.parentId).toBe(root.jid);
+      expect(before.display.role).toBe('child');
+      expect(before.policy.canCreateChildren).toBe(false);
+
+      const d = await manager.promote(a.jid);
+      expect(d.parentId).toBeNull();
+      expect(d.display.role).toBe('primary');
+      expect(d.policy).toEqual(interactiveRootPolicy());
+      expect(d.completion).toEqual({ mode: 'interactive' });
+      expect(d.onParentClose).toBe('cascade');
+      // Folder (and therefore the chat session key) is kept; workspaceFor
+      // then treats the unit as an extra cone.
+      expect(d.folder).toBe(a.folder);
+      expect(d.workspace.root).toBe(`/cones/${a.folder}/workspace`);
+      expect(host.persistScoop).toHaveBeenCalledOnce();
+      expect(host.persistScoop.mock.calls[0][0]).toMatchObject({
+        jid: a.jid,
+        parentJid: null,
+        requiresTrigger: false,
+      });
+      expect(host.rekeyConversation).toHaveBeenCalledOnce();
+      expect(host.rekeyConversation.mock.calls[0]).toEqual([
+        `/scoops/${a.folder}/workspace::${a.jid}`,
+        {
+          key: `/cones/${a.folder}/workspace::${a.jid}`,
+          workUnitId: a.jid,
+          workspaceId: `/cones/${a.folder}/workspace`,
+          folder: a.folder,
+          legacyKeys: { agentSessionId: a.jid, chatSessionId: `session-${a.folder}` },
+        },
+      ]);
+      expect(host.reinitLiveUnit).toHaveBeenCalledOnce();
+      expect(host.reinitLiveUnit).toHaveBeenCalledWith(a.jid);
+      // Persist → rekey → reinit so createTab binds the migrated record.
+      const persistOrder = host.persistScoop.mock.invocationCallOrder[0];
+      const rekeyOrder = host.rekeyConversation.mock.invocationCallOrder[0];
+      const reinitOrder = host.reinitLiveUnit.mock.invocationCallOrder[0];
+      expect(persistOrder).toBeLessThan(rekeyOrder);
+      expect(rekeyOrder).toBeLessThan(reinitOrder);
+      expect(manager.getParent(a.jid)).toBeNull();
+      expect(manager.roots().map((u) => u.descriptor.id)).toEqual([root.jid, a.jid, other.jid]);
+      expect(manager.getChildren(root.jid).map((u) => u.descriptor.id)).toEqual([b.jid]);
+      // The live runtime is the same object; its descriptor is a fresh projection.
+      expect(manager.get(a.jid)!.descriptor.parentId).toBeNull();
+    });
+
+    it('rejects an unknown id', async () => {
+      const { host, manager } = tree();
+      await expect(manager.promote('ghost')).rejects.toThrow(/Work unit not found: ghost/);
+      expect(host.persistScoop).not.toHaveBeenCalled();
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op on a unit that is already a root', async () => {
+      const { host, manager } = tree();
+      const d = await manager.promote(root.jid);
+      expect(d.parentId).toBeNull();
+      expect(d.id).toBe(root.jid);
+      expect(host.persistScoop).not.toHaveBeenCalled();
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
+    });
+
+    it('rolls the record back when persist fails', async () => {
+      const { host, manager } = tree();
+      host.persistScoop.mockRejectedValueOnce(new Error('disk full'));
+      await expect(manager.promote(a.jid)).rejects.toThrow(/disk full/);
+      expect(manager.get(a.jid)?.descriptor.parentId).toBe(root.jid);
+      expect(manager.get(a.jid)?.descriptor.display.role).toBe('child');
+      expect(host.getScoop(a.jid)?.trigger).toBe(`@${a.folder}`);
+      expect(host.reinitLiveUnit).not.toHaveBeenCalled();
+    });
+
+    it('detach is an alias of promote', async () => {
+      const { manager } = tree();
+      const d = await manager.detach(b.jid);
+      expect(d.parentId).toBeNull();
+      expect(d.display.role).toBe('primary');
+      expect(manager.get(b.jid)?.descriptor.parentId).toBeNull();
+    });
+  });
+
+  describe('close descendants (#2278)', () => {
+    it('cascades by default and still drops children', async () => {
+      const { host, manager } = tree();
+      await manager.close(root.jid);
+      expect(host.unregisterScoop.mock.calls.map(([jid]) => jid)).toEqual([a.jid, b.jid, root.jid]);
+      expect(manager.get(a.jid)).toBeNull();
+      expect(manager.get(b.jid)).toBeNull();
+      expect(manager.get(root.jid)).toBeNull();
+      // The other root and its child are untouched.
+      expect(manager.get(other.jid)?.descriptor.id).toBe(other.jid);
+      expect(manager.get(c.jid)?.descriptor.parentId).toBe(other.jid);
+    });
+
+    it('detach-on-close leaves the configured child as a surviving root', async () => {
+      const keeper = childRecord(root.jid, { folder: 'keeper', onParentClose: 'detach' });
+      const dropped = childRecord(root.jid, { folder: 'dropped' });
+      const host = makeFakeHost([root, keeper, dropped, other, c]);
+      const manager = new WorkUnitManager(host);
+
+      await manager.close(root.jid);
+      expect(manager.get(root.jid)).toBeNull();
+      expect(manager.get(dropped.jid)).toBeNull();
+      const survivor = manager.get(keeper.jid);
+      expect(survivor).not.toBeNull();
+      expect(survivor!.descriptor.parentId).toBeNull();
+      expect(survivor!.descriptor.display.role).toBe('primary');
+      expect(survivor!.descriptor.policy).toEqual(interactiveRootPolicy());
+      expect(manager.roots().map((u) => u.descriptor.id)).toEqual([keeper.jid, other.jid]);
+    });
+
+    it('close({ descendants: "detach" }) promotes every direct child', async () => {
+      const { manager } = tree();
+      await manager.close(root.jid, { descendants: 'detach' });
+      expect(manager.get(root.jid)).toBeNull();
+      expect(manager.get(a.jid)?.descriptor.parentId).toBeNull();
+      expect(manager.get(b.jid)?.descriptor.parentId).toBeNull();
+      expect(manager.get(c.jid)?.descriptor.parentId).toBe(other.jid);
+    });
+
+    it('an explicit cascade overrides a child that asked to detach', async () => {
+      const keeper = childRecord(root.jid, { folder: 'keeper', onParentClose: 'detach' });
+      const host = makeFakeHost([root, keeper]);
+      const manager = new WorkUnitManager(host);
+      await manager.close(root.jid, { descendants: 'cascade' });
+      expect(manager.get(keeper.jid)).toBeNull();
+      expect(manager.get(root.jid)).toBeNull();
+    });
+
+    it('a detached child keeps the grandchildren it already owned', async () => {
+      const mid = childRecord(root.jid, { folder: 'mid', onParentClose: 'detach' });
+      const deep = childRecord(mid.jid, { folder: 'deep' });
+      const host = makeFakeHost([root, mid, deep, other]);
+      const manager = new WorkUnitManager(host);
+      await manager.close(root.jid);
+      expect(manager.get(root.jid)).toBeNull();
+      expect(manager.get(mid.jid)?.descriptor.parentId).toBeNull();
+      expect(manager.get(deep.jid)?.descriptor.parentId).toBe(mid.jid);
+      expect(manager.rootOf(deep.jid)?.descriptor.id).toBe(mid.jid);
+    });
   });
 });

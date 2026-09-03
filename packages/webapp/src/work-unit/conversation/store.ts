@@ -162,6 +162,50 @@ export class WorkUnitConversationStore {
     }
   }
 
+  /**
+   * Move a canonical record to a new key/workspace identity (#2278 promote).
+   *
+   * `conversationKeyFor` includes `workspaceFor(...).root`, so promoting a
+   * child (`/scoops/<folder>/…` → `/cones/<folder>/…`) would otherwise leave
+   * history under the old key while `createTab` loads the new one empty.
+   * Save-then-delete: a crash mid-way may leave a duplicate, never a loss.
+   * No-op when keys match, the source is absent/unreadable, or the target
+   * already holds an incompatible newer-schema record.
+   */
+  async rekey(fromKey: string, identity: ConversationIdentity): Promise<void> {
+    if (fromKey === identity.key) return;
+    try {
+      const source = await this.read(fromKey);
+      if (source.status !== 'ok') return;
+      const target = await this.read(identity.key);
+      if (target.status === 'incompatible' || target.status === 'error') {
+        log.warn('Conversation rekey refused: target is not writable', {
+          fromKey,
+          toKey: identity.key,
+          status: target.status,
+        });
+        return;
+      }
+      const now = Date.now();
+      await this.save({
+        ...source.record,
+        key: identity.key,
+        workUnitId: identity.workUnitId,
+        workspaceId: identity.workspaceId,
+        folder: identity.folder,
+        legacyKeys: identity.legacyKeys,
+        updatedAt: now,
+      });
+      await this.delete(fromKey);
+    } catch (err) {
+      log.warn('Conversation rekey failed', {
+        fromKey,
+        toKey: identity.key,
+        error: errorText(err),
+      });
+    }
+  }
+
   /** Every canonical key currently stored. */
   async listKeys(): Promise<string[]> {
     try {

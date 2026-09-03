@@ -124,6 +124,16 @@ export function deriveCompletion(scoop: RegisteredScoop): CompletionPolicy {
   return { mode: 'notify-parent' };
 }
 
+/**
+ * Close policy of a child relative to its parent. Roots have no parent, so
+ * they always report `cascade` (the field is ignored). Absent / anything
+ * other than `'detach'` is cascade — today's default.
+ */
+export function deriveOnParentClose(scoop: RegisteredScoop): 'cascade' | 'detach' {
+  if (scoop.parentJid === null) return 'cascade';
+  return scoop.onParentClose === 'detach' ? 'detach' : 'cascade';
+}
+
 const CAPABILITY_FLAGS = [
   'canCreateChildren',
   'canManageChildren',

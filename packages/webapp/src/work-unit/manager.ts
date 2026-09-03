@@ -1,13 +1,15 @@
 /**
  * `WorkUnitManager` — hierarchy-aware facade over the orchestrator's scoop
- * registry (#1666, Phase 1; `createMany` / `join` in Phase 8a / #2278).
+ * registry (#1666, Phase 1; `createMany` / `join` in Phase 8a / #2278;
+ * promote/detach in Phase 8c).
  *
  * It answers the questions the RFC says nobody can answer today — "who is
  * my parent?", "which units do I own?", "which root should an unaddressed
  * event go to?" — from the explicit `parentJid` edge instead of a global
- * role lookup. Creation and teardown delegate to the existing
- * register/unregister paths. `join` is a thin map over the scoop-wait
- * completion bus — it must not grow a second waiter table.
+ * role lookup. Creation, promote/detach, and teardown delegate to the
+ * existing register / persist / unregister paths. `join` is a thin map
+ * over the scoop-wait completion bus — it must not grow a second waiter
+ * table.
  */
 
 import {
@@ -15,13 +17,18 @@ import {
   type RegisteredScoop,
   type ScoopConfig,
 } from '../scoops/types.js';
+import { conversationKeyFor, workspaceIdFor } from './conversation/key.js';
+import type { ConversationIdentity } from './conversation/store.js';
 import { defaultChildPathsForMode, workspaceFor } from './descriptor.js';
 import { assertChildPolicyAllowed, childrenOf, rootsOf } from './policy.js';
+import { chatSessionIdFor, normalizeScoopRecord } from './record.js';
 import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
 import type {
+  CloseWorkUnitOptions,
   CreateWorkUnitOptions,
   JoinOptions,
   JoinResult,
+  OnParentClose,
   WorkUnitDescriptor,
   WorkUnitId,
 } from './types.js';
@@ -38,6 +45,23 @@ export interface CompletionWaitResult {
 export interface WorkUnitManagerHost extends WorkUnitHost {
   getScoops(): RegisteredScoop[];
   registerScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Persist an existing record after an in-place mutation (promote / detach).
+   * Distinct from {@link registerScoop}, which also spawns a live runtime.
+   */
+  persistScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Rebuild the live agent after a promote so `ScoopContext.unit`, the
+   * filesystem view, and the tool set match the new root policy. No-op
+   * when nothing has spawned. Must not run if persist rolled back.
+   */
+  reinitLiveUnit(id: WorkUnitId): Promise<void>;
+  /**
+   * Move the canonical conversation from the pre-promote key to the new
+   * workspace identity. Optional so lightweight fakes need not wire a store;
+   * the real orchestrator always implements it.
+   */
+  rekeyConversation?(fromKey: string, identity: ConversationIdentity): Promise<void>;
   /**
    * Wait until each unit's current work settles, up to an optional timeout.
    * This IS `ScoopCompletionService.waitForScoops` — `join` must not grow a
@@ -64,6 +88,7 @@ export function buildWorkUnitRecord(
     parentJid: options.parentId,
     ...(config ? { config, configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION } : {}),
     ...(options.notifyOnComplete === false ? { notifyOnComplete: false } : {}),
+    ...(!root && options.onParentClose === 'detach' ? { onParentClose: 'detach' as const } : {}),
   };
   if (!root) base.trigger = `@${folder}`;
   return base;
@@ -262,17 +287,122 @@ export class WorkUnitManager {
   }
 
   /**
+   * Turn a child into an independent root (#2278): `parentJid = null`.
+   *
+   * Policy, completion and presentation then derive as for any other root
+   * (`interactiveRootPolicy`, `completion.mode: 'interactive'`,
+   * `display.role: 'primary'`). A restricted-root preset is **not** used —
+   * `parentJid === null` continues to mean the interactive-root preset, so
+   * the root test stays one field. `detach` is the RFC name for the same
+   * operation; it is an alias of this method.
+   *
+   * The unit keeps its folder (and therefore its chat session key).
+   * `workspaceFor` then treats it as an extra cone (`/cones/<folder>/…`);
+   * files under `/scoops/<folder>/` are not moved. The canonical conversation
+   * record is rekeyed (`/scoops/…` → `/cones/…`) before the live runtime is
+   * rebuilt so history is not orphaned under the old workspace identity.
+   *
+   * After persist, the live runtime is torn down and `createTab`'d so
+   * `ScoopContext.unit`, the filesystem (RestrictedFS → VirtualFS) and the
+   * tool/callback set stay in lockstep with the new root policy. A unit
+   * that has never spawned is persist-only.
+   *
+   * Idempotent on a unit that is already a root. Unknown ids throw.
+   */
+  async promote(id: WorkUnitId): Promise<WorkUnitDescriptor> {
+    const scoop = this.host.getScoop(id);
+    if (!scoop) throw new Error(`Work unit not found: ${id}`);
+    if (scoop.parentJid === null) return this.get(id)!.descriptor;
+
+    // Capture before `parentJid = null` changes workspaceFor / conversationKeyFor.
+    const fromConversationKey = conversationKeyFor(scoop);
+    const previous = snapshotOwnership(scoop, scoop.parentJid);
+    scoop.parentJid = null;
+    normalizeScoopRecord(scoop);
+    try {
+      await this.host.persistScoop(scoop);
+    } catch (err) {
+      restoreOwnership(scoop, previous);
+      throw err;
+    }
+    // Rekey before reinit so createTab binds the survivor to the migrated record.
+    await this.host.rekeyConversation?.(fromConversationKey, {
+      key: conversationKeyFor(scoop),
+      workUnitId: scoop.jid,
+      workspaceId: workspaceIdFor(scoop),
+      folder: scoop.folder,
+      legacyKeys: {
+        agentSessionId: scoop.jid,
+        chatSessionId: chatSessionIdFor(scoop),
+      },
+    });
+    await this.host.reinitLiveUnit(id);
+    return this.get(id)!.descriptor;
+  }
+
+  /**
+   * RFC name for {@link WorkUnitManager.promote}. Detach and promote are
+   * the same operation: a child becomes an independent root. There is no
+   * "detach from parent without taking root policy" API.
+   */
+  detach(id: WorkUnitId): Promise<WorkUnitDescriptor> {
+    return this.promote(id);
+  }
+
+  /**
    * Close a unit and, first, everything it owns. A parent never outlives its
    * children's teardown, and closing root A never touches root B's subtree.
+   *
+   * Descendants default to **cascade** (today's behaviour). A child whose
+   * `onParentClose` is `'detach'`, or a call that passes
+   * `{ descendants: 'detach' }`, is promoted instead of closed (#2278).
    */
-  async close(id: WorkUnitId): Promise<void> {
+  async close(id: WorkUnitId, options?: CloseWorkUnitOptions): Promise<void> {
     const runtime = this.get(id);
     if (!runtime) return;
-    for (const child of this.getChildren(id)) {
-      await this.close(child.descriptor.id);
+    // Snapshot before promote mutates parentJid (which would drop the child
+    // from getChildren mid-loop).
+    const children = this.getChildren(id);
+    for (const child of children) {
+      if (descendantClose(child, options) === 'detach') {
+        await this.promote(child.descriptor.id);
+      } else {
+        await this.close(child.descriptor.id, options);
+      }
     }
     await runtime.close();
   }
+}
+
+function descendantClose(child: WorkUnitRuntime, options?: CloseWorkUnitOptions): OnParentClose {
+  return options?.descendants ?? child.descriptor.onParentClose;
+}
+
+/** Fields `promote` mutates so a failed persist can roll the record back. */
+interface OwnershipSnapshot {
+  parentJid: string;
+  trigger: RegisteredScoop['trigger'];
+  requiresTrigger: boolean;
+  approvesGuestRequests: RegisteredScoop['approvesGuestRequests'];
+  onParentClose: RegisteredScoop['onParentClose'];
+}
+
+function snapshotOwnership(scoop: RegisteredScoop, parentJid: string): OwnershipSnapshot {
+  return {
+    parentJid,
+    trigger: scoop.trigger,
+    requiresTrigger: scoop.requiresTrigger,
+    approvesGuestRequests: scoop.approvesGuestRequests,
+    onParentClose: scoop.onParentClose,
+  };
+}
+
+function restoreOwnership(scoop: RegisteredScoop, previous: OwnershipSnapshot): void {
+  scoop.parentJid = previous.parentJid;
+  scoop.trigger = previous.trigger;
+  scoop.requiresTrigger = previous.requiresTrigger;
+  scoop.approvesGuestRequests = previous.approvesGuestRequests;
+  scoop.onParentClose = previous.onParentClose;
 }
 
 /**

@@ -36,6 +36,15 @@ describe('conversationKeyFor', () => {
     expect(keys.size).toBe(4);
   });
 
+  it('promote changes the workspace half of the key (#2278)', () => {
+    const child = childRecord('cone_1', { folder: 'worker-scoop' });
+    expect(conversationKeyFor(child)).toBe('/scoops/worker-scoop/workspace::scoop_worker-scoop_1');
+    const promoted = { ...child, parentJid: null };
+    expect(conversationKeyFor(promoted)).toBe(
+      '/cones/worker-scoop/workspace::scoop_worker-scoop_1'
+    );
+  });
+
   it('reads the layout from workspaceFor, not from a hardcoded path', () => {
     expect(workspaceIdFor(rootRecord({ folder: 'cone-research' }))).toBe(
       '/cones/cone-research/workspace'

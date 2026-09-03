@@ -5,7 +5,14 @@
  */
 
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { deriveCompletion, derivePolicy, isRootUnit, rootOwnerOf, rootsOf } from './policy.js';
+import {
+  deriveCompletion,
+  deriveOnParentClose,
+  derivePolicy,
+  isRootUnit,
+  rootOwnerOf,
+  rootsOf,
+} from './policy.js';
 import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from './record.js';
 import {
   statusFromTab,
@@ -218,5 +225,6 @@ export function toDescriptor(scoop: RegisteredScoop, tab?: ScoopTabState): WorkU
     workspaceHandle: workspaceHandleFor(scoop),
     policy: derivePolicy(scoop),
     completion: deriveCompletion(scoop),
+    onParentClose: deriveOnParentClose(scoop),
   };
 }

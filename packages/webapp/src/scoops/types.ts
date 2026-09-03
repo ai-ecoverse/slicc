@@ -176,6 +176,13 @@ export interface RegisteredScoop {
    * ephemeral scoops are unregistered at the end of their run.
    */
   notifyOnComplete?: boolean;
+  /**
+   * What happens to this unit when its parent closes (#2278). `'cascade'`
+   * (default / absent) tears it down with the parent — today's behaviour.
+   * `'detach'` promotes it to an independent root instead. Ignored on a
+   * root; `normalizeScoopRecord` strips it there.
+   */
+  onParentClose?: 'cascade' | 'detach';
 }
 
 /** Per-scoop configuration */

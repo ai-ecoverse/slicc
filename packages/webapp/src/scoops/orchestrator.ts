@@ -41,7 +41,10 @@ import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
 import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { migrateConversations } from '../work-unit/conversation/migration.js';
-import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
+import {
+  type ConversationIdentity,
+  WorkUnitConversationStore,
+} from '../work-unit/conversation/store.js';
 import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
@@ -1233,6 +1236,32 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Register a new scoop. Delegates to {@link ScoopLifecycleManager}. */
   registerScoop(scoop: RegisteredScoop): Promise<void> {
     return this.lifecycle.register(scoop);
+  }
+
+  /**
+   * Persist an already-registered record after an in-place mutation
+   * (`WorkUnitManager.promote` / `detach`). Does not spawn or tear down
+   * a runtime — unlike {@link registerScoop}.
+   */
+  async persistScoop(scoop: RegisteredScoop): Promise<void> {
+    this.scoops.set(scoop.jid, scoop);
+    await db.saveScoop(scoop);
+  }
+
+  /**
+   * Rebuild a live unit after promote/detach so the agent is not left on
+   * the child `ScoopContext.unit` cache + RestrictedFS.
+   */
+  reinitLiveUnit(jid: string): Promise<void> {
+    return this.lifecycle.reinitAfterPromote(jid);
+  }
+
+  /**
+   * Move the canonical conversation when promote changes workspace identity
+   * (`/scoops/<folder>/…` → `/cones/<folder>/…`). No-op without a store.
+   */
+  async rekeyConversation(fromKey: string, identity: ConversationIdentity): Promise<void> {
+    await this.conversationStore?.rekey(fromKey, identity);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */

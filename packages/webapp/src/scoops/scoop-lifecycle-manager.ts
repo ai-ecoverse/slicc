@@ -489,6 +489,31 @@ export class ScoopLifecycleManager {
     log.info('Scoop context created', { jid, contextId });
   }
 
+  /**
+   * Tear down and re-`createTab` a live unit after it was promoted to a
+   * root (#2278). The record is already persisted (`parentJid = null`);
+   * this drops the RestrictedFS + child-policy tool set so the next
+   * agent is a root (`interactiveRootPolicy`, full-workspace FS, child
+   * tools). No-op when nothing has spawned. Observers stay on the
+   * `LiveWorkUnit`. A failed rebuild is an error tab — the next prompt
+   * retries `createTab` rather than leaving the child runtime in place.
+   */
+  async reinitAfterPromote(jid: string): Promise<void> {
+    const unit = this.units.get(jid);
+    if (!unit?.context) return;
+    unit.disposeContext();
+    try {
+      await this.createTab(jid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('Failed to re-init promoted unit; next prompt will retry', { jid, error: message });
+      // Drop a half-attached context so the next `sendPrompt` retries
+      // `createTab` instead of driving the failed child runtime.
+      unit.disposeContext();
+      this.markTabError(jid, message);
+    }
+  }
+
   /** Destroy a scoop context. */
   destroyTab(jid: string): void {
     this.deps.idleTimers.clear(jid);
