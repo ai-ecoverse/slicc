@@ -52,7 +52,7 @@ describe('translateToMediabunny — accepted shapes', () => {
     expect(p.fastStart).toBe('in-memory');
   });
 
-  it('honours -c copy explicitly (no codec, no forced transcode)', () => {
+  it('records -c copy as a copy requirement (no codec, no forced transcode)', () => {
     const p = plan([
       '-i',
       'in.mp4',
@@ -65,8 +65,24 @@ describe('translateToMediabunny — accepted shapes', () => {
       'out.ts',
     ]);
     expect(p.container).toBe('mpegts');
-    expect(p.video.codec).toBeUndefined();
-    expect(p.video.forceTranscode).toBeUndefined();
+    expect(p.video).toEqual({ copy: true });
+    expect(p.audio).toEqual({ copy: true });
+  });
+
+  it('re-encodes for an explicit encoder even with no other transform', () => {
+    // ffmpeg re-encodes an AVC input for `-c:v libx264`; mediabunny would
+    // copy it unless told otherwise.
+    const p = plan(['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4']);
+    expect(p.video).toEqual({ codec: 'avc', forceTranscode: true });
+    expect(p.audio).toEqual({ codec: 'aac', forceTranscode: true });
+    // The last -c wins, and switching back to copy drops the encoder.
+    expect(plan(['-i', 'in.mp4', '-c:v', 'libx264', '-c:v', 'copy', 'out.mp4']).video).toEqual({
+      copy: true,
+    });
+  });
+
+  it('leaves the implicit choice (no -c) to mediabunny: copy when possible', () => {
+    expect(plan(['-i', 'in.mkv', 'out.mp4']).video).toEqual({});
   });
 
   it('maps -an / -vn to discards and -ac / -ar to audio transforms', () => {
@@ -76,12 +92,12 @@ describe('translateToMediabunny — accepted shapes', () => {
     expect(p.container).toBe('wav');
   });
 
-  it('maps scale / crop / transpose / fps video filters', () => {
+  it('maps crop-then-scale, fps and format video filters', () => {
     const p = plan([
       '-i',
       'in.mp4',
       '-vf',
-      'scale=1280:720,crop=640:360:10:20,transpose=1,fps=24,format=yuv420p',
+      'crop=640:360:10:20,scale=1280:720,fps=24,format=yuv420p',
       'out.mp4',
     ]);
     expect(p.video).toMatchObject({
@@ -89,9 +105,43 @@ describe('translateToMediabunny — accepted shapes', () => {
       height: 720,
       fit: 'fill',
       crop: { width: 640, height: 360, left: 10, top: 20 },
-      rotate: 90,
       frameRate: 24,
     });
+  });
+
+  it('maps a lone transpose, and fps in any position', () => {
+    expect(plan(['-i', 'in.mp4', '-vf', 'transpose=2', 'o.mp4']).video).toEqual({ rotate: 270 });
+    expect(plan(['-i', 'in.mp4', '-vf', 'fps=30,scale=320:-1', 'o.mp4']).video).toEqual({
+      frameRate: 30,
+      width: 320,
+    });
+  });
+
+  it('rejects filter orders mediabunny would apply differently', () => {
+    // ffmpeg: scale to 1280x720 THEN crop → 640x360. mediabunny crops the
+    // source first and then resizes → 1280x720. Not the same file.
+    expect(rejection(['-i', 'a.mp4', '-vf', 'scale=1280:720,crop=640:360:10:20', 'o.mp4'])).toMatch(
+      /crop after scale/
+    );
+    expect(rejection(['-i', 'a.mp4', '-vf', 'scale=640:360,transpose=1', 'o.mp4'])).toMatch(
+      /transpose combined with scale/
+    );
+    expect(rejection(['-i', 'a.mp4', '-vf', 'transpose=1,scale=640:360', 'o.mp4'])).toMatch(
+      /scale after transpose/
+    );
+    expect(rejection(['-i', 'a.mp4', '-vf', 'transpose=1,crop=1:1:0:0', 'o.mp4'])).toMatch(
+      /crop after scale\/transpose/
+    );
+  });
+
+  it('rejects -c copy combined with anything that would have to re-encode', () => {
+    expect(rejection(['-i', 'a.mp4', '-c:v', 'copy', '-vf', 'scale=320:-1', 'o.mp4'])).toMatch(
+      /-c:v copy cannot be combined/
+    );
+    expect(rejection(['-i', 'a.mp4', '-c:a', 'copy', '-ac', '1', 'o.mp4'])).toMatch(
+      /-c:a copy cannot be combined/
+    );
+    expect(rejection(['-i', 'a.mp4', '-c', 'copy', '-b:v', '1M', 'o.mp4'])).toMatch(/copy/);
   });
 
   it('keeps the aspect ratio for scale=W:-1 and scale=-2:H', () => {
@@ -180,6 +230,7 @@ describe('translateToMediabunny — rejections name the option', () => {
     [['-i', 'a.mp4', '-profile:v', 'high', 'o.mp4'], /-profile:v/],
     [['-i', 'a.mp4', '-bsf:v', 'hevc_mp4toannexb', 'o.ts'], /hevc_mp4toannexb/],
     [['-itsoffset', '1', '-i', 'a.mp4', 'o.mp4'], /-itsoffset/],
+    [['-i', 'a.mp4', '-shortest', 'o.mp4'], /-shortest ends at the shortest stream/],
   ])('%j', (argv, reason) => {
     expect(rejection(argv)).toMatch(reason);
   });

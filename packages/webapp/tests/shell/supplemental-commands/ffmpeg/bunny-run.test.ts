@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   audioOptionsFor,
+  copyViolations,
   loadMediabunny,
   runViaMediabunny,
   videoOptionsFor,
@@ -79,6 +80,55 @@ describe('runViaMediabunny', () => {
     if (res.kind === 'declined')
       expect(res.reason).toMatch(/audio track .*no encodable target codec/);
   }, 20_000);
+});
+
+describe('-c copy enforcement', () => {
+  it('declines a stream copy into a container that cannot hold the codec', async () => {
+    // PCM into an MP3 container: mediabunny would transcode to mp3 (or
+    // drop the track without an encoder); ffmpeg refuses. Either way the
+    // fast path must step aside rather than rewrite bytes `-c copy` froze.
+    const res = await runViaMediabunny({
+      plan: { container: 'mp3', video: {}, audio: { copy: true }, fastStart: false },
+      input: new Blob([makeWav({ seconds: 0.1 })]),
+      onLog: () => {},
+    });
+    expect(res.kind).toBe('declined');
+  }, 20_000);
+
+  it('copies when the container supports the codec', async () => {
+    const res = await runViaMediabunny({
+      plan: { container: 'wav', video: {}, audio: { copy: true }, fastStart: false },
+      input: new Blob([makeWav({ seconds: 0.1, channels: 1, sampleRate: 8000 })]),
+      onLog: () => {},
+    });
+    expect(res.kind).toBe('done');
+    if (res.kind === 'done')
+      expect(readWavHeader(res.bytes)).toMatchObject({ channels: 1, sampleRate: 8000 });
+  }, 20_000);
+
+  it('names the offending track and container', () => {
+    const conversion = {
+      utilizedTracks: [
+        { type: 'video', id: 1, codec: 'vp9' },
+        { type: 'audio', id: 2, codec: 'opus' },
+        { type: 'audio', id: 3, codec: null },
+      ],
+    } as unknown as Parameters<typeof copyViolations>[0];
+    const format = { getSupportedCodecs: () => ['avc', 'aac', 'opus'] } as Parameters<
+      typeof copyViolations
+    >[1];
+    const plan = {
+      container: 'mp4',
+      video: { copy: true },
+      audio: { copy: true },
+      fastStart: false,
+    } as const;
+    expect(copyViolations(conversion, format, plan)).toBe(
+      'video track 1: vp9 cannot be stream-copied into mp4; audio track 3: unknown codec cannot be stream-copied'
+    );
+    // Implicit mode (no -c) is mediabunny's call — nothing to enforce.
+    expect(copyViolations(conversion, format, { ...plan, video: {}, audio: {} })).toBeNull();
+  });
 });
 
 describe('option mapping', () => {

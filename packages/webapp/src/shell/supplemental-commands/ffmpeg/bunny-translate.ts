@@ -63,7 +63,17 @@ export interface BunnyCrop {
 
 export interface BunnyVideoPlan {
   discard?: true;
-  /** Absent = leave mediabunny to copy when it can (`-c:v copy` or no `-c:v`). */
+  /**
+   * `-c:v copy`: the stream must be copied, never re-encoded. mediabunny
+   * would otherwise transcode a codec the container cannot hold; the
+   * runner declines that case so the wasm core reports ffmpeg's error.
+   */
+  copy?: true;
+  /**
+   * Explicit encoder (`-c:v libx264`). Absent with `copy` absent = ffmpeg's
+   * implicit choice, which mediabunny resolves as "copy when the container
+   * can hold it, else transcode".
+   */
   codec?: BunnyVideoCodec;
   bitrate?: number;
   quality?: BunnyQuality;
@@ -81,6 +91,8 @@ export interface BunnyVideoPlan {
 
 export interface BunnyAudioPlan {
   discard?: true;
+  /** `-c:a copy` — see {@link BunnyVideoPlan.copy}. */
+  copy?: true;
   codec?: BunnyAudioCodec;
   bitrate?: number;
   quality?: BunnyQuality;
@@ -128,7 +140,6 @@ const IGNORED_TOGGLES = new Set([
   '-nostats',
   '-stats',
   '-nostdin',
-  '-shortest', // single input: no effect
   '-sn', // conversions carry no subtitle tracks anyway
   '-dn',
   '-copyts',
@@ -335,33 +346,61 @@ function parseCrop(args: string, video: BunnyVideoPlan): void {
   video.crop = { left, top, width, height };
 }
 
+/** Order bookkeeping for one `-vf` chain. */
+interface FilterChain {
+  resized: boolean;
+  rotated: boolean;
+}
+
+function applyScale(args: string, video: BunnyVideoPlan, chain: FilterChain): void {
+  if (chain.rotated) reject('scale after transpose: rotation/resize order is not expressible');
+  parseScale(args, video);
+  chain.resized = true;
+}
+
+function applyCrop(args: string, video: BunnyVideoPlan, chain: FilterChain): void {
+  if (chain.resized || chain.rotated) {
+    reject('crop after scale/transpose: mediabunny crops the source first');
+  }
+  parseCrop(args, video);
+}
+
+function applyTranspose(args: string, video: BunnyVideoPlan, chain: FilterChain): void {
+  if (chain.resized || video.crop) {
+    reject('transpose combined with scale/crop: rotation order is not expressible');
+  }
+  if (args === '1' || args === 'clock') video.rotate = 90;
+  else if (args === '2' || args === 'cclock') video.rotate = 270;
+  else reject(`transpose=${args} flips as well as rotates`);
+  chain.rotated = true;
+}
+
+function applyFps(args: string, video: BunnyVideoPlan): void {
+  video.frameRate = Number(args.replace(/^fps=/, ''));
+  if (!(video.frameRate > 0)) reject(`fps '${args}' is not a number`);
+}
+
+/**
+ * ffmpeg applies a filter chain in the order written; mediabunny applies
+ * its options in ITS fixed order (crop the source, then resize, with
+ * rotation handled separately). Only chains whose written order matches
+ * that pipeline are accepted — `crop,scale` yes, `scale,crop` no — and
+ * `transpose` is never combined with a size change, because which of the
+ * two happens first changes the output dimensions.
+ */
 function parseVideoFilter(spec: string, video: BunnyVideoPlan): void {
+  const chain: FilterChain = { resized: false, rotated: false };
   for (const filter of spec.split(',')) {
     const eq = filter.indexOf('=');
     const name = (eq >= 0 ? filter.slice(0, eq) : filter).trim();
     const args = eq >= 0 ? filter.slice(eq + 1) : '';
-    switch (name) {
-      case 'scale':
-        parseScale(args, video);
-        break;
-      case 'crop':
-        parseCrop(args, video);
-        break;
-      case 'transpose':
-        if (args === '1' || args === 'clock') video.rotate = 90;
-        else if (args === '2' || args === 'cclock') video.rotate = 270;
-        else reject(`transpose=${args} flips as well as rotates`);
-        break;
-      case 'fps':
-        video.frameRate = Number(args.replace(/^fps=/, ''));
-        if (!(video.frameRate > 0)) reject(`fps '${args}' is not a number`);
-        break;
-      case 'format':
-        if (args !== 'yuv420p') reject(`format=${args} has no WebCodecs equivalent`);
-        break;
-      default:
-        reject(`video filter '${name}' has no WebCodecs equivalent`);
-    }
+    if (name === 'scale') applyScale(args, video, chain);
+    else if (name === 'crop') applyCrop(args, video, chain);
+    else if (name === 'transpose') applyTranspose(args, video, chain);
+    else if (name === 'fps') applyFps(args, video);
+    else if (name === 'format') {
+      if (args !== 'yuv420p') reject(`format=${args} has no WebCodecs equivalent`);
+    } else reject(`video filter '${name}' has no WebCodecs equivalent`);
   }
 }
 
@@ -385,13 +424,25 @@ interface Walk {
 function setVideoCodec(walk: Walk, raw: string): void {
   const codec = VIDEO_CODECS[raw];
   if (!codec) reject(`video codec '${raw}' is not available through WebCodecs`);
-  if (codec !== 'copy') walk.plan.video.codec = codec;
+  if (codec === 'copy') {
+    delete walk.plan.video.codec;
+    walk.plan.video.copy = true;
+  } else {
+    delete walk.plan.video.copy;
+    walk.plan.video.codec = codec;
+  }
 }
 
 function setAudioCodec(walk: Walk, raw: string): void {
   const codec = AUDIO_CODECS[raw];
   if (!codec) reject(`audio codec '${raw}' is not available through WebCodecs`);
-  if (codec !== 'copy') walk.plan.audio.codec = codec;
+  if (codec === 'copy') {
+    delete walk.plan.audio.codec;
+    walk.plan.audio.copy = true;
+  } else {
+    delete walk.plan.audio.copy;
+    walk.plan.audio.codec = codec;
+  }
 }
 
 function setMovflags(walk: Walk, raw: string): void {
@@ -524,6 +575,9 @@ function walkOutputOptions(walk: Walk, opts: string[]): void {
     const tok = opts[i];
     const flag = baseFlag(tok);
     if (IGNORED_TOGGLES.has(flag)) continue;
+    if (flag === '-shortest') {
+      reject('-shortest ends at the shortest stream; mediabunny writes every track to its end');
+    }
     if (flag === '-an') {
       walk.plan.audio = { discard: true };
       continue;
@@ -590,13 +644,46 @@ function finalizePlan(walk: Walk, outputPath: string): BunnyPlan {
   ) {
     reject('trim end is not after trim start');
   }
-  // A bitrate/quality change on an unchanged codec must re-encode; every
-  // other transform already forces one inside mediabunny.
-  if (!plan.video.discard && (plan.video.bitrate !== undefined || plan.video.quality)) {
+  // An explicit encoder (`-c:v libx264`) re-encodes in ffmpeg even when the
+  // input already uses that codec; so does a bitrate/quality change. Only
+  // the implicit choice (no `-c`) may copy.
+  if (
+    !plan.video.discard &&
+    (plan.video.codec || plan.video.bitrate !== undefined || plan.video.quality)
+  ) {
     plan.video.forceTranscode = true;
   }
-  if (!plan.audio.discard && (plan.audio.bitrate !== undefined || plan.audio.quality)) {
+  if (
+    !plan.audio.discard &&
+    (plan.audio.codec || plan.audio.bitrate !== undefined || plan.audio.quality)
+  ) {
     plan.audio.forceTranscode = true;
+  }
+  // `-c copy` with a filter or a bitrate is an error in ffmpeg too
+  // ("filtering and streamcopy cannot be used together"); mediabunny would
+  // quietly transcode instead.
+  const v = plan.video;
+  if (
+    v.copy &&
+    (v.width !== undefined ||
+      v.height !== undefined ||
+      v.crop ||
+      v.rotate !== undefined ||
+      v.frameRate !== undefined ||
+      v.bitrate !== undefined ||
+      v.quality)
+  ) {
+    reject('-c:v copy cannot be combined with video filters or a bitrate');
+  }
+  const a = plan.audio;
+  if (
+    a.copy &&
+    (a.numberOfChannels !== undefined ||
+      a.sampleRate !== undefined ||
+      a.bitrate !== undefined ||
+      a.quality)
+  ) {
+    reject('-c:a copy cannot be combined with -ac/-ar or a bitrate');
   }
   if (plan.video.discard && plan.audio.discard) reject('-an with -vn leaves nothing to write');
   return plan;

@@ -118,6 +118,37 @@ export function audioOptionsFor(
   return out;
 }
 
+/**
+ * `-c copy` means the bytes must not change. mediabunny copies a track only
+ * when the container supports its codec and re-encodes otherwise, so a
+ * copy-mode track with an unsupported codec is declined here — the wasm
+ * core then fails the way real ffmpeg does ("codec not supported in this
+ * container") instead of a silently re-encoded file. Returns the reason,
+ * or null when every copy-mode track really will be copied.
+ */
+export function copyViolations(
+  conversion: Pick<MediabunnyModule.Conversion, 'utilizedTracks'>,
+  format: Pick<MediabunnyModule.OutputFormat, 'getSupportedCodecs'>,
+  plan: BunnyPlan
+): string | null {
+  const supported = new Set<string>(format.getSupportedCodecs());
+  const problems: string[] = [];
+  for (const track of conversion.utilizedTracks) {
+    const copy =
+      track.type === 'video' ? plan.video.copy : track.type === 'audio' ? plan.audio.copy : false;
+    if (!copy) continue;
+    const codec = track.codec;
+    if (codec === null)
+      problems.push(`${track.type} track ${track.id}: unknown codec cannot be stream-copied`);
+    else if (!supported.has(codec)) {
+      problems.push(
+        `${track.type} track ${track.id}: ${codec} cannot be stream-copied into ${plan.container}`
+      );
+    }
+  }
+  return problems.length > 0 ? problems.join('; ') : null;
+}
+
 function describeDiscards(discarded: readonly MediabunnyModule.DiscardedTrack[]): string {
   return discarded
     .map((d) => `${d.track.type} track ${d.track.id}: ${d.reason.replace(/_/g, ' ')}`)
@@ -175,6 +206,8 @@ export async function runViaMediabunny(args: {
         reason: involuntary.length > 0 ? describeDiscards(involuntary) : 'no track can be written',
       };
     }
+    const uncopyable = copyViolations(conversion, output.format, args.plan);
+    if (uncopyable) return { kind: 'declined', reason: uncopyable };
 
     let lastPercent = -1;
     conversion.onProgress = (progress) => {
