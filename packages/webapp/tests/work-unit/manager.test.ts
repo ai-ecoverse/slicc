@@ -171,6 +171,16 @@ describe('WorkUnitManager', () => {
     expect(host.registerScoop).toHaveBeenCalledOnce();
   });
 
+  it('create rejects an explicit id that is already in the registry', async () => {
+    const { host, manager } = tree();
+    const before = manager.get(root.jid)?.descriptor.name;
+    await expect(
+      manager.create({ parentId: null, name: 'Impostor', folder: 'impostor', id: root.jid })
+    ).rejects.toThrow(/Work unit already exists: cone_1/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.get(root.jid)?.descriptor.name).toBe(before);
+  });
+
   it('abort stops the turn; close unregisters and drops the runtime', async () => {
     const { host, manager } = tree();
     await manager.abort(a.jid);
@@ -186,5 +196,148 @@ describe('WorkUnitManager', () => {
     expect(manager.get(root.jid)?.descriptor.status).toBe('creating');
     await manager.close('nope');
     expect(host.unregisterScoop).toHaveBeenCalledOnce();
+  });
+
+  it('createMany registers several roots and returns descriptors in caller order', async () => {
+    const { manager } = tree();
+    const created = await manager.createMany([
+      { parentId: null, name: 'R1', folder: 'r1' },
+      { parentId: null, name: 'R2', folder: 'r2' },
+    ]);
+    expect(created.map((d) => d.name)).toEqual(['R1', 'R2']);
+    expect(created.every((d) => d.parentId === null)).toBe(true);
+    expect(manager.roots()).toHaveLength(4);
+  });
+
+  it('createMany registers a child under an intra-batch parent listed after it', async () => {
+    const { manager } = tree();
+    const created = await manager.createMany([
+      { parentId: 'batch-root', name: 'helper', folder: 'batch-helper' },
+      { parentId: null, name: 'Batch', folder: 'batch', id: 'batch-root' },
+    ]);
+    expect(created.map((d) => [d.id, d.parentId])).toEqual([
+      [created[0].id, 'batch-root'],
+      ['batch-root', null],
+    ]);
+    expect(manager.getParent(created[0].id)?.descriptor.id).toBe('batch-root');
+  });
+
+  it('createMany fails closed when any parent is missing — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'ok', folder: 'ok' },
+        { parentId: 'ghost', name: 'orphan' },
+      ])
+    ).rejects.toThrow(/Parent work unit not found: ghost/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
+  it('createMany is all-or-nothing when registerScoop fails mid-batch', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    const original = host.registerScoop.getMockImplementation()!;
+    let calls = 0;
+    host.registerScoop.mockImplementation(async (scoop) => {
+      calls += 1;
+      if (calls === 2) throw new Error('register failed');
+      return original(scoop);
+    });
+
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'KeepMe', folder: 'keep-me' },
+        { parentId: null, name: 'DropMe', folder: 'drop-me' },
+      ])
+    ).rejects.toThrow(/register failed/);
+
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+    expect(manager.list().some((d) => d.folder === 'keep-me')).toBe(false);
+  });
+
+  it('createMany rejects an explicit id already in the registry — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'ok', folder: 'ok' },
+        { parentId: null, name: 'Impostor', id: root.jid },
+      ])
+    ).rejects.toThrow(/Work unit already exists: cone_1/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
+  it('createMany rejects a duplicate explicit id and a cycle without registering', async () => {
+    const { host, manager } = tree();
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'A', id: 'same' },
+        { parentId: null, name: 'B', id: 'same' },
+      ])
+    ).rejects.toThrow(/Duplicate work unit id in createMany: same/);
+    await expect(
+      manager.createMany([
+        { parentId: 'b', name: 'A', id: 'a' },
+        { parentId: 'a', name: 'B', id: 'b' },
+      ])
+    ).rejects.toThrow(/createMany cycle/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+  });
+
+  it('createMany rejects a duplicate folder within the batch — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'A', folder: 'shared-folder' },
+        { parentId: null, name: 'B', folder: 'shared-folder' },
+      ])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: shared-folder/);
+    await expect(
+      manager.createMany([
+        { parentId: null, name: 'SameName' },
+        { parentId: null, name: 'SameName' },
+      ])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: SameName/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
+  it('createMany rejects a folder already in the registry — nothing is registered', async () => {
+    const { host, manager } = tree();
+    const before = manager.list().map((d) => d.id);
+    await expect(
+      manager.createMany([{ parentId: null, name: 'Impostor', folder: root.folder }])
+    ).rejects.toThrow(/Duplicate work unit folder in createMany: cone/);
+    expect(host.registerScoop).not.toHaveBeenCalled();
+    expect(manager.list().map((d) => d.id)).toEqual(before);
+  });
+
+  it('join waits on children of two roots through the scoop-wait bus', async () => {
+    const { host, manager } = tree();
+    const pending = manager.join([a.jid, c.jid]);
+    await host.complete(a.jid, 'from A');
+    await host.complete(c.jid, 'from C');
+    await expect(pending).resolves.toEqual([
+      { id: a.jid, summary: 'from A', timedOut: false },
+      { id: c.jid, summary: 'from C', timedOut: false },
+    ]);
+    expect(host.waitForScoops).toHaveBeenCalledWith([a.jid, c.jid], undefined);
+  });
+
+  it('join times out units that never settle', async () => {
+    const { manager } = tree();
+    const results = await manager.join([a.jid], { timeoutMs: 0 });
+    expect(results).toEqual([{ id: a.jid, summary: null, timedOut: true }]);
+  });
+
+  it('join reports an unknown id as timedOut immediately', async () => {
+    const { host, manager } = tree();
+    const results = await manager.join(['ghost']);
+    expect(results).toEqual([{ id: 'ghost', summary: null, timedOut: true }]);
+    expect(host.waitForScoops).toHaveBeenCalledWith(['ghost'], undefined);
   });
 });

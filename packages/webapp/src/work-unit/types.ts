@@ -176,7 +176,7 @@ export function statusFromTab(status: ScoopTabState['status'] | undefined): Work
   }
 }
 
-/** Options accepted by `WorkUnitManager.create`. */
+/** Options accepted by `WorkUnitManager.create` / `createMany`. */
 export interface CreateWorkUnitOptions {
   /** `null` creates a root; a jid creates a child of that unit. */
   parentId: WorkUnitId | null;
@@ -194,4 +194,25 @@ export interface CreateWorkUnitOptions {
   notifyOnComplete?: boolean;
   /** Caller-supplied id; defaults to the conventional `cone_…` / `scoop_…`. */
   id?: WorkUnitId;
+}
+
+/** Options accepted by `WorkUnitManager.join`. */
+export interface JoinOptions {
+  /**
+   * Bound in milliseconds. `0` is an explicit immediate timeout (already-
+   * settled units still report); omit or pass a negative value to wait
+   * indefinitely. Same contract as `scoop_wait` / `waitForScoops`.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * One row of `WorkUnitManager.join`. Mapped from the scoop-wait bus
+ * (`WaitResult`): `id` is that row's `jid`. An unknown id is `timedOut`
+ * immediately — join never hangs on a unit that is not registered.
+ */
+export interface JoinResult {
+  id: WorkUnitId;
+  summary: string | null;
+  timedOut: boolean;
 }
