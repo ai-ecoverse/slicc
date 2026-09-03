@@ -22,11 +22,20 @@ export interface TimerHandleTracker {
   restore(): void;
   /** Cancel pending timers without running their callbacks (`process.exit`). */
   clearPending(): void;
-  /** Uncounted macrotask hop for the drain loop's own tick. */
+  /** Uncounted macrotask hop for the drain loop's own first tick. */
   tick(): Promise<void>;
+  /**
+   * Resolve on the next fire/clear (or immediately when nothing is pending)
+   * so the drain can sleep until a handle actually changes instead of
+   * spinning `setTimeout(0)`.
+   */
+  waitForProgress(): Promise<void>;
 }
 
-export function createTimerHandleTracker(g: typeof globalThis = globalThis): TimerHandleTracker {
+export function createTimerHandleTracker(
+  g: typeof globalThis = globalThis,
+  options?: { onCallbackError?: (err: unknown) => void }
+): TimerHandleTracker {
   const originalSetTimeout = g.setTimeout;
   const originalClearTimeout = g.clearTimeout;
   const originalSetInterval = g.setInterval;
@@ -38,7 +47,33 @@ export function createTimerHandleTracker(g: typeof globalThis = globalThis): Tim
 
   const timeouts = new Set<TimerId>();
   const intervals = new Set<IntervalId>();
+  const progressWaiters = new Set<() => void>();
   let installed = false;
+
+  const notifyProgress = (): void => {
+    if (progressWaiters.size === 0) return;
+    const waiters = [...progressWaiters];
+    progressWaiters.clear();
+    for (const waiter of waiters) waiter();
+  };
+
+  const forget = (id: TimerId | IntervalId | undefined | null): boolean => {
+    if (id === undefined || id === null) return false;
+    const hadTimeout = timeouts.delete(id);
+    const hadInterval = intervals.delete(id);
+    return hadTimeout || hadInterval;
+  };
+
+  const runCallback = (handler: TimerCallback, args: unknown[]): void => {
+    try {
+      handler(...args);
+    } catch (err) {
+      options?.onCallbackError?.(err);
+      if (!options?.onCallbackError) throw err;
+    } finally {
+      notifyProgress();
+    }
+  };
 
   return {
     get pendingCount() {
@@ -55,15 +90,16 @@ export function createTimerHandleTracker(g: typeof globalThis = globalThis): Tim
         }
         const id: TimerId = nativeSetTimeout(() => {
           timeouts.delete(id);
-          handler(...args);
+          runCallback(handler, args);
         }, delay);
         timeouts.add(id);
         return id;
       }) as typeof setTimeout;
 
       g.clearTimeout = ((id?: TimerId) => {
-        if (id !== undefined && id !== null) timeouts.delete(id);
+        const had = forget(id);
         nativeClearTimeout(id as TimerId);
+        if (had) notifyProgress();
       }) as typeof clearTimeout;
 
       g.setInterval = ((handler: TimerCallback | string, delay?: number, ...args: unknown[]) => {
@@ -71,15 +107,16 @@ export function createTimerHandleTracker(g: typeof globalThis = globalThis): Tim
           return nativeSetInterval(handler, delay, ...(args as []));
         }
         const id: IntervalId = nativeSetInterval(() => {
-          handler(...args);
+          runCallback(handler, args);
         }, delay);
         intervals.add(id);
         return id;
       }) as typeof setInterval;
 
       g.clearInterval = ((id?: IntervalId) => {
-        if (id !== undefined && id !== null) intervals.delete(id);
+        const had = forget(id);
         nativeClearInterval(id as IntervalId);
+        if (had) notifyProgress();
       }) as typeof clearInterval;
     },
 
@@ -97,11 +134,19 @@ export function createTimerHandleTracker(g: typeof globalThis = globalThis): Tim
       timeouts.clear();
       for (const id of intervals) nativeClearInterval(id);
       intervals.clear();
+      notifyProgress();
     },
 
     tick() {
       return new Promise<void>((resolve) => {
         nativeSetTimeout(resolve, 0);
+      });
+    },
+
+    waitForProgress() {
+      if (timeouts.size + intervals.size === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        progressWaiters.add(resolve);
       });
     },
   };

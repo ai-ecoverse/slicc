@@ -108,4 +108,33 @@ describe('createTimerHandleTracker', () => {
     timers.restore();
     expect(g.setTimeout).not.toBe(wrapped);
   });
+
+  it('forgets an interval cancelled with clearTimeout', () => {
+    const { g, timers } = installed();
+    const id = g.setInterval(() => {
+      throw new Error('cross-cleared interval must not fire');
+    }, 20);
+    expect(timers.pendingCount).toBe(1);
+    g.clearTimeout(id);
+    expect(timers.pendingCount).toBe(0);
+  });
+
+  it('forgets a timeout cancelled with clearInterval', () => {
+    const { g, timers } = installed();
+    const id = g.setTimeout(() => {
+      throw new Error('cross-cleared timeout must not fire');
+    }, 20);
+    expect(timers.pendingCount).toBe(1);
+    g.clearInterval(id);
+    expect(timers.pendingCount).toBe(0);
+  });
+
+  it('waitForProgress resolves when a timeout fires', async () => {
+    const { g, timers } = installed();
+    g.setTimeout(() => undefined, 15);
+    const start = Date.now();
+    await timers.waitForProgress();
+    expect(timers.pendingCount).toBe(0);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(10);
+  });
 });

@@ -51,7 +51,7 @@ function makePortPair(): { realm: PortLike; host: PortLike } {
 async function handleFakeHostMessage(
   host: PortLike,
   event: MessageEvent,
-  opts: { delayMs?: number }
+  opts: { delayMs?: number; flushWrites?: unknown[] }
 ): Promise<void> {
   const data = event.data as { type?: string };
   if (data?.type !== 'realm-rpc-req') return;
@@ -74,6 +74,19 @@ async function handleFakeHostMessage(
     });
     return;
   }
+  if (req.channel === 'vfs' && req.op === 'snapshot') {
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: { entries: [] },
+    });
+    return;
+  }
+  if (req.channel === 'vfs' && req.op === 'flushWrites') {
+    opts.flushWrites?.push(req.args[0]);
+    host.postMessage({ type: 'realm-rpc-res', id: req.id, result: undefined });
+    return;
+  }
   if (req.channel === 'module' && req.op === 'buildGraph') {
     // These scripts only `require('fs')` (a builtin the realm shim serves),
     // so the real host would return an empty graph; mirror that here.
@@ -92,7 +105,10 @@ async function handleFakeHostMessage(
   });
 }
 
-function attachFakeHost(host: PortLike, opts: { delayMs?: number } = {}): void {
+function attachFakeHost(
+  host: PortLike,
+  opts: { delayMs?: number; flushWrites?: unknown[] } = {}
+): void {
   host.addEventListener('message', (event: MessageEvent) => {
     void handleFakeHostMessage(host, event, opts);
   });
@@ -110,7 +126,10 @@ function makeInit(code: string): RealmInitMsg {
   };
 }
 
-function runRealm(code: string, opts: { delayMs?: number } = {}): Promise<RealmDoneMsg> {
+function runRealm(
+  code: string,
+  opts: { delayMs?: number; flushWrites?: unknown[] } = {}
+): Promise<RealmDoneMsg> {
   const { realm, host } = makePortPair();
   attachFakeHost(host, opts);
   const promise = new Promise<RealmDoneMsg>((resolve) => {
@@ -214,5 +233,30 @@ describe('realm event-loop drain before teardown', () => {
     const done = await runRealm(code);
     expect(done.exitCode).toBe(0);
     expect(done.stdout).not.toContain('late');
+  });
+
+  it('honors process.exit from a delayed timer during the drain', async () => {
+    const code = [
+      'setTimeout(() => process.exit(7), 15);',
+      'setTimeout(() => console.log("late"), 40);',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(7);
+    expect(done.stdout).not.toContain('late');
+  });
+
+  it('flushes sync-fs mutations made from a delayed callback', async () => {
+    const flushWrites: unknown[] = [];
+    const code = [
+      'const fs = require("fs");',
+      'setTimeout(() => fs.writeFileSync("/workspace/delayed.txt", "hi"), 10);',
+    ].join('\n');
+    const done = await runRealm(code, { flushWrites });
+    expect(done.exitCode).toBe(0);
+    const created = flushWrites.flatMap((batch) => {
+      const b = batch as { created?: { path: string }[] };
+      return b.created ?? [];
+    });
+    expect(created.some((e) => e.path === '/workspace/delayed.txt')).toBe(true);
   });
 });

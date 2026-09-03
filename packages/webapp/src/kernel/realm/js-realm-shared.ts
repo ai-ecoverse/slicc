@@ -437,7 +437,14 @@ async function finishJsRealm(opts: {
   installSliccVersion();
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
     opts.rpc.call('wasm', 'compile', [path]);
-  const timers = createTimerHandleTracker();
+  const timers = createTimerHandleTracker(globalThis, {
+    onCallbackError(err) {
+      // process.exit() already recorded the code; swallow so a delayed
+      // exit is not an uncaught exception outside runUserCode.
+      if (err instanceof NodeExitError) return;
+      throw err;
+    },
+  });
   timers.install();
   try {
     const exitCode = await runEntryThenDrain({
@@ -498,16 +505,23 @@ async function runEntryThenDrain(opts: {
     opts.timers.clearPending();
     return opts.proc.getExitCode();
   }
-  await drainEventLoop(opts.rpc, opts.timers);
-  return exitCode;
+  await drainEventLoop(opts.rpc, opts.timers, opts.proc);
+  if (opts.proc.getDidCallProcessExit()) {
+    opts.timers.clearPending();
+  }
+  // Delayed callbacks (setTimeout, RPC .then) may have mutated the
+  // sync-fs cache after the post-entry flush. Flush again so those
+  // writes are not dropped when the realm tears down.
+  await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
+  return opts.proc.getDidCallProcessExit() ? opts.proc.getExitCode() : exitCode;
 }
 
 /**
  * Diff the {@link SyncFsCache} against its initial snapshot and flush any
  * created/modified/deleted paths back to the host via `vfs.flushWrites`.
- * Called unconditionally after `runUserCode` — even on a script crash — so
- * partial sync-fs progress is never silently dropped. A no-op mutation set
- * skips the RPC entirely.
+ * Called after `runUserCode` and again after the handle drain so delayed
+ * callbacks' cache-only mutations are not dropped. A no-op mutation set
+ * skips the RPC entirely. Successful flushes rebase the cache baseline.
  */
 async function flushSyncFsCache(
   rpc: RealmRpcClient,
@@ -518,6 +532,9 @@ async function flushSyncFsCache(
   if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
     try {
       await rpc.call('vfs', 'flushWrites', [mutations]);
+      // Rebase so a later flush (after drain) reports only mutations made
+      // since this one — same as createExecBridge's pre-exec flush.
+      syncFs.resetBaseline();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // These cache-only mutations (mkdir/rm/rename and, in non-bridge mode,
@@ -541,15 +558,24 @@ async function flushSyncFsCache(
  * wrapped `setTimeout` / `setInterval` set. A pending Promise with no handle
  * does not count — `new Promise(() => {})` must not hang teardown.
  *
- * Always tick at least once so microtasks queued in the user body (and a
- * single `setTimeout(0)` already registered) run before `realm-done`, matching
- * Node draining the current turn before considering the loop idle. There is
- * no wall-clock ceiling: a slow `exec` / `setTimeout(2000)` must be allowed
- * to finish. A never-settling RPC or uncleared `setInterval` hangs until the
- * host SIGKILLs the realm worker, the same way hung I/O hangs real Node.
+ * Sleeps on RPC/timer progress instead of spinning `setTimeout(0)`. A
+ * never-settling RPC or uncleared `setInterval` hangs until the host
+ * SIGKILLs the realm worker, the same way hung I/O hangs real Node.
+ * `process.exit()` from a delayed callback stops the drain.
  */
-async function drainEventLoop(rpc: RealmRpcClient, timers: TimerHandleTracker): Promise<void> {
-  do {
-    await timers.tick();
-  } while (rpc.pendingCount > 0 || timers.pendingCount > 0);
+async function drainEventLoop(
+  rpc: RealmRpcClient,
+  timers: TimerHandleTracker,
+  proc: ReturnType<typeof createProcessShim>
+): Promise<void> {
+  // One macrotask hop so microtasks queued in the user body (and a single
+  // setTimeout(0) already registered) run before we inspect handles.
+  await timers.tick();
+  while (!proc.getDidCallProcessExit() && (rpc.pendingCount > 0 || timers.pendingCount > 0)) {
+    const waits: Promise<void>[] = [];
+    if (rpc.pendingCount > 0) waits.push(rpc.waitForProgress());
+    if (timers.pendingCount > 0) waits.push(timers.waitForProgress());
+    if (waits.length === 0) break;
+    await Promise.race(waits);
+  }
 }
