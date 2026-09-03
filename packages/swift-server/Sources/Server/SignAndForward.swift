@@ -53,10 +53,23 @@ enum SignAndForward {
         "upgrade",
     ]
 
-    /// Adobe da.live API origin used in production. Tests inject a localhost
-    /// stub via the `daOrigin` parameter on `registerRoutes` / `handleDa` so
-    /// they can verify the bytes we put on the wire end-to-end.
+    /// Helix 5 Document Authoring admin — default when the envelope omits `origin`.
+    /// Tests inject a localhost stub via the `daOrigin` parameter on
+    /// `registerRoutes` / `handleDa` so they can verify the bytes we put on
+    /// the wire end-to-end without touching production.
     static let defaultDaOrigin = "https://admin.da.live"
+
+    /// Helix 6 Source Bus. Selected when the envelope sets
+    /// `origin: "https://api.aem.live"` (`aem://` mounts and the `da://`
+    /// content-source probe).
+    static let aemSourceBusOrigin = "https://api.aem.live"
+
+    /// Origins a DA envelope may target. Closed so a hostile envelope cannot
+    /// turn the caller's IMS bearer into an open proxy. Mirrors
+    /// `DA_ALLOWED_ORIGINS` in `@slicc/shared-ts` `executeDaSignAndForward`.
+    /// Dropping `api.aem.live` here is what made Sliccstart `aem://` mounts
+    /// 404 as `ENOENT '/'` (issue #2811).
+    static let allowedDaOrigins: Set<String> = [defaultDaOrigin, aemSourceBusOrigin]
 
     // MARK: - Envelope shapes
 
@@ -74,9 +87,20 @@ enum SignAndForward {
         let imsToken: String?
         let method: String?
         let path: String?
+        /// Upstream origin. Omit for `https://admin.da.live` (Helix 5 DA);
+        /// `https://api.aem.live` selects the Helix 6 Source Bus. Anything
+        /// else is rejected as `invalid_request`.
+        let origin: String?
         let query: [String: String]?
         let headers: [String: String]?
         let bodyBase64: String?
+    }
+
+    /// Result of mapping an envelope `origin` onto an upstream host.
+    enum DaOriginResult: Equatable {
+        case origin(String)
+        /// The envelope named a host outside `allowedDaOrigins`.
+        case rejected(String)
     }
 
     // MARK: - S3 profile resolution
@@ -312,11 +336,45 @@ enum SignAndForward {
         )
     }
 
-    /// Handle a DA sign-and-forward envelope. Forwards to `admin.da.live`
-    /// with `Authorization: Bearer <imsToken>`. Mirrors the node-server
-    /// handler — the IMS token is transient (never persisted) and the
-    /// upstream origin is hard-coded so the browser cannot redirect to
-    /// arbitrary hosts.
+    /// Resolve the upstream origin for a DA envelope.
+    ///
+    /// Mirrors `executeDaSignAndForward` in `@slicc/shared-ts`: an omitted
+    /// origin uses `defaultOrigin` (production: `admin.da.live`; tests inject
+    /// a stub). An explicit origin must sit in `allowedDaOrigins` — only
+    /// `null`/`undefined` defaults, so an empty string is rejected rather
+    /// than treated as "use the default".
+    static func resolveDaOrigin(
+        envelopeOrigin: String?,
+        defaultOrigin: String = defaultDaOrigin
+    ) -> DaOriginResult {
+        guard let envelopeOrigin else { return .origin(defaultOrigin) }
+        guard allowedDaOrigins.contains(envelopeOrigin) else {
+            return .rejected(envelopeOrigin)
+        }
+        return .origin(envelopeOrigin)
+    }
+
+    /// Build the upstream DA URL from origin + path (+ optional query).
+    /// Concatenation matches the JS `new URL(origin + env.path)` so a
+    /// trailing slash on the path — which is what turns a Source Bus GET
+    /// into a directory listing — survives.
+    static func buildDaURL(origin: String, path: String, query: [String: String]?) -> URL? {
+        guard var components = URLComponents(string: origin + path) else { return nil }
+        if let query, !query.isEmpty {
+            let sortedItems = query.sorted(by: { $0.key < $1.key })
+                .map { URLQueryItem(name: $0.key, value: $0.value) }
+            let existing = components.queryItems ?? []
+            components.queryItems = existing + sortedItems
+        }
+        return components.url
+    }
+
+    /// Handle a DA sign-and-forward envelope. Attaches
+    /// `Authorization: Bearer <imsToken>` and forwards to the origin the
+    /// envelope selected (`admin.da.live` by default, `api.aem.live` for
+    /// Helix 6). Mirrors the node-server handler — the IMS token is
+    /// transient (never persisted) and the origin allow-list keeps the
+    /// orchestrator from becoming an open proxy for that token.
     static func handleDa(
         request: Request,
         httpClient: HTTPClient,
@@ -349,16 +407,19 @@ enum SignAndForward {
             )
         }
 
-        guard var components = URLComponents(string: daOrigin + path) else {
-            return errorResponse(.badRequest, error: "failed to build URL", errorCode: "invalid_request")
+        let origin: String
+        switch resolveDaOrigin(envelopeOrigin: env.origin, defaultOrigin: daOrigin) {
+        case .origin(let resolved):
+            origin = resolved
+        case .rejected(let rejected):
+            return errorResponse(
+                .badRequest,
+                error: "origin '\(rejected)' is not an allowed DA upstream",
+                errorCode: "invalid_request"
+            )
         }
-        if let query = env.query, !query.isEmpty {
-            let sortedItems = query.sorted(by: { $0.key < $1.key })
-                .map { URLQueryItem(name: $0.key, value: $0.value) }
-            let existing = components.queryItems ?? []
-            components.queryItems = existing + sortedItems
-        }
-        guard let url = components.url else {
+
+        guard let url = buildDaURL(origin: origin, path: path, query: env.query) else {
             return errorResponse(.badRequest, error: "failed to build URL", errorCode: "invalid_request")
         }
 

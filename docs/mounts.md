@@ -54,7 +54,7 @@ The two backends differ in what the API gives them:
 | Versioning       | strong ETags, `If-Match` / `If-None-Match` | **no ETags and no conditional requests** — extra headers trip a CORS preflight the endpoint rejects                   |
 | Empty folders    | listed                                     | do not exist; a folder 404s once its last file is gone                                                                |
 
-Both authenticate with the same Adobe IMS bearer token and share the `da-sign-and-forward` transport; the envelope's `origin` field selects the upstream, and the allow-list in `executeDaSignAndForward` keeps that set closed to those two hosts.
+Both authenticate with the same Adobe IMS bearer token and share the `da-sign-and-forward` transport; the envelope's `origin` field selects the upstream, and the allow-list in `executeDaSignAndForward` (node-server / extension SW) and `SignAndForward.handleDa` (swift-server / Sliccstart) keeps that set closed to those two hosts. Dropping `api.aem.live` from either copy makes `aem://` mounts 404 as `ENOENT '/'` (issue #2811).
 
 ## Setting up credentials
 
