@@ -81,6 +81,27 @@ describe('job-control builtins', () => {
     const result = await run('disown', ['%2']);
     expect(result.stderr).toBe('bash: disown: %2: no such job\n');
   });
+
+  // `-a` / `-r` sweep the whole table, so an empty table satisfies them and
+  // real bash exits 0. `-h` names a specific job and still errors.
+  it.each([['-a'], ['-r'], ['-ar']])('disown %s succeeds against an empty table', async (flag) => {
+    await expect(run('disown', [flag])).resolves.toEqual({
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
+  it('disown -h still reports no such job', async () => {
+    await expect(run('disown', ['-h'])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
+  it('disown -a with an explicit jobspec still reports no such job', async () => {
+    await expect(run('disown', ['-a', '%1'])).resolves.toMatchObject({
+      exitCode: 1,
+      stderr: 'bash: disown: %1: no such job\n',
+    });
+  });
 });
 
 describe('trap', () => {
@@ -111,12 +132,14 @@ describe('trap', () => {
     });
   });
 
-  it('accepts ignore because nothing raises the signal', async () => {
-    await expect(run('trap', ['', 'INT'])).resolves.toEqual({
-      stdout: '',
-      stderr: '',
-      exitCode: 0,
-    });
+  // Ctrl+C and `kill` abort the run through the kernel process abort
+  // (`terminal-session-host.ts` consults no trap state), so acknowledging a
+  // mask would let a "protected" critical section be interrupted anyway.
+  it('refuses to mask a signal it cannot actually mask', async () => {
+    const result = await run('trap', ['', 'INT']);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('signals cannot be masked in this shell');
   });
 
   it('refuses to install a handler instead of silently dropping it', async () => {

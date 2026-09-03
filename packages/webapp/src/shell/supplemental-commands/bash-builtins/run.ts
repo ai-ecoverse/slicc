@@ -41,9 +41,18 @@
 
 import type { Command, ResolvedCommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { isHelpRequest } from '../subcommand-help.js';
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * Bash builtins take `--help` and nothing else, so this deliberately does
+ * NOT accept `-h` the way the shared `subcommand-help.ts` helper does:
+ * `-h` is a real `disown` flag ("do not send SIGHUP"), and treating it as
+ * a help request would shadow it.
+ */
+function isHelpRequest(args: readonly string[]): boolean {
+  return args.includes('--help');
+}
 
 const ok = (stdout = ''): CmdResult => ({ stdout, stderr: '', exitCode: 0 });
 const fail = (stderr: string, exitCode: number): CmdResult => ({
@@ -144,14 +153,19 @@ const DISOWN_HELP = `disown - remove jobs from the current shell
 Usage: disown [-h] [-ar] [jobspec ...]
 
 This shell has no job table (see \`jobs --help\`), so there is never a job to
-disown and \`disown\` reports \`no such job\` exactly as bash does.
+disown. \`-a\` and \`-r\` succeed against the empty table and every other form
+reports \`no such job\` — exactly as bash does.
 `;
 
 function createDisownCommand(): Command {
   return defineCommand('disown', async (args) => {
     if (isHelpRequest(args)) return ok(DISOWN_HELP);
     const jobspec = args.find((a) => !a.startsWith('-'));
-    // Bare `disown` targets the current job, which never exists here.
+    // `disown -a` / `disown -r` sweep the whole table, so an EMPTY table
+    // satisfies them and bash exits 0. `-h` and a bare `disown` name a
+    // specific job, which never exists here.
+    const sweeps = args.some((a) => /^-[ar]+$/.test(a));
+    if (sweeps && !jobspec) return ok();
     return bashError('disown', `${jobspec ?? 'current'}: no such job`);
   });
 }
@@ -199,16 +213,23 @@ Supported:
   trap                 print trapped signals (always empty — none can be set)
   trap -p [spec ...]   same
   trap -l              list the signals the kernel can deliver
-  trap - SPEC ...      reset SPEC to its default (nothing was trapped)
-  trap '' SPEC ...     ignore SPEC (nothing raises it here)
+  trap - SPEC ...      reset SPEC to its default (nothing was trapped, and
+                       the default for a delivered signal is what you get)
 
 NOT supported:
   trap 'command' SPEC  installing a handler
+  trap '' SPEC ...     ignoring/masking a signal
 
 There is no signal-delivery path into a running script in this shell, so a
 handler could never fire. Installing one exits 2 with this message rather
 than accepting it silently: a cleanup handler that never runs is worse than
 one that is refused.
+
+Masking is refused for the same reason, and it is not hypothetical: Ctrl+C
+in the terminal and \`kill -INT <pid>\` both abort the running script through
+the kernel process abort (\`kernel/terminal-session-host.ts\`), which consults
+no trap state. Acknowledging \`trap '' INT\` would let a "protected" critical
+section be interrupted anyway.
 
 Instead:
   - run cleanup on the normal path, or in the \`||\` branch of the command
@@ -216,9 +237,16 @@ Instead:
   - \`kill\` signals kernel processes (\`ps\`) directly; see \`kill --help\`
 `;
 
-/** The two handler tokens that ask for nothing: `-` resets, `''` ignores. */
-function isTrapAction(token: string): boolean {
-  return token === '-' || token === '';
+/**
+ * `-` restores a signal's DEFAULT disposition. Nothing is trapped here and
+ * the default for a signal the kernel does deliver is exactly what happens,
+ * so the request is already satisfied.
+ *
+ * `''` (ignore) deliberately does NOT qualify: masking is a promise this
+ * shell cannot keep — see TRAP_HELP.
+ */
+function isTrapReset(token: string): boolean {
+  return token === '-';
 }
 
 function createTrapCommand(): Command {
@@ -230,9 +258,20 @@ function createTrapCommand(): Command {
     // `trap` and `trap -p [spec ...]` both only REPORT — the table is empty.
     if (args.length === 0 || args.includes('-p')) return ok();
 
-    // `trap - SPEC...` resets to default and `trap '' SPEC...` ignores. Both
-    // are satisfied by a shell that traps nothing and raises nothing.
-    if (isTrapAction(args[0])) return ok();
+    // `trap - SPEC ...` asks for the default disposition, which is what an
+    // untrapped signal already gets.
+    if (isTrapReset(args[0])) return ok();
+
+    // `trap '' SPEC ...` asks for masking. Ctrl+C and `kill` abort the run
+    // through the kernel process abort regardless, so acknowledging it would
+    // be the same silent lie as accepting a handler.
+    if (args[0] === '') {
+      return unsupported(
+        'trap',
+        'signals cannot be masked in this shell',
+        'Ctrl+C and `kill` abort the running script regardless'
+      );
+    }
 
     return unsupported(
       'trap',

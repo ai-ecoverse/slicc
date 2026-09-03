@@ -40,16 +40,16 @@ just-bash ships bash's complete `help` topic table while implementing only part 
 
 **Faithful** — where real bash without job control already answers with a diagnostic, this shell answers with bash's own text and exit code:
 
-| command                       | behaviour                                                     |
-| ----------------------------- | ------------------------------------------------------------- |
-| `jobs`                        | empty table, exit 0; a jobspec gets `%1: no such job`, exit 1 |
-| `fg` / `bg`                   | `bash: fg: no job control`, exit 1                            |
-| `suspend`                     | `bash: suspend: cannot suspend: no job control`, exit 1       |
-| `disown`                      | `bash: disown: current: no such job`, exit 1                  |
-| `logout`                      | ``bash: logout: not login shell: use `exit'``, exit 1         |
-| `trap -l`                     | the five signals the kernel can deliver (see `kill --help`)   |
-| `trap` / `trap -p`            | empty trap table, exit 0                                      |
-| `trap - SPEC`, `trap '' SPEC` | exit 0 — nothing is trapped, and nothing raises these         |
+| command            | behaviour                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `jobs`             | empty table, exit 0; a jobspec gets `%1: no such job`, exit 1                                    |
+| `fg` / `bg`        | `bash: fg: no job control`, exit 1                                                               |
+| `suspend`          | `bash: suspend: cannot suspend: no job control`, exit 1                                          |
+| `disown`           | `-a`/`-r` sweep the empty table and exit 0; every other form gets `current: no such job`, exit 1 |
+| `logout`           | ``bash: logout: not login shell: use `exit'``, exit 1                                            |
+| `trap -l`          | the five signals the kernel can deliver (see `kill --help`)                                      |
+| `trap` / `trap -p` | empty trap table, exit 0                                                                         |
+| `trap - SPEC`      | exit 0 — restores the default disposition, which is what an untrapped signal already gets        |
 
 `jobs` is empty rather than wrong: `&` runs its command synchronously here, so a backgrounded command has already finished by the time `jobs` runs. For long-lived kernel processes use `ps` and `kill`.
 
