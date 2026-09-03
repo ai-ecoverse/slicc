@@ -142,7 +142,7 @@ One deliberate ADDITION: `/proc/table` has no Linux counterpart. Linux readers w
 
 `runInRealm` takes **no** `AbortSignal`: `pm.signal(pid, …)` is its only stop path. Anything that wants to preempt realm-backed work must therefore own a pid the realm parents under, which is what the bash job below is for.
 
-The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
+The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. After the JS entry settles, the realm keeps the worker alive while ref'd handles remain — pending RPC (fs/exec/fetch) and user timers — matching Node's event-loop keep-alive; `process.exit()` skips that drain. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
 
 ## Bash jobs (agent `bash` tool)
 

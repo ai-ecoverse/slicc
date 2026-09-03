@@ -896,23 +896,10 @@ describe('stdin in .jsh scripts', () => {
   });
 
   it('output-loss window: queueMicrotask + single setTimeout(0) writes reach realm-done stdout today', async () => {
-    // FINDING (DoD item 3) — the constraint Wave 2's `end`-event emission must
-    // respect. runJsRealm resolves as soon as the user AsyncFunction returns;
-    // it then runs flushSyncFsCache and, when process.exit() was NOT called,
-    // drainPendingRpcs() (js-realm-shared.ts). drainPendingRpcs is a do/while
-    // that always awaits AT LEAST ONE `setTimeout(r, 0)` macrotask boundary,
-    // but its loop only continues while `rpc.pendingCount > 0` — user timers do
-    // NOT count as pending RPCs. So the drain guarantees exactly ONE macrotask
-    // hop when there are no outstanding RPCs.
-    //
-    // Consequence, established empirically here:
-    //   * queueMicrotask output ALWAYS survives — microtasks queued in the body
-    //     run before the `await runUserCode` continuation resumes.
-    //   * a SINGLE setTimeout(0) hop survives — it was registered before the
-    //     drain's own setTimeout(0), so it fires within that one macrotask hop.
-    // Wave 2 may therefore emit `data`/`end` via one microtask/one setTimeout(0)
-    // hop and still have `end`-callback output captured. See the deeper-nesting
-    // test below for where that guarantee ends.
+    // drainEventLoop always ticks at least once, then continues while user
+    // timers or RPCs remain (Node handle keep-alive). queueMicrotask output
+    // survives because microtasks drain before the first macrotask hop;
+    // a SINGLE setTimeout(0) is a handle and is collected too.
     const ctx = createMockCtx(
       {
         '/workspace/defer.jsh': [
@@ -930,14 +917,10 @@ describe('stdin in .jsh scripts', () => {
     expect(result.stdout).toBe('sync\nmicro\nmacro\n');
   });
 
-  it('output-loss window: a SECOND, nested setTimeout(0) hop is DROPPED from stdout today', async () => {
-    // FINDING (DoD item 3, boundary case). drainPendingRpcs guarantees only ONE
-    // macrotask hop for pure user timers (see above). Output written from a
-    // setTimeout nested inside another setTimeout lands after realm-done has
-    // already captured stdout, so it is silently lost. This is the hard
-    // constraint for Wave 2: an `end`-event deferral must complete within a
-    // single microtask/macrotask hop, NOT a multi-tick async chain, or the
-    // callback's output will not appear in command stdout.
+  it('collects a nested setTimeout(0) hop the way Node waits for timer handles', async () => {
+    // Node keeps the process alive until the nested timer fires. The realm
+    // drain tracks user timers, so hop2 is part of command stdout — the
+    // previous one-macrotask window dropped it.
     const ctx = createMockCtx(
       {
         '/workspace/nested-defer.jsh': [
@@ -954,8 +937,30 @@ describe('stdin in .jsh scripts', () => {
     );
     const result = await executeJshFile('/workspace/nested-defer.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('sync\nhop1\n');
-    expect(result.stdout).not.toContain('hop2');
+    expect(result.stdout).toBe('sync\nhop1\nhop2\n');
+  });
+
+  it('lets an unawaited async main() finish before the command exits', async () => {
+    // Classic Node CJS pattern: fire main() without await. Real Node stays
+    // alive because the timer inside main is a handle. SLICC used to
+    // snapshot stdout as soon as the wrapping AsyncFunction returned.
+    const ctx = createMockCtx(
+      {
+        '/workspace/main.jsh': [
+          'async function main() {',
+          '  await new Promise((r) => setTimeout(r, 20));',
+          '  console.log("from-main");',
+          '}',
+          'main();',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      ''
+    );
+    const result = await executeJshFile('/workspace/main.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('from-main');
   });
 
   it('parity: process.stdin shim is constructed in exactly one place (createProcessShim)', () => {

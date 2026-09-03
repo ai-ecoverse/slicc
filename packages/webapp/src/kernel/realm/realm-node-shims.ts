@@ -156,9 +156,10 @@ export function createProcessShim(
  * one. Registering a `'data'` listener (or calling `resume()`) puts the stream
  * in flowing mode: on a single `queueMicrotask` hop it emits the whole buffer
  * as one `'data'` chunk (skipped when empty or already consumed), then `'end'`,
- * then `'close'`. The one-hop deferral is deliberate — Wave 1 measured that a
- * multi-tick chain loses `'end'`-handler output past `realm-done` (see
- * `js-realm-shared.ts` `drainPendingRpcs`). `'error'` never fires.
+ * then `'close'`. The one-hop deferral is enough for stdout capture: the realm
+ * drain now waits for user timers the way Node waits for handles, so a nested
+ * `setTimeout` in an `'end'` handler would still be collected. `'error'` never
+ * fires.
  *
  * `pause()` suppresses the scheduled flush (the buffer stays intact so another
  * surface — a later `resume()` or a `read()` — can still drain it); `resume()`

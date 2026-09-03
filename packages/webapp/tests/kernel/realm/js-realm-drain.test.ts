@@ -1,13 +1,13 @@
 /**
- * Tests for the bounded RPC drain before realm teardown.
+ * Tests for the Node-like event-loop drain before realm teardown.
  *
- * When user code fires an RPC-backed async operation without
- * awaiting it (e.g. `fs.readFile('/x').then(v => console.log(v))`),
- * the realm must yield enough ticks for the response to land and
- * the `.then` callback to run before `rpc.dispose()` rejects
- * in-flight promises. The drain is skipped on explicit
- * `process.exit()` and bounded so a never-settling promise does not
- * hang teardown.
+ * Real Node keeps the process alive while ref'd handles remain
+ * (timers, I/O), not by awaiting the entry script's returned
+ * promise. When user code fires RPC-backed I/O without awaiting it
+ * (e.g. `fs.readFile('/x').then(v => console.log(v))`) or schedules
+ * a timer, the realm must wait for that handle before `realm-done`.
+ * `process.exit()` skips the drain. A Promise with no handle
+ * (`new Promise(() => {})`) does not keep the realm alive.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -51,7 +51,7 @@ function makePortPair(): { realm: PortLike; host: PortLike } {
 async function handleFakeHostMessage(
   host: PortLike,
   event: MessageEvent,
-  opts: { delayMs?: number; hangPaths?: Set<string> }
+  opts: { delayMs?: number; flushWrites?: unknown[] }
 ): Promise<void> {
   const data = event.data as { type?: string };
   if (data?.type !== 'realm-rpc-req') return;
@@ -64,10 +64,6 @@ async function handleFakeHostMessage(
   };
   if (req.channel === 'vfs' && req.op === 'readFile') {
     const path = req.args[0] as string;
-    if (opts.hangPaths?.has(path)) {
-      // Never respond — the drain ceiling must cut this off.
-      return;
-    }
     if (opts.delayMs && opts.delayMs > 0) {
       await new Promise((r) => setTimeout(r, opts.delayMs));
     }
@@ -76,6 +72,19 @@ async function handleFakeHostMessage(
       id: req.id,
       result: 'hello-' + path,
     });
+    return;
+  }
+  if (req.channel === 'vfs' && req.op === 'snapshot') {
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: { entries: [] },
+    });
+    return;
+  }
+  if (req.channel === 'vfs' && req.op === 'flushWrites') {
+    opts.flushWrites?.push(req.args[0]);
+    host.postMessage({ type: 'realm-rpc-res', id: req.id, result: undefined });
     return;
   }
   if (req.channel === 'module' && req.op === 'buildGraph') {
@@ -98,7 +107,7 @@ async function handleFakeHostMessage(
 
 function attachFakeHost(
   host: PortLike,
-  opts: { delayMs?: number; hangPaths?: Set<string> } = {}
+  opts: { delayMs?: number; flushWrites?: unknown[] } = {}
 ): void {
   host.addEventListener('message', (event: MessageEvent) => {
     void handleFakeHostMessage(host, event, opts);
@@ -119,7 +128,7 @@ function makeInit(code: string): RealmInitMsg {
 
 function runRealm(
   code: string,
-  opts: { delayMs?: number; hangPaths?: Set<string> } = {}
+  opts: { delayMs?: number; flushWrites?: unknown[] } = {}
 ): Promise<RealmDoneMsg> {
   const { realm, host } = makePortPair();
   attachFakeHost(host, opts);
@@ -135,7 +144,7 @@ function runRealm(
   return promise;
 }
 
-describe('realm RPC drain before teardown', () => {
+describe('realm event-loop drain before teardown', () => {
   it('lets a non-awaited .then on an RPC promise print before teardown', async () => {
     const code = `const fs = require('fs'); fs.readFile('/x').then(v => console.log('then:' + v));`;
     const done = await runRealm(code);
@@ -143,28 +152,71 @@ describe('realm RPC drain before teardown', () => {
     expect(done.stdout).toContain('then:hello-/x');
   });
 
-  it('bounds the drain so a never-settling promise does not hang teardown', async () => {
-    // `.catch(()=>{})` silences the expected disposal rejection so
-    // vitest doesn't flag an unhandled rejection.
-    const code = `const fs = require('fs'); fs.readFile('/never').then(v => console.log('then:' + v)).catch(()=>{});`;
+  it('waits for a delayed RPC .then the way Node waits for I/O handles', async () => {
+    const code = `const fs = require('fs'); fs.readFile('/x').then(v => console.log('then:' + v));`;
+    const done = await runRealm(code, { delayMs: 40 });
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('then:hello-/x');
+  });
+
+  it('does not keep the realm alive for a Promise with no handle', async () => {
+    // Node exits: a pending Promise is not a libuv handle.
+    const code = `new Promise(() => {}); console.log('sync');`;
     const start = Date.now();
-    const done = await runRealm(code, { hangPaths: new Set(['/never']) });
+    const done = await runRealm(code);
     const elapsed = Date.now() - start;
     expect(done.exitCode).toBe(0);
-    // The drain ceiling is 50 ticks / 1000 ms; allow generous headroom
-    // for test-scheduler jitter.
-    expect(elapsed).toBeLessThan(3000);
-    expect(done.stdout).not.toContain('then:');
+    expect(done.stdout).toContain('sync');
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  it('lets a nested setTimeout print before teardown', async () => {
+    const code = [
+      'setTimeout(() => {',
+      '  process.stdout.write("hop1\\n");',
+      '  setTimeout(() => process.stdout.write("hop2\\n"), 0);',
+      '}, 0);',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toBe('hop1\nhop2\n');
+  });
+
+  it('lets setInterval run until it is cleared', async () => {
+    const code = [
+      'let n = 0;',
+      'const id = setInterval(() => {',
+      '  n += 1;',
+      '  process.stdout.write("tick" + n + "\\n");',
+      '  if (n >= 2) clearInterval(id);',
+      '}, 10);',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toBe('tick1\ntick2\n');
+  });
+
+  it('lets an unawaited async main() with a timer print before teardown', async () => {
+    const code = [
+      'async function main() {',
+      '  await new Promise((r) => setTimeout(r, 20));',
+      '  console.log("from-main");',
+      '}',
+      'main();',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('from-main');
   });
 
   it('bypasses the drain on explicit process.exit so teardown is immediate', async () => {
     // `.catch(()=>{})` silences the expected disposal rejection.
     // Use a SHORT delay (10 ms) so the pending RPC is still in-flight
-    // when process.exit() is called, but it WOULD settle INSIDE the
-    // drain window if the drain incorrectly runs. This ensures the test
-    // FAILS when the stale `didCallProcessExit` snapshot bug is present:
-    // the .then fires because the response arrives during the drain,
-    // so `done.stdout` contains 'then:'.
+    // when process.exit() is called, but it WOULD settle if the drain
+    // incorrectly runs. This ensures the test FAILS when the stale
+    // `didCallProcessExit` snapshot bug is present: the .then fires
+    // because the response arrives during the drain, so `done.stdout`
+    // contains 'then:'.
     const code = `const fs = require('fs'); fs.readFile('/x').then(v => console.log('then:' + v)).catch(()=>{}); process.exit(0);`;
     const start = Date.now();
     const done = await runRealm(code, { delayMs: 10 });
@@ -173,8 +225,38 @@ describe('realm RPC drain before teardown', () => {
     // With the live-flag bypass, dispose() rejects the pending RPC
     // immediately and the .then never prints.
     expect(done.stdout).not.toContain('then:');
-    // Should be well under the drain ceiling because we skipped it
-    // entirely; a non-bypassed drain would take at least one tick.
     expect(elapsed).toBeLessThan(50);
+  });
+
+  it('drops pending timers on process.exit the way Node does', async () => {
+    const code = `setTimeout(() => console.log('late'), 20); process.exit(0);`;
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).not.toContain('late');
+  });
+
+  it('honors process.exit from a delayed timer during the drain', async () => {
+    const code = [
+      'setTimeout(() => process.exit(7), 15);',
+      'setTimeout(() => console.log("late"), 40);',
+    ].join('\n');
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(7);
+    expect(done.stdout).not.toContain('late');
+  });
+
+  it('flushes sync-fs mutations made from a delayed callback', async () => {
+    const flushWrites: unknown[] = [];
+    const code = [
+      'const fs = require("fs");',
+      'setTimeout(() => fs.writeFileSync("/workspace/delayed.txt", "hi"), 10);',
+    ].join('\n');
+    const done = await runRealm(code, { flushWrites });
+    expect(done.exitCode).toBe(0);
+    const created = flushWrites.flatMap((batch) => {
+      const b = batch as { created?: { path: string }[] };
+      return b.created ?? [];
+    });
+    expect(created.some((e) => e.path === '/workspace/delayed.txt')).toBe(true);
   });
 });

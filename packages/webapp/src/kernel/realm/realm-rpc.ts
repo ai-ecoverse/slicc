@@ -53,6 +53,7 @@ export class RealmRpcClient {
    * detach from the caller.
    */
   private readonly eventSubscribers = new Map<string, Set<(payload: unknown) => void>>();
+  private readonly progressWaiters = new Set<() => void>();
   private readonly handler: (event: MessageEvent) => void;
   private disposed = false;
 
@@ -69,6 +70,7 @@ export class RealmRpcClient {
         } else {
           slot.resolve(res.result);
         }
+        this.notifyProgress();
         return;
       }
       if (data?.type === 'realm-event') {
@@ -91,6 +93,25 @@ export class RealmRpcClient {
 
   get pendingCount(): number {
     return this.pending.size;
+  }
+
+  /**
+   * Resolve on the next RPC completion (or immediately when nothing is
+   * in flight) so the event-loop drain can sleep until I/O actually
+   * settles instead of spinning `setTimeout(0)`.
+   */
+  waitForProgress(): Promise<void> {
+    if (this.pending.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.progressWaiters.add(resolve);
+    });
+  }
+
+  private notifyProgress(): void {
+    if (this.progressWaiters.size === 0) return;
+    const waiters = [...this.progressWaiters];
+    this.progressWaiters.clear();
+    for (const waiter of waiters) waiter();
   }
 
   call<T = unknown>(channel: RealmRpcChannel, op: string, args: unknown[] = []): Promise<T> {
@@ -137,5 +158,6 @@ export class RealmRpcClient {
     for (const slot of this.pending.values()) slot.reject(err);
     this.pending.clear();
     this.eventSubscribers.clear();
+    this.notifyProgress();
   }
 }
