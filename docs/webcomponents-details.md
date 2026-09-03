@@ -313,7 +313,13 @@ hint at rest, and a strip of key caps as keys land. Two host contracts:
 - **It pins itself** (`position: absolute; bottom: 0`) to the nearest
   positioned ancestor, which the shell makes `<slicc-chatpane>` — the column,
   not the composer band, so it survives a read-only unit hiding the band
-  (#2312). `.slicc-chatpane` is `position: relative` for exactly this.
+  (#2312). `.slicc-chatpane` is `position: relative` for exactly this. The
+  host stays column-width at z-index 2 (same as the composer band; tool tiles
+  and the dock rail sit at 3). A `.slicc-shell slicc-key-hud::after` bleed
+  (`left: 100%; width: 100vw`, `pointer-events: none`) extends the bar under
+  an open tool pane the way the composer's own `::before` does. Panel-layouts
+  do not get that bleed: their tool surfaces are sibling `<slicc-panel>`s
+  with no z-index 3 wrapper, so an unconditional 100vw bar would tint them.
 - **The host owns the words.** `hint` takes a `[x]` notation — bracketed
   tokens become caps, everything else is text the DOM escapes — so the shell
   can name the keys its live keymap actually binds. A key that is a SHAPE

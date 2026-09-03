@@ -97,6 +97,22 @@ slicc-composer[keys] > .slicc-composer__inner > * {
   backdrop-filter: blur(18px) saturate(1.4);
   -webkit-backdrop-filter: blur(18px) saturate(1.4);
 }
+/* Keyboard-mode HUD: same rightward bleed, same stacking. Scoped to the
+   dock-tree shell so panel-layouts (sibling slicc-panels, no z-index 3
+   tile wrapper) never get a 100vw bar painted over the adjacent tool panel. */
+.slicc-shell slicc-key-hud::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: 0;
+  left: 100%;
+  width: 100vw;
+  background: inherit;
+  border-top: inherit;
+  backdrop-filter: inherit;
+  -webkit-backdrop-filter: inherit;
+  pointer-events: none;
+}
 slicc-composer > .slicc-composer__inner {
   box-sizing: border-box;
   max-width: 680px;

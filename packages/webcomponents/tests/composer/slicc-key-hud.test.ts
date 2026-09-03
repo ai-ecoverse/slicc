@@ -47,6 +47,14 @@ describe('slicc-key-hud', () => {
     const style = getComputedStyle(el);
     expect(style.position).toBe('absolute');
     expect(style.bottom).toBe('0px');
+    // Under the open tool pane (z-index 3), matching the composer band.
+    expect(style.zIndex).toBe('2');
+  });
+
+  it('does not bleed on its own — that paint is a slicc-shell rule', () => {
+    const el = mount();
+    // Unconditional 100vw would tint an adjacent panel-layout tool surface.
+    expect(getComputedStyle(el, '::after').content).toBe('none');
   });
 
   it('announces the mode but never the typing', () => {
