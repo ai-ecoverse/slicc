@@ -73,7 +73,7 @@
       "lines": 84,
       "statements": 82,
       "functions": 82,
-      "branches": 73,
+      "branches": 74,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -134,7 +134,7 @@
     "swift-server": {
       "lines": 65,
       "functions": 64,
-      "regions": 62
+      "regions": 63
     },
     "swift-launcher": {
       "lines": 80,
