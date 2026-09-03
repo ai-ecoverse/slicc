@@ -212,3 +212,53 @@ describe('recycleFfmpeg', () => {
     expect(next).toBe(instances[1]);
   });
 });
+
+describe('install guidance and -version description', () => {
+  it('points an isolated runtime at the multi-threaded core first', async () => {
+    const {
+      ffmpegCoreNotInstalledMessage,
+      FFMPEG_CORE_MT_NOT_INSTALLED,
+      FFMPEG_CORE_NOT_INSTALLED,
+    } = await import('../../../src/shell/supplemental-commands/ffmpeg-wasm.js');
+    expect(ffmpegCoreNotInstalledMessage(true)).toBe(FFMPEG_CORE_MT_NOT_INSTALLED);
+    expect(ffmpegCoreNotInstalledMessage(true)).toContain('@ffmpeg/core-mt@');
+    // The single-threaded fallback is still named, so an agent on a
+    // browser that cannot boot pthreads has a working command to copy.
+    expect(ffmpegCoreNotInstalledMessage(true)).toContain('@ffmpeg/core@');
+    expect(ffmpegCoreNotInstalledMessage(false)).toBe(FFMPEG_CORE_NOT_INSTALLED);
+    expect(ffmpegCoreNotInstalledMessage(false)).not.toContain('core-mt');
+  });
+
+  it('defaults to the realm isolation flag', async () => {
+    const { ffmpegCoreNotInstalledMessage, FFMPEG_CORE_NOT_INSTALLED } = await import(
+      '../../../src/shell/supplemental-commands/ffmpeg-wasm.js'
+    );
+    // Node has no `crossOriginIsolated`, so the default is the ST guidance.
+    expect(ffmpegCoreNotInstalledMessage()).toBe(FFMPEG_CORE_NOT_INSTALLED);
+  });
+
+  it('describes the mt core with its thread count', async () => {
+    const { describeFfmpegCore } = await import(
+      '../../../src/shell/supplemental-commands/ffmpeg-wasm.js'
+    );
+    expect(describeFfmpegCore({ pkg: '@ffmpeg/core-mt' }, true, 8)).toBe(
+      '@ffmpeg/core-mt 0.12.10 (multi-threaded, 8 threads)'
+    );
+    expect(describeFfmpegCore({ pkg: '@ffmpeg/core-mt' }, true, 0)).toBe(
+      '@ffmpeg/core-mt 0.12.10 (multi-threaded)'
+    );
+  });
+
+  it('tells an isolated leader running the ST core what to install', async () => {
+    const { describeFfmpegCore } = await import(
+      '../../../src/shell/supplemental-commands/ffmpeg-wasm.js'
+    );
+    const isolated = describeFfmpegCore({ pkg: '@ffmpeg/core' }, true, 8);
+    expect(isolated).toContain('single-threaded');
+    expect(isolated).toContain('ipk add -g @ffmpeg/core-mt@0.12.10');
+    const embedded = describeFfmpegCore({ pkg: '@ffmpeg/core' }, false, 8);
+    expect(embedded).toBe(
+      '@ffmpeg/core 0.12.10 (single-threaded; runtime is not cross-origin isolated)'
+    );
+  });
+});

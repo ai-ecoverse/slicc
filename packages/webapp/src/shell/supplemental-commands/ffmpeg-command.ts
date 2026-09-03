@@ -40,7 +40,8 @@ import type {
 } from '../../kernel/panel-rpc-camera-types.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
 import {
-  FFMPEG_CORE_NOT_INSTALLED,
+  describeFfmpegCore,
+  ffmpegCoreNotInstalledMessage,
   getFfmpeg,
   type IpkResolutionContext,
   isCoreFault,
@@ -128,10 +129,10 @@ async function ffmpegVersion(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const loaded = await tryLoadFfmpegCoreFromNodeModules(createIpkContextFromCtx(ctx));
   if (!loaded) {
-    return { stdout: '', stderr: `ffmpeg: ${FFMPEG_CORE_NOT_INSTALLED}\n`, exitCode: 1 };
+    return { stdout: '', stderr: `ffmpeg: ${ffmpegCoreNotInstalledMessage()}\n`, exitCode: 1 };
   }
   return {
-    stdout: 'ffmpeg (wasm via @ffmpeg/ffmpeg)\n',
+    stdout: `ffmpeg (wasm via @ffmpeg/ffmpeg)\ncore: ${describeFfmpegCore(loaded)}\n`,
     stderr: '',
     exitCode: 0,
   };

@@ -18,7 +18,8 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createIpkContextFromCtx } from '../ffmpeg-command.js';
 import {
-  FFMPEG_CORE_NOT_INSTALLED,
+  describeFfmpegCore,
+  ffmpegCoreNotInstalledMessage,
   getFfmpeg,
   isCoreFault,
   recycleFfmpeg,
@@ -112,7 +113,9 @@ Supported options:
   -version                Report that this is the wasm emulation
 
 Unsupported options are rejected with a non-zero exit (never silently
-ignored). Install the core first with the same pin as \`ffmpeg\`:
+ignored). Install the core first with the same pin as \`ffmpeg\`
+(\`@ffmpeg/core-mt\` on a cross-origin-isolated leader, else \`@ffmpeg/core\`):
+  ipk add -g @ffmpeg/core-mt@<pinned>
   ipk add -g @ffmpeg/core@<pinned>
 
 Examples:
@@ -127,10 +130,10 @@ Examples:
 async function ffprobeVersion(ctx: CommandContext): Promise<CmdResult> {
   const loaded = await tryLoadFfmpegCoreFromNodeModules(createIpkContextFromCtx(ctx));
   if (!loaded) {
-    return { stdout: '', stderr: `ffprobe: ${FFMPEG_CORE_NOT_INSTALLED}\n`, exitCode: 1 };
+    return { stdout: '', stderr: `ffprobe: ${ffmpegCoreNotInstalledMessage()}\n`, exitCode: 1 };
   }
   return {
-    stdout: 'ffprobe (emulated via @ffmpeg/ffmpeg — not a real ffprobe binary)\n',
+    stdout: `ffprobe (emulated via @ffmpeg/ffmpeg — not a real ffprobe binary)\ncore: ${describeFfmpegCore(loaded)}\n`,
     stderr: '',
     exitCode: 0,
   };

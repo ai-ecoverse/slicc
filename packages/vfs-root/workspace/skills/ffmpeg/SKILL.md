@@ -18,13 +18,23 @@ rejected by name (never silently dropped).
 
 ## Install
 
+Two cores share one pin. Run `ffmpeg -version`: its `core:` line says which
+one is loaded and, on a cross-origin-isolated leader, whether the faster
+multi-threaded core is one install away.
+
 ```bash
+# Cross-origin-isolated leader (the hosted tab on current Chrome):
+# multi-threaded core, uses every CPU core for libx264 / libvpx / filters.
+ipk add -g @ffmpeg/core-mt@0.12.10
+
+# Everywhere else (Cherry, Electron, older browsers), and as a fallback:
 ipk add -g @ffmpeg/core@0.12.10
 ```
 
-Prefer `-g` so scoops and the cone share one copy. Follow the pinned
-version printed by `ffmpeg --help` / `ffprobe --help` if it differs.
-There is no CDN fallback.
+Installing both is fine: the loader boots `core-mt` when the runtime is
+isolated and `core` otherwise. Prefer `-g` so scoops and the cone share one
+copy. Follow the pinned version printed by `ffmpeg --help` / `ffprobe --help`
+if it differs. There is no CDN fallback.
 
 ## ffprobe — what works
 

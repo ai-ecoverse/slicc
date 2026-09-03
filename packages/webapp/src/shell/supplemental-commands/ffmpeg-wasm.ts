@@ -48,6 +48,50 @@ export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_
 export const FFMPEG_CORE_MT_PACKAGE = '@ffmpeg/core-mt';
 
 /**
+ * Install guidance for an isolated runtime, where the multi-threaded core
+ * is the one worth installing. Kept separate from
+ * {@link FFMPEG_CORE_NOT_INSTALLED} so a non-isolated float (Cherry,
+ * Electron, older Chrome) is never told to install a core it cannot boot.
+ */
+export const FFMPEG_CORE_MT_NOT_INSTALLED = `no ffmpeg core is installed in node_modules: this runtime is cross-origin isolated, so run \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\` for the multi-threaded core (\`${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` is the single-threaded fallback; no network fallback)`;
+
+/** `true` when this realm has SharedArrayBuffer and can run pthreads. */
+export function isCrossOriginIsolated(): boolean {
+  return globalThis.crossOriginIsolated === true;
+}
+
+/**
+ * The not-installed message that fits the calling runtime. Every surface
+ * that reports a missing core (`ffmpeg`, `ffprobe`, the loader) goes
+ * through here so the guidance an agent copies is the core the loader
+ * would actually prefer — see {@link selectFfmpegCore}.
+ */
+export function ffmpegCoreNotInstalledMessage(isolated = isCrossOriginIsolated()): string {
+  return isolated ? FFMPEG_CORE_MT_NOT_INSTALLED : FFMPEG_CORE_NOT_INSTALLED;
+}
+
+/**
+ * One-line description of a resolved core for `-version` output: which
+ * package, threaded or not, and — when a faster core is one `ipk add`
+ * away — what to install. Exported for unit tests.
+ */
+export function describeFfmpegCore(
+  loaded: Pick<LoadedFfmpegCore, 'pkg'>,
+  isolated = isCrossOriginIsolated(),
+  cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
+): string {
+  const version = `${loaded.pkg} ${BUNDLED_FFMPEG_CORE_VERSION}`;
+  if (loaded.pkg === FFMPEG_CORE_MT_PACKAGE) {
+    const threads = typeof cores === 'number' && cores > 0 ? `, ${cores} threads` : '';
+    return `${version} (multi-threaded${threads})`;
+  }
+  if (isolated) {
+    return `${version} (single-threaded; this runtime is cross-origin isolated, run \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\` for multi-threading)`;
+  }
+  return `${version} (single-threaded; runtime is not cross-origin isolated)`;
+}
+
+/**
  * Read-only VFS context the loader needs to read an ipk-installed
  * `@ffmpeg/core` glue + wasm pair (see {@link FFMPEG_CORE_LAYOUTS} for
  * where inside the package they live).
@@ -252,7 +296,7 @@ export async function tryLoadFfmpegCoreFromNodeModules(
   // lives in ffmpeg-command.ts, which is layer-back-edge debt-listed —
   // the fix belongs here so that file stays untouched.)
   if (pkg === undefined) {
-    return selectFfmpegCore(ipk, globalThis.crossOriginIsolated === true);
+    return selectFfmpegCore(ipk, isCrossOriginIsolated());
   }
   let resolved;
   try {
@@ -304,9 +348,9 @@ async function resolveAssetUrls(
     // a clear error if a caller still tries.
     throw new Error('ffmpeg-wasm is not available in Node runtime');
   }
-  if (!ipk) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
-  const loaded = await selectFfmpegCore(ipk, globalThis.crossOriginIsolated === true);
-  if (!loaded) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
+  if (!ipk) throw new Error(ffmpegCoreNotInstalledMessage());
+  const loaded = await selectFfmpegCore(ipk, isCrossOriginIsolated());
+  if (!loaded) throw new Error(ffmpegCoreNotInstalledMessage());
 
   log(
     `${loaded.pkg} loaded from ipk node_modules (js: ${loaded.coreSource.length} chars, wasm: ${loaded.wasmBytes.byteLength} bytes${loaded.workerSource ? ', multi-threaded' : ''})`
