@@ -25,6 +25,18 @@
  * `wasmURL` / `wasmModule` / `worker` options on `initialize`.
  * The Node path therefore must not call `initialize` at all —
  * `esbuild.build()` lazily boots the service on first call.
+ *
+ * The glue is a namespace import on purpose, unlike `magick-wasm.ts`,
+ * where named bindings shave ~100 kB of unused dual glue off the kernel
+ * worker's cold-boot graph. Vite resolves `esbuild-wasm` through its
+ * `browser` field to `lib/browser.js`, which is CommonJS: the bundle
+ * carries it as one opaque interop closure that no import style can
+ * tree-shake, and the package ships a single service with no dual glue
+ * to drop anyway. Named imports were measured at +163 B on the worker
+ * graph (the wrapper object), not a saving. The module sits in that
+ * eager graph for a functional reason — `realm-host.ts` needs
+ * `getEsbuild` for realm `require()` of ESM — so hoisting
+ * `ESBUILD_VERSION` into a leaf would not detach it either.
  */
 
 import * as esbuild from 'esbuild-wasm';
@@ -137,6 +149,12 @@ export interface EsbuildWasmBinary {
  * apply), derives the package directory from the resolved file, and
  * reads sibling `esbuild.wasm` bytes. Returns `null` on any miss —
  * the caller surfaces a clean "not installed" error.
+ *
+ * The binary has lived at the package root in every `esbuild-wasm`
+ * release since 0.5.0, so there is deliberately no candidate list here.
+ * A release that moves it would still pass every mocked test in this
+ * tree; `esbuild-wasm-live.test.ts` reads the real installed package
+ * and is the check that catches that.
  *
  * Exported so the loader's resolution behavior is unit-testable
  * without booting the heavy WASM service.
