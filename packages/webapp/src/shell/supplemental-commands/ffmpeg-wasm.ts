@@ -49,7 +49,8 @@ export const FFMPEG_CORE_MT_PACKAGE = '@ffmpeg/core-mt';
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed
- * `@ffmpeg/core/dist/esm/{ffmpeg-core.js,ffmpeg-core.wasm}` pair.
+ * `@ffmpeg/core` glue + wasm pair (see {@link FFMPEG_CORE_LAYOUTS} for
+ * where inside the package they live).
  * Mirrors the {@link IpkResolutionContext} shape used by
  * `esbuild-wasm.ts` and `biome-command.ts` so every float
  * (standalone/hosted/extension/Node) wires the loader the same way.
@@ -83,6 +84,71 @@ export interface LoadedFfmpegCore {
 }
 
 const FFMPEG_CORE_PACKAGE = '@ffmpeg/core';
+
+/**
+ * Directories inside an ipk-installed core package that hold the
+ * `ffmpeg-core.{js,wasm}` pair (plus `ffmpeg-core.worker.js` for the -mt
+ * core), relative to the package root, newest layout first. The first
+ * layout whose required files all exist wins.
+ *
+ * Verified against the registry with `npm pack`, not assumed: every 0.12.x
+ * release from 0.12.0 through the pinned 0.12.10 ships the identical
+ * `dist/esm/` + `dist/umd/` pair, for `@ffmpeg/core` and `@ffmpeg/core-mt`
+ * alike. So there is exactly one supported layout today. The list exists
+ * so the next reorganisation is a one-line change here, with
+ * `ffmpeg-wasm-live.test.ts` (which resolves the REAL installed package)
+ * failing to say so — instead of the silent "not installed" that the
+ * magick 0.0.43 bump produced (PR #2744) while every filesystem-mocking
+ * test stayed green.
+ *
+ * Two layouts that HAVE shipped are deliberately not candidates:
+ *
+ * - `dist/umd/` (0.12.x, the package's `main`). The `@ffmpeg/ffmpeg`
+ *   wrapper always spawns a module worker, whose `importScripts` throws, so
+ *   it loads the glue with `(await import(coreURL)).default`. The UMD build
+ *   has no default export (it assigns `module.exports` / `define`), so the
+ *   wrapper would throw its import-failure error from inside the worker —
+ *   worse than the clean install guidance the caller surfaces on `null`.
+ * - flat `dist/` (0.11.x and earlier: `dist/ffmpeg-core.{js,wasm,worker.js}`).
+ *   That core speaks the pre-0.12 `createFFmpeg` protocol and cannot be
+ *   driven by the bundled 0.12 wrapper at all; an `ipk add @ffmpeg/core@0.11`
+ *   is a version mismatch, not a layout the loader should paper over.
+ */
+const FFMPEG_CORE_LAYOUTS = ['dist/esm'] as const;
+
+/** Absolute VFS paths of one core install's files, resolved against one layout. */
+interface FfmpegCoreFiles {
+  core: string;
+  wasm: string;
+  /** Pthread worker — required for (and only present with) the -mt core. */
+  worker: string | null;
+}
+
+/**
+ * First layout under `pkgDir` whose glue + wasm (+ pthread worker for the
+ * -mt core) all exist, or null when none does — a partial/pruned install
+ * or a layout this loader does not know. The -mt core is unusable without
+ * its worker, so a layout missing it is a miss rather than a broken boot.
+ */
+async function findFfmpegCoreFiles(
+  pkgDir: string,
+  pkg: LoadedFfmpegCore['pkg'],
+  reader: ModuleReader
+): Promise<FfmpegCoreFiles | null> {
+  for (const layout of FFMPEG_CORE_LAYOUTS) {
+    const dir = `${pkgDir}/${layout}`;
+    const files: FfmpegCoreFiles = {
+      core: `${dir}/ffmpeg-core.js`,
+      wasm: `${dir}/ffmpeg-core.wasm`,
+      worker: pkg === FFMPEG_CORE_MT_PACKAGE ? `${dir}/ffmpeg-core.worker.js` : null,
+    };
+    if (!(await reader.exists(files.core))) continue;
+    if (!(await reader.exists(files.wasm))) continue;
+    if (files.worker && !(await reader.exists(files.worker))) continue;
+    return files;
+  }
+  return null;
+}
 
 let ffmpegPromise: Promise<FFmpeg> | null = null;
 
@@ -165,12 +231,13 @@ async function loadFfmpeg(
 }
 
 /**
- * Try to read `@ffmpeg/core`'s `dist/esm/ffmpeg-core.{js,wasm}` from
- * an ipk-installed `@ffmpeg/core` in the VFS. Resolves
+ * Try to read `@ffmpeg/core`'s `ffmpeg-core.{js,wasm}` from an
+ * ipk-installed `@ffmpeg/core` in the VFS. Resolves
  * `@ffmpeg/core/package.json` through the shared resolver (so the
  * standard `node_modules` walk and resolution rules apply), derives
- * the package directory from the resolved file, and reads the
- * sibling JS source + wasm bytes. Returns `null` on any resolution
+ * the package directory from the resolved file, locates the glue + wasm
+ * in a supported layout (see `FFMPEG_CORE_LAYOUTS`), and reads the JS
+ * source + wasm bytes. Returns `null` on any resolution
  * / read miss so the caller surfaces the canonical guidance error.
  * Exported so the loader's resolution behavior is unit-testable
  * without booting the heavy wasm runtime.
@@ -194,20 +261,12 @@ export async function tryLoadFfmpegCoreFromNodeModules(
     return null;
   }
   if (resolved.type !== 'file') return null;
-  const pkgDir = splitPath(resolved.path).dir;
-  const corePath = `${pkgDir}/dist/esm/ffmpeg-core.js`;
-  const wasmPath = `${pkgDir}/dist/esm/ffmpeg-core.wasm`;
-  // The -mt core is unusable without its pthread worker — treat a missing
-  // worker file as not-installed rather than booting a broken core.
-  const workerPath =
-    pkg === FFMPEG_CORE_MT_PACKAGE ? `${pkgDir}/dist/esm/ffmpeg-core.worker.js` : null;
-  if (!(await ipk.reader.exists(corePath))) return null;
-  if (!(await ipk.reader.exists(wasmPath))) return null;
-  if (workerPath && !(await ipk.reader.exists(workerPath))) return null;
+  const files = await findFfmpegCoreFiles(splitPath(resolved.path).dir, pkg, ipk.reader);
+  if (!files) return null;
   try {
-    const coreSource = await ipk.reader.readFile(corePath);
-    const wasmBytes = await ipk.readBytes(wasmPath);
-    const workerSource = workerPath ? await ipk.reader.readFile(workerPath) : undefined;
+    const coreSource = await ipk.reader.readFile(files.core);
+    const wasmBytes = await ipk.readBytes(files.wasm);
+    const workerSource = files.worker ? await ipk.reader.readFile(files.worker) : undefined;
     return { pkg, coreSource, wasmBytes, ...(workerSource !== undefined ? { workerSource } : {}) };
   } catch {
     return null;
