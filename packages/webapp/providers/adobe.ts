@@ -275,6 +275,7 @@ export const config: ProviderConfig = {
     'admin.hlx.live',
     'admin.aem.page',
     'admin.aem.live',
+    'api.aem.live',
   ],
 
   getModelIds: () => {

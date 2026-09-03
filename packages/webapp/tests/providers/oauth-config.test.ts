@@ -14,5 +14,6 @@ describe('OAuth provider domain config', () => {
     expect(adobeProvider.oauthTokenDomains).toContain('admin.hlx.live');
     expect(adobeProvider.oauthTokenDomains).toContain('admin.aem.page');
     expect(adobeProvider.oauthTokenDomains).toContain('admin.aem.live');
+    expect(adobeProvider.oauthTokenDomains).toContain('api.aem.live');
   });
 });
