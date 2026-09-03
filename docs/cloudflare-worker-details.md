@@ -105,6 +105,23 @@ start/resume flows:
   - Shipped pre-#1957 followers degrade rather than break: their platforms follow the
     308 and re-POST, so they connect to the replacement but do not persist it, and
     re-walk the redirect on each reconnect until updated.
+- **Superseded webhook deliveries** answer the same way: `POST /webhook/:token/:webhookId`
+  on a superseded tray returns `308` + `Location: <replacement webhook URL>/:webhookId`
+  (the delivery's query string carried over) + `code: "TRAY_SUPERSEDED"`. This is the
+  half of the problem the join surface does not cover: a webhook URL embeds the tray id,
+  an external service caches it for the life of a long job, and a tray reset mid-job used
+  to turn the callback into a bare `410 TRAY_EXPIRED` that a fire-and-forget sender drops
+  on the floor — a lick that never arrives and nothing reporting an error.
+  - **The replacement's webhook URL is stored separately** (`supersededByWebhookUrl`)
+    because it is not derivable: the join URL carries the join token, a delivery needs the
+    webhook token. It is optional on `/supersede`, so a leader that predates it leaves the
+    webhook surface on its old `410`. An unparseable value is refused at write time.
+  - **Ordering in the relay is load-bearing: capability token → supersede → expiry gate →
+    live-leader check.** After the token because `Location` names the replacement's webhook
+    _capability_, which is a secret — an unauthenticated redirect would hand it to anyone
+    who guessed a tray id. Before the expiry gate (which is why `/webhook/*` dispatches
+    ahead of it in the DO's `fetch`, like `/join`) because the callback that needs
+    redirecting is precisely the one arriving after the old tray died. A test pins both.
 - Preview bridge tabs (`serve --bridge`) attach via `/__slicc/bridge` WS. DO relays
   `bridge.cdp.request`/`bridge.cdp.response` between leader and each bridge socket,
   keyed by `connId`. On leader (re)connect the DO replays `bridge.connected` for every

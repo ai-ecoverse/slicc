@@ -31,6 +31,38 @@ export interface WebhookDeps {
   sendToLeader(message: unknown): boolean;
   isoNow(): string;
   now(): number;
+  /**
+   * The expiry gate the DO applies to every other capability route, called
+   * here instead of before dispatch so a superseded tray can answer a delivery
+   * with a redirect rather than the 410 that gate would return first.
+   */
+  ensureTrayIsActive(): Promise<Response | null>;
+}
+
+/**
+ * `Location` for a webhook delivery to a superseded tray: the replacement's
+ * webhook capability URL, with this delivery's `webhookId` and query string
+ * carried over so the redirect names the same event on the new tray.
+ *
+ * Returns null when the stored replacement does not parse, in which case the
+ * caller keeps the terminal response — a 3xx with no target is worse than the
+ * 410 it replaced.
+ */
+export function supersededWebhookLocation(
+  webhookBaseUrl: string,
+  webhookId: string,
+  requestUrl: URL
+): string | null {
+  let target: URL;
+  try {
+    target = new URL(webhookBaseUrl);
+  } catch {
+    return null;
+  }
+  // The base is `/webhook/:token`; a delivery is `/webhook/:token/:webhookId`.
+  target.pathname = `${target.pathname.replace(/\/+$/, '')}/${encodeURIComponent(webhookId)}`;
+  target.search = requestUrl.search;
+  return target.href;
 }
 
 /**
@@ -153,6 +185,18 @@ export class WebhookRelay {
       );
     }
 
+    // Checked after the capability token and before the expiry gate, mirroring
+    // the join surface. After the token because `Location` names the
+    // replacement's webhook capability — an unauthenticated redirect would hand
+    // that secret to anyone who guessed a tray id. Before expiry because a
+    // superseded tray is the more actionable answer, and it is what stops an
+    // external service's cached callback URL from dying with the tray (#1957).
+    const superseded = this.supersededRedirect(request, webhookId, cors);
+    if (superseded) return superseded;
+
+    const expired = await this.deps.ensureTrayIsActive();
+    if (expired) return expired;
+
     if (!this.deps.hasLiveLeader()) {
       return jsonResponse(
         { error: 'No live leader is connected for this tray', code: 'NO_LIVE_LEADER' },
@@ -190,6 +234,37 @@ export class WebhookRelay {
 
     const disposition = await this.awaitDelivery(deliveryId, settled);
     return webhookDeliveryResponse(webhookId, disposition);
+  }
+
+  /**
+   * The 308 that sends a delivery to the tray that replaced this one, or null
+   * when this tray was not superseded (or was superseded by a leader that named
+   * no webhook URL, which keeps the pre-#1957 410).
+   *
+   * 308 because every HTTP client follows it with the method and body intact —
+   * which is the whole point here. The sender is an external service, not a
+   * SLICC follower: it will never read a `successor-version` link, and a
+   * non-2xx it treats as fire-and-forget is exactly how a delivery goes missing
+   * with nothing reporting an error.
+   */
+  private supersededRedirect(
+    request: Request,
+    webhookId: string,
+    cors: Record<string, string>
+  ): Response | null {
+    const replacement = this.deps.requireTray().supersededByWebhookUrl;
+    if (!replacement) return null;
+    const location = supersededWebhookLocation(replacement, webhookId, new URL(request.url));
+    if (!location) return null;
+    return jsonResponse(
+      {
+        error: 'This tray was superseded; the delivery was redirected to its replacement',
+        code: 'TRAY_SUPERSEDED',
+        webhookUrl: location,
+      },
+      308,
+      { ...cors, Location: location }
+    );
   }
 
   /** Hand a leader-reported disposition to the waiting webhook POST, if any. */

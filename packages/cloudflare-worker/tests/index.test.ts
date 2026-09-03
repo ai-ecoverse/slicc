@@ -1914,6 +1914,99 @@ describe('POST /api/tray/:trayId/supersede', () => {
     return { trayId: session.trayId, controllerToken, joinUrl: session.capabilities.join.url };
   }
 
+  /** The same setup, plus the tray's webhook capability URL. */
+  async function setupTrayWithWebhook(env: ReturnType<typeof createTestHarness>['env']): Promise<{
+    trayId: string;
+    controllerToken: string;
+    webhookUrl: string;
+  }> {
+    const created = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
+    const controllerToken = new URL(session.capabilities.controller.url).pathname.split('/').pop()!;
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env
+    );
+    expect(leaderAttach.status).toBe(200);
+    return {
+      trayId: session.trayId,
+      controllerToken,
+      webhookUrl: session.capabilities.webhook.url,
+    };
+  }
+
+  it('redirects a webhook delivery to the replacement tray with a 308 (#1957)', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, webhookUrl } = await setupTrayWithWebhook(env);
+    const freshWebhookUrl = 'https://www.sliccy.ai/webhook/fresh-tray.deadbeef';
+
+    const supersede = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({
+          joinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef',
+          webhookUrl: freshWebhookUrl,
+        }),
+      }),
+      env
+    );
+    expect(supersede.status).toBe(200);
+    await expect(supersede.json()).resolves.toMatchObject({
+      supersededByWebhookUrl: freshWebhookUrl,
+    });
+
+    // The shape an external service cached hours ago: the OLD tray's URL.
+    const delivery = await handleWorkerRequest(
+      new Request(`${webhookUrl}/h3-render-done`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' }),
+      }),
+      env
+    );
+
+    expect(delivery.status).toBe(308);
+    expect(delivery.headers.get('Location')).toBe(`${freshWebhookUrl}/h3-render-done`);
+    await expect(delivery.json()).resolves.toMatchObject({ code: 'TRAY_SUPERSEDED' });
+  });
+
+  it('rejects a supersede whose webhookUrl is not an absolute URL', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({
+          joinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef',
+          webhookUrl: '/webhook/fresh-tray.deadbeef',
+        }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: 'INVALID_BODY' });
+  });
+
   it('marks the tray superseded when authorized with the controllerToken', async () => {
     const { env, readTray } = createTestHarness();
     const { trayId, controllerToken } = await setupTrayWithLeader(env);
