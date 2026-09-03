@@ -23,7 +23,7 @@ import type { SudoManager } from '../../sudo/sudo-manager.js';
 import type { SudoDecision, SudoRequest } from '../../sudo/types.js';
 import {
   type CapabilityBroker,
-  createPageCapabilityBroker,
+  createRestCapabilityBroker,
 } from '../../work-unit/capability/index.js';
 import { SKILLS_LIBRARY_DIR } from '../../work-unit/descriptor.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
@@ -45,8 +45,9 @@ export interface ShellAndSkillsDeps {
   sudoManager: SudoManager | null;
   /**
    * Privileged-capability adapter for this float (#2276). Production
-   * always injects the host's one broker. Tests that omit it get a page
-   * stub with `localNodeServer` available — the Node test env's topology.
+   * always injects the host's one broker. Tests that omit it get the
+   * `node-rest` adapter, whose `localNodeServer` is a composition-time fact
+   * needing no transport — the Node test env's topology.
    */
   capabilityBroker?: CapabilityBroker | null;
   onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
@@ -80,9 +81,9 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   const effectiveSkillsFs = (skillsFs ?? fs) as VirtualFS;
   const secretEnv = await fetchSecretEnvVars();
-  // Slice A of #2276: webhook topology comes from the injected broker.
+  // #2276: webhook topology comes from the injected broker, never a probe.
   // Remaining call sites: `work-unit/capability/index.ts`.
-  const broker = deps.capabilityBroker ?? createPageCapabilityBroker({ localNodeServer: true });
+  const broker = deps.capabilityBroker ?? createRestCapabilityBroker();
   const localNode = await broker.network.localNodeServer();
   const hasLocalNodeServer = () => localNode.ok;
 

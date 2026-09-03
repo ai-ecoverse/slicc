@@ -54,7 +54,7 @@ import { setLastSeenVersionReader } from '../base/slicc-version.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
-import { hasLocalNodeServer } from '../core/float-topology.js';
+import { hasLocalNodeServer, resolveFloatTopology } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -81,8 +81,10 @@ import {
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import {
+  type CapabilityAdapterId,
   type CapabilityBroker,
-  createPageCapabilityBroker,
+  createCapabilityBrokerForTopology,
+  type PageGestureChannel,
 } from '../work-unit/capability/index.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { matchDiscoveryRouteCandidate } from './discovery-lick-routing.js';
@@ -177,10 +179,17 @@ export interface KernelHostConfig {
   syncFsChannelNonce?: SyncFsNonce | null;
   /**
    * Privileged-capability adapter for this float (#2276). Default: the
-   * page stub with `network.localNodeServer` snapshotted from
-   * `hasLocalNodeServer()` at composition time. Tests inject a fake.
+   * adapter for `resolveFloatTopology()`, resolved ONCE here — nothing below
+   * the host probes the float. Tests inject a fake.
    */
   capabilityBroker?: CapabilityBroker;
+  /**
+   * Directory picker + device choosers, which need a page-realm user gesture
+   * in EVERY topology and so are a channel rather than a per-adapter op.
+   * Omitted leaves `mounts.pickDirectory` / `devices.*` unavailable, which is
+   * the pre-#2276 behaviour; slice C wires the real page channel.
+   */
+  pageGestures?: PageGestureChannel;
 
   /**
    * Boot-progress heartbeat, called at each boot milestone (orchestrator
@@ -467,10 +476,16 @@ async function bootOrchestrator(
     getBrowserAPI: () => browser,
   });
   orchestrator.setProcessManager(processManager);
-  // One broker for the float, before `init()` restores scoops (#2276).
+  // One broker for the float, before `init()` restores scoops (#2276). The
+  // topology is resolved exactly once, here: the annotation is also the
+  // compile-time check that `FloatTopology` and `CapabilityAdapterId` still
+  // name the same four transports.
+  const topology: CapabilityAdapterId = resolveFloatTopology();
   const capabilityBroker =
     config.capabilityBroker ??
-    createPageCapabilityBroker({ localNodeServer: hasLocalNodeServer() });
+    createCapabilityBrokerForTopology(topology, {
+      ...(config.pageGestures ? { pageGestures: config.pageGestures } : {}),
+    });
   orchestrator.setCapabilityBroker(capabilityBroker);
   // Fallback global for shell scripts / `.jsh` callers that can't
   // accept constructor injection. `ps` prefers the DI path when the

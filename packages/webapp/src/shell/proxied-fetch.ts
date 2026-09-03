@@ -488,6 +488,27 @@ async function collectViaPort(
   });
 }
 
+/**
+ * Extension-realm sibling of {@link collectViaExtensionDelegate}: the same
+ * collector over the ID-LESS `chrome.runtime.connect({ name })` available to
+ * a real extension page (offscreen / side panel / options). Returns the RAW
+ * head + body bytes, so a caller that wants an envelope rather than a
+ * binary-cache-populating `SecureFetch` response (the `extension-direct`
+ * CapabilityBroker adapter, #2276) can build one itself.
+ */
+export function collectViaExtensionPort(
+  url: string,
+  options?: Parameters<SecureFetch>[1],
+  progress?: FetchProgressObserver
+): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
+  return collectViaPort(
+    () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
+    url,
+    options,
+    progress
+  );
+}
+
 async function extensionPortFetch(
   url: string,
   options?: Parameters<SecureFetch>[1],
@@ -498,12 +519,7 @@ async function extensionPortFetch(
   // forbidden response headers are decoded back to their browser-stripped
   // names — matches the CLI client.
   const { head, body } = await withProgressEnd(progress, url, () =>
-    collectViaPort(
-      () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
-      url,
-      options,
-      progress
-    )
+    collectViaExtensionPort(url, options, progress)
   );
   return finalizeProxyResponse(head, new Uint8Array(body), url);
 }
