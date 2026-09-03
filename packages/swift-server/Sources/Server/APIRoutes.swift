@@ -1048,12 +1048,10 @@ private func makeStreamingProxyResponse(
     }
     headers[HTTPField.Name("Access-Control-Expose-Headers")!] = exposeNames.joined(separator: ", ")
 
-    let contentType = (headers[HTTPField.Name.contentType] ?? "").lowercased()
-    let isText =
-        contentType.hasPrefix("text/")
-        || contentType.hasPrefix("application/json")
-        || contentType.contains("charset=")
-        || contentType.contains("event-stream")
+    // Same predicate as node-server's response hop (shared-ts `isTextContentType`,
+    // mirrored in `ContentType.swift`) so neither float forwards an upstream body
+    // verbatim that the other scrubs (#2822).
+    let isText = isTextContentType(headers[HTTPField.Name.contentType] ?? "")
     let shouldScrub = isText && !secretInjector.isEmpty
     let upstreamBody = response.body
     let scrubber = secretInjector

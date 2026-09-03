@@ -31,6 +31,8 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 The Swift counterpart of `SecretsPipeline` lives in `packages/swift-server/Sources/Keychain/SecretInjector.swift` (the class is named `SecretInjector` for historical reasons; it owns the same Basic-auth / URL-creds / byte-safe helpers and the OAuth replica chain). Both implementations are pinned to identical mask outputs via `packages/swift-server/Tests/CrossImplementationTests.swift` and `packages/shared-ts/tests/cross-impl-vectors.test.ts`.
 
+`content-type.ts`'s `isTextContentType` decides whether the fetch proxy scrubs an upstream body, so it has a Swift twin too: `packages/swift-server/Sources/Server/ContentType.swift`. Divergence there is a secret leak, not a formatting nit — swift-server's own classifier used to miss `application/xml` / `application/javascript` / `image/svg+xml` while treating any `charset=` parameter as text (#2822). The list is pinned on both sides by `tests/content-type-parity.test.ts` and `CrossImplementationTests.swift`; change one only together with the other.
+
 ## Naming
 
 The `-ts` suffix is intentional: this package is the TypeScript half of the shared primitives. The Swift half currently lives inside `packages/swift-server/` for build-system convenience; if/when it's promoted to a standalone SPM package consumable from both `swift-server` and `swift-launcher`, the natural home is `packages/shared-swift/` so the two halves sit side-by-side in the file tree.

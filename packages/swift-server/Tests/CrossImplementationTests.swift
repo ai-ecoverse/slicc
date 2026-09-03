@@ -190,4 +190,53 @@ final class CrossImplementationTests: XCTestCase {
         )
         XCTAssertNil(out, "empty injector must be a no-op")
     }
+
+    // MARK: - Response content-type parity (mirrors the table in
+    // packages/shared-ts/tests/content-type-parity.test.ts)
+    //
+    // `/api/fetch-proxy` scrubs real secret values out of an upstream body only
+    // when the body is UTF-8 text. Node decides that with shared-ts
+    // `isTextContentType`; this float must agree, or an `application/xml` reply
+    // hands the agent a real secret on Sliccstart that the Node CLI masks
+    // (#2822). The `charset=` rows are the regression guard for the dropped
+    // catch-all that used to force binary bodies through a `String` round-trip.
+
+    private static let responseContentTypeTable: [(contentType: String, isText: Bool)] = [
+        ("text/plain", true),
+        ("text/html", true),
+        ("text/html; charset=utf-8", true),
+        ("text/css", true),
+        ("text/event-stream", true),
+        ("application/json", true),
+        ("application/json; charset=utf-8", true),
+        ("application/xml", true),
+        ("application/xhtml+xml", true),
+        ("application/javascript", true),
+        ("application/ecmascript", true),
+        ("image/svg+xml", true),
+        ("Application/JSON", true),
+        ("", false),
+        ("image/jpeg", false),
+        ("image/png", false),
+        ("application/octet-stream", false),
+        ("application/octet-stream; charset=utf-8", false),
+        ("application/pdf", false),
+        ("application/zip", false),
+        ("audio/mpeg", false),
+        ("video/mp4", false),
+        // Response-side only: a form body is not text here. The request hop has
+        // its own predicate because form POSTs carry secrets that must unmask.
+        ("application/x-www-form-urlencoded", false),
+    ]
+
+    func testIsTextContentTypeMatchesPinnedTable() {
+        for row in Self.responseContentTypeTable {
+            XCTAssertEqual(
+                isTextContentType(row.contentType),
+                row.isText,
+                "response content-type classification drift for "
+                    + (row.contentType.isEmpty ? "(empty)" : row.contentType)
+            )
+        }
+    }
 }
