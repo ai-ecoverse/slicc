@@ -9,4 +9,10 @@ describe('idle compaction settings', () => {
     expect(IDLE_COMPACTION_DEFAULTS).toEqual({ idleMinutes: 30, minTokens: 200_000 });
     expect(readIdleCompactionSettings()).toEqual(IDLE_COMPACTION_DEFAULTS);
   });
+
+  it('returns the shared frozen defaults so callers cannot mutate the knobs', () => {
+    const settings = readIdleCompactionSettings();
+    expect(settings).toBe(IDLE_COMPACTION_DEFAULTS);
+    expect(Object.isFrozen(settings)).toBe(true);
+  });
 });
