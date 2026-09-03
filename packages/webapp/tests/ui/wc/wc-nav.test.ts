@@ -54,10 +54,12 @@ import {
 } from '../../../src/core/feature-flags.js';
 import { registerProviderConfig, unregisterProviderConfig } from '../../../src/providers/index.js';
 import { setLeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
+import type { WorkUnitModel } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
+import type { WorkUnitClient } from '../../../src/work-unit/client/types.js';
 
 afterEach(() => {
   localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
@@ -130,6 +132,18 @@ function makeClient(overrides: Record<string, unknown> = {}): OffscreenClient {
   } as unknown as OffscreenClient;
 }
 
+/**
+ * The client protocol over a fake kernel: `wireWcNav` writes the pick through
+ * `setModel`, and the local adapter is exactly `setScoopModel`, so the
+ * assertions stay on the kernel call the pick has to reach.
+ */
+function workUnitsOver(client: OffscreenClient): Pick<WorkUnitClient, 'setModel'> {
+  const kernel = client as unknown as {
+    setScoopModel(jid: string, model: WorkUnitModel): Promise<boolean>;
+  };
+  return { setModel: (id, model) => kernel.setScoopModel(id, model) };
+}
+
 describe('wireWcNav', () => {
   function makeRefs(): WcShellRefs {
     const composerMeta = document.createElement('slicc-composer-meta');
@@ -146,7 +160,12 @@ describe('wireWcNav', () => {
   it('feeds the model picker, persists selection, and wires the menu', async () => {
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     // Models list assigned (registry may be empty under test — array either way).
     expect(Array.isArray((refs.composerMeta as HTMLElement & { models?: unknown }).models)).toBe(
@@ -178,7 +197,12 @@ describe('wireWcNav', () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     const exportIndex = refs.avatarMenu.items.findIndex((item) => item.id === 'export-transcript');
     const experimental = refs.avatarMenu.items[exportIndex + 1];
@@ -194,7 +218,12 @@ describe('wireWcNav', () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
     expect(refs.avatarMenu.items.some((item) => item.id === 'experimental-settings')).toBe(true);
 
     initFeatureFlags('standalone', { 'experimental-settings': 'off' });
@@ -211,7 +240,12 @@ describe('wireWcNav', () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     showExperimentalSettingsSpy.mockClear();
     refs.avatarMenu.dispatchEvent(
@@ -229,7 +263,12 @@ describe('wireWcNav', () => {
     avatar.setAttribute('name', 'SLICC');
     avatar.setAttribute('src', 'https://stale.example/old.png');
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     // The host strips identity so the avatar component falls back to its `?`
     // placeholder (the glyph itself is asserted in slicc-avatar.test.ts).
@@ -253,7 +292,12 @@ describe('wireWcNav', () => {
     try {
       const refs = makeRefs();
       const client = makeClient();
-      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+      await wireWcNav({
+        refs,
+        client,
+        workUnits: workUnitsOver(client),
+        log: { error: vi.fn() } as never,
+      });
 
       const send = refs.inputCard.querySelector('slicc-send-button');
       expect(send?.getAttribute('src')).toBe('https://avatars.example/lars.png');
@@ -268,7 +312,12 @@ describe('wireWcNav', () => {
   it('dispatches tray-leave with a worker URL on tray-stop', async () => {
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     const events: CustomEvent[] = [];
     window.addEventListener('slicc:tray-leave', (e) => events.push(e as CustomEvent));
@@ -282,7 +331,12 @@ describe('wireWcNav', () => {
   it('routes slicc-error-open-settings from the thread to the settings dialog', async () => {
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     showWcSettingsSpy.mockClear();
     refs.thread.dispatchEvent(
@@ -304,7 +358,12 @@ describe('wireWcNav', () => {
     // event so the leader lands on the login UI, not a bare focused tab.
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     showWcSettingsSpy.mockClear();
     window.dispatchEvent(new CustomEvent('slicc:open-settings-from-panel'));
@@ -315,7 +374,12 @@ describe('wireWcNav', () => {
   it('opens the same settings dialog for the composer-meta add-ai action', async () => {
     const refs = makeRefs();
     const client = makeClient();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     showWcSettingsSpy.mockClear();
     refs.composerMeta.dispatchEvent(new CustomEvent('add-ai', { bubbles: true }));
@@ -328,7 +392,12 @@ describe('wireWcNav', () => {
     const client = makeClient();
     const openMenu = vi.fn();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
     // `wireWcNav` resets `models` from the (empty) provider registry; seed
     // AFTER it runs so the handler sees a non-empty list and routes to the
     // picker rather than to settings.
@@ -350,7 +419,12 @@ describe('wireWcNav', () => {
     const refs = makeRefs();
     const client = makeClient();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = vi.fn();
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
     (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [
       { name: 'Opus 4.8', provider: 'Anthropic', id: 'anthropic:claude-opus-4-8' },
     ];
@@ -397,7 +471,12 @@ describe('wireWcNav', () => {
     (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [];
     const openMenu = vi.fn();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    await wireWcNav({
+      refs,
+      client,
+      workUnits: workUnitsOver(client),
+      log: { error: vi.fn() } as never,
+    });
 
     refs.thread.dispatchEvent(
       new CustomEvent('slicc-error-change-model', {
@@ -458,7 +537,12 @@ describe('wireWcNav', () => {
     try {
       const refs = makeRefs();
       const client = makeClient();
-      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+      await wireWcNav({
+        refs,
+        client,
+        workUnits: workUnitsOver(client),
+        log: { error: vi.fn() } as never,
+      });
 
       refs.thread.dispatchEvent(
         new CustomEvent('slicc-error-login', {
@@ -504,7 +588,12 @@ describe('wireWcNav', () => {
     try {
       const refs = makeRefs();
       const client = makeClient();
-      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+      await wireWcNav({
+        refs,
+        client,
+        workUnits: workUnitsOver(client),
+        log: { error: vi.fn() } as never,
+      });
 
       showWcSettingsSpy.mockClear();
       refs.thread.dispatchEvent(
@@ -546,7 +635,12 @@ describe('wireWcNav', () => {
     try {
       const refs = makeRefs();
       const client = makeClient();
-      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+      await wireWcNav({
+        refs,
+        client,
+        workUnits: workUnitsOver(client),
+        log: { error: vi.fn() } as never,
+      });
 
       // Simulate the model pill being stale (set to haiku 3.5 from pre-connection boot).
       refs.composerMeta.setAttribute('model', 'Claude Haiku 3.5');
@@ -590,9 +684,11 @@ describe('session-sharing entry points', () => {
 
   async function wire(): Promise<WcShellRefs> {
     const refs = makeRefs();
+    const client = makeClient();
     await wireWcNav({
       refs,
-      client: makeClient(),
+      client,
+      workUnits: workUnitsOver(client),
       log: { error: vi.fn() } as never,
     });
     return refs;

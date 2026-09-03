@@ -169,6 +169,28 @@ export function modelFor(
   return id !== undefined && provider !== undefined ? { provider, id } : undefined;
 }
 
+/**
+ * Split a provider-qualified model id (`anthropic:claude-opus-4-6`) into the
+ * record's `{ provider, id }` shape, or `null` when it carries no provider.
+ *
+ * `null` rather than a guessed provider: the picker's ids are qualified by
+ * construction, and inventing one for a bare id would pin a unit to a
+ * provider nobody chose. Callers keep whatever fallback they had.
+ *
+ * Model ids contain colons of their own (`us.anthropic.…:0`), so the FIRST
+ * colon is the separator — {@link qualifiedModelId} is its inverse.
+ */
+export function parseQualifiedModelId(qualified: string): WorkUnitModel | null {
+  const colon = qualified.indexOf(':');
+  if (colon <= 0) return null;
+  return { provider: qualified.slice(0, colon), id: qualified.slice(colon + 1) };
+}
+
+/** The wire/picker spelling of a unit's model. Inverse of {@link parseQualifiedModelId}. */
+export function qualifiedModelId(model: WorkUnitModel): string {
+  return `${model.provider}:${model.id}`;
+}
+
 /** Legacy-tolerant read of the bare model id a unit is pinned to, if any. */
 export function modelIdFor(scoop: Pick<RegisteredScoop, 'model' | 'config'>): string | undefined {
   return scoop.model?.id ?? scoop.config?.modelId;

@@ -166,12 +166,34 @@ describe('mountWcUiFollower', () => {
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
 
-    // Simulate the WebRTC channel connecting: the tray installs the real
-    // follower-sync agent via setChatAgent. We hand the controller a fake one
-    // so we can observe what the follower forwards to the leader.
+    // Simulate the WebRTC channel connecting. The composer's handle rides the
+    // client protocol now (#2382), so the observable is the SYNC MANAGER's
+    // `sendMessage` — what actually goes to the leader — not the handle
+    // `setChatAgent` was given, which only supplies the agent event stream.
     const opts = startFollowerSpy.mock.calls[0]![0];
     const sendMessage = vi.fn();
-    opts.setChatAgent?.({ sendMessage, onEvent: () => () => {}, stop: () => {} });
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage,
+      selectScoop,
+      stop: vi.fn(),
+    };
+    // A prompt has to name its unit, so the leader's roster comes first.
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          jid: 'cone_1',
+          name: 'sliccy',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_1'
+    );
+    opts.setChatAgent?.({ sendMessage: vi.fn(), onEvent: () => () => {}, stop: () => {} });
 
     const inputCard = app.querySelector('slicc-input-card') as HTMLElement;
 
@@ -195,12 +217,15 @@ describe('mountWcUiFollower', () => {
     inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'look at this' } }));
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    const [text, , attachments] = sendMessage.mock.calls[0]! as [
+    const [text, messageId, attachments] = sendMessage.mock.calls[0]! as [
       string,
       string,
       Array<{ kind: string; data?: string; path?: string }>,
     ];
     expect(text).toBe('look at this');
+    // The controller's own id rides along: a follower suppresses its own echo
+    // by it, so an adapter that minted a fresh one would double-render.
+    expect(messageId).toEqual(expect.any(String));
     expect(attachments).toHaveLength(1);
     expect(attachments[0]!.kind).toBe('image');
     expect(attachments[0]!.data).toBeTruthy();
@@ -401,18 +426,149 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
     expect(switcher.connection).toBe('disconnected');
 
-    // On connect, the tray fires onConnectionChange(true) → enabled + normal placeholder.
+    // On connect, the tray fires onConnectionChange(true) — but the leader has
+    // not named a unit yet (`activateFollowerSync` reports the connection
+    // BEFORE it asks for the first snapshot). A send names its unit (#2382), so
+    // the box stays shut for those few frames rather than accepting a prompt it
+    // would drop after clearing the input.
     const opts = startFollowerSpy.mock.calls[0]![0];
     opts.onConnectionChange?.(true);
+    expect(switcher.connection).toBe('connected');
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+
+    // The leader's first snapshot names the unit → composer opens.
+    opts.onSnapshot?.([], 'cone_1');
     expect(inputCard.hasAttribute('disabled')).toBe(false);
     expect(inputCard.getAttribute('placeholder')).toBe('Ask the leader, or describe a change…');
-    expect(switcher.connection).toBe('connected');
 
     // A disconnect re-disables + re-shows connecting.
     opts.onConnectionChange?.(false);
     expect(inputCard.hasAttribute('disabled')).toBe(true);
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
     expect(switcher.connection).toBe('disconnected');
+  });
+
+  it('aborts the leader’s turn from the follower’s own Stop button (#2382)', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const stop = vi.fn(() => true);
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage: vi.fn(() => true),
+      selectScoop,
+      stop,
+    };
+    opts.onConnectionChange?.(true);
+    opts.setChatAgent?.({ sendMessage: vi.fn(), onEvent: () => () => {}, stop: () => {} });
+    opts.onSnapshot?.([], 'cone_1');
+
+    // Idle: a stop is meaningless and must not reach the leader — same guard
+    // the leader's own composer uses.
+    inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
+    expect(stop).not.toHaveBeenCalled();
+
+    // Mid-turn the button has to work. Before this the follower installed NO
+    // `stop` listener at all, so the button (and keyboard mode's `s`) emitted
+    // into nothing and the leader's turn ran on.
+    opts.onStatus?.('processing', 'cone_1');
+    inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
+    expect(stop).toHaveBeenCalledTimes(1);
+    // The leader is already mirroring `cone_1`, so the abort needs no
+    // selection round trip. (That the client DOES select first when the unit
+    // differs — the tray's `abort` frame carries none — is pinned by the
+    // conformance suite's "stops a unit mid-turn" case.)
+    expect(selectScoop).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an empty activeScoopJid as an addressable unit', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onConnectionChange?.(true);
+    // A leader that sent a roster but could not name an active unit. `''` is
+    // not a jid: enabling the composer on it means the handle accepts the
+    // prompt, renders it, clears the input and then drops it as "No scoop
+    // selected".
+    opts.onScoopsList?.([] as never, '');
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          jid: 'cone_1',
+          name: 'sliccy',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_1'
+    );
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('keeps the composer shut after a reconnect until the NEW session names a unit', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onConnectionChange?.(true);
+    opts.onSnapshot?.([], 'cone_1');
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+
+    opts.onConnectionChange?.(false);
+    opts.onConnectionChange?.(true);
+    // A reconnect is a fresh bootstrap and the leader may have dropped the
+    // unit we were viewing, so the previous session's answer must not reopen
+    // the box…
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    // …while the viewed jid itself survives, because that is what the new
+    // leader is asked for (`requestSnapshot`).
+    expect(opts.getSelectedScoopJid?.()).toBe('cone_1');
+
+    opts.onSnapshot?.([], 'cone_2');
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+    expect(opts.getSelectedScoopJid?.()).toBe('cone_2');
+  });
+
+  it('opens the composer off the first scoops.list when no snapshot arrived yet', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onConnectionChange?.(true);
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+
+    // Either frame names a unit, and a leader may send the roster first — so
+    // neither one may be the only door out of the un-addressable window.
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          jid: 'cone_1',
+          name: 'sliccy',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_1'
+    );
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps model controls hidden before the catalog and for a legacy leader connection', async () => {

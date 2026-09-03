@@ -1,5 +1,6 @@
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
+import type { AgentHandle } from '../types.js';
 import type { WcPageVfs, WcShellBoot } from './wc-live.js';
 import {
   applyLeaderLocalThinkingChange,
@@ -13,7 +14,7 @@ import { submittedSteer, submittedText } from './wc-shell.js';
 export function wireWcComposer(deps: {
   boot: WcShellBoot;
   client: OffscreenClient;
-  agentHandle: ReturnType<OffscreenClient['createAgentHandle']>;
+  agentHandle: AgentHandle;
   setRefreshPlaceholder(fn: () => void): void;
   triggerPlaceholder(): void;
   openReader(): Promise<WcPageVfs['reader']>;

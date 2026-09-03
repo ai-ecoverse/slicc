@@ -51,7 +51,13 @@ import {
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { toKernelSudoRequest } from '../../sudo/leader-request.js';
-import { modelFor, thinkingFor } from '../../work-unit/record.js';
+import type { WorkUnitClient } from '../../work-unit/client/types.js';
+import {
+  modelFor,
+  parseQualifiedModelId,
+  qualifiedModelId,
+  thinkingFor,
+} from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -113,6 +119,12 @@ export interface WcTrayDeps {
   getController(): WcChatController | null;
   getSelectedJid(): string;
   agentHandle: AgentHandle;
+  /**
+   * The leader's client protocol. A follower's message and abort are delivered
+   * through it because they NAME a unit — the sending follower's own selection
+   * — which the selection-bound {@link agentHandle} cannot express (#2382).
+   */
+  workUnits: WorkUnitClient;
   openFs(): Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>;
   openWriter(): Promise<import('../../kernel/writable-vfs-client.js').WritableVfsClient>;
   window: Window;
@@ -185,7 +197,7 @@ function qualifiedModelIdForUnit(
 ): string {
   const pinned = unit ? modelFor(unit) : undefined;
   if (!pinned) return currentQualifiedModelId(catalog);
-  const qualified = `${pinned.provider}:${pinned.id}`;
+  const qualified = qualifiedModelId(pinned);
   return (
     catalog.find((entry) => entry.modelId === qualified)?.modelId ??
     catalog.find((entry) => entry.modelId.endsWith(`:${pinned.id}`))?.modelId ??
@@ -271,6 +283,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+/**
+ * The leader-capable float's own follower wiring. It still installs the raw
+ * sync manager as the chat agent (`setChatAgent`) and has no addressable-unit
+ * gate, unlike the dedicated follower mount — it is the third follower wiring
+ * and it collapses onto the one mount in #2382 PR D rather than being
+ * half-migrated here.
+ */
 export function buildFollowerOptions(
   deps: WcTrayDeps,
   joinUrl: string,
@@ -292,6 +311,10 @@ export function buildFollowerOptions(
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
     getSync,
+    // This float follows someone else's tray but has no `RemoteWorkUnitClient`
+    // of its own (the mounts collapse onto one client in #2382 PR D), so the
+    // pick goes out as the raw frame it always did — still naming the unit.
+    setModel: (unitId, model) => getSync()?.selectModel(qualifiedModelId(model), unitId),
     getSelectedScoopJid: () => selectedScoopJid,
     interceptLocalHandlers: true,
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
@@ -444,15 +467,13 @@ function leaderModelCallbacks(
       const named = scoopJid ? client.getScoop(scoopJid) : undefined;
       const target = rootForSelection(client.getScoops(), named ?? null);
       if (!target) return false;
-      const colon = entry.modelId.indexOf(':');
+      const picked = parseQualifiedModelId(entry.modelId);
+      if (!picked) return false;
       // Resolve only once the kernel has persisted it: the leader broadcasts
       // the follower's new `model.state` off this promise, and broadcasting
       // early would recompute it from the record's old value.
       return client
-        .setScoopModel(target.jid, {
-          provider: entry.modelId.slice(0, colon),
-          id: entry.modelId.slice(colon + 1),
-        })
+        .setScoopModel(target.jid, picked)
         .then((applied) => {
           // Reflect the pick locally only while the follower is on the cone
           // the leader has selected; otherwise the leader's pill would show
@@ -480,6 +501,72 @@ function leaderModelCallbacks(
 }
 
 /** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. */
+/**
+ * Deliver one follower's prompt into the leader's kernel (#2382).
+ *
+ * The unit is the SENDER's, not this leader's: `options.targetScoopJid` is the
+ * peer's own `scoops.select`, which the leader already records and already
+ * mirrors a transcript for. Delivering through the composer's agent handle
+ * instead would target `client.selectedScoopJid`, so a follower reading cone B
+ * typed into whichever cone this leader happened to be displaying.
+ */
+function deliverFollowerMessage(
+  deps: WcTrayDeps,
+  state: TrayRoleState,
+  text: string,
+  messageId: string,
+  attachments: Parameters<StartPageLeaderTrayOptions['onFollowerMessage']>[2],
+  options: Parameters<StartPageLeaderTrayOptions['onFollowerMessage']>[3]
+): void {
+  const { client } = deps;
+  // A guest's words are not the owner's. `source` carries the provenance into
+  // the transcript record, and the model-visible text is fenced with the seat
+  // label so the cone cannot read a guest instruction as an owner instruction.
+  // The fence is provenance, NOT a security control — a guest can write
+  // anything inside its own message, including a convincing forgery of this
+  // frame. The real control is the message-review gate.
+  const seat = options?.biscotto;
+  const source = seat ? `biscotto:${seat.id}` : undefined;
+  const forAgent = seat ? attributeGuestMessage(text, seat.label) : text;
+  // A peer that never selected anything falls back to the leader's selection,
+  // which is what every peer did before this.
+  const target = options?.targetScoopJid ?? client.selectedScoopJid;
+  // The leader's thread shows the unit it is DISPLAYING. A prompt for another
+  // unit must not appear on it — that unit's own replay carries the message
+  // when the user switches to it.
+  if (target === client.selectedScoopJid) {
+    deps.getController()?.addUserMessage(forAgent, attachments, source);
+  }
+  if (target) {
+    void deps.workUnits
+      .send(target, {
+        text: forAgent,
+        messageId,
+        ...(attachments ? { attachments } : {}),
+        ...(options?.steer ? { steer: true } : {}),
+        // Approving the MESSAGE is not approving the actions it provokes, so a
+        // guest-caused turn carries its own tool gate. Resolved by the review
+        // gate, which knows the seat record and the shared unit; the kernel
+        // never sees the `off` case.
+        ...(options?.guestGate ? { guestGate: options.guestGate } : {}),
+      })
+      .catch((err) =>
+        deps.log.warn('follower message delivery failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+  } else {
+    // Nothing selected on either side — report it the way a local send with no
+    // selection is reported, rather than dropping it silently.
+    deps.agentHandle.sendMessage(forAgent, messageId, attachments, options);
+  }
+  state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments);
+  // The message bumped the sender's lastActivity — mirror it into the
+  // worker-realm shim so kernel-side follower selection sees fresh recency (the
+  // shim otherwise only refreshes on follower-count changes).
+  if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
+}
+
 export function createLeaderOptionsFactory(
   deps: WcTrayDeps,
   state: TrayRoleState,
@@ -525,32 +612,19 @@ export function createLeaderOptionsFactory(
     onSprinkleLick: (name, body, targetScoop, originLabel) =>
       client.sendSprinkleLick(name, body, targetScoop, originLabel),
     onSprinkleInstancesChanged: () => mirrorSprinkleInstances(state),
-    onFollowerMessage: (text, messageId, attachments, options) => {
-      // A guest's words are not the owner's. `source` carries the provenance
-      // into the transcript record, and the model-visible text is fenced with
-      // the seat label so the cone cannot read a guest instruction as an owner
-      // instruction. The fence is provenance, NOT a security control — a guest
-      // can write anything inside its own message, including a convincing
-      // forgery of this frame. The real control is the message-review gate.
-      const seat = options?.biscotto;
-      const source = seat ? `biscotto:${seat.id}` : undefined;
-      const forAgent = seat ? attributeGuestMessage(text, seat.label) : text;
-      deps.getController()?.addUserMessage(forAgent, attachments, source);
-      deps.agentHandle.sendMessage(forAgent, messageId, attachments, {
-        ...options,
-        // Approving the MESSAGE is not approving the actions it provokes, so a
-        // guest-caused turn carries its own tool gate. Resolved by the review
-        // gate, which knows the seat record and the shared unit; the kernel
-        // never sees the `off` case.
-        ...(options?.guestGate ? { guestGate: options.guestGate } : {}),
-      });
-      state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments);
-      // The message bumped the sender's lastActivity — mirror it into the
-      // worker-realm shim so kernel-side follower selection sees fresh recency
-      // (the shim otherwise only refreshes on follower-count changes).
-      if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
+    onFollowerMessage: (text, messageId, attachments, options) =>
+      deliverFollowerMessage(deps, state, text, messageId, attachments, options),
+    // Same routing as the message above: a follower's stop names the unit that
+    // follower is looking at, not the one this leader is displaying.
+    onFollowerAbort: (targetScoopJid) => {
+      const target = targetScoopJid ?? client.selectedScoopJid;
+      if (!target) return;
+      void deps.workUnits.signal(target, 'stop').catch((err) =>
+        deps.log.warn('follower abort failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
     },
-    onFollowerAbort: () => deps.agentHandle.stop(),
     onFollowerNewSession: (action) => {
       // Route the follower's freezer new-chat to wc-live's `runNewSession`
       // via a window event; that path owns the archive + `clearAllMessages`,

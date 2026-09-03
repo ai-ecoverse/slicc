@@ -328,7 +328,50 @@ describe('LeaderSyncManager', () => {
 
     channel.simulateMessage({ type: 'user_message', text: 'from follower', messageId: 'fm1' });
 
-    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', undefined);
+    // The target is the unit whose transcript this peer was actually sent:
+    // `sendSnapshotToFollower` records it on join, so it is the leader's active
+    // unit here and the delivery is unchanged from before #2382.
+    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', undefined, {
+      targetScoopJid: 'cone',
+    });
+  });
+
+  it('routes a follower message and abort to THAT follower’s selected unit', () => {
+    const { manager, onFollowerMessage, onFollowerAbort } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    // The follower is reading `cone_b` while this leader displays `cone`
+    // (`getScoopJid`). Its prompt belongs to what IT is reading — the leader
+    // already mirrors that unit's transcript back to it — not to what the
+    // leader happens to have on screen (#2382).
+    channel.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    channel.simulateMessage({ type: 'user_message', text: 'for cone b', messageId: 'fm2' });
+    channel.simulateMessage({ type: 'abort' });
+
+    expect(onFollowerMessage).toHaveBeenCalledWith('for cone b', 'fm2', undefined, {
+      targetScoopJid: 'cone_b',
+    });
+    expect(onFollowerAbort).toHaveBeenCalledWith('cone_b');
+  });
+
+  it('carries steer alongside the target rather than instead of it', () => {
+    const { manager, onFollowerMessage } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    channel.simulateMessage({ type: 'scoops.select', scoopJid: 'cone_b' });
+    channel.simulateMessage({
+      type: 'user_message',
+      text: 'steer it',
+      messageId: 'fm3',
+      steer: true,
+    });
+
+    expect(onFollowerMessage).toHaveBeenCalledWith('steer it', 'fm3', undefined, {
+      steer: true,
+      targetScoopJid: 'cone_b',
+    });
   });
 
   it('handles follower user_message attachments', () => {
@@ -353,7 +396,9 @@ describe('LeaderSyncManager', () => {
       attachments,
     });
 
-    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', attachments);
+    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', attachments, {
+      targetScoopJid: 'cone',
+    });
   });
 
   it('strips path-only attachments from follower messages before forwarding', () => {

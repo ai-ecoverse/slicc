@@ -429,7 +429,8 @@ describe('FollowerDispatch', () => {
 
     const activityBefore = followers.followers.get('follower')?.lastActivity ?? 0;
     dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'message' });
-    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'message', undefined);
+    // No `scoops.select` from this peer: no target, leader's selection stands.
+    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'message', undefined, {});
     // A user message is real human activity: it must bump lastActivity (the
     // fixture seeds it at 1) and record this follower as the requester origin.
     expect(followers.followers.get('follower')?.lastActivity ?? 0).toBeGreaterThan(activityBefore);

@@ -10,7 +10,7 @@
  * protocol never sees.
  */
 
-import type { RegisteredScoop } from '../../scoops/types.js';
+import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
 import {
   presentationStateFor,
   recordToWorkUnitSummary,
@@ -287,18 +287,36 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     if (!client) return Promise.reject(new Error('kernel client not attached'));
     client.sendRaw({
       attachments: input.attachments,
-      messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      // The caller's id when it has one: the backend queue is cancelled by it
+      // and the panel's own copy of the message already carries it.
+      messageId: input.messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       scoopJid: id,
       text: input.text,
       type: 'user-message',
       ...(input.steer ? { steer: true as const } : {}),
+      ...(input.guestGate ? { guestGate: input.guestGate } : {}),
     } as Parameters<OffscreenClient['sendRaw']>[0]);
     return Promise.resolve();
   }
 
+  /**
+   * Pin one unit's model through the kernel's `set-scoop-model`, which
+   * resolves a child to the cone that owns it (#2310). The kernel's ack is a
+   * real `true`/`false`, so this transport never answers `undefined`.
+   */
+  setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined> {
+    const client = this.deps.getClient();
+    if (!client) return Promise.reject(new Error('kernel client not attached'));
+    return client.setScoopModel(id, model);
+  }
+
   signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void> {
     if (signal !== 'stop') return Promise.resolve();
-    this.deps.getClient()?.stopScoop(id);
+    const client = this.deps.getClient();
+    // No kernel means the turn was NOT stopped. Resolving would report a stop
+    // that never happened and let the composer drop its busy state on it.
+    if (!client) return Promise.reject(new Error('kernel client not attached'));
+    client.stopScoop(id);
     return Promise.resolve();
   }
 }

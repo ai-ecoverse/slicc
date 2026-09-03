@@ -293,3 +293,108 @@ describe('WC tray connected follower mapping', () => {
     ]);
   });
 });
+
+describe('WC tray follower message routing (#2382)', () => {
+  /**
+   * The leader adapter under test, over a fake kernel client and a fake
+   * `WorkUnitClient`. Only the pieces `onFollowerMessage` / `onFollowerAbort`
+   * touch are real.
+   */
+  function makeLeaderOptions(leaderSelectedJid: string | null) {
+    const sends: Array<{ id: string; text: string; messageId?: string }> = [];
+    const stops: string[] = [];
+    const addUserMessage = vi.fn();
+    const deps = {
+      refs: { floatbar: { setAttribute: vi.fn() }, switcher: { scoops: [] } },
+      client: {
+        selectedScoopJid: leaderSelectedJid,
+        getScoops: () => [],
+        getMessagesForScoop: () => [],
+      },
+      workUnits: {
+        send: (id: string, input: { text: string; messageId?: string }) => {
+          sends.push({ id, text: input.text, messageId: input.messageId });
+          return Promise.resolve();
+        },
+        signal: (id: string) => {
+          stops.push(id);
+          return Promise.resolve();
+        },
+      },
+      agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+      getController: () => ({ addUserMessage }),
+      getSelectedJid: () => leaderSelectedJid ?? 'cone',
+      window: { dispatchEvent: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      sprinkleManager: { available: () => [], opened: () => [] },
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
+    // A real manager with no followers: `onFollowerMessage` also refreshes the
+    // worker-realm follower shim, which walks the whole capability surface.
+    const sync = new LeaderSyncManager({
+      sendControl: () => {},
+      getMessages: () => [],
+      getScoopJid: () => leaderSelectedJid ?? 'cone',
+      onFollowerMessage: () => {},
+      onFollowerAbort: () => {},
+    });
+    const broadcastUserMessage = vi
+      .spyOn(sync, 'broadcastUserMessage')
+      .mockImplementation(() => {});
+    const state = {
+      leader: { sync, peers: { getPeers: () => [] } },
+      follower: null,
+      persistenceGuard: { activate: vi.fn(), deactivate: vi.fn() },
+      lockRelease: null,
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[1];
+    const options = createLeaderOptionsFactory(
+      deps,
+      state,
+      {} as Parameters<typeof createLeaderOptionsFactory>[2]
+    )('https://tray.example');
+    return { addUserMessage, broadcastUserMessage, options, sends, stops };
+  }
+
+  it('delivers a follower’s prompt to the unit that follower is reading', async () => {
+    const { options, sends, addUserMessage, broadcastUserMessage } = makeLeaderOptions('cone_a');
+
+    options.onFollowerMessage('hi from B', 'fm1', undefined, { targetScoopJid: 'cone_b' });
+    await Promise.resolve();
+
+    // The leader is displaying A; the follower is reading B. The prompt lands
+    // in B, and A's transcript — the one on this screen — gets no bubble for a
+    // message that is not its own.
+    expect(sends).toEqual([{ id: 'cone_b', text: 'hi from B', messageId: 'fm1' }]);
+    expect(addUserMessage).not.toHaveBeenCalled();
+    // The echo still goes out: followers reading B need to see it.
+    expect(broadcastUserMessage).toHaveBeenCalledWith('hi from B', 'fm1', undefined);
+  });
+
+  it('still renders the bubble when the follower is reading what the leader shows', async () => {
+    const { options, sends, addUserMessage } = makeLeaderOptions('cone_a');
+
+    options.onFollowerMessage('same unit', 'fm2', undefined, { targetScoopJid: 'cone_a' });
+    await Promise.resolve();
+
+    expect(sends).toEqual([{ id: 'cone_a', text: 'same unit', messageId: 'fm2' }]);
+    expect(addUserMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the leader’s selection for a peer that named no unit', async () => {
+    const { options, sends, addUserMessage } = makeLeaderOptions('cone_a');
+
+    options.onFollowerMessage('no target', 'fm3');
+    await Promise.resolve();
+
+    expect(sends).toEqual([{ id: 'cone_a', text: 'no target', messageId: 'fm3' }]);
+    expect(addUserMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the unit the follower is reading, not the one on screen', async () => {
+    const { options, stops } = makeLeaderOptions('cone_a');
+
+    options.onFollowerAbort('cone_b');
+    await Promise.resolve();
+
+    expect(stops).toEqual(['cone_b']);
+  });
+});

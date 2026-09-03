@@ -80,19 +80,31 @@ export function toSwitcherScoops(
   return toTabDescriptors(units, selectedJid, scoopColor);
 }
 
-/** Kernel callbacks for the WC live shell, factored for worker-free tests. */
-export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCallbacks {
-  // The leader's half of the client protocol (#2274). Built here because
-  // `OffscreenClient` takes its callback bag in the constructor: the adapter
-  // decorates that bag, so it must exist before the client does.
-  const workUnits = new LocalWorkUnitClient({
+/**
+ * The leader's half of the client protocol (#2274) for one wiring bag —
+ * created on first ask and held on the bag afterwards.
+ *
+ * Idempotent because three places need it and none of them can be the sole
+ * owner: `prepareWcShell` builds the bag, `createWcLiveCallbacks` DECORATES
+ * the callback bag the adapter must observe (so it has to exist before
+ * `OffscreenClient` does), and `attachWcClient` mounts the composer on it. A
+ * second instance would mean a second last-snapshot cache and a strip that
+ * repaints from a different roster than the composer sends to.
+ */
+export function ensureWorkUnitClient(wiring: WcLiveWiring): LocalWorkUnitClient {
+  wiring.workUnits ??= new LocalWorkUnitClient({
     fills: wiring.fills,
     getAwaiting: () => wiring.awaitingInput,
     getClient: () => wiring.getClient(),
     phases: wiring.phases,
     statuses: wiring.statuses,
   });
-  wiring.workUnits = workUnits;
+  return wiring.workUnits;
+}
+
+/** Kernel callbacks for the WC live shell, factored for worker-free tests. */
+export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCallbacks {
+  const workUnits = ensureWorkUnitClient(wiring);
 
   // The strip renders from the protocol's roster, not from `getScoops()` plus
   // three page-side maps — the same `toTabDescriptors` the follower calls.

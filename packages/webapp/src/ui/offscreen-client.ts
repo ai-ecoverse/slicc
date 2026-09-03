@@ -328,6 +328,18 @@ export class OffscreenClient implements KernelClientFacade {
   // AgentHandle (for chat panel)
   // -------------------------------------------------------------------------
 
+  /**
+   * Surface a page-side failure on the agent event stream, so a send that
+   * never reached the kernel renders exactly like one the kernel refused.
+   *
+   * Exists because the composer's `AgentHandle` moved onto `WorkUnitClient`
+   * (#2382): the protocol has no error variant (no adapter can produce one),
+   * so the float that CAN show one is handed the job.
+   */
+  emitAgentError(error: string): void {
+    this.emitToUI({ type: 'error', error });
+  }
+
   createAgentHandle(): AgentHandle {
     return {
       sendMessage: (

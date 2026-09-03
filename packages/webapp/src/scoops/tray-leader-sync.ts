@@ -141,10 +141,27 @@ export interface LeaderSyncManagerOptions {
       biscotto?: FollowerBiscottoIdentity;
       /** Tool gate for the turn this message starts; absent = ungated. */
       guestGate?: TurnGuestGate;
+      /**
+       * The unit this message is FOR — the sending follower's own
+       * `scoops.select`, which the leader already records per peer, or for a
+       * guest the one unit its seat is shared (`PendingGuestMessage.unitJid`,
+       * the same unit its tool gate names).
+       *
+       * Absent only for a peer that never selected anything, where the
+       * adapter falls back to the leader's own selection as it always did.
+       * Without this the leader delivered every follower's prompt to
+       * whatever IT was displaying, so a follower reading cone B typed into
+       * cone A (#2382).
+       */
+      targetScoopJid?: string;
     }
   ) => void;
-  /** Handle an abort request from a follower. */
-  onFollowerAbort: () => void;
+  /**
+   * Handle an abort request from a follower. `targetScoopJid` is that
+   * follower's own selection, for the same reason {@link onFollowerMessage}
+   * carries one: an abort names a unit, and the leader's selection is not it.
+   */
+  onFollowerAbort: (targetScoopJid?: string) => void;
   /**
    * Handle a follower's request to start a new session (freezer new-chat).
    * The follower has no VFS / cone to run `runNewSessionFreeze` itself; the
@@ -331,6 +348,11 @@ export class LeaderSyncManager {
           ...(pending.steer ? { steer: true } : {}),
           biscotto: pending.biscotto,
           ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
+          // The unit the seat is shared, captured when the guest SUBMITTED and
+          // the same one its tool gate names. Resolving it again here would
+          // let the leader's selection drift during review and deliver a gated
+          // message to a unit the gate does not cover.
+          targetScoopJid: pending.unitJid,
         });
       },
       notify: (bootstrapId, messageId, state) => {

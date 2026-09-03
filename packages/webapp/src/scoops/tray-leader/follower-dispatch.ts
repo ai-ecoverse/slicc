@@ -77,7 +77,11 @@ export class FollowerDispatch {
         break;
       case 'abort':
         this.context.log.info('Follower abort received', { bootstrapId });
-        this.context.options.onFollowerAbort();
+        // The unit THIS follower is looking at, not the one the leader is
+        // displaying — the same routing `handleModelSelection` already does.
+        this.context.options.onFollowerAbort(
+          this.context.followers.followers.get(bootstrapId)?.selectedScoopJid
+        );
         break;
       case 'new_session':
         this.handleFollowerNewSession(bootstrapId, message.action);
@@ -291,13 +295,14 @@ export class FollowerDispatch {
       return;
     }
     this.noteInteractionOrigin(bootstrapId);
-    if (message.steer) {
-      this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
-        steer: true,
-      });
-    } else {
-      this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
-    }
+    // The unit this peer selected. `sendSnapshotToFollower` already mirrors
+    // that unit's transcript back to it, so a prompt typed under that
+    // transcript has to land there too.
+    const targetScoopJid = follower?.selectedScoopJid;
+    this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
+      ...(message.steer ? { steer: true } : {}),
+      ...(targetScoopJid ? { targetScoopJid } : {}),
+    });
   }
 
   /**

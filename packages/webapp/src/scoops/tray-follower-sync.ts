@@ -400,12 +400,22 @@ export class FollowerSyncManager implements AgentHandle {
   // AgentHandle implementation
   // ---------------------------------------------------------------------------
 
+  /**
+   * Send a prompt to the leader.
+   *
+   * Returns whether the channel ACCEPTED the frame. `TraySyncChannel.send`
+   * answers `false` for a closed or closing data channel, and swallowing that
+   * is how a refused send looked like a delivered one: the composer had
+   * already rendered the bubble and cleared the input. `void` remains the
+   * `AgentHandle` contract, so a boolean here is additive — callers that
+   * cannot act on it keep ignoring it.
+   */
   sendMessage(
     text: string,
     messageId?: string,
     attachments?: MessageAttachment[],
     options?: { steer?: boolean }
-  ): void {
+  ): boolean {
     const id = messageId ?? `follower-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.sentMessageIds.add(id);
     // Off-loaded `path` values point at this follower's VFS — they are
@@ -414,14 +424,22 @@ export class FollowerSyncManager implements AgentHandle {
     const safeAttachments = attachments?.length
       ? stripLocalPathsForRemote(attachments)
       : attachments;
-    this.sync.send({
+    const accepted = this.sync.send({
       type: 'user_message',
       text,
       messageId: id,
       attachments: safeAttachments,
       ...(options?.steer ? { steer: true as const } : {}),
     });
-    log.info('Sent user message to leader', { messageId: id });
+    if (accepted) log.info('Sent user message to leader', { messageId: id });
+    else {
+      // The id never left the device, so it can never be echoed back — keeping
+      // it would suppress a LATER message that happens to reuse it after a
+      // retry.
+      this.sentMessageIds.delete(id);
+      log.warn('Channel refused a user message', { messageId: id });
+    }
+    return accepted;
   }
 
   onEvent(callback: (event: AgentEvent) => void): () => void {
@@ -429,9 +447,12 @@ export class FollowerSyncManager implements AgentHandle {
     return () => this.eventListeners.delete(callback);
   }
 
-  stop(): void {
-    this.sync.send({ type: 'abort' });
-    log.info('Sent abort to leader');
+  /** Abort the leader's current turn. Returns whether the channel took it. */
+  stop(): boolean {
+    const accepted = this.sync.send({ type: 'abort' });
+    if (accepted) log.info('Sent abort to leader');
+    else log.warn('Channel refused an abort');
+    return accepted;
   }
 
   // ---------------------------------------------------------------------------
