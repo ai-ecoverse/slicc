@@ -280,6 +280,16 @@ describe('parseFfmpegArgs value-taking flags', () => {
     expect(parsed.outputOpts).toEqual(['-unknown_opt', 'val']);
   });
 
+  it('counts a lone `-` sink as a positional so earlier options keep their values', () => {
+    // `-` is ffmpeg's stdin/stdout filename. Before it was recognised
+    // as a positional here, `-unknown_opt` saw nothing after it that
+    // could serve as the output, so it parsed as a toggle and `val`
+    // became a phantom output — dropping BOTH tokens from argv.
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-unknown_opt', 'val', '-f', 'null', '-']);
+    expect(parsed.outputPath).toBe('-');
+    expect(parsed.outputOpts).toEqual(['-unknown_opt', 'val', '-f', 'null']);
+  });
+
   it('binds an unknown option to the next INPUT, not the output', () => {
     const parsed = parseFfmpegArgs(['-hwaccel', 'auto', '-i', 'in.mp4', 'out.mp4']);
     expect(parsed.inputs[0].raw).toEqual(['-hwaccel', 'auto', '-i', 'in.mp4']);

@@ -407,7 +407,12 @@ function handleWarmupToken(state: ParseState, args: string[], i: number): number
 function hasLaterPositional(args: string[], from: number): boolean {
   for (let i = from; i < args.length; i++) {
     const tok = args[i];
-    if (!tok.startsWith('-')) return true;
+    // A lone `-` is ffmpeg's stdin/stdout filename, so it is a
+    // positional despite starting with `-`. Missing that let an
+    // unknown option before a null sink lose its value:
+    // `-unknown_opt val -f null -` saw no later positional, treated
+    // `-unknown_opt` as a toggle, and dropped both tokens from argv.
+    if (!tok.startsWith('-') || tok === '-') return true;
     if (VALUE_TAKING_FLAGS.has(tok)) i += 1;
   }
   return false;
