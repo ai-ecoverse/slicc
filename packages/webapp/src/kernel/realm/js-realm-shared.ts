@@ -44,6 +44,7 @@ import {
   createModuleSystem,
   loadModuleGraph,
   type ModuleExports,
+  type RealmUserCodeBridges,
   runUserCode,
 } from './realm-module-system.js';
 import {
@@ -54,6 +55,7 @@ import {
 } from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.js';
+import { createTimerHandleTracker, type TimerHandleTracker } from './realm-timer-handles.js';
 import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
 import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
@@ -386,50 +388,118 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const isEsmEntry = graph.entrySource !== undefined;
   const entryCode = graph.entrySource ?? init.code;
 
-  // Host-side WASM compile bridge. Realm code (e.g. the baked biome helper)
-  // routes `WebAssembly.compile` of a VFS path to the kernel host so a large
-  // module compiles in the high-headroom kernel-worker context instead of
-  // OOM-ing this per-task realm worker. Exposed as an internal global rather
-  // than a require()-able shim so it stays out of the AsyncFunction param list
-  // (parity-pinned) and callers can feature-detect with a `typeof` guard —
-  // floats without the bridge (e.g. the in-process test realm) cleanly fall
-  // back to in-realm compile. The returned `WebAssembly.Module` is
-  // structured-cloneable, so it round-trips over the realm port.
+  await finishJsRealm({
+    entryCode,
+    isEsmEntry,
+    filename,
+    dirname,
+    proc,
+    nodeConsole,
+    requireShim,
+    moduleShim,
+    realmFetch,
+    writeStderr,
+    rpc,
+    syncFs,
+    stdoutChunks,
+    stderrChunks,
+    port,
+  });
+}
+
+/**
+ * Install the WASM compile bridge and timer-handle wrappers, run the entry,
+ * drain Node-like handles, then post `realm-done`. Timer wrappers are always
+ * restored so the in-process test factory cannot leak them into vitest.
+ *
+ * The WASM compile bridge is an internal global rather than an AsyncFunction
+ * param (parity-pinned): callers feature-detect with `typeof`. The returned
+ * `WebAssembly.Module` is structured-cloneable across the realm port.
+ */
+async function finishJsRealm(opts: {
+  entryCode: string;
+  isEsmEntry: boolean;
+  filename: string;
+  dirname: string;
+  proc: ReturnType<typeof createProcessShim>;
+  nodeConsole: ReturnType<typeof createNodeConsole>;
+  requireShim: unknown;
+  moduleShim: { exports: ModuleExports; filename: string };
+  realmFetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  writeStderr: (value: unknown) => void;
+  rpc: RealmRpcClient;
+  syncFs: SyncFsCache;
+  stdoutChunks: string[];
+  stderrChunks: string[];
+  port: RealmPortLike;
+}): Promise<void> {
   const g = globalThis as GlobalWithWasmCompile;
   installSliccVersion();
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
-    rpc.call('wasm', 'compile', [path]);
-
-  let exitCode = await runUserCode(
-    entryCode,
-    {
-      process: proc.processShim,
-      console: nodeConsole,
-      require: requireShim,
-      module: moduleShim,
-      exports: moduleShim.exports,
-      fetch: realmFetch,
-      __dirname: dirname,
-      __filename: filename,
-    },
-    writeStderr,
-    isEsmEntry
-  );
-  await flushSyncFsCache(rpc, syncFs, writeStderr);
-  // process.exit() (main body or a stdin handler the shim caught) wins and skips the RPC drain.
-  if (proc.getDidCallProcessExit()) {
-    exitCode = proc.getExitCode();
-  } else {
-    await drainPendingRpcs(rpc);
+    opts.rpc.call('wasm', 'compile', [path]);
+  const timers = createTimerHandleTracker();
+  timers.install();
+  try {
+    const exitCode = await runEntryThenDrain({
+      entryCode: opts.entryCode,
+      bridges: {
+        process: opts.proc.processShim,
+        console: opts.nodeConsole,
+        require: opts.requireShim,
+        module: opts.moduleShim,
+        exports: opts.moduleShim.exports,
+        fetch: opts.realmFetch,
+        __dirname: opts.dirname,
+        __filename: opts.filename,
+      },
+      writeStderr: opts.writeStderr,
+      isEsmEntry: opts.isEsmEntry,
+      rpc: opts.rpc,
+      syncFs: opts.syncFs,
+      proc: opts.proc,
+      timers,
+    });
+    delete g.__slicc_compileWasm;
+    opts.rpc.dispose();
+    opts.port.postMessage({
+      type: 'realm-done',
+      stdout: opts.stdoutChunks.join(''),
+      stderr: opts.stderrChunks.join(''),
+      exitCode,
+    } satisfies RealmDoneMsg);
+  } finally {
+    timers.clearPending();
+    timers.restore();
   }
-  delete g.__slicc_compileWasm;
-  rpc.dispose();
-  port.postMessage({
-    type: 'realm-done',
-    stdout: stdoutChunks.join(''),
-    stderr: stderrChunks.join(''),
-    exitCode,
-  } satisfies RealmDoneMsg);
+}
+
+/**
+ * Run the entry, flush sync-fs, then drain ref'd handles (RPC + timers)
+ * unless `process.exit()` already skipped them.
+ */
+async function runEntryThenDrain(opts: {
+  entryCode: string;
+  bridges: RealmUserCodeBridges;
+  writeStderr: (value: unknown) => void;
+  isEsmEntry: boolean;
+  rpc: RealmRpcClient;
+  syncFs: SyncFsCache;
+  proc: ReturnType<typeof createProcessShim>;
+  timers: TimerHandleTracker;
+}): Promise<number> {
+  const exitCode = await runUserCode(
+    opts.entryCode,
+    opts.bridges,
+    opts.writeStderr,
+    opts.isEsmEntry
+  );
+  await flushSyncFsCache(opts.rpc, opts.syncFs, opts.writeStderr);
+  if (opts.proc.getDidCallProcessExit()) {
+    opts.timers.clearPending();
+    return opts.proc.getExitCode();
+  }
+  await drainEventLoop(opts.rpc, opts.timers);
+  return exitCode;
 }
 
 /**
@@ -466,21 +536,20 @@ async function flushSyncFsCache(
 }
 
 /**
- * Yield the event loop to let in-flight callbacks settle before teardown:
- * RPC-backed `.then` chains (fetch/exec) AND fire-and-forget dynamic-import
- * `.then` chains (pure microtasks, no pending RPC — e.g.
- * `import('pkg').then(m => ...)`). We always tick at least once: a single
- * macrotask boundary fully drains the microtask queue, so a non-awaited
- * dynamic import settles before `realm-done` captures stdout — matching Node,
- * which drains microtasks before exit. Bounded by a tick count and a
- * wall-clock ceiling so a never-settling promise cannot hang disposal.
+ * Keep the realm alive the way Node keeps a process alive: while there are
+ * ref'd handles. I/O is `rpc.pendingCount` (fs/exec/fetch). Timers are the
+ * wrapped `setTimeout` / `setInterval` set. A pending Promise with no handle
+ * does not count — `new Promise(() => {})` must not hang teardown.
+ *
+ * Always tick at least once so microtasks queued in the user body (and a
+ * single `setTimeout(0)` already registered) run before `realm-done`, matching
+ * Node draining the current turn before considering the loop idle. There is
+ * no wall-clock ceiling: a slow `exec` / `setTimeout(2000)` must be allowed
+ * to finish. A never-settling RPC or uncleared `setInterval` hangs until the
+ * host SIGKILLs the realm worker, the same way hung I/O hangs real Node.
  */
-async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
-  const maxTicks = 50;
-  const deadline = Date.now() + 1000;
-  let ticks = 0;
+async function drainEventLoop(rpc: RealmRpcClient, timers: TimerHandleTracker): Promise<void> {
   do {
-    await new Promise<void>((r) => setTimeout(r, 0));
-    ticks++;
-  } while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline);
+    await timers.tick();
+  } while (rpc.pendingCount > 0 || timers.pendingCount > 0);
 }

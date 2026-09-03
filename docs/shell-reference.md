@@ -1466,6 +1466,20 @@ workspace roots prepended (`/scoops/<folder>/workspace/{skills,bin}`).
 - CLI: `AsyncFunction` constructor with Node-like globals
 - Extension: Sandbox iframe (CSP-compliant), VFS via postMessage
 
+**Event-loop keep-alive (Node parity).** Real Node does not `await` a CJS
+script's return value. After the body finishes it keeps the process alive
+while libuv still has ref'd handles — timers (`setTimeout` / `setInterval`)
+and I/O (`fs`, `fetch`, sockets, `child_process`). A pending Promise with
+no handle (`new Promise(() => {})`) does **not** keep it alive.
+`process.exit(N)` skips remaining handles.
+
+SLICC matches that: `.jsh` / `node` wrap the entry in `AsyncFunction` (so
+top-level `await` works), then drain outstanding RPC (fs/exec/fetch) and
+user timers before `realm-done`. Fire-and-forget `.then()`, unawaited
+`main()`, and nested `setTimeout` therefore print before the command
+exits. An uncleared `setInterval` or hung I/O hangs until the shell job
+is SIGKILL'd, the same way hung I/O hangs real Node.
+
 ### Globals API
 
 #### process
