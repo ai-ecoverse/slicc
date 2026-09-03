@@ -59,7 +59,16 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf', 'gunzip', 'gzip', 'zcat']],
   [
     'Media',
-    ['convert', 'magick', 'pdftoppm', 'pdftocairo', 'pdftotext', 'ffmpeg', 'screencapture'],
+    [
+      'convert',
+      'magick',
+      'pdftoppm',
+      'pdftocairo',
+      'pdftotext',
+      'ffmpeg',
+      'ffprobe',
+      'screencapture',
+    ],
   ],
   ['Audio', ['say', 'afplay', 'chime']],
   [

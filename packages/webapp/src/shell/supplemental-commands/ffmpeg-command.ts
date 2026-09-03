@@ -43,6 +43,7 @@ import {
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
   type IpkResolutionContext,
+  isCoreFault,
   recycleFfmpeg,
   tryLoadFfmpegCoreFromNodeModules,
 } from './ffmpeg-wasm.js';
@@ -1557,22 +1558,6 @@ function buildFinalFfmpegArgs(
   finalArgs.push(...parsed.outputOpts);
   finalArgs.push(outputName);
   return finalArgs;
-}
-
-/**
- * True when an error out of the core is unrecoverable for the
- * *instance*, not merely for the call: a WebAssembly trap, an
- * emscripten abort, or an allocation the runtime could not satisfy.
- * All of them leave linear memory inconsistent, so the instance has
- * to be retired instead of reused.
- */
-function isCoreFault(err: unknown): boolean {
-  if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) return true;
-  if (err instanceof RangeError) return true;
-  const message = err instanceof Error ? err.message : String(err);
-  return /RuntimeError|memory access out of bounds|unreachable|Aborted|out of memory|allocation failed|table index is out of bounds|function signature mismatch/i.test(
-    message
-  );
 }
 
 /**

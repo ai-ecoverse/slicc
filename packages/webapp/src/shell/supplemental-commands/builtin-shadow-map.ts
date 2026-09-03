@@ -78,6 +78,18 @@ export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
     example: 'ffmpeg -i input.mp4 output.webm',
     bootstrap: `${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`,
   },
+  // Same core as ffmpeg — there is no separate ffprobe wasm/ipk; the
+  // built-in emulates via the ffmpeg Input #N banner (see ffprobe-command).
+  ffprobe: {
+    command: 'ffprobe',
+    example: 'ffprobe -v error -show_format -of json input.mp4',
+    bootstrap: `${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`,
+  },
+  '@ffprobe-installer/ffprobe': {
+    command: 'ffprobe',
+    example: 'ffprobe -v error -show_format -of json input.mp4',
+    bootstrap: `${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`,
+  },
   sqlite3: { command: 'sqlite3', example: 'sqlite3 database.db "SELECT 1"' },
   v86: {
     command: 'v86',

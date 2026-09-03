@@ -28,6 +28,8 @@ export const registryUrl = buildRegistryUrl;
 export { validateNpmPackageName };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Large packages (e.g. `@ffmpeg/core` ~20 MB) need more than the packument budget. */
+const DEFAULT_TARBALL_TIMEOUT_MS = 120_000;
 
 export interface PackumentDistTags {
   latest?: string;
@@ -271,8 +273,9 @@ export function resolveVersion(packument: Packument, range: string): string {
 
 /**
  * GET a package tarball via the injected `SecureFetch` and return the raw
- * bytes as a `Uint8Array`. Bounded by `opts.timeoutMs` (default 30s);
- * surfaces a clear error on non-2xx, empty body, or timeout.
+ * bytes as a `Uint8Array`. Bounded by `opts.timeoutMs` (default 120s —
+ * wasm cores and similar artifacts are multi-megabyte); surfaces a clear
+ * error on non-2xx, empty body, or timeout.
  */
 export async function fetchTarball(
   url: string,
@@ -299,7 +302,7 @@ export async function fetchTarball(
       `${label}: refused to fetch tarball from host '${parsed.host}' (expected '${EXPECTED_TARBALL_HOST}')`
     );
   }
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TARBALL_TIMEOUT_MS;
 
   let result: FetchResult;
   try {

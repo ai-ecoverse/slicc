@@ -337,6 +337,28 @@ function stringToBlobUrl(source: string, contentType: string): string {
 }
 
 /**
+ * True when an error out of the core is unrecoverable for the
+ * *instance*, not merely for the call: a WebAssembly trap, an
+ * emscripten abort, or an allocation the runtime could not satisfy.
+ * All of them leave linear memory inconsistent, so the instance has
+ * to be retired via {@link recycleFfmpeg} instead of reused.
+ *
+ * Single home for both `ffmpeg` and `ffprobe` — the predicate was
+ * derived from a live production trap (`RangeError: Array buffer
+ * allocation failed` at ~1.89 GB) and will be widened again; two
+ * copies would let one silently diverge and leave a poisoned core
+ * cached for later commands.
+ */
+export function isCoreFault(err: unknown): boolean {
+  if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) return true;
+  if (err instanceof RangeError) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /RuntimeError|memory access out of bounds|unreachable|Aborted|out of memory|allocation failed|table index is out of bounds|function signature mismatch/i.test(
+    message
+  );
+}
+
+/**
  * Drop the cached instance after an unrecoverable fault so the next
  * `getFfmpeg` boots a fresh core.
  *

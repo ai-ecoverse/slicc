@@ -26,6 +26,7 @@ import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
+import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
@@ -233,6 +234,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
+    createFfprobeCommand(),
     createWebhookCommand(options.webhook),
     createWebsocatCommand(),
     createCrontaskCommand(),
