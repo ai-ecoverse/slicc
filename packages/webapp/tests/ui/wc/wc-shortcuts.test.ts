@@ -76,6 +76,8 @@ function harness(
     scoops: Array<{ key: string; label?: string }>;
     active: string | null;
     select: typeof select;
+    /** Written by the mode; the real strip reflects it onto `arrow-keys`. */
+    arrowKeys?: 'on' | 'off';
   };
   Object.defineProperty(switcher, 'active', {
     configurable: true,
@@ -511,6 +513,42 @@ describe('inside keyboard mode', () => {
     escape();
     press({ key: 'ArrowLeft', code: 'ArrowLeft' });
     expect(select).toHaveBeenCalledWith('scoop_a');
+  });
+
+  /**
+   * The strip's own tablist walk takes ←/→ while a segment has the focus —
+   * which, after a click on a tab, is where the focus sits. It preventDefaults
+   * them, the mode stands down for a claimed key, and the unit never changes.
+   */
+  it('takes ←/→ off the strip for as long as the mode is up', () => {
+    const { switcher, handles } = harness();
+    expect(switcher.arrowKeys).toBeUndefined();
+    escape();
+    expect(switcher.arrowKeys).toBe('off');
+    press({ key: 'i', code: 'KeyI' });
+    expect(handles.active()).toBe(false);
+    expect(switcher.arrowKeys).toBe('on');
+  });
+
+  it('hands the arrows back on dispose', () => {
+    const { switcher, handles } = harness();
+    escape();
+    handles.dispose();
+    expect(switcher.arrowKeys).toBe('on');
+  });
+
+  it('ignores an arrow another handler already claimed', () => {
+    const { select } = harness();
+    escape();
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'ArrowRight',
+      code: 'ArrowRight',
+    });
+    event.preventDefault();
+    document.body.dispatchEvent(event);
+    expect(select).not.toHaveBeenCalled();
   });
 
   it('i and Enter go back to the composer and leave the mode', () => {

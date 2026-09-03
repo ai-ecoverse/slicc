@@ -602,6 +602,32 @@ describe('slicc-agent-tabs', () => {
       expect(document.activeElement).toBe(segment(element, 'cone'));
     });
 
+    it('yields ←/→ to the host while arrow-keys is off, keeping the rest', () => {
+      const element = mount();
+      element.arrowKeys = 'off';
+      expect(element.getAttribute('arrow-keys')).toBe('off');
+      segment(element, 'cone').focus();
+
+      // Not prevented and focus unmoved: the host's own ←/→ binding only runs
+      // for a key nothing closer to it has claimed.
+      expect(keydown(segment(element, 'cone'), 'ArrowRight').defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(segment(element, 'cone'));
+      expect(keydown(segment(element, 'cone'), 'ArrowLeft').defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(segment(element, 'cone'));
+
+      // Home / End and manual activation are the strip’s alone either way.
+      expect(keydown(segment(element, 'cone'), 'End').defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(segment(element, 'triage'));
+      keydown(segment(element, 'triage'), 'Enter');
+      expect(element.active).toBe('triage');
+
+      element.arrowKeys = 'on';
+      expect(element.hasAttribute('arrow-keys')).toBe(false);
+      segment(element, 'cone').focus();
+      expect(keydown(segment(element, 'cone'), 'ArrowRight').defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(segment(element, 'researcher'));
+    });
+
     it('manually activates the focused segment with Enter or Space', () => {
       const element = mount();
       const listener = vi.fn();

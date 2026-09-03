@@ -393,6 +393,30 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   /**
+   * Who owns ←/→ while a segment holds the focus: the strip's own roving walk
+   * (`on`, the default) or whoever is listening above it (`off`).
+   *
+   * The walk `preventDefault()`s the arrows, so a host that binds them
+   * globally — the shell's keyboard mode, where they switch units — reads that
+   * as "something closer to the key already claimed it" and stands down. A
+   * segment is where the focus RESTS after a click, which is exactly where the
+   * user is most likely to press an arrow next, so the two would disagree in
+   * the commonest state of all: the strip would shuffle its focus ring and the
+   * unit would never change.
+   *
+   * `off` yields those two keys and keeps the rest of the tablist keyboard —
+   * Home / End and Enter / Space activation — which nothing above binds.
+   */
+  get arrowKeys(): 'on' | 'off' {
+    return this.getAttribute('arrow-keys') === 'off' ? 'off' : 'on';
+  }
+
+  set arrowKeys(value: 'on' | 'off') {
+    if (value === 'off') this.setAttribute('arrow-keys', 'off');
+    else this.removeAttribute('arrow-keys');
+  }
+
+  /**
    * Seconds of `awaiting` before the focused avatar's drowse lid starts to
    * descend. Forwarded verbatim; `null` leaves the avatar's own 90 s default.
    */
@@ -696,6 +720,12 @@ export class SliccAgentTabs extends HTMLElement {
       this.select(current.dataset.k);
       return;
     }
+
+    // Yielded to the host (see {@link arrowKeys}): returning without
+    // `preventDefault()` is the whole handover, because the shell's keyboard
+    // mode only stands down for a key another handler already claimed.
+    const isArrow = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+    if (isArrow && this.arrowKeys === 'off') return;
 
     const tabs = [
       ...this.querySelectorAll<HTMLButtonElement>(`.${PREFIX}__segment:not(.hide)`),

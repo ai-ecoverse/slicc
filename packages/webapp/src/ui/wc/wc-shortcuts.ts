@@ -89,6 +89,14 @@ export interface ShortcutSwitcher {
   readonly active: string | null;
   /** Select by key — dispatches `slicc-scoop-select`, exactly like a click. */
   select(key: string): void;
+  /**
+   * Whether the strip's own roving ←/→ walk is live. Set to `off` for as long
+   * as the mode is on, because that walk `preventDefault()`s the arrows and
+   * the mode stands down for a claimed key — with the focus resting on a
+   * segment (where a click leaves it) `nextAgent` / `prevAgent` would never
+   * run. Optional: a float whose switcher has no such keyboard ignores it.
+   */
+  arrowKeys?: 'on' | 'off';
 }
 
 /** The bit of `<slicc-dock>` the mode drives. */
@@ -1208,10 +1216,16 @@ function syncKeyboardLock(doc: Document): void {
   else keyboard.unlock();
 }
 
-/** The mode flag plus the badge that makes it visible. */
+/**
+ * The mode flag plus the badge that makes it visible.
+ *
+ * `onToggle` fires on every real change, for the surfaces that must hand the
+ * mode their own keyboard while it is on — see {@link ShortcutSwitcher.arrowKeys}.
+ */
 function createMode(
   doc: Document,
-  keymap: () => Readonly<Record<string, CommandId>>
+  keymap: () => Readonly<Record<string, CommandId>>,
+  onToggle: (on: boolean) => void
 ): {
   on(): boolean;
   set(next: boolean): void;
@@ -1228,6 +1242,7 @@ function createMode(
       if (next === modeOn) return;
       modeOn = next;
       doc.documentElement.toggleAttribute('data-slicc-keyboard-mode', next);
+      onToggle(next);
       if (!next) {
         badge?.destroy();
         badge = null;
@@ -1618,7 +1633,15 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
   const help = createHelp(doc, () => keymap);
-  const mode = createMode(doc, () => keymap);
+  const mode = createMode(
+    doc,
+    () => keymap,
+    (on) => {
+      // The strip's tablist walk and the mode both want ←/→, and the strip is
+      // closer to the key. It stands aside for as long as the mode is up.
+      deps.switcher.arrowKeys = on ? 'off' : 'on';
+    }
+  );
   const state: ModeState = { lastDockSurface: 'files' };
   let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
   const commandFor = (key: string): Command | undefined => {
