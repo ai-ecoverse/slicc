@@ -94,10 +94,13 @@ Engines (chosen automatically; stderr names the one that ran):
                to install). Takes one-input → one-output jobs whose
                every option it can express: remux, -c copy, transcode to
                h264/hevc/vp8/vp9/av1 + aac/opus/mp3/vorbis/flac/pcm,
-               -ss/-t/-to, -vf scale/crop/transpose/fps, -s, -r/-g,
-               -ac/-ar, -an/-vn, -b:v/-b:a/-crf/-q:a, -movflags, -metadata.
+               -ss/-t/-to, -vf crop,scale,fps (in that order; transpose
+               only on its own), -s, -r/-g, -ac/-ar, -an/-vn,
+               -b:v/-b:a/-crf/-q:a, -movflags, -metadata.
                Without an explicit -c, streams the container can hold are
-               copied rather than re-encoded.
+               copied rather than re-encoded; an explicit encoder always
+               re-encodes; -c copy never re-encodes (a codec the container
+               cannot hold falls to the wasm core, which fails like ffmpeg).
   wasm         @ffmpeg/core (ipk-installed; see -version). Everything
                else: lavfi sources, -f concat, filtergraphs, -f null
                analysis sinks, image/GIF output, codecs the browser lacks.

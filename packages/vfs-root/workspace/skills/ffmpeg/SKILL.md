@@ -15,8 +15,10 @@ Both commands have two engines behind one CLI:
 - **mediabunny** (WebCodecs, hardware encoders, streams from disk): used
   automatically for one-input → one-output jobs whose every option it can
   express — remux, transcode to h264/hevc/vp8/vp9/av1 + aac/opus/mp3/vorbis/
-  flac/pcm, `-ss/-t/-to` trims, `-vf scale/crop/transpose/fps`, `-ac/-ar`,
-  `-b:v/-b:a/-crf`, `-movflags +faststart`, `-metadata`. Needs no install.
+  flac/pcm, `-ss/-t/-to` trims, `-vf crop,scale,fps` (written in that
+  order; `transpose` only on its own), `-ac/-ar`, `-b:v/-b:a/-crf`,
+  `-movflags +faststart`, `-metadata`. Needs no install. An explicit
+  encoder always re-encodes; `-c copy` never does.
   `ffprobe` answers from its container index (typed fields, no wasm boot).
 - **`@ffmpeg/core` wasm** (ipk-installed): everything else — lavfi sources,
   `-f concat`, filtergraphs (`drawtext`, `overlay`, `loudnorm`, …), analysis
