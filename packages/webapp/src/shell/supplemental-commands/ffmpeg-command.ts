@@ -68,13 +68,28 @@ interface MediaDeviceSummary {
 
 function ffmpegHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: `ffmpeg - WASM build, downloaded on demand
+    stdout: `ffmpeg - two engines behind the ffmpeg CLI
 
 Usage:
   ffmpeg [global-opts] -i input [input-opts] ... output [output-opts]
 
 Common flags pass through to ffmpeg unchanged. Inputs/outputs are
 resolved against the current VFS working directory.
+
+Engines (chosen automatically; stderr names the one that ran):
+  mediabunny   WebCodecs (hardware encoders, streams from disk, nothing
+               to install). Takes one-input → one-output jobs whose
+               every option it can express: remux, -c copy, transcode to
+               h264/hevc/vp8/vp9/av1 + aac/opus/mp3/vorbis/flac/pcm,
+               -ss/-t/-to, -vf scale/crop/transpose/fps, -s, -r/-g,
+               -ac/-ar, -an/-vn, -b:v/-b:a/-crf/-q:a, -movflags, -metadata.
+               Without an explicit -c, streams the container can hold are
+               copied rather than re-encoded.
+  wasm         @ffmpeg/core (ipk-installed; see -version). Everything
+               else: lavfi sources, -f concat, filtergraphs, -f null
+               analysis sinks, image/GIF output, codecs the browser lacks.
+  FFMPEG_ENGINE=wasm ffmpeg ...        force byte-identical ffmpeg behaviour
+  FFMPEG_ENGINE=mediabunny ffmpeg ...  fail (and say why) instead of falling back
 
 Concatenating (concat demuxer):
   printf "file 'a.mp4'\\nfile 'b.mp4'\\n" > list.txt
@@ -118,8 +133,11 @@ Analysis sinks (no output file — results are on stderr):
   is accepted and gets \`-f null\` injected (MEMFS has no /dev/null).
 
 Notes:
-  - First run downloads ~31 MB of ffmpeg-core; subsequent runs reuse
-    the cached copy.
+  - The wasm engine needs an ipk-installed core: \`ipk add -g @ffmpeg/core-mt@<pinned>\`
+    on a cross-origin-isolated leader (multi-threaded), else
+    \`ipk add -g @ffmpeg/core@<pinned>\`; \`ffmpeg -version\` prints which one
+    is loaded. Inputs are mounted lazily (never copied into the wasm heap);
+    only the output is buffered.
   - The browser will prompt for camera/mic permission on first capture.
   - Numeric -i values index into the per-kind enumerateDevices() list,
     matching ffmpeg's native avfoundation device numbering on macOS.

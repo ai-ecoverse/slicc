@@ -85,16 +85,17 @@ const BOOL_FLAGS = new Set([
 
 function ffprobeHelp(): CmdResult {
   return {
-    stdout: `ffprobe - media probe via ffmpeg-wasm (emulated)
+    stdout: `ffprobe - media probe (mediabunny, with a wasm fallback)
 
 Usage:
   ffprobe [options] -i <input>
   ffprobe [options] <input>
 
-SLICC does not ship a real ffprobe binary. @ffmpeg/core provides the
-ffmpeg entry point only, so this command runs the shared wasm core
-with \`-i <input>\` (no output), parses the Input #N banner from the
-core log, and formats the fields we can source reliably:
+SLICC does not ship a real ffprobe binary. Containers mediabunny reads
+(mp4/mov, webm/mkv, mp3, wav, ogg, flac, aac, mpegts) are probed from
+their index — typed fields, no wasm boot, nothing to install. Anything
+else falls back to the shared @ffmpeg/core wasm, run with \`-i <input>\`
+(no output) and its Input #N banner parsed. Either way the fields are:
 
   format:  filename, format_name, duration, start_time, bit_rate
   streams: index, codec_type, codec_name, profile, width/height,
@@ -112,11 +113,13 @@ Supported options:
                           section name (format|stream); p=0 prints values only.
                           Fields containing commas/quotes are CSV-quoted.
   -v / -loglevel LEVEL    quiet|panic|fatal|error|warning|info|verbose|debug
-  -version                Report that this is the wasm emulation
+  -version                Report the wasm core that would back the fallback
 
 Unsupported options are rejected with a non-zero exit (never silently
-ignored). Install the core first with the same pin as \`ffmpeg\`
-(\`@ffmpeg/core-mt\` on a cross-origin-isolated leader, else \`@ffmpeg/core\`):
+ignored). FFMPEG_ENGINE=wasm forces the emulation; FFMPEG_ENGINE=mediabunny
+refuses containers it cannot read instead of falling back. The fallback
+needs the same core pin as \`ffmpeg\` (\`@ffmpeg/core-mt\` on a
+cross-origin-isolated leader, else \`@ffmpeg/core\`):
   ipk add -g @ffmpeg/core-mt@<pinned>
   ipk add -g @ffmpeg/core@<pinned>
 

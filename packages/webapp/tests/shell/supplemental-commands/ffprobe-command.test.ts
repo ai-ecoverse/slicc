@@ -236,12 +236,14 @@ describe('selectProbeStreams', () => {
 });
 
 describe('createFfprobeCommand', () => {
-  it('prints help that discloses the emulation', async () => {
+  it('prints help that names both engines and discloses the emulation', async () => {
     const cmd = createFfprobeCommand();
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/emulated/i);
+    expect(result.stdout).toMatch(/mediabunny/);
+    expect(result.stdout).toMatch(/wasm fallback/i);
     expect(result.stdout).toMatch(/not ship a real ffprobe/i);
+    expect(result.stdout).toMatch(/FFMPEG_ENGINE=wasm/);
   });
 
   it('gates -version on an installed core', async () => {
