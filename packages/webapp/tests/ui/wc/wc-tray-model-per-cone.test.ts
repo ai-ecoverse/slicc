@@ -59,6 +59,8 @@ function cone(jid: string, folder: string, model?: RegisteredScoop['model']): Re
 }
 
 function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = true) {
+  type UnitsListener = (units: readonly WorkUnitSummary[]) => void;
+  let pushUnits: UnitsListener | undefined;
   const setScoopModel = vi.fn().mockResolvedValue(applied);
   const composerMeta = document.createElement('div') as HTMLElement & { model?: string };
   const modelChanges: string[] = [];
@@ -78,7 +80,8 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     // The leader's own client protocol: the model a follower is told about is
     // read from the same summary the leader's pill renders (#2382 PR C).
     workUnits: {
-      subscribeList: (listener: (units: readonly WorkUnitSummary[]) => void) => {
+      subscribeList: (listener: UnitsListener) => {
+        pushUnits = listener;
         listener(scoops.map((scoop) => recordToWorkUnitSummary(scoop, {})));
         return () => undefined;
       },
@@ -95,7 +98,15 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     state,
     {} as Parameters<typeof createLeaderOptionsFactory>[2]
   )('https://tray.example');
-  return { options, setScoopModel, modelChanges, composerMeta };
+  return {
+    options,
+    setScoopModel,
+    modelChanges,
+    composerMeta,
+    pushUnits: (units: readonly WorkUnitSummary[]) => {
+      pushUnits?.(units);
+    },
+  };
 }
 
 describe('follower model selection is per cone (#2310)', () => {
@@ -169,6 +180,31 @@ describe('follower model selection is per cone (#2310)', () => {
 
     expect(modelChanges).toEqual([]);
     expect(composerMeta.getAttribute('model')).toBeNull();
+  });
+
+  it('answers a follower from the latest roster push, not the one it started with', () => {
+    // These callbacks hold the roster from `subscribeList` so a follower's
+    // `model.state` can be answered synchronously. `setScoopModel` mutates the
+    // record in place, so the ack has to ANNOUNCE the change — otherwise the
+    // broadcast that runs right after it reports the model the unit ran on
+    // BEFORE the pick (#2382 PR C).
+    const harness = makeOptions([cone('cone_1', 'cone')], 'cone_1');
+    expect(harness.options.getModelSelectionState?.('cone_1').activeModelId).toBe(
+      'anthropic:claude-sonnet-4-6'
+    );
+
+    // The push `OffscreenClient.handleScoopModelAck` now makes after it writes
+    // the record (that it makes one is pinned in `offscreen-client.test.ts`).
+    harness.pushUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+    ]);
+
+    expect(harness.options.getModelSelectionState?.('cone_1').activeModelId).toBe(
+      'anthropic:claude-opus-4-6'
+    );
   });
 
   it('rejects a model id that is not in the advertised catalogue', () => {
@@ -282,6 +318,92 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
   };
   return { composerMeta, surface, requestModels, deliver };
 }
+
+describe('the model pill reads the shown unit, per unit (#2382 PR C)', () => {
+  /** Two models the tray catalog advertises, so both picks can resolve a name. */
+  const PILL_CATALOG: TrayModelCatalogEntry[] = [
+    { providerName: 'A', modelId: 'anthropic:claude-opus-4-6', modelName: 'Opus', reasoning: true },
+    {
+      providerName: 'A',
+      modelId: 'anthropic:claude-sonnet-4-6',
+      modelName: 'Sonnet',
+      reasoning: true,
+    },
+  ];
+
+  /** A follower surface with a roster and a movable selection. */
+  function harness() {
+    const composerMeta = document.createElement('div') as FollowerComposerMeta;
+    const sync = {
+      selectModel: vi.fn(),
+      setThinkingLevel: vi.fn(),
+      selectScoop: vi.fn(),
+      requestModels: vi.fn(),
+    } as unknown as NonNullable<
+      ReturnType<Parameters<typeof createFollowerModelSurface>[0]['getSync']>
+    >;
+    let selected = 'cone_1';
+    let units: WorkUnitSummary[] = [];
+    const surface = createFollowerModelSurface({
+      composerMeta,
+      getSync: () => sync,
+      getUnits: () => units,
+      setModel: vi.fn(),
+      getSelectedScoopJid: () => selected,
+    });
+    return {
+      composerMeta,
+      surface,
+      select: (jid: string) => {
+        selected = jid;
+      },
+      setUnits: (next: WorkUnitSummary[]) => {
+        units = next;
+      },
+    };
+  }
+
+  it('does not carry one cone’s model into another whose model is unknown', () => {
+    const h = harness();
+    h.setUnits([
+      recordToWorkUnitSummary(
+        cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+        {}
+      ),
+      // The second cone's record has no model yet (unbackfilled, or an older
+      // leader), but the leader's `model.state` can still answer for it.
+      recordToWorkUnitSummary(cone('cone_2', 'research'), {}),
+    ]);
+    h.surface.onModelsList(PILL_CATALOG);
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-opus-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // Switch to the cone whose summary has no model. The carry-forward is
+    // per unit, so cone_1's model must NOT leak here — `model.state` answers.
+    h.select('cone_2');
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_2' });
+    expect(h.composerMeta.model).toBe('Sonnet');
+  });
+
+  it('keeps a unit’s own last model when its summary momentarily loses it', () => {
+    const h = harness();
+    const withModel = recordToWorkUnitSummary(
+      cone('cone_1', 'cone', { provider: 'anthropic', id: 'claude-opus-4-6' }),
+      {}
+    );
+    h.setUnits([withModel]);
+    h.surface.onModelsList(PILL_CATALOG);
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // A later roster for the SAME unit arrives without the field. Absent is
+    // "not known yet" (#2329) — the pill keeps this unit's own last answer
+    // rather than falling back or blanking.
+    h.setUnits([{ ...withModel, model: undefined }]);
+    h.surface.onModelState({ activeModelId: 'anthropic:claude-sonnet-4-6', scoopJid: 'cone_1' });
+    expect(h.composerMeta.model).toBe('Opus');
+  });
+});
 
 describe('an empty model catalog is warm-up, not an answer (#2329)', () => {
   beforeEach(() => {

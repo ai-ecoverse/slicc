@@ -108,12 +108,17 @@ export function createFollowerModelSurface(opts: {
   let models: TrayModelCatalogEntry[] = [];
   let state: TrayModelSelectionState | null = null;
   /**
-   * The last model this surface could name for the shown unit. Absent is "not
-   * known yet", never "no model" (#2329): a roster can arrive before the unit
-   * has one, and reading that as an answer is what latched the pill empty for
-   * a whole session. Carried into {@link modelForUnit} as `previous`.
+   * The last model this surface could name, PER UNIT. Absent is "not known
+   * yet", never "no model" (#2329): a roster can arrive before the unit has
+   * one, and reading that as an answer is what latched the pill empty for a
+   * whole session. Carried into {@link modelForUnit} as `previous`.
+   *
+   * Keyed by unit because the carry-forward is only ever about the unit it
+   * came from — a single slot would show the PREVIOUS cone's model after a
+   * switch to one whose model is momentarily unknown, and would suppress that
+   * cone's own `model.state` answer.
    */
-  let lastKnownModel: WorkUnitModel | undefined;
+  const lastKnownModel = new Map<string, WorkUnitModel>();
   const enabled = opts.modelPickerEnabled !== false;
   const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
   const retryMaxDelayMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
@@ -158,8 +163,14 @@ export function createFollowerModelSurface(opts: {
    * leader's `model.state` (an older leader, or a caller with no roster).
    */
   const activeModelId = (): string | undefined => {
-    lastKnownModel = modelForUnit(opts.getUnits(), opts.getSelectedScoopJid(), lastKnownModel);
-    return lastKnownModel ? qualifiedModelId(lastKnownModel) : state?.activeModelId;
+    const unitId = opts.getSelectedScoopJid();
+    const known = modelForUnit(
+      opts.getUnits(),
+      unitId,
+      unitId ? lastKnownModel.get(unitId) : undefined
+    );
+    if (unitId && known) lastKnownModel.set(unitId, known);
+    return known ? qualifiedModelId(known) : state?.activeModelId;
   };
 
   const apply = (): void => {
@@ -234,7 +245,7 @@ export function createFollowerModelSurface(opts: {
   const reset = (): void => {
     models = [];
     state = null;
-    lastKnownModel = undefined;
+    lastKnownModel.clear();
     clearCatalogRetry();
     opts.composerMeta.models = [];
     opts.composerMeta.style.display = 'none';

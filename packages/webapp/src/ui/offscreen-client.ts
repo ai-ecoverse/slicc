@@ -1386,10 +1386,36 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /** Mirror an applied per-cone model pick onto the panel's record copy. */
+  /**
+   * The held roster in the shape the roster callback carries. Used when the
+   * panel mutates a record itself and has to announce it — the wire objects
+   * are what `onScoopListUpdate` is typed on, and its consumers key off `jid`.
+   */
+  private wireScoops(): ScoopListMsg['scoops'] {
+    return this.scoops.map((unit) => ({
+      jid: unit.jid,
+      name: unit.name,
+      folder: unit.folder,
+      parentId: unit.parentJid,
+      assistantLabel: unit.assistantLabel,
+      status: this.scoopStatuses.get(unit.jid) ?? 'ready',
+      ...(unit.config ? { config: unit.config } : {}),
+    }));
+  }
+
   private handleScoopModelAck(msg: SetScoopModelAckMsg): void {
     if (msg.applied) {
       const scoop = this.getScoop(msg.scoopJid);
-      if (scoop) scoop.model = msg.model ? { ...msg.model } : undefined;
+      if (scoop) {
+        scoop.model = msg.model ? { ...msg.model } : undefined;
+        // The roster CHANGED, so say so. Mutating the record in place and
+        // telling nobody left every reader that holds a roster — the tab
+        // strip, the model pill, and the `model.state` a follower is answered
+        // with (#2382 PR C) — describing the model this unit ran on before the
+        // pick. The ack below resolves immediately after, and the broadcast it
+        // triggers has to see the new value.
+        this.callbacks.onScoopListUpdate(this.wireScoops());
+      }
     }
     this.pendingModelAcks.get(msg.requestId)?.(msg.applied);
   }
