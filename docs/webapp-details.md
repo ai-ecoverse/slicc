@@ -48,6 +48,19 @@ blobs), `ffmpeg-wasm.ts` (core loader).
 - **Only the output is buffered** (MEMFS, then one read back into the VFS). A core fault
   recycles the instance (`recycleFfmpeg`) and cleanup must NOT re-enter the dead worker; the
   `faulted` flag guards every `unmount`/`deleteFile`.
+- **mediabunny fast path** (`ffmpeg/bunny-translate.ts` → `bunny-run.ts`, `bunny-probe.ts`,
+  `fast-path.ts`, `engine.ts`). `translateToMediabunny(parsed)` is pure: one real input, one
+  output in a container mediabunny writes, and every option either maps onto a `Conversion`
+  (`BunnyPlan`) or REJECTS with the option named — never a silent drop, because a wrong accept
+  produces a file the agent did not ask for. `runViaMediabunny` distinguishes `declined`
+  (pre-flight: unreadable container, a track mediabunny would drop on its own — fall back to
+  wasm, which then reports ffmpeg's own error) from `failed` (mid-run — the command's exit
+  code). `FFMPEG_ENGINE` (`auto` | `wasm` | `mediabunny`) is read from the shell env. mediabunny
+  is reached only via `import()` from these modules, so it never rides the boot graph; Vite dev
+  pre-bundles it (`optimizeDeps.include`). Output is still a `BufferTarget` (kernel-worker JS
+  heap, not the wasm heap) — streaming it to disk needs a VFS write stream, which does not exist
+  yet. Under Node/vitest PCM WAV round-trips for real (`bunny-run.test.ts`); WebCodecs codecs
+  decline and fall back, which is the same path a browser without an encoder takes.
 - `getNativeFile` is part of the VFS read surface: `RestrictedFS` gates it like `readFile`
   (answering `null`, the caller's fallback read raises the sandbox ENOENT), `sudo-fs` lists it in
   `READ_ASYNC`, and `VfsAdapter` exposes it beyond just-bash's `IFileSystem` for duck-typing.

@@ -10,13 +10,29 @@ allowed-tools: bash
 
 # ffmpeg / ffprobe
 
-Both commands share one realm-scoped `@ffmpeg/core` wasm instance. There is
-**no separate ffprobe binary** for this pin — `ffprobe` stages the input,
-runs `ffmpeg -hide_banner -i <file>` with no output, parses the Input #N
-banner, and formats a useful subset of fields. Unsupported options are
-rejected by name (never silently dropped).
+Both commands have two engines behind one CLI:
 
-## Install
+- **mediabunny** (WebCodecs, hardware encoders, streams from disk): used
+  automatically for one-input → one-output jobs whose every option it can
+  express — remux, transcode to h264/hevc/vp8/vp9/av1 + aac/opus/mp3/vorbis/
+  flac/pcm, `-ss/-t/-to` trims, `-vf scale/crop/transpose/fps`, `-ac/-ar`,
+  `-b:v/-b:a/-crf`, `-movflags +faststart`, `-metadata`. Needs no install.
+  `ffprobe` answers from its container index (typed fields, no wasm boot).
+- **`@ffmpeg/core` wasm** (ipk-installed): everything else — lavfi sources,
+  `-f concat`, filtergraphs (`drawtext`, `overlay`, `loudnorm`, …), analysis
+  sinks (`-f null`), image/GIF output, codecs the browser lacks.
+
+The choice is automatic and stderr says which engine ran. Force one with
+`FFMPEG_ENGINE=wasm ffmpeg …` (byte-identical ffmpeg behaviour) or
+`FFMPEG_ENGINE=mediabunny ffmpeg …` (fail instead of falling back, and see
+why). Without an explicit `-c`, mediabunny copies streams the container can
+hold rather than re-encoding them.
+
+There is **no separate ffprobe binary**: on the wasm engine `ffprobe` runs
+`ffmpeg -hide_banner -i <file>` with no output and parses the Input #N
+banner. Unsupported options are rejected by name (never silently dropped).
+
+## Install (wasm engine only)
 
 Two cores share one pin. Run `ffmpeg -version`: its `core:` line says which
 one is loaded and, on a cross-origin-isolated leader, whether the faster
@@ -57,7 +73,7 @@ ffprobe -v error -show_entries stream=channels -of csv clip.mp4
 # → stream,1
 ```
 
-Fields sourced from the banner: format `filename` / `format_name` /
+Fields (from mediabunny's index, or the wasm banner as fallback): format `filename` / `format_name` /
 `duration` / `start_time` / `bit_rate`; per-stream `codec_type` /
 `codec_name` / profile / resolution / fps / `sample_rate` / `channels` /
 `channel_layout` / bit rates. Channel layouts with qualifiers

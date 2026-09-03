@@ -500,7 +500,10 @@ export default defineConfig(({ mode }) => ({
     // image-processor) resolves under Vite dev middleware. Without it the
     // worker-side dynamic import never settles in dev and `convert` hangs;
     // the WASM binary itself still loads from the VFS ipk install.
-    include: ['@imagemagick/magick-wasm'],
+    // mediabunny is reached the same way (`import('mediabunny')` from
+    // ffmpeg/bunny-run.ts inside the kernel worker) and needs the same
+    // pre-bundle for the dev middleware.
+    include: ['@imagemagick/magick-wasm', 'mediabunny'],
     esbuildOptions: {
       target: 'esnext',
     },

@@ -1791,6 +1791,47 @@ async function detachAndCleanupMemfs(args: {
   }
 }
 
+/**
+ * mediabunny (WebCodecs) first, for the argv shapes it expresses exactly:
+ * one real input, one output in a container it writes, options that all
+ * map (`ffmpeg/bunny-translate.ts`). Analysis sinks, lavfi, concat and
+ * filtergraphs go straight to the wasm core. `FFMPEG_ENGINE=wasm` skips
+ * this entirely; `FFMPEG_ENGINE=mediabunny` fails instead of falling back.
+ * The module is `import()`ed so mediabunny never rides the boot graph.
+ */
+async function tryMediabunnyFastPath(
+  parsed: ParsedFfmpegInvocation,
+  resolvedInputs: ResolvedInput[],
+  outputPath: string,
+  analysisSink: boolean,
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
+): Promise<Awaited<ReturnType<typeof import('./ffmpeg/fast-path.js').runFfmpegFastPath>>> {
+  const { ffmpegEngineFromEnv } = await import('./ffmpeg/engine.js');
+  const engine = ffmpegEngineFromEnv(ctx.env);
+  const input = resolvedInputs.length === 1 ? resolvedInputs[0].data : null;
+  if (engine === 'wasm' || analysisSink || input === null) {
+    if (engine === 'mediabunny') {
+      return {
+        result: {
+          stdout: '',
+          stderr:
+            'ffmpeg: FFMPEG_ENGINE=mediabunny cannot run this: analysis sinks, lavfi and concat inputs are wasm-only\n',
+          exitCode: 1,
+        },
+      };
+    }
+    return { fallback: true, note: null };
+  }
+  const { runFfmpegFastPath } = await import('./ffmpeg/fast-path.js');
+  return runFfmpegFastPath({
+    parsed,
+    input,
+    outputPath: ctx.fs.resolvePath(ctx.cwd, outputPath),
+    fs: ctx.fs,
+    engine,
+  });
+}
+
 async function runWasmFfmpeg(
   parsed: ParsedFfmpegInvocation,
   ctx: Parameters<Parameters<typeof defineCommand>[1]>[1]
@@ -1804,6 +1845,33 @@ async function runWasmFfmpeg(
 
   const outputPath = parsed.outputPath!;
   const analysisSink = isAnalysisSink(parsed);
+
+  const fast = await tryMediabunnyFastPath(parsed, resolvedInputs, outputPath, analysisSink, ctx);
+  if ('result' in fast) return fast.result;
+  const result = await runOnWasmCore({
+    parsed,
+    ctx,
+    stage,
+    resolvedInputs,
+    outputPath,
+    analysisSink,
+  });
+  // Say why the fast path stepped aside, ahead of the core's own log — but
+  // only once the run is over, so the "core printed nothing" defaults inside
+  // still see an empty log.
+  return fast.note ? { ...result, stderr: `ffmpeg: ${fast.note}\n${result.stderr}` } : result;
+}
+
+/** The wasm core leg: boot (or reuse) the shared instance, stage, exec, read back. */
+async function runOnWasmCore(args: {
+  parsed: ParsedFfmpegInvocation;
+  ctx: Parameters<Parameters<typeof defineCommand>[1]>[1];
+  stage: StageNames;
+  resolvedInputs: ResolvedInput[];
+  outputPath: string;
+  analysisSink: boolean;
+}): Promise<CmdResult> {
+  const { parsed, ctx, stage, resolvedInputs, outputPath, analysisSink } = args;
   const outputName = memfsOutputName(stage, outputPath, analysisSink);
 
   let stderr = '';

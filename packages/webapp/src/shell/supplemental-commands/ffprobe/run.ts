@@ -544,14 +544,50 @@ async function execProbeBanner(
   return null;
 }
 
-async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise<CmdResult> {
-  return withProbeLock(() => runProbeExclusive(parsed, ctx));
+/** Render `info` the way the user asked, or the usual exit-1 shell error. */
+function renderResult(info: ProbeInfo, parsed: ParsedFfprobeArgs, stderr: string): CmdResult {
+  info.format.filename = parsed.inputPath ?? info.format.filename;
+  try {
+    const stdout = renderOutput(info, parsed);
+    return { stdout, stderr: parsed.quiet ? '' : stderr, exitCode: 0 };
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `ffprobe: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
 }
 
-async function runProbeExclusive(
+/**
+ * mediabunny reads the container index lazily and answers with typed
+ * fields — no 31 MB wasm boot, no banner scraping. `null` hands the probe
+ * to the wasm emulation (container mediabunny does not read, or
+ * `FFMPEG_ENGINE=wasm`). The module is `import()`ed so mediabunny never
+ * rides the boot graph.
+ */
+async function tryMediabunnyProbe(
   parsed: ParsedFfprobeArgs,
+  data: Blob,
   ctx: CommandContext
-): Promise<CmdResult> {
+): Promise<CmdResult | null> {
+  const { ffmpegEngineFromEnv } = await import('../ffmpeg/engine.js');
+  const engine = ffmpegEngineFromEnv(ctx.env);
+  if (engine === 'wasm') return null;
+  const { probeViaMediabunny } = await import('../ffmpeg/bunny-probe.js');
+  const info = await probeViaMediabunny(data, parsed.inputPath ?? '');
+  if (info) return renderResult(info, parsed, '');
+  if (engine === 'mediabunny') {
+    return {
+      stdout: '',
+      stderr: 'ffprobe: FFMPEG_ENGINE=mediabunny: input is not a container mediabunny reads\n',
+      exitCode: 1,
+    };
+  }
+  return null;
+}
+
+async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise<CmdResult> {
   if (!parsed.inputPath) {
     return {
       stdout: '',
@@ -567,11 +603,22 @@ async function runProbeExclusive(
       exitCode: 1,
     };
   }
-  // Lazily-read Blob mounted via WORKERFS: the probe only touches the
-  // container headers, so a multi-GB input costs the wasm heap nothing.
+  // Lazily-read Blob: mediabunny slices it; the wasm path mounts it via
+  // WORKERFS. Either way the probe only touches the container headers, so
+  // a multi-GB input costs no heap.
   const data = await readInputBlob(ctx.fs, resolved);
+  const fast = await tryMediabunnyProbe(parsed, data, ctx);
+  if (fast) return fast;
+  return withProbeLock(() => runProbeExclusive(parsed, data, ctx));
+}
+
+async function runProbeExclusive(
+  parsed: ParsedFfprobeArgs,
+  data: Blob,
+  ctx: CommandContext
+): Promise<CmdResult> {
   const stage = newStage();
-  const stagedName = inferMemfsName(parsed.inputPath);
+  const stagedName = inferMemfsName(parsed.inputPath ?? '');
   const memfsName = stagedPath(stage, stagedName);
 
   const loaded = await loadProbeCore(ctx);
@@ -595,7 +642,7 @@ async function runProbeExclusive(
       return fault;
     }
 
-    const info = parseFfmpegProbeLog(probeLog.text, parsed.inputPath);
+    const info = parseFfmpegProbeLog(probeLog.text, parsed.inputPath ?? '');
     if (!info) {
       return {
         stdout: '',
@@ -603,18 +650,7 @@ async function runProbeExclusive(
         exitCode: 1,
       };
     }
-    info.format.filename = parsed.inputPath;
-
-    try {
-      const stdout = renderOutput(info, parsed);
-      return { stdout, stderr: parsed.quiet ? '' : loadLog, exitCode: 0 };
-    } catch (err) {
-      return {
-        stdout: '',
-        stderr: `ffprobe: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
+    return renderResult(info, parsed, loadLog);
   } catch (err) {
     if (isCoreFault(err)) {
       faulted = true;

@@ -1792,3 +1792,123 @@ describe('runWasmFfmpeg lavfi/virtual inputs (NS2b)', () => {
     expect(writeVfs).toHaveBeenCalledWith('/home/out.png', expect.any(Uint8Array));
   });
 });
+
+describe('mediabunny fast path', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  /** A VFS holding one real WAV at /home/tone.wav. */
+  async function wavCtx(env: Record<string, string> = {}) {
+    const { makeWav } = await import('./ffmpeg/wav-fixture.js');
+    const wav = makeWav({ channels: 2, sampleRate: 44100, seconds: 0.2 });
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({
+      fs: {
+        exists: vi.fn(async (p: string) => p === '/home/tone.wav'),
+        readFileBuffer: vi.fn(async (p: string) => {
+          if (p !== '/home/tone.wav') throw new Error(`ENOENT: ${p}`);
+          return wav;
+        }),
+        writeFile,
+      },
+    });
+    for (const [k, v] of Object.entries(env)) ctx.env.set(k, v);
+    return { ctx, writeFile };
+  }
+
+  it('converts a WAV through mediabunny without booting the wasm core', async () => {
+    const { readWavHeader } = await import('./ffmpeg/wav-fixture.js');
+    const { ctx, writeFile } = await wavCtx();
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'tone.wav', '-ac', '1', '-ar', '8000', 'mono.wav'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/engine mediabunny/);
+    expect(result.stderr).toMatch(/wrote mono\.wav/);
+    expect(getFfmpeg).not.toHaveBeenCalled();
+    expect(writeFile).toHaveBeenCalledTimes(1);
+    const [path, bytes] = writeFile.mock.calls[0] as [string, Uint8Array];
+    expect(path).toBe('/home/mono.wav');
+    expect(readWavHeader(bytes)).toMatchObject({ channels: 1, sampleRate: 8000 });
+  }, 20_000);
+
+  it('FFMPEG_ENGINE=wasm skips mediabunny entirely', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+    const { ctx } = await wavCtx({ FFMPEG_ENGINE: 'wasm' });
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'tone.wav', '-ac', '1', 'mono.wav'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(getFfmpeg).toHaveBeenCalledTimes(1);
+    expect(result.stderr).not.toMatch(/mediabunny/);
+  });
+
+  it('falls back to the wasm core, saying why, when mediabunny declines the input', async () => {
+    // Garbage bytes: translatable argv, unreadable container.
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(getFfmpeg).toHaveBeenCalledTimes(1);
+    expect(result.stderr).toMatch(/^ffmpeg: mediabunny declined \(.*\); using the wasm core/);
+  });
+
+  it('stays silent about the fast path for argv it never claims (lavfi, filters)', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-vf', 'drawtext=text=hi', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toMatch(/mediabunny/);
+  });
+
+  it('FFMPEG_ENGINE=mediabunny fails loudly instead of falling back', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0 }));
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'mediabunny');
+
+    const unsupported = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-vf', 'drawtext=text=hi', 'out.mp4'],
+      ctx
+    );
+    expect(unsupported.exitCode).toBe(1);
+    expect(unsupported.stderr).toMatch(/FFMPEG_ENGINE=mediabunny cannot run this: .*drawtext/);
+
+    const declined = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], ctx);
+    expect(declined.exitCode).toBe(1);
+    expect(declined.stderr).toMatch(/mediabunny declined/);
+
+    const sink = await createFfmpegCommand().execute(['-i', 'in.mp4', '-f', 'null', '-'], ctx);
+    expect(sink.exitCode).toBe(1);
+    expect(sink.stderr).toMatch(/wasm-only/);
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it('reports a VFS write failure without blaming either engine', async () => {
+    const { ctx, writeFile } = await wavCtx();
+    writeFile.mockRejectedValue(new Error('EROFS: read-only file system'));
+
+    const result = await createFfmpegCommand().execute(['-i', 'tone.wav', 'copy.wav'], ctx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/cannot write copy\.wav: EROFS/);
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  }, 20_000);
+});
