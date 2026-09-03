@@ -755,6 +755,55 @@ describe('FollowerTrayManager — TRAY_SUPERSEDED redirect', () => {
     );
   });
 
+  it('keeps the hop bound and persistence when the browser auto-follows the 308 (#1957)', async () => {
+    // The hub answers 308 and a browser cannot opt out of following it, so the
+    // first call already lands on the replacement and returns ITS body. The
+    // manager must still see a hop: without it the follower bootstraps against
+    // the new tray while `onJoinUrlChanged` never fires, so every reconnect for
+    // the rest of the session starts from the dead join URL again.
+    const autoFollowed = () => {
+      const response = new Response(
+        JSON.stringify({
+          trayId: 'fresh-tray',
+          controllerId: 'follower-1',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: { action: 'wait', code: 'LEADER_NOT_ELECTED', retryAfterMs: 1000 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+      Object.defineProperty(response, 'redirected', { value: true });
+      Object.defineProperty(response, 'url', {
+        value: 'https://tray.example.com/join/fresh-tray.secret?json=true',
+      });
+      return response;
+    };
+
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => autoFollowed())
+      .mockImplementationOnce(async () => terminalFailResponse('fresh-tray'));
+    const onJoinUrlChanged = vi.fn();
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep: async () => {},
+      onJoinUrlChanged,
+    });
+
+    await expect(manager.start()).rejects.toThrow('Tray expired');
+    expect(onJoinUrlChanged).toHaveBeenCalledExactlyOnceWith(
+      'https://tray.example.com/join/fresh-tray.secret'
+    );
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      'https://tray.example.com/join/fresh-tray.secret?json=true'
+    );
+  });
+
   it('follows a header-only redirect whose body never says TRAY_SUPERSEDED (#1957)', async () => {
     // Step 2 of #1957 turns this body into `action: "redirect"`; a follower
     // that keys off the fail code would strand here, one that reads the

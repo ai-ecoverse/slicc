@@ -4,6 +4,7 @@ import {
   ElectronTrayFollower,
   FOLLOWER_RUNTIME_TAG,
   normalizeIceServers,
+  redirectLocation,
   TrayFollowerSignaling,
 } from '../src/electron-tray-follower.js';
 
@@ -145,6 +146,52 @@ describe('TrayFollowerSignaling', () => {
     const { body, supersededByJoinUrl } = await sig.attach('c', 'r');
     expect(body).toEqual({});
     expect(supersededByJoinUrl).toBe('https://tray.example/join/new');
+  });
+
+  it('suppresses redirect-following so the 308 supersede hop stays ours (#1957)', async () => {
+    let init: RequestInit | undefined;
+    const capture = (async (_url: string, options: RequestInit) => {
+      init = options;
+      return new Response(null, { status: 308 });
+    }) as unknown as typeof fetch;
+    const sig = new TrayFollowerSignaling('https://tray.example/join/abc', capture);
+    await sig.attach('c', 'r');
+    // Letting undici follow it would connect to the replacement but leave this
+    // client pointed at the dead tray, re-hopping on every later reconnect.
+    expect(init?.redirect).toBe('manual');
+  });
+
+  it('falls back to the 308 Location when no successor-version link is present', async () => {
+    const redirecting = (async () =>
+      new Response(null, {
+        status: 308,
+        // The hub puts `json=true` on Location for platforms that auto-follow;
+        // this client re-appends nothing, so it must not be carried forward.
+        headers: { Location: 'https://tray.example/join/new?json=true' },
+      })) as typeof fetch;
+    const sig = new TrayFollowerSignaling('https://tray.example/join/abc', redirecting);
+    expect((await sig.attach('c', 'r')).supersededByJoinUrl).toBe('https://tray.example/join/new');
+  });
+});
+
+describe('redirectLocation', () => {
+  it('reads a 3xx Location and strips the hub probe parameter', () => {
+    expect(redirectLocation(308, 'https://tray.example/join/new?json=true')).toBe(
+      'https://tray.example/join/new'
+    );
+    expect(redirectLocation(307, 'https://tray.example/join/new')).toBe(
+      'https://tray.example/join/new'
+    );
+  });
+
+  it('ignores a Location that is not on a redirect, absent, relative, or unparseable', () => {
+    expect(redirectLocation(200, 'https://tray.example/join/new')).toBeNull();
+    expect(redirectLocation(409, 'https://tray.example/join/new')).toBeNull();
+    expect(redirectLocation(308, null)).toBeNull();
+    // A relative target would have to be resolved against the request URL; the
+    // hub always sends an absolute one, so treat anything else as "no hop"
+    // rather than guessing at a tray address.
+    expect(redirectLocation(308, '/join/new')).toBeNull();
   });
 });
 

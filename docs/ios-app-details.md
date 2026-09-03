@@ -28,7 +28,7 @@ Nested horizontal content keeps a drag while it can scroll that way; scoop navig
 
 iCloud keeps advertising the **old** tray after a leader reconnects. `SessionReachability` and both attach loops must follow the supersede chain (`SupersedeRedirect`, which also moves the tray the connection owns) or a row reads live but cannot connect.
 
-The hop is named twice: in the 409 body (`code: "TRAY_SUPERSEDED"`, `joinUrl`) and as an RFC 5829 `Link: <replacement>; rel="successor-version"` header (`SupersedeLink`, #1957). **The link wins and stands alone** — the chase is gated on having a replacement address, never on the failure code, so a body shape this build does not model (or cannot decode) is not a dead end. Reading the code instead is what stranded the follower in #1956. Bounds stay ours: 5 hops, 1s apart, redirects never auto-followed by `URLSession`.
+The hop is named three times: as the 308's `Location`, as an RFC 5829 `Link: <replacement>; rel="successor-version"` header (`SupersedeLink`, #1957), and in the body (`code: "TRAY_SUPERSEDED"`, `joinUrl`, `action: "redirect"`; `action: "fail"` on a hub that predates the flip). **The link wins and any one of them stands alone** — the chase is gated on having a replacement address, never on the failure code, so a body shape this build does not model (or cannot decode) is not a dead end. Reading the code instead is what stranded the follower in #1956. Bounds stay ours: 5 hops, 1s apart, and `URLSession` never follows the 308 itself — `TraySignalingClient`'s default session installs `NoRedirectDelegate`, because a followed redirect connects but hides the move, leaving `activeJoinUrl` pointed at the dead tray.
 
 ## Recent joins
 

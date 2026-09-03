@@ -52,6 +52,25 @@ const SIGNALLING_TIMEOUT_MS = 10_000;
  *  it without limit (`cursor` already gates re-delivery; this is belt-only). */
 const MAX_SEEN_EVENTS = 512;
 
+/**
+ * The replacement join URL carried by a suppressed 3xx, or null. The hub's
+ * `Location` carries `json=true` (#1957) because platforms that auto-follow the
+ * redirect need it; this client re-appends nothing, so the parameter is dropped
+ * here rather than persisted into the next signaling client's join URL. A
+ * relative or unparseable target yields null, which the caller treats as "no
+ * replacement named" — never as a hop to a nonexistent tray.
+ */
+export function redirectLocation(status: number, location: string | null): string | null {
+  if (status < 300 || status >= 400 || !location) return null;
+  try {
+    const url = new URL(location);
+    url.searchParams.delete('json');
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 interface IceServerConfig {
   urls: string | string[];
   username?: string;
@@ -118,10 +137,17 @@ export class TrayFollowerSignaling {
   /**
    * Attach to the tray. Unlike poll/answer/ice, this tolerates a non-OK status
    * and returns the decoded body: the tray signals `TRAY_SUPERSEDED` with an
-   * HTTP 409 + a replacement `joinUrl`, and `wait` plans (leader not yet
-   * elected/connected) can also arrive on a non-2xx status. Throwing before
-   * decoding — as `post()` does — would strand the follower on both.
-   * `attachWithRedirects` interprets `result.code` / `result.action`.
+   * HTTP 308 + a replacement `joinUrl` (409 on hubs that predate #1957), and
+   * `wait` plans (leader not yet elected/connected) can also arrive on a
+   * non-2xx status. Throwing before decoding — as `post()` does — would strand
+   * the follower on both. `attachWithRedirects` interprets `result.code` /
+   * `result.action`.
+   *
+   * `redirect: 'manual'` keeps the supersede hop ours: undici surfaces the 308
+   * itself, headers intact, so `attachWithRedirects` keeps its own hop bound
+   * and reconstructs its signaling client against the replacement. Letting
+   * undici follow it instead would connect but leave `this.signaling` pointed
+   * at the dead tray, re-hopping on every reconnect for the rest of the run.
    */
   async attach(
     controllerId: string,
@@ -135,6 +161,7 @@ export class TrayFollowerSignaling {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ controllerId, runtime }),
+      redirect: 'manual',
       signal: AbortSignal.timeout(SIGNALLING_TIMEOUT_MS),
     });
     let body: TraySignalingReply = {};
@@ -149,7 +176,11 @@ export class TrayFollowerSignaling {
     return {
       status: res.status,
       body,
-      supersededByJoinUrl: successorVersionFromLinkHeader(res.headers.get('Link')),
+      // The link is preferred over `Location`: it is the canonical join URL,
+      // while `Location` carries the hub's `json=true` probe parameter (#1957).
+      supersededByJoinUrl:
+        successorVersionFromLinkHeader(res.headers.get('Link')) ??
+        redirectLocation(res.status, res.headers.get('Location')),
     };
   }
   poll(controllerId: string, bootstrapId: string, cursor: number): Promise<TraySignalingReply> {
@@ -230,10 +261,11 @@ export class ElectronTrayFollower {
   /**
    * Attach to the tray, resolving the non-terminal attach outcomes the worker
    * returns before a bootstrap is available:
-   *  - superseded (HTTP 409 + `joinUrl`, and/or a `successor-version` `Link`
-   *    header): the leader reconnected onto a fresh tray — follow the redirect
-   *    (bounded hops). The link alone is enough, so a body shape this client
-   *    does not recognize is not a dead end (#1957).
+   *  - superseded (HTTP 308 + `Location`, plus a `successor-version` `Link`
+   *    header and a `joinUrl` in the body; 409 on hubs that predate #1957): the
+   *    leader reconnected onto a fresh tray — follow the redirect (bounded
+   *    hops). Any one of the three is enough, so a body shape this client does
+   *    not recognize is not a dead end (#1957).
    *  - `wait` (leader not yet elected/connected, carries `retryAfterMs`): sleep
    *    then re-attach (bounded), as the shared Swift/Go followers do — otherwise
    *    a follower that raced leader election resolves "started" but is never

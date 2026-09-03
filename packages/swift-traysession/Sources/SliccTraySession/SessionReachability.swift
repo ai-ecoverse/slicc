@@ -38,7 +38,14 @@ public final class SessionReachability {
         // applies independently to every supersede-chain hop.
         config.timeoutIntervalForRequest = 4
         config.timeoutIntervalForResource = 4
-        let session = URLSession(configuration: config)
+        // The delegate reports the hub's 308 (#1957) instead of following it, so
+        // this probe keeps its own chain policy: five hops, and the four-second
+        // budget above applied PER hop rather than to whatever chain URLSession
+        // decides to walk. It also keeps `json=true` on every request — a
+        // followed redirect would drop it and land on the SPA fallback, which
+        // answers 200 + HTML and would make a live replacement look dead.
+        let session = URLSession(
+            configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
         self.init(maxSupersedeRedirects: 5) { request in
             try await session.data(for: request)
         }
@@ -80,12 +87,14 @@ public final class SessionReachability {
             else { return .unreachable }
             let payload = try? JSONDecoder().decode(ProbePayload.self, from: data)
 
-            // #1957: the hub names the replacement twice — as an RFC 5829
-            // `successor-version` link, and in the body it has always used. The
-            // link wins, stands alone (a body this build cannot decode is not a
-            // dead end), and outranks the terminal 200 below: a tray that has
-            // moved is not the tray to report on, whatever else it answered.
-            let linkSuccessor = SupersedeLink.successor(in: http)
+            // #1957: the hub names the replacement three times — as an RFC 5829
+            // `successor-version` link, as the 308's `Location`, and in the body
+            // it has always used. The link wins, any one of them stands alone (a
+            // body this build cannot decode is not a dead end), and all of them
+            // outrank the terminal 200 below: a tray that has moved is not the
+            // tray to report on, whatever else it answered.
+            let linkSuccessor =
+                SupersedeLink.successor(in: http) ?? SupersedeLink.redirectTarget(in: http)
 
             if http.statusCode == 200, let payload, linkSuccessor == nil {
                 return payload.leader?.connected == true ? .reachable : .unreachable

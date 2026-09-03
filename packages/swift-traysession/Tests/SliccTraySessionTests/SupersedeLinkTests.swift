@@ -123,4 +123,49 @@ final class SupersedeLinkTests: XCTestCase {
             SupersedeLink.successor(in: response)?.absoluteString,
             "https://www.sliccy.ai/join/a.b")
     }
+    // MARK: - redirectTarget (the 308 `Location`, #1957)
+
+    private func httpResponse(status: Int, headers: [String: String]) -> HTTPURLResponse {
+        HTTPURLResponse(
+            url: URL(string: "https://www.sliccy.ai/join/old.b")!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers)!
+    }
+
+    func testRedirectTargetStripsTheHubProbeParameter() {
+        // `json=true` is on Location for clients that auto-follow; a client that
+        // reads the header appends its own and must not persist the hub's.
+        XCTAssertEqual(
+            SupersedeLink.redirectTarget(
+                in: httpResponse(
+                    status: 308,
+                    headers: ["Location": "https://www.sliccy.ai/join/a.b?json=true"]))?
+                .absoluteString,
+            "https://www.sliccy.ai/join/a.b")
+        XCTAssertEqual(
+            SupersedeLink.redirectTarget(
+                in: httpResponse(
+                    status: 308,
+                    headers: ["Location": "https://www.sliccy.ai/join/a.b?x=1&json=true"]))?
+                .absoluteString,
+            "https://www.sliccy.ai/join/a.b?x=1")
+    }
+
+    func testRedirectTargetIgnoresNonRedirectsAndUnusableTargets() {
+        // Only a 3xx names a replacement; a 409's Location (if any) is noise.
+        XCTAssertNil(
+            SupersedeLink.redirectTarget(
+                in: httpResponse(
+                    status: 409, headers: ["Location": "https://www.sliccy.ai/join/a.b"])))
+        XCTAssertNil(SupersedeLink.redirectTarget(in: httpResponse(status: 308, headers: [:])))
+        // Relative and scheme-less targets would have to be resolved against a
+        // guessed base — report no hop instead.
+        XCTAssertNil(
+            SupersedeLink.redirectTarget(
+                in: httpResponse(status: 308, headers: ["Location": "/join/a.b"])))
+        XCTAssertNil(
+            SupersedeLink.redirectTarget(
+                in: httpResponse(status: 308, headers: ["Location": "//www.sliccy.ai/join/a.b"])))
+    }
 }

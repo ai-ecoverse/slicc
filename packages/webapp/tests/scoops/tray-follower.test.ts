@@ -155,6 +155,90 @@ describe('tray-follower', () => {
     });
   });
 
+  it('normalizes the 308 redirect body into the supersede plan (#1957)', () => {
+    expect(
+      normalizeFollowerAttachResponse({
+        trayId: 'stale-tray',
+        controllerId: 'follower-2',
+        role: 'follower',
+        leader: null,
+        participantCount: 1,
+        result: {
+          action: 'redirect',
+          code: 'TRAY_SUPERSEDED',
+          error: 'This session moved to a new tray after the leader reconnected',
+          joinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+        },
+      })
+    ).toEqual({
+      trayId: 'stale-tray',
+      controllerId: 'follower-2',
+      participantCount: 1,
+      leader: null,
+      // The plan keeps three actions; `redirect` is a wire shape, not a plan.
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      error: 'This session moved to a new tray after the leader reconnected',
+      supersededByJoinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+    });
+  });
+
+  it('reports a platform-followed redirect as a supersede hop, discarding the followed body', async () => {
+    // A browser cannot suppress redirect-following (`redirect: 'manual'` yields
+    // an opaque response), so by the time this resolves the POST has already
+    // landed on the replacement and the body below is the NEW tray's live
+    // attach result. It must still be reported as a hop, or the follower
+    // bootstraps against a tray whose join URL it never persists.
+    const followed = new Response(
+      JSON.stringify({
+        trayId: 'fresh-tray',
+        controllerId: 'follower-1',
+        role: 'follower',
+        leader: { controllerId: 'leader-1', connected: true, reconnectDeadline: null },
+        participantCount: 1,
+        result: {
+          action: 'signal',
+          code: 'LEADER_CONNECTED',
+          bootstrap: {
+            controllerId: 'follower-1',
+            bootstrapId: 'boot-1',
+            attempt: 1,
+            state: 'awaiting_offer',
+            expiresAt: '2026-03-11T01:00:00.000Z',
+            cursor: 0,
+            maxRetries: 3,
+            retriesRemaining: 3,
+          },
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+    Object.defineProperty(followed, 'redirected', { value: true });
+    Object.defineProperty(followed, 'url', {
+      value: 'https://tray.example.com/join/fresh-tray.deadbeef?json=true',
+    });
+
+    await expect(
+      attachTrayFollower({
+        joinUrl: 'https://tray.example.com/join/token',
+        controllerId: 'follower-1',
+        runtime: 'electron',
+        fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(followed),
+      })
+    ).resolves.toEqual({
+      trayId: '',
+      controllerId: 'follower-1',
+      participantCount: 0,
+      leader: null,
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      // `json=true` rides on the hub's `Location` so an auto-followed request
+      // reaches the API rather than the SPA — it must not reach the caller,
+      // which persists this as the session's join URL.
+      supersededByJoinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+    });
+  });
+
   it('rejects a TRAY_SUPERSEDED response missing joinUrl', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

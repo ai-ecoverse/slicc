@@ -69,15 +69,31 @@ start/resume flows:
 - Followers attach via the join capability; bootstrap over HTTP poll
   (poll/answer/ice-candidate/retry actions).
 - **Superseded tray** (`POST /api/tray/:trayId/supersede`, leader-only): once a tray is
-  marked superseded, both `/join/:token` shapes answer `409` +
-  `code: "TRAY_SUPERSEDED"` with the replacement's `joinUrl` in the body, plus an
-  RFC 8288 `Link: <joinUrl>; rel="successor-version"` header (RFC 5829) carrying the
-  same redirect in machine-readable form (issue #1957, step 1 — additive; the status
-  and body are unchanged for shipped followers). The header target is normalized
-  through `URL` so a stored join URL can't inject a header delimiter, and
-  `Access-Control-Expose-Headers: Link` is set on the capability CORS surface so a
-  cross-origin follower can read it. Step 2 (flip to `308` + `Location`) is gated on
-  a client capability opt-in.
+  marked superseded, both `/join/:token` shapes answer `308 Permanent Redirect` +
+  `Location: <joinUrl>`, an RFC 8288 `Link: <joinUrl>; rel="successor-version"` header
+  (RFC 5829), and a JSON body carrying `code: "TRAY_SUPERSEDED"` + `joinUrl` with
+  `result.action: "redirect"` on the attach shape (issue #1957). 308 over 409 because
+  the old tray's leader socket never reconnects — nothing is retryable — and over
+  301/302/307 because the move is permanent and the attach `POST`'s method and body
+  must survive it.
+  - **Three channels, one address, deliberately.** `Location` is for a client that lets
+    its platform follow the redirect; the link is for one that suppresses it (all five
+    SLICC followers do); the body is for a hub-shape a client cannot decode. Every
+    follower prefers the link, and treats any named replacement as a hop regardless of
+    status or `action`.
+  - **`Location` carries `json=true` when the superseded request had it; the link never
+    does.** A followed request that lost the parameter lands on the SPA fallback, which
+    answers `200` + HTML for a `GET` probe and would make a live replacement look dead.
+    The link stays bare because it is what followers persist as the session's join URL.
+  - Both header targets are normalized through `URL`, so a stored join URL cannot inject
+    a header delimiter. A replacement that does not parse keeps the old `409` +
+    `action: "fail"` shape — a redirect needs a target.
+  - `Access-Control-Expose-Headers: Link` is set on the capability CORS surface so a
+    cross-origin follower can read the link. Note that `applySliccLinks` skips 3xx, so
+    a supersede response carries the successor link **without** the standard rel set.
+  - Shipped pre-#1957 followers degrade rather than break: their platforms follow the
+    308 and re-POST, so they connect to the replacement but do not persist it, and
+    re-walk the redirect on each reconnect until updated.
 - Preview bridge tabs (`serve --bridge`) attach via `/__slicc/bridge` WS. DO relays
   `bridge.cdp.request`/`bridge.cdp.response` between leader and each bridge socket,
   keyed by `connId`. On leader (re)connect the DO replays `bridge.connected` for every

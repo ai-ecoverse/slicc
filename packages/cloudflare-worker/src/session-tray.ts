@@ -44,7 +44,7 @@ import {
   handleProviderTokenRequest,
   SharedProviderTokenSource,
 } from './apns-provider-token.js';
-import { supersededLinkHeaders } from './links.js';
+import { supersededLinkHeaders, supersededLocation } from './links.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type BiscottoDeps, dispatchBiscottoRoute } from './session-tray-biscotto.js';
@@ -605,7 +605,7 @@ export class SessionTrayDurableObject {
     // before the expiry gate: a superseded tray is a more actionable signal
     // than a generic expiry, and supersession can be set before expiry hits.
     if (tray.supersededByJoinUrl) {
-      return await this.supersededResponse(tray.supersededByJoinUrl, joinRequest);
+      return await this.supersededResponse(tray.supersededByJoinUrl, joinRequest, url);
     }
 
     const expiration = await this.ensureTrayIsActive();
@@ -672,25 +672,50 @@ export class SessionTrayDurableObject {
   }
 
   /**
-   * The 409 that redirects a follower to the tray that replaced this one.
-   * Step 1 of #1957: the status and body stay exactly as shipped clients
-   * parse them; the RFC 5829 `successor-version` link is the additive
-   * machine-readable form of the same redirect. Clients that don't know the
-   * rel ignore the header.
+   * The redirect that sends a follower to the tray that replaced this one.
+   *
+   * Step 2 of #1957: `308 Permanent Redirect` + `Location`, because the old
+   * tray's leader socket will never reconnect (see `ensureTrayIsActive`) and
+   * nothing here is retryable — which is what a 409 claimed for two releases.
+   * 308 over 301/302 so the method and body of the attach `POST` survive the
+   * hop, and over 307 because the move is permanent.
+   *
+   * The JSON body and the `successor-version` link both stay: a redirect
+   * response may carry a body, the link is what clients persist (it has no
+   * `json=true` on it, unlike `Location`), and the `error` string is still the
+   * only human-readable account of what happened. Only `result.action` changes,
+   * from `fail` to `redirect` — safe because every client that suppresses
+   * redirect-following keys off the link or `code` rather than `action`, and
+   * every client that does not suppress them never sees this body at all.
+   *
+   * A replacement that does not parse as a URL keeps the old 409 `fail` shape:
+   * there is no target, so the outcome really is terminal and a 3xx would be a
+   * redirect to nowhere.
    */
   private async supersededResponse(
     joinUrl: string,
-    joinRequest: JoinRequest | null
+    joinRequest: JoinRequest | null,
+    requestUrl: URL
   ): Promise<Response> {
     const error = 'This session moved to a new tray after the leader reconnected';
-    const linkHeaders = supersededLinkHeaders(joinUrl);
+    const location = supersededLocation(joinUrl, requestUrl);
+    const headers = {
+      ...supersededLinkHeaders(joinUrl),
+      ...(location ? { Location: location } : {}),
+    };
+    const status = location ? 308 : 409;
     if (joinRequest) {
       return await this.buildFollowerAttachResponse(
         joinRequestControllerId(joinRequest),
-        { action: 'fail', code: 'TRAY_SUPERSEDED', error, joinUrl },
-        409,
+        {
+          action: location ? 'redirect' : 'fail',
+          code: 'TRAY_SUPERSEDED',
+          error,
+          joinUrl,
+        },
+        status,
         undefined,
-        linkHeaders
+        headers
       );
     }
     return jsonResponse(
@@ -701,8 +726,8 @@ export class SessionTrayDurableObject {
         code: 'TRAY_SUPERSEDED',
         joinUrl,
       },
-      409,
-      linkHeaders
+      status,
+      headers
     );
   }
 

@@ -22,6 +22,18 @@ function appendJsonParam(url: string): string {
   return u.toString();
 }
 
+/**
+ * Undo {@link appendJsonParam} so a followed redirect yields the canonical
+ * join URL. The hub puts `json=true` on the supersede `Location` (#1957) —
+ * without it a followed request lands on the SPA fallback — but the parameter
+ * is a probe detail and must not end up in the persisted session URL.
+ */
+function stripJsonParam(url: string): string {
+  const u = new URL(url);
+  u.searchParams.delete('json');
+  return u.toString();
+}
+
 export interface FollowerAttachOptions extends FollowerJoinRequest {
   joinUrl: string;
   fetchImpl?: typeof fetch;
@@ -83,10 +95,39 @@ export async function attachTrayFollower(
     }),
   });
 
+  // The hub answers a superseded tray with a 308 (#1957), and a browser cannot
+  // opt out of following one: `redirect: 'manual'` yields an opaque-redirect
+  // filtered response with no status, headers or body, even same-origin. So the
+  // hop has already happened here and `response.url` is the only place the
+  // replacement survives — the final response's headers belong to the new tray.
+  //
+  // The followed body is discarded rather than used. Reporting the hop instead
+  // keeps ONE supersede path for every caller: `FollowerTrayManager` still owns
+  // the bound (MAX_SUPERSEDE_REDIRECTS), the inter-hop delay, and the
+  // `onJoinUrlChanged` persistence that a silently-followed redirect would skip
+  // — at the cost of re-attaching to the replacement explicitly.
+  if (response.redirected && response.url) {
+    const followed = stripJsonParam(response.url);
+    log.info('Follower tray attach was redirected, reporting the replacement', {
+      requested: options.joinUrl,
+      followed,
+    });
+    return {
+      trayId: '',
+      controllerId: options.controllerId ?? '',
+      participantCount: 0,
+      leader: null,
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      supersededByJoinUrl: followed,
+    };
+  }
+
   // #1957: a superseded tray states the replacement twice — in the body, and
   // as an RFC 5829 `successor-version` link. The header is the channel that
   // survives a body-shape change, so it wins when both are present and it
-  // alone is enough to follow the hop.
+  // alone is enough to follow the hop. Reachable when redirect-following is
+  // suppressed (non-browser `fetchImpl`) or against a hub that predates 308.
   const successorFromLink = successorVersionFromLinkHeader(response.headers.get('Link'));
 
   let body: FollowerAttachResponse;
@@ -129,7 +170,11 @@ export function normalizeFollowerAttachResponse(
     controllerId: response.controllerId,
     participantCount: response.participantCount,
     leader: response.leader,
-    action: response.result.action,
+    // `FollowerAttachPlan` keeps its three-action surface: the 308 body's
+    // `redirect` (#1957) always carries `TRAY_SUPERSEDED` and is normalized to
+    // the supersede plan just below, so the only way it survives this far is a
+    // hub that named a replacement of `''` — a bug, and terminal either way.
+    action: response.result.action === 'redirect' ? ('fail' as const) : response.result.action,
     code: response.result.code,
     iceServers: response.iceServers,
     trust: response.trust,
@@ -142,7 +187,8 @@ export function normalizeFollowerAttachResponse(
   // that reads this plan.
   const supersededByJoinUrl =
     successorFromLink ??
-    (response.result.action === 'fail' && response.result.code === 'TRAY_SUPERSEDED'
+    ((response.result.action === 'fail' || response.result.action === 'redirect') &&
+    response.result.code === 'TRAY_SUPERSEDED'
       ? response.result.joinUrl
       : undefined);
   if (supersededByJoinUrl) {
@@ -347,6 +393,15 @@ function isFollowerAttachResponse(value: unknown): value is FollowerAttachRespon
     return (
       attachResult['code'] === 'LEADER_CONNECTED' &&
       isTrayBootstrapStatus(attachResult['bootstrap'])
+    );
+  }
+  // `redirect` is the 308 supersede shape, `fail` the 409 one a pre-#1957 hub
+  // (or an unparseable replacement) still answers with.
+  if (attachResult['action'] === 'redirect') {
+    return (
+      attachResult['code'] === 'TRAY_SUPERSEDED' &&
+      typeof attachResult['error'] === 'string' &&
+      typeof attachResult['joinUrl'] === 'string'
     );
   }
   if (attachResult['action'] === 'fail') {

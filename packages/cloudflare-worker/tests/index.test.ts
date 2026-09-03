@@ -2024,7 +2024,7 @@ describe('POST /api/tray/:trayId/supersede', () => {
     expect(response.status).toBe(400);
   });
 
-  it('redirects a follower join with TRAY_SUPERSEDED once the tray is marked superseded', async () => {
+  it('redirects a follower join with a 308 once the tray is marked superseded', async () => {
     const { env } = createTestHarness();
     const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
     const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
@@ -2051,21 +2051,61 @@ describe('POST /api/tray/:trayId/supersede', () => {
       env
     );
 
-    expect(followerAttach.status).toBe(409);
+    // 308, not 409: the old tray's leader socket never reconnects, so nothing
+    // here is retryable, and 308 keeps the attach POST's method and body across
+    // the hop (#1957).
+    expect(followerAttach.status).toBe(308);
+    expect(followerAttach.headers.get('Location')).toBe(freshJoinUrl);
     expect(followerAttach.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
     await expect(followerAttach.json()).resolves.toMatchObject({
       trayId,
       controllerId: 'follow-1',
       role: 'follower',
       result: {
-        action: 'fail',
+        action: 'redirect',
         code: 'TRAY_SUPERSEDED',
         joinUrl: freshJoinUrl,
       },
     });
   });
 
-  it('returns TRAY_SUPERSEDED on a plain GET status probe once marked superseded', async () => {
+  it('carries json=true onto the supersede Location but not the successor link', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
+
+    await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: freshJoinUrl }),
+      }),
+      env
+    );
+
+    const attachUrl = new URL(joinUrl);
+    attachUrl.searchParams.set('json', 'true');
+    const followerAttach = await handleWorkerRequest(
+      new Request(attachUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'follow-1', runtime: 'electron' }),
+      }),
+      env
+    );
+
+    // A client that lets its platform follow the 308 must land back on the API,
+    // not the SPA fallback — which answers 200 + HTML and would make a live
+    // replacement look dead. The link stays bare: it is what followers persist.
+    expect(followerAttach.status).toBe(308);
+    expect(followerAttach.headers.get('Location')).toBe(`${freshJoinUrl}?json=true`);
+    expect(followerAttach.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
+  });
+
+  it('returns a 308 on a plain GET status probe once marked superseded', async () => {
     const { env } = createTestHarness();
     const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
     const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
@@ -2086,7 +2126,8 @@ describe('POST /api/tray/:trayId/supersede', () => {
     probeUrl.searchParams.set('json', 'true');
     const probe = await handleWorkerRequest(new Request(probeUrl), env);
 
-    expect(probe.status).toBe(409);
+    expect(probe.status).toBe(308);
+    expect(probe.headers.get('Location')).toBe(`${freshJoinUrl}?json=true`);
     expect(probe.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
     await expect(probe.json()).resolves.toMatchObject({
       trayId,
@@ -2123,17 +2164,22 @@ describe('POST /api/tray/:trayId/supersede', () => {
       env
     );
 
-    expect(followerAttach.status).toBe(409);
+    expect(followerAttach.status).toBe(308);
     expect(followerAttach.headers.get('Link')).toBe(
       '<https://www.sliccy.ai/join/fresh%3Eevil.deadbeef>; rel="successor-version"'
     );
-    // The body keeps the value verbatim — only the header target is normalized.
+    // Location is normalized through the same `URL` pass, so neither header can
+    // carry a raw delimiter out of a stored join URL.
+    expect(followerAttach.headers.get('Location')).toBe(
+      'https://www.sliccy.ai/join/fresh%3Eevil.deadbeef'
+    );
+    // The body keeps the value verbatim — only the header targets are normalized.
     await expect(followerAttach.json()).resolves.toMatchObject({
       result: { code: 'TRAY_SUPERSEDED', joinUrl: hostileJoinUrl },
     });
   });
 
-  it('keeps the successor-version link alongside the standard rel set through worker.fetch', async () => {
+  it('keeps the successor-version link through worker.fetch, without the standard rel set', async () => {
     const { env } = createTestHarness();
     const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
     const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
@@ -2154,10 +2200,13 @@ describe('POST /api/tray/:trayId/supersede', () => {
     probeUrl.searchParams.set('json', 'true');
     const probe = await worker.fetch(new Request(probeUrl), env);
 
-    expect(probe.status).toBe(409);
+    // `applySliccLinks` skips 3xx, so the supersede response no longer carries
+    // the standard discovery rels — the one link a follower needs is set by the
+    // tray DO itself and survives the wrapper.
+    expect(probe.status).toBe(308);
     const link = probe.headers.get('Link') ?? '';
-    expect(link).toContain(`<${freshJoinUrl}>; rel="successor-version"`);
-    expect(link).toContain('rel="api-catalog"');
+    expect(link).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
+    expect(link).not.toContain('rel="api-catalog"');
   });
 });
 
@@ -2197,6 +2246,25 @@ describe('standard Link header set', () => {
     // must degrade to "no header", never to a malformed one.
     expect(successorVersionLink('not-a-url')).toBeNull();
     expect(supersededLinkHeaders('not-a-url')).toEqual({});
+  });
+
+  it('supersededLocation propagates json=true and refuses a non-URL target', async () => {
+    const { supersededLocation } = await import('../src/links.js');
+    const fresh = 'https://www.sliccy.ai/join/fresh.deadbeef';
+
+    expect(supersededLocation(fresh, new URL('https://www.sliccy.ai/join/old.beef'))).toBe(fresh);
+    expect(
+      supersededLocation(fresh, new URL('https://www.sliccy.ai/join/old.beef?json=true'))
+    ).toBe(`${fresh}?json=true`);
+    // Only the exact opt-in value counts, matching `wantsJSON`.
+    expect(supersededLocation(fresh, new URL('https://www.sliccy.ai/join/old.beef?json=1'))).toBe(
+      fresh
+    );
+    // No target means no redirect: the caller must keep the terminal 409 rather
+    // than emit a 3xx pointing nowhere.
+    expect(supersededLocation('not-a-url', new URL('https://www.sliccy.ai/join/old.beef'))).toBe(
+      null
+    );
   });
 });
 
