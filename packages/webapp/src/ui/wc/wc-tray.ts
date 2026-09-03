@@ -29,7 +29,6 @@ import {
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
 import type {
-  ScoopSummary,
   TrayModelCatalogEntry,
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
@@ -51,8 +50,8 @@ import {
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { toKernelSudoRequest } from '../../sudo/leader-request.js';
-import { modelForUnit } from '../../work-unit/client/presentation.js';
-import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
+import { modelForUnit, toTabDescriptors } from '../../work-unit/client/presentation.js';
+import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { parseQualifiedModelId, qualifiedModelId, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
@@ -83,7 +82,9 @@ import {
   type LockManagerLike,
   requestLeaderLock,
 } from '../tray-leader-lock.js';
-import type { AgentHandle } from '../types.js';
+import type { AgentHandle, ChatMessage } from '../types.js';
+import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
+import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import {
   LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
   LEADER_MODEL_CATALOG_CHANGED_EVENT,
@@ -97,8 +98,9 @@ import type { WcChatController } from './wc-chat-controller.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
-import type { WcShellRefs } from './wc-shell.js';
-import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
+import { scoopColor } from './wc-scoop-color.js';
+import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
+import { toScoopSummaries } from './wc-tray-scoops.js';
 import { rootForSelection } from './wc-unit-context.js';
 
 export interface WcTrayDeps {
@@ -293,29 +295,42 @@ export function buildFollowerOptions(
   const { browser, client, getController } = deps;
   let selectedScoopJid: string | null = null;
   /**
-   * Last roster the leader sent. `toFollowerSwitcherScoops` orders the SELECTED
-   * cone's scoops ahead of the rest, so a local selection has to re-publish the
-   * descriptors — this leader-capable float is the third follower wiring path
-   * (with `wc-follower.ts` and the leader's own `wc-live.ts`) and needs the same
-   * behaviour (#2272).
+   * This float's own half of the client protocol (#2382 PR D). It follows
+   * ANOTHER leader, so its roster, transcript and model all come from the tray
+   * — never from `deps.client`, which is the local kernel and describes
+   * different units entirely. Until this landed it was the third follower
+   * wiring, rendering through the legacy `toFollowerSwitcherScoops` while the
+   * other two had moved to `toTabDescriptors`.
    */
-  let followerScoops: readonly ScoopSummary[] = [];
+  const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
   const publishFollowerScoops = (): void => {
-    deps.refs.switcher.scoops = toFollowerSwitcherScoops(followerScoops, selectedScoopJid);
+    deps.refs.switcher.scoops = toTabDescriptors(
+      workUnits.currentUnits(),
+      selectedScoopJid,
+      scoopColor
+    ) as SwitcherScoop[];
+  };
+  /** The live per-unit transcript subscription; re-pointed with the selection. */
+  let unitWatch: Unsubscribe | null = null;
+  const watchUnit = (jid: string): void => {
+    unitWatch?.();
+    unitWatch = workUnits.subscribe(jid, (event) => {
+      if (event.type !== 'snapshot' || selectedScoopJid !== jid) return;
+      const messages = event.snapshot.messages as unknown as ChatMessage[];
+      const controller = getController();
+      controller?.loadMessages(messages, event.snapshot.queuedIds);
+      controller?.setProcessing(messages.some((message) => message.isStreaming));
+    });
   };
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
     getSync,
-    // This float FOLLOWS another leader and has no `RemoteWorkUnitClient` of
-    // its own, so it has no roster for the remote units — the leader's
-    // `model.state` frame answers, as it always did. Collapses in #2382 PR D
-    // along with the rest of this wiring. Passing `deps.client.getScoops()`
-    // here would be the LOCAL kernel's roster and would name the wrong models.
-    getUnits: () => [],
-    // This float follows someone else's tray but has no `RemoteWorkUnitClient`
-    // of its own (the mounts collapse onto one client in #2382 PR D), so the
-    // pick goes out as the raw frame it always did — still naming the unit.
-    setModel: (unitId, model) => getSync()?.selectModel(qualifiedModelId(model), unitId),
+    // The REMOTE roster, now that this float has one: the model shown is the
+    // model of the unit it is following, not of a local kernel unit.
+    getUnits: () => workUnits.currentUnits(),
+    setModel: (unitId, model) => {
+      void workUnits.setModel(unitId, model).catch(() => undefined);
+    },
     getSelectedScoopJid: () => selectedScoopJid,
     interceptLocalHandlers: true,
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
@@ -339,17 +354,23 @@ export function buildFollowerOptions(
       selectedScoopJid = scoopJid;
       publishFollowerScoops(); // re-order for the new selection, as the leader does
       deps.refs.switcher.setAttribute('active', scoopJid);
-      sync.selectScoop(scoopJid);
+      // Ask BEFORE subscribing: the in-flight fetch is what tells the adapter
+      // not to seed this listener with the unit's previous transcript.
+      void workUnits.snapshot(scoopJid).catch(() => undefined);
+      watchUnit(scoopJid);
+      // The leader answers a selection with a snapshot, not a `model.state`.
+      modelSurface.onShownUnitChanged();
     },
     { capture: true }
   );
-  return {
+  return workUnits.wrapOptions({
     joinUrl,
-    onSnapshot: (messages, scoopJid) => {
+    onSnapshot: (_messages, scoopJid) => {
+      // The transcript is rendered by `watchUnit` off the protocol; what is
+      // left here is the selection bookkeeping the frame also carries.
       selectedScoopJid = scoopJid;
-      const controller = getController();
-      controller?.loadMessages(messages);
-      controller?.setProcessing(messages.some((message) => message.isStreaming));
+      watchUnit(scoopJid);
+      modelSurface.onShownUnitChanged();
     },
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       getController()?.addUserMessage(text, attachments),
@@ -358,13 +379,29 @@ export function buildFollowerOptions(
         getController()?.setProcessing(status === 'processing');
       }
     },
-    setChatAgent: (agent) => getController()?.setAgent(agent),
+    setChatAgent: (agent) => {
+      // Send and stop name their unit, exactly as the dedicated follower mount
+      // does (#2382 PR A); the agent EVENT stream stays on the sync manager.
+      getController()?.setAgent(
+        createWorkUnitAgentHandle(workUnits, {
+          getSelectedId: () => selectedScoopJid ?? workUnits.selectedUnitId,
+          onError: (error) => deps.log.warn('follower send failed', { error }),
+          onEvent: (listener) => agent.onEvent(listener),
+        })
+      );
+    },
     browserAPI: browser,
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
     getSelectedScoopJid: () => selectedScoopJid,
     onConnectionChange: (connected) => {
       deps.refs.switcher.connection = connected ? 'connected' : 'disconnected';
       if (!connected) {
+        // A reconnect is a fresh bootstrap; nothing the dead channel said
+        // survives it, and the subscription is re-pointed from the new
+        // session's first frame.
+        workUnits.resetSelection();
+        unitWatch?.();
+        unitWatch = null;
         modelSurface.reset();
       }
     },
@@ -374,9 +411,10 @@ export function buildFollowerOptions(
       if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
         selectedScoopJid = activeScoopJid;
       }
-      followerScoops = scoops;
       publishFollowerScoops();
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
+      if (selectedScoopJid) watchUnit(selectedScoopJid);
+      modelSurface.onShownUnitChanged();
     },
     // #1915: this float has a mounted permissions surface (it can lead), so
     // it can host a login the leader's kernel cannot prompt for.
@@ -387,15 +425,9 @@ export function buildFollowerOptions(
       }),
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,
-  };
+  });
 }
 
-/**
- * Mirror the leader's follower-reported sprinkle instances into the worker
- * shim. `sprinkle list` runs in the kernel worker and reads them from there,
- * so every event that can change the set — a report arriving, a follower
- * disconnecting — has to refresh it (issue #2166).
- */
 function mirrorSprinkleInstances(state: TrayRoleState): void {
   writeSprinkleInstancesToShim(state.leader ? state.leader.sync.getSprinkleInstances() : []);
 }

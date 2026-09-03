@@ -198,7 +198,10 @@ describe('role-switch follower status', () => {
 
     options.onSnapshot(streaming, 'research');
     expect(options.getSelectedScoopJid?.()).toBe('research');
-    expect(controller.loadMessages).toHaveBeenCalledWith(streaming);
+    // Through the client protocol now (#2382 PR D), so the queue answer rides
+    // along: `undefined` is a follower saying "nobody could answer", which
+    // leaves any held pile standing (#2362).
+    expect(controller.loadMessages).toHaveBeenCalledWith(streaming, undefined);
     expect(controller.setProcessing).toHaveBeenLastCalledWith(true);
 
     controller.setProcessing.mockClear();
