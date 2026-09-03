@@ -554,6 +554,22 @@ export async function mountWcUiFollower(
   // the whole reason a stall must not read as a disconnect — the connection is
   // fine and recovers by itself, so the placeholder says "busy", not "lost".
   const LEADER_BUSY = 'The leader is busy — hang on…';
+  let followerSelectedScoop: string | null = null;
+  /**
+   * The follower's half of the client protocol (#2274). It holds the roster
+   * the leader sent — kept so a local selection can re-publish the descriptors,
+   * since the strip orders the SELECTED cone's scoops ahead of the rest — and
+   * projects it onto the same `toTabDescriptors` the leader renders from.
+   */
+  const workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
+
+  /**
+   * The unit a send is addressed to. The shell's own copy first; the client's
+   * is the leader's answer (`scoops.list`'s active jid, or the unit it last
+   * mirrored), which is what lands first on a fresh join.
+   */
+  const addressableUnitId = (): string | null => followerSelectedScoop ?? workUnits.selectedUnitId;
+
   /**
    * The selected unit is a scoop, so the composer band is unmounted (#2312).
    * The follower reaches that decision through the SAME descriptor role the
@@ -566,10 +582,18 @@ export async function mountWcUiFollower(
   const setComposerState = (enabled: boolean, placeholder: string): void => {
     composerEnabled = enabled;
     composerPlaceholder = placeholder;
-    boot.refs.inputCard.setAttribute('placeholder', placeholder);
+    // Connected is not the same as addressable. `activateFollowerSync` installs
+    // the chat agent and reports the connection BEFORE it asks for the first
+    // snapshot, so there is a window where the leader has not named a unit yet
+    // — and a send names its unit (#2382). Submitting in that window would let
+    // the controller render the message and clear the input for a send that
+    // goes nowhere, so the box stays shut (and still says "connecting") until
+    // the first roster or snapshot lands, which is a few frames later.
+    const live = enabled && addressableUnitId() !== null;
+    boot.refs.inputCard.setAttribute('placeholder', enabled && !live ? CONNECTING : placeholder);
     // A read-only selection outranks the connection state: reconnecting while
     // a scoop is selected must not hand back a composer for it.
-    if (enabled && !composerReadOnly) boot.refs.inputCard.removeAttribute('disabled');
+    if (live && !composerReadOnly) boot.refs.inputCard.removeAttribute('disabled');
     else boot.refs.inputCard.setAttribute('disabled', '');
   };
   setComposerState(false, CONNECTING);
@@ -656,14 +680,6 @@ export async function mountWcUiFollower(
   const sprinkleZone = new WcSprinkleZone(boot.refs);
   const sprinkleCallbacks = sprinkleZone.callbacks();
 
-  let followerSelectedScoop: string | null = null;
-  /**
-   * The follower's half of the client protocol (#2274). It holds the roster
-   * the leader sent — kept so a local selection can re-publish the descriptors,
-   * since the strip orders the SELECTED cone's scoops ahead of the rest — and
-   * projects it onto the same `toTabDescriptors` the leader renders from.
-   */
-  const workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
   const publishFollowerScoops = (): void => {
     boot.refs.switcher.scoops = toTabDescriptors(
       workUnits.currentUnits(),
@@ -750,6 +766,9 @@ export async function mountWcUiFollower(
         followerSelectedScoop = scoopJid;
         controller.loadMessages(messages);
         controller.setProcessing(messages.some((message) => message.isStreaming));
+        // First unit of the session: re-evaluate the composer, which stayed
+        // shut while there was nothing to address.
+        applyFollowerSelectionChrome();
       },
       // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
       // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.

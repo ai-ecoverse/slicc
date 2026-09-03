@@ -426,18 +426,56 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
     expect(switcher.connection).toBe('disconnected');
 
-    // On connect, the tray fires onConnectionChange(true) → enabled + normal placeholder.
+    // On connect, the tray fires onConnectionChange(true) — but the leader has
+    // not named a unit yet (`activateFollowerSync` reports the connection
+    // BEFORE it asks for the first snapshot). A send names its unit (#2382), so
+    // the box stays shut for those few frames rather than accepting a prompt it
+    // would drop after clearing the input.
     const opts = startFollowerSpy.mock.calls[0]![0];
     opts.onConnectionChange?.(true);
+    expect(switcher.connection).toBe('connected');
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+
+    // The leader's first snapshot names the unit → composer opens.
+    opts.onSnapshot?.([], 'cone_1');
     expect(inputCard.hasAttribute('disabled')).toBe(false);
     expect(inputCard.getAttribute('placeholder')).toBe('Ask the leader, or describe a change…');
-    expect(switcher.connection).toBe('connected');
 
     // A disconnect re-disables + re-shows connecting.
     opts.onConnectionChange?.(false);
     expect(inputCard.hasAttribute('disabled')).toBe(true);
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
     expect(switcher.connection).toBe('disconnected');
+  });
+
+  it('opens the composer off the first scoops.list when no snapshot arrived yet', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onConnectionChange?.(true);
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+
+    // Either frame names a unit, and a leader may send the roster first — so
+    // neither one may be the only door out of the un-addressable window.
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          jid: 'cone_1',
+          name: 'sliccy',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_1'
+    );
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps model controls hidden before the catalog and for a legacy leader connection', async () => {
