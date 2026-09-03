@@ -129,8 +129,7 @@ type rather than in a comment on one branch.
 type WorkUnitClientEvent =
   | { type: 'status'; state: WorkUnitSummary['state'] }
   | { type: 'snapshot'; snapshot: WorkUnitSnapshot } // wholesale replay
-  | { type: 'message'; message: WorkUnitChatMessage } // routed / lick arrival
-  | { type: 'error'; error: string };
+  | { type: 'message'; message: WorkUnitChatMessage }; // routed / lick arrival
 ```
 
 There is no `error` variant: neither transport reports a per-unit failure as
@@ -383,9 +382,20 @@ drifted:
   already delivers, and the local adapter's no-answer fallback resolves with an
   empty transcript — which must never be allowed to wipe a live thread. The
   subscription only ever sees snapshots the transport really published.
-- `onScoopMessagesReplaced` (leader) and `onSnapshot` (follower) are no longer
-  handled in the mounts. The adapters still consume both — that is where a
-  kernel envelope or a tray frame becomes a snapshot event.
+- `onScoopMessagesReplaced` is gone from the leader's callback bag entirely.
+  The follower's `onSnapshot` handler SURVIVES, but only for the selection
+  bookkeeping the frame also carries — the leader names the unit it is
+  mirroring, and on a fresh join that frame is how the follower first learns
+  which unit it has. It no longer reads the transcript. The adapters consume
+  both callbacks; that is where a kernel envelope or a tray frame becomes a
+  snapshot event.
+- **Two mounts, not three.** The dedicated follower mount (`wc-follower.ts`)
+  and the leader mount (`wc-live.ts`) render from the protocol. The
+  leader-capable float's own follower path (`wc-tray.ts` `buildFollowerOptions`
+  — `onSnapshot` → `loadMessages`, `sync.selectScoop` on a tab click) is still
+  on the raw frames and has no `RemoteWorkUnitClient` of its own. It is the
+  third follower wiring and collapses onto the one mount in PR D, as it did for
+  the composer in PR A.
 - **The leader suppresses the seeded snapshot on a re-point; the follower takes
   it.** `subscribe` seeds a new listener synchronously with the last snapshot
   it published. On the leader that seed is the previous transcript of a unit
@@ -393,9 +403,27 @@ drifted:
   restore against a stale `queuedIds` (#2354). On the follower there is no
   backend queue to mis-reconcile, and the seed is often the only snapshot that
   unit will get (see the guest-seat case above).
-- `subscribe` does not re-ask for a transcript a `snapshot(id)` is already
-  fetching. Two asks meant two replays and therefore two `loadMessages`, and
-  each one consumes the held-queue restore.
+- **A subscriber that joins an in-flight `snapshot(id)` neither re-asks nor
+  takes the cached seed.** Both would produce a second wholesale render of a
+  transcript that is about to be replaced — dips disposed and rehydrated, a
+  flash of stale history, and the one-shot held-queue restore consumed against
+  a stale `queuedIds` (#2354). That single rule lives in the adapters, so a
+  mount decides nothing: a tab click asks first and therefore sees only the
+  fresh replay, while a fresh join and a guest seat have nothing in flight and
+  still get their seed.
+- **An unanswered request is recovered, once.** Because `subscribe` suppresses
+  its own ask while a snapshot is in flight, that ask is the only one and
+  nothing else would re-issue it — so a dropped request would leave the
+  PREVIOUS unit's transcript on screen while the composer, the thread context
+  and the navbar attention already belong to the new one. The local adapter
+  re-asks once on timeout, and if that is dropped too it publishes the unit's
+  OWN last-known transcript (or an empty one) with `queuedIds` absent, so the
+  held pile stands. That answer is emitted, never cached: it is the client's,
+  not the transport's.
+- **`resetSelection` drops the dead channel's transcripts.** A reconnect
+  re-sends a snapshot and the roster back to back and the roster can win that
+  race, so a seed from the previous session could paint a transcript the leader
+  has since frozen or cleared.
 
 ## Sequencing and scope
 

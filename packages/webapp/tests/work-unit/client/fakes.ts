@@ -85,6 +85,8 @@ export interface ClientHarness {
    * IS the request, so the two lists coincide there.
    */
   transcriptRequests: string[];
+  /** Drop everything the (now dead) channel said, where the transport has one. */
+  resetSelection?: () => void;
   /** `true` when this transport can carry a backend queue at all (#2362). */
   carriesQueue: boolean;
   /**
@@ -293,6 +295,7 @@ export function makeRemoteHarness(): ClientHarness {
       connected = false;
     },
     modelWrites,
+    resetSelection: () => client.resetSelection(),
     selections,
     transcriptRequests: selections,
     emitMessage: () => {

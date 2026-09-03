@@ -187,7 +187,30 @@ function transcriptCases(make: () => ClientHarness): void {
     harness.client.subscribe('cone_1', () => undefined);
     harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
     await pending;
-    expect(harness.transcriptRequests.length - asksBefore).toBeLessThanOrEqual(1);
+    // EXACTLY one, naming the unit — "at most one" would also pass a client
+    // that never asked at all, which is the failure mode this is guarding.
+    expect(harness.transcriptRequests.slice(asksBefore)).toEqual(['cone_1']);
+  });
+
+  it('forgets a dead channel’s transcripts when the selection is reset', async () => {
+    const harness = make();
+    if (!harness.resetSelection) return;
+    harness.setRoster(ROSTER, 'cone_1');
+    const first = harness.client.snapshot('cone_1');
+    harness.emitSnapshot('cone_1', [
+      { content: 'old session', id: 'm1', role: 'user', timestamp: 1 },
+    ]);
+    await first;
+
+    harness.resetSelection();
+    const seen: WorkUnitClientEvent[] = [];
+    harness.client.subscribe('cone_1', (event) => seen.push(event));
+
+    // A reconnect is a fresh bootstrap: the leader re-sends a snapshot and the
+    // roster back to back, and the roster can win that race. Seeding from the
+    // DEAD channel's cache would paint a transcript the leader may since have
+    // frozen or cleared with a new session.
+    expect(seen).toEqual([]);
   });
 
   it('lets a second snapshot supersede the first for the same unit', async () => {

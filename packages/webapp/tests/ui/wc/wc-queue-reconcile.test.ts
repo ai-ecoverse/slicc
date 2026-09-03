@@ -257,25 +257,37 @@ describe('replay envelope plumbing', () => {
    * drive the real mount: `prepareWcShell` selects a unit (which subscribes),
    * and the kernel callback the ADAPTER decorates delivers the envelope.
    */
-  function mountedShell(loadMessages: (messages: unknown[], queuedIds?: string[]) => void) {
+  function mountedShell(
+    loadMessages: (messages: unknown[], queuedIds?: string[]) => void,
+    jids: readonly string[] = ['cone-1']
+  ) {
     const app = document.createElement('div');
     document.body.append(app);
     const boot = prepareWcShell(app, 'test');
-    const unit = {
-      jid: 'cone-1',
-      name: 'sliccy',
-      folder: 'cone',
-      parentJid: null,
-      assistantLabel: 'sliccy',
-      config: {},
-    } as never;
+    const units = jids.map(
+      (jid) =>
+        ({
+          jid,
+          name: jid,
+          folder: jid,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+          config: {},
+        }) as never
+    );
+    const unit = units[0] as never;
+    let selectedScoopJid = jids[0] ?? null;
     boot.setClient({
-      selectedScoopJid: 'cone-1',
-      setSelectedScoopJid: vi.fn(),
+      get selectedScoopJid() {
+        return selectedScoopJid;
+      },
+      setSelectedScoopJid: vi.fn((jid: string) => {
+        selectedScoopJid = jid;
+      }),
       requestScoopMessages: vi.fn(),
       isProcessing: () => false,
       deleteQueuedMessage: async () => undefined,
-      getScoops: () => [unit],
+      getScoops: () => units,
     } as never);
     boot.setController({
       loadMessages,
@@ -289,7 +301,10 @@ describe('replay envelope plumbing', () => {
     // replay does.
     const callbacks = createWcLiveCallbacks(boot.wiring);
     boot.selectScoop(unit);
-    return { callbacks };
+    return {
+      callbacks,
+      selectUnit: (jid: string) => boot.selectScoop(units[jids.indexOf(jid)] as never),
+    };
   }
 
   it('hands queuedIds to the controller alongside the messages', () => {
@@ -307,6 +322,32 @@ describe('replay envelope plumbing', () => {
     callbacks.onScoopMessagesReplaced?.('cone-1', [] as never);
     // Absent is not empty: `undefined` leaves the held order standing.
     expect(loadMessages).toHaveBeenCalledWith([], undefined);
+  });
+
+  it('never leaves another unit’s transcript under the new unit’s chrome', () => {
+    vi.useFakeTimers();
+    try {
+      const loadMessages = vi.fn();
+      const { callbacks, selectUnit } = mountedShell(loadMessages, ['cone-1', 'cone-2']);
+      // A is painted normally.
+      callbacks.onScoopMessagesReplaced?.('cone-1', [{ id: 'a1' }] as never, []);
+      expect(loadMessages).toHaveBeenLastCalledWith([{ id: 'a1' }], []);
+
+      // Switch to B and let its replay go missing entirely: the composer, the
+      // thread context and the navbar attention already belong to B, so
+      // leaving A's messages up would let the user read B and send into A.
+      loadMessages.mockClear();
+      selectUnit('cone-2');
+      vi.advanceTimersByTime(5000); // first timeout → one retry
+      vi.advanceTimersByTime(5000); // retry dropped too → recover
+      expect(loadMessages).toHaveBeenCalled();
+      // B has never been seen, so B's transcript is empty — not A's.
+      expect(loadMessages.mock.calls.at(-1)?.[0]).toEqual([]);
+      // …and with no queue answer, so a held pile is left standing.
+      expect(loadMessages.mock.calls.at(-1)?.[1]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignores a replay for a unit that is not selected', () => {

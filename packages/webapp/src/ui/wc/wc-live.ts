@@ -207,20 +207,16 @@ function createUnitWatcher(
   let watch: Unsubscribe | null = null;
   return (jid) => {
     watch?.();
-    // `subscribe` SEEDS a new listener with the last snapshot it published,
-    // synchronously, inside this call. On a selection change that seed is the
-    // unit's PREVIOUS transcript, and painting it would consume the held-queue
-    // restore against a stale `queuedIds` — the restore is one-shot (#2354).
-    // So only pushes that arrive after this call paint.
-    let seeding = true;
+    // No seed suppression here: a selection asks for its snapshot BEFORE
+    // re-pointing, and `subscribe` does not seed a listener that joins an
+    // in-flight fetch — so what arrives is the fresh replay, once.
     watch = getClient().subscribe(jid, (event) => {
-      if (seeding || event.type !== 'snapshot') return;
+      if (event.type !== 'snapshot') return;
       // A replay that lands after the selection moved on describes the unit we
       // left; the mount's old handler made the same check against `getSelected`.
       if (getSelectedJid() !== jid) return;
       load(event.snapshot.messages as unknown as ChatMessage[], event.snapshot.queuedIds);
     });
-    seeding = false;
   };
 }
 

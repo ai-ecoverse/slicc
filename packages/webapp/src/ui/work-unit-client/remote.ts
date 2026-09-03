@@ -78,6 +78,17 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
    */
   resetSelection(): void {
     this.selectedId = null;
+    // The cached transcripts go too. `addFollower` sends a snapshot and the
+    // roster back to back on reconnect, and the roster can win that race for a
+    // unit that is not the leader's active one — so a subscriber attaching off
+    // the roster would be SEEDED with the previous session's transcript, which
+    // the leader may since have frozen or cleared with a new session. A
+    // reconnect is a fresh bootstrap; nothing the old channel said survives it.
+    this.lastSnapshots.clear();
+    // Waiters from the dead channel can never be settled by it either, and
+    // leaving them would make the next `subscribe` think a fetch is in flight
+    // and skip its own seed forever.
+    this.pendingSnapshots.clear();
   }
 
   /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
@@ -232,8 +243,14 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     const listeners = this.unitListeners.get(id) ?? new Set<(event: WorkUnitClientEvent) => void>();
     listeners.add(listener);
     this.unitListeners.set(id, listeners);
+    // Seeded with the last snapshot this client published — unless a
+    // `snapshot(id)` is in flight, whose answer is about to arrive and would
+    // make the seed a wholesale render we immediately replace (see the local
+    // adapter for the full argument). A fresh join and a guest seat have no
+    // snapshot in flight, so they still get their seed, which for them is
+    // often the only one that unit will ever have.
     const known = this.lastSnapshots.get(id);
-    if (known) listener({ snapshot: known, type: 'snapshot' });
+    if (known && !this.pendingSnapshots.has(id)) listener({ snapshot: known, type: 'snapshot' });
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);

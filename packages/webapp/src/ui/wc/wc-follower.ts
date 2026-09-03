@@ -762,6 +762,12 @@ export async function mountWcUiFollower(
     if (watchedUnit === jid && unitWatch) return;
     unitWatch?.();
     watchedUnit = jid;
+    // Whether the cached snapshot paints is the ADAPTER's call, not this one's:
+    // it seeds a new listener unless a `snapshot(jid)` is already in flight.
+    // A tab click asks first and so gets only the fresh transcript; a session
+    // bootstrap (`onSnapshot` / `onScoopsList`) has nothing in flight and takes
+    // the cache, which for a guest seat is often the only snapshot that unit
+    // will ever have.
     unitWatch = workUnits.subscribe(jid, (event) => {
       if (event.type !== 'snapshot' || watchedUnit !== jid) return;
       const messages = event.snapshot.messages as unknown as ChatMessage[];
@@ -1005,8 +1011,8 @@ export async function mountWcUiFollower(
         // only door out of the un-addressable window.
         unitConfirmedThisSession = true;
         // A leader sends the initial transcript AHEAD of this roster, so the
-        // adapter is holding it until the roster names the unit — subscribing
-        // here is what releases it (#2274's early-snapshot rule).
+        // adapter has already published it — subscribing here attaches to that
+        // cached snapshot, which is why this re-point takes the seed.
         if (followerSelectedScoop) watchUnit(followerSelectedScoop);
         publishFollowerScoops();
         applyFollowerSelectionChrome();
@@ -1054,8 +1060,10 @@ export async function mountWcUiFollower(
       // to move its own selection with the strip, or its staleness rule would
       // still judge arriving snapshots against the PREVIOUS unit — and accept
       // the very one this click just superseded.
-      watchUnit(scoopJid);
+      // Ask BEFORE subscribing: the in-flight fetch is what tells the adapter
+      // not to seed this listener with the unit's previous transcript.
       void workUnits.snapshot(scoopJid).catch(() => undefined);
+      watchUnit(scoopJid);
     }
   });
 

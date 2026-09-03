@@ -516,6 +516,45 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.hasAttribute('disabled')).toBe(false);
   });
 
+  it('renders a re-selected unit ONCE, from the fresh snapshot (#2382 PR B)', async () => {
+    const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
+    const loadMessages = vi.spyOn(WcChatController.prototype, 'loadMessages');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop: vi.fn(),
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+    };
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+    const roster = [
+      { assistantLabel: 'sliccy', folder: 'cone', jid: 'cone_a', name: 'a', parentId: null },
+      { assistantLabel: 'sliccy', folder: 'cone-b', jid: 'cone_b', name: 'b', parentId: null },
+    ];
+    opts.onScoopsList?.(roster as never, 'cone_a');
+    opts.onConnectionChange?.(true);
+    // `cone_a` now has a transcript cached in the adapter for this session.
+    opts.onSnapshot?.([{ id: 'a1', role: 'user', content: 'first' }] as never, 'cone_a');
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone_b' } }));
+    opts.onSnapshot?.([{ id: 'b1', role: 'user', content: 'bee' }] as never, 'cone_b');
+
+    // Back to A. Taking the cached seed here would paint A's OLD transcript and
+    // then paint again when the fresh one lands: two wholesale renders, dips
+    // disposed and rehydrated, and a flash of stale history.
+    loadMessages.mockClear();
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone_a' } }));
+    expect(loadMessages).not.toHaveBeenCalled();
+
+    opts.onSnapshot?.([{ id: 'a2', role: 'user', content: 'fresh a' }] as never, 'cone_a');
+    expect(loadMessages).toHaveBeenCalledTimes(1);
+    expect(loadMessages.mock.calls[0]?.[0]).toEqual([
+      { id: 'a2', role: 'user', content: 'fresh a' },
+    ]);
+    loadMessages.mockRestore();
+  });
+
   it('keeps the composer shut after a reconnect until the NEW session names a unit', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
