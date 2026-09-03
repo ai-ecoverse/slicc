@@ -298,6 +298,15 @@ export class SessionTrayDurableObject {
       return response;
     }
 
+    // Dispatched before the expiry gate, like `/join` above: a superseded tray
+    // must answer a delivery with a redirect to its replacement rather than the
+    // 410 this gate returns first (#1957). The relay applies the gate itself, so
+    // an expired-but-not-superseded tray still answers TRAY_EXPIRED.
+    const webhookMatch = url.pathname.match(/^\/webhook\/([^/]+?)(?:\/([^/]+))?$/);
+    if (webhookMatch) {
+      return this.handleWebhookRoute(request, webhookMatch[1], webhookMatch[2]);
+    }
+
     const expiration = await this.ensureTrayIsActive();
     if (expiration) {
       return expiration;
@@ -309,11 +318,6 @@ export class SessionTrayDurableObject {
         return this.handleLeaderWebSocket(controllerMatch[1], url);
       }
       return this.handleControllerAttach(request, controllerMatch[1], url);
-    }
-
-    const webhookMatch = url.pathname.match(/^\/webhook\/([^/]+?)(?:\/([^/]+))?$/);
-    if (webhookMatch) {
-      return this.handleWebhookRoute(request, webhookMatch[1], webhookMatch[2]);
     }
 
     return jsonResponse({ error: 'Not found', code: 'NOT_FOUND' }, 404);
@@ -479,9 +483,13 @@ export class SessionTrayDurableObject {
    */
   private async handleSupersede(request: Request): Promise<Response> {
     const tray = this.requireTray();
-    let body: { controllerToken?: string; joinUrl?: string };
+    let body: { controllerToken?: string; joinUrl?: string; webhookUrl?: string };
     try {
-      body = (await request.json()) as { controllerToken?: string; joinUrl?: string };
+      body = (await request.json()) as {
+        controllerToken?: string;
+        joinUrl?: string;
+        webhookUrl?: string;
+      };
     } catch {
       return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
     }
@@ -499,10 +507,35 @@ export class SessionTrayDurableObject {
     } catch {
       return jsonResponse({ error: 'joinUrl must be an absolute URL', code: 'INVALID_BODY' }, 400);
     }
+    // `webhookUrl` is optional: a leader that predates it still supersedes the
+    // join surface, and the webhook surface keeps its pre-existing 410. An
+    // unparseable one is refused rather than stored, so the redirect target can
+    // never be a value the DO had to guess at.
+    if (body.webhookUrl !== undefined) {
+      if (typeof body.webhookUrl !== 'string' || !body.webhookUrl) {
+        return jsonResponse(
+          { error: 'webhookUrl must be a non-empty string', code: 'INVALID_BODY' },
+          400
+        );
+      }
+      try {
+        new URL(body.webhookUrl);
+      } catch {
+        return jsonResponse(
+          { error: 'webhookUrl must be an absolute URL', code: 'INVALID_BODY' },
+          400
+        );
+      }
+      tray.supersededByWebhookUrl = body.webhookUrl;
+    }
     tray.supersededByJoinUrl = body.joinUrl;
     await this.persistTray();
     return jsonResponse(
-      { trayId: tray.trayId, supersededByJoinUrl: tray.supersededByJoinUrl },
+      {
+        trayId: tray.trayId,
+        supersededByJoinUrl: tray.supersededByJoinUrl,
+        supersededByWebhookUrl: tray.supersededByWebhookUrl,
+      },
       200
     );
   }
@@ -1427,6 +1460,7 @@ export class SessionTrayDurableObject {
       sendToLeader: (msg) => this.sendToLeader(msg as WorkerToLeaderControlMessage),
       isoNow: () => this.isoNow(),
       now: () => this.now(),
+      ensureTrayIsActive: () => this.ensureTrayIsActive(),
     };
   }
 

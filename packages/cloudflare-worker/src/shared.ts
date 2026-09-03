@@ -297,6 +297,18 @@ export interface TrayRecord {
    * `TRAY_EXPIRED` forever — the old tray's leader socket will never come back.
    */
   supersededByJoinUrl?: string;
+  /**
+   * The replacement tray's webhook capability URL (`/webhook/:token`), set by
+   * the same supersede call as {@link supersededByJoinUrl}.
+   *
+   * Stored separately because it cannot be derived: the join URL carries the
+   * join token, and a webhook delivery needs the webhook token. Without it a
+   * callback POSTed to this tray's cached webhook URL — the shape an external
+   * service saved hours earlier — has nowhere to go but a 410, and the event
+   * vanishes with nothing reporting an error. Absent on trays superseded by a
+   * leader that predates this field, which keeps the old 410 behavior.
+   */
+  supersededByWebhookUrl?: string;
   /** Push devices to wake for `turn_end` / `sudo_request` (issue #2062). */
   pushTokens?: Record<string, PushTokenRecord>;
   /** Guest seats on this cone. Absent on trays minted before the feature. */

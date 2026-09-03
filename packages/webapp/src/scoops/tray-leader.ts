@@ -414,7 +414,7 @@ export class LeaderTrayManager {
       // timeout, so a hung/unreachable old tray can never stall the leader's
       // reconnect. A crashed leader (no chance to run this at all) falls back
       // to the existing TRAY_EXPIRED path once the old tray's reclaim TTL elapses.
-      void this.notifyTraySuperseded(session, fresh.joinUrl);
+      void this.notifyTraySuperseded(session, fresh.joinUrl, fresh.webhookUrl);
       return fresh;
     }
   }
@@ -426,10 +426,16 @@ export class LeaderTrayManager {
    * Bearer = the old session's controllerToken (extracted from `controllerUrl`).
    * Best-effort: fire-and-forget from the caller, and every failure (including
    * a request that never settles) is caught here so it can never surface.
+   *
+   * `newWebhookUrl` does the same for the webhook surface, and cannot be derived
+   * from the join URL — one carries the join token, the other the webhook token.
+   * Without it, a callback an external service saved hours ago POSTs into a dead
+   * endpoint and the event is lost silently (#1957).
    */
   private async notifyTraySuperseded(
     oldSession: LeaderTraySession,
-    newJoinUrl: string
+    newJoinUrl: string,
+    newWebhookUrl?: string
   ): Promise<void> {
     try {
       const controllerToken = new URL(oldSession.controllerUrl).pathname.split('/').pop();
@@ -444,7 +450,10 @@ export class LeaderTrayManager {
           'content-type': 'application/json',
           authorization: `Bearer ${controllerToken}`,
         },
-        body: JSON.stringify({ joinUrl: newJoinUrl }),
+        body: JSON.stringify({
+          joinUrl: newJoinUrl,
+          ...(newWebhookUrl ? { webhookUrl: newWebhookUrl } : {}),
+        }),
         signal: AbortSignal.timeout(NOTIFY_SUPERSEDED_TIMEOUT_MS),
       });
     } catch (error) {

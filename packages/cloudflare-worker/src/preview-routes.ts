@@ -253,9 +253,9 @@ export async function handleTraySupersede(request: Request, trayStub: TrayStub):
   if (!controllerToken) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }
-  let body: { joinUrl?: string };
+  let body: { joinUrl?: string; webhookUrl?: string };
   try {
-    body = (await request.json()) as { joinUrl?: string };
+    body = (await request.json()) as { joinUrl?: string; webhookUrl?: string };
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
   }
@@ -263,7 +263,10 @@ export async function handleTraySupersede(request: Request, trayStub: TrayStub):
     new Request('https://internal/internal/supersede', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerToken, joinUrl: body.joinUrl }),
+      // `webhookUrl` lets the old tray redirect webhook deliveries too, not just
+      // joins — an external service's cached callback URL embeds the tray id and
+      // dies with the tray otherwise (#1957).
+      body: JSON.stringify({ controllerToken, joinUrl: body.joinUrl, webhookUrl: body.webhookUrl }),
     })
   );
 }

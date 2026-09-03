@@ -62,6 +62,21 @@ keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates 
 [docs § Signaling](../../docs/cloudflare-worker-details.md#signaling),
 [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
+### Supersede (redirect semantics, #1957)
+
+A superseded tray answers `308` + `Location` (plus a `successor-version` link and a JSON
+body) on **both** `/join/:token` and `/webhook/:token/:webhookId`, so a stale capability
+URL routes to the replacement instead of dead-ending. `/join` and `/webhook/*` therefore
+dispatch **before** `ensureTrayIsActive()` in the DO's `fetch`; the webhook relay applies
+that gate itself, after the capability token and after the supersede check.
+
+**Adding a capability that hands out a URL means storing its replacement on supersede.**
+`supersededByJoinUrl` and `supersededByWebhookUrl` are separate fields because one carries
+the join token and the other the webhook token — neither is derivable from the other, and
+the webhook one exists because an external service caches that URL for the life of a long
+job. Rules, ordering rationale, and the `json=true` convention:
+[docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+
 ### Biscotti (guest seats)
 
 `TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability`

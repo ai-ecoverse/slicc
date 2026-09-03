@@ -17,6 +17,10 @@ interface Harness {
   sent: WorkerToLeaderControlMessage[];
   leaderLive: boolean;
   leaderReachable: boolean;
+  /** The tray the relay reads, so a test can supersede or expire it. */
+  tray: TrayRecord;
+  /** What the DO's expiry gate answers; null means "tray is active". */
+  expiredResponse: Response | null;
 }
 
 function createTray(): TrayRecord {
@@ -38,10 +42,13 @@ function createHarness(waitMs = 20): Harness {
     leaderLive: true,
     leaderReachable: true,
     relay: undefined as unknown as WebhookRelay,
+    tray: createTray(),
+    expiredResponse: null,
   };
-  const tray = createTray();
+  const tray = harness.tray;
   const deps: WebhookDeps = {
     requireTray: () => tray,
+    ensureTrayIsActive: () => Promise.resolve(harness.expiredResponse),
     // Plain equality stands in for the DO's timing-safe comparison.
     matchesToken: (received, expected) => received === expected,
     hasLiveLeader: () => harness.leaderLive,
@@ -101,6 +108,87 @@ describe('WebhookRelay.handle', () => {
     const response = await h.relay.handle(TOKEN, post('{}'), undefined);
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: 'WEBHOOK_ID_REQUIRED' });
+  });
+
+  describe('superseded tray (#1957)', () => {
+    const replacement = 'https://hub.example/webhook/fresh-tray.deadbeef';
+
+    it('redirects the delivery to the replacement webhook URL with a 308', async () => {
+      h.tray.supersededByWebhookUrl = replacement;
+      const response = await h.relay.handle(TOKEN, post('{"ref":"v2"}'), 'build-done');
+
+      // 308 because an external sender follows it with the method and body
+      // intact — a non-2xx it ignores is how the delivery went missing.
+      expect(response.status).toBe(308);
+      expect(response.headers.get('Location')).toBe(`${replacement}/build-done`);
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'TRAY_SUPERSEDED',
+        webhookUrl: `${replacement}/build-done`,
+      });
+      // Nothing was forwarded to this tray's leader.
+      expect(h.sent).toEqual([]);
+    });
+
+    it('carries the delivery query string onto the redirect', async () => {
+      h.tray.supersededByWebhookUrl = replacement;
+      const request = new Request('https://hub.example/webhook/t/build-done?attempt=2', {
+        method: 'POST',
+        body: '{}',
+      });
+      const response = await h.relay.handle(TOKEN, request, 'build-done');
+      expect(response.headers.get('Location')).toBe(`${replacement}/build-done?attempt=2`);
+    });
+
+    it('redirects even when the delivery carries ?redirect=manual', async () => {
+      // The /join opt-out (#1957) has no meaning here: a webhook sender has no
+      // channel to be told about a hop through — it reads no Link header and
+      // parses no SLICC body — so the redirect is the only thing that saves the
+      // delivery. A query string it happens to carry is not a protocol request.
+      h.tray.supersededByWebhookUrl = replacement;
+      const request = new Request('https://hub.example/webhook/t/build-done?redirect=manual', {
+        method: 'POST',
+        body: '{}',
+      });
+      const response = await h.relay.handle(TOKEN, request, 'build-done');
+      expect(response.status).toBe(308);
+      expect(response.headers.get('Location')).toBe(`${replacement}/build-done?redirect=manual`);
+    });
+
+    it('redirects even once the tray has expired', async () => {
+      // The whole point: supersession is checked before the expiry gate, so a
+      // callback arriving after a long render still lands on the live tray.
+      h.tray.supersededByWebhookUrl = replacement;
+      h.leaderLive = false;
+      h.expiredResponse = new Response('{"code":"TRAY_EXPIRED"}', { status: 410 });
+      const response = await h.relay.handle(TOKEN, post('{}'), 'build-done');
+      expect(response.status).toBe(308);
+    });
+
+    it('never redirects on a bad webhook capability', async () => {
+      // `Location` names the replacement's webhook capability, so an
+      // unauthenticated redirect would hand that secret out to a guessed tray id.
+      h.tray.supersededByWebhookUrl = replacement;
+      const response = await h.relay.handle('wrong', post('{}'), 'build-done');
+      expect(response.status).toBe(403);
+      expect(response.headers.get('Location')).toBeNull();
+    });
+
+    it('keeps the expiry answer when the leader named no webhook replacement', async () => {
+      // A leader that predates the field supersedes the join surface only.
+      h.tray.supersededByJoinUrl = 'https://hub.example/join/fresh-tray.deadbeef';
+      h.expiredResponse = new Response('{"code":"TRAY_EXPIRED"}', { status: 410 });
+      const response = await h.relay.handle(TOKEN, post('{}'), 'build-done');
+      expect(response.status).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({ code: 'TRAY_EXPIRED' });
+    });
+
+    it('keeps the terminal answer when the stored replacement does not parse', async () => {
+      h.tray.supersededByWebhookUrl = 'not-a-url';
+      h.expiredResponse = new Response('{"code":"TRAY_EXPIRED"}', { status: 410 });
+      const response = await h.relay.handle(TOKEN, post('{}'), 'build-done');
+      expect(response.status).toBe(410);
+    });
   });
 
   it('410s when no leader is connected', async () => {

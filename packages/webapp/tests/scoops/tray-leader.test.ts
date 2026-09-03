@@ -330,6 +330,13 @@ describe('tray-leader', () => {
     expect(fetchImpl.mock.calls[3]?.[0]).toBe(
       'https://tray.example.com/api/tray/stale-tray/supersede'
     );
+    // The webhook URL rides along with the join URL (#1957): it cannot be derived
+    // from the join token, and without it an external service's cached callback
+    // URL dies with the old tray instead of being redirected.
+    expect(JSON.parse(String(fetchImpl.mock.calls[3]?.[1]?.body))).toEqual({
+      joinUrl: 'https://tray.example.com/join/fresh-token',
+      webhookUrl: 'https://tray.example.com/webhook/fresh-token',
+    });
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
 
     manager.stop();
