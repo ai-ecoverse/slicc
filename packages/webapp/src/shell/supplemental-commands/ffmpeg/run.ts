@@ -51,13 +51,16 @@ import type {
 import { captureViaPopup, isExtensionFloat } from '../extension-media-capture.js';
 import {
   describeFfmpegCore,
+  FFMPEG_CORE_MT_PACKAGE,
   ffmpegCoreNotInstalledMessage,
   getFfmpeg,
   type IpkResolutionContext,
   isCoreFault,
+  loadedFfmpegCorePackage,
   recycleFfmpeg,
   tryLoadFfmpegCoreFromNodeModules,
 } from '../ffmpeg-wasm.js';
+import { ffmpegCoreFromEnv } from './engine.js';
 import { bytesToBlob, readInputBlob } from './input-blob.js';
 import {
   deleteStagedFile,
@@ -104,6 +107,10 @@ Engines (chosen automatically; stderr names the one that ran):
   wasm         @ffmpeg/core (ipk-installed; see -version). Everything
                else: lavfi sources, -f concat, filtergraphs, -f null
                analysis sinks, image/GIF output, codecs the browser lacks.
+               FFMPEG_CORE=mt opts into @ffmpeg/core-mt on a cross-origin-
+               isolated leader: multi-threaded, SINGLE-INPUT jobs only
+               (multi-input deadlocks and is refused), -threads/-filter_threads
+               capped unless you pass them.
   FFMPEG_ENGINE=wasm ffmpeg ...        force byte-identical ffmpeg behaviour
   FFMPEG_ENGINE=mediabunny ffmpeg ...  fail (and say why) instead of falling back
 
@@ -149,11 +156,10 @@ Analysis sinks (no output file — results are on stderr):
   is accepted and gets \`-f null\` injected (MEMFS has no /dev/null).
 
 Notes:
-  - The wasm engine needs an ipk-installed core: \`ipk add -g @ffmpeg/core-mt@<pinned>\`
-    on a cross-origin-isolated leader (multi-threaded), else
-    \`ipk add -g @ffmpeg/core@<pinned>\`; \`ffmpeg -version\` prints which one
-    is loaded. Inputs are mounted lazily (never copied into the wasm heap);
-    only the output is buffered.
+  - The wasm engine needs an ipk-installed core: \`ipk add -g @ffmpeg/core@<pinned>\`
+    (\`@ffmpeg/core-mt\` for the FFMPEG_CORE=mt opt-in); \`ffmpeg -version\`
+    prints which one is loaded. Inputs are mounted lazily (never copied into
+    the wasm heap); only the output is buffered.
   - The browser will prompt for camera/mic permission on first capture.
   - Numeric -i values index into the per-kind enumerateDevices() list,
     matching ffmpeg's native avfoundation device numbering on macOS.
@@ -173,9 +179,18 @@ Notes:
 async function ffmpegVersion(
   ctx: CommandContext
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const loaded = await tryLoadFfmpegCoreFromNodeModules(createIpkContextFromCtx(ctx));
+  const preferMt = ffmpegCoreFromEnv(ctx.env) === 'mt';
+  const loaded = await tryLoadFfmpegCoreFromNodeModules(
+    createIpkContextFromCtx(ctx),
+    undefined,
+    preferMt
+  );
   if (!loaded) {
-    return { stdout: '', stderr: `ffmpeg: ${ffmpegCoreNotInstalledMessage()}\n`, exitCode: 1 };
+    return {
+      stdout: '',
+      stderr: `ffmpeg: ${ffmpegCoreNotInstalledMessage(preferMt)}\n`,
+      exitCode: 1,
+    };
   }
   return {
     stdout: `ffmpeg (wasm via @ffmpeg/ffmpeg)\ncore: ${describeFfmpegCore(loaded)}\n`,
@@ -1585,6 +1600,70 @@ async function loadResolvedInputs(
 }
 
 /**
+ * Thread budget for the multi-threaded core. Its emscripten pthread pool
+ * holds 32 workers; a thread requested beyond the pool needs the main
+ * thread's event loop to load a new worker, and that thread is blocked in
+ * `exec` — a deadlock, not an error. ffmpeg's defaults (encoder threads =
+ * 1.5 × cores, one filter thread per core PER GRAPH) blow past 32 on any
+ * modern machine, so unless the caller set them, encoders and decoders get
+ * {@link MT_THREAD_BUDGET.threads} and every filter graph
+ * {@link MT_THREAD_BUDGET.filterThreads}. Verified live: x264 at 8 threads
+ * on a single input completes; default filter threads hang.
+ */
+export const MT_THREAD_BUDGET = { threads: 8, filterThreads: 2 } as const;
+
+function hasThreadsFlag(tokens: readonly string[]): boolean {
+  return tokens.some((t) => t === '-threads' || t.startsWith('-threads:'));
+}
+
+/**
+ * Inject the mt thread budget into a parsed invocation, leaving any
+ * caller-supplied `-threads` / `-filter_threads` alone. `-threads` is a
+ * per-stream option in ffmpeg (before an `-i` it binds to that input's
+ * decoders, before the output to its encoders), so it is added in every
+ * position; the filter-thread options are global and go first. Exported
+ * for unit tests.
+ */
+export function applyMtThreadBudget(
+  parsed: ParsedFfmpegInvocation,
+  budget: { threads: number; filterThreads: number } = MT_THREAD_BUDGET,
+  cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
+): ParsedFfmpegInvocation {
+  const threads = String(Math.max(1, Math.min(budget.threads, cores ?? budget.threads)));
+  const all = [...parsed.inputs.flatMap((i) => i.raw), ...parsed.outputOpts];
+  const globals: string[] = [];
+  if (!all.includes('-filter_threads'))
+    globals.push('-filter_threads', String(budget.filterThreads));
+  if (!all.includes('-filter_complex_threads')) {
+    globals.push('-filter_complex_threads', String(budget.filterThreads));
+  }
+  const inputs = parsed.inputs.map((input, idx) => {
+    const prefix = [
+      ...(idx === 0 ? globals : []),
+      ...(hasThreadsFlag(input.raw) ? [] : ['-threads', threads]),
+    ];
+    return prefix.length > 0 ? { ...input, raw: [...prefix, ...input.raw] } : input;
+  });
+  const outputOpts = hasThreadsFlag(parsed.outputOpts)
+    ? parsed.outputOpts
+    : ['-threads', threads, ...parsed.outputOpts];
+  return { ...parsed, inputs, outputOpts };
+}
+
+/** Why a multi-input job is refused on the mt core instead of hanging. */
+function mtMultiInputRefusal(stderr: string): CmdResult {
+  return {
+    stdout: '',
+    stderr:
+      `${stderr}ffmpeg: the multi-threaded core deadlocks with more than one input ` +
+      '(ffmpeg starts a demux thread per input; emscripten proxies their pthread_create ' +
+      'to a main thread blocked in exec). Run without FFMPEG_CORE=mt so the single-threaded ' +
+      '@ffmpeg/core handles this job.\n',
+    exitCode: 1,
+  };
+}
+
+/**
  * Rebuild argv with the MEMFS-local input names. Each input's
  * `raw` carries the options that precede it on the user's command
  * line, so splicing them back keeps per-input flags (`-ss`, `-f`,
@@ -1759,14 +1838,19 @@ async function execWasmEncode(args: {
 }): Promise<{ early: CmdResult | null; outputBytes: Uint8Array | null }> {
   const { ffmpeg, parsed, resolvedInputs, stage, outputName, outputPath, analysisSink, stderr } =
     args;
+  const mt = loadedFfmpegCorePackage() === FFMPEG_CORE_MT_PACKAGE;
+  if (mt && parsed.inputs.length > 1) {
+    return { early: mtMultiInputRefusal(stderr), outputBytes: null };
+  }
   await mountStagedInputs(ffmpeg, stage, stagedFiles(resolvedInputs));
 
   // Bare `/dev/null` is a sink without `-f null` on the CLI; inject
   // the muxer so the pinned core does not exit 1 looking for a
   // container format for `__null_sink`.
-  const execParsed = analysisSink
+  const sinkParsed = analysisSink
     ? { ...parsed, outputOpts: ensureNullMuxerOpts(parsed.outputOpts) }
     : parsed;
+  const execParsed = mt ? applyMtThreadBudget(sinkParsed) : sinkParsed;
   const finalArgs = buildFinalFfmpegArgs(execParsed, resolvedInputs, outputName);
   const exitCode = await ffmpeg.exec(finalArgs);
   if (exitCode !== 0) {
@@ -1915,6 +1999,7 @@ async function runOnWasmCore(args: {
         stderr += `${msg}\n`;
       },
       ipk: createIpkContextFromCtx(ctx),
+      preferMt: ffmpegCoreFromEnv(ctx.env) === 'mt',
     });
   } catch (err) {
     return {

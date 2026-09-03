@@ -17,6 +17,7 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { ffmpegCoreFromEnv } from '../ffmpeg/engine.js';
 import { readInputBlob } from '../ffmpeg/input-blob.js';
 import { createIpkContextFromCtx } from '../ffmpeg/run.js';
 import { mountStagedInputs, newStage, stagedPath, unmountStagedInputs } from '../ffmpeg/staging.js';
@@ -119,9 +120,8 @@ Supported options:
 Unsupported options are rejected with a non-zero exit (never silently
 ignored). FFMPEG_ENGINE=wasm forces the emulation; FFMPEG_ENGINE=mediabunny
 refuses containers it cannot read instead of falling back. The fallback
-needs the same core pin as \`ffmpeg\` (\`@ffmpeg/core-mt\` on a
-cross-origin-isolated leader, else \`@ffmpeg/core\`):
-  ipk add -g @ffmpeg/core-mt@<pinned>
+needs the same core pin as \`ffmpeg\` (\`@ffmpeg/core\`, or
+\`@ffmpeg/core-mt\` with FFMPEG_CORE=mt on a cross-origin-isolated leader):
   ipk add -g @ffmpeg/core@<pinned>
 
 Examples:
@@ -134,9 +134,18 @@ Examples:
 }
 
 async function ffprobeVersion(ctx: CommandContext): Promise<CmdResult> {
-  const loaded = await tryLoadFfmpegCoreFromNodeModules(createIpkContextFromCtx(ctx));
+  const preferMt = ffmpegCoreFromEnv(ctx.env) === 'mt';
+  const loaded = await tryLoadFfmpegCoreFromNodeModules(
+    createIpkContextFromCtx(ctx),
+    undefined,
+    preferMt
+  );
   if (!loaded) {
-    return { stdout: '', stderr: `ffprobe: ${ffmpegCoreNotInstalledMessage()}\n`, exitCode: 1 };
+    return {
+      stdout: '',
+      stderr: `ffprobe: ${ffmpegCoreNotInstalledMessage(preferMt)}\n`,
+      exitCode: 1,
+    };
   }
   return {
     stdout: `ffprobe (emulated via @ffmpeg/ffmpeg — not a real ffprobe binary)\ncore: ${describeFfmpegCore(loaded)}\n`,
@@ -515,6 +524,7 @@ async function loadProbeCore(
         loadLog += `${msg}\n`;
       },
       ipk: createIpkContextFromCtx(ctx),
+      preferMt: ffmpegCoreFromEnv(ctx.env) === 'mt',
     });
     return { ffmpeg, loadLog };
   } catch (err) {

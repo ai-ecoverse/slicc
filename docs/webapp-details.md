@@ -33,12 +33,20 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 `import()`ed on first use like `ffprobe/run.ts`), `ffmpeg/` (staging, input blobs, both engines),
 `ffmpeg-wasm.ts` (core loader).
 
-- **Two cores, one pin.** `@ffmpeg/core` (single-threaded) and `@ffmpeg/core-mt` (pthreads over
-  SharedArrayBuffer) are ipk-installed by the user; the loader boots `-mt` only when
-  `crossOriginIsolated` is true (the hosted leader via Document-Isolation-Policy). Every
-  not-installed message goes through `ffmpegCoreNotInstalledMessage()` so the guidance names the
-  core the loader would actually prefer; `-version` prints the `core:` line via
-  `describeFfmpegCore()`. The live canary `ffmpeg-wasm-live.test.ts` resolves BOTH real packages.
+- **Two cores, one pin.** `@ffmpeg/core` (single-threaded, the default) and `@ffmpeg/core-mt`
+  (pthreads over SharedArrayBuffer) are ipk-installed by the user. The mt core is OPT-IN:
+  `FFMPEG_CORE=mt` (`ffmpeg/engine.ts`) on a `crossOriginIsolated` runtime (the hosted leader via
+  Document-Isolation-Policy). It is not the default because ffmpeg starts a demux thread per input
+  when there are several, and emscripten proxies those threads' `pthread_create` to a main thread
+  blocked in `exec` — every multi-input job deadlocks (verified live 2026-09-03: single-input x264 at
+  8 threads fine; any two-input lavfi job hangs, two workers past the 32-worker pool). `ffmpeg/run.ts`
+  refuses multi-input jobs on the mt core and injects `MT_THREAD_BUDGET` (`-threads 8`,
+  `-filter_threads 2`) unless the caller set them, because ffmpeg's defaults (1.5 × cores encoder
+  threads, one filter thread per core per graph) also exhaust the pool. The loader tracks which core
+  booted (`loadedFfmpegCorePackage()`); the first command's preference decides for the session.
+  Every not-installed message goes through `ffmpegCoreNotInstalledMessage(preferMt)`; `-version`
+  prints the `core:` line via `describeFfmpegCore()`. The live canary `ffmpeg-wasm-live.test.ts`
+  resolves BOTH real packages.
 - **Inputs never enter the wasm heap.** Each invocation gets a `StageNames` (`ffmpeg/staging.ts`):
   one WORKERFS mount at `/__in<id>` over `Blob`s, torn down with `unmountStagedInputs`. The
   `Blob` comes from `readInputBlob()` (`ffmpeg/input-blob.ts`): the VFS's native `File`

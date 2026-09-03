@@ -21,3 +21,22 @@ export function ffmpegEngineFromEnv(env: Map<string, string> | undefined): Ffmpe
   if (raw === 'wasm' || raw === 'mediabunny') return raw;
   return 'auto';
 }
+
+/**
+ * Which wasm core the `ffmpeg` / `ffprobe` fallback boots.
+ *
+ * - `st` (default): `@ffmpeg/core`, single-threaded, works everywhere.
+ * - `mt`: `@ffmpeg/core-mt` (pthreads over SharedArrayBuffer). Faster for
+ *   single-input encodes on a cross-origin-isolated leader, but it
+ *   DEADLOCKS on any job with more than one input — ffmpeg spawns a demux
+ *   thread per input and emscripten proxies `pthread_create` from those
+ *   threads to a main thread that is blocked inside `exec` (verified live
+ *   on the standalone harness, 2026-09-03). Opt-in until that is fixed.
+ */
+export type FfmpegCorePreference = 'st' | 'mt';
+
+export const FFMPEG_CORE_ENV = 'FFMPEG_CORE';
+
+export function ffmpegCoreFromEnv(env: Map<string, string> | undefined): FfmpegCorePreference {
+  return env?.get(FFMPEG_CORE_ENV)?.trim().toLowerCase() === 'mt' ? 'mt' : 'st';
+}

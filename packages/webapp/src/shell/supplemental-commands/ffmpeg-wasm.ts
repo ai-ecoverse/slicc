@@ -38,22 +38,22 @@ export const BUNDLED_FFMPEG_CORE_VERSION = __FFMPEG_CORE_VERSION__;
 export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_modules: run \`${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
 
 /**
- * The multi-threaded core (pthreads over SharedArrayBuffer). Preferred
- * automatically when the runtime is cross-origin isolated (the leader is,
- * via Document-Isolation-Policy — see #2040) AND the package is installed;
- * `@ffmpeg/core` remains the universal fallback because embedded floats
- * (Cherry, spoon/Electron) can never be isolated. Published in lockstep
- * with `@ffmpeg/core`, so the same pinned version applies.
+ * The multi-threaded core (pthreads over SharedArrayBuffer). OPT-IN via
+ * `FFMPEG_CORE=mt` on a cross-origin-isolated runtime (the hosted leader,
+ * via Document-Isolation-Policy — see #2040). It is not the default even
+ * where it could boot: ffmpeg spawns a demux thread per input when there
+ * is more than one, and those threads' `pthread_create` calls are proxied
+ * by emscripten to a main thread that is blocked inside `exec`, so every
+ * multi-input job deadlocks (verified live on the standalone harness,
+ * 2026-09-03). Single-input encodes are where it pays off. Embedded floats
+ * (Cherry, spoon/Electron) can never be isolated and always get
+ * `@ffmpeg/core`. Published in lockstep with `@ffmpeg/core`, so the same
+ * pinned version applies.
  */
 export const FFMPEG_CORE_MT_PACKAGE = '@ffmpeg/core-mt';
 
-/**
- * Install guidance for an isolated runtime, where the multi-threaded core
- * is the one worth installing. Kept separate from
- * {@link FFMPEG_CORE_NOT_INSTALLED} so a non-isolated float (Cherry,
- * Electron, older Chrome) is never told to install a core it cannot boot.
- */
-export const FFMPEG_CORE_MT_NOT_INSTALLED = `no ffmpeg core is installed in node_modules: this runtime is cross-origin isolated, so run \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\` for the multi-threaded core (\`${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` is the single-threaded fallback; no network fallback)`;
+/** Install guidance when the caller asked for the mt core (`FFMPEG_CORE=mt`). */
+export const FFMPEG_CORE_MT_NOT_INSTALLED = `@ffmpeg/core-mt is not installed in node_modules (FFMPEG_CORE=mt asked for the multi-threaded core): run \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\`, or unset FFMPEG_CORE and run \`${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
 
 /** `true` when this realm has SharedArrayBuffer and can run pthreads. */
 export function isCrossOriginIsolated(): boolean {
@@ -61,19 +61,22 @@ export function isCrossOriginIsolated(): boolean {
 }
 
 /**
- * The not-installed message that fits the calling runtime. Every surface
- * that reports a missing core (`ffmpeg`, `ffprobe`, the loader) goes
- * through here so the guidance an agent copies is the core the loader
- * would actually prefer — see {@link selectFfmpegCore}.
+ * The not-installed message that fits what the caller asked for. Every
+ * surface that reports a missing core (`ffmpeg`, `ffprobe`, the loader)
+ * goes through here so the guidance an agent copies is the core the
+ * loader would actually boot — see {@link selectFfmpegCore}.
  */
-export function ffmpegCoreNotInstalledMessage(isolated = isCrossOriginIsolated()): string {
-  return isolated ? FFMPEG_CORE_MT_NOT_INSTALLED : FFMPEG_CORE_NOT_INSTALLED;
+export function ffmpegCoreNotInstalledMessage(preferMt = false): string {
+  return preferMt && isCrossOriginIsolated()
+    ? FFMPEG_CORE_MT_NOT_INSTALLED
+    : FFMPEG_CORE_NOT_INSTALLED;
 }
 
 /**
  * One-line description of a resolved core for `-version` output: which
- * package, threaded or not, and — when a faster core is one `ipk add`
- * away — what to install. Exported for unit tests.
+ * package, threaded or not, the thread count, and — on an isolated
+ * runtime running the single-threaded core — how to opt into the mt core
+ * and what it cannot do. Exported for unit tests.
  */
 export function describeFfmpegCore(
   loaded: Pick<LoadedFfmpegCore, 'pkg'>,
@@ -83,10 +86,10 @@ export function describeFfmpegCore(
   const version = `${loaded.pkg} ${BUNDLED_FFMPEG_CORE_VERSION}`;
   if (loaded.pkg === FFMPEG_CORE_MT_PACKAGE) {
     const threads = typeof cores === 'number' && cores > 0 ? `, ${cores} threads` : '';
-    return `${version} (multi-threaded${threads})`;
+    return `${version} (multi-threaded${threads}; single-input jobs only)`;
   }
   if (isolated) {
-    return `${version} (single-threaded; this runtime is cross-origin isolated, run \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\` for multi-threading)`;
+    return `${version} (single-threaded; the multi-threaded core is opt-in on this isolated runtime: \`${GLOBAL_IPK_ADD} ${FFMPEG_CORE_MT_PACKAGE}@${BUNDLED_FFMPEG_CORE_VERSION}\` then FFMPEG_CORE=mt, single-input jobs only)`;
   }
   return `${version} (single-threaded; runtime is not cross-origin isolated)`;
 }
@@ -111,6 +114,8 @@ export interface IpkResolutionContext {
 }
 
 interface FfmpegAssetUrls {
+  /** Which core package the URLs came from. */
+  pkg: LoadedFfmpegCore['pkg'];
   coreURL: string;
   wasmURL: string;
   classWorkerURL?: string;
@@ -212,6 +217,19 @@ let currentFfmpeg: FFmpeg | null = null;
  */
 let currentAssetUrls: string[] = [];
 
+/** Package of the core {@link currentFfmpeg} runs, for per-core argv policy. */
+let currentCorePkg: LoadedFfmpegCore['pkg'] | null = null;
+
+/**
+ * Which core the cached instance booted (`null` while none is loaded).
+ * The `-mt` core needs a thread budget on every exec — see
+ * `MT_THREAD_BUDGET` in `ffmpeg/run.ts` — and only the loader knows which
+ * package it actually resolved.
+ */
+export function loadedFfmpegCorePackage(): LoadedFfmpegCore['pkg'] | null {
+  return currentCorePkg;
+}
+
 function revokeAssetUrls(urls: string[]): void {
   for (const url of urls) {
     try {
@@ -233,25 +251,37 @@ function revokeAssetUrls(urls: string[]): void {
  * throw {@link FFMPEG_CORE_NOT_INSTALLED}.
  */
 export async function getFfmpeg(
-  options: { onProgress?: (msg: string) => void; ipk?: IpkResolutionContext } = {}
+  options: {
+    onProgress?: (msg: string) => void;
+    ipk?: IpkResolutionContext;
+    /**
+     * Boot `@ffmpeg/core-mt` when installed AND the realm is isolated
+     * (`FFMPEG_CORE=mt`). The cached instance is realm-wide, so the first
+     * command's preference decides for the session.
+     */
+    preferMt?: boolean;
+  } = {}
 ): Promise<FFmpeg> {
   if (!ffmpegPromise) {
-    ffmpegPromise = loadFfmpeg(options.onProgress, options.ipk).catch((err) => {
-      // Reset on failure so the next call retries from scratch.
-      ffmpegPromise = null;
-      throw err;
-    });
+    ffmpegPromise = loadFfmpeg(options.onProgress, options.ipk, options.preferMt === true).catch(
+      (err) => {
+        // Reset on failure so the next call retries from scratch.
+        ffmpegPromise = null;
+        throw err;
+      }
+    );
   }
   return ffmpegPromise;
 }
 
 async function loadFfmpeg(
-  onProgress?: (msg: string) => void,
-  ipk?: IpkResolutionContext
+  onProgress: ((msg: string) => void) | undefined,
+  ipk: IpkResolutionContext | undefined,
+  preferMt: boolean
 ): Promise<FFmpeg> {
   const log = onProgress ?? (() => {});
   const ffmpeg = new FFmpeg();
-  const assets = await resolveAssetUrls(ipk, log);
+  const assets = await resolveAssetUrls(ipk, log, preferMt);
   const urls = [assets.coreURL, assets.wasmURL, assets.workerURL, assets.classWorkerURL].filter(
     (u): u is string => typeof u === 'string'
   );
@@ -271,6 +301,7 @@ async function loadFfmpeg(
   log('ffmpeg ready');
   currentFfmpeg = ffmpeg;
   currentAssetUrls = urls;
+  currentCorePkg = assets.pkg;
   return ffmpeg;
 }
 
@@ -288,15 +319,14 @@ async function loadFfmpeg(
  */
 export async function tryLoadFfmpegCoreFromNodeModules(
   ipk: IpkResolutionContext,
-  pkg?: LoadedFfmpegCore['pkg']
+  pkg?: LoadedFfmpegCore['pkg'],
+  preferMt = false
 ): Promise<LoadedFfmpegCore | null> {
-  // No explicit package → isolation-aware selection. The `ffmpeg -version`
-  // gate calls this no-arg form, so an isolated leader with only the -mt
-  // core installed reports ready instead of "not installed". (The gate
-  // lives in ffmpeg-command.ts, which is layer-back-edge debt-listed —
-  // the fix belongs here so that file stays untouched.)
+  // No explicit package → the same selection the loader makes. The
+  // `ffmpeg -version` gate calls this form, so a leader that opted into
+  // the -mt core reports ready instead of "not installed".
   if (pkg === undefined) {
-    return selectFfmpegCore(ipk, isCrossOriginIsolated());
+    return selectFfmpegCore(ipk, preferMt && isCrossOriginIsolated());
   }
   let resolved;
   try {
@@ -319,16 +349,16 @@ export async function tryLoadFfmpegCoreFromNodeModules(
 
 /**
  * Pick the core to boot: the multi-threaded `@ffmpeg/core-mt` when the
- * runtime is cross-origin isolated (SharedArrayBuffer available for its
- * pthread pool) and the package is installed; otherwise the single-threaded
- * `@ffmpeg/core`. Exported for unit tests; production passes
- * `globalThis.crossOriginIsolated`.
+ * caller opted in (`FFMPEG_CORE=mt` on a cross-origin-isolated runtime,
+ * so SharedArrayBuffer is available for its pthread pool) and the package
+ * is installed; otherwise the single-threaded `@ffmpeg/core`. Exported for
+ * unit tests; production passes `preferMt && isCrossOriginIsolated()`.
  */
 export async function selectFfmpegCore(
   ipk: IpkResolutionContext,
-  isolated: boolean
+  preferMt: boolean
 ): Promise<LoadedFfmpegCore | null> {
-  if (isolated) {
+  if (preferMt) {
     const mt = await tryLoadFfmpegCoreFromNodeModules(ipk, FFMPEG_CORE_MT_PACKAGE);
     if (mt) return mt;
   }
@@ -339,7 +369,8 @@ export async function selectFfmpegCore(
 
 async function resolveAssetUrls(
   ipk: IpkResolutionContext | undefined,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  preferMt: boolean
 ): Promise<FfmpegAssetUrls> {
   if (isNodeRuntime()) {
     // Node / vitest don't run the wasm core — every code path that
@@ -348,9 +379,10 @@ async function resolveAssetUrls(
     // a clear error if a caller still tries.
     throw new Error('ffmpeg-wasm is not available in Node runtime');
   }
-  if (!ipk) throw new Error(ffmpegCoreNotInstalledMessage());
-  const loaded = await selectFfmpegCore(ipk, isCrossOriginIsolated());
-  if (!loaded) throw new Error(ffmpegCoreNotInstalledMessage());
+  const wantMt = preferMt && isCrossOriginIsolated();
+  if (!ipk) throw new Error(ffmpegCoreNotInstalledMessage(wantMt));
+  const loaded = await selectFfmpegCore(ipk, wantMt);
+  if (!loaded) throw new Error(ffmpegCoreNotInstalledMessage(wantMt));
 
   log(
     `${loaded.pkg} loaded from ipk node_modules (js: ${loaded.coreSource.length} chars, wasm: ${loaded.wasmBytes.byteLength} bytes${loaded.workerSource ? ', multi-threaded' : ''})`
@@ -362,6 +394,7 @@ async function resolveAssetUrls(
   // `import(coreURL)` same-scheme. The -mt pthread worker rides the same
   // pattern (the official multithread recipe uses blob URLs for all three).
   return {
+    pkg: loaded.pkg,
     coreURL: stringToBlobUrl(loaded.coreSource, 'text/javascript'),
     wasmURL,
     ...(loaded.workerSource !== undefined
@@ -434,6 +467,7 @@ export function recycleFfmpeg(faulted?: FFmpeg): void {
   ffmpegPromise = null;
   currentFfmpeg = null;
   currentAssetUrls = [];
+  currentCorePkg = null;
 
   if (stale) {
     try {
@@ -454,4 +488,5 @@ export function resetFfmpegForTests(): void {
   ffmpegPromise = null;
   currentFfmpeg = null;
   currentAssetUrls = [];
+  currentCorePkg = null;
 }

@@ -36,23 +36,28 @@ banner. Unsupported options are rejected by name (never silently dropped).
 
 ## Install (wasm engine only)
 
-Two cores share one pin. Run `ffmpeg -version`: its `core:` line says which
-one is loaded and, on a cross-origin-isolated leader, whether the faster
-multi-threaded core is one install away.
-
 ```bash
-# Cross-origin-isolated leader (the hosted tab on current Chrome):
-# multi-threaded core, uses every CPU core for libx264 / libvpx / filters.
-ipk add -g @ffmpeg/core-mt@0.12.10
-
-# Everywhere else (Cherry, Electron, older browsers), and as a fallback:
 ipk add -g @ffmpeg/core@0.12.10
 ```
 
-Installing both is fine: the loader boots `core-mt` when the runtime is
-isolated and `core` otherwise. Prefer `-g` so scoops and the cone share one
-copy. Follow the pinned version printed by `ffmpeg --help` / `ffprobe --help`
-if it differs. There is no CDN fallback.
+Prefer `-g` so scoops and the cone share one copy. Follow the pinned
+version printed by `ffmpeg --help` / `ffprobe --help` if it differs.
+There is no CDN fallback. `ffmpeg -version` prints a `core:` line saying
+which core is loaded.
+
+**Multi-threaded core (opt-in, single-input jobs only).** On a
+cross-origin-isolated leader (the hosted tab on current Chrome):
+
+```bash
+ipk add -g @ffmpeg/core-mt@0.12.10
+FFMPEG_CORE=mt ffmpeg -i in.mp4 -c:v libx264 out.mp4
+```
+
+It uses several CPU cores for libx264 / libvpx and caps `-threads` and
+`-filter_threads` for you (pass your own to override). It deadlocks on any
+job with **more than one input** (ffmpeg's per-input demux threads), so such
+jobs are refused on it — run them without `FFMPEG_CORE=mt`. The first
+`ffmpeg` in a session decides which core stays loaded.
 
 ## ffprobe — what works
 

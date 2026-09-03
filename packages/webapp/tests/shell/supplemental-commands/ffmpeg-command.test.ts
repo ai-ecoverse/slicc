@@ -20,6 +20,7 @@ import {
   BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
+  loadedFfmpegCorePackage,
   recycleFfmpeg,
   selectFfmpegCore,
   tryLoadFfmpegCoreFromNodeModules,
@@ -34,7 +35,12 @@ vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
   const actual = await vi.importActual<
     typeof import('../../../src/shell/supplemental-commands/ffmpeg-wasm.js')
   >('../../../src/shell/supplemental-commands/ffmpeg-wasm.js');
-  return { ...actual, getFfmpeg: vi.fn(), recycleFfmpeg: vi.fn() };
+  return {
+    ...actual,
+    getFfmpeg: vi.fn(),
+    recycleFfmpeg: vi.fn(),
+    loadedFfmpegCorePackage: vi.fn(() => null),
+  };
 });
 
 // The page-realm branch of `requestCapturePermission` looks up the
@@ -1020,10 +1026,11 @@ describe('ffmpeg -version gating (NS2c)', () => {
     expect(result.stdout).toContain('ffmpeg');
   });
 
-  it('reports ready on an isolated leader with ONLY @ffmpeg/core-mt installed', async () => {
-    // The version gate resolves through the loader's no-arg (isolation-
-    // aware) form — an mt-only install that transcoding would happily
-    // boot must not report "not installed".
+  it('reports ready on an isolated leader with ONLY @ffmpeg/core-mt installed when opted in', async () => {
+    // The version gate resolves through the same selection the loader
+    // makes — an mt-only install that FFMPEG_CORE=mt would boot must not
+    // report "not installed"; without the opt-in it must, and it must
+    // point at the single-threaded core.
     const root = '/workspace/node_modules/@ffmpeg/core-mt';
     const sources = new Map<string, string>([
       [`${root}/package.json`, JSON.stringify({ name: '@ffmpeg/core-mt', version: '0.12.10' })],
@@ -1060,9 +1067,15 @@ describe('ffmpeg -version gating (NS2c)', () => {
     });
     vi.stubGlobal('crossOriginIsolated', true);
     try {
+      const noOptIn = await createFfmpegCommand().execute(['-version'], ctx);
+      expect(noOptIn.exitCode).toBe(1);
+      expect(noOptIn.stderr).toContain(FFMPEG_CORE_NOT_INSTALLED);
+
+      ctx.env.set('FFMPEG_CORE', 'mt');
       const result = await createFfmpegCommand().execute(['-version'], ctx);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('ffmpeg');
+      expect(result.stdout).toContain('core: @ffmpeg/core-mt');
+      expect(result.stdout).toContain('single-input jobs only');
       expect(result.stderr).toBe('');
     } finally {
       vi.unstubAllGlobals();
@@ -1911,4 +1924,93 @@ describe('mediabunny fast path', () => {
     expect(result.stderr).toMatch(/cannot write copy\.wav: EROFS/);
     expect(getFfmpeg).not.toHaveBeenCalled();
   }, 20_000);
+});
+
+describe('multi-threaded core guard rails', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+    vi.mocked(loadedFfmpegCorePackage).mockReset();
+    vi.mocked(loadedFfmpegCorePackage).mockReturnValue(null);
+  });
+
+  it('refuses a multi-input job on the mt core instead of deadlocking', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    useFakeFfmpeg(fake);
+    vi.mocked(loadedFfmpegCorePackage).mockReturnValue('@ffmpeg/core-mt');
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'wasm');
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'a.mp4', '-i', 'b.mp4', '-filter_complex', '[0:v][1:v]hstack', 'out.mp4'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/multi-threaded core deadlocks with more than one input/);
+    expect(fake.exec).not.toHaveBeenCalled();
+    expect(fake.mount).not.toHaveBeenCalled();
+  });
+
+  it('injects the thread budget on the mt core and leaves caller flags alone', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1]) });
+    useFakeFfmpeg(fake);
+    vi.mocked(loadedFfmpegCorePackage).mockReturnValue('@ffmpeg/core-mt');
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'wasm');
+
+    await createFfmpegCommand().execute(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], ctx);
+    const argv = fake.exec.mock.calls[0][0] as string[];
+    expect(argv.slice(0, 4)).toEqual(['-filter_threads', '2', '-filter_complex_threads', '2']);
+    expect(argv.filter((t) => t === '-threads')).toHaveLength(2); // decoder + encoder
+    expect(argv.indexOf('-threads')).toBeLessThan(argv.indexOf('-i'));
+
+    fake.exec.mockClear();
+    await createFfmpegCommand().execute(
+      ['-filter_threads', '1', '-threads', '3', '-i', 'in.mp4', '-threads', '5', 'out.mp4'],
+      ctx
+    );
+    const argv2 = fake.exec.mock.calls[0][0] as string[];
+    expect(argv2.filter((t) => t === '-threads')).toHaveLength(2);
+    expect(argv2[argv2.indexOf('-filter_threads') + 1]).toBe('1');
+    expect(argv2).toContain('-filter_complex_threads');
+  });
+
+  it('adds nothing on the single-threaded core', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1]) });
+    useFakeFfmpeg(fake);
+    vi.mocked(loadedFfmpegCorePackage).mockReturnValue('@ffmpeg/core');
+    const ctx = createMockCtx();
+    ctx.env.set('FFMPEG_ENGINE', 'wasm');
+
+    await createFfmpegCommand().execute(['-i', 'in.mp4', '-i', 'b.mp4', 'out.mp4'], ctx);
+    const argv = fake.exec.mock.calls[0][0] as string[];
+    expect(argv).not.toContain('-threads');
+    expect(argv).not.toContain('-filter_threads');
+  });
+});
+
+describe('applyMtThreadBudget', () => {
+  it('caps the encoder budget at the machine core count', async () => {
+    const { applyMtThreadBudget } = await import(
+      '../../../src/shell/supplemental-commands/ffmpeg/run.js'
+    );
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', 'out.mp4']);
+    const p4 = applyMtThreadBudget(parsed, { threads: 8, filterThreads: 2 }, 4);
+    expect(p4.outputOpts.slice(0, 2)).toEqual(['-threads', '4']);
+    const p8 = applyMtThreadBudget(parsed, { threads: 8, filterThreads: 2 }, 16);
+    expect(p8.outputOpts.slice(0, 2)).toEqual(['-threads', '8']);
+    expect(p8.inputs[0].raw.slice(0, 6)).toEqual([
+      '-filter_threads',
+      '2',
+      '-filter_complex_threads',
+      '2',
+      '-threads',
+      '8',
+    ]);
+    // Per-stream `-threads:v` counts as caller intent too.
+    const explicit = applyMtThreadBudget(
+      parseFfmpegArgs(['-i', 'in.mp4', '-threads:v', '2', 'o.mp4'])
+    );
+    expect(explicit.outputOpts.filter((t) => t.startsWith('-threads'))).toEqual(['-threads:v']);
+  });
 });
