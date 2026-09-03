@@ -85,6 +85,17 @@ start/resume flows:
     does.** A followed request that lost the parameter lands on the SPA fallback, which
     answers `200` + HTML for a `GET` probe and would make a live replacement look dead.
     The link stays bare because it is what followers persist as the session's join URL.
+  - **`?redirect=manual` opts out**, and the answer is then the pre-#1957 `409` +
+    link + body — no `Location`. It exists for the browser follower alone, which cannot
+    suppress redirect-following (`redirect: 'manual'` in `fetch` yields an
+    opaque-redirect filtered response: no status, headers, or body, even same-origin).
+    Left to the platform, a chain of superseded trays is walked end to end and arrives
+    as ONE observable hop, so `MAX_SUPERSEDE_REDIRECTS` counts 1 for a chain of any
+    length and a cycle burns the browser's own redirect limit in immediate re-POSTs.
+    Being told about one hop at a time is what the other four followers get by
+    suppressing redirects themselves. The parameter is a per-request probe detail: it
+    is never stored and never copied onto `Location`, and the webapp strips it (with
+    `json`) from any URL it persists.
   - Both header targets are normalized through `URL`, so a stored join URL cannot inject
     a header delimiter. A replacement that does not parse keeps the old `409` +
     `action: "fail"` shape — a redirect needs a target.

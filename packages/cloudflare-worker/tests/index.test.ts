@@ -2105,6 +2105,51 @@ describe('POST /api/tray/:trayId/supersede', () => {
     expect(followerAttach.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
   });
 
+  it('answers ?redirect=manual with the terminal 409 + link, no Location', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
+
+    await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: freshJoinUrl }),
+      }),
+      env
+    );
+
+    const attachUrl = new URL(joinUrl);
+    attachUrl.searchParams.set('json', 'true');
+    attachUrl.searchParams.set('redirect', 'manual');
+    const followerAttach = await handleWorkerRequest(
+      new Request(attachUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'follow-1', runtime: 'browser' }),
+      }),
+      env
+    );
+
+    // A browser cannot suppress redirect-following, so it needs to be TOLD
+    // about each hop to count it against MAX_SUPERSEDE_REDIRECTS. Emitting a
+    // Location here would let the platform walk a whole chain as one hop.
+    expect(followerAttach.status).toBe(409);
+    expect(followerAttach.headers.get('Location')).toBeNull();
+    expect(followerAttach.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
+    const body = (await followerAttach.json()) as {
+      result: { action: string; code: string; joinUrl: string };
+    };
+    expect(body.result).toMatchObject({
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      joinUrl: freshJoinUrl,
+    });
+  });
+
   it('returns a 308 on a plain GET status probe once marked superseded', async () => {
     const { env } = createTestHarness();
     const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
@@ -2265,6 +2310,20 @@ describe('standard Link header set', () => {
     expect(supersededLocation('not-a-url', new URL('https://www.sliccy.ai/join/old.beef'))).toBe(
       null
     );
+  });
+
+  it('prefersManualRedirect only on the exact redirect=manual opt-out', async () => {
+    const { prefersManualRedirect } = await import('../src/links.js');
+    const at = (search: string) =>
+      prefersManualRedirect(new URL(`https://www.sliccy.ai/join/old.beef${search}`));
+
+    expect(at('?redirect=manual')).toBe(true);
+    expect(at('?json=true&redirect=manual')).toBe(true);
+    expect(at('')).toBe(false);
+    // Anything other than the exact value is a client we do not know, and the
+    // safe default for an unknown client is the redirect every platform follows.
+    expect(at('?redirect=follow')).toBe(false);
+    expect(at('?redirect=1')).toBe(false);
   });
 });
 

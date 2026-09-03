@@ -44,7 +44,7 @@ import {
   handleProviderTokenRequest,
   SharedProviderTokenSource,
 } from './apns-provider-token.js';
-import { supersededLinkHeaders, supersededLocation } from './links.js';
+import { prefersManualRedirect, supersededLinkHeaders, supersededLocation } from './links.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type BiscottoDeps, dispatchBiscottoRoute } from './session-tray-biscotto.js';
@@ -688,9 +688,12 @@ export class SessionTrayDurableObject {
    * redirect-following keys off the link or `code` rather than `action`, and
    * every client that does not suppress them never sees this body at all.
    *
-   * A replacement that does not parse as a URL keeps the old 409 `fail` shape:
-   * there is no target, so the outcome really is terminal and a 3xx would be a
-   * redirect to nowhere.
+   * Two cases keep the pre-#1957 409 `fail` shape. A replacement that does not
+   * parse as a URL, because there is no target and a 3xx would be a redirect to
+   * nowhere. And a request carrying `?redirect=manual`, because a client that
+   * cannot suppress redirect-following needs to be *told* about each hop to
+   * count it — see {@link prefersManualRedirect}. Both keep the
+   * `successor-version` link, which is all a client needs to follow the hop.
    */
   private async supersededResponse(
     joinUrl: string,
@@ -698,7 +701,9 @@ export class SessionTrayDurableObject {
     requestUrl: URL
   ): Promise<Response> {
     const error = 'This session moved to a new tray after the leader reconnected';
-    const location = supersededLocation(joinUrl, requestUrl);
+    const location = prefersManualRedirect(requestUrl)
+      ? null
+      : supersededLocation(joinUrl, requestUrl);
     const headers = {
       ...supersededLinkHeaders(joinUrl),
       ...(location ? { Location: location } : {}),

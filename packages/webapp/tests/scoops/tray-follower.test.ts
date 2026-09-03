@@ -41,7 +41,7 @@ describe('tray-follower', () => {
       retryAfterMs: 1000,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://tray.example.com/join/token?json=true',
+      'https://tray.example.com/join/token?json=true&redirect=manual',
       expect.objectContaining({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -488,7 +488,7 @@ describe('tray-follower', () => {
 
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
-      'https://tray.example.com/join/token?json=true',
+      'https://tray.example.com/join/token?json=true&redirect=manual',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -501,7 +501,7 @@ describe('tray-follower', () => {
     );
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
-      'https://tray.example.com/join/token?json=true',
+      'https://tray.example.com/join/token?json=true&redirect=manual',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -514,7 +514,7 @@ describe('tray-follower', () => {
     );
     expect(fetchImpl).toHaveBeenNthCalledWith(
       3,
-      'https://tray.example.com/join/token?json=true',
+      'https://tray.example.com/join/token?json=true&redirect=manual',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({

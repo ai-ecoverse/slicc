@@ -23,14 +23,37 @@ function appendJsonParam(url: string): string {
 }
 
 /**
- * Undo {@link appendJsonParam} so a followed redirect yields the canonical
- * join URL. The hub puts `json=true` on the supersede `Location` (#1957) —
- * without it a followed request lands on the SPA fallback — but the parameter
- * is a probe detail and must not end up in the persisted session URL.
+ * Ask the hub for a supersede it can observe rather than one the platform
+ * swallows.
+ *
+ * `fetch` cannot be made to hand back a 308: `redirect: 'manual'` yields an
+ * opaque-redirect filtered response with no status, headers, or body, even
+ * same-origin. So a chain of superseded trays is followed end to end by the
+ * browser and shows up here as a single hop — `MAX_SUPERSEDE_REDIRECTS` would
+ * count 1 for a chain of any length, and a cycle would burn the browser's own
+ * redirect limit in immediate re-POSTs and surface as a generic network error
+ * instead of the intended bound. `?redirect=manual` makes the hub answer with
+ * the terminal 409 + `successor-version` link instead (#1957), which is one hop
+ * at a time — the same thing the Node, Go, and Swift followers get by
+ * suppressing redirect-following themselves.
  */
-function stripJsonParam(url: string): string {
+function appendManualRedirectParam(url: string): string {
+  const u = new URL(url);
+  u.searchParams.set('redirect', 'manual');
+  return u.toString();
+}
+
+/**
+ * Undo {@link appendJsonParam} and {@link appendManualRedirectParam} so a URL
+ * derived from a request never carries a probe parameter into the persisted
+ * session. The hub puts `json=true` on the supersede `Location` (#1957) —
+ * without it a followed request lands on the SPA fallback — and `redirect` is
+ * ours, echoed back by `response.url`.
+ */
+function stripProbeParams(url: string): string {
   const u = new URL(url);
   u.searchParams.delete('json');
+  u.searchParams.delete('redirect');
   return u.toString();
 }
 
@@ -85,7 +108,7 @@ export interface FollowerBootstrapPlan {
 export async function attachTrayFollower(
   options: FollowerAttachOptions
 ): Promise<FollowerAttachPlan> {
-  const fetchUrl = appendJsonParam(options.joinUrl);
+  const fetchUrl = appendManualRedirectParam(appendJsonParam(options.joinUrl));
   const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -95,19 +118,19 @@ export async function attachTrayFollower(
     }),
   });
 
-  // The hub answers a superseded tray with a 308 (#1957), and a browser cannot
-  // opt out of following one: `redirect: 'manual'` yields an opaque-redirect
-  // filtered response with no status, headers or body, even same-origin. So the
-  // hop has already happened here and `response.url` is the only place the
-  // replacement survives — the final response's headers belong to the new tray.
+  // Fallback for a hub that does not honor `?redirect=manual` (one deployed
+  // before it existed): the platform followed the 308 chain, so the hop already
+  // happened and `response.url` is the only place the replacement survives —
+  // the final response's headers and body belong to the new tray.
   //
-  // The followed body is discarded rather than used. Reporting the hop instead
-  // keeps ONE supersede path for every caller: `FollowerTrayManager` still owns
-  // the bound (MAX_SUPERSEDE_REDIRECTS), the inter-hop delay, and the
-  // `onJoinUrlChanged` persistence that a silently-followed redirect would skip
-  // — at the cost of re-attaching to the replacement explicitly.
+  // Reporting the hop keeps ONE supersede path for every caller:
+  // `FollowerTrayManager` still owns the inter-hop delay and the
+  // `onJoinUrlChanged` persistence a silently-followed redirect would skip.
+  // What it CANNOT recover is the hop count — a chain of any length arrives as
+  // one redirect here, so `MAX_SUPERSEDE_REDIRECTS` under-counts it. That is
+  // the whole reason for the opt-out above, and why this stays a fallback.
   if (response.redirected && response.url) {
-    const followed = stripJsonParam(response.url);
+    const followed = stripProbeParams(response.url);
     log.info('Follower tray attach was redirected, reporting the replacement', {
       requested: options.joinUrl,
       followed,
@@ -305,7 +328,12 @@ async function postFollowerBootstrapRequest(
   options: FollowerBootstrapOptions,
   body: FollowerBootstrapRequest
 ): Promise<FollowerBootstrapResponse> {
-  const fetchUrl = appendJsonParam(options.joinUrl);
+  // Opts out of redirect semantics for the same reason the attach does, plus
+  // one specific to bootstrap: a silently-followed 308 would re-POST this
+  // bootstrap — cursor, `bootstrapId` and all — to a tray that has never heard
+  // of it, and the caller would read the answer as progress on its own
+  // handshake. A supersede belongs to whoever owns the join URL, not here.
+  const fetchUrl = appendManualRedirectParam(appendJsonParam(options.joinUrl));
   const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

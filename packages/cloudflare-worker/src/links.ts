@@ -108,3 +108,26 @@ export function supersededLocation(joinUrl: string, requestUrl: URL): string | n
   }
   return target.href;
 }
+
+/**
+ * Whether the caller asked to be told about a supersede instead of redirected
+ * through it — `?redirect=manual`, spelled after `RequestInit.redirect`.
+ *
+ * Exists for exactly one client: a browser. Every other follower suppresses
+ * redirect-following itself and counts hops one at a time, but `fetch` cannot
+ * be made to hand a 308 back (`redirect: 'manual'` yields an opaque-redirect
+ * filtered response — no status, headers, or body, even same-origin). Left to
+ * the platform, a chain of superseded trays is followed end to end and arrives
+ * as ONE observable hop, so `MAX_SUPERSEDE_REDIRECTS` counts 1 for a chain of
+ * any length and a cycle burns the browser's own redirect limit in immediate
+ * re-POSTs before failing as a generic network error.
+ *
+ * A client that sets it gets the pre-#1957 terminal shape (409 + the
+ * `successor-version` link + the body), which is exactly enough to take one hop
+ * and come back for the next. The parameter is a per-request probe detail: it
+ * is never stored, never copied onto `Location`, and a client must strip it
+ * from any URL it persists.
+ */
+export function prefersManualRedirect(requestUrl: URL): boolean {
+  return requestUrl.searchParams.get('redirect') === 'manual';
+}
