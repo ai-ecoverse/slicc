@@ -31,7 +31,9 @@ function harness(options: { activeDock?: string | null } = {}) {
   const freezer = document.createElement('div');
   const memoryHost = document.createElement('slicc-memory-panel');
   const composer = document.createElement('slicc-composer');
-  document.body.append(inputCard, thread, dockTree, freezer, memoryHost, composer);
+  const chatPane = document.createElement('slicc-chatpane');
+  chatPane.append(composer);
+  document.body.append(inputCard, thread, dockTree, freezer, memoryHost, chatPane);
   const selectFile = vi.fn();
   const fileTree = { rows: [] as string[], visibleIds: () => fileTree.rows, selectFile };
   const deps: ShortcutSurfaceDeps = {
@@ -41,6 +43,7 @@ function harness(options: { activeDock?: string | null } = {}) {
     dock: { active: options.activeDock ?? null, selectItem },
     freezer,
     composer,
+    chatPane,
     fileTree: fileTree as unknown as ShortcutSurfaceDeps['fileTree'],
     memoryHost,
   };

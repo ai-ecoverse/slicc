@@ -493,6 +493,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     freezer: freezer as unknown as SliccFreezer & HTMLElement,
     composerMeta: composerMeta as unknown as SliccComposerMeta,
     composer,
+    chatPane: pane,
     inputCard,
     thread,
     frame,

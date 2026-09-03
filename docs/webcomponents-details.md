@@ -305,6 +305,33 @@ Non-obvious rules:
   (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
   use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
+## Keyboard-mode HUD (`<slicc-key-hud>`)
+
+The bar keyboard mode wears: a lucide `keyboard` glyph, the mode's name, a
+hint at rest, and a strip of key caps as keys land. Two host contracts:
+
+- **It pins itself** (`position: absolute; bottom: 0`) to the nearest
+  positioned ancestor, which the shell makes `<slicc-chatpane>` — the column,
+  not the composer band, so it survives a read-only unit hiding the band
+  (#2312). `.slicc-chatpane` is `position: relative` for exactly this.
+- **The host owns the words.** `hint` takes a `[x]` notation — bracketed
+  tokens become caps, everything else is text the DOM escapes — so the shell
+  can name the keys its live keymap actually binds. A key that is a SHAPE
+  (Enter, the arrows) draws its lucide glyph inside the cap and carries an
+  `aria-label`; modifiers stay as characters, which is how the keys are
+  printed.
+
+Presses arrive imperatively (`record(caps, bound)`, which arms the linger that
+brings the hint back) or declaratively (`presses`, which does not — a story or
+a test states a moment and it stays put). The bar's height is FIXED across
+both states: it is up for as long as the mode is, and one that grew a few
+pixels per keystroke would twitch under the composer all session. An unbound
+press is drawn dimmed rather than dropped, because a blank HUD reads as a dead
+keyboard.
+
+The composer's side of it is `slicc-composer[keys]`: everything the band holds
+recedes to 55% except the HUD.
+
 ## Tablist arrows vs a host keyboard
 
 `<slicc-agent-tabs>` implements the ARIA tablist keyboard: with a segment
