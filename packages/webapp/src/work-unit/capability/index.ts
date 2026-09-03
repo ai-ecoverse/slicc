@@ -3,17 +3,30 @@
  *
  * Slice A shipped the protocol and one page stub. Slice B replaced the stubs
  * with real adapters keyed by float topology (`node-rest`, `extension-direct`,
- * `extension-delegate`, `connect`), composed once in `kernel/host.ts`.
+ * `extension-delegate`, `connect`), composed once in `kernel/host.ts`. Slice C
+ * migrates the remaining privileged call sites off direct float probes, one
+ * PR per domain — network is done.
  *
- * TODO(#2276) slice C: privileged call sites that still branch on float /
- * topology (`isChromeExtensionRealm` / `isExtensionRealm` /
+ * `network` (#2276 slice C, done): `scoops/tray-leader.ts` (`createTrayFetch`),
+ * `shell/proxied-fetch.ts` (`createProxiedFetch`) and `shell/mcp/redirect-uri.ts`
+ * were NOT rewired onto `broker.network.crossOriginFetch` — they are
+ * `SecureFetch`-shaped transport factories called from 18+ shell sites with
+ * no broker in scope, not privileged operations behind an allowlist, so
+ * threading a broker instance through all of them would have been a
+ * different, much larger refactor. Instead each call site takes the ANSWER
+ * by injection rather than probing: `tray-leader.ts` and `proxied-fetch.ts`
+ * read `getChromeExtensionRealm()` (`base/api-endpoint.ts`'s lazily-cached,
+ * per-realm fact — resolved once, not re-probed per call, mirroring the
+ * existing `extensionDelegateId` / `localApiBaseUrl` idiom in that same
+ * module); `redirect-uri.ts`'s `resolveMcpRedirectUri` takes `topology` as a
+ * parameter, resolved by its two callers at the point they actually need a
+ * redirect URI. See `docs/work-unit.md` phase 6c.
+ *
+ * TODO(#2276) slice C, remaining domains — privileged call sites that still
+ * branch on float / topology (`isChromeExtensionRealm` / `isExtensionRealm` /
  * `hasLocalNodeServer` / `resolveFloatTopology`) rather than this broker.
  * One PR per domain, smallest first:
  *
- * network
- *   - scoops/tray-leader.ts `createTrayFetch`
- *   - shell/proxied-fetch.ts `createProxiedFetch`
- *   - shell/mcp/redirect-uri.ts
  * secrets
  *   - scoops/scoop-context/shell-and-skills.ts `fetchSecretEnvVars`
  *   - shell/supplemental-commands/secret-command.ts

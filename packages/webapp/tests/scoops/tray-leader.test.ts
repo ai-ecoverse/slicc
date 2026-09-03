@@ -11,7 +11,11 @@ import {
   subscribeToLeaderTrayRuntimeStatus,
   TrayProxyFetchError,
 } from '../../src/scoops/tray-leader.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
+import {
+  setBridgeToken,
+  setChromeExtensionRealm,
+  setLocalApiBaseUrl,
+} from '../../src/shell/proxied-fetch.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -1061,12 +1065,18 @@ describe('createTrayFetch', () => {
     } else {
       delete (globalThis as { chrome?: unknown }).chrome;
     }
+    // `getChromeExtensionRealm()` caches its answer per realm (#2276); force
+    // a fresh read of the stub above instead of the previous test's cached
+    // value, and reset the cache back to "unresolved" on restore so later
+    // describe blocks re-probe their own stub.
+    setChromeExtensionRealm(mode === 'extension');
     return () => {
       if (original === undefined) {
         delete (globalThis as { chrome?: unknown }).chrome;
       } else {
         (globalThis as { chrome?: unknown }).chrome = original;
       }
+      setChromeExtensionRealm(null);
     };
   };
 
@@ -1792,6 +1802,9 @@ describe('createTrayFetch — thin-bridge URL + token', () => {
         (globalThis as { chrome?: unknown }).chrome = original;
       }
     };
+    // Force a fresh read of the deleted-chrome stub above (#2276's cache
+    // otherwise carries over whatever the previous describe block set).
+    setChromeExtensionRealm(false);
     setLocalApiBaseUrl(null);
     setBridgeToken(null);
   });
@@ -1799,6 +1812,7 @@ describe('createTrayFetch — thin-bridge URL + token', () => {
   afterEach(() => {
     setLocalApiBaseUrl(null);
     setBridgeToken(null);
+    setChromeExtensionRealm(null);
     restoreChrome();
   });
 

@@ -10,8 +10,7 @@ import {
   subscribeToLeaderTrayRuntimeStatus,
 } from '../base/tray-leader-status.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
-import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
+import { apiHeaders, getChromeExtensionRealm, resolveApiUrl } from '../shell/proxied-fetch.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 
@@ -679,7 +678,10 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
 }
 
 export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
-  const isExtension = isExtensionRealm();
+  // Reads the realm's cached answer (`base/api-endpoint.ts`, re-exported via
+  // `shell/proxied-fetch.ts`) rather than probing directly (#2276): the same
+  // fact `createProxiedFetch` asks, resolved once per realm.
+  const isExtension = getChromeExtensionRealm();
   if (isExtension) {
     // Wrap so calling `this.fetchImpl(...)` doesn't rebind `this` to the
     // LeaderTrayManager instance and trigger "Illegal invocation" against

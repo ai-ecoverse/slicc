@@ -21,7 +21,6 @@
 import {
   base64ToUint8,
   type FetchProxyResponseMsg,
-  isChromeExtensionRealm,
   isTextContentType,
   uint8ToBase64,
 } from '@slicc/shared-ts';
@@ -96,15 +95,22 @@ const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
  * layer can read it without importing up the stack. Re-exported here because
  * this module has always been its public address.
  */
-import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../base/api-endpoint.js';
+import {
+  apiHeaders,
+  getChromeExtensionRealm,
+  getExtensionDelegateId,
+  resolveApiUrl,
+} from '../base/api-endpoint.js';
 
 export {
   apiHeaders,
   getBridgeToken,
+  getChromeExtensionRealm,
   getExtensionDelegateId,
   getLocalApiBaseUrl,
   resolveApiUrl,
   setBridgeToken,
+  setChromeExtensionRealm,
   setExtensionDelegateId,
   setLocalApiBaseUrl,
 } from '../base/api-endpoint.js';
@@ -584,8 +590,10 @@ export async function collectViaExtensionDelegate(
 export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): SecureFetch {
   const progress = fetchOptions.progress;
   // 1. Real extension page (offscreen / options): `chrome.runtime.id` is
-  //    truthy. Use the id-less Port connect — UNCHANGED.
-  if (isChromeExtensionRealm()) {
+  //    truthy. Use the id-less Port connect — UNCHANGED. Reads the realm's
+  //    cached answer (`base/api-endpoint.ts`) rather than probing directly
+  //    (#2276): the fact is resolved once per realm, not re-checked per call.
+  if (getChromeExtensionRealm()) {
     return (url, options) => extensionPortFetch(url, options, progress);
   }
 

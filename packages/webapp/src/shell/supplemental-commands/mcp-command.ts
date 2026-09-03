@@ -21,6 +21,7 @@ import { defineCommand } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { OAuthLauncher } from '../../providers/types.js';
+import { resolveFloatTopology } from '../float-topology.js';
 import { McpTimeoutError } from '../mcp/client.js';
 import type { FetchLike } from '../mcp/oauth.js';
 import { resolveMcpRedirectUri } from '../mcp/redirect-uri.js';
@@ -257,7 +258,7 @@ async function runOAuthForAdd(
     discoveryPath: asMetadata.discoveryPath,
     issuer: asMetadata.issuer,
   });
-  const redirectUri = await resolveMcpRedirectUri();
+  const redirectUri = await resolveMcpRedirectUri(resolveFloatTopology());
   const dcr = await dynamicRegister(asMetadata, redirectUri, fetchImpl);
   const scope =
     asMetadata.supportedScopes && asMetadata.supportedScopes.length > 0

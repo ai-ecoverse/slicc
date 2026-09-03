@@ -21,6 +21,7 @@ import {
   unregisterProviderConfig,
 } from '../../providers/index.js';
 import type { OAuthLauncher, ProviderConfig } from '../../providers/types.js';
+import { resolveFloatTopology } from '../float-topology.js';
 import {
   type DiscoveredAuth,
   discoverAuth,
@@ -142,7 +143,7 @@ function buildProviderConfig(opts: RegisterMcpProviderOptions): ProviderConfig {
         asMetadata,
         clientId: opts.auth.clientId,
         scope: opts.auth.scope,
-        redirectUri: opts.auth.redirectUri ?? (await resolveMcpRedirectUri()),
+        redirectUri: opts.auth.redirectUri ?? (await resolveMcpRedirectUri(resolveFloatTopology())),
         launcher: effectiveLauncher,
         fetchImpl,
       });

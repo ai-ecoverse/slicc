@@ -14,6 +14,7 @@ import {
   type FetchProgressObserver,
   getResponseBodyCap,
   readResponseBody,
+  setChromeExtensionRealm,
   setResponseBodyCap,
 } from '../../src/shell/proxied-fetch.js';
 
@@ -161,6 +162,9 @@ describe('response body cap — extension Port path', () => {
   afterEach(() => {
     setResponseBodyCap(null);
     (globalThis as { chrome?: unknown }).chrome = undefined;
+    // `getChromeExtensionRealm()` caches its answer per realm (#2276); force
+    // a fresh read of the next block's stub instead of this one's.
+    setChromeExtensionRealm(null);
   });
 
   it('rejects on the response-head content-length and disconnects the Port', async () => {
@@ -168,6 +172,7 @@ describe('response body cap — extension Port path', () => {
     (globalThis as { chrome?: unknown }).chrome = {
       runtime: { connect: vi.fn(() => port), id: 'test-id' },
     };
+    setChromeExtensionRealm(true);
     const { calls, observer } = recorder();
     const pending = createProxiedFetch({ progress: observer })(url);
     await new Promise((r) => setTimeout(r, 0));
@@ -188,6 +193,7 @@ describe('response body cap — extension Port path', () => {
     (globalThis as { chrome?: unknown }).chrome = {
       runtime: { connect: vi.fn(() => port), id: 'test-id' },
     };
+    setChromeExtensionRealm(true);
     const pending = createProxiedFetch()(url);
     await new Promise((r) => setTimeout(r, 0));
     emit({
