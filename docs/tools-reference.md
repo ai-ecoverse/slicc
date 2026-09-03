@@ -388,11 +388,11 @@ name that is not here is an error, never a cross-cone match.
 When `policy.canCreateChildren` is true (every root, and a child given the
 nested-delegation grant). Create a new scoop owned by the caller.
 
-| Property   | Value                                                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Name**   | `scoop_scoop`                                                                                                                                      |
-| **Input**  | `{ name: string, canCreateChildren?: boolean, … }` — display name (e.g., "Andy"); `canCreateChildren: true` grants the new scoop nested delegation |
-| **Output** | `{ content: "Scoop created" }`                                                                                                                     |
+| Property   | Value                                                                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Name**   | `scoop_scoop`                                                                                                                                                                                                             |
+| **Input**  | `{ name: string, canCreateChildren?: boolean, workspaceMode?: string, … }` — display name (e.g., "Andy"); `canCreateChildren: true` grants nested delegation; `workspaceMode` is `shared-readonly` (default) or `private` |
+| **Output** | `{ content: "Scoop created" }`                                                                                                                                                                                            |
 
 **Behavior**:
 
@@ -407,6 +407,7 @@ nested-delegation grant). Create a new scoop owned by the caller.
 - `canCreateChildren: true` stamps `ScoopConfig.canCreateChildren` so the
   new scoop may create and manage its own children; refused when the caller
   does not hold the flag (`isPolicySubset`)
+- Optional `workspaceMode`: `shared-readonly` (default, today's sandbox) or `private` (own `/scoops/<folder>/` only — no parent workspace, no implicit `/shared/`, mounts not auto-visible). `snapshot` / `shared-live` are rejected.
 
 ---
 

@@ -10,7 +10,12 @@
  * completion bus — it must not grow a second waiter table.
  */
 
-import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../scoops/types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ScoopConfig,
+} from '../scoops/types.js';
+import { defaultChildPathsForMode, workspaceFor } from './descriptor.js';
 import { assertChildPolicyAllowed, childrenOf, rootsOf } from './policy.js';
 import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
 import type {
@@ -20,6 +25,7 @@ import type {
   WorkUnitDescriptor,
   WorkUnitId,
 } from './types.js';
+import { DEFAULT_CHILD_WORKSPACE_MODE, resolveWorkspaceMode } from './workspace-mode.js';
 
 /** One row of the scoop-wait bus. Structurally the completion-service `WaitResult`. */
 export interface CompletionWaitResult {
@@ -47,6 +53,7 @@ export function buildWorkUnitRecord(
 ): RegisteredScoop {
   const root = options.parentId === null;
   const folder = options.folder ?? options.name;
+  const config = root ? options.config : childConfigForCreate(options, folder);
   const base: RegisteredScoop = {
     jid: options.id ?? (root ? `cone_${now()}` : `scoop_${folder}_${now()}`),
     name: options.name,
@@ -55,13 +62,60 @@ export function buildWorkUnitRecord(
     assistantLabel: root ? 'sliccy' : folder,
     addedAt: new Date(now()).toISOString(),
     parentJid: options.parentId,
-    ...(options.config
-      ? { config: options.config, configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION }
-      : {}),
+    ...(config ? { config, configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION } : {}),
     ...(options.notifyOnComplete === false ? { notifyOnComplete: false } : {}),
   };
   if (!root) base.trigger = `@${folder}`;
   return base;
+}
+
+/**
+ * Stamp `workspaceMode` and fill omitted path lists from the mode's defaults.
+ * Explicit `visiblePaths` / `writablePaths` still replace. Unimplemented modes
+ * throw here so a test of `buildWorkUnitRecord` covers the same gate as
+ * `create`.
+ */
+function childConfigForCreate(options: CreateWorkUnitOptions, folder: string): ScoopConfig {
+  const mode = resolveWorkspaceMode(options.workspace?.mode ?? options.config?.workspaceMode);
+  const ownerRoot = options.workspace?.from ?? '/workspace';
+  const defaults = defaultChildPathsForMode(
+    mode,
+    folder,
+    { root: ownerRoot },
+    options.workspace?.from
+  );
+  const existing = options.config;
+  return {
+    ...existing,
+    workspaceMode: mode,
+    visiblePaths:
+      existing?.visiblePaths !== undefined ? existing.visiblePaths : defaults.visiblePaths,
+    writablePaths:
+      existing?.writablePaths !== undefined ? existing.writablePaths : defaults.writablePaths,
+  };
+}
+
+/**
+ * Fill `workspace.from` from the parent's layout when the caller omitted it,
+ * so extra-cone children default to THAT cone's workspace rather than the
+ * primary's `/workspace` (#2271 + #2277).
+ */
+function withOwnerWorkspace(
+  options: CreateWorkUnitOptions,
+  host: WorkUnitManagerHost
+): CreateWorkUnitOptions {
+  if (options.parentId === null) return options;
+  if (options.workspace?.from !== undefined) return options;
+  const parent = host.getScoop(options.parentId);
+  if (!parent) return options;
+  return {
+    ...options,
+    workspace: {
+      mode:
+        options.workspace?.mode ?? options.config?.workspaceMode ?? DEFAULT_CHILD_WORKSPACE_MODE,
+      from: workspaceFor(parent).root,
+    },
+  };
 }
 
 export class WorkUnitManager {
@@ -73,7 +127,13 @@ export class WorkUnitManager {
    * `registerScoop` would otherwise overwrite via `Map.set`.
    */
   async create(options: CreateWorkUnitOptions): Promise<WorkUnitDescriptor> {
-    const record = buildWorkUnitRecord(options);
+    // Unimplemented modes throw even for a root so a typed stub cannot sneak
+    // through as "ignored on cones". Implemented modes on a root are ignored
+    // — roots stay `full-workspace`.
+    if (options.parentId === null && options.workspace?.mode !== undefined) {
+      resolveWorkspaceMode(options.workspace.mode);
+    }
+    const record = buildWorkUnitRecord(withOwnerWorkspace(options, this.host));
     assertIdAvailable(record.jid, (id) => this.host.getScoop(id));
     if (options.parentId !== null) {
       const parent = this.host.getScoop(options.parentId);

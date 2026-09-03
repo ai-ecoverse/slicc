@@ -44,6 +44,12 @@ import type { JsonSchemaObject } from '../tools/types.js';
 import { defaultChildVisibleRoots, PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { modelIdFor, modelProviderFor, thinkingFor } from '../work-unit/record.js';
+import type { WorkspaceIsolationMode } from '../work-unit/types.js';
+import {
+  DEFAULT_CHILD_WORKSPACE_MODE,
+  type ImplementedWorkspaceMode,
+  parseWorkspaceMode,
+} from '../work-unit/workspace-mode.js';
 import { AGENT_ADJECTIVES, AGENT_FLAVORS } from './agent-names.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
@@ -113,6 +119,13 @@ export interface AgentSpawnOptions {
    * missing ones before forwarding to the orchestrator.
    */
   visiblePaths?: string[];
+  /**
+   * Workspace isolation mode (#2277). Default `shared-readonly` preserves
+   * today's spawn. `private` drops the parent workspace, the implicit
+   * `/shared/` writable, and mount auto-inclusion. `snapshot` / `shared-live`
+   * are rejected.
+   */
+  workspaceMode?: WorkspaceIsolationMode;
   /**
    * The invoking shell's cwd (`ctx.cwd` in just-bash) at the moment the
    * caller ran `agent`. When `visiblePaths` is NOT provided, the bridge
@@ -444,6 +457,16 @@ function validateSpawnOptions(
     };
   }
 
+  const parsedMode = parseWorkspaceMode(options.workspaceMode);
+  if (!parsedMode.ok) {
+    return {
+      error: {
+        finalText: `agent: ${parsedMode.error}`,
+        exitCode: 1,
+      },
+    };
+  }
+
   const backgroundAfter = options.backgroundAfterSeconds;
   if (
     backgroundAfter !== undefined &&
@@ -744,13 +767,15 @@ function buildScoopConfig(
   defaultVisibleRoots: string[]
 ): NonNullable<RegisteredScoop['config']> {
   const cwdPrefix = normalizeRwPrefix(options.cwd);
-  const visiblePaths = resolveVisiblePaths(options, defaultVisibleRoots);
-  const configuredWritable = resolveWritablePaths(options.writablePaths, cwdPrefix);
+  const mode = resolvedWorkspaceMode(options.workspaceMode);
+  const visiblePaths = resolveVisiblePaths(options, defaultVisibleRoots, mode);
+  const configuredWritable = resolveWritablePaths(options.writablePaths, cwdPrefix, mode);
   const writablePaths = dedupePrefixes([...configuredWritable, `${scratchFolder}/`, '/tmp/']);
 
   const scoopConfig: NonNullable<RegisteredScoop['config']> = {
     visiblePaths,
     writablePaths,
+    workspaceMode: mode,
     allowedCommands: options.allowedCommands,
   };
   if (options.maxTurns !== undefined) {
@@ -1175,8 +1200,17 @@ function normalizeRwPrefix(path: string): string {
   return normalized.endsWith('/') ? normalized : `${normalized}/`;
 }
 
-function resolveWritablePaths(paths: string[] | undefined, cwdPrefix: string): string[] {
-  const defaults = [cwdPrefix, '/shared/'];
+function resolvedWorkspaceMode(raw: WorkspaceIsolationMode | undefined): ImplementedWorkspaceMode {
+  const parsed = parseWorkspaceMode(raw);
+  return parsed.ok ? parsed.mode : DEFAULT_CHILD_WORKSPACE_MODE;
+}
+
+function resolveWritablePaths(
+  paths: string[] | undefined,
+  cwdPrefix: string,
+  mode: ImplementedWorkspaceMode = DEFAULT_CHILD_WORKSPACE_MODE
+): string[] {
+  const defaults = mode === 'private' ? [cwdPrefix] : [cwdPrefix, '/shared/'];
   if (paths === undefined) return defaults;
   if (
     paths.some((path) => typeof path !== 'string' || !path.startsWith('/') || path.includes('\0'))
@@ -1199,10 +1233,15 @@ function resolveWritablePaths(paths: string[] | undefined, cwdPrefix: string): s
  *   from anywhere on the VFS can still READ the directory they were
  *   spawned from. De-duped on the normalized trailing-slash form.
  */
-function resolveVisiblePaths(options: AgentSpawnOptions, defaultVisibleRoots: string[]): string[] {
+function resolveVisiblePaths(
+  options: AgentSpawnOptions,
+  defaultVisibleRoots: string[],
+  mode: ImplementedWorkspaceMode = DEFAULT_CHILD_WORKSPACE_MODE
+): string[] {
   if (options.visiblePaths !== undefined) {
     return options.visiblePaths.map(normalizeRwPrefix);
   }
+  if (mode === 'private') return [];
   const base = [...defaultVisibleRoots];
   if (options.invokingCwd && options.invokingCwd.length > 0) {
     base.push(normalizeRwPrefix(options.invokingCwd));

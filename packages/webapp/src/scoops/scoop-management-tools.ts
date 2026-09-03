@@ -12,6 +12,7 @@ import type { ToolDefinition } from '../tools/types.js';
 import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
 import { derivePolicy, isRootUnit, subtreeOf } from '../work-unit/policy.js';
 import { uniqueFolder } from '../work-unit/record.js';
+import { type ImplementedWorkspaceMode, parseWorkspaceMode } from '../work-unit/workspace-mode.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -366,6 +367,7 @@ interface ScoopRecordInput {
   modelProviderId: string | undefined;
   visiblePaths: string[] | undefined;
   writablePaths: string[] | undefined;
+  workspaceMode: ImplementedWorkspaceMode;
   allowedCommands: string[] | undefined;
   thinkingLevel: ThinkingLevel | undefined;
   backgroundAfterSeconds: number | undefined;
@@ -390,6 +392,7 @@ function buildScoopRecord({
   modelProviderId,
   visiblePaths,
   writablePaths,
+  workspaceMode,
   allowedCommands,
   thinkingLevel,
   backgroundAfterSeconds,
@@ -407,8 +410,8 @@ function buildScoopRecord({
     config: {
       ...(model ? { modelId: model } : {}),
       ...(model && modelProviderId ? { modelProviderId } : {}),
-      visiblePaths: visiblePaths ?? defaultVisibleRoots,
-      writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
+      ...childSandboxPaths(workspaceMode, folder, defaultVisibleRoots, visiblePaths, writablePaths),
+      workspaceMode,
       ...(allowedCommands ? { allowedCommands } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(backgroundAfterSeconds !== undefined ? { backgroundAfterSeconds } : {}),
@@ -418,6 +421,26 @@ function buildScoopRecord({
     // Record the creating scoop's JID. originToolCallId is intentionally absent:
     // ToolDefinition.execute does not receive the tool-call ID.
     parentJid,
+  };
+}
+
+/**
+ * Path lists for a new scoop. Explicit caller lists still replace. `private`
+ * drops the parent workspace and the implicit `/shared/` writable so neither
+ * silently expands the sandbox (#2277). `shared-readonly` keeps today's
+ * scoop_scoop defaults (extra-cone `defaultVisibleRoots` included).
+ */
+function childSandboxPaths(
+  mode: ImplementedWorkspaceMode,
+  folder: string,
+  defaultVisibleRoots: string[],
+  visiblePaths: string[] | undefined,
+  writablePaths: string[] | undefined
+): { visiblePaths: string[]; writablePaths: string[] } {
+  const sandbox = `/scoops/${folder}/`;
+  return {
+    visiblePaths: visiblePaths ?? (mode === 'private' ? [] : defaultVisibleRoots),
+    writablePaths: writablePaths ?? (mode === 'private' ? [sandbox] : [sandbox, '/shared/']),
   };
 }
 
@@ -456,6 +479,7 @@ async function executeScoopScoop(
     prompt: taskPrompt,
     visiblePaths,
     writablePaths,
+    workspaceMode,
     allowedCommands,
     thinking,
     background_after: backgroundAfter,
@@ -466,11 +490,15 @@ async function executeScoopScoop(
     prompt?: string;
     visiblePaths?: string[];
     writablePaths?: string[];
+    workspaceMode?: string;
     allowedCommands?: string[];
     thinking?: string;
     background_after?: number;
     canCreateChildren?: boolean;
   };
+
+  const parsedMode = parseWorkspaceMode(workspaceMode);
+  if (!parsedMode.ok) return { content: parsedMode.error, isError: true };
 
   const parsed = parseThinkingLevel(thinking);
   if (!parsed.ok) return { content: parsed.content, isError: parsed.isError };
@@ -509,6 +537,7 @@ async function executeScoopScoop(
       modelProviderId: parsedModel.providerId,
       visiblePaths,
       writablePaths,
+      workspaceMode: parsedMode.mode,
       allowedCommands,
       thinkingLevel: parsed.level,
       backgroundAfterSeconds: parsedBackgroundAfter.seconds,
@@ -898,7 +927,7 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'scoop_scoop',
     description:
-      'Create a new scoop. Optionally specify a model, a prompt, and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
+      'Create a new scoop. Optionally specify a model, a prompt, a workspace isolation mode (private | shared-readonly), and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -917,13 +946,19 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description:
-            'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default: YOUR OWN workspace plus the shared skills tree — ["/workspace/"] for the primary cone, ["/cones/<folder>/workspace/", "/workspace/skills/"] for any other. Prefer omitting it over naming "/workspace/" explicitly, which would point the scoop at a different cone\'s files. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
+            'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default for workspaceMode: shared-readonly (the default) is YOUR OWN workspace plus the shared skills tree — ["/workspace/"] for the primary cone, ["/cones/<folder>/workspace/", "/workspace/skills/"] for any other; private is []. Prefer omitting it over naming "/workspace/" explicitly, which would point the scoop at a different cone\'s files. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable in shared-readonly; private does not auto-include them. Trailing slash recommended (e.g. "/shared/data/").',
         },
         writablePaths: {
           type: 'array',
           items: { type: 'string' },
           description:
             'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes — note that /tmp stays readable and writable regardless, as shared scratch space every scoop gets (so nothing secret belongs there). Trailing slash recommended.',
+        },
+        workspaceMode: {
+          type: 'string',
+          enum: ['private', 'shared-readonly', 'snapshot', 'shared-live'],
+          description:
+            'Workspace isolation mode. Default "shared-readonly" is today\'s scoop: parent workspace + skills are visible, own sandbox + /shared/ are writable, mounts stay readable. "private" is an isolated sandbox (own /scoops/<folder>/ only — no parent workspace, no implicit /shared/, mounts are NOT auto-visible). "snapshot" and "shared-live" are not implemented and are rejected. Explicit visiblePaths / writablePaths still replace the mode\'s path defaults.',
         },
         allowedCommands: {
           type: 'array',

@@ -14,6 +14,7 @@ interface SpawnArgs {
   backgroundAfterSeconds?: number;
   structuredOutputSchema?: Record<string, unknown>;
   persistSession?: boolean;
+  workspaceMode?: string;
 }
 
 interface SpawnResult {
@@ -112,6 +113,13 @@ describe('agent command', () => {
       expect(result.stdout).toContain('<allowed-commands>');
       expect(result.stdout).toContain('<prompt>');
       expect(result.stdout).toContain('--model');
+    });
+
+    it('help text documents --workspace-mode', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toContain('--workspace-mode');
+      expect(result.stdout).toContain('private');
+      expect(result.stdout).toContain('shared-readonly');
     });
 
     it('help text includes at least one concrete example', async () => {
@@ -659,6 +667,48 @@ describe('agent command', () => {
       installBridge(spawn);
       await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
       expect(spawn.mock.calls[0][0].visiblePaths).toBeUndefined();
+    });
+
+    it('forwards --workspace-mode private to the bridge', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--workspace-mode', 'private', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].workspaceMode).toBe('private');
+    });
+
+    it('does not pass workspaceMode when the flag is absent (bridge default)', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].workspaceMode).toBeUndefined();
+    });
+
+    it('rejects --workspace-mode snapshot before calling the bridge', async () => {
+      const spawn = vi.fn();
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--workspace-mode', 'snapshot', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not implemented');
+      expect(result.stderr).toContain('RFC open question 4');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown --workspace-mode', async () => {
+      const spawn = vi.fn();
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--workspace-mode', 'cow', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/unknown|not implemented/i);
+      expect(spawn).not.toHaveBeenCalled();
     });
 
     it('accepts --read-only in the first position', async () => {

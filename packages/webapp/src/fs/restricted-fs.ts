@@ -37,6 +37,18 @@ import type { VirtualFS } from './virtual-fs.js';
 
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 
+/**
+ * Construction options beyond the path lists and write-enforcement mode.
+ *
+ * `includeMounts` defaults to `true` so existing call sites (and today's
+ * `shared-readonly` scoops) keep seeing every VFS mount as a readable
+ * prefix. `private` isolation turns it off so a mount cannot silently
+ * expand a child's authority (#2277).
+ */
+export interface RestrictedFsOptions {
+  includeMounts?: boolean;
+}
+
 // ── Virtual device files (/dev/*) ─────────────────────────────────────
 //
 // Device files are always accessible regardless of sandbox ACLs. To add a
@@ -116,12 +128,14 @@ export class RestrictedFS {
   private readGrantPatterns: Array<{ pattern: string; regex: RegExp; ancestorRegexes: RegExp[] }> =
     [];
   private writeEnforcement: RestrictedFsWriteEnforcement;
+  private includeMounts: boolean;
 
   constructor(
     vfs: VirtualFS,
     allowedPaths: string[],
     readOnlyPaths: string[] = [],
-    writeEnforcement: RestrictedFsWriteEnforcement = 'hard'
+    writeEnforcement: RestrictedFsWriteEnforcement = 'hard',
+    options: RestrictedFsOptions = {}
   ) {
     this.vfs = vfs;
     const normalize = (p: string) => {
@@ -131,11 +145,14 @@ export class RestrictedFS {
     this.allowedPrefixes = allowedPaths.map(normalize);
     this.readOnlyPrefixes = readOnlyPaths.map(normalize);
     this.writeEnforcement = writeEnforcement;
+    this.includeMounts = options.includeMounts !== false;
   }
 
-  /** Get all prefixes including dynamic mount paths (as read-only). */
+  /** Get all prefixes, optionally including dynamic mount paths (as read-only). */
   private getAllPrefixes(): string[] {
-    const mountPrefixes = this.vfs.listMounts().map((p) => (p.endsWith('/') ? p : p + '/'));
+    const mountPrefixes = this.includeMounts
+      ? this.vfs.listMounts().map((p) => (p.endsWith('/') ? p : p + '/'))
+      : [];
     return [
       ...this.allowedPrefixes,
       ...this.readOnlyPrefixes,
@@ -887,7 +904,13 @@ export class RestrictedFS {
   }
 
   listMounts(): string[] {
-    return this.vfs.listMounts();
+    const all = this.vfs.listMounts();
+    if (this.includeMounts) return all;
+    // Private isolation: only mounts the caller explicitly granted (inside
+    // allowed / read-only prefixes) remain visible. `isAllowedStrict` does
+    // not consult the mount list when `includeMounts` is false, so this
+    // cannot re-admit a mount through the same silent path we just closed.
+    return all.filter((p) => this.isAllowedStrict(p));
   }
 
   getMountIndex(): ReturnType<VirtualFS['getMountIndex']> {

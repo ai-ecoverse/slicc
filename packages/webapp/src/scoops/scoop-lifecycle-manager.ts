@@ -50,6 +50,7 @@ import {
   setUnitThinking,
   uniqueFolder,
 } from '../work-unit/record.js';
+import { includeMountsForMode, parseWorkspaceMode } from '../work-unit/workspace-mode.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { globalSeedModel } from './model-seed.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
@@ -422,6 +423,10 @@ export class ScoopLifecycleManager {
     // invariant, not a policy choice.
     const unitDescriptor = toDescriptor(scoop);
     const fsPolicy = unitDescriptor.policy.filesystem;
+    if (fsPolicy.kind === 'restricted') {
+      const parsedMode = parseWorkspaceMode(fsPolicy.mode);
+      if (!parsedMode.ok) throw new Error(parsedMode.error);
+    }
     const fs =
       fsPolicy.kind === 'full-workspace'
         ? sharedFs
@@ -429,7 +434,8 @@ export class ScoopLifecycleManager {
             sharedFs,
             [...fsPolicy.writablePaths],
             [...fsPolicy.visiblePaths],
-            'sudo-delegated'
+            'sudo-delegated',
+            { includeMounts: includeMountsForMode(fsPolicy.mode) }
           );
 
     if (fsPolicy.kind === 'restricted') {

@@ -67,6 +67,8 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
   transcripts at 64 KB — never `agent-sessions` history or compaction input.
 - **Agent bridge defaults** (`agent-bridge.ts`, `docs/webapp-details.md`): writable `[cwd,
 /shared/, <scratch>/, /tmp/]`, visible child roots + `invokingCwd`; `--read-only` replaces.
+  `--workspace-mode private` drops parent workspace, `/shared/`, and mount auto-inclusion
+  (#2277); `/tmp/` stays ambient.
 - **Mount signing is browser-naive** (`docs/mounts.md`): CLI → `/api/s3-sign-and-forward`,
   extension → SW. Never sign in the browser.
 - **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set; the `FsWatcher`

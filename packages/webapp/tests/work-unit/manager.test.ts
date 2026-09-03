@@ -139,7 +139,16 @@ describe('WorkUnitManager', () => {
     expect(lead.policy.canCreateChildren).toBe(true);
     expect(lead.policy.canManageChildren).toBe(true);
 
-    const grandchild = await manager.create({ parentId: lead.id, name: 'deep' });
+    // Grandchild paths must sit under the supervisor's sandbox (#2784
+    // containment); mode defaults alone would name `/scoops/deep/`.
+    const grandchild = await manager.create({
+      parentId: lead.id,
+      name: 'deep',
+      config: {
+        visiblePaths: ['/scoops/lead/'],
+        writablePaths: ['/scoops/lead/deep/'],
+      },
+    });
     expect(grandchild.parentId).toBe(lead.id);
     expect(grandchild.policy.canCreateChildren).toBe(false);
     expect(grandchild.policy.canManageChildren).toBe(false);
@@ -152,9 +161,14 @@ describe('WorkUnitManager', () => {
     const { host, manager } = tree();
     const helper = await manager.create({ parentId: root.jid, name: 'helper' });
     expect(helper.policy.canCreateChildren).toBe(false);
-    await expect(manager.create({ parentId: helper.id, name: 'deep' })).rejects.toThrow(
-      /cannot create children/
-    );
+    // Empty paths keep ⊆ so the refusal is the grant, not path escape.
+    await expect(
+      manager.create({
+        parentId: helper.id,
+        name: 'deep',
+        config: { visiblePaths: [], writablePaths: [] },
+      })
+    ).rejects.toThrow(/cannot create children/);
     expect(host.registerScoop).toHaveBeenCalledOnce();
   });
 
@@ -165,7 +179,11 @@ describe('WorkUnitManager', () => {
       manager.create({
         parentId: helper.id,
         name: 'lead',
-        config: { canCreateChildren: true },
+        config: {
+          canCreateChildren: true,
+          visiblePaths: [],
+          writablePaths: [],
+        },
       })
     ).rejects.toThrow(/isPolicySubset/);
     expect(host.registerScoop).toHaveBeenCalledOnce();
@@ -181,6 +199,69 @@ describe('WorkUnitManager', () => {
     expect(manager.get(root.jid)?.descriptor.name).toBe(before);
   });
 
+  it("create names shared-readonly by default and preserves today's path lists", async () => {
+    const { manager } = tree();
+    const d = await manager.create({ parentId: root.jid, name: 'researcher' });
+    expect(d.workspaceHandle.access).toBe('shared-readonly');
+    expect(d.policy.filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'shared-readonly',
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/researcher/', '/shared/'],
+    });
+  });
+
+  it('create with workspace.mode private isolates the sandbox', async () => {
+    const { host, manager } = tree();
+    const d = await manager.create({
+      parentId: root.jid,
+      name: 'secret',
+      workspace: { mode: 'private' },
+    });
+    expect(d.workspaceHandle.access).toBe('private');
+    expect(d.policy.filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'private',
+      visiblePaths: [],
+      writablePaths: ['/scoops/secret/'],
+    });
+    const recorded = host.registerScoop.mock.calls[0][0];
+    expect(recorded.config?.workspaceMode).toBe('private');
+    expect(recorded.config?.writablePaths).not.toContain('/shared/');
+  });
+
+  it('create with config.workspaceMode private (no workspace wrapper) isolates the sandbox', async () => {
+    const { host, manager } = tree();
+    const d = await manager.create({
+      parentId: root.jid,
+      name: 'vault',
+      config: { workspaceMode: 'private' },
+    });
+    expect(d.workspaceHandle.access).toBe('private');
+    expect(d.policy.filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'private',
+      visiblePaths: [],
+      writablePaths: ['/scoops/vault/'],
+    });
+    const recorded = host.registerScoop.mock.calls[0][0];
+    expect(recorded.config?.workspaceMode).toBe('private');
+    expect(recorded.config?.visiblePaths).not.toContain('/workspace/');
+    expect(recorded.config?.writablePaths).not.toContain('/shared/');
+  });
+
+  it('create throws on unimplemented snapshot / shared-live modes', async () => {
+    const { manager } = tree();
+    await expect(
+      manager.create({ parentId: root.jid, name: 'cow', workspace: { mode: 'snapshot' } })
+    ).rejects.toThrow(/not implemented/);
+    await expect(
+      manager.create({ parentId: root.jid, name: 'live', workspace: { mode: 'shared-live' } })
+    ).rejects.toThrow(/not implemented/);
+    await expect(
+      manager.create({ parentId: null, name: 'root-snap', workspace: { mode: 'snapshot' } })
+    ).rejects.toThrow(/RFC open question 4/);
+  });
   it('abort stops the turn; close unregisters and drops the runtime', async () => {
     const { host, manager } = tree();
     await manager.abort(a.jid);

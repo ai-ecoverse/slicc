@@ -300,6 +300,47 @@ describe('RestrictedFS', () => {
     });
   });
 
+  describe('includeMounts: false — private isolation (#2277)', () => {
+    let privateVfs: VirtualFS;
+    let privateFs: RestrictedFS;
+
+    beforeAll(async () => {
+      privateVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-private', wipe: true });
+      await privateVfs.mkdir('/scoops/secret', { recursive: true });
+      await privateVfs.writeFile('/scoops/secret/notes.md', 'mine');
+      await privateVfs.mkdir('/shared', { recursive: true });
+      await privateVfs.writeFile('/shared/leak.txt', 'shared');
+      await privateVfs.mkdir('/mnt/kb', { recursive: true });
+      await privateVfs.writeFile('/mnt/kb/README.md', 'mount');
+      const originalListMounts = privateVfs.listMounts.bind(privateVfs);
+      privateVfs.listMounts = () => [...originalListMounts(), '/mnt/kb'];
+      privateFs = new RestrictedFS(privateVfs, ['/scoops/secret/'], [], 'hard', {
+        includeMounts: false,
+      });
+    });
+
+    it('does not silently expand reads onto a mount', async () => {
+      await expect(privateFs.readFile('/mnt/kb/README.md')).rejects.toThrow('ENOENT');
+      expect(await privateFs.exists('/mnt/kb/README.md')).toBe(false);
+    });
+
+    it('does not list mounts the caller did not grant', () => {
+      expect(privateFs.listMounts()).not.toContain('/mnt/kb');
+    });
+
+    it('writable paths cannot silently expand onto /shared or a mount', async () => {
+      await expect(privateFs.writeFile('/shared/hacked.txt', 'nope')).rejects.toThrow('EACCES');
+      await expect(privateFs.writeFile('/mnt/kb/hacked.txt', 'nope')).rejects.toThrow('EACCES');
+      await privateFs.writeFile('/scoops/secret/ok.txt', 'yes');
+      expect(await privateFs.readFile('/scoops/secret/ok.txt', { encoding: 'utf-8' })).toBe('yes');
+    });
+
+    it('still writes /tmp (ambient scratch, not a silent expansion of the grant list)', async () => {
+      await privateFs.writeFile('/tmp/scratch.txt', 'tmp');
+      expect(await privateFs.readFile('/tmp/scratch.txt', { encoding: 'utf-8' })).toBe('tmp');
+    });
+  });
+
   describe('mount/unmount operations', () => {
     let mountOpVfs: VirtualFS;
 

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  defaultChildPathsForMode,
   PRIMARY_WORKSPACE,
   SKILLS_LIBRARY_DIR,
   TMP_ROOT,
   tmpDirFor,
   toDescriptor,
   workspaceFor,
+  workspaceHandleFor,
 } from '../../src/work-unit/descriptor.js';
 import { statusFromTab } from '../../src/work-unit/types.js';
 import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
@@ -76,6 +78,11 @@ describe('work-unit descriptor', () => {
     });
     expect(d.policy.filesystem).toEqual({ kind: 'full-workspace' });
     expect(d.policy.approvalAuthority).toBe('user');
+    expect(d.workspaceHandle).toEqual({
+      workspaceId: '/workspace',
+      root: '/workspace',
+      access: 'shared-live',
+    });
   });
 
   it('projects a child record and derives role from the edge, not a legacy role field', () => {
@@ -87,6 +94,11 @@ describe('work-unit descriptor', () => {
     expect(d.status).toBe('creating');
     expect(d.policy.approvalAuthority).toEqual({ parentId: 'cone_1' });
     expect(d.completion).toEqual({ mode: 'notify-parent' });
+    expect(d.workspaceHandle).toEqual({
+      workspaceId: '/scoops/worker-scoop/workspace',
+      root: '/scoops/worker-scoop/workspace',
+      access: 'shared-readonly',
+    });
   });
 
   it('is a pure projection: JSON round-trips and does not alias the record', () => {
@@ -143,5 +155,60 @@ describe('tmpDirFor — per-unit scratch under the shared /tmp (#2267, #2568)', 
     // is what stops a `startsWith` sweep of `/tmp/cone` from eating
     // `/tmp/cone-adobe`.
     expect(`${tmpDirFor(roster, adobe)}/`.startsWith(`${tmpDirFor(roster, primary)}/`)).toBe(false);
+  });
+});
+
+describe('workspaceHandleFor / defaultChildPathsForMode (#2277)', () => {
+  it('projects a root as shared-live over its own workspace id', () => {
+    expect(workspaceHandleFor(rootRecord())).toEqual({
+      workspaceId: '/workspace',
+      root: '/workspace',
+      access: 'shared-live',
+    });
+  });
+
+  it('defaults a child without workspaceMode to shared-readonly', () => {
+    expect(workspaceHandleFor(childRecord('cone_1')).access).toBe('shared-readonly');
+  });
+
+  it('projects an explicit private child', () => {
+    const scoop = childRecord('cone_1', {
+      folder: 'secret-scoop',
+      config: {
+        workspaceMode: 'private',
+        visiblePaths: [],
+        writablePaths: ['/scoops/secret-scoop/'],
+      },
+    });
+    expect(workspaceHandleFor(scoop)).toEqual({
+      workspaceId: '/scoops/secret-scoop/workspace',
+      root: '/scoops/secret-scoop/workspace',
+      access: 'private',
+    });
+  });
+
+  it("shared-readonly path defaults match today's scoop_scoop injection", () => {
+    expect(
+      defaultChildPathsForMode('shared-readonly', 'andy-scoop', { root: '/workspace' })
+    ).toEqual({
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/andy-scoop/', '/shared/'],
+    });
+  });
+
+  it('private path defaults are own sandbox only — no parent workspace, no /shared/', () => {
+    expect(defaultChildPathsForMode('private', 'andy-scoop', { root: '/workspace' })).toEqual({
+      visiblePaths: [],
+      writablePaths: ['/scoops/andy-scoop/'],
+    });
+  });
+
+  it("shared-readonly from an extra cone uses that cone's workspace, not /workspace", () => {
+    expect(
+      defaultChildPathsForMode('shared-readonly', 'helper', { root: '/cones/cone-beta/workspace' })
+    ).toEqual({
+      visiblePaths: ['/cones/cone-beta/workspace/', '/workspace/skills/'],
+      writablePaths: ['/scoops/helper/', '/shared/'],
+    });
   });
 });

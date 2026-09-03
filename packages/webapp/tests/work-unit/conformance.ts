@@ -56,6 +56,9 @@ export function runWorkUnitConformance(name: string, make: () => ConformanceHarn
         expect(scratch.startsWith('/')).toBe(true);
       }
       expect(child.descriptor.workspace.root).not.toBe(root.descriptor.workspace.root);
+      expect(root.descriptor.workspaceHandle.access).toBe('shared-live');
+      expect(root.descriptor.workspaceHandle.root).toBe(root.descriptor.workspace.root);
+      expect(child.descriptor.workspaceHandle.root).toBe(child.descriptor.workspace.root);
     });
 
     it('status events follow the lifecycle and stop after unsubscribe', () => {
