@@ -7,6 +7,7 @@ import {
   buildCameraRequest,
   createFfmpegCommand,
   createIpkContextFromCtx,
+  ensureNullMuxerOpts,
   isAnalysisSink,
   isAvfoundationCapture,
   parseAvfoundationDeviceSpec,
@@ -1493,6 +1494,27 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(isAnalysisSink(parsed)).toBe(true);
   });
 
+  it('parseFfmpegArgs does not treat bare - without -f null as an output', () => {
+    // Without the null muxer, `-` would mean stdout (not emulated).
+    // Accepting it as a positional would write a VFS file named `-`.
+    const bare = parseFfmpegArgs(['-i', 'in.mp4', '-']);
+    expect(bare.outputPath).toBeNull();
+    const mp3Dash = parseFfmpegArgs(['-i', 'in.wav', '-f', 'mp3', '-']);
+    expect(mp3Dash.outputPath).toBeNull();
+  });
+
+  it('rejects non-null - output with a clear missing-output error', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.wav', '-f', 'mp3', '-'],
+      createMockCtx({ fs: { writeFile } })
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/at least one output file must be specified/i);
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(getFfmpeg).not.toHaveBeenCalled();
+  });
+
   it('isAnalysisSink accepts -f null /dev/null and bare /dev/null', () => {
     expect(
       isAnalysisSink(
@@ -1510,10 +1532,20 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-af', 'loudnorm', '/dev/null']))).toBe(
       true
     );
-    // Bare `-` without `-f null` is stdout, not a sink.
+    // Bare `-` without `-f null` is not an output positional at all.
     expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-']))).toBe(false);
     // Real output path with `-f null` is still an encode artifact.
     expect(isAnalysisSink(parseFfmpegArgs(['-i', 'in.mp4', '-f', 'null', 'dump.bin']))).toBe(false);
+  });
+
+  it('ensureNullMuxerOpts injects -f null when missing', () => {
+    expect(ensureNullMuxerOpts(['-af', 'loudnorm'])).toEqual(['-af', 'loudnorm', '-f', 'null']);
+    expect(ensureNullMuxerOpts(['-af', 'loudnorm', '-f', 'null'])).toEqual([
+      '-af',
+      'loudnorm',
+      '-f',
+      'null',
+    ]);
   });
 
   it('succeeds for -f null - and returns the captured log without VFS writeback', async () => {
@@ -1577,6 +1609,36 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(writeFile).not.toHaveBeenCalled();
   });
 
+  it('injects -f null for bare /dev/null so the core gets a muxer', async () => {
+    const fake = makeFakeFfmpeg({
+      exitCode: 0,
+      readFile: () => {
+        throw new Error('FS error: no such file or directory');
+      },
+    });
+    fake.on.mockImplementation((event: string, handler: (e: { message: string }) => void) => {
+      if (event === 'log') {
+        handler({ message: 'Input Integrated loudness: -16.0 LUFS' });
+      }
+    });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'loudnorm=print_format=json', '/dev/null'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/Integrated loudness/);
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    expect(execArgs.at(-1)).toBe('__null_sink');
+    // Must include `-f null` even though the CLI omitted it — otherwise
+    // the pinned core exits 1: "Unable to find a suitable output format".
+    const fIdx = execArgs.lastIndexOf('-f');
+    expect(fIdx).toBeGreaterThanOrEqual(0);
+    expect(execArgs[fIdx + 1]).toBe('null');
+  });
+
   it('still fails a normal encode with a missing or empty output', async () => {
     useFakeFfmpeg(
       makeFakeFfmpeg({
@@ -1601,7 +1663,8 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
 
   it('does not recycle the core on a successful analysis sink', async () => {
     // Skipping readback must not be confused with a core fault: the
-    // null muxer leaves no MEMFS artifact by design.
+    // null muxer leaves no MEMFS artifact by design. The health probe
+    // (write+delete) must succeed for the instance to stay cached.
     const fake = makeFakeFfmpeg({
       exitCode: 0,
       readFile: () => {
@@ -1618,8 +1681,37 @@ describe('runWasmFfmpeg analysis sinks (-f null)', () => {
     expect(result.exitCode).toBe(0);
     expect(recycleFfmpeg).not.toHaveBeenCalled();
     expect(fake.readFile).not.toHaveBeenCalled();
-    // Inputs still cleaned from MEMFS; the disposable sink name is too.
+    // Health probe + input cleanup both delete from MEMFS.
     expect(fake.deleteFile).toHaveBeenCalled();
+    expect(fake.writeFile).toHaveBeenCalledWith('__health_probe', expect.any(Uint8Array));
+  });
+
+  it('recycles and fails when a sink exit 0 leaves a poisoned core', async () => {
+    // Stale exit 0 after an internal Aborted() — documented in
+    // docs/pitfalls.md. Sinks skip readEncodedOutput, so the health
+    // probe must catch the trap and recycle.
+    const fake = makeFakeFfmpeg({
+      exitCode: 0,
+      readFile: () => {
+        throw new Error('FS error: no such file or directory');
+      },
+    });
+    fake.writeFile.mockImplementation(async (name: string) => {
+      if (name === '__health_probe') {
+        throw new WebAssembly.RuntimeError('Aborted()');
+      }
+    });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/wasm core faulted and was recycled/i);
+    expect(recycleFfmpeg).toHaveBeenCalledTimes(1);
+    expect(recycleFfmpeg).toHaveBeenCalledWith(fake);
   });
 });
 
