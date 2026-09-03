@@ -265,6 +265,31 @@ describe('registerFetchProxyRoute', () => {
     }
   );
 
+  it.each(['application/octet-stream', 'image/jpeg', ''])(
+    'forwards JPEG request bytes unchanged with Content-Type %j',
+    async (contentType) => {
+      const probe = Buffer.from([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+      let seen: Buffer | undefined;
+      await setup((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c) => chunks.push(Buffer.from(c)));
+        req.on('end', () => {
+          seen = Buffer.concat(chunks);
+          res.end('ok');
+        });
+      });
+      const headers: Record<string, string> = { 'x-target-url': `${upstreamUrl}/upload` };
+      if (contentType) headers['content-type'] = contentType;
+      const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+        method: 'POST',
+        headers,
+        body: new Uint8Array(probe),
+      });
+      expect(res.status).toBe(200);
+      expect(seen).toEqual(probe);
+    }
+  );
+
   it('preserves headerless binary response bytes when secrets are configured', async () => {
     const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x41]);
     await setup((_req, res) => res.end(binary));

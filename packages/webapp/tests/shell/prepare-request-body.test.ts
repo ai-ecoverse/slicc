@@ -112,4 +112,23 @@ describe('prepareRequestBody — binary content-type preservation', () => {
   it('undefined body returns undefined', () => {
     expect(prepareRequestBody(undefined)).toBeUndefined();
   });
+
+  it('Uint8Array wraps as a Blob even without a Content-Type (jsh fetch path)', async () => {
+    // A latin1 string with no CT is left as a string so `fetch()` UTF-8-encodes
+    // text. A Uint8Array is already bytes — wrapping it must not depend on CT,
+    // or JPEG `FF D8` becomes `C3 BF C3 98`.
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const result = prepareRequestBody(probe);
+    expect(result).toBeInstanceOf(Blob);
+    const out = await blobBytes(result as Blob);
+    expect(Array.from(out)).toEqual(Array.from(probe));
+  });
+
+  it('Uint8Array is not UTF-8-expanded even under a text Content-Type', async () => {
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+    const result = prepareRequestBody(probe, { 'Content-Type': 'text/plain' });
+    expect(result).toBeInstanceOf(Blob);
+    const out = await blobBytes(result as Blob);
+    expect(Array.from(out)).toEqual(Array.from(probe));
+  });
 });

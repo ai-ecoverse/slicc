@@ -502,16 +502,11 @@ func registerAPIRoutes(
                 // corrupted by the `String` round-trip. injectBody/unmaskBodyBytes
                 // both leave masked values intact on domain mismatch (safe,
                 // matches TS — avoids false 403s from LLM conversation context).
+                // Empty Content-Type is binary (mirrors TS `isTextContentType`):
+                // a JPEG posted with no type must not take the UTF-8 String path.
                 if rawBody.readableBytes > 0 {
-                    let contentType = (injectedHeaders[.contentType] ?? "").lowercased()
-                    let isText =
-                        contentType.isEmpty
-                        || contentType.hasPrefix("text/")
-                        || contentType.contains("json")
-                        || contentType.contains("xml")
-                        || contentType.contains("urlencoded")
-                        || contentType.contains("javascript")
-                    if isText,
+                    let contentType = injectedHeaders[.contentType] ?? ""
+                    if isTextRequestContentType(contentType),
                         let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
                     {
                         let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
@@ -789,6 +784,24 @@ private func decodeWebhookBody(from request: Request) async throws -> LickSystem
     } catch {
         return .object(["raw": .string(String(buffer: body))])
     }
+}
+
+/// Request-body classifier for secret unmask. Mirrors `@slicc/shared-ts`
+/// `isTextContentType`, plus `urlencoded` (form bodies carry secrets).
+/// Empty is binary — a JPEG posted with no Content-Type must not take the
+/// UTF-8 `String` path (`FF D8` must not become `C3 BF C3 98`).
+private func isTextRequestContentType(_ contentType: String) -> Bool {
+    if contentType.isEmpty { return false }
+    let normalized = contentType.lowercased()
+    return normalized.hasPrefix("text/")
+        || normalized.contains("json")
+        || normalized.contains("xml")
+        || normalized.contains("urlencoded")
+        || normalized.contains("javascript")
+        || normalized.contains("ecmascript")
+        || normalized.contains("html")
+        || normalized.contains("css")
+        || normalized.contains("svg")
 }
 
 private func collectBody(from request: Request) async throws -> ByteBuffer {

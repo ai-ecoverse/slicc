@@ -582,17 +582,19 @@ export type PanelRpcRequest =
       // `chrome.runtime` Port to the thin-bridge extension (host_permissions
       // CORS bypass). Request `headers` are PLAIN — the page-side collector
       // encodes the forbidden-header transport (X-Proxy-*) exactly once.
-      // `body` is the raw `SecureFetch` body string (structured-clone-safe
-      // and lossless for both latin1-binary and UTF-8 text), preserving the
-      // existing `prepareRequestBody` contract verbatim. The result carries
-      // the streamed response head + body bytes; the worker finalizes them so
-      // its own `binary-cache` (not the page's) is populated.
+      // `body` is the raw `SecureFetch` body: a Unicode string for text, or a
+      // `Uint8Array` for binary (structured-clone-safe). A latin1 string is
+      // still accepted for just-bash `curl` / git. The page-side collector
+      // runs `prepareRequestBody` so native `fetch` never UTF-8-encodes
+      // high bytes. The result carries the streamed response head + body
+      // bytes; the worker finalizes them so its own `binary-cache` (not the
+      // page's) is populated.
       op: 'proxied-fetch';
       payload: {
         url: string;
         method: string;
         headers: Record<string, string>;
-        body?: string;
+        body?: string | Uint8Array;
       };
     }
   | {

@@ -100,6 +100,25 @@ describe('createProxiedFetch — CLI branch DAV verb pass-through', () => {
     });
   }
 
+  it('sends a Uint8Array body as a Blob and stamps X-Slicc-Raw-Body', async () => {
+    const { createProxiedFetch } = await import('../../src/shell/proxied-fetch.js');
+    const proxiedFetch = createProxiedFetch();
+    const probe = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+
+    await proxiedFetch('https://api.example.com/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg' },
+      body: probe as unknown as string,
+    });
+
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBeInstanceOf(Blob);
+    const out = new Uint8Array(await (init.body as Blob).arrayBuffer());
+    expect(Array.from(out)).toEqual(Array.from(probe));
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Slicc-Raw-Body']).toBe('1');
+  });
+
   it('omits body for GET (sanity check that the DAV-body guard is method-aware)', async () => {
     const { createProxiedFetch } = await import('../../src/shell/proxied-fetch.js');
     const proxiedFetch = createProxiedFetch();

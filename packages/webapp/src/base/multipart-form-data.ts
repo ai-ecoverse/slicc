@@ -1,12 +1,13 @@
 /**
  * `multipart-form-data.ts` — the single `multipart/form-data` serializer.
  *
- * `SecureFetch` (and the realm's `fetch` RPC that funnels into it) can only
- * carry a `string` body, so every binary payload rides the latin1 convention
- * (one character per byte). That transport can express multipart fine — what
- * was missing was the *serialization* step, which is why `fetch(url, { body:
- * new FormData() })` used to throw in `.jsh` even though `FormData`, `File`,
- * and `Blob` are all constructible globals there.
+ * `SecureFetch` historically carried only a `string` body, so binary used to
+ * ride a latin1 convention (one character per byte). The jsh `fetch` adapter
+ * now keeps multipart bytes as a `Uint8Array` so native `fetch` cannot
+ * UTF-8-expand high bytes. The serializer still produces raw bytes — what
+ * was originally missing was this *serialization* step, which is why
+ * `fetch(url, { body: new FormData() })` used to throw in `.jsh` even though
+ * `FormData`, `File`, and `Blob` are all constructible globals there.
  *
  * The boundary token is minted here, in the same call that produces the bytes,
  * and returned alongside them as a ready-made `Content-Type` value. Callers

@@ -27,7 +27,7 @@ import {
 } from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
-import { getFetchBodyBytes } from './fetch-body.js';
+import { getFetchBodyBytes, type SecureFetchRequestBody } from './fetch-body.js';
 import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
@@ -262,25 +262,28 @@ async function withProgressEnd<T>(
 
 /**
  * Bodies that are NOT text-shaped (multipart form payloads, git packfiles,
- * application/octet-stream, etc.) reach this layer as latin1-encoded strings
- * (one char per byte) — the convention upstream callers use to thread binary
- * data through `SecureFetch`'s `body: string` contract. `fetch()` would
- * UTF-8-re-encode such a string, expanding every byte ≥0x80 to two bytes
- * and corrupting the payload (git push fails for any repo with deflated
- * objects). Convert back to raw bytes via `getFetchBodyBytes` and ship as
- * a Blob so the binary survives intact.
+ * application/octet-stream, etc.) reach this layer either as a `Uint8Array`
+ * (the jsh `fetch` adapter — never a JS string, so native `fetch` cannot
+ * UTF-8-expand high bytes) or as a latin1-encoded string (one char per byte)
+ * from just-bash `curl` / git. `fetch()` would UTF-8-re-encode a latin1
+ * string, expanding every byte ≥0x80 to two bytes and corrupting the payload
+ * (git push fails for any repo with deflated objects; a JPEG SOI `FF D8`
+ * becomes `C3 BF C3 98`). Convert strings back to raw bytes via
+ * `getFetchBodyBytes` when the Content-Type is not text-shaped, and wrap
+ * `Uint8Array` bodies in a Blob unconditionally, so the binary survives.
  */
 export function prepareRequestBody(
-  body: string | Uint8Array | undefined,
+  body: SecureFetchRequestBody | undefined,
   headers?: Record<string, string>
 ): BodyInit | undefined {
-  if (!body) return undefined;
-  // Already bytes: the caller resolved the encoding itself (the
-  // CapabilityBroker adapters do, so both of their transports send the same
-  // bytes), leaving nothing to infer from the content type. The cast is the
-  // `ArrayBufferLike` / `ArrayBuffer` gap only — every `BufferSource` is a
-  // `BodyInit`.
-  if (typeof body !== 'string') return body as BodyInit;
+  if (body == null || body === '') return undefined;
+  // Already bytes: the caller resolved the encoding itself (jsh fetch and
+  // the CapabilityBroker adapters). Wrap as Blob unconditionally — native
+  // `fetch` cannot UTF-8-expand a Blob, and lib.dom's `BodyInit` omits
+  // `Uint8Array`. Content-Type is irrelevant here.
+  if (typeof body !== 'string') {
+    return new Blob([body as Uint8Array<ArrayBuffer>]);
+  }
   const ct =
     Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? '';
   if (ct && !isTextContentType(ct)) {
@@ -384,7 +387,9 @@ interface PreparedPortRequest {
 async function buildPortRequest(options?: ProxyRequestOptions): Promise<PreparedPortRequest> {
   const plainHeaders = headersToRecord(options?.headers);
   const method = options?.method ?? 'GET';
-  const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
+  const preparedBody = options?.body
+    ? prepareRequestBody(options.body as SecureFetchRequestBody, plainHeaders)
+    : undefined;
   const transportHeaders = encodeForbiddenRequestHeaders(plainHeaders);
 
   let bodyBase64: string | undefined;
@@ -624,7 +629,12 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
       const { head, body } = await withProgressEnd(progress, url, () =>
         client.call(
           'proxied-fetch',
-          { url, method, headers: plainHeaders, body: options?.body },
+          {
+            url,
+            method,
+            headers: plainHeaders,
+            body: options?.body as string | Uint8Array | undefined,
+          },
           // Generous timeout — multi-MB wasm / package downloads outlast the
           // panel-RPC default 15s.
           { timeoutMs: 120_000 }
@@ -651,7 +661,17 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
     if (options?.body && !['GET', 'HEAD'].includes(method)) {
-      init.body = prepareRequestBody(options.body, headers);
+      const prepared = prepareRequestBody(
+        options.body as SecureFetchRequestBody | undefined,
+        headers
+      );
+      // Skip the global express.json() parser on the proxy hop. Binary
+      // Content-Types already skip it, but a Blob with no CT (or a JSON
+      // file uploaded as bytes) must still arrive byte-for-byte.
+      if (prepared instanceof Blob) {
+        headers['X-Slicc-Raw-Body'] = '1';
+      }
+      init.body = prepared;
     }
 
     return withProgressEnd(progress, url, async () => {
