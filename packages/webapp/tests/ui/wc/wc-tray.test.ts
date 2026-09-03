@@ -129,6 +129,7 @@ function makeDeps() {
     getController: () => null,
     getSelectedJid: () => 'cone',
     agentHandle: { sendMessage: vi.fn(), stop: vi.fn(), onEvent: vi.fn() },
+    workUnits: { subscribeList: () => () => undefined, send: vi.fn(), signal: vi.fn() },
     openFs: vi.fn(),
     openWriter: vi.fn(),
     window: testWindow,

@@ -14,6 +14,7 @@
  * and this module sits below it.
  */
 
+import type { WorkUnitModel } from '../../scoops/types.js';
 import type { WorkUnitId, WorkUnitPresentationState, WorkUnitSummary } from './types.js';
 
 /**
@@ -37,6 +38,35 @@ export interface WorkUnitTabDescriptor {
 /** A unit is a root (cone) when its role says so — never the wire's shape. */
 export function isRootSummary(unit: Pick<WorkUnitSummary, 'role'>): boolean {
   return unit.role === 'primary';
+}
+
+/**
+ * The model the shell should show for `id` — the model of the CONE that owns
+ * it (#2310). Selecting a scoop shows its cone's model, because that is the
+ * unit the picker writes to.
+ *
+ * **Absent is "not known yet", never "no model" (#2329).** A unit's model
+ * reaches the shell from a roster that can legitimately arrive without it: a
+ * follower's leader may predate the per-unit field (`ScoopSummary.model` is
+ * optional on the wire), the record may not be backfilled, and a catalog that
+ * has not warmed up yet answers for nothing. Reading absence as an answer is
+ * what latched a follower's pill empty for a whole session, so `previous` is
+ * carried forward instead and the caller keeps rendering what it had.
+ *
+ * The identity is all this decides. A display NAME and the reasoning
+ * capability come from the provider catalog, which is leader-global on both
+ * sides — `resolveModelById` locally, the tray's `models.list` remotely — and
+ * is deliberately not on the client protocol.
+ */
+export function modelForUnit(
+  units: readonly WorkUnitSummary[],
+  id: WorkUnitId | null | undefined,
+  previous?: WorkUnitModel
+): WorkUnitModel | undefined {
+  // The owning cone answers; a unit whose chain is unknown or broken answers
+  // for itself, which is what `rootForSelection(roster, scoop) ?? scoop` did.
+  const owner = ownerRootOf(units, id) ?? units.find((unit) => unit.id === id);
+  return owner?.model ?? previous;
 }
 
 /**

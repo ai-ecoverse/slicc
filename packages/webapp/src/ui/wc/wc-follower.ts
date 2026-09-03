@@ -820,6 +820,9 @@ export async function mountWcUiFollower(
 
   const modelSurface = createFollowerModelSurface({
     composerMeta,
+    // The shown unit's own model, from the roster the leader sends (#2382 PR
+    // C). The catalog stays with the surface; only the identity comes from here.
+    getUnits: () => workUnits.currentUnits(),
     setModel: (unitId, model) => {
       void workUnits.setModel(unitId, model).catch(() => undefined);
     },

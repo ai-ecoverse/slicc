@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { buildNewConeRecord, wireConeActions } from '../../../src/ui/wc/wc-cone-actions.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 
 function root(jid: string, folder: string, label: string, addedAt: string): RegisteredScoop {
   return {
@@ -70,6 +71,9 @@ function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {
     freezer,
     client,
     getSelected: () => selected,
+    // The roster as the client protocol carries it — the same projection the
+    // leader adapter makes, so the seeded model is read the way the pill is.
+    getUnits: () => scoops.map((scoop) => recordToWorkUnitSummary(scoop, {})),
     selectScoop,
     freezeCone,
     log: { warn },

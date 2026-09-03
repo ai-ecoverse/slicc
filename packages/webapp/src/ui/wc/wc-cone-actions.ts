@@ -15,9 +15,10 @@
  */
 
 import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { buildWorkUnitRecord } from '../../work-unit/manager.js';
 import { rootsOf } from '../../work-unit/policy.js';
-import { modelFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { rootForSelection, switcherLabelFor } from './wc-unit-context.js';
 
@@ -26,6 +27,12 @@ export interface ConeActionsDeps {
   freezer: HTMLElement;
   client: Pick<OffscreenClient, 'getScoops' | 'registerScoop' | 'unregisterScoop'>;
   getSelected(): RegisteredScoop | null;
+  /**
+   * The client protocol's roster, for the one per-unit model read (#2382 PR
+   * C). A new cone starts on the model of the cone the user was on, and that
+   * model is read from the same summary the pill renders.
+   */
+  getUnits(): readonly WorkUnitSummary[];
   selectScoop(scoop: RegisteredScoop): void;
   /**
    * Archive the cone's chat before it goes (the freezer, no memory
@@ -199,7 +206,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
     const record = buildNewConeRecord(
       draft.name,
       client.getScoops(),
-      selected ? modelFor(selected) : undefined
+      modelForUnit(deps.getUnits(), selected?.jid)
     );
     pendingSelect = draft.name;
     void client

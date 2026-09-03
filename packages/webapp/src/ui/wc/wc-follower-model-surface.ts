@@ -4,7 +4,9 @@ import type {
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
 import type { ThinkingLevel, WorkUnitModel } from '../../scoops/types.js';
-import { parseQualifiedModelId } from '../../work-unit/record.js';
+import { modelForUnit } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
+import { parseQualifiedModelId, qualifiedModelId } from '../../work-unit/record.js';
 
 const PI_FROM_META: Readonly<Record<string, ThinkingLevel>> = {
   off: 'off',
@@ -79,6 +81,18 @@ export function createFollowerModelSurface(opts: {
    * surface itself only ever knows "this unit, this model".
    */
   setModel(unitId: string, model: WorkUnitModel): void;
+  /**
+   * The client protocol's roster, from which the SHOWN unit's model is read
+   * (#2382 PR C). `summary.model` is the one per-unit model read on both
+   * sides; this surface keeps only the catalog, which is leader-global and
+   * deliberately not on the protocol.
+   *
+   * An empty roster means "this caller has none" — the leader-capable float in
+   * `wc-tray.ts` follows another leader and has no `RemoteWorkUnitClient` yet
+   * — and falls back to the leader's `model.state` frame, which is also the
+   * fallback for a leader too old to send `ScoopSummary.model`.
+   */
+  getUnits: () => readonly WorkUnitSummary[];
   getSelectedScoopJid: () => string | null;
   modelPickerEnabled?: boolean;
   interceptLocalHandlers?: boolean;
@@ -93,6 +107,13 @@ export function createFollowerModelSurface(opts: {
 } {
   let models: TrayModelCatalogEntry[] = [];
   let state: TrayModelSelectionState | null = null;
+  /**
+   * The last model this surface could name for the shown unit. Absent is "not
+   * known yet", never "no model" (#2329): a roster can arrive before the unit
+   * has one, and reading that as an answer is what latched the pill empty for
+   * a whole session. Carried into {@link modelForUnit} as `previous`.
+   */
+  let lastKnownModel: WorkUnitModel | undefined;
   const enabled = opts.modelPickerEnabled !== false;
   const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
   const retryMaxDelayMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
@@ -132,10 +153,18 @@ export function createFollowerModelSurface(opts: {
     retryDeadline = null;
   };
 
+  /**
+   * The provider-qualified id to show: the SHOWN unit's own model, else the
+   * leader's `model.state` (an older leader, or a caller with no roster).
+   */
+  const activeModelId = (): string | undefined => {
+    lastKnownModel = modelForUnit(opts.getUnits(), opts.getSelectedScoopJid(), lastKnownModel);
+    return lastKnownModel ? qualifiedModelId(lastKnownModel) : state?.activeModelId;
+  };
+
   const apply = (): void => {
-    const active = state
-      ? models.find((model) => model.modelId === state?.activeModelId)
-      : undefined;
+    const wanted = activeModelId();
+    const active = wanted ? models.find((model) => model.modelId === wanted) : undefined;
     if (!enabled || !state || !active) {
       opts.composerMeta.style.display = 'none';
       scheduleCatalogRetry();
@@ -205,6 +234,7 @@ export function createFollowerModelSurface(opts: {
   const reset = (): void => {
     models = [];
     state = null;
+    lastKnownModel = undefined;
     clearCatalogRetry();
     opts.composerMeta.models = [];
     opts.composerMeta.style.display = 'none';

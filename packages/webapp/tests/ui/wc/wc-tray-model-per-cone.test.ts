@@ -22,6 +22,8 @@ import type {
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { createFollowerModelSurface } from '../../../src/ui/wc/wc-follower-model-surface.js';
 import { createLeaderOptionsFactory } from '../../../src/ui/wc/wc-tray.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 vi.mock('../../../src/ui/provider-settings.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>(
@@ -73,6 +75,14 @@ function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = t
     window,
     getSelectedJid: () => selectedJid,
     sprinkleManager: { opened: () => [], available: () => [] },
+    // The leader's own client protocol: the model a follower is told about is
+    // read from the same summary the leader's pill renders (#2382 PR C).
+    workUnits: {
+      subscribeList: (listener: (units: readonly WorkUnitSummary[]) => void) => {
+        listener(scoops.map((scoop) => recordToWorkUnitSummary(scoop, {})));
+        return () => undefined;
+      },
+    },
   } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
   const state = {
     leader: null,
@@ -257,6 +267,8 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
   const surface = createFollowerModelSurface({
     composerMeta,
     getSync: () => sync,
+    // The wc-tray wiring: no remote roster, so `model.state` answers.
+    getUnits: () => [],
     // The wc-tray wiring: the pick goes out as the raw frame, unit named.
     setModel: (unitId, model) => sync.selectModel(`${model.provider}:${model.id}`, unitId),
     getSelectedScoopJid: () => 'cone_1',

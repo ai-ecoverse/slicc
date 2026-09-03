@@ -200,6 +200,7 @@ describe('WC tray connected follower mapping', () => {
       refs: { floatbar },
       client: {},
       window: { dispatchEvent },
+      workUnits: { subscribeList: () => () => undefined },
     } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
     const state = {
       leader: handle,
@@ -264,6 +265,7 @@ describe('WC tray connected follower mapping', () => {
       client: {},
       baseFloatLabel: 'standalone · live',
       window: { dispatchEvent: vi.fn() },
+      workUnits: { subscribeList: () => () => undefined },
     } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
     const state = {
       leader: handle,
@@ -320,6 +322,7 @@ describe('WC tray follower message routing (#2382)', () => {
           stops.push(id);
           return Promise.resolve();
         },
+        subscribeList: () => () => undefined,
       },
       agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
       getController: () => ({ addUserMessage }),

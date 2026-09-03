@@ -284,7 +284,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // selection is the first thing rendered under the new mode.
     controller?.setReadOnly(readOnly);
     if (!readOnly) refs.inputCard.removeAttribute('disabled');
-    void applyThreadContext(refs, scoop, client.getScoops());
+    void applyThreadContext(refs, scoop, ensureWorkUnitClient(wiring).currentUnits());
     // Selection IS the snapshot call on this protocol (#2382): it sets the
     // panel's selected jid and asks the kernel for the replay, which used to
     // be `setSelectedScoopJid` + `requestScoopMessages` here. The transcript
@@ -1039,6 +1039,7 @@ export function attachWcClient(
       freezer: refs.freezer,
       client,
       getSelected: () => boot.getSelected(),
+      getUnits: () => workUnits.currentUnits(),
       selectScoop: boot.selectScoop,
       freezeCone: freezerRail.freezeCone,
       log,
