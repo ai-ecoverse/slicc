@@ -1,5 +1,5 @@
 /**
- * RemoteMountCache — TTL + ETag cache for S3 and DA backends.
+ * RemoteMountCache — TTL + ETag cache for S3, DA, AEM, and hostfs backends.
  *
  * Backed by IndexedDB (`slicc-mount-cache` database), keyed by
  * (mountId, mountRelativePath). Both panel and offscreen instances point at
@@ -7,7 +7,8 @@
  * synchronized via the BroadcastChannel mount sync.
  *
  * See spec §"Cache key path convention": all paths are mount-relative
- * (e.g. 'foo/bar.html'), never VFS-absolute.
+ * (e.g. 'foo/bar.html'), never VFS-absolute. Hostfs additionally receives
+ * `hostfs_invalidate` over `/licks-ws` for out-of-band host edits.
  */
 
 import type { MountDirEntry } from './backend.js';
@@ -166,6 +167,54 @@ export class RemoteMountCache {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+  }
+
+  /**
+   * Drop every cached body and listing under `dirPath` (the directory itself
+   * and any descendant). Used by hostfs recursive removes and host-watcher
+   * directory events. An empty `dirPath` clears the whole mount.
+   */
+  async invalidatePrefix(dirPath: string): Promise<void> {
+    await this.invalidatePrefixes([dirPath]);
+  }
+
+  /**
+   * Drop exact keys and descendants for several paths in one scan per store.
+   * An empty path clears the whole mount. Host-watcher batches use this rather
+   * than paying one full `getAllKeys()` scan for every changed path.
+   */
+  async invalidatePrefixes(paths: readonly string[]): Promise<void> {
+    const prefixes = [
+      ...new Set(paths.map((path) => path.replace(/^\/+/, '').replace(/\/+$/, ''))),
+    ];
+    if (prefixes.length === 0 || prefixes.includes('')) {
+      await this.clearMount();
+      return;
+    }
+    const db = await this.openDb();
+    const mountPrefix = `${this.mountId}::`;
+    const dropMatching = (storeName: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.getAllKeys();
+        req.onsuccess = () => {
+          for (const key of req.result as IDBValidKey[]) {
+            if (typeof key !== 'string' || !key.startsWith(mountPrefix)) continue;
+            const relativeKey = key.slice(mountPrefix.length);
+            if (
+              prefixes.some(
+                (prefix) => relativeKey === prefix || relativeKey.startsWith(`${prefix}/`)
+              )
+            ) {
+              store.delete(key);
+            }
+          }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    await Promise.all([dropMatching(LISTING_STORE), dropMatching(BODY_STORE)]);
   }
 
   /** Drop all listings + bodies for this mountId only. */

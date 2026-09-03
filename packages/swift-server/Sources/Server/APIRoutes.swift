@@ -76,6 +76,12 @@ func registerAPIRoutes(
     // registration; a folder created later needs a restart.
     let hostMountRoots = HostFSRoutes.resolveRoots(mounts: config.mounts)
     HostFSRoutes.registerRoutes(router: router, roots: hostMountRoots)
+    // Retain for process lifetime — FSEventStream callbacks hold an unretained
+    // pointer into this object. Replacing the previous watch stops its streams.
+    HostFSWatch.shared?.stop()
+    let hostFsWatch = HostFSWatch(lickSystem: lickSystem)
+    hostFsWatch.start(roots: hostMountRoots)
+    HostFSWatch.shared = hostFsWatch
 
     router.get("/api/runtime-config") { _, _ in
         let envWorkerBaseUrl: String? = {

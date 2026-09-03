@@ -141,6 +141,36 @@ describe('RemoteMountCache.bodies', () => {
     expect(await b.getBody('bar.txt')).not.toBeNull();
   });
 
+  it('invalidatePrefix drops the directory and all descendants', async () => {
+    const cache = new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName: uniqueDbName() });
+    await cache.putBody('dir/a.txt', new Uint8Array([1]), '"a"');
+    await cache.putBody('dir/sub/b.txt', new Uint8Array([2]), '"b"');
+    await cache.putBody('other.txt', new Uint8Array([3]), '"c"');
+    await cache.putListing('dir', [{ name: 'a.txt', kind: 'file' }]);
+    await cache.invalidatePrefix('dir');
+    expect(await cache.getBody('dir/a.txt')).toBeNull();
+    expect(await cache.getBody('dir/sub/b.txt')).toBeNull();
+    expect(await cache.getListing('dir')).toBeNull();
+    expect(await cache.getBody('other.txt')).not.toBeNull();
+  });
+
+  it('invalidatePrefixes drops several subtrees in one batch', async () => {
+    const cache = new RemoteMountCache({
+      mountId: 'm1',
+      ttlMs: 30_000,
+      dbName: uniqueDbName(),
+    });
+    await cache.putBody('a/one.txt', new Uint8Array([1]), '"a"');
+    await cache.putBody('b/two.txt', new Uint8Array([2]), '"b"');
+    await cache.putBody('c/keep.txt', new Uint8Array([3]), '"c"');
+
+    await cache.invalidatePrefixes(['a', '/b/']);
+
+    expect(await cache.getBody('a/one.txt')).toBeNull();
+    expect(await cache.getBody('b/two.txt')).toBeNull();
+    expect(await cache.getBody('c/keep.txt')).not.toBeNull();
+  });
+
   it('re-opens transparently after versionchange (deleteDatabase) drops the cached connection', async () => {
     // Use real timers for this case — fake timers break the indexedDB
     // microtask scheduling that deleteDatabase relies on to deliver

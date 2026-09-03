@@ -13,7 +13,9 @@
  *   - Push events (no `requestId`, no reply): `webhook_event` →
  *     `LickManager.handleWebhookEvent` (the pre-#2524 shape, still accepted
  *     from an older node-server); `navigate_event` →
- *     `lickManager.emitEvent({ type: 'navigate', ... })`.
+ *     `lickManager.emitEvent({ type: 'navigate', ... })`;
+ *     `hostfs_invalidate` → drop RemoteMountCache keys on the matching
+ *     hostfs mount (external host edits).
  *
  * `webhook_event` is the one type spoken on BOTH shapes on purpose: the
  * request shape carries the delivery disposition back so the node-server can
@@ -88,6 +90,13 @@ export interface LickWsBridgeOptions {
    * back to same-origin (the legacy bundled-UI assumption).
    */
   lickWsUrl?: string | null;
+  /**
+   * Host-watcher invalidation: the launcher broadcasts
+   * `{ type: 'hostfs_invalidate', mount, paths }` when a configured
+   * mount root changes on disk. Wired to `VirtualFS` +
+   * `HostFsMountBackend.applyHostInvalidation` in the kernel host.
+   */
+  onHostfsInvalidate?: (event: HostfsInvalidateEvent) => void;
   /** Override the WebSocket constructor (tests). */
   webSocketFactory?: (url: string) => MinimalWebSocket;
   /** Override the base reconnect delay (tests). Defaults to 3000ms. */
@@ -96,6 +105,19 @@ export interface LickWsBridgeOptions {
   setTimeoutFn?: (cb: () => void, delay: number) => ReturnType<typeof setTimeout>;
   /** Override clearTimeout used for reconnection (tests). */
   clearTimeoutFn?: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+/** Launcher → browser: drop RemoteMountCache keys for a hostfs mount. */
+export interface HostfsInvalidateEvent {
+  type: 'hostfs_invalidate';
+  /** SLICC mount target, e.g. `/mnt/kb`. */
+  mount: string;
+  /**
+   * Mount-relative paths that changed. Empty array (or a single empty
+   * string) means clear the whole mount cache.
+   */
+  paths: string[];
+  timestamp?: string;
 }
 
 export interface LickWsBridgeHandle {
@@ -115,6 +137,8 @@ interface RequestMessage {
   instruction?: unknown;
   branch?: unknown;
   path?: unknown;
+  paths?: unknown;
+  mount?: unknown;
   title?: unknown;
   timestamp?: unknown;
   name?: unknown;
@@ -342,6 +366,11 @@ async function processLickMessage(
 
   if (data.type === 'navigate_event') {
     dispatchNavigateEvent(rt.lickManager, data);
+    return;
+  }
+
+  if (data.type === 'hostfs_invalidate') {
+    dispatchHostfsInvalidate(rt, data);
   }
 }
 
@@ -453,6 +482,46 @@ function dispatchNavigateEvent(lickManager: LickManager, data: RequestMessage): 
     return;
   }
   lickManager.emitEvent(event);
+}
+
+/**
+ * Parse + forward a host-watcher invalidation. Pure validation lives here so
+ * tests can assert drop-vs-forward without a live VirtualFS.
+ */
+export function parseHostfsInvalidateEvent(data: RequestMessage): HostfsInvalidateEvent | null {
+  if (typeof data.mount !== 'string' || data.mount.length === 0) return null;
+  const rawPaths = data.paths;
+  const paths: string[] = [];
+  if (Array.isArray(rawPaths)) {
+    for (const p of rawPaths) {
+      if (typeof p === 'string') paths.push(p);
+    }
+  }
+  return {
+    type: 'hostfs_invalidate',
+    mount: data.mount,
+    paths,
+    timestamp: typeof data.timestamp === 'string' ? data.timestamp : undefined,
+  };
+}
+
+function dispatchHostfsInvalidate(rt: BridgeRuntime, data: RequestMessage): void {
+  const event = parseHostfsInvalidateEvent(data);
+  if (!event) {
+    log.debug('hostfs_invalidate dropped — invalid payload', {
+      hasMount: typeof data.mount === 'string' && data.mount.length > 0,
+      pathsIsArray: Array.isArray(data.paths),
+    });
+    return;
+  }
+  try {
+    rt.options.onHostfsInvalidate?.(event);
+  } catch (err) {
+    log.warn('hostfs_invalidate handler threw', {
+      mount: event.mount,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function handleLickRequest(

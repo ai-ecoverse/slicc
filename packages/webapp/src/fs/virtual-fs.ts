@@ -1580,6 +1580,15 @@ export class VirtualFS {
   }
 
   /**
+   * Return the backend registered at an exact mount path, or `null`. Used by
+   * the lick-ws `hostfs_invalidate` handler to drop RemoteMountCache keys.
+   */
+  getMountBackend(absolutePath: string): MountBackend | null {
+    const normalized = normalizePath(absolutePath);
+    return this.mountPoints.get(normalized) ?? null;
+  }
+
+  /**
    * Register a backend at `absolutePath` without persistence or
    * peer-sync. Used by the kernel for `/proc` and reserved for
    * any future kernel-only mount (`/dev`, `/sys`, …) that should

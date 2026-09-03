@@ -63,6 +63,7 @@ import { shouldParseGlobalJson } from './fetch-proxy-headers.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { registerHostFsRoutes, resolveHostMountRoots } from './hostfs.js';
+import { startHostFsWatchers } from './hostfs-watch.js';
 import { createBridgeServer } from './http-keepalive.js';
 import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
@@ -1371,6 +1372,9 @@ async function main() {
   // Roots are resolved once at startup; a folder created later needs a restart.
   state.hostMountRoots = await resolveHostMountRoots(RUNTIME_FLAGS.mounts);
   registerHostFsRoutes(app, state.hostMountRoots);
+  const hostFsWatch = startHostFsWatchers(state.hostMountRoots, (event) => {
+    broadcastLickEvent(event);
+  });
 
   // Sudo approval endpoint — raises a native OS dialog / TTY prompt from this
   // trusted process so the in-browser agent can request, but never fabricate,
@@ -1403,11 +1407,15 @@ async function main() {
     wss,
     server,
   });
+  const shutdown = async (): Promise<void> => {
+    hostFsWatch.stop();
+    await gracefulShutdown();
+  };
   process.on('SIGINT', () => {
-    void gracefulShutdown();
+    void shutdown();
   });
   process.on('SIGTERM', () => {
-    void gracefulShutdown();
+    void shutdown();
   });
   process.on('exit', () => {
     // Synchronous last-resort cleanup — kill the launched browser if still running.
