@@ -19,6 +19,7 @@ import { registerTranscriptExportService } from '../../transcript/export-provide
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
+import type { Unsubscribe, WorkUnitClient } from '../../work-unit/client/types.js';
 import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
 import {
@@ -115,6 +116,110 @@ export interface WcShellBoot {
  * {@link attachWcClient} (phase B) — standalone spawns a kernel worker,
  * the extension popout connects to the offscreen engine.
  */
+/**
+ * Decide what happens to the queued pile when the selection moves (#2354).
+ *
+ * A read-only detour that stays inside the queue owner's own cone HOLDS the
+ * pile; anything else cancels it on the backend, because the orchestrator must
+ * never silently deliver a prompt the user dropped by navigating away. The
+ * hold is keyed by the OWNING CONE, not by the unit being left: the queue
+ * belongs to the cone, so a hop between two of its scoops must not re-key the
+ * hold onto a scoop jid that no destination owner could ever match.
+ *
+ * Returns the stash to carry forward, or `null` when there is none left.
+ */
+function reconcileQueueForSwitch(args: {
+  controller: WcChatController | null;
+  deleteQueued: (jid: string, id: string) => void;
+  destination: string;
+  previousJid: string | null;
+  readOnly: boolean;
+  roster: readonly RegisteredScoop[];
+  stashed: { jid: string; items: ChatMessage[] } | null;
+}): { jid: string; items: ChatMessage[] } | null {
+  const { controller, deleteQueued, destination, previousJid, readOnly, roster } = args;
+  let stashed = args.stashed;
+  const cancel = (jid: string, ids: readonly string[]): void => {
+    for (const id of ids) deleteQueued(jid, id);
+  };
+  /**
+   * The cone that owns a unit — itself for a cone, its root for a scoop.
+   * `undefined` when the unit is not in the live roster: `rootForSelection`
+   * would fall back to the DEFAULT root there, which would silently read as
+   * "same cone" and preserve a queue the user actually walked away from.
+   * Unknown owner therefore means "cancel", the conservative direction and the
+   * behaviour that predates the hold.
+   */
+  const ownerOf = (jid: string | undefined): string | undefined => {
+    const unit = jid === undefined ? undefined : roster.find((s) => s.jid === jid);
+    return unit ? (rootForSelection(roster, unit)?.jid ?? unit.jid) : undefined;
+  };
+  const destinationOwner = ownerOf(destination);
+  // Snapshot the OLD unit's queued ids and cancel them BEFORE the selection
+  // moves. The controller's own pile is dropped locally later by the replay;
+  // its `onQueuedCancel` hook then fires against the NEW jid as
+  // defense-in-depth (a redundant per-id delete is a no-op).
+  if (previousJid && previousJid !== destination) {
+    const previousOwner = ownerOf(previousJid);
+    if (readOnly && destinationOwner !== undefined && destinationOwner === previousOwner) {
+      const items = controller?.stashQueued() ?? [];
+      if (items.length > 0) stashed = { items, jid: previousOwner };
+    } else {
+      const queued = controller?.getQueuedMessages() ?? [];
+      cancel(
+        previousJid,
+        queued.map((m) => m.id)
+      );
+    }
+  }
+  if (!stashed) return null;
+  // Back on the cone that owns the pile: hand it to the controller, which
+  // re-installs it after the replay. Still somewhere inside that cone's subtree
+  // (a sibling scoop): keep holding. Anywhere else — including a DIFFERENT
+  // cone's scoop — the detour is over and the prompts really were abandoned.
+  if (stashed.jid === destination) {
+    controller?.restoreQueued(stashed.items);
+    return null;
+  }
+  if (destinationOwner !== stashed.jid) {
+    cancel(
+      stashed.jid,
+      stashed.items.map((m) => m.id)
+    );
+    return null;
+  }
+  return stashed;
+}
+
+/**
+ * A re-pointable subscription to ONE unit's transcript.
+ *
+ * Every replay the kernel produces for the watched unit arrives here — the one
+ * a selection asks for AND the ones it pushes on its own (a new session, a
+ * compaction, a freezer restore), which used to reach the shell through
+ * `onScoopMessagesReplaced` in the callback bag (#2382).
+ */
+function createUnitWatcher(
+  getClient: () => WorkUnitClient,
+  getSelectedJid: () => string | null,
+  load: (messages: readonly ChatMessage[], queuedIds?: readonly string[]) => void
+): (jid: string) => void {
+  let watch: Unsubscribe | null = null;
+  return (jid) => {
+    watch?.();
+    // No seed suppression here: a selection asks for its snapshot BEFORE
+    // re-pointing, and `subscribe` does not seed a listener that joins an
+    // in-flight fetch — so what arrives is the fresh replay, once.
+    watch = getClient().subscribe(jid, (event) => {
+      if (event.type !== 'snapshot') return;
+      // A replay that lands after the selection moved on describes the unit we
+      // left; the mount's old handler made the same check against `getSelected`.
+      if (getSelectedJid() !== jid) return;
+      load(event.snapshot.messages as unknown as ChatMessage[], event.snapshot.queuedIds);
+    });
+  };
+}
+
 export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
   const refs = mountWcShell(app, {
     messages: [],
@@ -147,86 +252,55 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
    */
   let stashedQueue: { jid: string; items: ChatMessage[] } | null = null;
 
+  /** Re-points the transcript subscription; see {@link createUnitWatcher}. */
+  const watchUnit = createUnitWatcher(
+    () => ensureWorkUnitClient(wiring),
+    () => selected?.jid ?? null,
+    (messages, queuedIds) => controller?.loadMessages(messages, queuedIds)
+  );
+
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
     if (!client) return;
     const readOnly = isReadOnlyRole(unitRoleFor(scoop));
-    const cancelQueued = (jid: string, ids: readonly string[]): void => {
-      for (const id of ids) void client?.deleteQueuedMessage(jid, id).catch(() => undefined);
-    };
-    const roster = client.getScoops();
-    /**
-     * The cone that owns a unit — itself for a cone, its root for a scoop.
-     * `undefined` when the unit is not in the live roster: `rootForSelection`
-     * would fall back to the DEFAULT root there, which would silently read as
-     * "same cone" and preserve a queue the user actually walked away from.
-     * Unknown owner therefore means "cancel", the conservative direction and
-     * the behaviour that predates the hold.
-     */
-    const ownerOf = (jid: string | undefined): string | undefined => {
-      const unit = jid === undefined ? undefined : roster.find((s) => s.jid === jid);
-      return unit ? (rootForSelection(roster, unit)?.jid ?? unit.jid) : undefined;
-    };
-    const destinationOwner = ownerOf(scoop.jid);
-    // Scoop-switch queue-cancel: snapshot the OLD scoop's currently-queued
-    // ids and cancel them on the backend BEFORE switching selectedScoopJid,
-    // so the orchestrator never silently delivers a prompt the user dropped
-    // by navigating to a different scoop. The controller's #queued is
-    // dropped locally later via loadMessages; its onQueuedCancel hook then
-    // fires against the NEW jid as defense-in-depth (a redundant per-id
-    // delete is a no-op once the backend already removed it).
-    const previousJid = client.selectedScoopJid;
-    if (previousJid && previousJid !== scoop.jid) {
-      const previousOwner = ownerOf(previousJid);
-      // Held only for a read-only detour that stays inside the queue owner's
-      // own cone; anything else is a real departure.
-      if (readOnly && destinationOwner !== undefined && destinationOwner === previousOwner) {
-        // Keyed by the OWNING CONE, not by the unit we are leaving: the queue
-        // belongs to the cone, so a hop between two of its scoops must not
-        // re-key the hold onto a scoop jid (which no destination owner could
-        // ever match, cancelling the pile on the next hop).
-        const items = controller?.stashQueued() ?? [];
-        if (items.length > 0) stashedQueue = { jid: previousOwner, items };
-      } else {
-        const queued = controller?.getQueuedMessages() ?? [];
-        cancelQueued(
-          previousJid,
-          queued.map((m) => m.id)
-        );
-      }
-    }
-    if (stashedQueue) {
-      // Back on the cone that owns the pile: hand it to the controller, which
-      // re-installs it after the replay. Still somewhere inside that cone's
-      // subtree (a sibling scoop): keep holding. Anywhere else — including a
-      // DIFFERENT cone's scoop — the detour is over and the prompts really
-      // were abandoned, so cancel them on the backend.
-      if (stashedQueue.jid === scoop.jid) {
-        controller?.restoreQueued(stashedQueue.items);
-        stashedQueue = null;
-      } else if (destinationOwner !== stashedQueue.jid) {
-        cancelQueued(
-          stashedQueue.jid,
-          stashedQueue.items.map((m) => m.id)
-        );
-        stashedQueue = null;
-      }
-    }
+    stashedQueue = reconcileQueueForSwitch({
+      controller,
+      deleteQueued: (jid, id) => void client?.deleteQueuedMessage(jid, id).catch(() => undefined),
+      destination: scoop.jid,
+      previousJid: client.selectedScoopJid,
+      readOnly,
+      roster: client.getScoops(),
+      stashed: stashedQueue,
+    });
     const cachedBackpressure = lickBackpressure.get(scoop.jid);
     controller?.setLickBackpressure(
       cachedBackpressure?.count ?? 0,
       cachedBackpressure?.waitingMs ?? 0,
       unitSlugFor(scoop)
     );
-    client.setSelectedScoopJid(scoop.jid);
     // A cone gets its composer back (text and queue intact — the band is
     // hidden, never rebuilt); `applyThreadContext` re-locks it for a scoop.
-    // Set BEFORE `requestScoopMessages`, so the replay for the new selection
-    // is the first thing rendered under the new mode.
+    // Set BEFORE the snapshot is asked for, so the replay for the new
+    // selection is the first thing rendered under the new mode.
     controller?.setReadOnly(readOnly);
     if (!readOnly) refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop, client.getScoops());
-    client.requestScoopMessages(scoop.jid);
+    // Selection IS the snapshot call on this protocol (#2382): it sets the
+    // panel's selected jid and asks the kernel for the replay, which used to
+    // be `setSelectedScoopJid` + `requestScoopMessages` here. The transcript
+    // is painted by the subscription below rather than by awaiting this,
+    // because the two would paint the SAME replay twice — and because the
+    // adapter's no-answer fallback resolves with an empty transcript, which
+    // must never be allowed to wipe the thread.
+    // Snapshot BEFORE the subscription: the request this makes is the one the
+    // subscription then waits on, so the unit is asked for exactly once.
+    // Swallowed, as `requestScoopMessages` was: a selection that cannot reach
+    // the kernel leaves the previous transcript up, and the next roster or
+    // status event re-drives it. There is no logger in this factory.
+    void ensureWorkUnitClient(wiring)
+      .snapshot(scoop.jid)
+      .catch(() => undefined);
+    watchUnit(scoop.jid);
     // Ahead of the replay on purpose: the held-queue reconcile that runs when
     // it lands reads the turn state (see `#applyPendingQueueRestore`, #2354).
     controller?.setProcessing(client.isProcessing(scoop.jid));

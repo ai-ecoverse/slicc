@@ -114,7 +114,19 @@ export interface WorkUnitChatMessage {
  * descriptor, the transcript, and the backend's pending queue.
  */
 export interface WorkUnitSnapshot {
-  summary: WorkUnitSummary;
+  /**
+   * How the strip would render this unit, when the transport can say.
+   *
+   * ABSENT means the transport is mirroring a unit it cannot describe, which
+   * is a real and permanent state rather than a race: a biscotto seat is
+   * pinned to ONE thread and is deliberately never sent `scoops.list`
+   * (`sendScoopsListToFollower` refuses it — the inventory's labels would leak
+   * what else the owner is working on), so no roster entry for its unit will
+   * ever arrive. Holding such a snapshot back until a summary showed up left
+   * every guest with a blank thread; the transcript is the part that matters,
+   * and a reader that needs the strip's view asks {@link WorkUnitClient.list}.
+   */
+  summary?: WorkUnitSummary;
   messages: readonly WorkUnitChatMessage[];
   /**
    * The backend's pending queue for this unit, in delivery order (#2362).

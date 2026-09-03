@@ -12,6 +12,7 @@ import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
 import { isReadOnlyUnit, toTabDescriptors } from '../../work-unit/client/presentation.js';
+import type { Unsubscribe } from '../../work-unit/client/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -19,7 +20,7 @@ import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
-import type { AgentHandle } from '../types.js';
+import type { AgentHandle, ChatMessage } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import { wireWcAttach } from './wc-attach.js';
@@ -745,6 +746,36 @@ export async function mountWcUiFollower(
     boot.getController()?.setReadOnly(composerReadOnly);
     setComposerState(composerEnabled, composerPlaceholder);
   };
+  /** The live per-unit subscription; re-pointed whenever the shown unit moves. */
+  let unitWatch: Unsubscribe | null = null;
+  /** The unit `unitWatch` is currently pointed at, so a re-point is a no-op. */
+  let watchedUnit: string | null = null;
+  /**
+   * Render one unit's transcript from the client protocol. Unlike the leader's
+   * twin this DOES take the seeded snapshot: a leader sends the initial
+   * transcript ahead of `scoops.list`, so on a fresh join the held early
+   * snapshot is the only one this follower will get for that unit — and there
+   * is no backend queue on this transport for a stale seed to mis-reconcile
+   * (`queuedIds` is always absent here).
+   */
+  const watchUnit = (jid: string): void => {
+    if (watchedUnit === jid && unitWatch) return;
+    unitWatch?.();
+    watchedUnit = jid;
+    // Whether the cached snapshot paints is the ADAPTER's call, not this one's:
+    // it seeds a new listener unless a `snapshot(jid)` is already in flight.
+    // A tab click asks first and so gets only the fresh transcript; a session
+    // bootstrap (`onSnapshot` / `onScoopsList`) has nothing in flight and takes
+    // the cache, which for a guest seat is often the only snapshot that unit
+    // will ever have.
+    unitWatch = workUnits.subscribe(jid, (event) => {
+      if (event.type !== 'snapshot' || watchedUnit !== jid) return;
+      const messages = event.snapshot.messages as unknown as ChatMessage[];
+      controller.loadMessages(messages, event.snapshot.queuedIds);
+      controller.setProcessing(messages.some((message) => message.isStreaming));
+    });
+  };
+
   /**
    * Drop everything that describes the connection that just ended: the client's
    * mirrored unit (so the next session's first snapshot is not judged against
@@ -754,6 +785,11 @@ export async function mountWcUiFollower(
   const forgetSessionSelection = (): void => {
     unitConfirmedThisSession = false;
     workUnits.resetSelection();
+    // The next session re-points the subscription from its own first frame; a
+    // remembered unit here would make that re-point a no-op.
+    unitWatch?.();
+    unitWatch = null;
+    watchedUnit = null;
   };
   boot.refs.switcher.connection = 'disconnected';
 
@@ -817,11 +853,16 @@ export async function mountWcUiFollower(
               }),
           }),
       browserAPI: prelude.browser,
-      onSnapshot: (messages, scoopJid) => {
-        followerSelectedScoop = usableUnitId(scoopJid);
+      // The TRANSCRIPT is no longer read off this frame — `watchUnit` renders
+      // it from the client protocol (#2382), the same subscription the leader
+      // mount uses. What is left here is the selection bookkeeping the frame
+      // also carries: the leader names the unit it is mirroring, and on a
+      // fresh join that is how this follower first learns which one it has.
+      onSnapshot: (_messages, scoopJid) => {
+        const unit = usableUnitId(scoopJid);
+        followerSelectedScoop = unit;
         unitConfirmedThisSession = true;
-        controller.loadMessages(messages);
-        controller.setProcessing(messages.some((message) => message.isStreaming));
+        if (unit) watchUnit(unit);
         // First unit of the session: re-evaluate the composer, which stayed
         // shut while there was nothing to address.
         applyFollowerSelectionChrome();
@@ -969,6 +1010,10 @@ export async function mountWcUiFollower(
         // Either frame can be the first of a session, so neither may be the
         // only door out of the un-addressable window.
         unitConfirmedThisSession = true;
+        // A leader sends the initial transcript AHEAD of this roster, so the
+        // adapter has already published it — subscribing here attaches to that
+        // cached snapshot, which is why this re-point takes the seed.
+        if (followerSelectedScoop) watchUnit(followerSelectedScoop);
         publishFollowerScoops();
         applyFollowerSelectionChrome();
         boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
@@ -1015,7 +1060,10 @@ export async function mountWcUiFollower(
       // to move its own selection with the strip, or its staleness rule would
       // still judge arriving snapshots against the PREVIOUS unit — and accept
       // the very one this click just superseded.
+      // Ask BEFORE subscribing: the in-flight fetch is what tells the adapter
+      // not to seed this listener with the unit's previous transcript.
       void workUnits.snapshot(scoopJid).catch(() => undefined);
+      watchUnit(scoopJid);
     }
   });
 

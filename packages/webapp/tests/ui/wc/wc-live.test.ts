@@ -167,6 +167,7 @@ function makeWiring(options: {
     getClient: () =>
       ({
         getScoops: () => options.scoops ?? [],
+        requestScoopMessages: vi.fn(),
       }) as never,
     getSelected: () => selected,
     selectScoop: vi.fn((s: RegisteredScoop) => {
@@ -436,15 +437,26 @@ describe('createWcLiveCallbacks', () => {
     expect(wiring.controller.updateLickState).toHaveBeenCalledWith('lick-1', 'confirmed');
   });
 
-  it('replaces history for the selected scoop', () => {
-    const wiring = makeWiring({ selected: cone });
+  it('routes a replay onto the client protocol instead of the callback bag', () => {
+    // The unit has to be in the roster: the adapter describes a snapshot from
+    // the record, and holds a replay for a unit the page has not listed yet.
+    const wiring = makeWiring({ selected: cone, scoops: [cone] });
     const callbacks = createWcLiveCallbacks(wiring);
+    const seen: unknown[] = [];
+    // The mount reads the transcript from `subscribe` now (#2382); the bag has
+    // no `onScoopMessagesReplaced` handler of its own, and the ADAPTER is what
+    // turns the kernel's envelope into a snapshot event.
+    wiring.workUnits?.subscribe(cone.jid, (event) => {
+      if (event.type === 'snapshot') seen.push(event.snapshot);
+    });
     const messages = [{ id: 'h1' }];
-    callbacks.onScoopMessagesReplaced?.(cone.jid, messages as never);
+    callbacks.onScoopMessagesReplaced?.(cone.jid, messages as never, ['q1']);
+    expect(seen).toHaveLength(1);
+    // The backend queue snapshot rides the same envelope (#2354/#2362).
+    expect(seen[0]).toMatchObject({ messages, queuedIds: ['q1'] });
+    // A replay for another unit reaches that unit's subscribers, not this one.
     callbacks.onScoopMessagesReplaced?.('other', [] as never);
-    expect(wiring.controller.loadMessages).toHaveBeenCalledTimes(1);
-    // The backend queue snapshot rides the same envelope (#2354).
-    expect(wiring.controller.loadMessages).toHaveBeenCalledWith(messages, undefined);
+    expect(seen).toHaveLength(1);
   });
 
   it('selects the cone when the kernel reports ready', () => {

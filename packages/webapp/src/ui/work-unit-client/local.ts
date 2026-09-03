@@ -69,6 +69,12 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     WorkUnitId,
     { messages: readonly WorkUnitChatMessage[]; queuedIds: readonly string[] | undefined }
   >();
+  /**
+   * Units whose unanswered request has already been re-issued once. Bounds the
+   * recovery in {@link snapshot} to a single extra ask per unit, and is cleared
+   * for a unit as soon as one of its replays actually lands.
+   */
+  private readonly retriedSnapshots = new Set<WorkUnitId>();
   /** Replays awaited by {@link snapshot}, keyed by unit. */
   private readonly pendingSnapshots = new Map<
     WorkUnitId,
@@ -115,6 +121,9 @@ export class LocalWorkUnitClient implements WorkUnitClient {
 
   /** Emit a snapshot to this unit's subscribers and settle anyone awaiting it. */
   private publishSnapshot(id: WorkUnitId, snapshot: WorkUnitSnapshot): void {
+    // The transport is answering for this unit again, so a future unanswered
+    // request earns its own retry rather than inheriting this one's.
+    this.retriedSnapshots.delete(id);
     this.lastSnapshots.set(id, snapshot);
     this.emit(id, { snapshot, type: 'snapshot' });
     const waiters = this.pendingSnapshots.get(id);
@@ -131,6 +140,63 @@ export class LocalWorkUnitClient implements WorkUnitClient {
       this.orphanedReplays.delete(id);
       this.publishSnapshot(id, snapshot);
     }
+  }
+
+  /**
+   * Answer for a unit whose replay request went unanswered.
+   *
+   * `subscribe` suppresses its own request while a snapshot is in flight, so
+   * the timed-out ask was the ONLY one and nothing else will re-issue it. Left
+   * alone, the shell would keep the PREVIOUS unit's transcript on screen while
+   * the composer, the thread context and the navbar attention already belong
+   * to the new one — the user reads B and sends into A.
+   *
+   * So: ask once more, and if that is dropped too, publish what we can for
+   * this unit rather than leaving another unit's messages under its chrome.
+   * Once, not a loop — a kernel that ignored two requests will not answer a
+   * third, and a retry timer per selection would outlive the selection that
+   * started it.
+   */
+  private recoverUnanswered(id: WorkUnitId): void {
+    if (!this.unitListeners.has(id)) return;
+    if (this.retriedSnapshots.has(id)) {
+      this.publishRecovery(id);
+      return;
+    }
+    this.retriedSnapshots.add(id);
+    this.deps.getClient()?.requestScoopMessages(id);
+    setTimeout(() => {
+      // A replay landed in the meantime: `publishSnapshot` clears the mark.
+      if (this.retriedSnapshots.has(id)) this.publishRecovery(id);
+    }, SNAPSHOT_TIMEOUT_MS);
+  }
+
+  /**
+   * Show this unit's OWN last-known transcript (or nothing) when the transport
+   * will not answer for it.
+   *
+   * `queuedIds` is deliberately absent: it is the protocol's "nobody could
+   * answer", which leaves the held pile standing instead of spending the
+   * one-shot restore on a reconcile against a queue we never saw (#2354).
+   *
+   * Emitted rather than published: this snapshot is the CLIENT's answer, not
+   * the transport's, so it must not become the cache a later subscriber is
+   * seeded from as though the kernel had said it.
+   */
+  private publishRecovery(id: WorkUnitId): void {
+    if (!this.unitListeners.has(id)) return;
+    const cached = this.lastSnapshots.get(id);
+    const scoop = this.deps
+      .getClient()
+      ?.getScoops()
+      .find((unit) => unit.jid === id);
+    this.emit(id, {
+      snapshot: {
+        messages: cached?.messages ?? [],
+        ...(scoop ? { summary: this.toSummary(scoop) } : {}),
+      },
+      type: 'snapshot',
+    });
   }
 
   /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
@@ -231,9 +297,19 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     const listeners = this.unitListeners.get(id) ?? new Set<(event: WorkUnitClientEvent) => void>();
     listeners.add(listener);
     this.unitListeners.set(id, listeners);
+    // A `snapshot(id)` in flight settles BOTH questions this branch asks. It
+    // has already asked the transport, so asking again would replay the same
+    // transcript twice — and its answer is about to arrive, so seeding the
+    // listener with the cached one first would paint the unit's PREVIOUS
+    // transcript and then immediately replace it: two wholesale renders, dips
+    // disposed and rehydrated, a flash of stale history, and (on the leader)
+    // the one-shot held-queue restore consumed against a stale `queuedIds`
+    // (#2354). So a subscriber that joins an in-flight fetch just waits.
     const known = this.lastSnapshots.get(id);
-    if (known) listener({ snapshot: known, type: 'snapshot' });
-    else this.deps.getClient()?.requestScoopMessages(id);
+    if (!this.pendingSnapshots.has(id)) {
+      if (known) listener({ snapshot: known, type: 'snapshot' });
+      else this.deps.getClient()?.requestScoopMessages(id);
+    }
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);
@@ -268,6 +344,7 @@ export class LocalWorkUnitClient implements WorkUnitClient {
         // Drop THIS caller's waiter (not the set: a concurrent call for the
         // same unit still has its own pending promise and its own fallback).
         this.forgetWaiter(id, resolveReplay);
+        this.recoverUnanswered(id);
         resolve(this.snapshotFor(id, [], undefined));
       }, SNAPSHOT_TIMEOUT_MS);
     });
