@@ -8,10 +8,10 @@
  */
 
 import type { IFileSystem } from 'just-bash';
-import type { ParsedFfmpegInvocation } from '../ffmpeg-command.js';
 import { runViaMediabunny } from './bunny-run.js';
 import { translateToMediabunny } from './bunny-translate.js';
 import type { FfmpegEngine } from './engine.js';
+import type { ParsedFfmpegInvocation } from './run.js';
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 

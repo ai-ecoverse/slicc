@@ -19,7 +19,7 @@
  * kernel worker's eager import graph until the first media command.
  */
 
-import type { ParsedFfmpegInvocation } from '../ffmpeg-command.js';
+import type { ParsedFfmpegInvocation } from './run.js';
 
 export type BunnyContainer =
   | 'mp4'

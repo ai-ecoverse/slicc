@@ -7,7 +7,7 @@ import {
   parseTime,
   translateToMediabunny,
 } from '../../../../src/shell/supplemental-commands/ffmpeg/bunny-translate.js';
-import { parseFfmpegArgs } from '../../../../src/shell/supplemental-commands/ffmpeg-command.js';
+import { parseFfmpegArgs } from '../../../../src/shell/supplemental-commands/ffmpeg/run.js';
 
 function plan(argv: string[]): BunnyPlan {
   const t = translateToMediabunny(parseFfmpegArgs(argv));

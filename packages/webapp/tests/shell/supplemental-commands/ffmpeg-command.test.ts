@@ -5,7 +5,6 @@ import { createRequire } from 'module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCameraRequest,
-  createFfmpegCommand,
   createIpkContextFromCtx,
   ensureNullMuxerOpts,
   isAnalysisSink,
@@ -15,7 +14,8 @@ import {
   parseFfmpegArgs,
   permissionKindsFor,
   requestCapturePermission,
-} from '../../../src/shell/supplemental-commands/ffmpeg-command.js';
+} from '../../../src/shell/supplemental-commands/ffmpeg/run.js';
+import { createFfmpegCommand } from '../../../src/shell/supplemental-commands/ffmpeg-command.js';
 import {
   BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,

@@ -214,7 +214,7 @@ Three things the recycle path has to get right:
 - **Revoke the `blob:` URLs.** `terminate()` does not. The core JS + wasm are
   ~31 MB per generation, so a recyclable loader that never revokes feeds the
   memory pressure that caused the fault.
-- **Cover every entry point into the shared core.** In `ffmpeg-command.ts` that
+- **Cover every entry point into the shared core.** In `ffmpeg/run.ts` that
   is the main command path _and_ `transcodeCapturedBytes` (the webcam
   post-capture pass), which uses the same cached instance.
 

@@ -1,13 +1,14 @@
 /**
- * `ffprobe` shell command — media introspection backed by the same
- * `@ffmpeg/core` wasm instance that powers `ffmpeg`.
+ * `ffprobe` shell command — media introspection.
  *
- * `@ffmpeg/core` 0.12.x ships the ffmpeg entry point only; there is no
- * separate ffprobe wasm / ipk artifact for this pin. We therefore
- * emulate by staging the input into MEMFS, running
- * `ffmpeg -hide_banner -i <file>` (which exits non-zero with "At least
- * one output file must be specified" after printing the Input #N
- * banner), and parsing that banner into structured fields.
+ * Two engines, same output: mediabunny reads the container index from a
+ * lazily-read `Blob` and answers with typed fields (`../ffmpeg/bunny-probe.ts`,
+ * no wasm boot); containers it does not read fall back to the shared
+ * `@ffmpeg/core` wasm instance that powers `ffmpeg`. `@ffmpeg/core` 0.12.x
+ * ships the ffmpeg entry point only — no separate ffprobe binary — so the
+ * fallback mounts the input via WORKERFS, runs `ffmpeg -hide_banner -i <file>`
+ * (which exits non-zero with "At least one output file must be specified"
+ * after printing the Input #N banner), and parses that banner.
  *
  * This is an honest subset: duration, container/format name, and
  * per-stream codec/type/sample rate/channels/resolution/fps. Flags we
@@ -17,8 +18,8 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { readInputBlob } from '../ffmpeg/input-blob.js';
+import { createIpkContextFromCtx } from '../ffmpeg/run.js';
 import { mountStagedInputs, newStage, stagedPath, unmountStagedInputs } from '../ffmpeg/staging.js';
-import { createIpkContextFromCtx } from '../ffmpeg-command.js';
 import {
   describeFfmpegCore,
   ffmpegCoreNotInstalledMessage,

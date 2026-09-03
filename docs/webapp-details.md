@@ -29,8 +29,9 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## Media commands (`ffmpeg` / `ffprobe`)
 
-`shell/supplemental-commands/ffmpeg-command.ts`, `ffprobe/`, `ffmpeg/` (staging + input
-blobs), `ffmpeg-wasm.ts` (core loader).
+`shell/supplemental-commands/ffmpeg-command.ts` (registration stub; the body is `ffmpeg/run.ts`,
+`import()`ed on first use like `ffprobe/run.ts`), `ffmpeg/` (staging, input blobs, both engines),
+`ffmpeg-wasm.ts` (core loader).
 
 - **Two cores, one pin.** `@ffmpeg/core` (single-threaded) and `@ffmpeg/core-mt` (pthreads over
   SharedArrayBuffer) are ipk-installed by the user; the loader boots `-mt` only when
