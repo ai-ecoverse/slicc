@@ -27,11 +27,21 @@ import { PRESETS } from '../theme-presets.js';
 import type { SimplifiedSlots, SliccTheme, ThemeComponents } from '../theme-types.js';
 import { TOKEN_GROUPS } from '../theme-types.js';
 import { getShowTimestamps, setShowTimestamps } from '../timestamp-preference.js';
+import type { KeyboardTrigger } from './wc-shortcuts.js';
 
 type ProviderSettingsModule = typeof import('../provider-settings.js');
 
 interface SettingsLogger {
   error(message: string, ...data: unknown[]): void;
+  warn?(message: string, ...data: unknown[]): void;
+}
+
+/** Live keyboard-mode trigger switcher for the Theme dialog. */
+export interface ThemeKeyboardOpts {
+  getTrigger(): KeyboardTrigger;
+  setTrigger(trigger: KeyboardTrigger): void;
+  /** Persist to `/etc/slicc/keys.json` (optional — live change still applies). */
+  persistTrigger?(trigger: KeyboardTrigger): Promise<void>;
 }
 
 const STYLE_ID = 'slicc-wc-settings-style';
@@ -84,6 +94,14 @@ slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
 .wcset__toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--canvas);}
 .wcset__toggle-row label{font-size:13px;font-weight:500;color:var(--ink);}
 .wcset__toggle-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--ctx);}
+.wcset__radio-list{display:flex;flex-direction:column;gap:8px;}
+.wcset__radio-row{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--canvas);}
+.wcset__radio-row:hover{border-color:var(--ctx);}
+.wcset__radio-row:has(input:checked){border-color:var(--ink);}
+.wcset__radio-row input{margin-top:2px;flex:0 0 auto;}
+.wcset__radio-row__body{flex:1;min-width:0;}
+.wcset__radio-row__title{font-size:12.5px;font-weight:600;}
+.wcset__radio-row__detail{font-size:11px;color:var(--txt-3);margin-top:2px;line-height:1.4;}
 `;
 
 function ensureSettingsStyle(doc: Document): void {
@@ -356,6 +374,68 @@ function buildBrowsingPreferencesSection(): HTMLElement {
   check.addEventListener('change', () => setDiscoveryEnabled(check.checked));
   row.append(label, check);
   section.append(row);
+  return section;
+}
+
+/**
+ * How keyboard mode is entered — three radios written to `/etc/slicc/keys.json`
+ * as `trigger`, and applied live so the user does not need a reload.
+ */
+function buildKeyboardModeSection(
+  keyboard: ThemeKeyboardOpts,
+  setStatus: (text: string, isError?: boolean) => void,
+  log: SettingsLogger
+): HTMLElement {
+  const section = div('wcset__add');
+  section.append(div('wcset__section-label', 'Keyboard mode'));
+  const list = div('wcset__radio-list');
+  const options: Array<{ value: KeyboardTrigger; title: string; detail: string }> = [
+    {
+      value: 'auto',
+      title: 'Auto',
+      detail: 'On whenever you are not typing — click outside the composer to command.',
+    },
+    {
+      value: 'esc',
+      title: 'Esc',
+      detail: 'Press Esc to enter. Blurring the composer does not turn it on.',
+    },
+    {
+      value: null,
+      title: 'Off',
+      detail: 'Keyboard mode disabled. Shortcuts stay unavailable until you pick Auto or Esc.',
+    },
+  ];
+  const name = 'wcset-keyboard-trigger';
+  // `null` is Off — never coalesce with `??` or the Off radio appears as Auto.
+  const current = keyboard.getTrigger();
+  for (const opt of options) {
+    const row = document.createElement('label');
+    row.className = 'wcset__radio-row';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = name;
+    input.value = opt.value === null ? 'off' : opt.value;
+    input.checked = current === opt.value;
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      const next: KeyboardTrigger = opt.value;
+      keyboard.setTrigger(next);
+      setStatus('Saved.');
+      void keyboard.persistTrigger?.(next).catch((err) => {
+        log.error('Could not persist keyboard trigger', err);
+        setStatus('Applied for this session; could not write /etc/slicc/keys.json.', true);
+      });
+    });
+    const body = div('wcset__radio-row__body');
+    body.append(
+      div('wcset__radio-row__title', opt.title),
+      div('wcset__radio-row__detail', opt.detail)
+    );
+    row.append(input, body);
+    list.append(row);
+  }
+  section.append(list);
   return section;
 }
 
@@ -946,7 +1026,10 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
 /**
  * Open a standalone theme settings dialog (separate from account settings).
  */
-export async function showThemeSettings(log: SettingsLogger): Promise<void> {
+export async function showThemeSettings(
+  log: SettingsLogger,
+  keyboard?: ThemeKeyboardOpts
+): Promise<void> {
   ensureSettingsStyle(document);
   deleteCustomTheme('__preview');
 
@@ -972,7 +1055,9 @@ export async function showThemeSettings(log: SettingsLogger): Promise<void> {
     const appearance = buildAppearanceSection(deps);
     const chatSection = buildChatPreferencesSection();
     const browsingSection = buildBrowsingPreferencesSection();
-    body.append(appearance, chatSection, browsingSection, status);
+    body.append(appearance, chatSection, browsingSection);
+    if (keyboard) body.append(buildKeyboardModeSection(keyboard, setStatus, log));
+    body.append(status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {

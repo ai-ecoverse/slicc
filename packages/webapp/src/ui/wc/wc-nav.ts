@@ -78,16 +78,23 @@ export function modelListForMeta(groups: readonly GroupedModels[]): MetaModel[] 
 }
 
 /**
- * Sync the model-pill label to the currently-resolved model. Extracted from
- * `wireWcNav` so the function stays within the 150-line limit.
+ * Sync the model-pill label (and its qualified id) to the currently-resolved
+ * model. Extracted from `wireWcNav` so the function stays within the 150-line
+ * limit. The qualified id lets `cycleModel` advance from the real selection
+ * when two providers share a display name.
  */
 function applyModelPillFromCurrentModel(
   composerMeta: Element,
-  resolveCurrentModel: () => { name?: string; id: string }
+  resolveCurrentModel: () => { name?: string; id: string },
+  resolveQualifiedId?: () => string
 ): void {
   try {
     const model = resolveCurrentModel();
     composerMeta.setAttribute('model', model.name ?? model.id);
+    if (resolveQualifiedId) {
+      (composerMeta as HTMLElement & { selectedModelId?: string | null }).selectedModelId =
+        resolveQualifiedId();
+    }
   } catch {
     // Model pill is informational; never block on resolution.
   }
@@ -107,9 +114,15 @@ export interface WcNavDeps {
    * Keyboard mode's handles. Two-way: the menu entry opens the help overlay
    * (the only way a user who never presses Esc discovers the mode exists),
    * and `a` inside the mode needs the account dialog this module owns —
-   * registered here because nothing below `ui/wc/` can reach it.
+   * registered here because nothing below `ui/wc/` can reach it. Trigger
+   * get/set power the Theme dialog's keyboard-mode switcher.
    */
-  shortcuts?: Pick<ShortcutHandles, 'showHelp' | 'setAction'>;
+  shortcuts?: Pick<ShortcutHandles, 'showHelp' | 'setAction' | 'trigger' | 'setTrigger'>;
+  /**
+   * Persist a Theme-dialog trigger change to `/etc/slicc/keys.json`. Optional
+   * so a float without a VFS still gets the live switch.
+   */
+  persistKeyboardTrigger?: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => Promise<void>;
 }
 
 function standardMenuItems(
@@ -156,15 +169,65 @@ function buildRefreshModels(
   };
 }
 
+/** Sync the pill label + qualified id from the account store's current model. */
+function buildRefreshModelPill(
+  composerMeta: HTMLElement,
+  resolveCurrentModel: () => { name?: string; id: string },
+  getSelectedProvider: () => string
+): () => void {
+  return () =>
+    applyModelPillFromCurrentModel(composerMeta, resolveCurrentModel, () => {
+      const model = resolveCurrentModel();
+      return `${getSelectedProvider()}:${model.id}`;
+    });
+}
+
+/** Paint the nav avatar + send-button face from the richest connected account. */
+function buildApplyIdentity(
+  refs: WcShellRefs,
+  getAccounts: () => readonly { providerId: string; userName?: string; userAvatar?: string }[],
+  isExtension: boolean
+): () => void {
+  return () => {
+    const identity = accountIdentity(getAccounts());
+    const avatar = refs.avatarMenu.querySelector('slicc-avatar');
+    // The send button paints the user's face as its circular ground — same
+    // identity source as the nav avatar.
+    const send = refs.inputCard.querySelector('slicc-send-button');
+    if (identity) {
+      avatar?.removeAttribute('initials');
+      avatar?.setAttribute('name', identity.name);
+      if (identity.avatarUrl) {
+        avatar?.setAttribute('src', identity.avatarUrl);
+        send?.setAttribute('src', identity.avatarUrl);
+      }
+      refs.avatarMenu.user = { name: identity.name, provider: identity.provider };
+      return;
+    }
+    // Signed out: clear the avatar's identity so it shows the `?` placeholder
+    // instead of an initial derived from a placeholder name.
+    avatar?.removeAttribute('name');
+    avatar?.removeAttribute('src');
+    avatar?.removeAttribute('initials');
+    send?.removeAttribute('src');
+    refs.avatarMenu.user = {
+      name: 'SLICC',
+      provider: isExtension ? 'extension' : 'standalone',
+    };
+  };
+}
+
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log, onExportTranscript } = deps;
-  const { getAllAvailableModels, getAccounts, resolveCurrentModel } = await import(
-    '../provider-settings.js'
-  );
+  const { getAllAvailableModels, getAccounts, getSelectedProvider, resolveCurrentModel } =
+    await import('../provider-settings.js');
 
   const refreshModels = buildRefreshModels(refs.composerMeta, getAllAvailableModels);
-  const refreshModelPill = () =>
-    applyModelPillFromCurrentModel(refs.composerMeta, resolveCurrentModel);
+  const refreshModelPill = buildRefreshModelPill(
+    refs.composerMeta,
+    resolveCurrentModel,
+    getSelectedProvider
+  );
   refreshModels();
   // After the invalid-model error card opens the picker via
   // `slicc-error-change-model`, the next model pick should auto-replay the
@@ -187,33 +250,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   });
 
   const isExtension = isExtensionRealm();
-  const applyIdentity = (): void => {
-    const identity = accountIdentity(getAccounts());
-    const avatar = refs.avatarMenu.querySelector('slicc-avatar');
-    // The send button paints the user's face as its circular ground — same
-    // identity source as the nav avatar.
-    const send = refs.inputCard.querySelector('slicc-send-button');
-    if (identity) {
-      avatar?.removeAttribute('initials');
-      avatar?.setAttribute('name', identity.name);
-      if (identity.avatarUrl) {
-        avatar?.setAttribute('src', identity.avatarUrl);
-        send?.setAttribute('src', identity.avatarUrl);
-      }
-      refs.avatarMenu.user = { name: identity.name, provider: identity.provider };
-    } else {
-      // Signed out: clear the avatar's identity so it shows the `?` placeholder
-      // instead of an initial derived from a placeholder name.
-      avatar?.removeAttribute('name');
-      avatar?.removeAttribute('src');
-      avatar?.removeAttribute('initials');
-      send?.removeAttribute('src');
-      refs.avatarMenu.user = {
-        name: 'SLICC',
-        provider: isExtension ? 'extension' : 'standalone',
-      };
-    }
-  };
+  const applyIdentity = buildApplyIdentity(refs, getAccounts, isExtension);
   applyIdentity();
   const trayMenuItems = (): NonNullable<typeof refs.avatarMenu.items> => {
     // Tray runs page-side only in standalone; the extension leader lives in
@@ -279,7 +316,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   );
   // Registered, not reimplemented: `a` opens the very dialog the menu does.
   deps.shortcuts?.setAction('accounts', openSettings);
-  const openTheme = buildOpenTheme(log);
+  const openTheme = buildOpenTheme(log, themeKeyboardOpts(deps));
   const openExperimental = buildOpenExperimental(log);
   wireFollowersSegment(refs, log);
 
@@ -351,11 +388,40 @@ function buildOpenSettings(
   };
 }
 
-function buildOpenTheme(log: BootStageLogger): () => void {
+function buildOpenTheme(
+  log: BootStageLogger,
+  keyboard?: {
+    getTrigger: () => import('./wc-shortcuts.js').KeyboardTrigger;
+    setTrigger: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => void;
+    persistTrigger?: (trigger: import('./wc-shortcuts.js').KeyboardTrigger) => Promise<void>;
+  }
+): () => void {
   return () => {
     import('./wc-settings.js')
-      .then(({ showThemeSettings }) => showThemeSettings(log))
+      .then(({ showThemeSettings }) =>
+        showThemeSettings(
+          log,
+          keyboard
+            ? {
+                getTrigger: keyboard.getTrigger,
+                setTrigger: keyboard.setTrigger,
+                persistTrigger: keyboard.persistTrigger,
+              }
+            : undefined
+        )
+      )
       .catch((err) => log.error('Theme settings dialog failed', err));
+  };
+}
+
+/** Theme-dialog wiring for the live keyboard-mode trigger switcher. */
+function themeKeyboardOpts(deps: WcNavDeps): Parameters<typeof buildOpenTheme>[1] {
+  const shortcuts = deps.shortcuts;
+  if (!shortcuts) return undefined;
+  return {
+    getTrigger: () => shortcuts.trigger(),
+    setTrigger: (trigger) => shortcuts.setTrigger(trigger),
+    persistTrigger: deps.persistKeyboardTrigger,
   };
 }
 

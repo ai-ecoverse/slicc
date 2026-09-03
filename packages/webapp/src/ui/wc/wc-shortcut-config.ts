@@ -51,7 +51,10 @@ import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import {
   type CommandId,
   DEFAULT_KEYMAP,
+  DEFAULT_TRIGGER,
   isCommandId,
+  type KeyboardTrigger,
+  parseKeyboardTrigger,
   RESERVED_KEYS,
   V1_KEYMAP,
 } from './wc-shortcuts.js';
@@ -64,8 +67,19 @@ export const SHORTCUT_KEYS_PATH = '/etc/slicc/keys.json';
 export interface KeymapParseResult {
   /** The final map: defaults, with the file's entries applied over them. */
   keymap: Record<string, CommandId>;
+  /**
+   * How keyboard mode is entered. Omitted / unknown in the file →
+   * {@link DEFAULT_TRIGGER}. Explicit `null` disables the mode.
+   */
+  trigger: KeyboardTrigger;
   /** Everything ignored, and why — each one a line the user can act on. */
   warnings: string[];
+}
+
+/** What the loader hands the live shell after a successful read. */
+export interface ShortcutConfig {
+  keymap: Readonly<Record<string, CommandId>>;
+  trigger: KeyboardTrigger;
 }
 
 /** A named key the config may bind, beyond single characters. */
@@ -112,23 +126,36 @@ export function parseKeymapDocument(
 ): KeymapParseResult {
   const keymap: Record<string, CommandId> = { ...defaults };
   const warnings: string[] = [];
+  let trigger: KeyboardTrigger = DEFAULT_TRIGGER;
 
   let doc: unknown;
   try {
     doc = JSON.parse(text);
   } catch (err) {
     warnings.push(`not valid JSON, keeping the defaults (${(err as Error).message})`);
-    return { keymap, warnings };
+    return { keymap, trigger, warnings };
   }
 
-  const bindings = (doc as { bindings?: unknown } | null)?.bindings;
+  const root = doc as { bindings?: unknown; trigger?: unknown } | null;
+  if (root && Object.hasOwn(root, 'trigger')) {
+    const parsed = parseKeyboardTrigger(root.trigger);
+    if (parsed === undefined) {
+      warnings.push(
+        `"trigger": ${JSON.stringify(root.trigger)} is not null, "esc", or "auto"; keeping ${JSON.stringify(DEFAULT_TRIGGER)}`
+      );
+    } else {
+      trigger = parsed;
+    }
+  }
+
+  const bindings = root?.bindings;
   if (bindings === undefined) {
     warnings.push('no "bindings" object, keeping the defaults');
-    return { keymap, warnings };
+    return { keymap, trigger, warnings };
   }
   if (typeof bindings !== 'object' || bindings === null || Array.isArray(bindings)) {
     warnings.push('"bindings" is not an object, keeping the defaults');
-    return { keymap, warnings };
+    return { keymap, trigger, warnings };
   }
 
   for (const [key, value] of Object.entries(bindings)) {
@@ -148,7 +175,7 @@ export function parseKeymapDocument(
     }
     keymap[key] = value;
   }
-  return { keymap, warnings };
+  return { keymap, trigger, warnings };
 }
 
 /**
@@ -184,8 +211,8 @@ export function isUntouchedV1Document(text: string): boolean {
 export interface LoadShortcutConfigDeps {
   reader: Pick<LocalVfsClient, 'readFile'>;
   writer: Pick<WritableVfsClient, 'writeFile' | 'mkdir'>;
-  /** Hand the merged keymap to the live wiring. */
-  apply(keymap: Readonly<Record<string, CommandId>>): void;
+  /** Hand the merged keymap + trigger mode to the live wiring. */
+  apply(config: ShortcutConfig): void;
   logger?: {
     info(msg: string, ...rest: unknown[]): void;
     warn(msg: string, ...rest: unknown[]): void;
@@ -264,9 +291,68 @@ export async function loadShortcutConfig(deps: LoadShortcutConfigDeps): Promise<
     }
   }
 
-  const { keymap, warnings } = parseKeymapDocument(text);
+  const { keymap, trigger, warnings } = parseKeymapDocument(text);
   for (const warning of warnings) {
     logger.warn(`${SHORTCUT_KEYS_PATH}: ${warning}`);
   }
-  deps.apply(keymap);
+  deps.apply({ keymap, trigger });
+}
+
+/** On-disk shape of `/etc/slicc/keys.json` for in-place `trigger` patches. */
+interface KeysJsonDocument {
+  '//'?: unknown;
+  trigger?: unknown;
+  bindings?: unknown;
+}
+
+/**
+ * Rewrite only the `trigger` field of `/etc/slicc/keys.json`, preserving the
+ * comment and whatever bindings the user already has.
+ *
+ * Used by the Theme dialog's keyboard-mode switcher so a click is durable
+ * without forcing a reload. Missing file → seed the shipped document first
+ * (same policy as {@link loadShortcutConfig}), then patch.
+ */
+export async function writeShortcutTrigger(
+  deps: {
+    reader: Pick<LocalVfsClient, 'readFile'>;
+    writer: Pick<WritableVfsClient, 'writeFile' | 'mkdir'>;
+  },
+  trigger: KeyboardTrigger
+): Promise<void> {
+  let text: string | null = null;
+  try {
+    const raw = await deps.reader.readFile(SHORTCUT_KEYS_PATH, { encoding: 'utf-8' });
+    text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  } catch (err) {
+    if (!isMissing(err)) throw err;
+  }
+
+  let doc: KeysJsonDocument;
+  if (text === null) {
+    await deps.writer.mkdir('/etc/slicc', { recursive: true });
+    doc = JSON.parse(defaultKeysDoc) as KeysJsonDocument;
+  } else {
+    // Refuse to overwrite a corrupt/malformed file — the loader warns and
+    // keeps it; Theme must not silently replace custom bindings with the seed.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      throw new Error(
+        `${SHORTCUT_KEYS_PATH} is not valid JSON; fix or remove it before changing trigger`,
+        { cause: err }
+      );
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${SHORTCUT_KEYS_PATH} must be a JSON object`);
+    }
+    doc = parsed as KeysJsonDocument;
+  }
+
+  doc.trigger = trigger;
+  if (typeof doc.bindings !== 'object' || doc.bindings === null || Array.isArray(doc.bindings)) {
+    doc.bindings = {};
+  }
+  await deps.writer.writeFile(SHORTCUT_KEYS_PATH, `${JSON.stringify(doc, null, 2)}\n`);
 }

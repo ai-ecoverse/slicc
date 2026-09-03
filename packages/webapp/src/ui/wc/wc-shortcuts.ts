@@ -9,16 +9,21 @@
  * once: <kbd>Esc</kbd> leaves the text field and enters keyboard mode, and
  * inside it every binding is a bare letter.
  *
- * ## The mode is the resting state
+ * ## The mode is the resting state (when `trigger` is `auto`)
  *
- * Keyboard mode is not a place you visit, it is where you are whenever you
- * are not typing: {@link settle} turns it on the moment no text field holds
- * the focus, and off the moment one does. Escape is therefore a shortcut for
- * "leave the field", not a toggle, and `i` / Enter — which put the caret back
- * in the composer — are the only way out. That is vim's grammar rather than a
- * pair of modes with a switch between them, and it means the answer to "will
- * this letter type or command?" is always visible: the caret is in the
+ * With the default {@link KeyboardTrigger} of `auto`, keyboard mode is not a
+ * place you visit — it is where you are whenever you are not typing:
+ * {@link settle} turns it on the moment no text field (and no composer chrome)
+ * holds the focus, and off the moment one does. Escape is therefore a shortcut
+ * for "leave the field", not a toggle, and `i` / Enter — which put the caret
+ * back in the composer — are the only way out. That is vim's grammar rather
+ * than a pair of modes with a switch between them, and it means the answer to
+ * "will this letter type or command?" is always visible: the caret is in the
  * composer, or the badge is up.
+ *
+ * `/etc/slicc/keys.json` can set `"trigger": "esc"` (Enter only via Escape),
+ * or `"trigger": null` (mode disabled). The Theme dialog switches between the
+ * three; the default stays `auto`.
  *
  * ## The Escape contract
  *
@@ -115,6 +120,33 @@ export interface ShortcutComposerMeta {
   readonly models: readonly unknown[];
   /** Open the model dropdown, as clicking the pill does. */
   openMenu(): void;
+  /** Advance to the next model in the pill's list (wraps). */
+  cycleModel?(): void;
+  /** Advance to the next thinking level (wraps). No-op when the pill is hidden. */
+  cycleThinking?(): void;
+}
+
+/**
+ * How keyboard mode is entered. Stored in `/etc/slicc/keys.json` as `trigger`.
+ *
+ * - `auto` — resting state: on whenever nothing typable (and no composer chrome) is focused
+ * - `esc` — only Escape enters; blur does not
+ * - `null` — mode disabled entirely
+ */
+export type KeyboardTrigger = 'auto' | 'esc' | null;
+
+/** Shipped default: today's resting keyboard mode. */
+export const DEFAULT_TRIGGER: KeyboardTrigger = 'auto';
+
+/**
+ * Parse a `keys.json` `trigger` value. Returns `undefined` when the value is
+ * present but not one of the three accepted forms — the caller warns and keeps
+ * the default rather than inventing a mode.
+ */
+export function parseKeyboardTrigger(value: unknown): KeyboardTrigger | undefined {
+  if (value === null) return null;
+  if (value === 'auto' || value === 'esc') return value;
+  return undefined;
 }
 
 /** The bit of `<slicc-freezer>` the mode drives. */
@@ -244,6 +276,10 @@ export interface ShortcutHandles {
   setKeymap(keymap: Readonly<Record<string, CommandId>>): void;
   /** The mapping in force, for the help sheet and for tests. */
   keymap(): Readonly<Record<string, CommandId>>;
+  /** How the mode is entered — see {@link KeyboardTrigger}. */
+  trigger(): KeyboardTrigger;
+  /** Live-switch the trigger (Theme dialog); does not write the VFS. */
+  setTrigger(trigger: KeyboardTrigger): void;
 }
 
 type ModalElement = HTMLElement & { show?: () => void; hide?: () => void };
@@ -308,6 +344,43 @@ export function deepActiveElement(doc: Document): Element | null {
   // own again, so this is a walk rather than a single hop.
   while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
   return element;
+}
+
+/**
+ * Is `node` inside `root`, piercing shadow roots and slotted light DOM?
+ *
+ * Used so a click on the composer's `+` button (or model/thinking pill) does
+ * not look like "left the composer" to {@link settle}: those controls take
+ * focus without being typing targets, and under `auto` that used to flip
+ * keyboard mode on mid-gesture.
+ */
+export function isWithinElement(
+  root: Element | null | undefined,
+  node: Node | null | undefined
+): boolean {
+  if (!root || !node) return false;
+  let cur: Node | null = node;
+  while (cur) {
+    if (cur === root) return true;
+    if (typeof ShadowRoot !== 'undefined' && cur instanceof ShadowRoot) {
+      cur = cur.host;
+      continue;
+    }
+    const parent: ParentNode | null = cur.parentNode;
+    if (parent) {
+      cur = parent;
+      continue;
+    }
+    const slotted: HTMLSlotElement | null | undefined = (
+      cur as Element & { assignedSlot?: HTMLSlotElement | null }
+    ).assignedSlot;
+    if (slotted) {
+      cur = slotted;
+      continue;
+    }
+    break;
+  }
+  return false;
 }
 
 /**
@@ -547,6 +620,8 @@ export type CommandId =
   | 'sprinkles'
   | 'zoom'
   | 'model'
+  | 'cycleModel'
+  | 'cycleThinking'
   | 'accounts'
   | 'help';
 
@@ -804,6 +879,24 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
       meta.openMenu();
     },
   },
+  cycleModel: {
+    holdsMode: true,
+    description: 'Next model',
+    run: ({ deps, actions }) => {
+      const meta = deps.composerMeta;
+      if (!meta) return;
+      if (meta.models.length === 0) {
+        actions.accounts?.();
+        return;
+      }
+      meta.cycleModel?.();
+    },
+  },
+  cycleThinking: {
+    holdsMode: true,
+    description: 'Next thinking level',
+    run: ({ deps }) => deps.composerMeta?.cycleThinking?.(),
+  },
   accounts: {
     holdsMode: false,
     description: 'Accounts',
@@ -858,7 +951,7 @@ export const RESERVED_KEYS: readonly string[] = [
  * - **Shift is the heavier twin of the same letter** (`n`/`N`, `c`/`C`,
  *   `y`/`Y`), so a destructive variant is never a key of its own.
  *
- * Deliberately left free: `e h j k o q v w x . ; [] pairs aside` and, above
+ * Deliberately left free: `d o q w x . ; [] pairs aside` and, above
  * all, `/` — the obvious key for a command palette, and not worth spending on
  * a third synonym for `?`.
  */
@@ -897,6 +990,8 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   z: 'zoom',
   // Rare
   l: 'model',
+  L: 'cycleModel',
+  h: 'cycleThinking',
   ',': 'accounts',
 };
 
@@ -1004,15 +1099,21 @@ function ensureStyle(doc: Document): void {
 }
 
 /** The overlay body: a lead line, then one row per binding. */
-function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement {
+function buildHelpBody(
+  doc: Document,
+  rows: readonly ShortcutRow[],
+  trigger: KeyboardTrigger
+): HTMLElement {
   const list = doc.createElement('div');
   list.className = 'wcsc';
   const note = doc.createElement('div');
   note.className = 'wcsc__note';
   note.textContent =
-    'Keyboard mode is on whenever nothing is focused for typing, so these keys are ' +
-    'live by default. Put the caret back in the composer to type — nothing is ' +
-    'intercepted there.';
+    trigger === null
+      ? 'Keyboard mode is off. Turn it on in Theme settings (Esc or Auto).'
+      : trigger === 'esc'
+        ? 'Press Esc to enter keyboard mode. Put the caret back in the composer to type — nothing is intercepted there.'
+        : 'Keyboard mode is on whenever nothing is focused for typing (and you are not clicking composer chrome), so these keys are live by default. Put the caret back in the composer to type — nothing is intercepted there.';
   list.append(note);
   for (const row of rows) {
     const line = doc.createElement('div');
@@ -1128,7 +1229,8 @@ function createHud(
 /** The help overlay's lifecycle, kept apart from the mode's. */
 function createHelp(
   doc: Document,
-  readKeymap: () => Readonly<Record<string, CommandId>>
+  readKeymap: () => Readonly<Record<string, CommandId>>,
+  readTrigger: () => KeyboardTrigger
 ): {
   show(): void;
   hide(): void;
@@ -1150,9 +1252,9 @@ function createHelp(
     dialog.className = 'wcsc-dialog';
     dialog.setAttribute('heading', 'Keyboard mode');
     dialog.dataset.wcShortcuts = 'help';
-    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap())));
+    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap()), readTrigger()));
     // The dialog dismisses itself on Escape / ✕ / backdrop; drop our handle
-    // so the next `h` builds a fresh one instead of toggling a dead node.
+    // so the next `?` builds a fresh one instead of toggling a dead node.
     dialog.addEventListener('slicc-dialog-close', () => {
       overlay = null;
       dialog.remove();
@@ -1252,6 +1354,37 @@ function passesThrough(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Apply a keyboard-mode trigger policy to the current focus.
+ *
+ * Kept out of {@link createSettler}'s `settle` so the early-return gates
+ * (overlay / unfocused document) stay readable and the complexity budget
+ * is spent on the policy itself.
+ */
+function applyTriggerSettle(
+  trigger: KeyboardTrigger,
+  keepComposer: boolean,
+  composerAvailable: boolean,
+  mode: { set(on: boolean): void },
+  setIntent: (next: ModeIntent) => void
+): void {
+  if (trigger === null) {
+    mode.set(false);
+    if (composerAvailable && keepComposer) setIntent('composer');
+    return;
+  }
+  if (trigger === 'esc') {
+    if (keepComposer) {
+      mode.set(false);
+      if (composerAvailable) setIntent('composer');
+    }
+    return;
+  }
+  // auto
+  mode.set(!keepComposer);
+  if (composerAvailable) setIntent(keepComposer ? 'composer' : 'keyboard');
+}
+
+/**
  * The mode's other half: the rule that decides where the mode SHOULD be, and
  * the intent that survives a unit switch.
  *
@@ -1263,7 +1396,8 @@ function passesThrough(event: KeyboardEvent): boolean {
 function createSettler(
   doc: Document,
   mode: ReturnType<typeof createMode>,
-  deps: ShortcutDeps
+  deps: ShortcutDeps,
+  readTrigger: () => KeyboardTrigger
 ): {
   /** Reconcile the mode with the focus, after the current task. */
   schedule(): void;
@@ -1284,10 +1418,11 @@ function createSettler(
   let intent: ModeIntent = 'composer';
 
   /**
-   * Bring the mode in line with where the focus actually is: on unless
-   * something typable holds it. This is the whole resting-state rule, and it
-   * is the only writer of the intent besides a deliberate {@link choose} —
-   * asking the DOM once beats every surface remembering to tell us.
+   * Bring the mode in line with where the focus actually is.
+   *
+   * Under `auto`, on unless something typable — or any composer chrome — holds
+   * focus. Under `esc`, only leave the mode when focus is in the composer;
+   * never auto-enter. Under `null`, always off.
    */
   const settle = (): void => {
     // A modal owns the keyboard while it is up. The mode settles again when
@@ -1298,9 +1433,16 @@ function createSettler(
     // host page, a background tab — and a badge there advertises a mode for a
     // keyboard that is somewhere else entirely.
     if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
-    const typing = isTypingTarget(deepActiveElement(doc));
-    mode.set(!typing);
-    if (composerAvailable()) intent = typing ? 'composer' : 'keyboard';
+    const focused = deepActiveElement(doc);
+    applyTriggerSettle(
+      readTrigger(),
+      isTypingTarget(focused) || isWithinElement(deps.composerBand, focused),
+      composerAvailable(),
+      mode,
+      (next) => {
+        intent = next;
+      }
+    );
   };
 
   /**
@@ -1323,14 +1465,18 @@ function createSettler(
     schedule,
     restore: () => {
       if (hasOpenOverlay(doc)) return;
+      const trigger = readTrigger();
       if (intent === 'composer' && composerAvailable()) {
         mode.set(false);
         deps.focusComposer?.();
+      } else if (trigger === null) {
+        mode.set(false);
       } else {
         mode.set(true);
       }
       // A composer that REFUSED the focus (a follower's disabled card) falls
-      // back to keyboard mode rather than to a mode with nowhere to type.
+      // back to keyboard mode rather than to a mode with nowhere to type —
+      // unless the trigger forbids entering the mode at all.
       schedule();
     },
     choose: (next) => {
@@ -1479,12 +1625,15 @@ function handleEscape(
   event: KeyboardEvent,
   doc: Document,
   mode: ReturnType<typeof createMode>,
-  settler: ReturnType<typeof createSettler>
+  settler: ReturnType<typeof createSettler>,
+  trigger: KeyboardTrigger
 ): void {
   // An open overlay owns its own Escape; entering the mode underneath it
   // would leave the user pressing Escape twice for one dismissal.
   if (hasOpenOverlay(doc)) return;
   if (!mode.on()) {
+    // Mode disabled: leave Escape for the browser (fullscreen, etc.).
+    if (trigger === null) return;
     // Swallowed on purpose: one press means "leave the text field", not
     // "leave fullscreen".
     event.preventDefault();
@@ -1605,7 +1754,13 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   if (!doc) throw new Error('wireKeyboardShortcuts: no document');
   INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
-  const help = createHelp(doc, () => keymap);
+  let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
+  let trigger: KeyboardTrigger = DEFAULT_TRIGGER;
+  const help = createHelp(
+    doc,
+    () => keymap,
+    () => trigger
+  );
   const mode = createMode(
     doc,
     () => keymap,
@@ -1618,12 +1773,11 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     }
   );
   const state: ModeState = { lastDockSurface: 'files' };
-  let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
   const commandFor = (key: string): Command | undefined => {
     const id = keymap[key];
     return id ? COMMANDS[id] : undefined;
   };
-  const settler = createSettler(doc, mode, deps);
+  const settler = createSettler(doc, mode, deps, () => trigger);
   const chord = createChord(doc);
   const dispatch: Dispatch = {
     deps,
@@ -1641,7 +1795,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     if (event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
       chord.clear();
-      handleEscape(event, doc, mode, settler);
+      handleEscape(event, doc, mode, settler, trigger);
       return;
     }
     if (!mode.on()) return;
@@ -1684,7 +1838,16 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
    * click that focused the field, and it must be typed, not run.
    */
   const onFocusIn = (event: FocusEvent): void => {
-    if (mode.on() && isTypingTarget(deepTarget(event))) mode.set(false);
+    const target = deepTarget(event);
+    // Composer chrome (+, model pill, …) is not a typing target but must still
+    // leave the mode — otherwise a click there under `auto` would keep letters
+    // bound until settle runs, and a letter in the same task would fire a command.
+    if (
+      mode.on() &&
+      (isTypingTarget(target) || isWithinElement(deps.composerBand, target as Node | null))
+    ) {
+      mode.set(false);
+    }
     settler.schedule();
   };
   /**
@@ -1751,6 +1914,16 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       keymap = { ...next };
     },
     keymap: () => keymap,
+    trigger: () => trigger,
+    setTrigger: (next) => {
+      trigger = next;
+      // Off always clears. Esc must also clear: the shell boots under Auto and
+      // may already be in keyboard mode before keys.json / Theme applies Esc,
+      // and Esc's settle deliberately does not auto-enter — so without this
+      // clear, bare shortcuts would keep working until the composer is focused.
+      if (next === null || next === 'esc') mode.set(false);
+      settler.schedule();
+    },
   };
   INSTALLED.set(doc, handles);
   return handles;

@@ -189,7 +189,17 @@ Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive syst
 
 ## Keyboard mode
 
-SLICC's main control is a text field, so it has no always-on shortcuts to collide with your typing. Instead it has a **mode**, like vim — and, like vim, the mode is where you rest: keyboard mode is on whenever nothing is focused for typing, and every key below is a bare letter. Press <kbd>Esc</kbd> to leave the composer for it, or just click somewhere that is not a text field. To type again, press <kbd>⏎</kbd> or <kbd>i</kbd> (or click into the composer). While the mode is on, a pill above the composer says so.
+SLICC's main control is a text field, so it has no always-on shortcuts to collide with your typing. Instead it has a **mode**, like vim. By default (**Auto**), the mode is where you rest: keyboard mode is on whenever nothing is focused for typing (and you are not clicking composer chrome like the `+` button), and every key below is a bare letter. Press <kbd>Esc</kbd> to leave the composer for it, or just click somewhere that is not the composer. To type again, press <kbd>⏎</kbd> or <kbd>i</kbd> (or click into the composer). While the mode is on, a pill above the composer says so.
+
+In **Theme settings** you can switch how the mode is entered:
+
+| Trigger        | Behavior                                                   |
+| -------------- | ---------------------------------------------------------- |
+| Auto (default) | On whenever you are not typing / not in composer chrome    |
+| Esc            | Only <kbd>Esc</kbd> enters; blurring the composer does not |
+| Off            | Keyboard mode disabled                                     |
+
+The choice is stored as `"trigger"` in `/etc/slicc/keys.json` (`"auto"`, `"esc"`, or `null`).
 
 | Key                          | Action                                                            |
 | ---------------------------- | ----------------------------------------------------------------- |
@@ -217,6 +227,8 @@ SLICC's main control is a text field, so it has no always-on shortcuts to collid
 | <kbd>[</kbd> / <kbd>]</kbd>  | Toggle the left rail / the right panel                            |
 | <kbd>z</kbd>                 | Full screen the open panel                                        |
 | <kbd>l</kbd>                 | Model picker                                                      |
+| <kbd>L</kbd>                 | Next model                                                        |
+| <kbd>h</kbd>                 | Next thinking level                                               |
 | <kbd>,</kbd>                 | Accounts                                                          |
 
 **Chords.** Anything that owns a list takes a digit straight after it, and the digit picks from THAT list instead of the tab strip: <kbd>f</kbd> <kbd>3</kbd> is the third file, <kbd>r</kbd> <kbd>1</kbd> is the chat you archived most recently, <kbd>e</kbd> <kbd>2</kbd> is the second sprinkle. <kbd>9</kbd> is always the last one, exactly as it is for agents. The first key acts immediately, so <kbd>f</kbd> on its own is still just "open the files panel", and a digit pressed on its own is still an agent.
@@ -231,7 +243,7 @@ Keys that navigate, or toggle chrome (digits, the arrows, <kbd>j</kbd>, <kbd>k</
 
 **Switching agents keeps your place.** The mode you were in when you left a cone is the mode you land back in: leave it typing and the caret is waiting in the new cone's composer, leave it in keyboard mode and the pill is still up. A scoop's transcript is read-only and has no composer at all, so it always puts you in keyboard mode — but it does not overwrite what you left behind, so cone → scoop → cone gives your caret back.
 
-**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS — edit it and reload the tab. It ships EMPTY: the keymap above lives in SLICC itself and the file holds only your overrides, so anything you do not mention follows the shipped map, including keys a later version adds. Each entry maps a key to a command (`"q": "terminal"`) and several keys can share one; `null` removes a binding. The file lists every command it accepts, and a chord follows its command — rebind `files` to <kbd>q</kbd> and <kbd>q</kbd> <kbd>3</kbd> is the third file. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
+**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS — edit it and reload the tab (Theme settings writes `"trigger"` live without a reload). Bindings ship EMPTY: the keymap above lives in SLICC itself and the file holds only your overrides, so anything you do not mention follows the shipped map, including keys a later version adds. Each entry maps a key to a command (`"q": "terminal"`) and several keys can share one; `null` removes a binding. The file lists every command it accepts, and a chord follows its command — rebind `files` to <kbd>q</kbd> and <kbd>q</kbd> <kbd>3</kbd> is the third file. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
 
 > **Upgrading from 6.110 or earlier?** That version wrote its whole keymap into `/etc/slicc/keys.json`, which would have pinned you to it forever. If you never edited the file, SLICC replaces it once with the empty one so the map above reaches you; if you did edit it, your file is left exactly as it is. To keep the old keys, the file's comment carries them as a block you can paste back into `"bindings"`.
 

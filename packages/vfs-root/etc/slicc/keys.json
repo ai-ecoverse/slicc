@@ -1,12 +1,19 @@
 {
   "//": [
-    "Keyboard-mode shortcuts. Press Esc anywhere in SLICC to enter keyboard mode;",
-    "the keys then work on their own, with no modifier. Edit this file and reload",
-    "the tab to change them — it is read once at startup.",
+    "Keyboard-mode shortcuts. How the mode is entered is controlled by",
+    "\"trigger\" (also switchable in Theme settings):",
+    "  \"auto\" — on whenever nothing is focused for typing (default; today's behavior)",
+    "  \"esc\"  — only Escape enters the mode; blur does not",
+    "  null   — keyboard mode disabled",
     "",
-    "This file holds OVERRIDES only, and ships empty: the shipped keymap lives in",
-    "SLICC itself, so whatever you do not mention here follows it, including any",
-    "keys a later version adds. Press ? in keyboard mode to see what is bound.",
+    "Inside the mode the keys work on their own, with no modifier. Edit this",
+    "file and reload the tab to change them — it is read once at startup",
+    "(Theme settings writes \"trigger\" live without a reload).",
+    "",
+    "This file holds OVERRIDES only for key bindings, and ships with an empty",
+    "bindings object: the shipped keymap lives in SLICC itself, so whatever",
+    "you do not mention here follows it, including any keys a later version",
+    "adds. Press ? in keyboard mode to see what is bound.",
     "",
     "Each entry is \"key\": \"command\". A key is a single character (\"x\") or a named",
     "key (\"Enter\", \"Tab\", \"Backspace\", \"Delete\", \"Home\", \"End\", \"ArrowLeft\",",
@@ -19,7 +26,8 @@
     "Commands: composer, nextAgent, prevAgent, newConversation,",
     "newConversationErase, newCone, dropCone, sessions, stop, approvals, attach,",
     "copyReply, copyChat, voice, nextItem, prevItem, leftRail, rightRail, files,",
-    "tabs, peek, terminal, memory, monitor, sprinkles, zoom, model, accounts, help.",
+    "tabs, peek, terminal, memory, monitor, sprinkles, zoom, model, cycleModel,",
+    "cycleThinking, accounts, help.",
     "",
     "Some commands own a list, and the keys pressed straight after them address",
     "THAT list instead of the tab strip: files, memory, sessions and sprinkles.",
@@ -42,7 +50,9 @@
     "    \"l\": \"model\", \"a\": \"accounts\", \"h\": \"help\", \"/\": \"help\"",
     "  }",
     "",
-    "This file is yours — SLICC only writes it when it is missing."
+    "This file is yours — SLICC only writes it when it is missing, or when Theme",
+    "settings updates \"trigger\"."
   ],
+  "trigger": "auto",
   "bindings": {}
 }

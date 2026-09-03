@@ -106,7 +106,14 @@ function harness(
     collapse,
   };
   const openMenu = vi.fn();
-  const composerMeta = { models: options.models ?? ['claude-opus-4-6'], openMenu };
+  const cycleModel = vi.fn();
+  const cycleThinking = vi.fn();
+  const composerMeta = {
+    models: options.models ?? ['claude-opus-4-6'],
+    openMenu,
+    cycleModel,
+    cycleThinking,
+  };
   const freezer = Object.assign(document.createElement('div'), { toggle });
   document.body.append(freezer);
   const newChat = vi.fn();
@@ -167,6 +174,8 @@ function harness(
     selectItem,
     collapse,
     openMenu,
+    cycleModel,
+    cycleThinking,
     focusComposer,
     toggle,
     newChat,
@@ -1656,5 +1665,73 @@ describe('peek', () => {
     escape();
     press({ key: 'p', code: 'KeyP' });
     expect(h.selectItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('keyboard trigger modes', () => {
+  it('defaults to auto and settles into keyboard mode with nothing focused', async () => {
+    const { handles } = harness();
+    expect(handles.trigger()).toBe('auto');
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  it('esc does not auto-enter on blur; Escape still enters', async () => {
+    const { handles, composerField } = harness();
+    handles.setTrigger('esc');
+    composerField.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(escape()).toBe(true);
+    expect(handles.active()).toBe(true);
+  });
+
+  it('null refuses Escape and never settles on', async () => {
+    const { handles, composerField } = harness();
+    handles.setTrigger(null);
+    composerField.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(escape()).toBe(false);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('switching to esc clears a mode that Auto already entered', async () => {
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    handles.setTrigger('esc');
+    expect(handles.active()).toBe(false);
+    await flush();
+    expect(handles.active()).toBe(false);
+  });
+});
+
+describe('composer chrome keeps keyboard mode off', () => {
+  it('does not enter keyboard mode when focus is on a button inside the composer band', async () => {
+    const { handles, composer } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    const plus = document.createElement('button');
+    plus.textContent = '+';
+    composer.append(plus);
+    plus.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(handles.intent()).toBe('composer');
+  });
+});
+
+describe('cycleModel / cycleThinking', () => {
+  it('L cycles the model and h cycles thinking', () => {
+    const { cycleModel, cycleThinking } = harness();
+    escape();
+    press({ key: 'L', code: 'KeyL' });
+    expect(cycleModel).toHaveBeenCalledTimes(1);
+    press({ key: 'h', code: 'KeyH' });
+    expect(cycleThinking).toHaveBeenCalledTimes(1);
   });
 });
