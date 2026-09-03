@@ -182,6 +182,23 @@ describe('slicc-key-hud', () => {
       }
     });
 
+    it('drops a live press deadline when presses are set declaratively', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount({ linger: '1000' });
+        el.record(['f'], true);
+        el.presses = [{ caps: ['3'] }];
+        el.remove();
+        document.body.append(el);
+        // The stated moment stays put: a reattach must not inherit the
+        // deadline the earlier live press left behind.
+        vi.advanceTimersByTime(5000);
+        expect(caps(el)).toEqual(['3']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('drops its timer when it leaves the document', () => {
       vi.useFakeTimers();
       try {
@@ -191,6 +208,62 @@ describe('slicc-key-hud', () => {
         // Nothing to draw into once it is gone; the timer must not fire at a
         // detached tree.
         expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * The dock-tree MOVES surfaces rather than cloning them, so opening a
+     * panel detaches and reattaches the chat column — and this HUD with it.
+     * The timer dies with the detach; the deadline must not, or the caps it
+     * was about to clear would sit there for good.
+     */
+    it('picks the pending clear back up after a reattach', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount({ linger: '1000' });
+        el.record(['f'], true);
+        vi.advanceTimersByTime(400);
+        const column = document.createElement('div');
+        document.body.append(column);
+        column.append(el);
+        expect(caps(el)).toEqual(['f']);
+        // What is LEFT of the linger, not a fresh one.
+        vi.advanceTimersByTime(500);
+        expect(caps(el)).toEqual(['f']);
+        vi.advanceTimersByTime(200);
+        expect(caps(el)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears on reattach when the linger ran out while it was detached', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount({ linger: '1000' });
+        el.record(['f'], true);
+        el.remove();
+        vi.advanceTimersByTime(2000);
+        document.body.append(el);
+        expect(caps(el)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not resurrect a cleared strip on a later reattach', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount({ linger: '1000' });
+        el.record(['f'], true);
+        vi.advanceTimersByTime(1200);
+        expect(caps(el)).toEqual([]);
+        el.remove();
+        document.body.append(el);
+        expect(caps(el)).toEqual([]);
+        expect(hintEl(el)?.hidden).toBe(false);
       } finally {
         vi.useRealTimers();
       }

@@ -323,7 +323,10 @@ hint at rest, and a strip of key caps as keys land. Two host contracts:
 
 Presses arrive imperatively (`record(caps, bound)`, which arms the linger that
 brings the hint back) or declaratively (`presses`, which does not — a story or
-a test states a moment and it stays put). The bar's height is FIXED across
+a test states a moment and it stays put). The linger's DEADLINE is kept apart
+from its timer and resumed on reattach: the dock-tree moves surfaces rather
+than cloning them, so opening a panel detaches the chat column and the timer
+with it, and the caps it was about to clear would otherwise sit there for good. The bar's height is FIXED across
 both states: it is up for as long as the mode is, and one that grew a few
 pixels per keystroke would twitch under the composer all session. An unbound
 press is drawn dimmed rather than dropped, because a blank HUD reads as a dead

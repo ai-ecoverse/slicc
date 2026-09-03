@@ -163,6 +163,15 @@ export class SliccKeyHud extends HTMLElement {
   readonly #root: ShadowRoot;
   #presses: KeyPress[] = [];
   #timer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * When the strip is due to clear, in `Date.now()` terms — kept apart from
+   * the timer so it can outlive one. The dock-tree MOVES surfaces rather than
+   * cloning them, so the chat column (and this HUD with it) is detached and
+   * reattached whenever a panel opens: the timer dies with the detach, and
+   * without the deadline the caps it was going to clear would sit there for
+   * good. `null` whenever there is nothing pending.
+   */
+  #deadline: number | null = null;
   #hudEl: HTMLElement | null = null;
   #labelEl: HTMLElement | null = null;
   #hintEl: HTMLElement | null = null;
@@ -181,9 +190,11 @@ export class SliccKeyHud extends HTMLElement {
     if (!this.hasAttribute('role')) this.setAttribute('role', 'status');
     if (!this.hasAttribute('aria-live')) this.setAttribute('aria-live', 'polite');
     this.#render();
+    this.#resume();
   }
 
   disconnectedCallback(): void {
+    // The deadline survives; only the timer goes. See {@link #deadline}.
     this.#stopTimer();
   }
 
@@ -247,6 +258,7 @@ export class SliccKeyHud extends HTMLElement {
       .filter((press) => Array.isArray(press?.caps))
       .map((press) => ({ bound: press.bound !== false, caps: [...press.caps] }));
     this.#stopTimer();
+    this.#deadline = null;
     this.#trim();
     this.#reflect();
   }
@@ -259,18 +271,37 @@ export class SliccKeyHud extends HTMLElement {
     this.#presses.push({ caps: [...caps], bound });
     this.#trim();
     this.#reflect();
-    this.#stopTimer();
-    this.#timer = setTimeout(() => {
-      this.#timer = null;
-      this.clear();
-    }, this.linger);
+    this.#arm(this.linger);
   }
 
   /** Drop the strip and bring the hint back. */
   clear(): void {
     this.#stopTimer();
+    this.#deadline = null;
     this.#presses = [];
     this.#reflect();
+  }
+
+  /** Clear the strip in `ms`, and remember when that is. */
+  #arm(ms: number): void {
+    this.#stopTimer();
+    this.#deadline = Date.now() + ms;
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      this.clear();
+    }, ms);
+  }
+
+  /**
+   * Pick a pending clear back up after a reattach: what is left of the
+   * deadline, or immediately when it passed while we were detached — a strip
+   * that outlived its own linger has nothing left to say.
+   */
+  #resume(): void {
+    if (this.#deadline === null || this.#presses.length === 0) return;
+    const left = this.#deadline - Date.now();
+    if (left <= 0) this.clear();
+    else this.#arm(left);
   }
 
   #stopTimer(): void {
