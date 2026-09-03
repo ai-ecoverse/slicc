@@ -1,9 +1,12 @@
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import type { WorkUnitClient } from '../../work-unit/client/types.js';
 import { modelFor } from '../../work-unit/record.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import type { OffscreenClient } from '../offscreen-client.js';
+import type { AgentHandle } from '../types.js';
+import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { WcChatController } from './wc-chat-controller.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { unitSlugFor } from './wc-unit-context.js';
@@ -17,10 +20,11 @@ export interface WelcomeInterceptHolder {
 export function createWcController(
   refs: WcShellRefs,
   client: OffscreenClient,
+  workUnits: WorkUnitClient,
   getSelected: () => RegisteredScoop | null,
   onIdle?: () => void,
   welcome?: WelcomeInterceptHolder
-): { controller: WcChatController; agentHandle: ReturnType<OffscreenClient['createAgentHandle']> } {
+): { controller: WcChatController; agentHandle: AgentHandle } {
   const dipInstances = new Map<string, DipInstance[]>();
   void import('../legacy-styles.js')
     .then(({ loadDipStyles }) => loadDipStyles())
@@ -32,7 +36,16 @@ export function createWcController(
     .then(({ applyThemeOverrides }) => applyThemeOverrides())
     .catch(() => undefined);
 
-  const agentHandle = client.createAgentHandle();
+  // Send and stop ride the client protocol; the agent EVENT stream stays on
+  // the kernel handle, which is the transport that owns it (see
+  // `createWorkUnitAgentHandle`). One selection rule for both: the unit the
+  // panel says it is showing.
+  const kernelEvents = client.createAgentHandle();
+  const agentHandle = createWorkUnitAgentHandle(workUnits, {
+    getSelectedId: () => client.selectedScoopJid,
+    onError: (error) => client.emitAgentError(error),
+    onEvent: (listener) => kernelEvents.onEvent(listener),
+  });
   agentHandle.onEvent((event) => {
     if (event.type !== 'tool_use_start' && event.type !== 'tool_result') return;
     if (event.type === 'tool_result' && event.isError) refs.switcher.glower();

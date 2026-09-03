@@ -257,6 +257,8 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
   const surface = createFollowerModelSurface({
     composerMeta,
     getSync: () => sync,
+    // The wc-tray wiring: the pick goes out as the raw frame, unit named.
+    setModel: (unitId, model) => sync.selectModel(`${model.provider}:${model.id}`, unitId),
     getSelectedScoopJid: () => 'cone_1',
     catalogRetryDelayMs: 10,
     catalogRetryMaxDelayMs: 40,

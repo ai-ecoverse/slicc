@@ -20,6 +20,7 @@ import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentHandle } from '../types.js';
+import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
@@ -47,7 +48,12 @@ const log = createLogger('wc-follower');
  *  `![…](/shared/sprinkles/welcome/…)` image references. */
 const WELCOME_DIP_SRC_PREFIX = '/shared/sprinkles/welcome/';
 
-/** A placeholder agent until the follower sync connects and replaces it via setChatAgent. */
+/**
+ * A placeholder agent until the WebRTC channel connects. It stays even though
+ * send and stop moved onto the client protocol (#2382): the third method,
+ * `onEvent`, has no source at all before there is a sync manager, and the
+ * composer is disabled until then for the same reason.
+ */
 const NOOP_AGENT: AgentHandle = {
   sendMessage: () => {},
   onEvent: () => () => {},
@@ -707,6 +713,9 @@ export async function mountWcUiFollower(
 
   const modelSurface = createFollowerModelSurface({
     composerMeta,
+    setModel: (unitId, model) => {
+      void workUnits.setModel(unitId, model).catch(() => undefined);
+    },
     getSync: () => follower.currentSync,
     getSelectedScoopJid: () => followerSelectedScoop,
     modelPickerEnabled: features.modelPicker,
@@ -778,7 +787,17 @@ export async function mountWcUiFollower(
         }
       },
       setChatAgent: (agent) => {
-        controller.setAgent(agent);
+        // Send and stop go through the client protocol, which NAMES the unit
+        // instead of relying on whatever the leader last mirrored to us — the
+        // same handle the leader's composer holds (#2382). The agent EVENT
+        // stream stays on the sync manager: it is the transport that owns it.
+        controller.setAgent(
+          createWorkUnitAgentHandle(workUnits, {
+            getSelectedId: () => followerSelectedScoop ?? workUnits.selectedUnitId,
+            onError: (error) => log.warn('follower send failed', { error }),
+            onEvent: (listener) => agent.onEvent(listener),
+          })
+        );
         // A failed tool call on the mirrored stream earns the same 2.6s glower
         // the leader shows. The envelope drops `scoopJid` on the way in, so this
         // is the selected scoop's stream — which is exactly whose face is on

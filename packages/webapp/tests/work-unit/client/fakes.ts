@@ -60,8 +60,16 @@ export interface ClientHarness {
   /** Deliver an incoming (routed / lick) message. */
   emitMessage(id: string, message: { id: string; content: string }): void;
   emitStatus(id: string, status: ScoopStatus): void;
-  /** Prompts the transport actually received. */
-  sent: Array<{ id: string | null; text: string }>;
+  /** Prompts the transport actually received, exactly as it received them. */
+  sent: Array<{
+    id: string | null;
+    text: string;
+    messageId?: string;
+    steer?: boolean;
+    guestGate?: unknown;
+  }>;
+  /** Model writes the transport received, in the transport's own spelling. */
+  modelWrites: Array<{ id: string | null; model: string }>;
   /** Units the transport was asked to abort. */
   stopped: string[];
   /** `true` when this transport can carry a backend queue at all (#2362). */
@@ -83,14 +91,34 @@ export function makeLocalHarness(): ClientHarness {
   const phases = new Map<string, 'thinking' | 'tool'>();
   let awaiting: string | null = null;
   const sent: ClientHarness['sent'] = [];
+  const modelWrites: ClientHarness['modelWrites'] = [];
   const stopped: string[] = [];
 
   const kernel = {
     getScoop: (jid: string) => roster.find((scoop) => scoop.jid === jid),
     getScoops: () => roster,
     requestScoopMessages: () => {},
-    sendRaw: (message: { scoopJid?: string; text?: string }) => {
-      sent.push({ id: message.scoopJid ?? null, text: message.text ?? '' });
+    sendRaw: (message: {
+      scoopJid?: string;
+      text?: string;
+      messageId?: string;
+      steer?: boolean;
+      guestGate?: unknown;
+    }) => {
+      sent.push({
+        id: message.scoopJid ?? null,
+        text: message.text ?? '',
+        ...(message.messageId ? { messageId: message.messageId } : {}),
+        ...(message.steer ? { steer: true } : {}),
+        ...(message.guestGate ? { guestGate: message.guestGate } : {}),
+      });
+    },
+    // The kernel's ack: `true` for a unit it knows, `false` otherwise — the
+    // routing of a child to its owning cone is the kernel's job, so the write
+    // is recorded under the id the client named.
+    setScoopModel: (jid: string, model: { provider: string; id: string }) => {
+      modelWrites.push({ id: jid, model: `${model.provider}:${model.id}` });
+      return Promise.resolve(roster.some((scoop) => scoop.jid === jid));
     },
     setSelectedScoopJid: () => {},
     stopScoop: (jid: string) => stopped.push(jid),
@@ -116,6 +144,7 @@ export function makeLocalHarness(): ClientHarness {
   return {
     carriesQueue: true,
     client,
+    modelWrites,
     emitMessage: (id, message) => {
       callbacks.onIncomingMessage(id, message as never);
     },
@@ -162,6 +191,7 @@ export function makeLocalHarness(): ClientHarness {
 /** The follower's shape: `ScoopSummary` frames off the tray wire. */
 export function makeRemoteHarness(): ClientHarness {
   const sent: ClientHarness['sent'] = [];
+  const modelWrites: ClientHarness['modelWrites'] = [];
   const stopped: string[] = [];
   let selected: string | null = null;
 
@@ -169,7 +199,21 @@ export function makeRemoteHarness(): ClientHarness {
     selectScoop: (jid: string) => {
       selected = jid;
     },
-    sendMessage: (text: string) => sent.push({ id: selected, text }),
+    sendMessage: (
+      text: string,
+      messageId?: string,
+      _attachments?: unknown,
+      options?: { steer?: boolean }
+    ) =>
+      sent.push({
+        id: selected,
+        text,
+        ...(messageId ? { messageId } : {}),
+        ...(options?.steer ? { steer: true } : {}),
+      }),
+    // `model.select` carries the qualified id as one string and no ack.
+    selectModel: (modelId: string, scoopJid?: string) =>
+      modelWrites.push({ id: scoopJid ?? null, model: modelId }),
     stop: () => {
       if (selected) stopped.push(selected);
     },
@@ -181,6 +225,7 @@ export function makeRemoteHarness(): ClientHarness {
   return {
     carriesQueue: false,
     client,
+    modelWrites,
     emitMessage: () => {
       // The tray wire has no per-unit incoming-message frame: routed messages
       // reach a follower inside the leader's next snapshot. Nothing to emit —

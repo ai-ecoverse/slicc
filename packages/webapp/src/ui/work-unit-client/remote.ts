@@ -13,6 +13,7 @@
 import type { FollowerSyncManager } from '../../scoops/tray-follower-sync.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
+import type { WorkUnitModel } from '../../scoops/types.js';
 import type {
   Unsubscribe,
   WorkUnitChatMessage,
@@ -24,6 +25,7 @@ import type {
   WorkUnitSnapshot,
   WorkUnitSummary,
 } from '../../work-unit/client/types.js';
+import { qualifiedModelId } from '../../work-unit/record.js';
 import type { ChatMessage } from '../types.js';
 import { summaryToWorkUnit } from '../wc/wc-tray-scoops.js';
 
@@ -268,17 +270,39 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void> {
     const sync = this.deps.getSync();
     if (!sync) return Promise.reject(new Error('not connected to a leader'));
+    // A gate is minted by a LEADER from its own seat record. Putting one on
+    // the tray wire would be a guest granting itself a gate, so this is a
+    // refusal, never a fallback to an ungated send.
+    if (input.guestGate) {
+      return Promise.reject(new Error('a guest gate cannot travel over the tray wire'));
+    }
     if (this.selectedId !== id) {
       this.selectedId = id;
       sync.selectScoop(id);
     }
     sync.sendMessage(
       input.text,
-      undefined,
+      input.messageId,
       input.attachments as Parameters<FollowerSyncManager['sendMessage']>[2],
       input.steer ? { steer: true } : undefined
     );
     return Promise.resolve();
+  }
+
+  /**
+   * Ask the leader to pin `id`'s model (#2310). The tray carries the
+   * provider-qualified id as one string and resolves a child to the cone that
+   * owns it on the leader side.
+   *
+   * `model.select` is fire-and-forget — there is no ack frame — so this always
+   * answers `undefined` ("nobody could answer"), never `false`. The applied
+   * value arrives on the next `model.state` / roster frame.
+   */
+  setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined> {
+    const sync = this.deps.getSync();
+    if (!sync) return Promise.reject(new Error('not connected to a leader'));
+    sync.selectModel(qualifiedModelId(model), id);
+    return Promise.resolve(undefined);
   }
 
   signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void> {

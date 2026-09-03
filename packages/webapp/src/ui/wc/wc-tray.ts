@@ -51,7 +51,12 @@ import {
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { toKernelSudoRequest } from '../../sudo/leader-request.js';
-import { modelFor, thinkingFor } from '../../work-unit/record.js';
+import {
+  modelFor,
+  parseQualifiedModelId,
+  qualifiedModelId,
+  thinkingFor,
+} from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -185,7 +190,7 @@ function qualifiedModelIdForUnit(
 ): string {
   const pinned = unit ? modelFor(unit) : undefined;
   if (!pinned) return currentQualifiedModelId(catalog);
-  const qualified = `${pinned.provider}:${pinned.id}`;
+  const qualified = qualifiedModelId(pinned);
   return (
     catalog.find((entry) => entry.modelId === qualified)?.modelId ??
     catalog.find((entry) => entry.modelId.endsWith(`:${pinned.id}`))?.modelId ??
@@ -292,6 +297,10 @@ export function buildFollowerOptions(
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
     getSync,
+    // This float follows someone else's tray but has no `RemoteWorkUnitClient`
+    // of its own (the mounts collapse onto one client in #2382 PR D), so the
+    // pick goes out as the raw frame it always did — still naming the unit.
+    setModel: (unitId, model) => getSync()?.selectModel(qualifiedModelId(model), unitId),
     getSelectedScoopJid: () => selectedScoopJid,
     interceptLocalHandlers: true,
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
@@ -444,15 +453,13 @@ function leaderModelCallbacks(
       const named = scoopJid ? client.getScoop(scoopJid) : undefined;
       const target = rootForSelection(client.getScoops(), named ?? null);
       if (!target) return false;
-      const colon = entry.modelId.indexOf(':');
+      const picked = parseQualifiedModelId(entry.modelId);
+      if (!picked) return false;
       // Resolve only once the kernel has persisted it: the leader broadcasts
       // the follower's new `model.state` off this promise, and broadcasting
       // early would recompute it from the record's old value.
       return client
-        .setScoopModel(target.jid, {
-          provider: entry.modelId.slice(0, colon),
-          id: entry.modelId.slice(colon + 1),
-        })
+        .setScoopModel(target.jid, picked)
         .then((applied) => {
           // Reflect the pick locally only while the follower is on the cone
           // the leader has selected; otherwise the leader's pill would show

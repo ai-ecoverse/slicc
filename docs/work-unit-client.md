@@ -51,6 +51,8 @@ interface WorkUnitClient {
   snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot>;
   /** Deliver a prompt to `id`. */
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void>;
+  /** Pin `id`'s own model (#2310). See `setModel` below for the tri-state answer. */
+  setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined>;
   /** Per-unit event stream (status, replays, incoming messages, errors). */
   subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe;
   /** Interrupt `id`'s current turn. */
@@ -144,6 +146,71 @@ subscriber with no transcript until some later selection asked for one. That is 
 subscribe-during-turn testable on both sides — today the leader gets a replay
 and the follower gets `onSnapshot`, and nothing states they must agree.
 
+### `send` — what a prompt carries
+
+```ts
+interface WorkUnitClientInput {
+  text: string;
+  messageId?: string; // the CALLER's id
+  steer?: boolean; // interrupt the running turn instead of queueing
+  attachments?: readonly unknown[];
+  guestGate?: TurnGuestGate; // LOCAL ONLY
+}
+```
+
+`messageId` is on the protocol because both transports key real behaviour on
+it: the leader's backend queue is cancelled by it (`delete-queued-message`)
+and a follower suppresses its own echo by it (`sentMessageIds`). An adapter
+that minted its own would orphan the queue entry the shell is showing and
+double-render the send. It stays OPTIONAL — a caller that never has to name
+the message again lets the adapter mint one.
+
+`guestGate` is the one field a remote client **refuses**. A turn-scoped guest
+gate (#2535) is minted by a leader from its own seat record; a client that
+could put one on the tray wire would be a guest granting itself a gate.
+`RemoteWorkUnitClient.send` therefore rejects a gated send rather than
+delivering it ungated — silently dropping the gate is the outcome that must
+not happen, so it is a rejection and not a fallback.
+
+### `setModel`
+
+```ts
+setModel(id, model): Promise<boolean | undefined>
+```
+
+Local → `OffscreenClient.setScoopModel` (`set-scoop-model`); remote →
+`FollowerSyncManager.selectModel(qualifiedId, unitId)`. Both backends resolve
+a CHILD to the cone that owns it (#2310), so the client does not pre-resolve
+the owner — a third owner walk beside the two that already disagree is exactly
+what this protocol exists to remove.
+
+The answer is tri-state, following the same absent-is-not-empty rule as
+`queuedIds`: `true` applied, `false` refused (the backend does not know the
+unit), `undefined` nobody could answer. A remote client always answers
+`undefined` — `model.select` is a fire-and-forget frame with no ack, so
+`false` there would claim a refusal that never happened. It is about the WRITE
+only; what a unit currently runs on is read from `summary.model`.
+
+### One `AgentHandle` for both composers
+
+`createWorkUnitAgentHandle(client, { getSelectedId, onEvent, onError })`
+(`ui/work-unit-client/agent-handle.ts`) is the chat controller's handle over
+the protocol. There were two: `OffscreenClient.createAgentHandle()` on a
+leader and the `FollowerSyncManager` itself on a follower. Send and stop are
+exactly `send` and `signal(id, 'stop')`, so they are written once; a send with
+no selection is REPORTED, never guessed at, because the protocol names the
+unit and there is no "current" one to fall back on.
+
+**The agent event stream stays with the transport.** `AgentEvent` is the agent
+loop's vocabulary (deltas, tool calls, turn boundaries) and
+`WorkUnitClientEvent` is the shell's presentation vocabulary (status,
+snapshot, message). Folding one into the other would put the whole agent wire
+on a protocol whose job is the strip and the transcript, so the caller passes
+its own `onEvent`. `onError` is the same argument from the other side: the
+protocol has no error variant (no adapter can produce one), so the float that
+CAN show one is handed the job — on a leader that is
+`OffscreenClient.emitAgentError`, on a follower a log line.
+
 ### `signal`
 
 The RFC wrote `signal(id, processId, signal)`. **There is no process-level
@@ -206,7 +273,8 @@ keeps (`WcLiveWiring.statuses` / `fills` / `phases` / `awaitingInput`).
 | `list`           | `getScoops()` joined with the page-side maps                                                                           |
 | `subscribeList`  | `onScoopListUpdate` / `onScoopCreated` / `onStatusChange` / `onScoopPhaseChange`                                       |
 | `snapshot`       | `setSelectedScoopJid` + `requestScoopMessages` → the next `scoop-messages-replaced` for that jid, `queuedIds` included |
-| `send`           | the existing composer path (`AgentHandle.sendMessage`)                                                                 |
+| `send`           | `sendRaw({ type: 'user-message' })`, carrying the caller's `messageId`                                                 |
+| `setModel`       | `setScoopModel` (the kernel acks, so this transport never answers `undefined`)                                         |
 | `subscribe`      | `onStatusChange` / `onScoopMessagesReplaced` / `onIncomingMessage`                                                     |
 | `signal('stop')` | `stopScoop`                                                                                                            |
 
@@ -247,7 +315,8 @@ Wraps a `FollowerSyncManager` and the small state machine in `wc-follower.ts`
 | `list`           | the last `onScoopsList` payload, expanded through `fromWire`                   |
 | `subscribeList`  | `onScoopsList`                                                                 |
 | `snapshot`       | `selectScoop(id)` → the next `onSnapshot` for that jid; `queuedIds: undefined` |
-| `send`           | `sendMessage`                                                                  |
+| `send`           | `sendMessage` (rejects a `guestGate`; selects the unit first when it differs)  |
+| `setModel`       | `selectModel(qualifiedId, unitId)` — no ack frame, so always `undefined`       |
 | `subscribe`      | `onSnapshot` / `onStatus` (through `shouldApplyFollowerStatus`) / `onEvent`    |
 | `signal('stop')` | `stop()`                                                                       |
 
@@ -278,6 +347,12 @@ drifted:
 5. **event ordering on subscribe-during-turn** — a subscriber attaching while
    a turn is running gets `snapshot` before any `message`, and a later
    `snapshot` supersedes messages delivered before it.
+6. **composer parity** — a send names its unit and carries the caller's
+   `messageId` and the `steer` flag; a gated send is carried or refused, never
+   delivered ungated; `stop` names its unit and sends nothing to get there.
+7. **model write parity** — `setModel` reaches the transport naming the unit
+   the caller named, including a child, and answers `true` or `undefined` but
+   never a refusal the transport did not hear.
 
 ## Sequencing and scope
 
@@ -290,7 +365,12 @@ This lands in two steps:
    `rootForSelection` / `isReadOnlyRole` survive as thin delegations, so no
    caller moves and no export disappears. `orderByOwner` and `rootOfSummary`
    are gone — they were private, and the shared implementation IS them.
-2. **A follow-up** — the mount cutover: the transcript, the queued pile, the
+2. **A follow-up (#2382)** — the mount cutover, landing as four PRs. **PR A
+   (this one)** puts the composer, stop and the model write on the protocol:
+   `setModel` joins it, and one `createWorkUnitAgentHandle` replaces the two
+   `AgentHandle`s. **PR B** moves the transcript and selection onto
+   `snapshot`/`subscribe`. **PR C** makes `summary.model` the only per-unit
+   model read. **PR D** collapses the three mounts. In full: the transcript, the queued pile, the
    composer, selection (`selectScoop` → `client.snapshot`) and the model pill
    move onto the client too, and `mountWcUiLive` / `mountWcUiFollower` /
    `mountWcUiExtension` collapse onto one mount path that takes a

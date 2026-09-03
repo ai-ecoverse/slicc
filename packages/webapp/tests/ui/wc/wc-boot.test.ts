@@ -85,9 +85,20 @@ function makeFakeClient() {
     },
     stop: vi.fn(),
   };
+  let selectedScoopJid: string | null = null;
   const client = {
     createAgentHandle: () => handle,
-    setSelectedScoopJid: vi.fn(),
+    // The composer sends through the client protocol now (#2382), so the fake
+    // kernel has to answer the two calls the local adapter makes: the raw
+    // `user-message` envelope and the selection it is addressed to.
+    sendRaw: vi.fn(),
+    emitAgentError: vi.fn(),
+    get selectedScoopJid(): string | null {
+      return selectedScoopJid;
+    },
+    setSelectedScoopJid: vi.fn((jid: string | null) => {
+      selectedScoopJid = jid;
+    }),
     requestScoopMessages: vi.fn(),
     isProcessing: vi.fn(() => false),
     getScoops: vi.fn(() => [cone()]),
@@ -150,16 +161,22 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
+    boot.selectScoop(cone());
 
     expect(root.querySelector('slicc-shell')).toBeTruthy();
     boot.refs.inputCard.setAttribute('value', 'hello cone');
     boot.refs.inputCard.dispatchEvent(
       new CustomEvent('submit', { bubbles: true, detail: { value: 'hello cone' } })
     );
-    expect(fake.handle.sendMessage).toHaveBeenCalledWith(
-      'hello cone',
-      expect.any(String),
-      undefined
+    // The prompt reaches the kernel NAMING its unit, and carrying the
+    // controller's own message id — the id the queued pile is cancelled by.
+    expect(fake.raw.sendRaw).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.any(String),
+        scoopJid: 'cone-1',
+        text: 'hello cone',
+        type: 'user-message',
+      })
     );
     // The submit handler clears the input card for the next prompt.
     expect(boot.refs.inputCard.getAttribute('value') ?? '').toBe('');
@@ -204,13 +221,16 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
+    boot.selectScoop(cone());
 
     boot.refs.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
-    expect(fake.handle.stop).not.toHaveBeenCalled();
+    expect(fake.raw.stopScoop).not.toHaveBeenCalled();
 
     fake.emit({ type: 'message_start', messageId: 'm1' });
     boot.refs.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
-    expect(fake.handle.stop).toHaveBeenCalledTimes(1);
+    // The abort names the unit too — `signal(id, 'stop')`, not "whatever is
+    // running".
+    expect(fake.raw.stopScoop).toHaveBeenCalledWith('cone-1');
   });
 
   it('persists thinking-level changes for the selected scoop', () => {

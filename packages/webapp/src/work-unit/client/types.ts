@@ -21,6 +21,7 @@
  */
 
 import type { WorkUnitModel } from '../../scoops/types.js';
+import type { TurnGuestGate } from '../../sudo/types.js';
 import type { Unsubscribe, WorkUnitId, WorkUnitRole } from '../types.js';
 
 export type { Unsubscribe, WorkUnitId, WorkUnitRole } from '../types.js';
@@ -134,9 +135,32 @@ export interface WorkUnitSnapshot {
 /** A prompt delivered through the client. */
 export interface WorkUnitClientInput {
   text: string;
+  /**
+   * The CALLER's id for this message, which both transports key real
+   * behaviour on: the leader's backend queue is cancelled by it
+   * (`delete-queued-message`) and a follower suppresses its own echo by it
+   * (`sentMessageIds`). A client that minted its own would orphan the queue
+   * entry the shell shows and double-render the send.
+   *
+   * Absent lets the adapter mint one, which is only correct for a caller that
+   * never has to name the message again.
+   */
+  messageId?: string;
   /** Steer the running turn instead of queueing behind it. */
   steer?: boolean;
   attachments?: readonly unknown[];
+  /**
+   * Turn-scoped guest gate for a message a biscotto sent: approving the
+   * MESSAGE is not approving the actions it provokes, so a guest-caused turn
+   * carries its own tool gate.
+   *
+   * LOCAL ONLY, and deliberately so. The gate is minted by a leader from its
+   * own seat record; a client that could put one on the wire would be a guest
+   * granting itself a gate. A remote client therefore REJECTS a gated send
+   * rather than delivering it ungated — silently dropping the gate is the one
+   * outcome that must not happen, so it is a rejection and not a fallback.
+   */
+  guestGate?: TurnGuestGate;
 }
 
 /**
@@ -188,6 +212,26 @@ export interface WorkUnitClient {
   snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot>;
   /** Deliver a prompt to `id`. */
   send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void>;
+  /**
+   * Pin the model `id` itself runs on (#2310). Naming a CHILD is legal and is
+   * not pre-resolved here: both backends resolve a child to the cone that owns
+   * it, and resolving it client-side would put a third owner walk next to the
+   * two that already disagree.
+   *
+   * Resolves with whether the backend CONFIRMED the write:
+   *
+   * - `true` — applied to that unit's record.
+   * - `false` — refused; the backend does not know the unit.
+   * - `undefined` — nobody could answer. A remote client ALWAYS answers this:
+   *   the tray's `model.select` is a fire-and-forget frame with no ack, so
+   *   `false` there would claim a refusal that never happened. Same
+   *   absent-is-not-empty rule as {@link WorkUnitSnapshot.queuedIds}.
+   *
+   * The answer is about the WRITE only. What a unit currently runs on is read
+   * from `summary.model` off {@link WorkUnitClient.subscribeList} — an absent
+   * model is warm-up, never a latched answer (#2329).
+   */
+  setModel(id: WorkUnitId, model: WorkUnitModel): Promise<boolean | undefined>;
   /** Per-unit event stream. See {@link WorkUnitClientEvent} for the ordering rule. */
   subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe;
   /** Interrupt `id`'s current turn. */

@@ -3,7 +3,8 @@ import type {
   TrayModelCatalogEntry,
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
-import type { ThinkingLevel } from '../../scoops/types.js';
+import type { ThinkingLevel, WorkUnitModel } from '../../scoops/types.js';
+import { parseQualifiedModelId } from '../../work-unit/record.js';
 
 const PI_FROM_META: Readonly<Record<string, ThinkingLevel>> = {
   off: 'off',
@@ -68,6 +69,16 @@ type FollowerComposerMeta = HTMLElement & {
 export function createFollowerModelSurface(opts: {
   composerMeta: FollowerComposerMeta;
   getSync: () => FollowerModelSync | null;
+  /**
+   * Apply a model pick to ONE named unit (#2310/#2382).
+   *
+   * Required rather than derived from `getSync()`, because the two callers
+   * reach the leader differently: the dedicated follower mount writes through
+   * its `RemoteWorkUnitClient`, while the leader-capable float in `wc-tray.ts`
+   * has no remote client of its own yet and sends the frame directly. The
+   * surface itself only ever knows "this unit, this model".
+   */
+  setModel(unitId: string, model: WorkUnitModel): void;
   getSelectedScoopJid: () => string | null;
   modelPickerEnabled?: boolean;
   interceptLocalHandlers?: boolean;
@@ -154,7 +165,17 @@ export function createFollowerModelSurface(opts: {
       // Name the unit the pick applies to (#2310): the leader changes THAT
       // cone's model, not its own selection and not a global setting.
       const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
-      if (modelId) sync.selectModel(modelId, scoopJid ?? undefined);
+      const model = modelId ? parseQualifiedModelId(modelId) : null;
+      if (model && scoopJid) {
+        opts.setModel(scoopJid, model);
+      } else if (modelId) {
+        // No unit to name (nothing selected yet), or a bare id carrying no
+        // provider: send the raw frame, where the leader resolves the target
+        // from this follower's last `scoops.select` and the model id from its
+        // own catalog. Naming a unit is what the protocol adds; it cannot
+        // invent either half.
+        sync.selectModel(modelId, scoopJid ?? undefined);
+      }
       apply();
     },
     { capture: opts.interceptLocalHandlers }

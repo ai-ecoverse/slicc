@@ -166,12 +166,34 @@ describe('mountWcUiFollower', () => {
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
 
-    // Simulate the WebRTC channel connecting: the tray installs the real
-    // follower-sync agent via setChatAgent. We hand the controller a fake one
-    // so we can observe what the follower forwards to the leader.
+    // Simulate the WebRTC channel connecting. The composer's handle rides the
+    // client protocol now (#2382), so the observable is the SYNC MANAGER's
+    // `sendMessage` — what actually goes to the leader — not the handle
+    // `setChatAgent` was given, which only supplies the agent event stream.
     const opts = startFollowerSpy.mock.calls[0]![0];
     const sendMessage = vi.fn();
-    opts.setChatAgent?.({ sendMessage, onEvent: () => () => {}, stop: () => {} });
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      sendMessage,
+      selectScoop,
+      stop: vi.fn(),
+    };
+    // A prompt has to name its unit, so the leader's roster comes first.
+    opts.onScoopsList?.(
+      [
+        {
+          assistantLabel: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          jid: 'cone_1',
+          name: 'sliccy',
+          parentId: null,
+          state: 'idle',
+        },
+      ] as never,
+      'cone_1'
+    );
+    opts.setChatAgent?.({ sendMessage: vi.fn(), onEvent: () => () => {}, stop: () => {} });
 
     const inputCard = app.querySelector('slicc-input-card') as HTMLElement;
 
@@ -195,12 +217,15 @@ describe('mountWcUiFollower', () => {
     inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'look at this' } }));
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    const [text, , attachments] = sendMessage.mock.calls[0]! as [
+    const [text, messageId, attachments] = sendMessage.mock.calls[0]! as [
       string,
       string,
       Array<{ kind: string; data?: string; path?: string }>,
     ];
     expect(text).toBe('look at this');
+    // The controller's own id rides along: a follower suppresses its own echo
+    // by it, so an adapter that minted a fresh one would double-render.
+    expect(messageId).toEqual(expect.any(String));
     expect(attachments).toHaveLength(1);
     expect(attachments[0]!.kind).toBe('image');
     expect(attachments[0]!.data).toBeTruthy();

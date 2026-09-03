@@ -34,6 +34,7 @@ import type { WcChatController } from './wc-chat-controller.js';
 import { wireConeActions } from './wc-cone-actions.js';
 import {
   createWcLiveCallbacks,
+  ensureWorkUnitClient,
   type LickBackpressureState,
   toSwitcherScoops,
   type WcLiveWiring,
@@ -827,9 +828,13 @@ export function attachWcClient(
   const refreshStats = wireWcStats(boot.wiring, client);
   const triggerPlaceholder = (): void => refreshPlaceholder?.();
   const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
+  // The kernel-backed client protocol the shell owns (built in
+  // `prepareWcShell`, decorated by `createWcLiveCallbacks`).
+  const workUnits = ensureWorkUnitClient(boot.wiring);
   const { controller, agentHandle } = createWcController(
     refs,
     client,
+    workUnits,
     () => boot.getSelected(),
     makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats }),
     welcomeHolder
@@ -1174,6 +1179,7 @@ export function attachWcClient(
       wireWcNav({
         refs,
         client,
+        workUnits,
         log,
         onExportTranscript,
         shortcuts: refs.shortcuts,
