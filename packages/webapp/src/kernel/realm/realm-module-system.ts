@@ -62,12 +62,16 @@ function entryFromDir(filename: string, cwd: string): string {
 }
 
 /**
- * Cheap pre-check: does the entry code reference any `require`/`import` at all?
- * When it does not, there is nothing for the host to resolve or transpile, so
- * the no-module fast path skips the `module`/buildGraph RPC entirely.
+ * Cheap pre-check: does the entry need the host graph / entry transpile?
+ * `import` covers static and dynamic import; `export\b` (not `exports`)
+ * covers an export-only ESM entry so `node --input-type=module -e 'export
+ * const x = 1'` and `node file.mjs` with only `export` still get lowered
+ * to CJS. CJS `exports.foo = 1` must not trip this.
  */
 function mightNeedModuleGraph(code: string): boolean {
-  return code.includes('require') || code.includes('import');
+  return (
+    code.includes('require') || code.includes('import') || /(?:^|[;\n}])\s*export\b/.test(code)
+  );
 }
 
 /**

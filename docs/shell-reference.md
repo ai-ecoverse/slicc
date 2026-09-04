@@ -1434,15 +1434,16 @@ Full gesture-bridge mechanics, extension popup routing, and the shared trust mod
 
 The `node` shim (`shell/supplemental-commands/node-command.ts`) accepts the same argument shapes as real Node:
 
-| Form                      | Program source        | `process.argv`                    |
-| ------------------------- | --------------------- | --------------------------------- |
-| `node -e CODE [ARGS…]`    | `CODE`                | `['node', ...ARGS]`               |
-| `node SCRIPT [ARGS…]`     | VFS file at `SCRIPT`  | `['node', <abs SCRIPT>, ...ARGS]` |
-| `… \| node`               | piped stdin           | `['node']`                        |
-| `node - [ARGS…]`          | stdin                 | `['node', '-', ...ARGS]`          |
-| `node /dev/stdin [ARGS…]` | stdin                 | `['node', '/dev/stdin', ...ARGS]` |
-| `node --check SCRIPT`     | `SCRIPT` (parse only) | n/a — does not run                |
-| `node --check -e CODE`    | `CODE` (parse only)   | n/a — does not run                |
+| Form                       | Program source               | `process.argv`                    |
+| -------------------------- | ---------------------------- | --------------------------------- |
+| `node -e CODE [ARGS…]`     | `CODE`                       | `['node', ...ARGS]`               |
+| `node SCRIPT [ARGS…]`      | VFS file at `SCRIPT`         | `['node', <abs SCRIPT>, ...ARGS]` |
+| `… \| node`                | piped stdin                  | `['node']`                        |
+| `node - [ARGS…]`           | stdin                        | `['node', '-', ...ARGS]`          |
+| `node /dev/stdin [ARGS…]`  | stdin                        | `['node', '/dev/stdin', ...ARGS]` |
+| `node --check SCRIPT`      | `SCRIPT` (parse only)        | n/a — does not run                |
+| `node --check -e CODE`     | `CODE` (parse only)          | n/a — does not run                |
+| `node --input-type=module` | same as `-e` / stdin / `.js` | treated as ESM                    |
 
 `/dev/fd/0` and `/proc/self/fd/0` are accepted as aliases of `/dev/stdin`. These
 device tokens are **not** VFS files — the shim recognizes them before the
@@ -1460,14 +1461,20 @@ does **not** see its own source as stdin (`fs.readFileSync(0)` returns empty),
 and relative `require('./x')` resolves against the shell's cwd rather than
 `/dev`.
 
-`--help` / `-h` / `--version` / `-v` / `--check` / `-c` are node's own options
-only when they _precede_ the program source. After it they belong to the
-script, so `node /dev/stdin --help` runs the heredoc with `--help` in
-`process.argv` instead of printing the shim's usage.
+`--help` / `-h` / `--version` / `-v` / `--check` / `-c` / `--input-type` are
+node's own options only when they _precede_ the program source. After it they
+belong to the script, so `node /dev/stdin --help` runs the heredoc with
+`--help` in `process.argv` instead of printing the shim's usage.
 
-`--check` / `-c` parse the program with the same `AsyncFunction` wrapper
-execution uses (so top-level `await` is valid) and exit 0 or 1 without
-running it. `node --help` lists the supported flag set.
+`--check` / `-c` parse the program the way the realm would run it: ESM /
+`import`/`export` / `import.meta` entries go through the same entry transpile
+as `node file.mjs`, then an `AsyncFunction` body (so top-level `await` is
+valid). They exit 0 or 1 without running the script.
+
+`--input-type=module` / `--input-type=commonjs` (also `--input-type module`)
+select how stdin / `-e` / `.js` are treated. `.mjs` is always ESM and `.cjs`
+is always CJS; mixing the flag with the other extension is rejected. `node
+--help` lists the supported flag set.
 
 ---
 
