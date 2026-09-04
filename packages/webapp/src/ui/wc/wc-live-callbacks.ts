@@ -173,10 +173,18 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     onScoopCreated: (scoop) => {
       refreshScoops();
       if (!wiring.getSelected() && !viewingFrozen() && !wiring.pendingUrlContext) {
-        // The adapter has already folded the new record into its roster, so
-        // ask it for the summary rather than projecting a second time.
-        const created = workUnits.currentUnits().find((unit) => unit.id === scoop.jid);
-        if (created) wiring.selectScoop(created);
+        // Projected from the PAYLOAD, not looked up in the roster: this
+        // handler runs before the adapter republishes its list, and the
+        // adapter holds no roster of its own — it reads `getScoops()`, which
+        // the record may not be in yet. A lookup would silently no-op and the
+        // first cone of a fresh boot would never be selected.
+        wiring.selectScoop(
+          recordToWorkUnitSummary(scoop, {
+            fill: wiring.fills.get(scoop.jid),
+            phase: wiring.phases.get(scoop.jid),
+            status: wiring.statuses.get(scoop.jid),
+          })
+        );
       }
     },
     onScoopListUpdate: (scoops) => {

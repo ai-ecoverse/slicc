@@ -22,6 +22,7 @@ import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-cli
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
+import type { WorkUnitWorkspace } from '../../work-unit/types.js';
 import {
   guardedReload,
   installWorkerStaleAssetReloadListener,
@@ -218,6 +219,31 @@ function createUnitWatcher(
       load(event.snapshot.messages as unknown as ChatMessage[], event.snapshot.queuedIds);
     });
   };
+}
+
+/**
+ * The workspace the workbench (file tree, terminal, memory) shows: the one
+ * belonging to the cone that owns the selection (#2271).
+ *
+ * A record operation — the workspace lives on the record — so the selected
+ * SUMMARY is resolved back to one here, at the leaf (#2382 D2a).
+ *
+ * **A selection the roster no longer knows clears itself.** Resolving a unit
+ * that was dropped while it was on screen falls through to the FIRST root,
+ * which would put another cone's files, terminal and memory under the dead
+ * unit's chrome. Dropping the selection instead lets the next roster event
+ * re-select (`ensureSelection`), and the caller gets the same default
+ * workspace that selection will land on.
+ */
+export function workspaceForSelection(deps: {
+  client: Pick<OffscreenClient, 'getScoop' | 'getScoops'>;
+  clearSelection(): void;
+  selectedId: string | undefined;
+}): WorkUnitWorkspace {
+  const { client, selectedId } = deps;
+  const record = selectedId === undefined ? undefined : client.getScoop(selectedId);
+  if (selectedId !== undefined && !record) deps.clearSelection();
+  return ownerWorkspaceFor(client.getScoops(), record);
 }
 
 export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
@@ -984,12 +1010,12 @@ export function attachWcClient(
     // The workbench shows the files and memory of the cone that owns the
     // current selection — the primary's `/workspace` until an extra cone is
     // selected (#2271).
-    getWorkspace: () => {
-      // A record operation: the workspace lives on the record, so resolve the
-      // selected SUMMARY back to it at this leaf (#2382 D2a).
-      const id = boot.getSelected()?.id;
-      return ownerWorkspaceFor(client.getScoops(), id ? client.getScoop(id) : undefined);
-    },
+    getWorkspace: () =>
+      workspaceForSelection({
+        client,
+        clearSelection: boot.clearSelection,
+        selectedId: boot.getSelected()?.id,
+      }),
     mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };

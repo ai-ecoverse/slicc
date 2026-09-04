@@ -63,6 +63,8 @@ function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {
     selected = scoop;
   });
   const frozen: string[] = [];
+  const selectedUnits: WorkUnitSummary[] = [];
+  let unitsBehind: RegisteredScoop[] | null = null;
   const freezeCone = vi.fn(async (unit: RegisteredScoop) => {
     if (opts.freezeFails) throw new Error('vfs down');
     frozen.push(unit.folder);
@@ -74,8 +76,11 @@ function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {
     getSelected: () => (selected ? recordToWorkUnitSummary(selected, {}) : null),
     // The roster as the client protocol carries it — the same projection the
     // leader adapter makes, so the seeded model is read the way the pill is.
-    getUnits: () => scoops.map((scoop) => recordToWorkUnitSummary(scoop, {})),
+    // `unitsBehind` pins it to an earlier instant: the two rosters are views
+    // of one `scoop-list` event and either can arrive first.
+    getUnits: () => (unitsBehind ?? scoops).map((scoop) => recordToWorkUnitSummary(scoop, {})),
     selectScoop: (unit: WorkUnitSummary) => {
+      selectedUnits.push(unit);
       const record = scoops.find((s) => s.jid === unit.id);
       if (record) selectScoop(record);
     },
@@ -106,6 +111,11 @@ function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {
     action,
     buttons,
     landed,
+    selectedUnits,
+    /** Pin the CLIENT's roster to this instant; the record roster moves on. */
+    holdUnits: () => {
+      unitsBehind = [...scoops];
+    },
     get scoops() {
       return scoops;
     },
@@ -189,6 +199,46 @@ describe('wireConeActions', () => {
     expect(h.selectScoop).not.toHaveBeenCalled();
     // …the kernel's real record is.
     h.landed(research);
+    expect(h.selected?.jid).toBe('cone_2');
+  });
+
+  it('selects the new cone even when the client roster is a tick behind (#2382 D2a)', async () => {
+    // The record roster and the client's roster are two views of one
+    // `scoop-list` event. Waiting for the summary would silently drop the
+    // selection the user just asked for — and nothing re-drives it, because
+    // `pendingSelect` is spent the moment the record lands.
+    const h = harness([primary]);
+    h.fire('new-cone');
+    (h.dialog()?.querySelector('input[name="name"]') as HTMLInputElement).value = 'Research';
+    h.action('create')?.click();
+    await vi.waitFor(() => expect(h.client.registerScoop).toHaveBeenCalledOnce());
+
+    h.holdUnits();
+    h.landed(research);
+    expect(h.selected?.jid).toBe('cone_2');
+    // …and what it was handed is the leader's own projection of that record,
+    // not a half-built stand-in.
+    expect(h.selectedUnits.at(-1)).toMatchObject({
+      id: 'cone_2',
+      parentId: null,
+      role: 'primary',
+      folder: 'cone-research',
+    });
+  });
+
+  it('moves off a dropped cone onto a root the client roster has not seen yet', async () => {
+    // Same race on the way out, with the survivor as the young cone: the user
+    // makes a second cone and drops the first before the client's roster
+    // catches up. Giving up here leaves them sitting on the cone that was
+    // just unregistered.
+    const h = harness([primary]);
+    h.holdUnits(); // the client's roster stops at [primary]
+    h.scoops.push(research);
+    h.handles.refresh();
+    h.select(primary);
+    h.fire('drop-cone');
+    h.action('drop')?.click();
+    await vi.waitFor(() => expect(h.client.unregisterScoop).toHaveBeenCalledWith('cone_1'));
     expect(h.selected?.jid).toBe('cone_2');
   });
 

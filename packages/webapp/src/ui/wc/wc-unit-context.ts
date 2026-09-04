@@ -11,6 +11,7 @@
 import {
   isReadOnlyUnit,
   isRootSummary,
+  orderRoots,
   orderUnits,
   ownerRootOf,
 } from '../../work-unit/client/presentation.js';
@@ -69,18 +70,29 @@ export function unitForContext(
   return defaultRootOf(units);
 }
 
-/** The primary root when present, else the oldest root. */
+/**
+ * The primary root when present, else the oldest root.
+ *
+ * "Oldest" is the STRIP's rule (`orderRoots`: `addedAt` ascending when every
+ * root carries one, then id), not roster order. Reading the first root the
+ * transport happened to list would let boot selection, the sprinkle stop, the
+ * freezer fallback and a bare `?ctx=cone` land on a different cone than the
+ * leftmost tab — the restore walks IndexedDB key order, so after the original
+ * cone is dropped those two orders genuinely differ.
+ */
 export function defaultRootOf(units: readonly WorkUnitSummary[]): WorkUnitSummary | undefined {
-  return units.find(isPrimaryRootSummary) ?? units.find(isRootSummary);
+  const roots = orderRoots(units.filter(isRootSummary));
+  return roots.find(isPrimaryRootSummary) ?? roots[0];
 }
 
 /**
- * Strip order for a roster of records — cones first (oldest first), then the
- * selected cone's scoops, then everything else.
+ * Strip order for a roster — cones first (oldest first), then the selected
+ * cone's scoops, then everything else.
  *
  * The rule itself lives in `work-unit/client/presentation.ts` since #2274, so
- * the follower orders the same roster the same way (#2317). This is the
- * record-side entry point: project, order, project back.
+ * the follower orders the same roster the same way (#2317). Both sides now
+ * order the SAME type, so this is a name the shell's call sites keep rather
+ * than a projection step.
  */
 export function orderForSwitcher(
   units: readonly WorkUnitSummary[],
@@ -92,16 +104,41 @@ export function orderForSwitcher(
 /**
  * The root a session-level action ("New chat", the freezer, clear-chat)
  * belongs to (#2272). A selected root is itself; a selected child resolves
- * to the root that owns it, walking the ownership edge (`parentJid`) so a
- * scoop-of-a-scoop still lands on its cone. Nothing selected — or a broken
- * chain — falls back to the default root, which is what these actions used
- * before multiple cones existed.
+ * to the root that owns it, walking the ownership edge so a scoop-of-a-scoop
+ * still lands on its cone. Nothing selected falls back to the default root,
+ * which is what these actions used before multiple cones existed.
+ *
+ * **A child whose owner is UNKNOWN answers `undefined`, not the default
+ * root.** `WorkUnitSummary.parentId` is optional on the protocol — a leader
+ * too old to send the edge leaves it absent while `role` still says the unit
+ * is owned by someone (#2382 D2b, when a follower's summary starts arriving
+ * here). Falling back would freeze, re-model or stop the DEFAULT cone on
+ * behalf of a scoop that belongs to a different one; "I cannot say" is the
+ * only honest answer, and every caller already handles it because the roster
+ * can be empty.
  */
 export function rootForSelection(
   units: readonly WorkUnitSummary[],
   selected: Pick<WorkUnitSummary, 'id'> | null | undefined
 ): WorkUnitSummary | undefined {
-  return ownerRootOf(units, selected?.id) ?? defaultRootOf(units);
+  const owner = ownerRootOf(units, selected?.id);
+  if (owner) return owner;
+  if (hasUnknownOwner(units, selected?.id)) return undefined;
+  return defaultRootOf(units);
+}
+
+/**
+ * A unit the roster describes as owned but carries no edge for.
+ *
+ * Narrow on purpose: a child whose named parent is merely MISSING from the
+ * roster (its cone was dropped mid-render) keeps the historical fallback,
+ * because that is a race the shell has always resolved to the default root.
+ * This is the other case — the edge was never sent at all.
+ */
+function hasUnknownOwner(units: readonly WorkUnitSummary[], id: string | undefined): boolean {
+  if (id === undefined) return false;
+  const unit = units.find((candidate) => candidate.id === id);
+  return unit !== undefined && !isRootSummary(unit) && unit.parentId === undefined;
 }
 
 /**

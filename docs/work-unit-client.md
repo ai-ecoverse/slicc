@@ -469,15 +469,42 @@ Nothing in the rendering changed; the fields did:
 - `unit.jid` → `unit.id`, `unit.parentJid === null` → `isRootSummary(unit)`,
   and the switcher label reads the carried `role` instead of re-deriving it.
 - `wc-unit-context.ts`'s helpers (`orderForSwitcher`, `rootForSelection`,
-  `rootForConeFolder`, `chatSessionIdFor`) are typed on summaries and read the
-  roster from `WorkUnitClient.subscribeList` — the shell's `getUnits()` — not
-  from `OffscreenClient.getScoops()`.
+  `rootForConeFolder`, `defaultRootOf`) are typed on summaries, and their
+  callers pass the client's roster — the shell's `getUnits()`, which reads
+  `LocalWorkUnitClient.currentUnits()` — instead of
+  `OffscreenClient.getScoops()`. (`chatSessionIdFor` stays on
+  `work-unit/record.ts`: it keys off `folder` alone, which both shapes carry.)
 - **Record-only fields are read at the LEAF, never by re-widening the
   selection.** Two survive on the leader: the reasoning level behind the
   thinking pill (`applyThreadContext`'s optional `getRecord`) and the session
   archive's folder work in the freezer rail, which resolves its cone summary
   back to a record with a single lookup. A follower passes neither and renders
   correctly without them — it has no thinking pill and no freezer.
+- **`defaultRootOf` orders roots the way the STRIP does** (`orderRoots`:
+  `addedAt` ascending when every root carries one, then id). Reading the first
+  root in roster order would make boot selection, the sprinkle stop, the
+  freezer fallback and a bare `?ctx=cone` disagree with the leftmost tab — the
+  restore walks IndexedDB key order, so after the original cone is dropped
+  those orders differ.
+- **A selection is never dropped because the client's roster is a tick
+  behind.** The record roster and the client's are two views of one
+  `scoop-list` event, and either can arrive first: a new cone landing
+  (`wc-cone-actions.ts`) and the first cone of a fresh boot
+  (`onScoopCreated`) both project the record they are already holding when
+  the summary is not there yet. Waiting for the roster silently loses the
+  selection the user just asked for.
+
+### What a follower's summary may not carry (the D2b contract)
+
+Three fields are optional on the protocol, and every one of them changes
+behaviour when a follower's summary starts arriving at this surface. The rule
+is the same in all three rows: **absent is "not known", never a value.**
+
+| Field                          | Absent means                                                                           | What the shell does                                                                                                                                                                                                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parentId`                     | A leader too old to send the ownership edge, while `role` still says the unit is owned | `rootForSelection` answers `undefined` rather than the default root. Inventing an owner would freeze, re-model or stop the WRONG cone on a scoop's behalf. A child whose named parent is merely missing from the roster keeps the historical default-root fallback — that is a render race, not an absent edge. |
+| `addedAt`                      | The transport does not carry registration time                                         | `orderRoots` is all-or-nothing: with any root missing it, roots keep transport order, and `defaultRootOf` reads that same order — so the default selection and the strip cannot disagree.                                                                                                                       |
+| the record behind `getRecord?` | The caller has no records at all (a follower)                                          | The thinking pill keeps the value it had. `metaThinkingForScoop` answers `off` for an unknown level, and writing that would report reasoning as DISABLED on every selection — the #2329 latch bug in a second place.                                                                                            |
 
 The mount collapse itself (`attachWcChat` / `attachWcWorkbench` /
 `mountWcShell`) is PR D2b.

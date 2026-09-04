@@ -17,6 +17,7 @@ import {
   prepareWcShell,
   wireDockTreePersistence,
   wireWcChipTips,
+  workspaceForSelection,
 } from '../../../src/ui/wc/wc-live.js';
 import {
   createWcLiveCallbacks,
@@ -348,6 +349,16 @@ describe('createWcLiveCallbacks', () => {
     expect(wiring.refs.switcher.scoops).toHaveLength(1);
   });
 
+  it('selects it from the PAYLOAD, before the record is in the roster (#2382 D2a)', () => {
+    // This handler runs ahead of the adapter's republish, and the adapter
+    // holds no roster of its own — it reads `getScoops()`, which the brand-new
+    // record is not in yet. A roster lookup here would no-op and the first
+    // cone of a fresh boot would never be selected.
+    const wiring = makeWiring({ selected: null, scoops: [] });
+    createWcLiveCallbacks(wiring).onScoopCreated(cone);
+    expect(wiring.selectScoop).toHaveBeenCalledWith(asUnit(cone));
+  });
+
   it('refreshes switcher chips on scoop list updates', () => {
     const wiring = makeWiring({ selected: cone, scoops: [cone, scoop({})] });
     createWcLiveCallbacks(wiring).onScoopListUpdate([] as never);
@@ -477,7 +488,7 @@ describe('prepareWcShell scoop selection', () => {
   it('reads the selected unit’s thinking level from its RECORD at the leaf (#2382 D2a)', async () => {
     // Selection is expressed in summaries, and a summary carries no reasoning
     // level — so the mount has to hand `applyThreadContext` a record lookup.
-    // Without it the pill would silently go blank on every selection.
+    // Without it the pill would report `off` on every selection.
     const app = document.createElement('div');
     const boot = prepareWcShell(app, 'test');
     const record = scoop({
@@ -939,5 +950,50 @@ describe('parseProcTable', () => {
     );
     expect(snapshot.processes).toEqual([{ pid: 0, argv: '', status: 'running' }]);
     expect(snapshot.terminated).toBe(0);
+  });
+});
+
+describe('workspaceForSelection (workbench files, terminal and memory)', () => {
+  const primary = scoop({ jid: 'cone-1', name: 'sliccy', folder: 'cone', parentJid: null });
+  const extra = scoop({
+    jid: 'cone-2',
+    name: 'research',
+    folder: 'cone-research',
+    parentJid: null,
+    addedAt: '2026-01-02T00:00:00Z',
+  });
+  const clientFor = (roster: RegisteredScoop[]) => ({
+    getScoop: (jid: string) => roster.find((record) => record.jid === jid),
+    getScoops: () => roster,
+  });
+
+  it('resolves the selected unit to the workspace of the cone that owns it', () => {
+    const clearSelection = vi.fn();
+    const helper = scoop({ jid: 'scoop-1', name: 'helper', parentJid: 'cone-2' });
+    const client = clientFor([primary, extra, helper]);
+    expect(workspaceForSelection({ client, clearSelection, selectedId: 'scoop-1' }).root).toBe(
+      workspaceForSelection({ client, clearSelection, selectedId: 'cone-2' }).root
+    );
+    expect(clearSelection).not.toHaveBeenCalled();
+  });
+
+  it('clears a selection the roster no longer knows instead of showing another cone', () => {
+    // The selected cone was dropped while it was on screen. Resolving anyway
+    // falls through to the first root, which would put the surviving cone's
+    // files, terminal and memory under the dead unit's chrome.
+    const clearSelection = vi.fn();
+    const client = clientFor([primary]);
+    workspaceForSelection({ client, clearSelection, selectedId: 'cone-2' });
+    expect(clearSelection).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the selection alone when nothing is selected', () => {
+    const clearSelection = vi.fn();
+    workspaceForSelection({
+      client: clientFor([primary]),
+      clearSelection,
+      selectedId: undefined,
+    });
+    expect(clearSelection).not.toHaveBeenCalled();
   });
 });

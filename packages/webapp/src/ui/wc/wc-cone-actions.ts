@@ -15,6 +15,7 @@
  */
 
 import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
+import { recordToWorkUnitSummary } from '../../work-unit/client/from-record.js';
 import { modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { buildWorkUnitRecord } from '../../work-unit/manager.js';
@@ -176,8 +177,18 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
    */
   const currentRoot = (): WorkUnitSummary | undefined =>
     rootForSelection(deps.getUnits(), deps.getSelected());
-  const unitById = (id: string): WorkUnitSummary | undefined =>
-    deps.getUnits().find((unit) => unit.id === id);
+  /**
+   * The unit as the protocol carries it, projecting the record when the
+   * client's roster cannot answer yet.
+   *
+   * The two rosters are views of the same `scoop-list` event and either can
+   * be a tick behind. Giving up on a miss would silently drop a selection the
+   * user just asked for, so the leader falls back to its own projection of
+   * the record it is already holding — the same projection
+   * `toSwitcherScoops` makes.
+   */
+  const unitFor = (record: RegisteredScoop): WorkUnitSummary =>
+    deps.getUnits().find((unit) => unit.id === record.jid) ?? recordToWorkUnitSummary(record);
 
   const closeDialog = (): void => {
     if (!dialog) return;
@@ -268,8 +279,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       }
       if (wasMine) {
         const next = rootsOf(client.getScoops()).find((s) => s.jid !== root.jid);
-        const summary = next && unitById(next.jid);
-        if (summary) deps.selectScoop(summary);
+        if (next) deps.selectScoop(unitFor(next));
       }
       dropping = false;
       render();
@@ -301,8 +311,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       );
       if (landed) {
         pendingSelect = null;
-        const summary = unitById(landed.jid);
-        if (summary && deps.getSelected()?.id !== landed.jid) deps.selectScoop(summary);
+        if (deps.getSelected()?.id !== landed.jid) deps.selectScoop(unitFor(landed));
       }
     }
     const r = row();

@@ -109,6 +109,47 @@ describe('wc-unit-context', () => {
     expect(defaultRootOf([worker])).toBeUndefined();
   });
 
+  it('reads "oldest" as the STRIP does, not as roster order', () => {
+    // The primary cone is gone (dropped), and the restore walked IndexedDB
+    // key order, so the roster lists the NEWER extra cone first. Taking the
+    // first root here would point boot selection, the sprinkle stop, the
+    // freezer fallback and a bare `?ctx=cone` at a different cone than the
+    // leftmost tab, which orders roots by `addedAt`.
+    const older = unit({
+      jid: 'cone_3',
+      parentJid: null,
+      folder: 'cone-older',
+      addedAt: '2026-01-02T00:00:00.000Z',
+    });
+    const newer = unit({
+      jid: 'cone_4',
+      parentJid: null,
+      folder: 'cone-newer',
+      addedAt: '2026-01-09T00:00:00.000Z',
+    });
+    const roster = [newer, older, worker];
+    expect(defaultRootOf(roster)?.id).toBe('cone_3');
+    expect(orderForSwitcher(roster)[0]?.id).toBe('cone_3');
+    expect(defaultRootOf(roster)?.id).toBe(orderForSwitcher(roster)[0]?.id);
+  });
+
+  it('keeps transport order when a root is missing addedAt, on both reads', () => {
+    // All-or-nothing: sorting a half-timestamped roster would interleave a
+    // real ordering with a positional one. The strip and the default
+    // selection must at least agree on the answer they give.
+    const undated = unit({ jid: 'cone_5', parentJid: null, folder: 'cone-undated' });
+    delete (undated as { addedAt?: string }).addedAt;
+    const dated = unit({
+      jid: 'cone_6',
+      parentJid: null,
+      folder: 'cone-dated',
+      addedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const roster = [undated, dated];
+    expect(defaultRootOf(roster)?.id).toBe('cone_5');
+    expect(defaultRootOf(roster)?.id).toBe(orderForSwitcher(roster)[0]?.id);
+  });
+
   it('orders roots (oldest first) ahead of children, grouped by owner', () => {
     // With nothing selected the children follow their cones in cone order
     // (#2274): `scoop_1` belongs to the primary cone, `scoop_2` to the second.
@@ -183,6 +224,20 @@ describe('wc-unit-context', () => {
 
     it('returns undefined when the roster has no root at all', () => {
       expect(rootForSelection([worker], worker)).toBeUndefined();
+    });
+
+    it('refuses to name an owner for a child whose edge was never sent (#2382 D2b)', () => {
+      // `parentId` is optional on the protocol: a leader too old to send the
+      // edge leaves it absent while `role` still says the unit is owned. The
+      // default root is the WRONG answer — freeze, model and stop would bind
+      // to a cone this scoop does not belong to.
+      const edgeless = unit({ jid: 'scoop_8', folder: 'edgeless', role: 'child' });
+      delete (edgeless as { parentId?: string | null }).parentId;
+      expect(edgeless.parentId).toBeUndefined();
+      expect(rootForSelection([...all, edgeless], edgeless)).toBeUndefined();
+      // …and a unit the roster does not know at all still falls back, because
+      // that is a render race and not an absent edge.
+      expect(rootForSelection([...all, edgeless], { id: 'gone' })?.id).toBe('cone_1');
     });
   });
 

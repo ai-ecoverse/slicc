@@ -94,14 +94,22 @@ export async function applyThreadContext(
   applyComposerAvailability(refs, readOnly);
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   const record = getRecord?.(unit.id);
-  const thinking = record ? thinkingFor(record) : {};
-  refs.composerMeta.setAttribute(
-    'thinking',
-    metaThinkingForScoop(
-      (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
-      thinking.effortOverride
-    )
-  );
+  // Absent is "not known yet", never "off" — the same rule the model pill
+  // follows (#2329). `metaThinkingForScoop` answers `off` for an unknown
+  // level, which for a caller that carries no records (a follower, #2382
+  // D2b) would report reasoning as DISABLED on every selection. With nothing
+  // to say the pill keeps the value it had. A locked effort level is an
+  // answer in its own right and is written whether or not a record answered.
+  if (record || lockedEffort) {
+    const thinking = record ? thinkingFor(record) : {};
+    refs.composerMeta.setAttribute(
+      'thinking',
+      metaThinkingForScoop(
+        (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
+        thinking.effortOverride
+      )
+    );
+  }
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     // The pill follows the model of the cone the picker writes to (#2310) —

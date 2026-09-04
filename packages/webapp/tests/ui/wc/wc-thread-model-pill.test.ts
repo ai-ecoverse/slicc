@@ -107,6 +107,20 @@ describe('composer model pill per selected unit (#2310)', () => {
     expect(r.composer.hasAttribute('hidden')).toBe(true);
   });
 
+  it('keeps the thinking pill when no record answers, never writing off (#2382 D2b)', async () => {
+    // A caller with no records at all — a follower, once its summary reaches
+    // this surface — must not be told reasoning is DISABLED.
+    // `metaThinkingForScoop` answers `off` for an unknown level, so the write
+    // is skipped entirely and the pill keeps what it had. Same rule the model
+    // pill follows for an absent model (#2329).
+    const r = refs();
+    await applyThreadContext(r, summaries([scoop])[0], summaries([cone, scoop]), byId([scoop]));
+    expect(r.composerMeta.getAttribute('thinking')).toBe('high');
+
+    await applyThreadContext(r, summaries([cone])[0], summaries([cone, scoop]));
+    expect(r.composerMeta.getAttribute('thinking')).toBe('high');
+  });
+
   it('falls back to the selected unit when its owning cone is not in the roster', async () => {
     const r = refs();
     // A roster the scoop's cone is missing from: the chain cannot be walked,
