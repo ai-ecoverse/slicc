@@ -69,6 +69,7 @@ function deps(over: Partial<IdleCompactionDeps> = {}) {
     getCompactionApiKey: () => 'key',
     estimateTokens: (messages) => messages.length * 1000,
     onCompacted: vi.fn(),
+    onDiscarded: vi.fn(),
     folder: 'cone',
     ...over,
   };
@@ -233,6 +234,111 @@ describe('IdleCompaction', () => {
     expect(await idle.runNow()).toBe('failed');
     expect(idle.isRunning).toBe(false);
     expect(failing.agent.state.messages).toHaveLength(2);
+  });
+
+  // The notice the round's `summarizing` state put in the transcript has to
+  // come back out again for every outcome that kept nothing — otherwise the
+  // transcript permanently claims a compaction that did not happen (#2843).
+  describe('onDiscarded (#2843)', () => {
+    it('fires for a round that was aborted', async () => {
+      const { deps: d } = deps();
+      d.getCompactFn = () => (_messages, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      const idle = new IdleCompaction(d);
+      const round = idle.runNow();
+      idle.cancel();
+      expect(await round).toBe('cancelled');
+      expect(d.onDiscarded).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires when the thread moved', async () => {
+      const moved = deps();
+      moved.deps.getCompactFn = () => async () => {
+        moved.agent.state.messages.push(bigUser());
+        return [summary()];
+      };
+      expect(await new IdleCompaction(moved.deps).runNow()).toBe('thread-moved');
+      expect(moved.deps.onDiscarded).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires when the round made no progress', async () => {
+      const same = deps();
+      same.deps.getCompactFn = () => async (messages) => [...messages];
+      expect(await new IdleCompaction(same.deps).runNow()).toBe('no-progress');
+      expect(same.deps.onDiscarded).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires when the round threw', async () => {
+      const failing = deps();
+      failing.deps.getCompactFn = () => async () => {
+        throw new Error('summary failed');
+      };
+      expect(await new IdleCompaction(failing.deps).runNow()).toBe('failed');
+      expect(failing.deps.onDiscarded).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT fire for an adopted round', async () => {
+      const { deps: d } = deps();
+      expect(await new IdleCompaction(d).runNow()).toBe('compacted');
+      expect(d.onDiscarded).not.toHaveBeenCalled();
+      expect(d.onCompacted).toHaveBeenCalledTimes(1);
+    });
+
+    // A gate rejection never opened a notice, so retracting one would remove a
+    // row belonging to some EARLIER round.
+    it('does NOT fire for a round that never started', async () => {
+      for (const over of [
+        { isEnabled: () => false },
+        { isBusy: () => true },
+        { getAgent: () => null },
+        { getCompactionApiKey: () => undefined },
+        { getSettings: () => ({ idleMinutes: 5, minTokens: 5_000 }) },
+      ] satisfies Partial<IdleCompactionDeps>[]) {
+        const { deps: d } = deps(over);
+        await new IdleCompaction(d).runNow();
+        expect(d.onDiscarded).not.toHaveBeenCalled();
+      }
+    });
+
+    it('swallows a throwing hook and still reports the outcome', async () => {
+      const { deps: d } = deps({
+        onDiscarded: vi.fn(() => {
+          throw new Error('renderer blew up');
+        }),
+      });
+      d.getCompactFn = () => async (messages) => [...messages];
+      const idle = new IdleCompaction(d);
+      // A listener bug must not turn a harmless no-progress round into a
+      // rejected promise nobody is awaiting.
+      await expect(idle.runNow()).resolves.toBe('no-progress');
+      expect(idle.isRunning).toBe(false);
+    });
+  });
+
+  // The window used to be floored at one minute, which made the feature
+  // untestable outside a real wait (#2843).
+  it('honours a sub-minute idle window', async () => {
+    const { deps: d, compactFn } = deps({
+      getSettings: () => ({ idleMinutes: 0.01, minTokens: 100 }),
+    });
+    const idle = new IdleCompaction(d);
+    idle.arm();
+    await vi.advanceTimersByTimeAsync(599);
+    expect(compactFn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(compactFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('clamps a non-positive window so it cannot fire in the arming task', async () => {
+    const { deps: d, compactFn } = deps({
+      getSettings: () => ({ idleMinutes: 0, minTokens: 100 }),
+    });
+    const idle = new IdleCompaction(d);
+    idle.arm();
+    expect(compactFn).not.toHaveBeenCalled();
+    expect(idle.isArmed).toBe(true);
   });
 
   it('refuses to overlap rounds', async () => {

@@ -1293,3 +1293,149 @@ describe('createCompactContext image elision (#1986)', () => {
     expect(withStub.length).toBeGreaterThan(0);
   });
 });
+
+// The elision-only branch used to be the one compaction path that told nobody:
+// it rewrote the history the model sees (and wrote a snapshot) without emitting
+// a single state, so the transcript showed nothing (#2843).
+describe('createCompactContext elision-only round is observable (#2843)', () => {
+  const mockModel = { id: 'test-model' } as unknown as Model<Api>;
+
+  beforeEach(() => {
+    mockCompleteSimple.mockReset();
+    mockCompleteSimple.mockResolvedValue(llmResponse('## Goal\ntesting'));
+  });
+
+  it('emits summarizing → idle when elision alone brings it under the threshold', async () => {
+    const states: string[] = [];
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 200000,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+    // One giant tool result: over the per-message threshold, so it is stubbed in
+    // place and the conversation lands back under the soft threshold.
+    const messages = [
+      createMessage('user', 'inspect the app'),
+      createAssistantWithToolCalls('running', ['tool-1']),
+      createToolResult('x'.repeat(1_000_000), 'tool-1'),
+    ];
+
+    const result = await compact(messages);
+
+    // No summary call — this is still the early return, not the LLM path.
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+    expect(hasCompactionProgress(messages, result)).toBe(true);
+    // …and it is no longer silent. `idle` last, so every consumer's
+    // resting-state contract holds.
+    expect(states).toEqual(['summarizing', 'idle']);
+  });
+
+  it('stays silent when nothing was compacted at all', async () => {
+    const states: string[] = [];
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 200000,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+
+    const result = await compact([createMessage('user', 'hello')]);
+
+    expect(result).toHaveLength(1);
+    expect(states).toEqual([]);
+  });
+});
+
+// An aborted round must cost NOTHING. `summarizeWithLlm` swallows the abort
+// along with every other summary failure and returns null, so before #2843 a
+// cancelled round fell through to the naive drop: it emitted `fallback`
+// ("summarization failed — older messages truncated") and returned a truncated
+// history. compact-on-idle throws that result away, but the notice was already
+// on screen, and any other `force` caller would have adopted a truncation
+// nobody asked for.
+describe('createCompactContext abort (#2843)', () => {
+  const mockModel = { id: 'test-model' } as unknown as Model<Api>;
+
+  /** A conversation over the tiny window below, so compaction actually runs. */
+  const overThreshold = () => [
+    createMessage('user', 'x'.repeat(10_000)),
+    createMessage('assistant', 'ok'),
+    createMessage('user', 'and now?'),
+  ];
+
+  const tinyWindow = {
+    model: mockModel,
+    getApiKey: () => 'test-key' as string | undefined,
+    contextWindow: 2000,
+    reserveTokens: 500,
+    keepRecentTokens: 600,
+  };
+
+  beforeEach(() => {
+    mockCompleteSimple.mockReset();
+    // The provider rejecting is how an abort surfaces here: pi-ai turns the
+    // signal into a thrown error, which `summarizeWithLlm` turns into null.
+    mockCompleteSimple.mockRejectedValue(new Error('aborted'));
+  });
+
+  it('returns the history untouched when the signal fired', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const compact = createCompactContext(tinyWindow);
+    const messages = overThreshold();
+
+    const result = await compact(messages, controller.signal);
+
+    // Identity, not just equality: nothing was rebuilt, nothing was dropped.
+    expect(result).toBe(messages);
+    expect(hasCompactionProgress(messages, result)).toBe(false);
+  });
+
+  it('emits cancelled → idle and never fallback', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const states: string[] = [];
+    const compact = createCompactContext({
+      ...tinyWindow,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+
+    await compact(overThreshold(), controller.signal);
+
+    expect(states).not.toContain('fallback');
+    expect(states.indexOf('cancelled')).toBeGreaterThan(states.indexOf('summarizing'));
+    // Every consumer's resting-state contract still holds.
+    expect(states[states.length - 1]).toBe('idle');
+  });
+
+  it('does not claim a truncation in the returned history', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const compact = createCompactContext(tinyWindow);
+
+    const result = await compact(overThreshold(), controller.signal);
+
+    // The naive-drop marker is the lie the old path told.
+    expect(result.some((m) => firstText(m).includes('compacted to save context space'))).toBe(
+      false
+    );
+  });
+
+  it('still degrades to the naive drop when the signal did NOT fire', async () => {
+    // The guard keys off the signal, not off the summary failing — a genuine
+    // provider outage must keep reaching the fallback that #1985 added.
+    const states: string[] = [];
+    const compact = createCompactContext({
+      ...tinyWindow,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+    const messages = overThreshold();
+
+    const result = await compact(messages, new AbortController().signal);
+
+    expect(states).toContain('fallback');
+    expect(states).not.toContain('cancelled');
+    expect(firstText(result[0])).toContain('compacted to save context space');
+  });
+});
