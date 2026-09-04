@@ -2214,6 +2214,82 @@ describe('GitCommands', () => {
     });
   });
 
+  describe('commit -F/--file (#2865)', () => {
+    async function stageFile(content = 'content'): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', content);
+      await git.execute(['add', 'file.txt'], '/project');
+    }
+
+    it('commits with -F <file>', async () => {
+      await stageFile();
+      await vfs.writeFile('/project/msg.txt', 'subject\n\nbody\n');
+      const result = await git.execute(['commit', '-F', 'msg.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('subject');
+      const log = await git.execute(['log', '--format', '%s', '-n', '1'], '/project');
+      expect(log.stdout.trim()).toBe('subject');
+    });
+
+    it('commits with --file=<path>', async () => {
+      await stageFile();
+      await vfs.writeFile('/project/msg.txt', 'equals-form subject\n');
+      const result = await git.execute(['commit', '--file=/project/msg.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('equals-form subject');
+    });
+
+    it('commits with --file - from stdin', async () => {
+      await stageFile();
+      const result = await git.execute(
+        ['commit', '--file', '-'],
+        '/project',
+        undefined,
+        'stdin subject\n\nbody\n'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('stdin subject');
+      const log = await git.execute(['log', '--format', '%s', '-n', '1'], '/project');
+      expect(log.stdout.trim()).toBe('stdin subject');
+    });
+
+    it('reads --file - from a shell pipe', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(
+        "printf 'piped subject\\n\\nbody\\n' | git commit --file -"
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('piped subject');
+    });
+
+    it('names an unknown long option instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '--bogus', 'x'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('unknown option `bogus`');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+
+    it('names an unknown short switch instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '-Q', 'y'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('unknown switch `Q`');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+
+    it('reports that -F requires a value when --file= is empty', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '--file='], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('switch `F` requires a value');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+  });
+
   describe('checkout -- <file> (file restoration)', () => {
     it('restores a file from HEAD', async () => {
       await git.execute(['init'], '/project');

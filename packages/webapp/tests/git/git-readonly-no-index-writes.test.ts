@@ -80,6 +80,7 @@ function makeCtx(vfs: VirtualFS, lfs: IsoGitFsPromises): GitCommandContext {
     setDefaultAuthorName: () => {},
     setDefaultAuthorEmail: () => {},
     getConfigOverrides: () => undefined,
+    stdin: '',
   };
 }
 
