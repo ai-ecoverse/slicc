@@ -162,12 +162,12 @@ export class ScoopMessageRouter {
     await this.deps.db.saveMessage(message);
 
     // Route to the direct target (chatJid) only.
-    // No @mention scanning — the cone delegates to scoops via the delegate_to_scoop tool,
+    // No @mention scanning — the cone delegates to scoops via the feed_scoop tool,
     // which lets it add context/clarification before routing.
     await this.routeToScoop(message);
   }
 
-  /** Delegate a prompt directly to a scoop's agent. Used by the delegate_to_scoop tool. */
+  /** Delegate a prompt directly to a scoop's agent. Used by the feed_scoop tool. */
   async delegateToScoop(scoopJid: string, prompt: string, senderName: string): Promise<void> {
     const scoop = this.deps.getScoops().get(scoopJid);
     if (!scoop) throw new Error(`Scoop not found: ${scoopJid}`);

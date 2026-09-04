@@ -1419,7 +1419,7 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.messageRouter.handleMessage(message);
   }
 
-  /** Delegate a prompt directly to a scoop's agent. Used by the delegate_to_scoop tool. */
+  /** Delegate a prompt directly to a scoop's agent. Used by the feed_scoop tool. */
   delegateToScoop(scoopJid: string, prompt: string, senderName: string): Promise<void> {
     return this.messageRouter.delegateToScoop(scoopJid, prompt, senderName);
   }
