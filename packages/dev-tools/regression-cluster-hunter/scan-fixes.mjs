@@ -41,6 +41,7 @@ import {
   cooldownElapsed,
   discriminatingTokens,
   isCandidateFix,
+  isProductSource,
   parseFirstParentLog,
   productSources,
   rankSiblings,
@@ -123,10 +124,16 @@ async function lastRunAt(token, repo, workflowFile) {
   return list[0]?.created_at ?? null;
 }
 
-/** Every tracked source file, read once and reused for all token searches. */
+/**
+ * Every tracked PRODUCT source file, read once and shared by the token search
+ * and the shape probes. Tests are excluded at load: they cannot carry the
+ * production defect, and including them both proposes them as siblings and
+ * inflates the token counts `discriminatingTokens` uses to reject over-common
+ * tokens. See `isProductSource`.
+ */
 function loadTrackedSources() {
   const files = git('ls-files', '-z').split('\0').filter(Boolean);
-  const wanted = files.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|swift|go)$/i.test(f));
+  const wanted = files.filter(isProductSource);
   const contents = new Map();
   for (const f of wanted) {
     try {
@@ -320,7 +327,7 @@ async function main() {
   }
 
   const sources = loadTrackedSources();
-  notes.push(`Searched ${sources.size} tracked source files.`);
+  notes.push(`Searched ${sources.size} tracked product-source files (tests excluded).`);
 
   const { scored, rejected, inspected } = await scoreWindow({
     token,

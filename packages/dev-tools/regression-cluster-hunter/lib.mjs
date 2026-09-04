@@ -147,9 +147,16 @@ const FIX_TYPES = new Set(['fix', 'perf']);
 const EXCLUDED_SUBJECT = /^(chore|docs|test|ci|build|style|refactor|revert)[(!:]/i;
 const EXCLUDED_SCOPE = /^(deps|deps-dev|docs|ci|release|renovate)$/i;
 
-/** Paths whose changes are not product code. */
+/**
+ * Paths whose changes are not product code.
+ *
+ * Both test conventions are covered on purpose. `packages/*` puts suites in a
+ * `tests/` directory, but `packages/dev-tools/` colocates them as
+ * `lib.test.mjs` — and matching only the directory let this hunter's own
+ * `shapes.test.mjs` be proposed as a suspect on its first live run.
+ */
 const NON_PRODUCT_PATH =
-  /(^|\/)(dist|node_modules|coverage|__snapshots__)\/|(^docs\/)|(\.(md|mdx|json|lock|snap|png|jpg|jpeg|svg|gif|webp|ya?ml)$)|(^|\/)tests?\//i;
+  /(^|\/)(dist|node_modules|coverage|__snapshots__)\/|(^docs\/)|(\.(md|mdx|json|lock|snap|png|jpg|jpeg|svg|gif|webp|ya?ml)$)|(^|\/)tests?\/|\.(test|spec)\.[a-z]+$/i;
 
 /** Source files we are willing to call a sibling. */
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|swift|go)$/i;
@@ -208,13 +215,30 @@ export function isCandidateFix(pr) {
 }
 
 /**
+ * Is this path product source — the only kind of file that can harbour the bug?
+ *
+ * Shared by the fix's own touched-file list, the token search and the shape
+ * probes, so all three agree. A test file cannot carry the production defect,
+ * and letting tests into the corpus does two kinds of damage: they show up as
+ * proposed "siblings" (the first live run offered this hunter's own
+ * `shapes.test.mjs` as a suspect), and they inflate the per-token file counts
+ * that `discriminatingTokens` uses to reject over-common tokens — so a good
+ * signature can be discarded because its tests happen to mention it.
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isProductSource(file) {
+  return SOURCE_EXT.test(file) && !NON_PRODUCT_PATH.test(file);
+}
+
+/**
  * The product source files a fix touched — the sites already repaired, which
  * are excluded from the sibling sweep by definition.
  * @param {string[]} files
  * @returns {string[]}
  */
 export function productSources(files) {
-  return (files ?? []).filter((f) => SOURCE_EXT.test(f) && !NON_PRODUCT_PATH.test(f));
+  return (files ?? []).filter(isProductSource);
 }
 
 /** A removed line that is a comment or doc prose rather than code. */
@@ -328,7 +352,7 @@ export function rankSiblings(tokenFiles, fixedFiles, opts = {}) {
   for (const { token, files } of tokenFiles ?? []) {
     for (const file of files) {
       if (fixed.has(file)) continue;
-      if (!SOURCE_EXT.test(file) || NON_PRODUCT_PATH.test(file)) continue;
+      if (!isProductSource(file)) continue;
       if (!byFile.has(file)) byFile.set(file, new Set());
       byFile.get(file).add(token);
     }

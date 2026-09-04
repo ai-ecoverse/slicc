@@ -5,6 +5,7 @@ import {
   cooldownElapsed,
   discriminatingTokens,
   isCandidateFix,
+  isProductSource,
   parseFirstParentLog,
   productSources,
   rankSiblings,
@@ -434,5 +435,36 @@ describe('selectCandidate ranks on the uncapped count', () => {
 
   it('applies the cluster floor to the uncapped count', () => {
     expect(selectCandidate([{ pr: 1, title: 'a', siblings: sib(0), totalSiblings: 1 }])).toBeNull();
+  });
+});
+
+describe('isProductSource', () => {
+  it('accepts source across every runtime', () => {
+    for (const f of [
+      'packages/webapp/src/shell/proxied-fetch.ts',
+      'packages/swift-server/Sources/Server/APIRoutes.swift',
+      'packages/go-optel/main.go',
+      'packages/dev-tools/tools/thing.mjs',
+    ]) {
+      expect(isProductSource(f), f).toBe(true);
+    }
+  });
+
+  it('rejects tests, docs, dist and data files', () => {
+    // The first live run offered this hunter's own `shapes.test.mjs` as a
+    // suspect. A test cannot carry the production defect, and tests in the
+    // corpus also inflate the per-token file counts that
+    // `discriminatingTokens` uses to reject over-common tokens.
+    for (const f of [
+      'packages/webapp/tests/shell/proxied-fetch.test.ts',
+      'packages/dev-tools/regression-cluster-hunter/shapes.test.mjs',
+      'packages/webapp/test/helper.ts',
+      'docs/shell-reference.md',
+      'dist/extension/bundle.js',
+      'package-lock.json',
+      'packages/webapp/src/thing.json',
+    ]) {
+      expect(isProductSource(f), f).toBe(false);
+    }
   });
 });
