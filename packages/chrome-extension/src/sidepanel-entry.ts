@@ -1,12 +1,11 @@
 /// <reference path="./chrome.d.ts" />
 import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry';
-import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { nudgeIframeRepaint, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   CHERRY_PANEL_PORT_NAME,
   SIDE_PANEL_FEATURES,
   type SwToPanelMessage,
 } from './cherry-panel-protocol.js';
-import { nudgeIframeRepaint } from './iframe-repaint.js';
 
 // Production hosted origin for the follower iframe; DEV → local wrangler.
 declare const __SLICC_EXT_DEV__: boolean;

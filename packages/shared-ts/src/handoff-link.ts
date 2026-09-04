@@ -207,7 +207,7 @@ export function handoffFingerprint(input: {
     input.branch ?? '',
     input.path ?? '',
     input.instruction ?? '',
-  ].join(' ');
+  ].join('\u0000');
 }
 
 /* ────────── header-shape adapters that go straight to a verb match ────────── */

@@ -258,6 +258,62 @@ describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
     expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([]);
   });
 
+  it('flags a template-literal (backtick) dynamic import() targeting webapp/src', () => {
+    const source = 'async function f() { await import(`../../webapp/src/net/handoff-link.js`); }';
+    expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/net/handoff-link.js',
+        to: 'packages/webapp/src/net/handoff-link.js',
+      },
+    ]);
+  });
+
+  it('flags an interpolated template-literal import() whose literal text lands on webapp/src', () => {
+    const source = 'async function f(mod) { await import(`../../webapp/src/net/${mod}.js`); }';
+    const hits = findChromeExtensionWebappEscapes('discovery-observer.ts', source);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].specifier).toContain('webapp/src');
+  });
+
+  it('allows an interpolated template-literal import() that does NOT reference webapp/src', () => {
+    const source = 'async function f(mod) { await import(`./commands/${mod}.js`); }';
+    expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([]);
+  });
+
+  it('flags a concatenated (+-joined) specifier targeting webapp/src', () => {
+    const source = "import('../../webapp' + '/src/net/handoff-link.js');";
+    expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/net/handoff-link.js',
+        to: 'packages/webapp/src/net/handoff-link.js',
+      },
+    ]);
+  });
+
+  it('flags a triple-slash reference path targeting webapp/src', () => {
+    const source = '/// <reference path="../../webapp/src/cdp/types.ts" />\nexport {};';
+    expect(findChromeExtensionWebappEscapes('bridge-sw.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/cdp/types.ts',
+        to: 'packages/webapp/src/cdp/types.ts',
+      },
+    ]);
+  });
+
+  it('flags "export type { ... } from" — only a top-level "import type {" clause is granted', () => {
+    const source = "export type { ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/kernel/messages.js',
+        to: 'packages/webapp/src/kernel/messages.js',
+      },
+    ]);
+  });
+
   it('ignores escapes inside comments', () => {
     const source = "// import { x } from '../../webapp/src/kernel/messages.js';";
     expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toEqual([]);

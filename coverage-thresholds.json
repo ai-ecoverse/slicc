@@ -38,6 +38,15 @@
         "packages/shared-ts/src/transcript-export.ts",
         "packages/shared-ts/src/transcript-redaction.ts",
         "packages/shared-ts/src/slicc-app-url.ts",
+        "packages/shared-ts/src/extension-bridge-protocol.ts",
+        "packages/shared-ts/src/cdp-target-info.ts",
+        "packages/shared-ts/src/proxy-headers.ts",
+        "packages/shared-ts/src/discovery-link.ts",
+        "packages/shared-ts/src/well-known-probe.ts",
+        "packages/shared-ts/src/handoff-link.ts",
+        "packages/shared-ts/src/link-header.ts",
+        "packages/shared-ts/src/iframe-repaint.ts",
+        "packages/shared-ts/src/leader-ext-id.ts",
         "packages/node-server/src/electron-tray-follower.ts"
       ]
     },

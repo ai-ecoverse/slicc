@@ -7,10 +7,30 @@
  * leaving the panel blank until something forces a full frame-tree repaint
  * (DevTools attaching, or a page reload). `nudgeIframeRepaint` works around
  * it without either of those.
+ *
+ * DOM globals (`window`, `HTMLIFrameElement`, `requestAnimationFrame`) are
+ * read through `globalThis` with local structural types rather than the
+ * ambient `lib.dom` identifiers: this module is only ever RUN in a browser,
+ * but it is also type-checked by non-browser tsconfig projects that compile
+ * `@slicc/shared-ts` source without the `DOM` lib (the worker/CLI/node-server
+ * projects) — see this package's Conventions in CLAUDE.md.
  */
+
+/** Structural subset of `Window` this module needs. */
+interface FrameGlobal {
+  self?: unknown;
+  top?: unknown;
+}
+
 export function isNestedInAnotherFrame(): boolean {
   try {
-    return window.self !== window.top;
+    // Read through `globalThis.window`, not `globalThis` itself: in a real
+    // browser `window === globalThis`, so the two are equivalent, but a test
+    // harness that stubs a separate `window` object (assigning only
+    // `globalThis.window`, not replacing `globalThis`) needs this to resolve
+    // the SAME way a bare `window.self`/`window.top` reference would.
+    const win = (globalThis as { window?: FrameGlobal }).window ?? (globalThis as FrameGlobal);
+    return win.self !== win.top;
   } catch {
     // Cross-origin access to `window.top` throws — that itself means we're
     // framed by a different origin, which is the case this guards against.
@@ -18,10 +38,18 @@ export function isNestedInAnotherFrame(): boolean {
   }
 }
 
+/** Structural subset of `HTMLIFrameElement` this module needs. */
+interface RepaintableIframe {
+  style: { display: string };
+  isConnected: boolean;
+}
+
 /** Iframes with a repaint nudge currently in flight (display toggled off,
  *  restore pending). Guards against overlapping nudges corrupting the restore
  *  value — see {@link nudgeIframeRepaint}. */
-const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
+const nudgeInFlight = new WeakSet<RepaintableIframe>();
+
+type RequestAnimationFrameFn = (callback: (time: number) => void) => number;
 
 /**
  * Force the browser to redo the render/compositing pass for `iframe` by
@@ -46,7 +74,7 @@ const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
  * nudge is already pending we skip: the in-flight one will restore the correct
  * display, so we just run the callback.
  */
-export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => void): void {
+export function nudgeIframeRepaint(iframe: RepaintableIframe, onDone?: () => void): void {
   if (nudgeInFlight.has(iframe)) {
     onDone?.();
     return;
@@ -69,7 +97,7 @@ export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => voi
 }
 
 function performNudge(
-  iframe: HTMLIFrameElement,
+  iframe: RepaintableIframe,
   onDone?: () => void,
   onRafRestore?: () => void
 ): void {
@@ -99,9 +127,11 @@ function performNudge(
   // ceiling below rather than throwing an unhandled `requestAnimationFrame is
   // not a function` (which fails the whole vitest run — see #1603's merge-queue
   // flake). In a real browser rAF is always present, so behavior is unchanged.
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => restore(true));
+  const raf = (globalThis as { requestAnimationFrame?: RequestAnimationFrameFn })
+    .requestAnimationFrame;
+  if (typeof raf === 'function') {
+    raf(() => {
+      raf(() => restore(true));
     });
   }
   setTimeout(() => restore(false), 100);

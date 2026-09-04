@@ -53,8 +53,8 @@ origins, comparisons without slash normalization.
 
 Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
 and relative imports out of `packages/webapp/src` (→ `@slicc/shared-ts`); move down,
-never grow baselines. Registries move wholesale, never re-declare; setter injection
-needs a registrar in each reading realm. `isExtensionRealm`/`getChromeExtensionRealm`
+never grow baselines. chrome-extension→webapp escapes flagged too, except top-level `import type {`
+from kernel/messages.js. `isExtensionRealm`/`getChromeExtensionRealm`
 in `scoops/`/`tools/`/`kernel/` (not `host.ts`) → `CapabilityBroker` (#2276).
 
 ## 11. Untyped string-keyed bags

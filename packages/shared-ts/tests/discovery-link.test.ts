@@ -120,6 +120,15 @@ describe('discoveryFingerprint', () => {
     expect(a).toBe(b);
   });
 
+  it('does not collide two identities that concatenate to the same string under a naive join (NUL-separator regression)', () => {
+    // Under a plain '' join, 'ab' + '' + 'c' equals 'a' + 'bc' + '' — the
+    // origin/kind boundary shifts. Only a separator that can't appear in any
+    // field (NUL, per the source doc comment) keeps them apart.
+    const a = discoveryFingerprint({ origin: 'ab', kind: '', url: 'c' });
+    const b = discoveryFingerprint({ origin: 'a', kind: 'bc', url: '' });
+    expect(a).not.toBe(b);
+  });
+
   it('distinguishes kind and url', () => {
     const base = discoveryFingerprint({ origin: 'o', kind: 'ai-catalog', url: 'u1' });
     const otherKind = discoveryFingerprint({ origin: 'o', kind: 'llms-txt', url: 'u1' });

@@ -385,6 +385,23 @@ describe('handoffFingerprint', () => {
     expect(a).toBe(b);
   });
 
+  it('does not collide two identities that concatenate to the same string under a naive join (NUL-separator regression)', () => {
+    // Under a plain '' join, 'upskill' + 'https://github.com/o/r' + 'next' + '' + ''
+    // equals 'upskill' + 'https://github.com/o/rnext' + '' + '' + '' — the target
+    // and branch fields shift into each other. Only a separator that can't appear
+    // in any field (NUL, per the source doc comment) keeps them apart.
+    const branchOnR = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      branch: 'next',
+    });
+    const targetOnly = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/rnext',
+    });
+    expect(branchOnR).not.toBe(targetOnly);
+  });
+
   it('distinguishes branch and path', () => {
     const base = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
     const branched = handoffFingerprint({

@@ -27,15 +27,6 @@ export const EXTENSION_BRIDGE_PROTOCOL_VERSION = 1;
 export const EXTENSION_BRIDGE_PORT_NAME = 'slicc.cdp-bridge';
 
 /**
- * URL query parameter the service worker appends to the pinned leader-tab
- * URL carrying the extension id. The leader page reads it to open the
- * `chrome.runtime.connect(<id>, { name: EXTENSION_BRIDGE_PORT_NAME })` Port
- * — `chrome.runtime.id` is undefined on an externally_connectable page, so
- * the id must be passed in out of band.
- */
-export const LEADER_EXT_ID_QUERY_NAME = 'ext';
-
-/**
  * Fields the structural validators read off an inbound Port message before
  * narrowing to a typed envelope. Extra keys may be present; only these three
  * are inspected.

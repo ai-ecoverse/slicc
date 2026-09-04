@@ -221,18 +221,69 @@ const ALLOWED_TYPE_ONLY_WEBAPP_TARGET = 'packages/webapp/src/kernel/messages.js'
 
 // A full `import type { ... } from '<spec>'` clause. Deliberately does NOT
 // match a mixed `import { type X, Y }` clause (that carries a real value
-// import too) or a type-only namespace/default import — the one exemption
-// this repo grants is narrow on purpose.
+// import too), a type-only namespace/default import, or an `export type {
+// ... } from '<spec>'` re-export (still a live binding at the type level,
+// and not the narrow shape this repo grants) — the one exemption this repo
+// grants is narrow on purpose.
 const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
+
+// A dynamic `import(...)`/`require(...)` call whose specifier is a template
+// literal (backtick) rather than a plain string — round-1 review, #2891:
+// `RELATIVE_IMPORT_RE` only matches `'` / `"` quoted specifiers, so
+// `` import(`../../webapp/src/x.js`) `` slipped past it entirely. Captures
+// the raw backtick contents (which may itself contain `${...}`
+// interpolation, in which case exact resolution isn't possible — see the
+// caller's handling).
+const BACKTICK_IMPORT_RE = /(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)`([^`]*)`/g;
+
+// A dynamic `import(...)`/`require(...)` call built from string-literal
+// segments joined with `+` (a concatenated specifier) rather than one
+// literal — round-1 review, #2891. Captures the raw argument list; the
+// caller reassembles the concatenated string from the quoted segments.
+const CONCAT_CALL_ARGS_RE =
+  /(?:import|require)\s*\(\s*((?:['"][^'"]*['"]\s*\+\s*)+['"][^'"]*['"])\s*\)/g;
+const QUOTED_SEGMENT_RE = /['"]([^'"]*)['"]/g;
+
+// TS triple-slash reference directive — syntactically a `///` comment (so
+// `stripComments` blanks it out and it must be scanned on the RAW source
+// first), but compiler-meaningful: it pulls the referenced file's types
+// into the compilation unit exactly like an import would. Round-1 review,
+// #2891.
+const TRIPLE_SLASH_REFERENCE_RE = /\/\/\/\s*<reference\s+path=["']([^"']+)["']\s*\/>/g;
+
+/** Resolve a chrome-extension/src-relative specifier against `packages/webapp/src`; null if it doesn't land there. */
+function resolveWebappTarget(importerDir, specifier) {
+  const queryAt = specifier.indexOf('?');
+  const abs = resolve(
+    CHROME_EXT_SCAN_ROOT,
+    importerDir,
+    queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
+  );
+  const targetRel = relative(repoRoot, abs).split('\\').join('/');
+  return targetRel.startsWith('packages/webapp/src/') ? targetRel : null;
+}
 
 /**
  * Find every relative import in a packages/chrome-extension/src file that
  * targets packages/webapp/src. Returns `[{ line, specifier, to }]`; the one
  * allowed occurrence (a type-only named clause targeting
- * `kernel/messages.ts`) is excluded.
+ * `kernel/messages.ts`) is excluded. Covers quoted specifiers, template
+ * literals (interpolated or not), concatenated `+`-joined specifiers inside
+ * `import()`/`require()`, and TS triple-slash reference paths — none of
+ * those last three forms can ever be the granted type-only exemption, so
+ * they are flagged unconditionally whenever they land in webapp/src.
  */
 export function findChromeExtensionWebappEscapes(importerRel, source) {
   const importerDir = dirname(importerRel);
+
+  const hits = [];
+  for (const m of source.matchAll(TRIPLE_SLASH_REFERENCE_RE)) {
+    const to = resolveWebappTarget(importerDir, m[1]);
+    if (to === null) continue;
+    const line = source.slice(0, m.index).split('\n').length;
+    hits.push({ line, specifier: m[1], to });
+  }
+
   const stripped = stripComments(source);
 
   // RELATIVE_IMPORT_RE anchors its match on the `from '<spec>'` /
@@ -249,17 +300,10 @@ export function findChromeExtensionWebappEscapes(importerRel, source) {
     typeOnlyFromIndices.set(m[1], list);
   }
 
-  const hits = [];
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const specifier = m[1];
-    const queryAt = specifier.indexOf('?');
-    const abs = resolve(
-      CHROME_EXT_SCAN_ROOT,
-      importerDir,
-      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
-    );
-    const targetRel = relative(repoRoot, abs).split('\\').join('/');
-    if (!targetRel.startsWith('packages/webapp/src/')) continue;
+    const targetRel = resolveWebappTarget(importerDir, specifier);
+    if (targetRel === null) continue;
 
     const isTypeOnlyOccurrence = (typeOnlyFromIndices.get(specifier) ?? []).includes(m.index);
     if (isTypeOnlyOccurrence && targetRel === ALLOWED_TYPE_ONLY_WEBAPP_TARGET) continue;
@@ -267,6 +311,33 @@ export function findChromeExtensionWebappEscapes(importerRel, source) {
     const line = stripped.slice(0, m.index).split('\n').length;
     hits.push({ line, specifier, to: targetRel });
   }
+
+  for (const m of stripped.matchAll(BACKTICK_IMPORT_RE)) {
+    const raw = m[1];
+    const line = stripped.slice(0, m.index).split('\n').length;
+    if (!raw.includes('$')) {
+      // Fully static — resolve exactly like a quoted specifier.
+      const targetRel = resolveWebappTarget(importerDir, raw);
+      if (targetRel !== null) hits.push({ line, specifier: raw, to: targetRel });
+      continue;
+    }
+    // Interpolated — exact resolution isn't possible, but the literal text
+    // (placeholders included) landing on webapp/src is itself the tell;
+    // fail closed rather than silently letting it through unexamined.
+    if (raw.includes('webapp/src')) {
+      hits.push({ line, specifier: raw, to: 'packages/webapp/src/ (interpolated, unresolved)' });
+    }
+  }
+
+  for (const m of stripped.matchAll(CONCAT_CALL_ARGS_RE)) {
+    const segments = [...m[1].matchAll(QUOTED_SEGMENT_RE)].map((seg) => seg[1]);
+    const joined = segments.join('');
+    const targetRel = resolveWebappTarget(importerDir, joined);
+    if (targetRel === null) continue;
+    const line = stripped.slice(0, m.index).split('\n').length;
+    hits.push({ line, specifier: joined, to: targetRel });
+  }
+
   return hits;
 }
 

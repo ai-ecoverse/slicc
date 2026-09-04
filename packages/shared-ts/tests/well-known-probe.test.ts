@@ -125,7 +125,7 @@ describe('probeWellKnown', () => {
     try {
       const fetchImpl: ProbeFetch = vi.fn(
         (_url: string, init?: { signal?: AbortSignal }) =>
-          new Promise((_resolve, reject) => {
+          new Promise<ProbeResponse>((_resolve, reject) => {
             init?.signal?.addEventListener('abort', () => {
               reject(new Error('aborted'));
             });

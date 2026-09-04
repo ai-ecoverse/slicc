@@ -138,12 +138,14 @@ popup posts bytes over `chrome.runtime` messaging.
 
 `src/` must not depend on `packages/webapp/src` at runtime — enforced zero-tolerance by
 `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` (`npm run
-lint:layer-back-edges`). The pure protocol modules the extension needs (CDP bridge envelope,
-proxy-headers, discovery/handoff/well-known-probe link extraction, the `cdp/types`
-`TargetInfo` subset) live in `@slicc/shared-ts`; webapp keeps thin re-export shims at their
-original paths so no webapp-internal caller moved. `src/iframe-repaint.ts` is a local copy
-of webapp's `ui/iframe-repaint.ts` (a DOM helper, not protocol code — not shared-ts's
-concern; webapp's own `ui/sprinkle-renderer.ts` keeps its copy too).
+lint:layer-back-edges`), which covers quoted, template-literal, and `+`-concatenated
+`import()`/`require()` specifiers plus TS triple-slash reference paths. The pure protocol
+modules the extension needs (CDP bridge envelope, `LEADER_EXT_ID_QUERY_NAME`, proxy-headers,
+discovery/handoff/well-known-probe link extraction, the `cdp/types` `TargetInfo` subset, the
+`iframe-repaint.ts` DOM helper) all live in `@slicc/shared-ts` — `@slicc/shared-ts`'s
+`tsconfig.json` already includes the `DOM` lib, so a DOM-touching helper is not a barrier to
+moving it there too. Webapp keeps thin re-export shims at every original path so no
+webapp-internal caller moved.
 
 The one exception: `service-worker.ts`'s `import type { ... } from
 '../../webapp/src/kernel/messages.js'` block (12 names). That message-envelope union is core
