@@ -133,6 +133,8 @@ final class SyncProtocolCorpusTests: XCTestCase {
         switch name {
         case "ChatMessage":
             reencoded = try encoder.encode(try decoder.decode(ChatMessage.self, from: sample))
+        case "ChatCompactionMarker":
+            reencoded = try encoder.encode(try decoder.decode(ChatCompactionMarker.self, from: sample))
         case "ToolCall":
             reencoded = try encoder.encode(try decoder.decode(ToolCall.self, from: sample))
         case "MessageAttachment":

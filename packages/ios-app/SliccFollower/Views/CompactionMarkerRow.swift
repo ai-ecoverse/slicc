@@ -26,6 +26,15 @@ struct CompactionMarkerRow: View, Equatable {
 
     @Environment(\.palette) private var palette
 
+    /// Written out rather than synthesized, for the reason `MessageBubble`
+    /// spells out: `@Environment` is a stored property that is not `Equatable`,
+    /// so leaving this to the compiler fails the conformance. Environment
+    /// values are not part of a view's value anyway — a theme switch
+    /// re-renders the whole transcript.
+    static func == (lhs: CompactionMarkerRow, rhs: CompactionMarkerRow) -> Bool {
+        lhs.marker == rhs.marker
+    }
+
     /// The web's `--amber`. Not a `ThemePalette` token: this is the only
     /// surface in the app that needs it, and adding a token would mean
     /// resolving it in every palette AND in the leader-theme reader for one

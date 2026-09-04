@@ -41,6 +41,10 @@ final class FixtureConversationUITests: XCTestCase {
         // parallel cluster.
         "fx-assistant-progress",
         "fx-assistant-progress-cluster",
+        // Compaction seams (#2843) — one row per rendered state.
+        "fx-compaction-idle",
+        "fx-compaction-threshold-running",
+        "fx-compaction-fallback",
         "fx-queued-1",
         "fx-assistant-streaming",
     ]
@@ -75,6 +79,12 @@ final class FixtureConversationUITests: XCTestCase {
         "Waiting for approval on the leader",  // tool_ui read-only body
         "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER",  // overflowing code block
         "embedded follower garnish",  // pipe-table cell (the Grid-free table card)
+        // Compaction marker copy: the row derives every word from
+        // trigger + state, so these strings can only come from its own table
+        // (#2843). The transcript pointer rides the same combined label.
+        "Compacted while idle. Full transcript /sessions/live-cone-fixture-8egf.md",
+        "Context filling up — compacting history. Full transcript /sessions/live-cone-fixture-8egf.md",
+        "Summary unavailable — older messages truncated",
     ]
 
     override func setUp() {
