@@ -298,8 +298,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
-  // the script-relative path helpers and the skill-scoped config/token
-  // store; see `skill-global.ts` for the surface and rationale.
+  // skill-root `refs`/`assets` (parent of the `scripts/` path segment when
+  // the script lives under it), script-dir `.config`, and the skill-scoped
+  // token store; see `skill-global.ts` for the surface and rationale.
   const skillGlobal = createSkillGlobal({
     argv: init.argv,
     fs: fsBridge as unknown as SkillFsBridge,

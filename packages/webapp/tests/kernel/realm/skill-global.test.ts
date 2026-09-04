@@ -2,8 +2,8 @@
  * Tests for `createSkillGlobal` — the `skill` realm global.
  *
  * Covers:
- *  - Path math (skill.dir / refs / assets) for typical, root, and
- *    no-slash argv shapes.
+ *  - Path math (skill.dir / root / refs / assets) for typical, Agent
+ *    Skills `scripts/` layout, root, and no-slash argv shapes.
  *  - skill.config() round-trip: missing file → null, read after write,
  *    shallow merge semantics, write error surfacing.
  *  - skill.token(providerId) delegates to `oauth-token <id>`, shell-
@@ -52,15 +52,55 @@ function makeExec(
 }
 
 describe('createSkillGlobal — path math', () => {
-  it('resolves dir/refs/assets from a typical argv[1]', () => {
+  it('resolves dir/root/refs/assets from a typical argv[1] at the skill root', () => {
     const skill = createSkillGlobal({
       argv: ['node', '/workspace/skills/concur/concur.jsh'],
       fs: makeFs(),
       exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
     });
     expect(skill.dir).toBe('/workspace/skills/concur');
+    expect(skill.root).toBe('/workspace/skills/concur');
     expect(skill.refs).toBe('/workspace/skills/concur/references');
     expect(skill.assets).toBe('/workspace/skills/concur/assets');
+  });
+
+  it('resolves refs/assets from the skill root when argv[1] is under scripts/', () => {
+    // Agent Skills layout: <root>/{SKILL.md,scripts/,references/,assets/}.
+    // argv[1] is <root>/scripts/foo.jsh — dir stays the script folder,
+    // refs/assets are one level up. #2866
+    const skill = createSkillGlobal({
+      argv: ['node', '/workspace/skills/remotion-clipper/scripts/render.jsh'],
+      fs: makeFs(),
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    expect(skill.dir).toBe('/workspace/skills/remotion-clipper/scripts');
+    expect(skill.root).toBe('/workspace/skills/remotion-clipper');
+    expect(skill.refs).toBe('/workspace/skills/remotion-clipper/references');
+    expect(skill.assets).toBe('/workspace/skills/remotion-clipper/assets');
+  });
+
+  it('resolves refs/assets from the skill root when the script is nested under scripts/', () => {
+    const skill = createSkillGlobal({
+      argv: ['node', '/workspace/skills/interview-me/scripts/lib/install.jsh'],
+      fs: makeFs(),
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    expect(skill.dir).toBe('/workspace/skills/interview-me/scripts/lib');
+    expect(skill.root).toBe('/workspace/skills/interview-me');
+    expect(skill.refs).toBe('/workspace/skills/interview-me/references');
+    expect(skill.assets).toBe('/workspace/skills/interview-me/assets');
+  });
+
+  it('does not treat a directory whose name merely ends in scripts as the scripts/ folder', () => {
+    const skill = createSkillGlobal({
+      argv: ['node', '/workspace/skills/my-scripts/run.jsh'],
+      fs: makeFs(),
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    expect(skill.dir).toBe('/workspace/skills/my-scripts');
+    expect(skill.root).toBe('/workspace/skills/my-scripts');
+    expect(skill.refs).toBe('/workspace/skills/my-scripts/references');
+    expect(skill.assets).toBe('/workspace/skills/my-scripts/assets');
   });
 
   it('handles a script at the filesystem root without double slashes', () => {
@@ -70,8 +110,21 @@ describe('createSkillGlobal — path math', () => {
       exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
     });
     expect(skill.dir).toBe('/');
+    expect(skill.root).toBe('/');
     // Regression: previously produced `//references` / `//assets`
     // because the helper concatenated `${dir}/...` unconditionally.
+    expect(skill.refs).toBe('/references');
+    expect(skill.assets).toBe('/assets');
+  });
+
+  it('strips /scripts at the filesystem root without producing an empty root', () => {
+    const skill = createSkillGlobal({
+      argv: ['node', '/scripts/runme.jsh'],
+      fs: makeFs(),
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    expect(skill.dir).toBe('/scripts');
+    expect(skill.root).toBe('/');
     expect(skill.refs).toBe('/references');
     expect(skill.assets).toBe('/assets');
   });
@@ -96,8 +149,22 @@ describe('createSkillGlobal — path math', () => {
       exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
     });
     expect(skill.dir).toBe('');
+    expect(skill.root).toBe('');
     expect(skill.refs).toBe('references');
     expect(skill.assets).toBe('assets');
+  });
+
+  it('keeps .config next to the script when the script lives under scripts/', async () => {
+    const fs = makeFs();
+    const skill = createSkillGlobal({
+      argv: ['node', '/workspace/skills/gmail/scripts/gmail.jsh'],
+      fs,
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    await skill.config({ account: 'me' });
+    expect(fs.store.has('/workspace/skills/gmail/scripts/.config')).toBe(true);
+    expect(fs.store.has('/workspace/skills/gmail/.config')).toBe(false);
+    expect(await skill.config()).toEqual({ account: 'me' });
   });
 
   it('produces a frozen object', () => {
@@ -256,6 +323,7 @@ describe('createSkillGlobal — end-to-end', () => {
     const skill = createSkillGlobal({ argv, fs, exec });
 
     expect(skill.dir).toBe('/workspace/skills/oryx');
+    expect(skill.root).toBe('/workspace/skills/oryx');
     expect(await skill.config()).toBeNull();
     await skill.config({ apiBase: 'https://oryx.example.com' });
     expect(await skill.config()).toEqual({ apiBase: 'https://oryx.example.com' });
