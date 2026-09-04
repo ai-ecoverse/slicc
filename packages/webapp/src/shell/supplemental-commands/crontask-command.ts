@@ -1,6 +1,5 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { hasLocalNodeServer } from '../float-topology.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 import { getLickManagerSurface } from './lick-surface.js';
@@ -9,6 +8,17 @@ import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * `hasLocalNodeServer` is the caller's already-resolved topology fact
+ * (#2276) — mirrors `WebhookCommandOptions` in `webhook-command.ts`, which
+ * `createSupplementalCommands` threads from the SAME composed answer
+ * (`shell-and-skills.ts`). Defaults to `true` (node-rest) only for callers
+ * outside production wiring, e.g. ad hoc tests.
+ */
+export interface CrontaskCommandOptions {
+  hasLocalNodeServer?: () => boolean;
+}
 
 /** Standalone before `createKernelHost` published the manager — see `lick-surface.ts`. */
 function notInitializedError(subcommand: string): CommandResult {
@@ -96,7 +106,11 @@ function flagError(message: string): CommandResult {
   return { stdout: '', stderr: `crontask: ${message}\n`, exitCode: 1 };
 }
 
-async function handleCreate(args: string[], env: LickTargetEnv): Promise<CommandResult> {
+async function handleCreate(
+  args: string[],
+  env: LickTargetEnv,
+  hasLocalNodeServer: () => boolean
+): Promise<CommandResult> {
   const parsed = parseKnownFlags(args.slice(1), { value: CREATE_VALUE_FLAGS });
   if ('error' in parsed) return flagError(parsed.error);
 
@@ -185,7 +199,10 @@ function formatTaskList(tasks: CronTaskInfo[]): string {
   return output;
 }
 
-async function handleList(args: string[]): Promise<CommandResult> {
+async function handleList(
+  args: string[],
+  hasLocalNodeServer: () => boolean
+): Promise<CommandResult> {
   const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return flagError(parsed.error);
 
@@ -215,7 +232,10 @@ async function handleList(args: string[]): Promise<CommandResult> {
   return { stdout: formatTaskList(tasks), stderr: '', exitCode: 0 };
 }
 
-async function handleDelete(args: string[]): Promise<CommandResult> {
+async function handleDelete(
+  args: string[],
+  hasLocalNodeServer: () => boolean
+): Promise<CommandResult> {
   const subcommand = args[0];
   const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return flagError(parsed.error);
@@ -251,7 +271,8 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
   return { stdout: `Deleted cron task "${id}"\n`, stderr: '', exitCode: 0 };
 }
 
-export function createCrontaskCommand(): Command {
+export function createCrontaskCommand(commandOptions: CrontaskCommandOptions = {}): Command {
+  const hasLocalNodeServer = commandOptions.hasLocalNodeServer ?? (() => true);
   return defineCommand('crontask', async (args, ctx) => {
     const subcommand = args[0];
     if (!subcommand || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) {
@@ -261,12 +282,12 @@ export function createCrontaskCommand(): Command {
     try {
       switch (subcommand) {
         case 'create':
-          return await handleCreate(args, ctx.env);
+          return await handleCreate(args, ctx.env, hasLocalNodeServer);
         case 'list':
-          return await handleList(args);
+          return await handleList(args, hasLocalNodeServer);
         case 'delete':
         case 'kill':
-          return await handleDelete(args);
+          return await handleDelete(args, hasLocalNodeServer);
         default:
           return { stdout: '', stderr: `crontask: unknown command "${subcommand}"\n`, exitCode: 1 };
       }

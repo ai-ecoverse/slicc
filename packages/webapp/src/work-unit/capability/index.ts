@@ -109,12 +109,28 @@
  * `secret-command.ts` now reuses that SAME broker instead of constructing an
  * independent one. See `docs/work-unit.md` phase 6f.
  *
- * TODO(#2276) slice C, remaining domains — privileged call sites in `scoops/`
- * / `tools/` / `kernel/` that still branch on float / topology
- * (`isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
- * `resolveFloatTopology` / `getChromeExtensionRealm` /
- * `setChromeExtensionRealm`) rather than asking an injected `CapabilityBroker`
- * or taking a composition-time answer. One PR per domain, smallest first:
+ * slice C is done. Every privileged call site in `scoops/` / `tools/` /
+ * `kernel/` (except `kernel/host.ts`, the one composition root) that used to
+ * branch on float / topology directly now asks an injected
+ * `CapabilityBroker` or takes a composition-time answer instead — network,
+ * secrets, mounts, approvals, and finally browser + leftovers (this file's
+ * last remaining-domains list, now empty):
+ *
+ *   - `kernel/telemetry.ts` takes `isExtensionRealm` as a parameter;
+ *     `ui/main.ts` passes its own already-resolved local.
+ *   - `kernel/host.ts`'s `shouldStartLickWsBridge` takes the already-composed
+ *     `capabilityBroker.adapter` instead of re-probing `hasLocalNodeServer()`.
+ *   - `shell/supplemental-commands/crontask-command.ts` now mirrors
+ *     `webhook-command.ts`'s (already-compliant) `hasLocalNodeServer`
+ *     injection, threaded through `SupplementalCommandsConfig`.
+ *   - `shell/supplemental-commands/playwright/handlers/snapshot.ts`'s
+ *     `pdfHandler` KEEPS its `isExtensionRealm()` read: `shell/` owns
+ *     topology (`shell/float-topology.ts`'s header), and there is no
+ *     `browser.*` CapabilityBroker op to route through — browser automation
+ *     rides `/cdp` on every adapter, not one of the four broker transports.
+ *     The read only picks an error STRING after a CDP call already failed.
+ *
+ * `ui/` sites stay as they are: UI composition may know its float.
  *
  * TODO(#2276) slice D, the lint gate — a plain identifier grep on this list is
  * NOT sufficient by itself: `export const isTrayExtension =
@@ -127,14 +143,6 @@
  * (`base/runtime-env.ts`) and its `@slicc/shared-ts` original,
  * `canConnectToChromeRuntime` — both are true on the thin-bridge hosted page
  * and are float signals just like the other six.
- *
- * browser
- *   - shell/supplemental-commands/playwright/handlers/snapshot.ts
- * leftovers (take a composition-time answer, not a probe)
- *   - kernel/telemetry.ts, kernel/host.ts `shouldStartLickWsBridge`,
- *     shell/supplemental-commands/webhook-command.ts, crontask-command.ts
- *
- * `ui/` sites stay as they are: UI composition may know its float.
  */
 
 export { normalizeApprovalDecision } from './approval-decision.js';

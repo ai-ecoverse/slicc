@@ -521,7 +521,10 @@ describe('crontask command - Extension mode', () => {
     const { createCrontaskCommand: createCmd } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    command = createCmd();
+    // Extension realm: no local node-server. Production wiring resolves this
+    // once in `shell-and-skills.ts` and injects it — mirrored here explicitly
+    // now that the command no longer probes `chrome` itself (#2276).
+    command = createCmd({ hasLocalNodeServer: () => false });
   });
 
   afterEach(() => {
@@ -815,7 +818,9 @@ describe('crontask command - extension-delegate mode', () => {
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    command = createCrontaskCommand();
+    // Extension realm: no local node-server (#2276 — see the extension-mode
+    // block above for why this is now explicit).
+    command = createCrontaskCommand({ hasLocalNodeServer: () => false });
   });
 
   afterEach(async () => {
@@ -869,7 +874,9 @@ describe('crontask command - extension-direct equivalence', () => {
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    command = createCrontaskCommand();
+    // Extension realm: no local node-server (#2276 — see the extension-mode
+    // block above for why this is now explicit).
+    command = createCrontaskCommand({ hasLocalNodeServer: () => false });
   });
 
   afterEach(() => {
@@ -905,7 +912,9 @@ describe('crontask create - default lick target (#2311)', () => {
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    command = createCrontaskCommand();
+    // Extension realm: no local node-server (#2276 — see the extension-mode
+    // block above for why this is now explicit).
+    command = createCrontaskCommand({ hasLocalNodeServer: () => false });
   });
 
   afterEach(() => {
@@ -984,7 +993,9 @@ describe('crontask create — unresolvable --scoop (#2524)', () => {
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    command = createCrontaskCommand();
+    // Extension realm: no local node-server (#2276 — see the extension-mode
+    // block above for why this is now explicit).
+    command = createCrontaskCommand({ hasLocalNodeServer: () => false });
   });
 
   afterEach(() => {
@@ -1113,10 +1124,13 @@ describe('lick registration — cone targets round-trip through the proxy', () =
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    const result = await (createCrontaskCommand() as any).execute(
-      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'cone-research'],
-      { cwd: '/', env: {}, fs: {} as any }
-    );
+    const result = await (
+      createCrontaskCommand({ hasLocalNodeServer: () => false }) as any
+    ).execute(['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'cone-research'], {
+      cwd: '/',
+      env: {},
+      fs: {} as any,
+    });
     expect(result.exitCode).toBe(0);
     expect(lm.createCronTask).toHaveBeenCalledWith(
       'digest',
@@ -1131,10 +1145,13 @@ describe('lick registration — cone targets round-trip through the proxy', () =
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    const result = await (createCrontaskCommand() as any).execute(
-      ['create', '--name', 'digest', '--cron', '0 9 * * *'],
-      { cwd: '/', env: { SLICC_LICK_TARGET: 'cone-research' }, fs: {} as any }
-    );
+    const result = await (
+      createCrontaskCommand({ hasLocalNodeServer: () => false }) as any
+    ).execute(['create', '--name', 'digest', '--cron', '0 9 * * *'], {
+      cwd: '/',
+      env: { SLICC_LICK_TARGET: 'cone-research' },
+      fs: {} as any,
+    });
     expect(result.exitCode).toBe(0);
     expect(lm.createCronTask).toHaveBeenCalledWith(
       'digest',
@@ -1155,10 +1172,13 @@ describe('lick registration — cone targets round-trip through the proxy', () =
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    const result = await (createCrontaskCommand() as any).execute(
-      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'ghost-cone'],
-      { cwd: '/', env: {}, fs: {} as any }
-    );
+    const result = await (
+      createCrontaskCommand({ hasLocalNodeServer: () => false }) as any
+    ).execute(['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'ghost-cone'], {
+      cwd: '/',
+      env: {},
+      fs: {} as any,
+    });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('matches no live cone or scoop');
     expect(lm.createCronTask).not.toHaveBeenCalled();
@@ -1172,7 +1192,9 @@ describe('lick registration — cone targets round-trip through the proxy', () =
     const { createCrontaskCommand } = await import(
       '../../../src/shell/supplemental-commands/crontask-command.js'
     );
-    const result = await (createCrontaskCommand() as any).execute(['list'], {
+    const result = await (
+      createCrontaskCommand({ hasLocalNodeServer: () => false }) as any
+    ).execute(['list'], {
       cwd: '/',
       env: {},
       fs: {} as any,

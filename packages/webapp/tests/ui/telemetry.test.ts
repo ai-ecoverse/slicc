@@ -474,7 +474,7 @@ describe('telemetry — extension branch', () => {
 
   it('uses the inlined rum.js (default export) and sets RUM_GENERATION=slicc-extension', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     expect(mockSampleRumJs).toHaveBeenCalledWith(
       'navigate',
       expect.objectContaining({ target: 'extension' })
@@ -488,13 +488,13 @@ describe('telemetry — extension branch', () => {
     if ((globalThis as any).window) {
       delete (globalThis as any).window.SAMPLE_PAGEVIEWS_AT_RATE;
     }
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     expect((globalThis as any).window?.SAMPLE_PAGEVIEWS_AT_RATE).toBeUndefined();
   });
 
   it('forwards trackChatSend through the extension sampleRUM', async () => {
     const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     trackChatSend('cone', 'claude-sonnet');
@@ -506,7 +506,7 @@ describe('telemetry — extension branch', () => {
 
   it('registers window error listeners that call trackError("js", sanitized)', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const errorEvent = new Event('error') as ErrorEvent;
@@ -527,7 +527,7 @@ describe('telemetry — extension branch', () => {
 
   it('error listener falls back to error.message when event.message is empty', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     // Chromium synthesizes both ErrorEvent.message and ErrorEvent.error for
@@ -552,7 +552,7 @@ describe('telemetry — extension branch', () => {
 
   it('registers unhandledrejection listener that calls trackError("js", sanitized)', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const rejection = new Event('unhandledrejection') as PromiseRejectionEvent;
@@ -571,7 +571,7 @@ describe('telemetry — extension branch', () => {
 
   it('sanitizeError truncates messages over 200 characters', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const long = 'x'.repeat(250);
@@ -585,7 +585,7 @@ describe('telemetry — extension branch', () => {
 
   it('sanitizeError collapses multiple VFS paths in one message', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const errorEvent = new Event('error') as ErrorEvent;
@@ -603,7 +603,7 @@ describe('telemetry — extension branch', () => {
 
   it('sanitizeError handles a null/empty message without throwing', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const errorEvent = new Event('error') as ErrorEvent;
@@ -617,7 +617,7 @@ describe('telemetry — extension branch', () => {
 
   it('unhandledrejection with a non-Error reason stringifies it', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const rejection = new Event('unhandledrejection') as PromiseRejectionEvent;
@@ -632,7 +632,7 @@ describe('telemetry — extension branch', () => {
 
   it('sanitizeError collapses uppercase VFS paths (regex i flag)', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
-    await initTelemetry();
+    await initTelemetry({ isExtensionRealm: true });
     mockSampleRumJs.mockClear();
 
     const errorEvent = new Event('error') as ErrorEvent;

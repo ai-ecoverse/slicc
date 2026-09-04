@@ -17,7 +17,7 @@ import {
 import { createCmpCommand } from './cmp-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
-import { createCrontaskCommand } from './crontask-command.js';
+import { type CrontaskCommandOptions, createCrontaskCommand } from './crontask-command.js';
 import { createCurlwrightCommand } from './curlwright-command.js';
 import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDiCommand } from './di-command.js';
@@ -164,6 +164,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   setEnv?: (name: string, value: string) => void;
   /** Runtime topology and tray-status readers for the webhook command. */
   webhook?: WebhookCommandOptions;
+  /** Runtime topology reader for the crontask command. */
+  crontask?: CrontaskCommandOptions;
   /**
    * Builds the process-tracking config (PM, owner, parent pid) for the
    * realm-backed `node` / `python` commands so their `kind:'jsh'`/`'py'`
@@ -237,7 +239,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createFfprobeCommand(),
     createWebhookCommand(options.webhook),
     createWebsocatCommand(),
-    createCrontaskCommand(),
+    createCrontaskCommand(options.crontask),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
