@@ -84,6 +84,7 @@ import { createUnameCommand } from './uname-command.js';
 import { createUnlinkCommand } from './unlink-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createUpgradeCommand } from './upgrade-command.js';
+import { createUptimeCommand } from './uptime-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
 import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
@@ -291,6 +292,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createAgentCommand({ getParentJid: options.getParentJid }),
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
+    createUptimeCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
     // bash builtins `help` advertises that just-bash never implemented — they
     // answered 127 until #2816. See bash-builtins-command.ts.

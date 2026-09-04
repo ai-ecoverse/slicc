@@ -121,7 +121,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Clipboard', ['pbcopy', 'pbpaste', 'xclip', 'xsel']],
   ['Filesystem', ['mount', 'umount', 'fswatch']],
   ['Scoops & agents', ['agent', 'mcp', 'webhook', 'crontask']],
-  ['Process', ['ps', 'kill', 'meminfo']],
+  ['Process', ['ps', 'kill', 'meminfo', 'uptime']],
   // Advertised by bash's `help` table but unimplemented upstream — SLICC
   // registers them so they answer honestly instead of 127 (#2816).
   ['Shell builtins (limited)', [...BASH_BUILTIN_COMMAND_NAMES]],
