@@ -74,11 +74,9 @@ export function createFollowerModelSurface(opts: {
   /**
    * Apply a model pick to ONE named unit (#2310/#2382).
    *
-   * Required rather than derived from `getSync()`, because the two callers
-   * reach the leader differently: the dedicated follower mount writes through
-   * its `RemoteWorkUnitClient`, while the leader-capable float in `wc-tray.ts`
-   * has no remote client of its own yet and sends the frame directly. The
-   * surface itself only ever knows "this unit, this model".
+   * Required rather than derived from `getSync()`: both callers now write
+   * through their own `RemoteWorkUnitClient`, and the surface itself only ever
+   * knows "this unit, this model".
    */
   setModel(unitId: string, model: WorkUnitModel): void;
   /**
@@ -87,10 +85,10 @@ export function createFollowerModelSurface(opts: {
    * sides; this surface keeps only the catalog, which is leader-global and
    * deliberately not on the protocol.
    *
-   * An empty roster means "this caller has none" — the leader-capable float in
-   * `wc-tray.ts` follows another leader and has no `RemoteWorkUnitClient` yet
-   * — and falls back to the leader's `model.state` frame, which is also the
-   * fallback for a leader too old to send `ScoopSummary.model`.
+   * An empty roster means "this caller cannot answer yet" — a follower that
+   * has not received `scoops.list`, or a guest seat that never will — and
+   * falls back to the leader's `model.state` frame, which is also the fallback
+   * for a leader too old to send `ScoopSummary.model`.
    */
   getUnits: () => readonly WorkUnitSummary[];
   getSelectedScoopJid: () => string | null;
@@ -106,6 +104,14 @@ export function createFollowerModelSurface(opts: {
   /** Repaint after the shown unit or the roster changed. */
   onShownUnitChanged(): void;
   reset(): void;
+  /**
+   * Uninstall. The two capture listeners live on the SHARED composer, which
+   * outlives this surface, so a float that joins a tray more than once would
+   * otherwise stack one intercepting handler per join. Also hands the pill
+   * back: `reset()` hides it, and only the owner of the local pill can show it
+   * again.
+   */
+  dispose(): void;
 } {
   let models: TrayModelCatalogEntry[] = [];
   let state: TrayModelSelectionState | null = null;
@@ -227,56 +233,54 @@ export function createFollowerModelSurface(opts: {
     if (opts.interceptLocalHandlers) event.stopImmediatePropagation();
   };
 
-  opts.composerMeta.addEventListener(
-    'model-change',
-    (event) => {
-      const sync = opts.getSync();
-      if (!sync) return;
-      intercept(event);
-      const modelId = (event as CustomEvent<{ id?: string }>).detail?.id;
-      // Name the unit the pick applies to (#2310): the leader changes THAT
-      // cone's model, not its own selection and not a global setting.
-      const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
-      const model = modelId ? parseQualifiedModelId(modelId) : null;
-      if (model && scoopJid) {
-        // Seed the pick BEFORE the repaint: the leader's `model.state` for it
-        // is a round trip away, and until it lands the roster still names the
-        // model this unit is moving off.
-        lastKnownModel.set(scoopJid, model);
-        opts.setModel(scoopJid, model);
-      } else if (modelId) {
-        // No unit to name (nothing selected yet), or a bare id carrying no
-        // provider: send the raw frame, where the leader resolves the target
-        // from this follower's last `scoops.select` and the model id from its
-        // own catalog. Naming a unit is what the protocol adds; it cannot
-        // invent either half.
-        sync.selectModel(modelId, scoopJid ?? undefined);
-      }
-      apply();
-    },
-    { capture: opts.interceptLocalHandlers }
-  );
+  const onModelChange = (event: Event): void => {
+    const sync = opts.getSync();
+    if (!sync) return;
+    intercept(event);
+    const modelId = (event as CustomEvent<{ id?: string }>).detail?.id;
+    // Name the unit the pick applies to (#2310): the leader changes THAT
+    // cone's model, not its own selection and not a global setting.
+    const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
+    const model = modelId ? parseQualifiedModelId(modelId) : null;
+    if (model && scoopJid) {
+      // Seed the pick BEFORE the repaint: the leader's `model.state` for it
+      // is a round trip away, and until it lands the roster still names the
+      // model this unit is moving off.
+      lastKnownModel.set(scoopJid, model);
+      opts.setModel(scoopJid, model);
+    } else if (modelId) {
+      // No unit to name (nothing selected yet), or a bare id carrying no
+      // provider: send the raw frame, where the leader resolves the target
+      // from this follower's last `scoops.select` and the model id from its
+      // own catalog. Naming a unit is what the protocol adds; it cannot
+      // invent either half.
+      sync.selectModel(modelId, scoopJid ?? undefined);
+    }
+    apply();
+  };
+  opts.composerMeta.addEventListener('model-change', onModelChange, {
+    capture: opts.interceptLocalHandlers,
+  });
 
-  opts.composerMeta.addEventListener(
-    'thinking-change',
-    (event) => {
-      const sync = opts.getSync();
-      if (!sync) return;
-      intercept(event);
-      if (opts.getLockedEffortLevel?.()) {
-        apply();
-        return;
-      }
-      const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
-      const thinkingLevel = thinkingLevelForAgent(metaLevel);
-      const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
-      if (scoopJid && thinkingLevel && thinkingLevel !== 'max') {
-        sync.setThinkingLevel(scoopJid, thinkingLevel, effortOverrideForAgent(metaLevel));
-      }
+  const onThinkingChange = (event: Event): void => {
+    const sync = opts.getSync();
+    if (!sync) return;
+    intercept(event);
+    if (opts.getLockedEffortLevel?.()) {
       apply();
-    },
-    { capture: opts.interceptLocalHandlers }
-  );
+      return;
+    }
+    const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
+    const thinkingLevel = thinkingLevelForAgent(metaLevel);
+    const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
+    if (scoopJid && thinkingLevel && thinkingLevel !== 'max') {
+      sync.setThinkingLevel(scoopJid, thinkingLevel, effortOverrideForAgent(metaLevel));
+    }
+    apply();
+  };
+  opts.composerMeta.addEventListener('thinking-change', onThinkingChange, {
+    capture: opts.interceptLocalHandlers,
+  });
 
   const reset = (): void => {
     models = [];
@@ -314,5 +318,16 @@ export function createFollowerModelSurface(opts: {
       apply();
     },
     reset,
+    dispose() {
+      opts.composerMeta.removeEventListener('model-change', onModelChange, {
+        capture: opts.interceptLocalHandlers,
+      });
+      opts.composerMeta.removeEventListener('thinking-change', onThinkingChange, {
+        capture: opts.interceptLocalHandlers,
+      });
+      reset();
+      // `reset()` hid it; the leader's own pill logic decides what to show.
+      opts.composerMeta.style.removeProperty('display');
+    },
   };
 }

@@ -1161,6 +1161,11 @@ export function attachWcClient(
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
           agentHandle,
           workUnits,
+          restoreLocalChrome: () => {
+            boot.wiring.refreshScoops?.();
+            const selected = boot.getSelected();
+            if (selected) void applyThreadContext(refs, selected, workUnits.currentUnits());
+          },
           openFs: openReader,
           openWriter: async () => (await openVfs()).writer,
           window,

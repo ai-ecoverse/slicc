@@ -8,7 +8,7 @@
  *
  * What the follower is here to prove:
  *   - the cone tabs and their ORDER mirror the leader (`orderForSwitcher` on
- *     one side, `toFollowerSwitcherScoops` on the other — two independent
+ *     one side, the tray projection on the other — two independent
  *     implementations of the same rule, which is exactly why it needs a test);
  *   - a follower changes the model of the cone IT is looking at, while the
  *     leader sits in another cone, and only that cone moves (#2310);

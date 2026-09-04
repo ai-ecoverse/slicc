@@ -1,10 +1,8 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
-import { toTabDescriptors } from '../../work-unit/client/presentation.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { isRootUnit } from '../../work-unit/policy.js';
 import { modelFor } from '../../work-unit/record.js';
-import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop } from './wc-shell.js';
 import type { UnitRole } from './wc-unit-context.js';
 
@@ -161,19 +159,4 @@ export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
     ...(scoop.trigger ? { trigger: scoop.trigger } : {}),
     ...(scoop.addedAt ? { addedAt: scoop.addedAt } : {}),
   };
-}
-
-/**
- * Map tray summaries onto the descriptors shared by follower and Cherry tabs.
- *
- * Ordering and rendering both live in `work-unit/client/presentation.ts`
- * since #2274 — this is the wire's half of the projection and nothing more.
- * The leader's strip goes through the same two functions from its own
- * records, which is what stops the two from drifting again (#2317).
- */
-export function toFollowerSwitcherScoops(
-  scoops: readonly ScoopSummary[],
-  selectedJid?: string | null
-): SwitcherScoop[] {
-  return toTabDescriptors(scoops.map(summaryToWorkUnit), selectedJid, scoopColor);
 }

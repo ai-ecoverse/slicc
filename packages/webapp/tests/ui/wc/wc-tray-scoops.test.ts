@@ -1,11 +1,14 @@
 import type { ScoopSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
+import { scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
+import type { SwitcherScoop } from '../../../src/ui/wc/wc-shell.js';
 import {
   summaryIsRoot,
   summaryRole,
-  toFollowerSwitcherScoops,
+  summaryToWorkUnit,
   toScoopSummaries,
 } from '../../../src/ui/wc/wc-tray-scoops.js';
+import { toTabDescriptors } from '../../../src/work-unit/client/presentation.js';
 
 const cone = {
   jid: 'cone',
@@ -25,6 +28,19 @@ const WIRE_PAIRS: Pick<ScoopSummary, 'state' | 'activity'>[] = [
   { state: 'broken' },
   { state: 'initializing' },
 ];
+
+/**
+ * What the follower strip renders, as the mounts now compose it directly:
+ * the wire's projection through the shared ordering + descriptor pair. The
+ * one-line `toFollowerSwitcherScoops` wrapper that used to sit here is gone
+ * with the last mount that called it (#2382 PR D).
+ */
+function followerDescriptors(
+  scoops: readonly ScoopSummary[],
+  selectedJid?: string | null
+): SwitcherScoop[] {
+  return toTabDescriptors(scoops.map(summaryToWorkUnit), selectedJid, scoopColor);
+}
 
 describe('tray scoop tab adapters', () => {
   it('keeps `state` to the four values every shipped follower switches on', () => {
@@ -109,7 +125,7 @@ describe('tray scoop tab adapters', () => {
 
   it('expands every wire pair back into follower descriptor fields', () => {
     const expand = (pair: Pick<ScoopSummary, 'state' | 'activity'>): Record<string, unknown> => {
-      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, ...pair, fill: 40 }]);
+      const [descriptor] = followerDescriptors([{ ...cone, ...pair, fill: 40 }]);
       return { state: descriptor?.state, phase: descriptor?.phase, awaiting: descriptor?.awaiting };
     };
 
@@ -132,7 +148,7 @@ describe('tray scoop tab adapters', () => {
 
   it('round-trips every pair, so leader and follower render the same face', () => {
     for (const pair of WIRE_PAIRS) {
-      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, ...pair, fill: 40 }]);
+      const [descriptor] = followerDescriptors([{ ...cone, ...pair, fill: 40 }]);
       const [summary] = toScoopSummaries([cone], [descriptor as never]);
       const label = JSON.stringify(pair);
       expect(summary?.state, `state round trip broke for ${label}`).toBe(pair.state);
@@ -147,7 +163,7 @@ describe('tray scoop tab adapters', () => {
   it('treats an older leader’s bare `working` exactly as it did before', () => {
     // No `activity` at all — the pre-refinement wire. A busy scoop must still
     // read as thinking, which is what this follower already rendered.
-    const [descriptor] = toFollowerSwitcherScoops([{ ...cone, state: 'working', fill: 30 }]);
+    const [descriptor] = followerDescriptors([{ ...cone, state: 'working', fill: 30 }]);
     expect(descriptor).toMatchObject({ state: 'working', phase: 'thinking', eyes: 'open' });
     expect(descriptor?.awaiting).toBeUndefined();
   });
@@ -155,12 +171,12 @@ describe('tray scoop tab adapters', () => {
   it('ignores an activity from a newer leader and falls back to the state', () => {
     // The escape hatch the refinement field exists to provide: an unrecognised
     // value costs this build nothing, so the NEXT value added is free too.
-    const [busy] = toFollowerSwitcherScoops([
+    const [busy] = followerDescriptors([
       { ...cone, state: 'working', activity: 'daydreaming' as never, fill: 10 },
     ]);
     expect(busy).toMatchObject({ state: 'working', phase: 'thinking' });
 
-    const [resting] = toFollowerSwitcherScoops([
+    const [resting] = followerDescriptors([
       { ...cone, state: 'idle', activity: 'daydreaming' as never, fill: 10 },
     ]);
     expect(resting).toMatchObject({ state: 'idle' });
@@ -168,7 +184,7 @@ describe('tray scoop tab adapters', () => {
   });
 
   it('preserves lifecycle state and fill for follower and Cherry descriptors', () => {
-    const descriptors = toFollowerSwitcherScoops([
+    const descriptors = followerDescriptors([
       { ...cone, state: 'broken', fill: 82 },
       {
         ...cone,
@@ -187,7 +203,7 @@ describe('tray scoop tab adapters', () => {
   });
 
   it('keeps a refined scoop open-eyed rather than dead or eyeless', () => {
-    const descriptors = toFollowerSwitcherScoops([
+    const descriptors = followerDescriptors([
       { ...cone, state: 'working', activity: 'thinking' },
       { ...cone, jid: 'b', state: 'idle', activity: 'awaiting' },
     ]);
@@ -195,7 +211,7 @@ describe('tray scoop tab adapters', () => {
   });
 
   it('defaults lifecycle state and fill from an older leader payload', () => {
-    const [descriptor] = toFollowerSwitcherScoops([cone]);
+    const [descriptor] = followerDescriptors([cone]);
     expect(descriptor).toMatchObject({ state: 'idle', fill: 0, eyes: 'open' });
   });
 });
@@ -240,7 +256,7 @@ describe('parentId on the wire (#1666 / #2270)', () => {
   });
 
   it('lists every cone first, then scoops grouped by owner (#2272)', () => {
-    const descriptors = toFollowerSwitcherScoops(toScoopSummaries([b, a, research, cone], []));
+    const descriptors = followerDescriptors(toScoopSummaries([b, a, research, cone], []));
     expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual([
       'cone:cone_2',
       'cone:cone',
@@ -253,20 +269,20 @@ describe('parentId on the wire (#1666 / #2270)', () => {
   it("puts the selected cone's scoops right after the cones (#2272)", () => {
     const summaries = toScoopSummaries([b, a, research, cone], []);
     // Selecting the primary (or one of its scoops) pulls its scoops forward.
-    expect(toFollowerSwitcherScoops(summaries, 'cone').map((d) => d.key)).toEqual([
+    expect(followerDescriptors(summaries, 'cone').map((d) => d.key)).toEqual([
       'cone_2',
       'cone',
       'scoop_a',
       'scoop_b',
     ]);
-    expect(toFollowerSwitcherScoops(summaries, 'scoop_a').map((d) => d.key)).toEqual([
+    expect(followerDescriptors(summaries, 'scoop_a').map((d) => d.key)).toEqual([
       'cone_2',
       'cone',
       'scoop_a',
       'scoop_b',
     ]);
     // An unknown selection falls back to plain owner order.
-    expect(toFollowerSwitcherScoops(summaries, 'nope').map((d) => d.key)).toEqual([
+    expect(followerDescriptors(summaries, 'nope').map((d) => d.key)).toEqual([
       'cone_2',
       'cone',
       'scoop_b',
@@ -283,7 +299,7 @@ describe('parentId on the wire (#1666 / #2270)', () => {
       parentJid: 'scoop_a',
     };
     const orphan = { ...cone, jid: 'scoop_x', name: 'x', isCone: false, parentJid: 'gone' };
-    const descriptors = toFollowerSwitcherScoops(
+    const descriptors = followerDescriptors(
       toScoopSummaries([orphan, grandchild, b, a, research, cone], [])
     );
     expect(descriptors.map((d) => d.key)).toEqual([
@@ -301,13 +317,11 @@ describe('parentId on the wire (#1666 / #2270)', () => {
       { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
       { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
     ];
-    expect(toFollowerSwitcherScoops(legacy).map((d) => d.key)).toEqual(['c', 's']);
+    expect(followerDescriptors(legacy).map((d) => d.key)).toEqual(['c', 's']);
   });
 
   it('keeps a summary with neither edge nor flag as an unknown-owner child (#2358)', () => {
     const edgeless = [{ jid: 'x', name: 'x', folder: 'x', assistantLabel: 'x' }];
-    expect(toFollowerSwitcherScoops(edgeless).map((d) => `${d.type}:${d.key}`)).toEqual([
-      'scoop:x',
-    ]);
+    expect(followerDescriptors(edgeless).map((d) => `${d.type}:${d.key}`)).toEqual(['scoop:x']);
   });
 });

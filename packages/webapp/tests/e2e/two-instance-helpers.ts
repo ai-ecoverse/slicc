@@ -262,7 +262,7 @@ export async function bootSecondLeader(
 /**
  * The tab strip's labels, in render order: cones (oldest first), then the
  * selected cone's scoops, then everyone else's (`orderForSwitcher` on the
- * leader, `toFollowerSwitcherScoops` on the follower — the assertion that the
+ * leader, the tray projection on the follower — the assertion that the
  * two agree is the point of the follower scenario).
  *
  * The segments live in `<slicc-agent-tabs>`'s LIGHT DOM, so a plain locator
