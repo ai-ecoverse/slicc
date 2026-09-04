@@ -68,11 +68,6 @@ function parseCount(raw: string, flag: string): number {
   return value;
 }
 
-/** Value attached to a short flag (`-p1`, `-F3`, `-ipatch.diff`). */
-function attachedValue(arg: string, prefix: string): string | null {
-  return arg.startsWith(prefix) && arg.length > prefix.length ? arg.slice(prefix.length) : null;
-}
-
 function applyLongFlag(arg: string, out: PatchArgs): boolean {
   const separator = arg.indexOf('=');
   const name = separator === -1 ? arg : arg.slice(0, separator);
@@ -108,41 +103,59 @@ function applyLongFlag(arg: string, out: PatchArgs): boolean {
   }
 }
 
-/** Short flags with an attached or following value. Returns the new index. */
-function applyValueShortFlag(args: string[], index: number, out: PatchArgs): number | null {
-  const arg = args[index];
-  const attached = [
-    [
-      '-p',
-      (value: string) => {
-        out.strip = parseCount(value, '-p');
-      },
-    ],
-    [
-      '-F',
-      (value: string) => {
-        out.fuzz = parseCount(value, '-F');
-      },
-    ],
-    [
-      '-i',
-      (value: string) => {
-        out.patchFile = value;
-      },
-    ],
-  ] as const;
-  for (const [prefix, assign] of attached) {
-    const value = attachedValue(arg, prefix);
-    if (value !== null) {
-      assign(value);
-      return index;
+/** Short flags that take a value: the rest of the cluster, or the next arg. */
+const VALUE_SHORT_FLAGS: Record<string, ((value: string, out: PatchArgs) => void) | undefined> = {
+  p: (value, out) => {
+    out.strip = parseCount(value, '-p');
+  },
+  F: (value, out) => {
+    out.fuzz = parseCount(value, '-F');
+  },
+  i: (value, out) => {
+    out.patchFile = value;
+  },
+};
+
+/** Short flags that take no value, and so may bundle (`patch -Rs`). */
+const BOOL_SHORT_FLAGS: Record<string, ((out: PatchArgs) => void) | undefined> = {
+  R: (out) => {
+    out.reverse = true;
+  },
+  s: (out) => {
+    out.silent = true;
+  },
+  h: (out) => {
+    out.mode = 'help';
+  },
+};
+
+/**
+ * Consume one short-flag cluster, getopt-style: booleans bundle (`-Rs`), and
+ * the first value flag in the cluster takes whatever follows it there (`-p1`,
+ * `-Rp1`) or, failing that, the next argument (`-p 1`). Returns the index of
+ * the last argument consumed.
+ */
+function applyShortCluster(
+  args: string[],
+  index: number,
+  out: PatchArgs
+): number | { error: string } {
+  const cluster = args[index].slice(1);
+  for (let position = 0; position < cluster.length; position++) {
+    const letter = cluster[position];
+    const takesValue = VALUE_SHORT_FLAGS[letter];
+    if (takesValue) {
+      const rest = cluster.slice(position + 1);
+      takesValue(rest === '' ? requireValue(args, index + 1, `-${letter}`) : rest, out);
+      return rest === '' ? index + 1 : index;
     }
-    if (arg === prefix) {
-      assign(requireValue(args, index + 1, prefix));
-      return index + 1;
-    }
+    const boolFlag = BOOL_SHORT_FLAGS[letter];
+    if (!boolFlag) return { error: `unrecognized option '-${letter}'` };
+    boolFlag(out);
+    // `-h` answers immediately; nothing after it in the cluster can matter.
+    if (out.mode !== 'apply') return index;
   }
-  return null;
+  return index;
 }
 
 /**
@@ -178,24 +191,10 @@ export function parsePatchArgs(rawArgs: string[]): PatchArgs {
       if (out.mode !== 'apply') return out;
       continue;
     }
-    const consumed = applyValueShortFlag(args, index, out);
-    if (consumed !== null) {
-      index = consumed;
-      continue;
-    }
-    switch (arg) {
-      case '-h':
-        out.mode = 'help';
-        return out;
-      case '-R':
-        out.reverse = true;
-        break;
-      case '-s':
-        out.silent = true;
-        break;
-      default:
-        throw new PatchUsageError(`unrecognized option '${arg}'`);
-    }
+    const consumed = applyShortCluster(args, index, out);
+    if (typeof consumed !== 'number') throw new PatchUsageError(consumed.error);
+    if (out.mode !== 'apply') return out;
+    index = consumed;
   }
 
   if (operands.length > 2) throw new PatchUsageError(`extra operand '${operands[2]}'`);

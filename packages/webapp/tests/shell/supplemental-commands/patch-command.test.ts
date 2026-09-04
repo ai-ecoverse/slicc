@@ -237,6 +237,26 @@ describe('parsePatchArgs', () => {
     expect(parsePatchArgs(['--input=x.diff']).patchFile).toBe('x.diff');
   });
 
+  it('bundles short boolean flags, as GNU patch does', () => {
+    expect(parsePatchArgs(['-Rs'])).toMatchObject({ reverse: true, silent: true });
+    expect(parsePatchArgs(['-sR'])).toMatchObject({ reverse: true, silent: true });
+    expect(parsePatchArgs(['-R', '-s'])).toMatchObject({ reverse: true, silent: true });
+  });
+
+  it('lets a value flag take the rest of its cluster, or the next argument', () => {
+    expect(parsePatchArgs(['-Rp1'])).toMatchObject({ reverse: true, strip: 1 });
+    expect(parsePatchArgs(['-sp', '2'])).toMatchObject({ silent: true, strip: 2 });
+    expect(parsePatchArgs(['-si', 'x.diff'])).toMatchObject({ silent: true, patchFile: 'x.diff' });
+  });
+
+  it('answers help from inside a bundle', () => {
+    expect(parsePatchArgs(['-sh']).mode).toBe('help');
+  });
+
+  it('rejects a bundle containing an unknown letter', () => {
+    expect(() => parsePatchArgs(['-Rz'])).toThrow(/unrecognized option '-z'/);
+  });
+
   it('reads the two operands as FILE and PATCHFILE', () => {
     expect(parsePatchArgs(['note.txt', 'change.patch'])).toMatchObject({
       originalFile: 'note.txt',
