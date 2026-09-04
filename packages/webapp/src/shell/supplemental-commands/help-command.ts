@@ -101,6 +101,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'cost',
       'hostname',
       'whoami',
+      'id',
       'help',
       'sleep',
       'time',

@@ -34,6 +34,7 @@ import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
 import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
+import { createIdCommand, createWhoamiCommand } from './id-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
@@ -265,6 +266,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     }),
     createThemeCommand(),
     createUnameCommand(),
+    createIdCommand(),
+    // Shadows just-bash's bundled `whoami`, which answers a hardcoded `user`.
+    createWhoamiCommand(),
     createUnlinkCommand(),
     createManCommand(),
     createDigCommand(),
