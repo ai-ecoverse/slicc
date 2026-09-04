@@ -121,6 +121,22 @@ export type AgentEvent =
       toolCallId?: string;
     }
   | { type: 'turn_end'; messageId: string }
+  /**
+   * A context-compaction round announcing itself as its own transcript row.
+   *
+   * Deliberately NOT a `message_start` / `content_delta` / `content_done`
+   * triple: a compaction round is not an assistant turn. Faking one made the
+   * UI's `message_start` handler declare the cone busy, and nothing ever
+   * cleared it — no `turn_end` follows a notice, and a live float drives
+   * `processing` from scoop-status broadcasts that only fire when the status
+   * CHANGES (an idle round never leaves `ready`). The stranded busy state
+   * then parked every later user submission in the queued stack while the
+   * agent answered it anyway (#2843).
+   *
+   * `messageId` is stable for the whole round, so the terminal state UPDATES
+   * the row the opening state created rather than appending a second one.
+   */
+  | { type: 'compaction_notice'; messageId: string; marker: ChatCompactionMarker }
   | { type: 'error'; error: string }
   | { type: 'screenshot'; base64: string; url?: string }
   | { type: 'terminal_output'; text: string };
@@ -137,6 +153,37 @@ export type MessageRole = 'user' | 'assistant';
  * `dismissed` (denied). Drives the `<slicc-lick-card>` `state` attribute.
  */
 export type LickState = 'pending' | 'confirmed' | 'dismissed';
+
+/** What started a compaction round; mirrors `CompactionTrigger` in the webapp core. */
+export type CompactionMarkerTrigger = 'threshold' | 'overflow' | 'idle';
+
+/**
+ * How a compaction round ended, as the transcript shows it:
+ *
+ * - `summarizing` — in flight; the summary LLM call has not returned yet.
+ * - `summarized` — the history was replaced by a summary.
+ * - `fallback` — summarization was unavailable or failed, so older messages
+ *   were truncated WITHOUT a summary.
+ * - `discarded` — the round produced nothing the conversation kept: the user
+ *   came back mid-round (compact-on-idle aborts and throws the result away),
+ *   or the summary made no progress. A `discarded` marker is not a row to
+ *   render — hosts REMOVE the row, because announcing a compaction that never
+ *   happened is worse than saying nothing.
+ */
+export type CompactionMarkerState = 'summarizing' | 'summarized' | 'fallback' | 'discarded';
+
+/**
+ * The transcript's record of one context-compaction round. Carries state, not
+ * prose: every renderer (web `<slicc-compaction-marker>`, iOS
+ * `CompactionMarkerRow`) derives its own copy from these fields, so the two
+ * can never drift into different wordings of the same envelope.
+ */
+export interface ChatCompactionMarker {
+  trigger: CompactionMarkerTrigger;
+  state: CompactionMarkerState;
+  /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
+  transcriptPath?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -167,6 +214,12 @@ export interface ChatMessage {
   lickState?: LickState;
   /** True when the message is queued (submitted while the agent is still processing). */
   queued?: boolean;
+  /**
+   * Compaction-marker row: this message records a compaction round rather
+   * than anything anyone said. Set, the view renders a
+   * `<slicc-compaction-marker>` seam instead of an assistant bubble.
+   */
+  compaction?: ChatCompactionMarker;
   /**
    * Cone-error marker — set by the chat controller's `error` AgentEvent
    * handler. The view renders this assistant message as a `slicc-error-card`

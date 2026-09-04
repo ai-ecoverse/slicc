@@ -81,6 +81,33 @@ describe('createChatFixture', () => {
     expect(msgs.some((m) => m.queued === true)).toBe(true);
   });
 
+  it('covers every RENDERED compaction-marker state', () => {
+    const states = msgs
+      .map((m) => m.compaction?.state)
+      .filter((state): state is NonNullable<typeof state> => state !== undefined)
+      .sort();
+    expect(states).toEqual(['fallback', 'summarized', 'summarizing']);
+  });
+
+  /**
+   * `discarded` means "this round kept nothing, so remove the row". A fixture
+   * entry for it would be a rendered marker for a compaction that never
+   * happened — the exact regression the state exists to prevent (#2843).
+   */
+  it('never stages a discarded compaction marker', () => {
+    expect(msgs.some((m) => m.compaction?.state === 'discarded')).toBe(false);
+  });
+
+  it('varies the compaction trigger so each wording is exercised', () => {
+    const triggers = new Set(msgs.map((m) => m.compaction?.trigger).filter(Boolean));
+    expect([...triggers].sort()).toEqual(['idle', 'overflow', 'threshold']);
+  });
+
+  /** A marker's own body is never shown, so a fixture body would be dead copy. */
+  it('leaves compaction-marker bodies empty', () => {
+    for (const m of msgs.filter((msg) => msg.compaction)) expect(m.content).toBe('');
+  });
+
   it('includes a user message with image and text attachments', () => {
     const attachmentMsg = byId.get('fx-user-attachment');
     expect(attachmentMsg).toBeDefined();

@@ -2,7 +2,7 @@
   "traySyncProtocolVersion": 8,
   "leaderVariantCount": 42,
   "followerVariantCount": 37,
-  "agentEventVariantCount": 12,
+  "agentEventVariantCount": 13,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -929,6 +929,25 @@
   ],
   "agentEvents": [
     {
+      "type": "compaction_notice",
+      "ios": "decoded",
+      "mirrored": [
+        "marker",
+        "messageId",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "compaction_notice",
+        "messageId": "compaction-cone-1",
+        "marker": {
+          "trigger": "idle",
+          "state": "summarized",
+          "transcriptPath": "/sessions/live-cone-mtlor6sy-8egf.md"
+        }
+      }
+    },
+    {
       "type": "content_delta",
       "ios": "decoded",
       "mirrored": [
@@ -1146,11 +1165,27 @@
   ],
   "nestedPayloads": [
     {
+      "name": "ChatCompactionMarker",
+      "ios": "mirrored",
+      "mirrored": [
+        "state",
+        "transcriptPath",
+        "trigger"
+      ],
+      "dropped": [],
+      "sample": {
+        "trigger": "overflow",
+        "state": "fallback",
+        "transcriptPath": "/sessions/live-cone-mtlor6sy-8egf.md"
+      }
+    },
+    {
       "name": "ChatMessage",
       "ios": "mirrored",
       "mirrored": [
         "attachments",
         "channel",
+        "compaction",
         "content",
         "error",
         "id",
@@ -1220,7 +1255,12 @@
         "lickId": "lick-1",
         "lickState": "pending",
         "queued": false,
-        "error": false
+        "error": false,
+        "compaction": {
+          "trigger": "idle",
+          "state": "summarized",
+          "transcriptPath": "/sessions/live-cone-mtlor6sy-8egf.md"
+        }
       }
     },
     {

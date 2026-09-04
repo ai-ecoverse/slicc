@@ -42,6 +42,15 @@ public enum AgentEvent: Codable {
     case toolUI(messageId: String, toolName: String, requestId: String, html: String)
     case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
+    /// A context-compaction round announcing itself as its own transcript row.
+    ///
+    /// NOT an assistant turn, and deliberately not modelled as one: the leader
+    /// used to fake `messageStart`/`contentDelta`/`contentDone` for this, which
+    /// left every consumer believing a turn had begun that nothing would ever
+    /// end (#2843). `messageId` is stable for the whole round, so the terminal
+    /// event updates the row the opening one created; a `marker.state` of
+    /// `.discarded` removes it.
+    case compactionNotice(messageId: String, marker: ChatCompactionMarker)
     case error(error: String)
     case screenshot(base64: String, url: String?)
     case terminalOutput(text: String)
@@ -51,6 +60,7 @@ public enum AgentEvent: Codable {
         case type, messageId, text, toolName, toolInput, result, isError, error, toolCallId
         case progress
         case model, usage, requestId, html, base64, url
+        case marker
     }
 
     public init(from decoder: Decoder) throws {
@@ -99,6 +109,10 @@ public enum AgentEvent: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId))
         case "turn_end":
             self = .turnEnd(messageId: try container.decode(String.self, forKey: .messageId))
+        case "compaction_notice":
+            self = .compactionNotice(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                marker: try container.decode(ChatCompactionMarker.self, forKey: .marker))
         case "error":
             self = .error(error: try container.decode(String.self, forKey: .error))
         case "screenshot":
@@ -159,6 +173,10 @@ public enum AgentEvent: Codable {
         case .turnEnd(let messageId):
             try container.encode("turn_end", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
+        case .compactionNotice(let messageId, let marker):
+            try container.encode("compaction_notice", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(marker, forKey: .marker)
         case .error(let error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)

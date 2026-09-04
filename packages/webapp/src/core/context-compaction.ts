@@ -143,6 +143,10 @@ export interface CompactionConfig {
    *                          `onMemoryUpdates` is also wired)
    *   'idle'               → in `finally`, always fires last
    *
+   * An ABORTED round (the caller's signal fired) emits `'cancelled'` and then
+   * `'idle'` instead of `'fallback'` — nothing was truncated, so nothing must
+   * claim it was.
+   *
    * `detail` names what started the round and, once
    * {@link onBeforeCompaction} has run, where the full transcript went.
    * No-op when omitted.
@@ -184,6 +188,14 @@ export interface CompactionStateDetail {
   trigger: CompactionTrigger;
   /** Set from the `summarizing` phase on, once the snapshot hook has answered. */
   transcriptPath?: string;
+  /**
+   * Opaque id of the round these states belong to, echoed from
+   * {@link CompactionOptions.roundId}. Only a caller that decides adoption
+   * AFTER the compactor returns sets one — the idle timer, whose late
+   * `cancelled` has to name the round it is retracting rather than whatever
+   * compaction row happens to be on the transcript (#2843).
+   */
+  roundId?: string;
 }
 
 export interface CompactionOptions {
@@ -204,6 +216,12 @@ export interface CompactionOptions {
    * `force` caller.
    */
   trigger?: CompactionTrigger;
+  /**
+   * Tag every state this round emits with an opaque id. Set by a caller whose
+   * adoption decision lands after the round returns, so its own later
+   * `cancelled` can be matched to the row this round opened (#2843).
+   */
+  roundId?: string;
 }
 
 /**
@@ -213,8 +231,20 @@ export interface CompactionOptions {
  * naive-drop result is about to be applied — the one phase worth surfacing
  * in the transcript, because it means older context was truncated without a
  * summary (#1985).
+ *
+ * `cancelled` is the OTHER terminal state, and it is not a failure: the round
+ * ran but the conversation kept none of it. An aborted round used to reach
+ * `fallback`, so a user who came back mid-idle-round was told summarization
+ * had failed and their history had been truncated — when in fact nothing was
+ * touched (#2843). A consumer that renders a compaction row must REMOVE it on
+ * `cancelled`, not relabel it.
  */
-export type CompactionState = 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
+export type CompactionState =
+  | 'summarizing'
+  | 'extracting-memory'
+  | 'fallback'
+  | 'cancelled'
+  | 'idle';
 
 /**
  * Lightweight serializer that renders an AgentMessage array as a text block
@@ -678,6 +708,18 @@ export function hasCompactionProgress(
   return messages.some((message, index) => message !== compacted[index]);
 }
 
+/**
+ * The detail every state of one round carries. A caller that decides adoption
+ * after the round returns names the round (see {@link CompactionOptions.roundId});
+ * everyone else emits the trigger alone.
+ */
+function stateDetailFor(
+  trigger: CompactionTrigger,
+  options: CompactionOptions | undefined
+): CompactionStateDetail {
+  return options?.roundId ? { trigger, roundId: options.roundId } : { trigger };
+}
+
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
 function emitCompactionState(
   config: CompactionConfig,
@@ -1077,7 +1119,7 @@ export function createCompactContext(
     // saw it BEFORE any elision touches a message, so the transcript on disk
     // is the real one, not the stubbed one.
     const trigger = options?.trigger ?? (options?.force ? 'overflow' : 'threshold');
-    const detail: CompactionStateDetail = { trigger };
+    const detail = stateDetailFor(trigger, options);
     const snapshot = await snapshotBeforeCompaction(config, messages, trigger);
     if (snapshot) detail.transcriptPath = snapshot.transcriptPath;
 
@@ -1089,7 +1131,17 @@ export function createCompactContext(
       hopelessMultiplier,
       settings
     );
-    if (hopeless.earlyReturn) return hopeless.earlyReturn;
+    if (hopeless.earlyReturn) {
+      // Elision alone sufficed, so no summary call runs — but the history the
+      // model sees was still rewritten, and a snapshot was still written. This
+      // used to be the ONE compaction path that told nobody: no state was
+      // emitted, so the transcript showed nothing and consumers never left
+      // `idle`. A round that changes the conversation must be observable
+      // whichever branch reduced it (#1985 / #2843).
+      emitCompactionState(config, 'summarizing', detail);
+      emitCompactionState(config, 'idle', detail);
+      return hopeless.earlyReturn;
+    }
     const workingMessages = hopeless.messages;
     const isHopeless = hopeless.isHopeless;
 
@@ -1135,6 +1187,20 @@ export function createCompactContext(
       }
     } else if (!isHopeless) {
       log.warn('No API key available for LLM summarization, falling back to naive drop');
+    }
+    // An aborted round is NOT a degradation, and it must not fall through to
+    // naive drop. `summarizeWithLlm` swallows the abort along with every other
+    // summary failure and returns null, so without this check a cancelled
+    // round emitted `fallback` ("summarization failed — older messages
+    // truncated") and returned a truncated history. The compact-on-idle caller
+    // discards that result, but the notice had already been shown and any
+    // OTHER `force` caller would have adopted a truncation nobody asked for
+    // (#2843). Return the input untouched so an abort costs exactly nothing.
+    if (signal?.aborted) {
+      log.info('Compaction aborted before the fallback drop (history untouched)', { trigger });
+      emitCompactionState(config, 'cancelled', detail);
+      emitCompactionState(config, 'idle', detail);
+      return messages;
     }
     // Surface the degradation (#1985): the LLM summary failed or was
     // unavailable, so older context is about to be truncated WITHOUT a

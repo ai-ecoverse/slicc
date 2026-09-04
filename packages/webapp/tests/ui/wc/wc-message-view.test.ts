@@ -158,10 +158,39 @@ describe('buildThreadChildren', () => {
 
   it('renders assistant messages with rendered markdown bodies', () => {
     const agents = children.filter((c) => c.tagName.toLowerCase() === 'slicc-agent-message');
-    const assistantCount = fixture.filter((m) => m.role === 'assistant').length;
+    // A compaction marker rides an assistant-role message but is not a turn —
+    // it renders as its own row, never as the model's voice (#2843).
+    const assistantCount = fixture.filter((m) => m.role === 'assistant' && !m.compaction).length;
     expect(agents.length).toBe(assistantCount);
     const withCode = agents.find((a) => a.querySelector('code'));
     expect(withCode).toBeTruthy();
+  });
+
+  it('renders every fixture compaction marker as its own row (#2843)', () => {
+    const markers = children.filter(
+      (c) => c.tagName.toLowerCase() === 'slicc-compaction-marker'
+    ) as HTMLElement[];
+    const expected = fixture.filter((m) => m.compaction);
+    expect(markers).toHaveLength(expected.length);
+    expect(markers.length).toBeGreaterThan(0);
+    // State and trigger ride the attributes; the element owns the wording.
+    expect(markers.map((m) => m.getAttribute('state')).sort()).toEqual(
+      expected.map((m) => m.compaction?.state).sort()
+    );
+    for (const marker of markers) {
+      expect(marker.textContent ?? '').toBe('');
+    }
+  });
+
+  it('does not render a discarded marker at all', () => {
+    const els = messageEls({
+      id: 'gone',
+      role: 'assistant',
+      content: '',
+      timestamp: 0,
+      compaction: { trigger: 'idle', state: 'discarded' },
+    });
+    expect(els).toEqual([]);
   });
 
   it('marks the streaming tail message', () => {

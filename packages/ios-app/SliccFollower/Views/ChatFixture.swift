@@ -381,12 +381,17 @@ enum ChatFixture {
                 ]
             ))
 
-        // 7. Queued messages + streaming tail
+        // 7. Compaction markers — one seam per RENDERED state, mirroring
+        // `buildCompactionMarkers` in the webapp fixture. `discarded` is
+        // deliberately absent: that round kept nothing, so it has no row.
+        out.append(contentsOf: compactionMarkers())
+
+        // 8. Queued messages + streaming tail
         out.append(
             ChatMessage(
                 id: "fx-queued-1", role: .user,
                 content: "Also double-check the install.md formatting after you finish.",
-                timestamp: ts(18),
+                timestamp: ts(18.5),
                 queued: true
             ))
         out.append(
@@ -405,6 +410,30 @@ enum ChatFixture {
             ))
 
         return out
+    }
+
+    // MARK: - Compaction markers
+
+    /// One marker per rendered state, each on a different trigger so all three
+    /// wordings paint at once. Bodies stay empty: `CompactionMarkerRow` derives
+    /// every word from `trigger` + `state`, so fixture copy would be dead.
+    private static func compactionMarkers() -> [ChatMessage] {
+        let snapshot = "/sessions/live-cone-fixture-8egf.md"
+        return [
+            ChatMessage(
+                id: "fx-compaction-idle", role: .assistant, content: "", timestamp: ts(18.1),
+                compaction: ChatCompactionMarker(
+                    trigger: .idle, state: .summarized, transcriptPath: snapshot)),
+            ChatMessage(
+                id: "fx-compaction-threshold-running", role: .assistant, content: "",
+                timestamp: ts(18.2),
+                compaction: ChatCompactionMarker(
+                    trigger: .threshold, state: .summarizing, transcriptPath: snapshot)),
+            // No snapshot path: the degraded row must render without the chip.
+            ChatMessage(
+                id: "fx-compaction-fallback", role: .assistant, content: "", timestamp: ts(18.3),
+                compaction: ChatCompactionMarker(trigger: .overflow, state: .fallback)),
+        ]
     }
 
     // MARK: - Tool progress fixture

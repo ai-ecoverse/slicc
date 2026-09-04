@@ -254,6 +254,66 @@ public enum LickState: String, Codable {
     }
 }
 
+// MARK: - Compaction marker
+
+/// Mirrors `CompactionMarkerTrigger` from agent-wire-types.ts: what started a
+/// context-compaction round. Lenient like `LickState` — an unknown trigger
+/// must not empty a snapshot — and degrades to `.threshold`, the trigger that
+/// carries the most neutral wording.
+public enum CompactionMarkerTrigger: String, Codable {
+    case threshold
+    case overflow
+    case idle
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CompactionMarkerTrigger(rawValue: raw) ?? .threshold
+    }
+}
+
+/// Mirrors `CompactionMarkerState` from agent-wire-types.ts: how a round
+/// ended.
+///
+/// `discarded` is a real case and not a rendering state: the round kept
+/// nothing, so a consumer REMOVES the row. An unknown state degrades to
+/// `.summarized` rather than `.discarded` — silently dropping a row the leader
+/// asked for is worse than showing a plainly-worded one.
+public enum CompactionMarkerState: String, Codable {
+    case summarizing
+    case summarized
+    case fallback
+    case discarded
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CompactionMarkerState(rawValue: raw) ?? .summarized
+    }
+}
+
+/// Mirrors `ChatCompactionMarker` from agent-wire-types.ts: the transcript's
+/// record of one context-compaction round.
+///
+/// Carries state, never prose. `CompactionMarkerRow` in the iOS app owns its
+/// copy table and `<slicc-compaction-marker>` owns the web one, so one
+/// envelope reads correctly on both without either shipping the other's
+/// wording.
+public struct ChatCompactionMarker: Codable, Equatable {
+    public var trigger: CompactionMarkerTrigger
+    public var state: CompactionMarkerState
+    /// `/sessions` path of the pre-compaction transcript snapshot, if written.
+    public var transcriptPath: String?
+
+    public init(
+        trigger: CompactionMarkerTrigger,
+        state: CompactionMarkerState,
+        transcriptPath: String? = nil
+    ) {
+        self.trigger = trigger
+        self.state = state
+        self.transcriptPath = transcriptPath
+    }
+}
+
 // MARK: - ToolCall
 
 public struct ToolCall: Codable, Identifiable, Equatable {
@@ -307,6 +367,9 @@ public struct ChatMessage: Codable, Identifiable, Equatable {
     /// Cone-error marker. The message is an error report rather than an
     /// ordinary assistant turn.
     public var error: Bool?
+    /// Compaction-marker row: this message records a compaction round rather
+    /// than anything anyone said, and renders as a seam instead of a bubble.
+    public var compaction: ChatCompactionMarker?
 
     public init(
         id: String,
@@ -325,7 +388,8 @@ public struct ChatMessage: Codable, Identifiable, Equatable {
         lickId: String? = nil,
         lickState: LickState? = nil,
         queued: Bool? = nil,
-        error: Bool? = nil
+        error: Bool? = nil,
+        compaction: ChatCompactionMarker? = nil
     ) {
         self.id = id
         self.role = role
@@ -344,5 +408,6 @@ public struct ChatMessage: Codable, Identifiable, Equatable {
         self.lickState = lickState
         self.queued = queued
         self.error = error
+        self.compaction = compaction
     }
 }

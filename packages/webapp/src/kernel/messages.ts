@@ -1062,7 +1062,11 @@ export interface ScoopStatusMsg {
 export interface CompactionStateMsg {
   type: 'compaction-state';
   scoopJid: string;
-  state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
+  /**
+   * `cancelled` means the round came to nothing and its transcript row must be
+   * removed. Absent from kernels older than #2843, which simply never retract.
+   */
+  state: 'summarizing' | 'extracting-memory' | 'fallback' | 'cancelled' | 'idle';
   /**
    * What started the round: the proactive threshold check, overflow
    * recovery, or the `compact-on-idle` timer. Absent on envelopes from an
@@ -1071,6 +1075,13 @@ export interface CompactionStateMsg {
   trigger?: 'threshold' | 'overflow' | 'idle';
   /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
   transcriptPath?: string;
+  /**
+   * Opaque id of the round, present only for a round whose caller decides
+   * adoption after the compactor returns (the idle timer). It lets a late
+   * `cancelled` retract the row THIS round opened rather than whichever
+   * compaction row is currently on the transcript (#2843).
+   */
+  roundId?: string;
 }
 
 /**

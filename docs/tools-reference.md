@@ -645,8 +645,33 @@ same last message, no prompt in flight; otherwise it is discarded and the conver
 untouched. A prompt, `stop()`, `clear-chat` or dispose ABORTS a round in flight (the LLM calls get
 the round's `AbortSignal`), and the round's memory extraction is deferred
 (`CompactionOptions.deferMemoryExtraction`) until the result is adopted, so a discarded round never
-writes bullets for a history that is still in the conversation. Idle minutes and the minimum context
-size are fixed (`core/idle-compaction-settings.ts`); the experimental dialog only exposes the flag.
+writes bullets for a history that is still in the conversation.
+
+An aborted round costs nothing: `compactContext` checks the signal before the naive-drop fallback
+and returns the input history untouched, emitting `cancelled` → `idle` instead of the `fallback`
+state. Without that check a cancelled round claimed a truncation it had not performed, and any
+non-idle `force` caller would have adopted it. Every non-adopted outcome of a STARTED round
+(`cancelled`, `thread-moved`, `no-progress`, `failed`) also fires `IdleCompactionDeps.onDiscarded`,
+which `ScoopContext` turns into a `cancelled` compaction state so the transcript can retract the
+marker row the round opened. Gate rejections and `below-minimum` never opened one and never fire it.
+
+The shipped window is 30 minutes and 200 000 tokens, but both are read LIVE (on every arm and every
+fire) from clamped `localStorage` keys — `slicc_idle_compaction_minutes` (0.01 – 1440) and
+`slicc_idle_compaction_min_tokens` (0 – 10M) — so the e2e scenario exercises the production timer,
+gates and adoption check with a window of about a second (`tests/e2e/compaction-idle.test.ts`). The
+experimental dialog still exposes only the on/off flag.
+
+**The marker row**: a compaction round shows up in the transcript as `<slicc-compaction-marker>` (a
+hairline seam broken by a chip), not as an assistant bubble. The `compaction_notice` AgentEvent
+carries `trigger` + `state` (`summarizing` / `summarized` / `fallback` / `discarded`) and a
+transcript path — never prose, so the web component and the iOS `CompactionMarkerRow` each word it
+themselves. One row per round: the opening state inserts it, the terminal state updates it in place,
+and `discarded` removes it. Critically, a notice is NOT a turn — it touches no processing state
+anywhere. The predecessor faked an assistant turn (`message_start` → `content_delta` →
+`content_done`) to get prose into the thread, which left the composer permanently busy: nothing
+clears `#processing` for a notice (`content_done` does not, no `turn_end` follows, and a live float's
+status broadcasts only fire on a CHANGE, which an idle round never causes), so every later send
+parked in the queued stack while the agent answered it anyway.
 
 ---
 

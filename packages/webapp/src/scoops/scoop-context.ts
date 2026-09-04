@@ -642,6 +642,14 @@ export class ScoopContext {
       estimateTokens: estimateConversationTokens,
       // The adopted history is what a reload must restore.
       onCompacted: () => this.sessions.persistNow(),
+      // Retract the transcript's compaction row: the round ran, the
+      // conversation kept nothing. Rides the same envelope the phases do, so
+      // the panel needs no second channel to learn a round came to nothing.
+      // `roundId` names the round being retracted: its terminal state may have
+      // already settled the row, and a round that never opened one must not
+      // take an earlier round's row down with it (#2843).
+      onDiscarded: (roundId) =>
+        this.callbacks.onCompactionStateChange?.('cancelled', { trigger: 'idle', roundId }),
       folder: this.scoop.folder,
     });
     this.idleCompaction = idle;

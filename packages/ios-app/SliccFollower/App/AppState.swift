@@ -1343,6 +1343,19 @@ class AppState: ObservableObject {
                 notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
             }
 
+        // A compaction round's own transcript row. Touches NONE of the turn
+        // state — not `isStreaming`, not `streamingMessageId`, not the voice
+        // reply binding — because a compaction is not a turn. The leader used
+        // to fake one for this, which is what stranded the web composer in its
+        // busy state for a whole session (#2843); modelling it as turn state
+        // here would reintroduce the same bug on iOS.
+        case .compactionNotice(let messageId, let marker):
+            logger.info(
+                "Agent event: compaction_notice id=\(messageId) state=\(marker.state.rawValue)")
+            applyCompactionNotice(
+                messageId: messageId, marker: marker, buffer: &buffer, scoopJid: scoopJid,
+                isVisible: isVisible)
+
         case .error(let error):
             logger.error("Agent event: error — \(error)")
             if let idx = buffer.lastIndex(where: { $0.isStreaming == true }) {

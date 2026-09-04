@@ -55,6 +55,21 @@ export interface IdleCompactionDeps {
   estimateTokens: (messages: AgentMessage[]) => number;
   /** The compacted history was adopted; persist it. */
   onCompacted: (info: { before: number; after: number }) => void;
+  /**
+   * The round produced nothing the conversation kept. Fired for every
+   * non-adopted outcome of a round that actually STARTED — aborted, thread
+   * moved, no progress, failed — so the transcript can retract the notice it
+   * showed when the round opened. The compactor's own `cancelled` emission
+   * only covers the abort it can see; the adoption gate here is the only place
+   * that knows a completed summary was thrown away (#2843).
+   *
+   * Carries the round's id (the one handed to the compactor) so a consumer can
+   * tell "retract the row THIS round opened" from "retract whatever compaction
+   * row is on the transcript". They differ: a round the compactor completed
+   * emits its terminal state long before adoption is decided, and a round that
+   * found nothing to summarize never opened a row at all.
+   */
+  onDiscarded: (roundId: string) => void;
   folder: string;
 }
 
@@ -83,6 +98,8 @@ export class IdleCompaction {
   private running = false;
   /** Aborts the round in flight; replaced per round. */
   private round: AbortController | null = null;
+  /** Rounds started by this instance, for a per-instance unique round id. */
+  private rounds = 0;
 
   constructor(private readonly deps: IdleCompactionDeps) {}
 
@@ -105,9 +122,13 @@ export class IdleCompaction {
     this.disarm();
     if (this.deps.isDisposed() || !this.deps.isEnabled() || !this.deps.getAgent()) return;
     const { idleMinutes } = this.deps.getSettings();
-    // Belt to the settings' braces: a delay past the 32-bit limit would be
-    // clamped to ~1 ms by the runtime and fire at once.
-    const delay = Math.min(Math.max(1, idleMinutes) * 60_000, 2_147_483_647);
+    // Belt to the settings' braces. `readIdleCompactionSettings` already
+    // clamps, so this only has to survive an injected value in a test: a
+    // delay past the 32-bit limit would be clamped to ~1 ms by the runtime
+    // and fire AT ONCE, and a non-positive delay would fire in the same task
+    // that armed it. Do NOT floor this at a minute — the e2e scenario runs
+    // the production timer with a sub-minute window (#2843).
+    const delay = Math.min(Math.max(1, idleMinutes * 60_000), 2_147_483_647);
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.runNow();
@@ -154,6 +175,35 @@ export class IdleCompaction {
       return 'below-minimum';
     }
 
+    // Names this round on every state it emits, so the retraction below can
+    // say WHICH round came to nothing (#2843).
+    const roundId = `idle-${Date.now().toString(36)}-${((this.rounds += 1)).toString(36)}`;
+    const outcome = await this.runRound(agent, compactFn, messages, tokens, roundId);
+    // Every non-adopted outcome of a STARTED round retracts the notice the
+    // round's `summarizing` state put in the transcript. Gate rejections and
+    // `below-minimum` return above this line precisely because they never
+    // opened one.
+    if (outcome !== 'compacted') {
+      try {
+        this.deps.onDiscarded(roundId);
+      } catch (err) {
+        log.warn('onDiscarded hook threw', {
+          folder: this.deps.folder,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return outcome;
+  }
+
+  /** One round, from the abort controller to the adoption decision. Never throws. */
+  private async runRound(
+    agent: Agent,
+    compactFn: CompactFn,
+    messages: AgentMessage[],
+    tokens: number,
+    roundId: string
+  ): Promise<IdleCompactionOutcome> {
     const before = fingerprint(messages);
     const input = messages.slice();
     const round = new AbortController();
@@ -169,6 +219,7 @@ export class IdleCompaction {
       const compacted = await compactFn(input, round.signal, {
         force: true,
         trigger: 'idle',
+        roundId,
         deferMemoryExtraction: (extract) => {
           extractMemories = extract;
         },

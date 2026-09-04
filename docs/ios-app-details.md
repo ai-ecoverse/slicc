@@ -220,6 +220,29 @@ The rule is stated ONCE, in `Models/UnitRole.swift` — `UnitRole.isReadOnly`, t
 
 Cone selection is unchanged. Covered by `SliccFollowerTests/ReadOnlyScoopTests` and `SliccFollowerUITests/ReadOnlyScoopUITests`.
 
+## Compaction marker rows
+
+A `compaction_notice` event is bookkeeping, not a turn, and `AppState+Compaction.swift` is where that
+distinction is enforced: `applyCompactionNotice` touches NONE of the turn state — not `isStreaming`,
+not `streamingMessageId`, not the voice-reply binding. The leader used to fake an assistant turn to
+get a compaction notice into the transcript, which stranded the web composer in its busy state for a
+whole session ([#2843](https://github.com/ai-ecoverse/slicc/issues/2843)); modelling it as turn state
+here would reintroduce the same bug on the phone.
+
+One row per ROUND: the leader keeps `messageId` stable, so the opening state inserts and the terminal
+state updates in place. A `discarded` state REMOVES the row instead of relabelling it — a transcript
+that keeps announcing a compaction which did not happen is worse than one that says nothing. The
+publish flushes immediately rather than coalescing: a marker arrives a few times per round at most,
+and a retraction sitting in a pending flush would leave a stale row on screen.
+
+`CompactionMarkerRow` mirrors `<slicc-compaction-marker>` — same rule·chip·rule geometry, same
+glyph-per-state choice, and a copy table that is the PAIR of the web component's. The wire carries
+`trigger` + `state` and never prose precisely so each surface words it itself; change one table and
+change the other. `MessageBubble` checks the marker FIRST, ahead of the lick branch, so nothing about
+the message it rides on (assistant role, an empty body) can reclassify it. Decoding is lenient in
+one direction only: an unknown state degrades to `.summarized`, never to `.discarded`, because
+degrading to a state that removes the row would silently drop a row the leader asked us to show.
+
 ## App Intents entities and schemas
 
 Siri, Spotlight and Shortcuts reach the app through App Intents. Three surfaces, and the choice of which schema each one adopts is deliberate.

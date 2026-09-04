@@ -6,7 +6,7 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
-import type { ToolProgressEvent } from '@slicc/shared-ts';
+import type { ChatCompactionMarker, ToolProgressEvent } from '@slicc/shared-ts';
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
@@ -1029,6 +1029,9 @@ export class WcChatController {
       case 'turn_end':
         this.#handleTurnEnd(event.messageId);
         break;
+      case 'compaction_notice':
+        this.#handleCompactionNotice(event.messageId, event.marker);
+        break;
       case 'error':
         this.#handleError(event.error);
         break;
@@ -1176,6 +1179,57 @@ export class WcChatController {
     this.#activeToolCount = Math.max(0, this.#activeToolCount - 1);
     if (this.#activeToolCount === 0) this.#setBusyPhase('thinking');
     this.#rerenderMessage(message);
+  }
+
+  /**
+   * A compaction round's transcript row: created by the round's opening
+   * state, updated in place by its terminal one, and REMOVED when the round
+   * turns out to have kept nothing (`discarded`).
+   *
+   * Deliberately touches neither `setProcessing` nor `#currentStreamId`. A
+   * compaction is not a turn: the row is born complete, no deltas follow it,
+   * and no `turn_end` closes it. The predecessor faked an assistant turn for
+   * this and stranded `#processing` at `true` for the rest of the session —
+   * see the `compaction_notice` doc comment in `agent-wire-types.ts` (#2843).
+   */
+  #handleCompactionNotice(messageId: string, marker: ChatCompactionMarker): void {
+    const existing = this.#findMessage(messageId);
+    if (marker.state === 'discarded') {
+      if (existing) this.#removeMessage(existing);
+      return;
+    }
+    if (existing) {
+      existing.compaction = marker;
+      this.#rerenderMessage(existing);
+      return;
+    }
+    // A queued submission must not be dragged into the thread behind this
+    // row, so the append path is used directly rather than any turn helper.
+    this.#appendMessage({
+      id: messageId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      compaction: marker,
+    });
+  }
+
+  /**
+   * Drop a message from the thread and the model. Used only to retract a
+   * compaction row for a round that came to nothing — a transcript must not
+   * keep announcing a compaction that did not happen.
+   */
+  #removeMessage(message: ChatMessage): void {
+    // Same reason `#rerenderMessage` unwraps: this message's tool rows (a
+    // compaction row has none, but the helper is general) may currently be
+    // parented by a cross-message cluster.
+    this.#unwrapToolClusters();
+    this.#onMessageDisposed?.(message.id);
+    for (const el of this.#els.get(message.id) ?? []) el.remove();
+    this.#els.delete(message.id);
+    this.#messages = this.#messages.filter((m) => m !== message);
+    this.#reflowToolClusters();
+    this.#refreshClusterProgress();
   }
 
   #handleTurnEnd(messageId: string): void {

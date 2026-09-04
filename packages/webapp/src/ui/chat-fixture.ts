@@ -507,20 +507,55 @@ function buildLicks(): ChatMessage[] {
     },
   ];
 }
-/** Section 6: Queued messages (before the streaming tail). */
+/**
+ * Section 6: Compaction markers — one seam per rendered state. `discarded` is
+ * deliberately absent: a round that kept nothing has no row, so a fixture
+ * entry for it would assert the opposite of the contract (#2843).
+ */
+function buildCompactionMarkers(): ChatMessage[] {
+  const snapshot = '/sessions/live-cone-fixture-8egf.md';
+  // `content` stays empty on every marker: the row is bookkeeping, and the
+  // renderer derives all of its copy from `trigger` + `state`.
+  return [
+    {
+      id: 'fx-compaction-idle',
+      role: 'assistant',
+      content: '',
+      timestamp: tsAt(18.1),
+      compaction: { trigger: 'idle', state: 'summarized', transcriptPath: snapshot },
+    },
+    {
+      id: 'fx-compaction-threshold-running',
+      role: 'assistant',
+      content: '',
+      timestamp: tsAt(18.2),
+      compaction: { trigger: 'threshold', state: 'summarizing', transcriptPath: snapshot },
+    },
+    {
+      id: 'fx-compaction-fallback',
+      role: 'assistant',
+      content: '',
+      timestamp: tsAt(18.3),
+      // No snapshot path: the degraded row must render without the link chip.
+      compaction: { trigger: 'overflow', state: 'fallback' },
+    },
+  ];
+}
+
+/** Section 7: Queued messages (before the streaming tail). */
 function buildQueuedMessages(): ChatMessage[] {
   return [
     {
       id: 'fx-queued-1',
       role: 'user',
       content: 'Also double-check the install.md formatting after you finish.',
-      timestamp: tsAt(18),
+      timestamp: tsAt(18.5),
       queued: true,
     },
   ];
 }
 
-/** Section 7: Streaming / live-state tail. The cursor keeps blinking via CSS. */
+/** Section 8: Streaming / live-state tail. The cursor keeps blinking via CSS. */
 function buildStreamingTail(): ChatMessage[] {
   return [
     {
@@ -552,6 +587,7 @@ export function createChatFixture(): ChatMessage[] {
     ...buildScoopManagementTools(),
     ...buildDelegation(),
     ...buildLicks(),
+    ...buildCompactionMarkers(),
     ...buildQueuedMessages(),
     ...buildStreamingTail(),
   ];
