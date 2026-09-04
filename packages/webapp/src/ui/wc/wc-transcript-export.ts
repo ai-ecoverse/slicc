@@ -4,11 +4,11 @@
  *
  * - `transcriptZipToBlob`: streams + verifies a TranscriptZipResult.
  * - `downloadTranscriptBlob`: anchor-based browser download.
- * - `openTranscriptExportApproval`: shows a slicc-dialog with Allow/Deny.
+ * - `showTranscriptExportFailure`: tells the user an export produced no file.
  * - `runTranscriptExportForFollower`: creates a ZIP for an approved follower
  *   export using the registered TranscriptExportService.
  */
-import type { TranscriptExportSelector } from '@slicc/shared-ts';
+import { TranscriptExportError, type TranscriptExportSelector } from '@slicc/shared-ts';
 import { makeExportSpool } from '../../transcript/export-spool.js';
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
 import type { OffscreenClient } from '../offscreen-client.js';
@@ -79,8 +79,51 @@ export async function downloadTranscriptBlob(blob: Blob, filename: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Leader approval dialog
+// Failure notice
 // ---------------------------------------------------------------------------
+
+/** One-line reason for a failed export, safe to render verbatim. */
+function exportFailureReason(err: unknown): string {
+  if (err instanceof TranscriptExportError) {
+    return err.detail ? `${err.code}: ${err.detail}` : err.code;
+  }
+  return err instanceof Error && err.message ? err.message : 'unknown error';
+}
+
+/**
+ * Tell the user an export produced no file.
+ *
+ * A failed export is otherwise completely silent: the caller logs and
+ * swallows, the download never arrives, and the only signal is a console line
+ * the user will never open (#2845). This puts the reason on screen.
+ *
+ * Reuses the `<slicc-dialog>` primitive the rest of the WC shell uses. If that
+ * element is not defined (an embedded float, or a failure so early the shell
+ * never registered it), this is a no-op — the caller's log line stands alone,
+ * exactly as before.
+ */
+export function showTranscriptExportFailure(err: unknown): void {
+  if (typeof document === 'undefined' || !customElements.get('slicc-dialog')) return;
+  const dialog = document.createElement('slicc-dialog') as HTMLElement & { show?: () => void };
+  dialog.setAttribute('heading', 'Export failed');
+
+  const body = document.createElement('p');
+  body.style.cssText = 'margin:0;padding:0.25rem 0;font-size:0.9375rem;line-height:1.5;';
+  body.textContent = `No transcript was written — ${exportFailureReason(err)}.`;
+  dialog.append(body);
+
+  const close = document.createElement('button');
+  close.setAttribute('slot', 'footer');
+  close.type = 'button';
+  close.dataset.transcriptExportAction = 'close';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => dialog.remove());
+  dialog.append(close);
+
+  dialog.addEventListener('slicc-dialog-close', () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.show?.();
+}
 
 // ---------------------------------------------------------------------------
 // Leader-side ZIP factory for follower exports
