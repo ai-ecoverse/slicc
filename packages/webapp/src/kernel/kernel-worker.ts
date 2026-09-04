@@ -24,6 +24,7 @@
 
 /// <reference lib="webworker" />
 
+import { setPageLoadedAt } from '../base/page-load-time.js';
 import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
@@ -151,6 +152,14 @@ export interface KernelWorkerInitMsg {
    * the comparison then stays silent.
    */
   pageBuildId?: string | null;
+  /**
+   * The PAGE realm's `performance.timeOrigin` — when the browser window was
+   * last loaded. This worker's own `timeOrigin` is when the WORKER was
+   * constructed, which is some way into the page's boot, so `uptime` reads the
+   * page's value instead (#2819). Absent on older pages; the worker then falls
+   * back to its own origin.
+   */
+  pageLoadedAt?: number | null;
   /**
    * The page's resolved feature-flag float (its `UiRuntimeMode`). The
    * worker adopts the page's cached remote flag values for this float
@@ -361,6 +370,9 @@ function configureWorkerEnvironment(init: KernelWorkerInitMsg): void {
   setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
   setBridgeToken(init.bridgeToken ?? null);
   setSyncFsBridgeEnabled(init.syncFsBridgeEnabled ?? false); // realm sync-fs SW bridge (see sync-fs-enabled.ts)
+  // `uptime` is time since the browser window was last loaded; this worker's
+  // own `performance.timeOrigin` is later than that (#2819).
+  setPageLoadedAt(init.pageLoadedAt ?? null);
   // Thin-bridge extension leader: the worker has no `chrome`, so a
   // configured delegate id routes cross-origin shell fetches over panel-RPC
   // to the page realm, which opens the extension Port (host_permissions CORS

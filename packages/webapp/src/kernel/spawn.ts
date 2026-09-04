@@ -438,6 +438,10 @@ export function bootstrapKernelWorker<TClient>(
     // compares it against its own copy to catch mixed-build graphs after
     // a mid-session deploy (#1983).
     pageBuildId: __SLICC_BUILD_ID__,
+    // When the browser window was last loaded. The worker's own
+    // `performance.timeOrigin` is later — it is when the worker was
+    // constructed — so `uptime` needs the page's (#2819).
+    pageLoadedAt: globalThis.performance?.timeOrigin ?? Date.now(),
     flagFloat: options.flagFloat ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
