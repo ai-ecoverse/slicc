@@ -89,9 +89,9 @@ fine — name them so reviewers don't conflate them with your changes.
 - [ ] **UI change?** Attach a screencast of what changed (**required** for UI
       changes). Record it with the `demo-recording` skill — a CDP screencast of
       the running harness (`node packages/dev-tools/tools/slicc-screencast.mjs`)
-      or a polished cursor-animated MP4. Upload it with `gh image` from
-      `ai-ecoverse/ai-aligned-gh` (e.g.
-      `gh image --markdown screencast.webm`) and paste the embed here.
+      or a polished cursor-animated MP4. Upload it with gh's repeatable
+      `--attach` flag (needs gh >= 2.99, e.g.
+      `gh pr comment <pr> --body "…" --attach ./screencast.webm`).
 - [ ] N/A — explain below
 
 **Pre-existing failures** (verified against `main`, unrelated to this PR):

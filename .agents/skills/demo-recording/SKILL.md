@@ -5,7 +5,7 @@ description: |
   CDP screencast of the *running* dev/e2e harness (to review what changed
   frame-by-frame, issue #1264), and a polished cursor-animated MP4
   (playwright-cli + ffmpeg) for showcase demos. Upload the result to the PR
-  with `gh image`. Use when asked to record a UI demo, capture a before/after,
+  with `gh --attach`. Use when asked to record a UI demo, capture a before/after,
   showcase a feature, or attach a screencast to a pull request.
 globs: 'packages/webcomponents/**,packages/webapp/src/ui/**'
 ---
@@ -13,7 +13,8 @@ globs: 'packages/webcomponents/**,packages/webapp/src/ui/**'
 # Demo Recording
 
 Record a video of a SLICC UI change for a pull request, then upload it with
-`gh image` (see § Embedding in GitHub PRs). Pick the mode that fits.
+`gh --attach` (see § Embedding in GitHub PRs; needs gh >= 2.99). Pick the mode
+that fits.
 
 ## Two capture modes
 
@@ -628,25 +629,75 @@ Use `-` and `->` instead.
 
 ## Embedding in GitHub PRs
 
-Upload the recording with `gh image` from the sibling
-[`ai-ecoverse/ai-aligned-gh`](https://github.com/ai-ecoverse/ai-aligned-gh)
-wrapper (its `gh` shim adds an `image` subcommand — plain `gh` cannot attach
-media). It uploads the file to content-addressed storage and prints a stable,
-embeddable URL, so agents get a programmatic upload path (no browser
-drag-and-drop). Supported: `mp4 mov webm` (plus image types).
+Upload the recording with `gh`'s repeatable `--attach` flag. It needs
+**gh >= 2.99** — check with `gh --version` before recording, because a failed
+upload after a long capture wastes the whole run. The file is uploaded to
+`https://github.com/user-attachments/assets/<uuid>` and the embed markdown
+lands in the body — appended to the end, or in place if the body references
+the local path (see § Controlling where the media lands) — so agents get a
+programmatic upload path (no browser drag-and-drop). Supported: `mp4 mov webm`
+(plus image types), up to 50 files per command.
+
+`--attach` works on `gh pr comment`, `gh pr create`, `gh pr edit`,
+`gh issue comment` and `gh issue create`:
 
 ```bash
-# Print a ready-to-embed Markdown reference and drop it in the PR body:
-gh pr comment <pr> --body "UI change: $(gh image --markdown /tmp/shot/screencast.webm)"
+# Attach the recording to a PR comment; repeat --attach for several files.
+gh pr comment <pr> --body "UI change: before / after" \
+  --attach ./before.png --attach /tmp/shot/screencast.webm
 
-# Or capture the bare URL (stdout is URL-only) and embed it yourself:
-URL="$(gh image /tmp/demo.mp4)"        # → https://repo--owner.agentbin.net/<sha256>.mp4
-gh pr edit <pr> --body "…$URL…"        # a bare media URL on its own line renders inline
+# Alt text follows the path after '#' (images only — video renders as a
+# player and takes no alt text).
+gh pr comment <pr> --body "…" --attach './before.png#Terminal panel at 75%'
 ```
 
-Use `--repo owner/repo` outside a repo dir and `--timeout <seconds>` to adjust
-the wait (default 180s). The URL is content-addressed and stable — re-uploading
-the same file returns the same URL.
+### Controlling where the media lands
+
+An attachment the body does not mention is appended to the end. To place it,
+**reference the local path in the body** and `gh` rewrites that reference to
+the uploaded URL — this is the easy way to get a laid-out comment:
+
+```bash
+gh pr comment <pr> --body-file - --attach ./before.png --attach ./after.png <<'EOF'
+| Before | After |
+| --- | --- |
+| ![before](./before.png) | ![after](./after.png) |
+EOF
+```
+
+If you need the URLs somewhere the rewrite cannot reach (a second comment, the
+PR body, a checklist you build later), post once with a placeholder body and
+every `--attach`, read the assigned URLs back out of the stored body, then
+PATCH the comment with the real markdown:
+
+```bash
+# 1. Post with a placeholder; gh prints the comment URL (…#issuecomment-<id>).
+gh pr comment <pr> --body "uploading…" --attach ./before.png --attach ./after.png
+
+# 2. Read the body back — it now carries the user-attachments URLs.
+gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body
+
+# 3. PATCH the comment with laid-out markdown substituting those URLs.
+#    Write the body to a file first — backticks in a shell-passed body get
+#    interpolated.
+gh api repos/<owner>/<repo>/issues/comments/<id> -X PATCH -F body=@/tmp/comment.md
+```
+
+Use `--repo owner/repo` outside a repo dir.
+
+### When there is no upload path
+
+`--attach` is a write operation, so under the sibling
+[`ai-ecoverse/ai-aligned-gh`](https://github.com/ai-ecoverse/ai-aligned-gh)
+wrapper it goes through the gated write path and can prompt the as-a-bot
+device flow. An agent that cannot complete an interactive authorization has
+**no** upload path for the recording. Say so in the PR comment — name the
+local file path and the command that regenerates it — rather than blocking on
+the prompt or silently dropping the recording:
+
+> Recorded `/tmp/shot/screencast.webm` (14 s, 30 fps) but could not attach it:
+> `gh` needs an interactive as-a-bot authorization I cannot complete.
+> Re-attach with `gh pr comment <pr> --body "…" --attach /tmp/shot/screencast.webm`.
 
 ## Full Example: Resize Demo
 
