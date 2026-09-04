@@ -99,6 +99,11 @@ export interface NetworkEntry {
   status: number | null;
   responseHeaders: Record<string, string> | null;
   responseBody: string | null;
+  /**
+   * Whether `responseBody` is base64 (CDP `Network.getResponseBody.base64Encoded`).
+   * Kept verbatim from the CDP result — MIME type never decides the encoding.
+   */
+  responseBodyBase64: boolean;
   mimeType: string | null;
   isStatic: boolean;
   timestamp: number;
