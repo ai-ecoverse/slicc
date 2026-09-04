@@ -19,6 +19,8 @@
  */
 
 import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
+import { createShortcutCaps } from './wc-shortcut-caps.js';
+import { createShortcutUsage } from './wc-shortcut-usage.js';
 import {
   type ShortcutComposerMeta,
   type ShortcutDock,
@@ -336,5 +338,22 @@ export function wireShellKeyboard(deps: ShellKeyboardDeps): ShortcutHandles {
     zoomSurface: () => zoomSurface(deps),
     peekTabs: () => peekTabs(deps),
     lists: shortcutLists(deps),
+    /**
+     * The floating key caps. Built here rather than in the mode for the same
+     * reason the six DOM-reached commands are: finding the rail item a letter
+     * drives is knowledge of this shell's markup, and the mode has none.
+     */
+    caps: createShortcutCaps({
+      inputCard: deps.inputCard,
+      root: deps.chatPane,
+      switcher: deps.switcher,
+    }),
+    /**
+     * What the user has done this session, for the help sheet's personalised
+     * section. Created here because it listens to the SURFACES' own events —
+     * the same markup knowledge this file already owns — and because a click
+     * on a rail item has to count exactly as much as the key that opens it.
+     */
+    usage: createShortcutUsage(deps.chatPane.ownerDocument),
   });
 }

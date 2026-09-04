@@ -240,8 +240,37 @@ export interface ShortcutDeps {
    * and "the caret is somewhere you cannot see".
    */
   composerBand?: HTMLElement;
+  /**
+   * The floating key caps: one per reachable control, mounted with the mode
+   * and taken down with it.
+   *
+   * Optional, and supplied by `wc-shortcut-surfaces.ts` for the same reason
+   * the six DOM-reached commands are — finding the rail item a letter drives
+   * is markup knowledge, and this module has none. A float that hands over no
+   * caps simply has none; the HUD and the help sheet still name every key.
+   */
+  caps?: ShortcutCaps;
+  /**
+   * What the user has done this session, for the help sheet's personalised
+   * section. Counts POINTER use as well as keys, which is the whole point —
+   * the sheet's job is to tell you the shortcut for the thing you have been
+   * clicking. Optional: a float without one gets the reference sheet.
+   */
+  usage?: HelpUsage & { record?(id: CommandId): void };
   /** Injected for tests; defaults to the switcher's own document. */
   doc?: Document;
+}
+
+/**
+ * The floating key caps, as the mode drives them: up with the mode, down with
+ * it. The keymap is passed at show time rather than held, because the config
+ * load is deliberately late — the caps must name the keys in force when they
+ * appear, not the defaults the shell wired itself with.
+ */
+export interface ShortcutCaps {
+  show(keymap: Readonly<Record<string, CommandId>>): void;
+  hide(): void;
+  destroy(): void;
 }
 
 /** Actions the shell cannot reach on its own, registered by later wiring. */
@@ -290,19 +319,58 @@ type ModalElement = HTMLElement & { show?: () => void; hide?: () => void };
 export interface ShortcutRow {
   keys: string[];
   description: string;
+  /** The section this row belongs under. */
+  group: CommandGroup;
+  /**
+   * The command it runs, when it is one. Absent for the two rows that are the
+   * MODE rather than a binding — Escape, and the digits that address the tab
+   * strip positionally — which is also why neither can be personalised: there
+   * is no command id to count.
+   */
+  id?: CommandId;
 }
 
 const STYLE_ID = 'slicc-shortcuts-style';
 const CSS = `
-slicc-dialog.wcsc-dialog::part(dialog){width:min(440px,92vw);}
-.wcsc{display:flex;flex-direction:column;gap:2px;font-family:var(--ui);color:var(--ink);}
-.wcsc__note{font-size:12px;color:var(--txt-3);padding:0 2px 8px;line-height:1.5;}
-.wcsc__row{display:flex;align-items:center;gap:12px;padding:7px 2px;border-bottom:1px solid var(--line);}
+/* The sheet grows a column at a time as the viewport allows, and the dialog
+   grows with it — one alphabetical column of thirty-odd rows is a reference
+   you read; three short labelled ones are a cheat sheet you scan. Capped at
+   three because a fourth makes the eye travel further than the list is long. */
+slicc-dialog.wcsc-dialog::part(dialog){width:min(460px,92vw);}
+@media (min-width:900px){slicc-dialog.wcsc-dialog::part(dialog){width:min(860px,94vw);}}
+@media (min-width:1280px){slicc-dialog.wcsc-dialog::part(dialog){width:min(1180px,94vw);}}
+.wcsc{font-family:var(--ui);color:var(--ink);}
+.wcsc__note{font-size:12px;color:var(--txt-3);padding:0 2px 10px;line-height:1.5;}
+
+/* CSS columns rather than a grid: the sections are different heights, and
+   columns flow them into balanced tracks without anyone having to decide
+   which group goes where. 'break-inside' is what keeps a section whole. */
+.wcsc__cols{columns:1;column-gap:30px;}
+@media (min-width:900px){.wcsc__cols{columns:2;}}
+@media (min-width:1280px){.wcsc__cols{columns:3;}}
+.wcsc__group{break-inside:avoid;page-break-inside:avoid;margin:0 0 16px;}
+.wcsc__title{font:600 10.5px/1 var(--ui);letter-spacing:.09em;text-transform:uppercase;color:var(--txt-3);padding:0 2px 6px;}
+
+.wcsc__row{display:flex;align-items:center;gap:12px;padding:6px 4px;border-bottom:1px solid var(--line);border-radius:6px;}
 .wcsc__row:last-child{border-bottom:0;}
 .wcsc__desc{flex:1;min-width:0;font-size:12.5px;}
 .wcsc__keys{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
 .wcsc__key{font:600 11px/1 var(--mono,ui-monospace,monospace);color:var(--txt-2);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:4px 6px;white-space:nowrap;}
 .wcsc__sep{font-size:11px;color:var(--txt-3);}
+
+/* Used this session. A tinted row rather than a badge or a bolder weight:
+   the point is to make the handful you already touched findable at a glance
+   in a wall of rows, not to shout at you about them. */
+.wcsc__row[data-used]{background:color-mix(in srgb,var(--ctx) 9%,transparent);}
+.wcsc__row[data-used] .wcsc__desc{color:var(--ink);}
+.wcsc__row[data-used] .wcsc__key{color:var(--ink);border-color:color-mix(in srgb,var(--ctx) 34%,var(--line));}
+
+/* The personalised section leads, and is the one thing on the sheet allowed
+   to look different from the reference below it. */
+.wcsc__group--yours{border:1px solid color-mix(in srgb,var(--ctx) 26%,var(--line));border-radius:10px;padding:10px 10px 4px;background:color-mix(in srgb,var(--ctx) 5%,transparent);}
+.wcsc__group--yours .wcsc__title{color:color-mix(in srgb,var(--ctx) 55%,var(--ink));}
+.wcsc__group--yours .wcsc__row{border-bottom-color:color-mix(in srgb,var(--ctx) 16%,var(--line));}
+.wcsc__count{font:500 10.5px/1 var(--ui);color:var(--txt-3);flex:0 0 auto;}
 `;
 
 /**
@@ -540,6 +608,26 @@ interface ModeState {
 }
 
 /**
+ * The sections of the help sheet, in reading order.
+ *
+ * These are the groups the shipped keymap was always organised into — the
+ * comments in {@link DEFAULT_KEYMAP} said "Anchors / Units / The turn /
+ * Panels / Rare" long before anything read them. Promoting them from comments
+ * to data is what lets the sheet be a cheat sheet: thirty-odd rows in one
+ * alphabetical column is a reference, five short labelled lists is something
+ * you can scan.
+ */
+export const COMMAND_GROUPS = [
+  'Getting around',
+  'Agents',
+  'The turn',
+  'Panels',
+  'Settings',
+] as const;
+
+export type CommandGroup = (typeof COMMAND_GROUPS)[number];
+
+/**
  * One binding. `holdsMode` is the whole modal grammar in a boolean: a command
  * that navigates — or that toggles chrome, like the two rails — keeps keyboard
  * mode; a command that hands focus to a surface gives it up (the mode is
@@ -556,6 +644,24 @@ interface Command {
    * the chords.
    */
   list?: ChordListId;
+  /**
+   * The dock surface this command opens, when it opens one. Declared here for
+   * the same reason {@link Command.list} is: it is a fact about the COMMAND,
+   * and anything else that needs it — the floating key caps, which have to
+   * find the rail item a letter drives — reads it from this table instead of
+   * keeping a second copy that could quietly disagree.
+   */
+  surfaceId?: string;
+  /**
+   * Which part of the app the command belongs to — the sections the help
+   * sheet reads as a cheat sheet rather than as one long list.
+   *
+   * On the COMMAND for the same reason {@link Command.list} and
+   * {@link Command.surfaceId} are: a user who rebinds `files` to `q` should
+   * find it under Panels, where it has always been, and not have the sheet's
+   * shape depend on the keymap.
+   */
+  group: CommandGroup;
   /**
    * Runs the command, and MAY report the index it activated in its list — the
    * seed the step keys page on from, so `e` (which opens the first sprinkle)
@@ -641,6 +747,8 @@ function surfaceCommand(id: string, description: string, list?: ChordListId): Co
   return {
     holdsMode: !!list,
     description,
+    group: 'Panels',
+    surfaceId: id,
     ...(list ? { list } : {}),
     run: ({ deps, state }) => {
       state.lastDockSurface = id;
@@ -658,6 +766,7 @@ function freezerCommand(type: string, description: string): Command {
   return {
     holdsMode: false,
     description,
+    group: 'Agents',
     run: ({ deps }) => {
       deps.freezer?.dispatchEvent(new CustomEvent(type, { bubbles: true }));
     },
@@ -675,6 +784,7 @@ function freezerCommand(type: string, description: string): Command {
 const COMMANDS: Readonly<Record<CommandId, Command>> = {
   nextAgent: {
     holdsMode: true,
+    group: 'Agents',
     description: 'Next agent, looping',
     run: ({ deps }) => {
       const next = nextInCycle(
@@ -686,6 +796,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   prevAgent: {
     holdsMode: true,
+    group: 'Agents',
     description: 'Previous agent, looping',
     run: ({ deps }) => {
       const prev = prevInCycle(
@@ -697,12 +808,14 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   composer: {
     holdsMode: false,
+    group: 'Getting around',
     description: 'Back to the composer',
     run: ({ deps }) => deps.focusComposer?.(),
   },
   stop: {
     // Stopping keeps you where you are: the turn ends, the keyboard stays.
     holdsMode: true,
+    group: 'The turn',
     description: 'Stop the running turn',
     run: ({ deps }) => deps.stopTurn?.(),
   },
@@ -714,22 +827,26 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
      * keeps its Enter; see {@link isActivationTarget}).
      */
     holdsMode: true,
+    group: 'The turn',
     description: 'Go to the pending approval',
     run: ({ deps }) => deps.focusApproval?.(),
   },
   attach: {
     // The menu opens with its search field ready, so the mode is leaving.
     holdsMode: false,
+    group: 'The turn',
     description: 'Attach a file or skill',
     run: ({ deps }) => deps.openAttachMenu?.(),
   },
   copyReply: {
     holdsMode: true,
+    group: 'The turn',
     description: 'Copy the last reply',
     run: ({ deps }) => deps.copyReply?.(),
   },
   copyChat: {
     holdsMode: true,
+    group: 'The turn',
     description: 'Copy the whole chat',
     run: ({ deps }) => deps.copyChat?.(),
   },
@@ -743,21 +860,25 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
      * Holds the mode, because the key that ends the turn is this same key.
      */
     holdsMode: true,
+    group: 'The turn',
     description: 'Dictate — again to send',
     run: ({ deps }) => deps.toggleVoice?.(),
   },
   nextItem: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'Next message — or, after a list key, the next entry',
     run: (ctx) => stepList(ctx, 1),
   },
   prevItem: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'Previous message — or the previous entry',
     run: (ctx) => stepList(ctx, -1),
   },
   newConversation: {
     holdsMode: false,
+    group: 'Agents',
     description: 'New conversation',
     // The event the rail's action row fires on a single click: save the
     // chat, extract memories, start a new one.
@@ -770,6 +891,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   dropCone: freezerCommand('drop-cone', 'Drop this cone'),
   sessions: {
     holdsMode: true,
+    group: 'Agents',
     description: 'Archived chats (with 1-9 / j / k: restore that one)',
     list: 'sessions',
     // Force the rail OPEN rather than toggling it: this is the one key whose
@@ -778,11 +900,13 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   leftRail: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'Toggle the left rail',
     run: ({ deps }) => deps.freezer?.toggle(),
   },
   rightRail: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'Toggle the right panel',
     /**
      * The dock's own toggle: clicking the ACTIVE rail item collapses its
@@ -820,6 +944,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
      * shell knowing anything about tabs.
      */
     holdsMode: true,
+    group: 'Panels',
     description: 'Peek a tab (then 1-9: show it and come back)',
     run: ({ deps }) => deps.peekTabs?.(),
   },
@@ -837,6 +962,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
      * that completes the chord has to arrive with the keyboard still live.
      */
     holdsMode: true,
+    group: 'Panels',
     description: 'Sprinkles (with 1-9 / j / k: open that one)',
     list: 'sprinkles',
     run: ({ deps, state }) => {
@@ -854,6 +980,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   zoom: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'Full screen the open panel',
     /**
      * Runs synchronously inside the keydown on purpose: `requestFullscreen()`
@@ -864,6 +991,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   model: {
     holdsMode: false,
+    group: 'Settings',
     description: 'Model picker',
     /**
      * `openMenu()` is the pill's own programmatic click — and, exactly like a
@@ -883,6 +1011,7 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   cycleModel: {
     holdsMode: true,
+    group: 'Settings',
     description: 'Next model',
     run: ({ deps, actions }) => {
       const meta = deps.composerMeta;
@@ -896,16 +1025,19 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   },
   cycleThinking: {
     holdsMode: true,
+    group: 'Settings',
     description: 'Next thinking level',
     run: ({ deps }) => deps.composerMeta?.cycleThinking?.(),
   },
   accounts: {
     holdsMode: false,
+    group: 'Settings',
     description: 'Accounts',
     run: ({ actions }) => actions.accounts?.(),
   },
   help: {
     holdsMode: true,
+    group: 'Getting around',
     description: 'This help',
     run: (ctx) => ctx.toggleHelp(),
   },
@@ -917,6 +1049,30 @@ export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[];
 /** Is `value` a command a keymap may point at? */
 export function isCommandId(value: unknown): value is CommandId {
   return typeof value === 'string' && Object.hasOwn(COMMANDS, value);
+}
+
+/**
+ * The dock surface `id` opens, or `null` for a command that opens none.
+ *
+ * The one fact about the command table the floating key caps need: which rail
+ * item a letter drives. Exported rather than re-derived so a dock id that
+ * moves moves in exactly one place.
+ */
+export function commandSurfaceId(id: CommandId): string | null {
+  return COMMANDS[id].surfaceId ?? null;
+}
+
+/**
+ * The command that opens dock surface `surfaceId`, or `null` for a surface no
+ * command opens.
+ *
+ * The inverse of {@link commandSurfaceId}, and the reason the usage log can
+ * count a CLICK on a rail item as the same action as the key that opens it —
+ * which is the whole point: the help sheet learns what you do, not what you
+ * do with the keyboard.
+ */
+export function commandForSurfaceId(surfaceId: string): CommandId | null {
+  return COMMAND_IDS.find((id) => COMMANDS[id].surfaceId === surfaceId) ?? null;
 }
 
 /**
@@ -1038,16 +1194,28 @@ function keyLabel(key: string): string {
  * than no list. A command nobody has a key for is dropped.
  */
 /**
- * The key the badge should tell a new user to press for help — the first one
- * bound to `help`, as it prints, or `null` when a config has unbound it.
+ * The first key bound to `id`, as it prints, or `null` when nothing is.
  *
  * Derived rather than written out for the same reason {@link shortcutRows} is:
- * the mode's own hint must never name a key that does nothing, which is
- * exactly what it did when the shipped map moved help off `h`.
+ * nothing the mode draws may name a key that does nothing, which is exactly
+ * what the badge did when the shipped map moved help off `h`. The floating key
+ * caps read the same way — a cap on the files rail item says whatever the live
+ * keymap has bound to `files`, and disappears if a config unbinds it.
+ *
+ * FIRST, not all: a control has room for one legend, and the keymap's own
+ * order is the honest tiebreak.
  */
-export function helpKeyLabel(keymap: Readonly<Record<string, CommandId>>): string | null {
-  const key = Object.keys(keymap).find((k) => keymap[k] === 'help');
+export function commandKeyLabel(
+  keymap: Readonly<Record<string, CommandId>>,
+  id: CommandId
+): string | null {
+  const key = Object.keys(keymap).find((k) => keymap[k] === id);
   return key === undefined ? null : keyLabel(key);
+}
+
+/** The key the badge should tell a new user to press for help. */
+export function helpKeyLabel(keymap: Readonly<Record<string, CommandId>>): string | null {
+  return commandKeyLabel(keymap, 'help');
 }
 
 /**
@@ -1083,11 +1251,18 @@ export function shortcutRows(
     {
       keys: ['Esc'],
       description: 'Leave the composer for keyboard mode (again: exit full screen)',
+      group: 'Getting around' as const,
     },
-    { keys: ['1 – 9'], description: 'Switch to that agent in the tab strip (9 = last)' },
+    {
+      keys: ['1 – 9'],
+      description: 'Switch to that agent in the tab strip (9 = last)',
+      group: 'Agents' as const,
+    },
     ...COMMAND_IDS.filter((id) => byCommand.has(id)).map((id) => ({
       keys: byCommand.get(id) ?? [],
       description: COMMANDS[id].description,
+      group: COMMANDS[id].group,
+      id,
     })),
   ];
 }
@@ -1101,10 +1276,111 @@ function ensureStyle(doc: Document): void {
 }
 
 /** The overlay body: a lead line, then one row per binding. */
+/** How many of your own actions the personalised section leads with. */
+const FREQUENT_ROWS = 5;
+
+/**
+ * What the sheet needs from the usage log, structurally — so this module,
+ * which `wc-shortcut-usage.ts` imports FROM, never imports it back.
+ */
+export interface HelpUsage {
+  ranked(): ReadonlyArray<{ id: CommandId; count: number }>;
+}
+
+/** A row plus what the sheet knows about your use of it. */
+interface HelpRow extends ShortcutRow {
+  count: number;
+}
+
+/** One `<kbd>` per key, `+` between a chord's parts is the row's own business. */
+function keyNodes(doc: Document, row: ShortcutRow): HTMLElement {
+  const keys = doc.createElement('div');
+  keys.className = 'wcsc__keys';
+  for (const key of row.keys) {
+    const kbd = doc.createElement('kbd');
+    kbd.className = 'wcsc__key';
+    kbd.textContent = key;
+    keys.append(kbd);
+  }
+  return keys;
+}
+
+/**
+ * One line of the sheet. `data-used` is the highlight: something you have
+ * already done this session, tinted so the few you touched are findable in a
+ * wall of rows.
+ */
+function helpRow(doc: Document, row: HelpRow, showCount = false): HTMLElement {
+  const line = doc.createElement('div');
+  line.className = 'wcsc__row';
+  if (row.count > 0) line.dataset.used = String(row.count);
+
+  const desc = doc.createElement('div');
+  desc.className = 'wcsc__desc';
+  desc.textContent = row.description;
+  line.append(desc);
+
+  if (showCount) {
+    const count = doc.createElement('div');
+    count.className = 'wcsc__count';
+    count.textContent = `×${row.count}`;
+    line.append(count);
+  }
+  line.append(keyNodes(doc, row));
+  return line;
+}
+
+function helpGroup(doc: Document, title: string, rows: readonly HelpRow[]): HTMLElement {
+  const group = doc.createElement('div');
+  group.className = 'wcsc__group';
+  const heading = doc.createElement('div');
+  heading.className = 'wcsc__title';
+  heading.textContent = title;
+  group.append(heading);
+  for (const row of rows) group.append(helpRow(doc, row));
+  return group;
+}
+
+/**
+ * **Your frequent actions** — the section that makes the sheet worth opening
+ * twice.
+ *
+ * Ordered by what you have actually done, counting POINTER use as well as
+ * keys (see `wc-shortcut-usage.ts`), so its whole job is to tell you the
+ * shortcut for the thing you have been clicking. A user who has done nothing
+ * yet gets no section at all rather than an empty box — the sheet has to work
+ * on the first press too.
+ */
+function frequentGroup(doc: Document, rows: readonly HelpRow[]): HTMLElement | null {
+  const top = rows
+    .filter((row) => row.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, FREQUENT_ROWS);
+  if (top.length === 0) return null;
+
+  const group = doc.createElement('div');
+  group.className = 'wcsc__group wcsc__group--yours';
+  const heading = doc.createElement('div');
+  heading.className = 'wcsc__title';
+  heading.textContent = 'Your frequent actions';
+  group.append(heading);
+  for (const row of top) group.append(helpRow(doc, row, true));
+  return group;
+}
+
+/**
+ * The help sheet: a personalised header, then the whole keymap in labelled
+ * sections that flow into as many columns as the viewport allows.
+ *
+ * Sections come from the COMMAND table rather than from the keymap
+ * ({@link Command.group}), so rebinding a key never reshuffles the sheet, and
+ * a group nobody has a binding for simply does not appear.
+ */
 function buildHelpBody(
   doc: Document,
   rows: readonly ShortcutRow[],
-  trigger: KeyboardTrigger
+  trigger: KeyboardTrigger,
+  usage?: HelpUsage
 ): HTMLElement {
   const list = doc.createElement('div');
   list.className = 'wcsc';
@@ -1117,23 +1393,22 @@ function buildHelpBody(
         ? 'Press Esc to enter keyboard mode. Put the caret back in the composer to type — nothing is intercepted there.'
         : 'Keyboard mode is on whenever nothing is focused for typing (and you are not clicking composer chrome), so these keys are live by default. Put the caret back in the composer to type — nothing is intercepted there.';
   list.append(note);
-  for (const row of rows) {
-    const line = doc.createElement('div');
-    line.className = 'wcsc__row';
-    const desc = doc.createElement('div');
-    desc.className = 'wcsc__desc';
-    desc.textContent = row.description;
-    const keys = doc.createElement('div');
-    keys.className = 'wcsc__keys';
-    for (const key of row.keys) {
-      const kbd = doc.createElement('kbd');
-      kbd.className = 'wcsc__key';
-      kbd.textContent = key;
-      keys.append(kbd);
-    }
-    line.append(desc, keys);
-    list.append(line);
+
+  const counts = new Map((usage?.ranked() ?? []).map((entry) => [entry.id, entry.count]));
+  const counted: HelpRow[] = rows.map((row) => ({
+    ...row,
+    count: (row.id === undefined ? undefined : counts.get(row.id)) ?? 0,
+  }));
+
+  const cols = doc.createElement('div');
+  cols.className = 'wcsc__cols';
+  const yours = frequentGroup(doc, counted);
+  if (yours) cols.append(yours);
+  for (const group of COMMAND_GROUPS) {
+    const inGroup = counted.filter((row) => row.group === group);
+    if (inGroup.length > 0) cols.append(helpGroup(doc, group, inGroup));
   }
+  list.append(cols);
   return list;
 }
 
@@ -1232,7 +1507,8 @@ function createHud(
 function createHelp(
   doc: Document,
   readKeymap: () => Readonly<Record<string, CommandId>>,
-  readTrigger: () => KeyboardTrigger
+  readTrigger: () => KeyboardTrigger,
+  usage?: HelpUsage
 ): {
   show(): void;
   hide(): void;
@@ -1254,7 +1530,10 @@ function createHelp(
     dialog.className = 'wcsc-dialog';
     dialog.setAttribute('heading', 'Keyboard mode');
     dialog.dataset.wcShortcuts = 'help';
-    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap()), readTrigger()));
+    // Read at OPEN time: the sheet is a snapshot of what you have done so
+    // far, and a sheet built at wire time would always say you had done
+    // nothing.
+    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap()), readTrigger(), usage));
     // The dialog dismisses itself on Escape / ✕ / backdrop; drop our handle
     // so the next `?` builds a fresh one instead of toggling a dead node.
     dialog.addEventListener('slicc-dialog-close', () => {
@@ -1303,6 +1582,7 @@ function createMode(
   doc: Document,
   keymap: () => Readonly<Record<string, CommandId>>,
   hudHost: () => HTMLElement,
+  caps: ShortcutCaps | undefined,
   onToggle: (on: boolean) => void
 ): {
   on(): boolean;
@@ -1324,6 +1604,7 @@ function createMode(
       if (!next) {
         hud?.destroy();
         hud = null;
+        caps?.hide();
         return;
       }
       ensureStyle(doc);
@@ -1331,6 +1612,9 @@ function createMode(
       // shell wired itself (the config load is deliberately late) is the one
       // the hint names.
       hud = createHud(doc, hudHost(), keymap());
+      // Same keymap, same moment, for the same reason: a cap that named a key
+      // the config had already rebound would be worse than no cap at all.
+      caps?.show(keymap());
       // The caret would otherwise keep blinking in a composer that no longer
       // receives what is typed.
       const focused = doc.activeElement as HTMLElement | null;
@@ -1595,11 +1879,16 @@ interface Dispatch {
  */
 function runCommand(
   command: Command,
+  id: CommandId,
   event: KeyboardEvent,
   armed: ArmedChord | null,
   ctx: Dispatch
 ): void {
   event.preventDefault();
+  // Counted here rather than inside each command: this is the one place every
+  // keyed command passes through. The pointer half is counted by the usage
+  // log itself, off the surfaces' own events.
+  ctx.deps.usage?.record?.(id);
   if (!command.holdsMode) ctx.mode.set(false);
   const at = command.run({
     deps: ctx.deps,
@@ -1758,7 +2047,7 @@ function handleModeKeyDown(
     helpOpen: () => boolean;
     deps: ShortcutDeps;
     dispatch: Dispatch;
-    commandFor: (key: string) => Command | undefined;
+    commandIdFor: (key: string) => CommandId | undefined;
     trigger: KeyboardTrigger;
   }
 ): void {
@@ -1777,7 +2066,11 @@ function handleModeKeyDown(
   // the digit the prefix was waiting for unless it is consumed below.
   const armed = ctx.chord.take();
 
-  const command = ctx.commandFor(event.key);
+  // Resolved as an ID, because the id is what the usage log counts — deriving
+  // it again at the bottom of this function would read the keymap twice for
+  // one keystroke.
+  const commandId = ctx.commandIdFor(event.key);
+  const command = commandId ? COMMANDS[commandId] : undefined;
   if (suspendedByModal(ctx.doc, command, ctx.helpOpen())) {
     // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
     // dialog reads as "not now" rather than as a dead keyboard.
@@ -1801,7 +2094,7 @@ function handleModeKeyDown(
 
   ctx.mode.record(describeKey(event), !!command);
   // An unbound key is not an exit: the mode is sticky, like vim's.
-  if (command) runCommand(command, event, armed, ctx.dispatch);
+  if (command && commandId) runCommand(command, commandId, event, armed, ctx.dispatch);
 }
 
 /**
@@ -1891,15 +2184,24 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   const actions: ShortcutActions = {};
   let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
   let trigger: KeyboardTrigger = DEFAULT_TRIGGER;
+  /*
+   * What the user has done this session, counting POINTER use as well as
+   * keys — the data behind the sheet's "your frequent actions". Supplied by
+   * the shell where there is one; a float that hands over none simply gets
+   * the reference sheet.
+   */
+  const usage = deps.usage;
   const help = createHelp(
     doc,
     () => keymap,
-    () => trigger
+    () => trigger,
+    usage
   );
   const mode = createMode(
     doc,
     () => keymap,
     () => deps.hudHost ?? doc.body,
+    deps.caps,
     (on) => {
       // The strip's tablist walk and the mode both want ←/→, and the strip is
       // closer to the key. It stands aside for as long as the mode is up.
@@ -1908,10 +2210,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     }
   );
   const state: ModeState = { lastDockSurface: 'files' };
-  const commandFor = (key: string): Command | undefined => {
-    const id = keymap[key];
-    return id ? COMMANDS[id] : undefined;
-  };
+  const commandIdFor = (key: string): CommandId | undefined => keymap[key];
   const composerPointer = { value: false };
   const settler = createSettler(
     doc,
@@ -1941,7 +2240,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       helpOpen: () => !!help.element(),
       deps,
       dispatch,
-      commandFor,
+      commandIdFor,
       trigger,
     });
 
@@ -2009,6 +2308,10 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       chord.clear();
       mode.set(false);
       help.hide();
+      // After `mode.set(false)`, which has already taken the caps down —
+      // this releases the observers that were watching for the chrome to
+      // rebuild underneath them.
+      deps.caps?.destroy();
       // Only if we are still the live one: a remount disposes the old handle
       // AFTER installing itself would be wrong, so `wireKeyboardShortcuts`
       // disposes first — but a caller disposing an already-replaced handle

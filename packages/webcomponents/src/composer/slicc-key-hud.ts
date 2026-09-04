@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { append, type HChild, h, sheet } from '../internal/dom.js';
 import { hasIcon, iconEl } from '../internal/icons.js';
+import { CAP_ICONS } from '../internal/key-caps.js';
 
 /**
  * One press, as the HUD draws it: the caps of a single keystroke (modifiers
@@ -34,26 +35,6 @@ const DEFAULT_LINGER_MS = 1600;
  * it). A shell that has rebound either key passes its own hint instead.
  */
 const DEFAULT_HINT = '[?] help · [i] or [⏎] to type';
-
-/**
- * Caps whose key is a SHAPE rather than a letter, drawn as the lucide glyph
- * instead of the character. A `⏎` typed into a font is whatever that font
- * thinks a return is — at 11px, usually a smudge; the icon is the same stroke
- * weight as every other glyph in the app, at the size we asked for.
- *
- * Modifiers (`⌘`, `⇧`, `⌥`) stay text: those characters ARE the keys' legends,
- * and every Mac keyboard prints them exactly so.
- */
-const CAP_ICONS: Readonly<Record<string, string>> = {
-  '⏎': 'corner-down-left',
-  '↵': 'corner-down-left',
-  Enter: 'corner-down-left',
-  '←': 'arrow-left',
-  '→': 'arrow-right',
-  '↑': 'arrow-up',
-  '↓': 'arrow-down',
-  '⇥': 'arrow-right-to-line',
-};
 
 /** One key cap: a glyph where the key is a shape, the character otherwise. */
 function capNode(text: string, hint: boolean): HTMLElement {

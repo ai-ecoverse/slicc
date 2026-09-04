@@ -5,8 +5,11 @@
  * out of the way of typing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createShortcutUsage } from '../../../src/ui/wc/wc-shortcut-usage.js';
 import {
+  COMMAND_GROUPS,
   COMMAND_IDS,
+  type CommandId,
   DEFAULT_KEYMAP,
   deepActiveElement,
   deepTarget,
@@ -48,6 +51,17 @@ function harness(
     /** Rows the `files` / `sessions` chord lists report. */
     files?: string[];
     sessions?: string[];
+    /** The session usage log the help sheet personalises from. */
+    usage?: {
+      ranked(): ReadonlyArray<{ id: CommandId; count: number }>;
+      record?(id: CommandId): void;
+    };
+    /**
+     * Make `selectItem` / `toggle` dispatch the surface events the real
+     * components emit, so a test can see what a keystroke actually costs end
+     * to end. The default mocks stay silent, as most tests want.
+     */
+    liveDock?: boolean;
   } = {}
 ) {
   const keys = options.tabs ?? ['cone_1', 'cone_2', 'scoop_a'];
@@ -102,7 +116,14 @@ function harness(
   } = {
     items: options.dockItems ?? [{ id: 'files', kind: 'tool' as const }],
     active: options.activeDock ?? null,
-    selectItem,
+    selectItem: options.liveDock
+      ? (vi.fn((id: string) => {
+          selectItem(id);
+          document.body.dispatchEvent(
+            new CustomEvent('slicc-dock-select', { detail: { id }, bubbles: true, composed: true })
+          );
+        }) as unknown as typeof selectItem)
+      : selectItem,
     collapse,
   };
   const openMenu = vi.fn();
@@ -114,7 +135,20 @@ function harness(
     cycleModel,
     cycleThinking,
   };
-  const freezer = Object.assign(document.createElement('div'), { toggle });
+  const freezer = Object.assign(document.createElement('div'), {
+    toggle: options.liveDock
+      ? (force?: boolean) => {
+          toggle(force);
+          freezer.dispatchEvent(
+            new CustomEvent('freezer-toggle', {
+              detail: { open: force ?? true },
+              bubbles: true,
+              composed: true,
+            })
+          );
+        }
+      : toggle,
+  });
   document.body.append(freezer);
   const newChat = vi.fn();
   const erase = vi.fn();
@@ -153,6 +187,7 @@ function harness(
       files: { size: () => files.length, selectAt: (i) => selectFile(files[i]) },
       sessions: { size: () => sessions.length, selectAt: (i) => selectSession(sessions[i]) },
     },
+    ...(options.usage ? { usage: options.usage } : {}),
     ...(options.noDock ? {} : { dock }),
     ...(options.noFreezer ? {} : { freezer }),
     ...(options.noComposer ? {} : { focusComposer }),
@@ -749,6 +784,134 @@ describe('inside keyboard mode', () => {
     expect(overlay?.querySelectorAll('.wcsc__row')).toHaveLength(shortcutRows().length);
     press({ key, code: 'Slash', shiftKey: true });
     expect(handles.helpOverlay()).toBeNull();
+  });
+
+  /**
+   * The sheet is a cheat sheet, not a reference: labelled sections that flow
+   * into columns, so you can scan for the thing you want instead of reading
+   * thirty rows in one alphabetical list.
+   */
+  it('groups the sheet into sections in command-table order', () => {
+    const { handles } = harness();
+    handles.showHelp();
+    const titles = [...(handles.helpOverlay()?.querySelectorAll('.wcsc__title') ?? [])].map(
+      (t) => t.textContent
+    );
+    expect(titles).toEqual([...COMMAND_GROUPS]);
+  });
+
+  it('puts every row in exactly one section', () => {
+    const { handles } = harness();
+    handles.showHelp();
+    const overlay = handles.helpOverlay();
+    expect(overlay?.querySelectorAll('.wcsc__group')).toHaveLength(COMMAND_GROUPS.length);
+    expect(overlay?.querySelectorAll('.wcsc__row')).toHaveLength(shortcutRows().length);
+  });
+
+  /** A sheet has to work on the FIRST press, before you have done anything. */
+  it('shows no personalised section until something has been used', () => {
+    const { handles } = harness();
+    handles.showHelp();
+    expect(handles.helpOverlay()?.querySelector('.wcsc__group--yours')).toBeNull();
+    expect(handles.helpOverlay()?.querySelectorAll('.wcsc__row[data-used]')).toHaveLength(0);
+  });
+
+  /**
+   * The point of the whole thing: it learns from what you have DONE — pointer
+   * included — and tells you the key for it.
+   */
+  it('leads with your frequent actions, most-used first', () => {
+    const usage = {
+      entries: [
+        { id: 'memory' as const, count: 2 },
+        { id: 'files' as const, count: 7 },
+      ],
+      ranked() {
+        return this.entries;
+      },
+      record() {},
+    };
+    const { handles } = harness({ usage });
+    handles.showHelp();
+    const yours = handles.helpOverlay()?.querySelector('.wcsc__group--yours');
+    expect(yours?.querySelector('.wcsc__title')?.textContent).toBe('Your frequent actions');
+    const rows = [...(yours?.querySelectorAll('.wcsc__row') ?? [])].map((r) => [
+      r.querySelector('.wcsc__desc')?.textContent,
+      r.querySelector('.wcsc__count')?.textContent,
+    ]);
+    expect(rows[0]?.[1]).toBe('×7');
+    expect(rows[0]?.[0]).toContain('File browser');
+    expect(rows[1]?.[1]).toBe('×2');
+  });
+
+  it('highlights a used row in the reference section too', () => {
+    const usage = { ranked: () => [{ id: 'files' as const, count: 3 }], record() {} };
+    const { handles } = harness({ usage });
+    handles.showHelp();
+    const used = [...(handles.helpOverlay()?.querySelectorAll('.wcsc__row[data-used]') ?? [])];
+    // Once in the personalised section, once in Panels where it lives.
+    expect(used).toHaveLength(2);
+    expect(used.every((row) => row.getAttribute('data-used') === '3')).toBe(true);
+  });
+
+  it('counts a keyed command as a use', () => {
+    const seen: string[] = [];
+    const usage = { ranked: () => [], record: (id: string) => seen.push(id) };
+    harness({ usage });
+    escape();
+    press({ key: 'f' });
+    expect(seen).toContain('files');
+  });
+
+  /**
+   * A keystroke is ONE use, even though it reaches its surface through the
+   * same event a click produces — which the usage log is also listening for.
+   * Without this, keyed panel opens rank 2:1 against clicked ones and the
+   * personalised section is biased towards the keyboard, which is the exact
+   * bias the feature exists to avoid.
+   */
+  it('counts a keyed panel open once, not once per path', () => {
+    const usage = createShortcutUsage(document);
+    const { dock } = harness({ usage, liveDock: true });
+    escape();
+    press({ key: 'f' });
+    expect(dock.selectItem).toHaveBeenCalledWith('files');
+    expect(usage.ranked()).toEqual([{ id: 'files', count: 1 }]);
+    usage.dispose();
+  });
+
+  it('counts a clicked panel open once, and the same as a keyed one', () => {
+    const usage = createShortcutUsage(document);
+    harness({ usage, liveDock: true });
+    document.body.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { detail: { id: 'files' }, bubbles: true })
+    );
+    expect(usage.ranked()).toEqual([{ id: 'files', count: 1 }]);
+    usage.dispose();
+  });
+
+  /**
+   * `r` forces the left rail OPEN to show the archived chats, which fires the
+   * rail's own `freezer-toggle` — so the naive listener credited the press to
+   * `leftRail` and archived chats never appeared in the sheet at all.
+   */
+  it('credits archived chats to sessions, not to the left rail', () => {
+    const usage = createShortcutUsage(document);
+    harness({ usage, liveDock: true });
+    escape();
+    press({ key: 'r' });
+    expect(usage.ranked()).toEqual([{ id: 'sessions', count: 1 }]);
+    usage.dispose();
+  });
+
+  it('still counts a rail toggle the user actually clicked', () => {
+    const usage = createShortcutUsage(document);
+    const { freezer } = harness({ usage, liveDock: true });
+    freezer.dispatchEvent(
+      new CustomEvent('freezer-toggle', { detail: { open: true }, bubbles: true })
+    );
+    expect(usage.ranked()).toEqual([{ id: 'leftRail', count: 1 }]);
+    usage.dispose();
   });
 
   it('forgets an overlay that dismissed itself', () => {
