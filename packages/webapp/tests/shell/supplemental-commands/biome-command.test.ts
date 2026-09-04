@@ -13,6 +13,7 @@ import {
   createIpkContextFromCtx,
   expandPaths,
   finalizeOutcome,
+  interpretBiomeHelperResult,
   isLintableFile,
   JSH_WRAP_PREFIX_BYTE_LENGTH,
   parseBiomeArgs,
@@ -834,6 +835,79 @@ describe('biome --help / argument errors', () => {
     );
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toMatch(/failed to parse configuration \/workspace\/project\/biome\.json/);
+  });
+});
+
+describe('interpretBiomeHelperResult', () => {
+  it('parses a JSON document on a clean exit', () => {
+    const outcome = interpretBiomeHelperResult({
+      stdout:
+        '[{"path":"/workspace/a.ts","formatted":null,"diagnosticsText":"","diagnostics":[],"errorCount":0,"warningCount":0,"unchanged":true}]',
+      stderr: '',
+      exitCode: 0,
+    });
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.stderr).toBe('');
+    expect(outcome.results).toHaveLength(1);
+    expect(outcome.results[0]?.path).toBe('/workspace/a.ts');
+  });
+
+  it('surfaces the helper stderr when it exits 0 with empty stdout', () => {
+    // Regression for #2870: the realm helper can exit 0 while producing no
+    // output (e.g. an inert esm-transpile hook), and the old code discarded
+    // the one clue — the helper's stderr — behind a misleading JSON message.
+    const outcome = interpretBiomeHelperResult({
+      stdout: '',
+      stderr: 'esm-transpile hook is inert without esbuild-wasm\n',
+      exitCode: 0,
+    });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.results).toEqual([]);
+    expect(outcome.stderr).toContain('helper exited 0 with no output');
+    expect(outcome.stderr).toContain('esm-transpile hook is inert without esbuild-wasm');
+    expect(outcome.stderr).not.toContain('failed to parse helper output');
+  });
+
+  it('reports a bare no-output message when exit 0 leaves no stderr either', () => {
+    const outcome = interpretBiomeHelperResult({ stdout: '   \n', stderr: '', exitCode: 0 });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stderr).toBe('biome: helper exited 0 with no output (nothing was linted)\n');
+  });
+
+  it('rewrites a missing-module stderr into an ipk add hint on empty stdout', () => {
+    const outcome = interpretBiomeHelperResult({
+      stdout: '',
+      stderr: "Cannot find module '@biomejs/wasm-web' (run: ipk install @biomejs/wasm-web)\n",
+      exitCode: 0,
+    });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stderr).toContain('@biomejs/wasm-web is not installed');
+  });
+
+  it('appends the helper stderr when malformed stdout fails to parse', () => {
+    const outcome = interpretBiomeHelperResult({
+      stdout: '{not json',
+      stderr: 'partial write before crash\n',
+      exitCode: 0,
+    });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stderr).toContain('failed to parse helper output');
+    expect(outcome.stderr).toContain('partial write before crash');
+  });
+
+  it('surfaces a non-zero exit stderr unchanged (rewriting module errors)', () => {
+    const plain = interpretBiomeHelperResult({
+      stdout: '',
+      stderr: 'boom\n',
+      exitCode: 1,
+    });
+    expect(plain).toEqual({ results: [], stderr: 'boom\n', exitCode: 1 });
+    const rewritten = interpretBiomeHelperResult({
+      stdout: '',
+      stderr: "Cannot find module '@biomejs/js-api' (run: ipk install @biomejs/js-api)\n",
+      exitCode: 1,
+    });
+    expect(rewritten.stderr).toContain('@biomejs/js-api is not installed');
   });
 });
 

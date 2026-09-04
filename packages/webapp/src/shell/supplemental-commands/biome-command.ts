@@ -734,19 +734,47 @@ async function runBiomeOps(
   const result = await executeJsCode(BIOME_HELPER_SCRIPT, argv, ctx, undefined, {
     filename: '[biome-helper]',
   });
+  return interpretBiomeHelperResult(result);
+}
+
+/**
+ * Turn the realm helper's raw `{ stdout, stderr, exitCode }` into a
+ * {@link RunOpsOutcome}. Split out and exported so the diagnostic-surfacing
+ * paths can be unit-tested without booting the realm.
+ *
+ * Precedence:
+ * 1. A non-zero exit is the helper reporting its own failure — surface its
+ *    stderr (rewritten to an `ipk add` hint when it is a missing module).
+ * 2. A zero exit with EMPTY stdout means the helper died producing no output
+ *    (e.g. an inert esm-transpile hook). `JSON.parse('')` would otherwise
+ *    throw a `failed to parse helper output` that discards the one clue we
+ *    have — so surface the helper's stderr instead, keeping any it emitted.
+ * 3. Otherwise parse the JSON document; a parse failure keeps the legacy
+ *    message but now also appends whatever the helper wrote to stderr.
+ */
+export function interpretBiomeHelperResult(result: ExecResult): RunOpsOutcome {
   if (result.exitCode !== 0) {
     const rewritten = rewriteMissingModuleError(result.stderr);
     return { results: [], stderr: rewritten ?? result.stderr, exitCode: result.exitCode };
+  }
+  if (result.stdout.trim() === '') {
+    const rewritten = rewriteMissingModuleError(result.stderr);
+    const detail = rewritten ?? result.stderr.trim();
+    const stderr = detail
+      ? `biome: helper exited 0 with no output: ${detail.replace(/\n$/, '')}\n`
+      : 'biome: helper exited 0 with no output (nothing was linted)\n';
+    return { results: [], stderr, exitCode: 1 };
   }
   try {
     const parsed = JSON.parse(result.stdout) as BiomeFileResult[];
     return { results: parsed, stderr: '', exitCode: 0 };
   } catch (err) {
-    return {
-      results: [],
-      stderr: `biome: failed to parse helper output: ${err instanceof Error ? err.message : String(err)}\n`,
-      exitCode: 1,
-    };
+    const detail = err instanceof Error ? err.message : String(err);
+    const helperStderr = result.stderr.trim();
+    const stderr = helperStderr
+      ? `biome: failed to parse helper output: ${detail} (helper stderr: ${helperStderr})\n`
+      : `biome: failed to parse helper output: ${detail}\n`;
+    return { results: [], stderr, exitCode: 1 };
   }
 }
 
