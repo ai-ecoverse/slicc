@@ -16,16 +16,26 @@
  */
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMountCapabilityBroker } from '../../../src/fs/mount/capability-broker.js';
 import { makeSignedFetchDa, makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
 import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
+import { createRestCapabilityBroker } from '../../../src/work-unit/capability/index.js';
 
 // ----------------- helpers -----------------
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
+// An unset broker now fails closed (#2276 round-1 review finding 2) — this
+// file wants the `node-rest` transport specifically, so it injects one
+// explicitly rather than relying on a default that no longer exists.
+beforeEach(() => {
+  setMountCapabilityBroker(createRestCapabilityBroker());
+});
+
 afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
+  setMountCapabilityBroker(undefined);
   // Reset module-level base + token so thin-bridge cases don't leak into
   // later same-origin assertions.
   setLocalApiBaseUrl(null);
@@ -216,6 +226,12 @@ describe('signed-fetch CLI transport — envelope error mapping', () => {
 });
 
 describe('signed-fetch CLI transport — wire failures', () => {
+  // The hints below are restored, byte-for-byte, from what this module used
+  // to craft itself — `sendSignRequest` now derives them from `broker.
+  // adapter` instead of a topology probe (round-1 review finding 4): no
+  // `status` on the failure means node-rest was reached, so the
+  // localhost hint applies; a status present means a server DID answer, so
+  // no hint is added (the detail is already in `message`).
   it('fetch() rejects → EIO with localhost-backend hint', async () => {
     mockFetch(async () => {
       throw new TypeError('Failed to fetch');
@@ -232,7 +248,7 @@ describe('signed-fetch CLI transport — wire failures', () => {
     const transport = makeSignedFetchS3('aws');
     await expect(transport({ method: 'GET', bucket: 'b', key: 'k' })).rejects.toMatchObject({
       code: 'EIO',
-      message: expect.stringContaining('not a JSON envelope'),
+      message: expect.stringContaining('not an envelope'),
     });
   });
 
@@ -318,7 +334,10 @@ describe('signed-fetch CLI transport — thin-bridge URL + token', () => {
     const headers = cap.getHeaders();
     expect(headers).not.toBeNull();
     expect(headers!['X-Bridge-Token']).toBeUndefined();
-    expect(headers!['content-type']).toBe('application/json');
+    // Capitalized here (`rest-ops.ts`'s pre-existing casing choice, shared by
+    // every capability domain, not `signed-fetch.ts`-specific) — HTTP header
+    // names are case-insensitive, but the test captures a plain object.
+    expect(headers!['Content-Type']).toBe('application/json');
   });
 
   it('thin-bridge: S3 envelope POSTs to the bridge origin with X-Bridge-Token', async () => {
@@ -331,7 +350,7 @@ describe('signed-fetch CLI transport — thin-bridge URL + token', () => {
     const headers = cap.getHeaders();
     expect(headers).not.toBeNull();
     expect(headers!['X-Bridge-Token']).toBe('abc-123');
-    expect(headers!['content-type']).toBe('application/json');
+    expect(headers!['Content-Type']).toBe('application/json');
   });
 
   it('thin-bridge: DA envelope POSTs to the bridge origin with X-Bridge-Token', async () => {

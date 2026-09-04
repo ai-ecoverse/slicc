@@ -64,6 +64,19 @@ import {
  */
 const CONTROL_CALL_TIMEOUT_MS = REST_CONTROL_CALL_TIMEOUT_MS;
 
+/**
+ * Deadline for `mounts.signRequest` specifically: an OBJECT TRANSFER, not a
+ * control call. S3 caps a single object at 25 MiB and a DA source/asset body
+ * can be comparably large, so {@link CONTROL_CALL_TIMEOUT_MS}'s 10s would
+ * kill a large upload/download on a slow link well before the server (or the
+ * upstream S3/DA it forwards to) actually finishes. 120s matches
+ * `mount-bridge-client.ts`'s `CALL_TIMEOUT_MS` — the same budget the
+ * extension-delegate leg already uses for the identical operation, so a
+ * float doesn't get a stricter deadline just because it happens to run
+ * `node-rest`.
+ */
+const MOUNT_SIGN_TIMEOUT_MS = 120_000;
+
 /** Whether a rejection is a cancellation rather than a transport error. */
 function isAbort(err: unknown): boolean {
   return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
@@ -104,6 +117,12 @@ interface JsonCallOptions {
    * apply. Only `approvals.request` sets it.
    */
   humanPaced?: boolean;
+  /**
+   * Override the machine deadline for this one call — e.g.
+   * {@link MOUNT_SIGN_TIMEOUT_MS} for `mounts.signRequest`'s object
+   * transfer, longer than the default control-plane budget.
+   */
+  timeoutMs?: number;
 }
 
 /** The bound HTTP surface every operation below shares. */
@@ -136,7 +155,8 @@ function createTransport(options: RestCapabilityBrokerOptions): RestTransport {
     headers,
     send,
     async callJson(method, path, body, options) {
-      const signal = callSignal(timeoutMs, options?.signal, options?.humanPaced === true);
+      const effectiveTimeoutMs = options?.timeoutMs ?? timeoutMs;
+      const signal = callSignal(effectiveTimeoutMs, options?.signal, options?.humanPaced === true);
       const init: RequestInit = {
         method,
         headers: headers({ 'Content-Type': 'application/json' }),
@@ -149,7 +169,7 @@ function createTransport(options: RestCapabilityBrokerOptions): RestTransport {
           status: 0,
           ok: false,
           body: {
-            error: isAbort(resp) ? `no answer within ${timeoutMs}ms` : resp.message,
+            error: isAbort(resp) ? `no answer within ${effectiveTimeoutMs}ms` : resp.message,
           },
         };
       }
@@ -366,7 +386,9 @@ async function restSignRequest(
     request.backend === 's3'
       ? REST_CAPABILITY_PATHS.s3SignAndForward
       : REST_CAPABILITY_PATHS.daSignAndForward;
-  const call = await transport.callJson('POST', path, request.envelope);
+  const call = await transport.callJson('POST', path, request.envelope, {
+    timeoutMs: MOUNT_SIGN_TIMEOUT_MS,
+  });
   const reply = call.body as MountSignResult | undefined;
   // A refusal the server encoded as an envelope is a VALUE, not a capability
   // miss — the transport worked, the request did not.

@@ -1,35 +1,27 @@
 /**
- * Default `SignedFetch` factories — pick CLI vs extension transport at runtime.
+ * Default `SignedFetch` factories, routed through the `CapabilityBroker`'s
+ * `mounts.signRequest` op (#2276 slice C).
  *
  * The browser-side mount backends never compute SigV4 signatures or hold
- * S3 credentials. They build logical requests and call into a `signedFetch`
- * function which routes:
+ * S3 credentials. They build a logical envelope and hand it to the broker,
+ * which picks the transport for this float's topology — HTTP POST to
+ * node-server's `/api/s3-sign-and-forward` / `/api/da-sign-and-forward`
+ * (`node-rest`), or a `chrome.runtime` message to the extension service
+ * worker (`extension-direct` / `extension-delegate`). Every adapter already
+ * implements `mounts.signRequest` (slice B), so this module holds no
+ * topology branch of its own — see `getMountCapabilityBroker` below.
  *
- *   - **CLI / Electron**: HTTP POST to node-server's
- *     `/api/s3-sign-and-forward` or `/api/da-sign-and-forward`. The URL is
- *     resolved through `resolveApiUrl` so thin-bridge mode (hosted leader on
- *     sliccy.ai) targets the local node-server's absolute bridge origin with
- *     the per-process `X-Bridge-Token`; the legacy bundled-UI / loopback
- *     case stays on the relative URL with no extra header. Server resolves
- *     credentials, signs, forwards.
- *   - **Extension**: `chrome.runtime.sendMessage` to the service worker.
- *     Service worker reads `s3.<profile>.*` from `chrome.storage.local`
- *     (S3) or accepts a transient IMS token in the envelope (DA), then
- *     signs/attaches and forwards via `fetch` (host_permissions: <all_urls>).
- *
- * For DA in either deployment, the IMS bearer token is fetched from the
- * existing Adobe LLM provider's browser-side state and passed transiently
- * in the envelope. v2 will move OAuth server/SW-side and remove the
- * browser-side exposure.
+ * For DA, the IMS bearer token is fetched from the existing Adobe LLM
+ * provider's browser-side state and passed transiently in the envelope. v2
+ * will move OAuth server/SW-side and remove the browser-side exposure.
  */
 
 import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
-import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../base/api-endpoint.js';
-import { isExtensionRealm } from '../../base/runtime-env.js';
+import type { CapabilityAdapterId, MountSignRequest } from '../../work-unit/capability/index.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
-import { callMountBridge, type MountSignAndForwardType } from './mount-bridge-client.js';
+import { getMountCapabilityBroker } from './capability-broker.js';
 import { getDefaultImsClient } from './profile.js';
 
 const decodeBase64 = base64ToUint8;
@@ -114,88 +106,59 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
 }
 
 /**
- * POST an envelope to node-server's sign-and-forward endpoint, parse reply.
+ * A hint appended to a transport-level failure — restores the actionable
+ * text this module used to craft itself when it built the HTTP/SW request
+ * directly, now derived from which adapter actually ran instead of a
+ * topology probe (round-1 review finding 4).
  *
- * `endpoint` is a same-origin `/api/*` path; in thin-bridge mode (hosted
- * leader on sliccy.ai, local node-server cross-origin) `resolveApiUrl`
- * prepends the configured bridge origin and `apiHeaders` attaches the
- * `X-Bridge-Token` capability. Same-origin / loopback callers continue to
- * hit the relative URL with no extra headers — the local node-server only
- * requires the token for non-loopback origins.
+ * Only added when `status` is ABSENT: a present `status` means a server was
+ * reached and answered (its detail is already folded into `message` by the
+ * REST adapter's own `errorText`), so a "backend not running" / "service
+ * worker not responding" hint would be actively wrong there.
  */
-async function postEnvelopeToCli(endpoint: string, body: unknown): Promise<SignAndForwardReply> {
-  let res: Response;
-  try {
-    res = await fetch(resolveApiUrl(endpoint), {
-      method: 'POST',
-      headers: apiHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    throw new FsError(
-      'EIO',
-      `mount transport failed: ${err instanceof Error ? err.message : String(err)} ` +
-        `(SLICC backend at localhost may not be running)`
-    );
+function transportHint(adapter: CapabilityAdapterId, status: number | undefined): string {
+  if (status !== undefined) return '';
+  if (adapter === 'node-rest') return ' (SLICC backend at localhost may not be running)';
+  if (adapter === 'extension-direct' || adapter === 'extension-delegate') {
+    return ' (extension service worker not responding)';
   }
-  // Parse the body — server returns the same envelope shape on both success
-  // (200) and structured error (400/502). If the server crashes outside the
-  // route handler (e.g. middleware error producing Express's default HTML
-  // error page), .json() throws a SyntaxError. Map to FsError so the agent
-  // sees an actionable transport message rather than an opaque parse error.
-  try {
-    return (await res.json()) as SignAndForwardReply;
-  } catch (err) {
-    throw new FsError(
-      'EIO',
-      `mount transport: response is not a JSON envelope (status ${res.status}): ` +
-        `${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-}
-
-/** Post a chrome.runtime message to the SW and await the response. */
-async function postEnvelopeToSw(
-  type: MountSignAndForwardType,
-  envelope: unknown
-): Promise<SignAndForwardReply> {
-  try {
-    // The bundled chrome.d.ts declares sendMessage's return as Promise<void>;
-    // Chrome MV3's actual API resolves with whatever the listener
-    // sendResponse'd. Cast through unknown to land on the typed envelope.
-    const raw = (await chrome.runtime.sendMessage({ type, envelope })) as unknown;
-    return raw as SignAndForwardReply;
-  } catch (err) {
-    throw new FsError(
-      'EIO',
-      `mount transport failed: ${err instanceof Error ? err.message : String(err)} ` +
-        `(extension service worker not responding)`
-    );
-  }
+  return '';
 }
 
 /**
- * Route a sign-and-forward envelope to the correct transport for this realm:
+ * Send one `MountSignRequest` through the injected broker and unwrap it.
  *
- *   - **Fat extension** (`chrome.runtime.id` present — offscreen / side panel):
- *     `chrome.runtime.sendMessage` to the service worker.
- *   - **Thin-bridge extension** (hosted leader tab page realm, or its kernel
- *     worker — `chrome.runtime.id` absent but an `extensionDelegateId` was set
- *     at boot): the `mount.sign-and-forward` bridge. The page realm opens the
- *     explicit-id `chrome.runtime` Port directly; the worker realm bridges over
- *     panel-RPC to the page, which opens the Port for it. Mirrors `secrets.crud`
- *     — without this branch a worker-realm POST hits the tray-hub catch-all
- *     instead of the extension SW (EXT8).
- *   - **CLI / Electron / hosted-leader cloud**: HTTP POST to node-server.
+ * `CapabilityResult.ok: false` here means the TRANSPORT failed (no adapter,
+ * a disconnected Port, an unparseable reply) — a server-side refusal
+ * (`profile_not_configured`, `invalid_request`, …) travels as a normal
+ * `SignAndForwardReply` with `ok: false` INSIDE a successful
+ * `CapabilityResult`, exactly as it did when this module built the HTTP/SW
+ * request itself; `envelopeToResponse` still does that error-code mapping.
+ *
+ * An unset broker is a FAIL-CLOSED `CapabilityUnavailable`, not a silent
+ * `node-rest` guess (round-1 review finding 2): a composition miss on an
+ * extension topology must never POST a signed envelope — IMS bearer
+ * included — to the hosted origin's REST routes.
  */
-async function routeSignAndForward(
-  type: MountSignAndForwardType,
-  cliEndpoint: string,
-  envelope: unknown
-): Promise<SignAndForwardReply> {
-  if (isExtensionRealm()) return postEnvelopeToSw(type, envelope);
-  if (getExtensionDelegateId()) return callMountBridge(type, envelope);
-  return postEnvelopeToCli(cliEndpoint, envelope);
+async function sendSignRequest(request: MountSignRequest): Promise<SignAndForwardReply> {
+  const broker = getMountCapabilityBroker();
+  if (!broker) {
+    throw new FsError(
+      'EIO',
+      'mount transport unavailable: setMountCapabilityBroker was never called for this ' +
+        'float (composition bug — refusing to guess a transport for a privileged ' +
+        'sign-and-forward request)'
+    );
+  }
+  const result = await broker.mounts.signRequest(request);
+  if (!result.ok) {
+    const status = 'status' in result ? result.status : undefined;
+    throw new FsError(
+      'EIO',
+      `mount transport failed: ${result.message}${transportHint(broker.adapter, status)}`
+    );
+  }
+  return result.value;
 }
 
 // ----------------- S3 -----------------
@@ -215,11 +178,7 @@ export function makeSignedFetchS3(profile: string): SignedFetchS3 {
       headers: req.headers,
       bodyBase64: req.body ? encodeBase64(req.body) : undefined,
     };
-    const reply = await routeSignAndForward(
-      'mount.s3-sign-and-forward',
-      '/api/s3-sign-and-forward',
-      envelope
-    );
+    const reply = await sendSignRequest({ backend: 's3', envelope });
     return envelopeToResponse(reply);
   };
 }
@@ -252,11 +211,7 @@ export function makeSignedFetchDa(opts?: { getImsToken?: () => Promise<string> }
       headers: req.headers,
       bodyBase64: req.body ? encodeBase64(req.body) : undefined,
     };
-    const reply = await routeSignAndForward(
-      'mount.da-sign-and-forward',
-      '/api/da-sign-and-forward',
-      envelope
-    );
+    const reply = await sendSignRequest({ backend: 'da', envelope });
     return envelopeToResponse(reply);
   };
 }

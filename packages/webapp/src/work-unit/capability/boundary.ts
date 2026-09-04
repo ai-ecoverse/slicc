@@ -26,7 +26,10 @@ export function createLazyOps<T>(load: () => Promise<T>, timeoutMs?: number): ()
   let pending: Promise<T> | null = null;
   return () => {
     if (pending === null) {
-      const loaded = timeoutMs === undefined ? load() : withTimeout(load(), timeoutMs);
+      const loaded =
+        timeoutMs === undefined
+          ? load()
+          : withTimeout(load(), timeoutMs, (ms) => `module load exceeded ${ms}ms`);
       pending = loaded.catch((err: unknown) => {
         pending = null;
         throw err;
@@ -36,12 +39,20 @@ export function createLazyOps<T>(load: () => Promise<T>, timeoutMs?: number): ()
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * Race `promise` against a deadline, rejecting with `message(timeoutMs)` if
+ * it fires first. Exported so other transports that need the same
+ * race-a-deadline shape (e.g. `extension-ops.ts`'s same-extension
+ * `sendToServiceWorker` mount call, which has no `AbortSignal` of its own)
+ * don't reimplement it with `createLazyOps`'s module-load-specific wording.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: (timeoutMs: number) => string = (ms) => `no answer within ${ms}ms`
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`module load exceeded ${timeoutMs}ms`)),
-      timeoutMs
-    );
+    const timer = setTimeout(() => reject(new Error(message(timeoutMs))), timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

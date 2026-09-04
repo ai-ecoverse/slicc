@@ -56,6 +56,7 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
 import { hasLocalNodeServer, resolveFloatTopology } from '../core/float-topology.js';
+import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -488,6 +489,11 @@ async function bootOrchestrator(
       ...(config.pageGestures ? { pageGestures: config.pageGestures } : {}),
     });
   orchestrator.setCapabilityBroker(capabilityBroker);
+  // `fs/mount/` transports (`signed-fetch.ts`) read this module-level fact
+  // instead of taking constructor injection — mount construction happens
+  // far below any composition root (#2276 slice C). Set before
+  // `orchestrator.init()` mounts the shared FS, below.
+  setMountCapabilityBroker(capabilityBroker);
   // Fallback global for shell scripts / `.jsh` callers that can't
   // accept constructor injection. `ps` prefers the DI path when the
   // supplemental command is constructed via

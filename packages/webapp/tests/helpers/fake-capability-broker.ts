@@ -8,23 +8,39 @@
  * would turn that into a real 10s wait. Inject this instead so secret/network
  * capability reads are deterministic and never touch a transport.
  */
-import type { CapabilityBroker, CapabilityResult } from '../../src/work-unit/capability/index.js';
+import {
+  type CapabilityBroker,
+  type CapabilityDomain,
+  type CapabilityResult,
+  capabilityUnavailable,
+} from '../../src/work-unit/capability/index.js';
 
-const notUsed = (op: string) => async (): Promise<never> => {
-  throw new Error(`${op}: not used by this test`);
+/**
+ * A typed `CapabilityUnavailable`, not a throw (round-1 review finding 5):
+ * production adapters never let a call escape as an exception, so a fake
+ * that throws for an "unused" op would let a test pass against a code path
+ * that would crash a real broker's `attempt()`/`guardCapability()` wrapper.
+ */
+const notUsed = (op: `${CapabilityDomain}.${string}`) => {
+  const [capability, operation] = op.split('.') as [CapabilityDomain, string];
+  return async () => capabilityUnavailable(capability, operation, `${op}: not used by this test`);
 };
 
 export interface FakeCapabilityBrokerOptions {
   listMaskedEnv?: CapabilityResult<{ entries: readonly unknown[] }>;
   localNodeServer?: CapabilityResult<{ available: boolean }>;
+  signRequest?: (
+    request: Parameters<CapabilityBroker['mounts']['signRequest']>[0]
+  ) => CapabilityResult<unknown>;
 }
 
-/** A broker whose `secrets.listMaskedEnv` and `network.localNodeServer` resolve to the given (or empty/unavailable) results; every other operation throws if called. */
+/** A broker whose `secrets.listMaskedEnv`, `network.localNodeServer` and `mounts.signRequest` resolve to the given (or empty/unavailable/unused) results; every other operation throws if called. */
 export function createFakeCapabilityBroker(
   options: FakeCapabilityBrokerOptions = {}
 ): CapabilityBroker {
   const listMaskedEnv = options.listMaskedEnv ?? { ok: true, value: { entries: [] } };
   const localNodeServer = options.localNodeServer ?? { ok: true, value: { available: false } };
+  const signRequest = options.signRequest;
   return {
     adapter: 'node-rest',
     secrets: {
@@ -59,9 +75,12 @@ export function createFakeCapabilityBroker(
       hidRequest: notUsed('devices.hidRequest'),
     },
     mounts: {
-      allowlist: [],
-      supports: () => false,
-      signRequest: notUsed('mounts.signRequest'),
+      allowlist: signRequest ? ['signRequest'] : [],
+      supports: (op) => op === 'signRequest' && signRequest !== undefined,
+      signRequest: signRequest
+        ? ((async (request: Parameters<CapabilityBroker['mounts']['signRequest']>[0]) =>
+            signRequest(request)) as CapabilityBroker['mounts']['signRequest'])
+        : notUsed('mounts.signRequest'),
       pickDirectory: notUsed('mounts.pickDirectory'),
       recover: notUsed('mounts.recover'),
     },

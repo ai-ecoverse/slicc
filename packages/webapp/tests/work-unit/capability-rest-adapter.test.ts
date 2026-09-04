@@ -219,6 +219,42 @@ describe('node-rest adapter emits the contract wire', () => {
     ]);
   });
 
+  it('has its own, much larger, budget than the 10s control-plane deadline (#2276 round-1 review finding 1)', async () => {
+    // S3 caps a single object at 25 MiB, so `mounts.signRequest` must not
+    // die on the same 10s control-plane clock `secrets.listMaskedEnv` etc.
+    // use. Proven with a SHORT shared `controlTimeoutMs` rather than a real
+    // 10s/120s wait: if signRequest secretly inherited it, this response
+    // would time it out exactly like the control call below — it doesn't,
+    // because it hardcodes its own 120s deadline independent of the option.
+    const delayedFetch = (ms: number, body: unknown): typeof fetch =>
+      (async () => {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as typeof fetch;
+
+    const controlBroker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      controlTimeoutMs: 20,
+      fetchImpl: delayedFetch(200, { entries: [] }),
+    });
+    const controlResult = await controlBroker.secrets.listMaskedEnv();
+    expect(isCapabilityFailure(controlResult)).toBe(true);
+
+    const mountBroker = createRestCapabilityBroker({
+      resolveUrl: (path) => path,
+      controlTimeoutMs: 20,
+      fetchImpl: delayedFetch(200, { ok: true, status: 200, headers: {}, bodyBase64: '' }),
+    });
+    const signResult = await mountBroker.mounts.signRequest({
+      backend: 's3',
+      envelope: { profile: 'p', method: 'GET', bucket: 'b', key: 'k' },
+    });
+    expect(signResult.ok).toBe(true);
+  });
+
   it('surfaces an upstream sign-and-forward refusal as a value, not as unavailable', async () => {
     const broker = createRestCapabilityBroker({
       resolveUrl: (path) => path,
