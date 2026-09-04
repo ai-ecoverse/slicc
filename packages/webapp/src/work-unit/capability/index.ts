@@ -5,8 +5,8 @@
  * with real adapters keyed by float topology (`node-rest`, `extension-direct`,
  * `extension-delegate`, `connect`), composed once in `kernel/host.ts`. Slice C
  * removes float probes from `scoops/` / `tools/` / `kernel/` business logic
- * (review-patterns category 10), one domain per PR — network and secrets are
- * done.
+ * (review-patterns category 10), one domain per PR — network, secrets and
+ * mounts are done.
  *
  * `network` (#2276 slice C, done, #2829): none of `scoops/tray-leader.ts`
  * (`createTrayFetch`), `shell/proxied-fetch.ts` (`createProxiedFetch`) or
@@ -50,6 +50,35 @@
  * `test`/`edit`) has no `broker.secrets` equivalent, so no allowlist op was
  * added. See `docs/work-unit.md` phase 6d.
  *
+ * `mounts` (#2276 slice C, done): `fs/mount/signed-fetch.ts`'s S3/DA
+ * sign-and-forward transport now calls `broker.mounts.signRequest({ backend,
+ * envelope })` instead of re-implementing the same extension-direct /
+ * extension-delegate / node-rest branch every slice-B adapter already
+ * carries. `envelopeToResponse` — the error-code → `FsError` mapping — is
+ * UNCHANGED: a server-encoded refusal (`profile_not_configured`, …) travels
+ * as a `SignAndForwardReply` value inside a successful `CapabilityResult`,
+ * not as a broker-level failure. The broker is a module-level fact
+ * (`fs/mount/capability-broker.ts`, its own tiny module so `kernel/host.ts`
+ * setting it eagerly does not drag `signed-fetch.ts`'s lazy chunk — SigV4
+ * envelope building, the IMS client — onto the eager boot graph), set once
+ * next to `orchestrator.setCapabilityBroker`: `fs/` sits at the bottom of
+ * the layer stack and mount construction happens far from any composition
+ * root (`VirtualFS.mount()`, `mount-commands.ts`, `mount-recovery.ts`), so
+ * constructor injection would fan out through all of them.
+ *
+ * `fs/mount-commands.ts`'s extension-popup-vs-direct-picker branch and
+ * `fs/picker-popup.ts`'s shared 4-kind popup launcher both KEEP
+ * `isExtensionRealm()` — not an oversight. Both decide how to host a
+ * directory picker's required page gesture, exactly what
+ * `CapabilityBroker`'s `PageGestureChannel` / `mounts.pickDirectory()` was
+ * designed for (slice B), but no real `PageGestureChannel` implementation
+ * exists anywhere yet — `kernel/host.ts`'s `config.pageGestures` is never
+ * supplied in production, so `mounts.pickDirectory()` is unconditionally
+ * `CapabilityUnavailable` today. Routing through it now would BREAK
+ * local-mount picking, not migrate it; wiring a real page-gesture channel
+ * (bridging a page-realm gesture from the kernel worker) is separate,
+ * larger follow-up work. See `docs/work-unit.md` phase 6e.
+ *
  * TODO(#2276) slice C, remaining domains — privileged call sites in `scoops/`
  * / `tools/` / `kernel/` that still branch on float / topology
  * (`isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
@@ -69,8 +98,6 @@
  * `canConnectToChromeRuntime` — both are true on the thin-bridge hosted page
  * and are float signals just like the other six.
  *
- * mounts
- *   - fs/mount-commands.ts, fs/mount/signed-fetch.ts, fs/picker-popup.ts
  * approvals
  *   - sudo/index.ts `createSudoBroker`
  * browser

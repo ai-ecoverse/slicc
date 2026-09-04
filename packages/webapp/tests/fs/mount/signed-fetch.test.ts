@@ -216,23 +216,27 @@ describe('signed-fetch CLI transport — envelope error mapping', () => {
 });
 
 describe('signed-fetch CLI transport — wire failures', () => {
-  it('fetch() rejects → EIO with localhost-backend hint', async () => {
+  // The exact hint text below now comes from the broker's transport-agnostic
+  // `CapabilityFailure.message` (#2276 slice C) rather than a topology-
+  // specific string this module used to craft itself — still an actionable
+  // EIO, just without a backend-specific hint baked into the call site.
+  it('fetch() rejects → EIO surfacing the transport error', async () => {
     mockFetch(async () => {
       throw new TypeError('Failed to fetch');
     });
     const transport = makeSignedFetchS3('aws');
     await expect(transport({ method: 'GET', bucket: 'b', key: 'k' })).rejects.toMatchObject({
       code: 'EIO',
-      message: expect.stringContaining('SLICC backend at localhost'),
+      message: expect.stringContaining('Failed to fetch'),
     });
   });
 
-  it('non-JSON 502 (Express HTML error page) → EIO with parse-error hint', async () => {
+  it('non-JSON 502 (Express HTML error page) → EIO surfacing the parse failure', async () => {
     mockFetch(async () => htmlResponse('<html><body>Internal Server Error</body></html>', 502));
     const transport = makeSignedFetchS3('aws');
     await expect(transport({ method: 'GET', bucket: 'b', key: 'k' })).rejects.toMatchObject({
       code: 'EIO',
-      message: expect.stringContaining('not a JSON envelope'),
+      message: expect.stringContaining('not an envelope'),
     });
   });
 
@@ -318,7 +322,10 @@ describe('signed-fetch CLI transport — thin-bridge URL + token', () => {
     const headers = cap.getHeaders();
     expect(headers).not.toBeNull();
     expect(headers!['X-Bridge-Token']).toBeUndefined();
-    expect(headers!['content-type']).toBe('application/json');
+    // Capitalized here (`rest-ops.ts`'s pre-existing casing choice, shared by
+    // every capability domain, not `signed-fetch.ts`-specific) — HTTP header
+    // names are case-insensitive, but the test captures a plain object.
+    expect(headers!['Content-Type']).toBe('application/json');
   });
 
   it('thin-bridge: S3 envelope POSTs to the bridge origin with X-Bridge-Token', async () => {
@@ -331,7 +338,7 @@ describe('signed-fetch CLI transport — thin-bridge URL + token', () => {
     const headers = cap.getHeaders();
     expect(headers).not.toBeNull();
     expect(headers!['X-Bridge-Token']).toBe('abc-123');
-    expect(headers!['content-type']).toBe('application/json');
+    expect(headers!['Content-Type']).toBe('application/json');
   });
 
   it('thin-bridge: DA envelope POSTs to the bridge origin with X-Bridge-Token', async () => {

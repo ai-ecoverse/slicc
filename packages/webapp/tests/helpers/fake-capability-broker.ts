@@ -17,14 +17,18 @@ const notUsed = (op: string) => async (): Promise<never> => {
 export interface FakeCapabilityBrokerOptions {
   listMaskedEnv?: CapabilityResult<{ entries: readonly unknown[] }>;
   localNodeServer?: CapabilityResult<{ available: boolean }>;
+  signRequest?: (
+    request: Parameters<CapabilityBroker['mounts']['signRequest']>[0]
+  ) => CapabilityResult<unknown>;
 }
 
-/** A broker whose `secrets.listMaskedEnv` and `network.localNodeServer` resolve to the given (or empty/unavailable) results; every other operation throws if called. */
+/** A broker whose `secrets.listMaskedEnv`, `network.localNodeServer` and `mounts.signRequest` resolve to the given (or empty/unavailable/unused) results; every other operation throws if called. */
 export function createFakeCapabilityBroker(
   options: FakeCapabilityBrokerOptions = {}
 ): CapabilityBroker {
   const listMaskedEnv = options.listMaskedEnv ?? { ok: true, value: { entries: [] } };
   const localNodeServer = options.localNodeServer ?? { ok: true, value: { available: false } };
+  const signRequest = options.signRequest;
   return {
     adapter: 'node-rest',
     secrets: {
@@ -59,9 +63,12 @@ export function createFakeCapabilityBroker(
       hidRequest: notUsed('devices.hidRequest'),
     },
     mounts: {
-      allowlist: [],
-      supports: () => false,
-      signRequest: notUsed('mounts.signRequest'),
+      allowlist: signRequest ? ['signRequest'] : [],
+      supports: (op) => op === 'signRequest' && signRequest !== undefined,
+      signRequest: signRequest
+        ? ((async (request: Parameters<CapabilityBroker['mounts']['signRequest']>[0]) =>
+            signRequest(request)) as CapabilityBroker['mounts']['signRequest'])
+        : notUsed('mounts.signRequest'),
       pickDirectory: notUsed('mounts.pickDirectory'),
       recover: notUsed('mounts.recover'),
     },
