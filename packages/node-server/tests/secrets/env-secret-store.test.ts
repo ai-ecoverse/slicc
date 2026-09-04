@@ -105,6 +105,30 @@ describe('EnvSecretStore', () => {
     expect(list.some((e) => e.name.endsWith('_DOMAINS'))).toBe(false);
   });
 
+  // #2828: the .env store is line-oriented, so a multiline value would be
+  // written back truncated to its first line. `set` refuses instead — and
+  // critically, a refused OVERWRITE leaves the previous credential intact.
+  it('refuses a multiline value and leaves an existing secret untouched', () => {
+    store.set('PEM', 'still-valid-token', ['a.com']);
+    const pem = '-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----';
+
+    expect(() => store.set('PEM', pem, ['a.com'])).toThrow(/cannot contain newlines/);
+
+    expect(store.get('PEM')).toEqual({
+      name: 'PEM',
+      value: 'still-valid-token',
+      domains: ['a.com'],
+    });
+    expect(readFileSync(filePath, 'utf-8')).not.toContain('BEGIN PRIVATE KEY');
+  });
+
+  it('names the offending secret in the multiline rejection', () => {
+    expect(() => store.set('NEW_PEM', 'a\nb', ['a.com'])).toThrow(
+      'Secret "NEW_PEM" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line'
+    );
+    expect(store.get('NEW_PEM')).toBeNull();
+  });
+
   it('persists across store instances', () => {
     store.set('PERSIST', 'val', ['p.com']);
     const store2 = new EnvSecretStore(filePath);

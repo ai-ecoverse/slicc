@@ -153,6 +153,57 @@ final class SecretAPIRoutesTests: XCTestCase {
         )
     }
 
+    /// A multiline value cannot round-trip through the line-oriented blob, so
+    /// the route refuses it with a 400 that names the problem rather than
+    /// storing a credential truncated to its first line (#2828). node-server's
+    /// route returns the same status and the same message.
+    func testPostSecretRejectsMultilineValue() async throws {
+        let name = secretName("SET_PEM")
+        let error = try await expectPostSecretRejected(
+            body: #"{"name":"\#(name)","value":"-----BEGIN KEY-----\nMIIEv\n-----END KEY-----","domains":["a.com"]}"#,
+            status: .badRequest,
+            unwrittenName: name
+        )
+        XCTAssertEqual(error, EnvFileFormat.multilineValueError(name))
+    }
+
+    /// The dangerous shape: a rejected multiline *overwrite* must leave the
+    /// existing credential intact. Before #2828 this returned 200 having
+    /// replaced a working value with an unrecoverable truncation.
+    func testPostSecretMultilineOverwriteLeavesExistingValueIntact() async throws {
+        let name = secretName("SET_PEM_OVERWRITE")
+        try SecretStore.set(name: name, value: "still-valid-token", domains: ["a.com"])
+
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: SecretInjector(sessionId: "persisted-set-overwrite-fixture")
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/secrets",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"name":"\#(name)","value":"line1\nline2","domains":["a.com"]}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                    XCTAssertEqual(
+                        try self.decodeJSONObject(from: response.body)["error"]?.stringValue,
+                        EnvFileFormat.multilineValueError(name)
+                    )
+                }
+            }
+        }
+
+        XCTAssertEqual(SecretStore.get(name: name)?.value, "still-valid-token")
+    }
+
     func testPostSecretRejectsMalformedJSON() async throws {
         try await expectPostSecretRejected(body: "not json", status: .badRequest, unwrittenName: nil)
     }

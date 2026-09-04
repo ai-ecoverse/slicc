@@ -1,4 +1,8 @@
-import { previewSecret } from '@slicc/shared-ts';
+import {
+  isSingleLineSecretValue,
+  multilineSecretValueError,
+  previewSecret,
+} from '@slicc/shared-ts';
 import express, { type Express, type Response } from 'express';
 import type { EnvSecretStore } from '../secrets/env-secret-store.js';
 import type { OauthSecretStore } from '../secrets/oauth-secret-store.js';
@@ -66,6 +70,12 @@ async function handleScopeEdit(
     } else {
       const existing = secretStore.get(name);
       if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
+      // Re-saving is a full rewrite of the value, so a value the store should
+      // never have held (a hand-edited multiline entry) must not be laundered
+      // through a scope change into a truncated one (#2828).
+      if (!isSingleLineSecretValue(existing.value)) {
+        return res.status(400).json({ error: multilineSecretValueError(name) });
+      }
       secretStore.set(name, existing.value, domains);
     }
     await secretProxy.reload();
@@ -156,6 +166,13 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
     const { name, value, domains } = req.body ?? {};
     if (typeof name !== 'string' || typeof value !== 'string' || !isStringArray(domains)) {
       return res.status(400).json({ error: 'bad-request' });
+    }
+    // Fail closed at the boundary: the persisted .env schema stores one value
+    // per line, so a multiline value (a PEM private key, typically) would be
+    // truncated to its first line — and an overwrite would replace a working
+    // credential with an unrecoverable one behind a 200 (#2828).
+    if (!isSingleLineSecretValue(value)) {
+      return res.status(400).json({ error: multilineSecretValueError(name) });
     }
     try {
       secretStore.set(name, value, domains);

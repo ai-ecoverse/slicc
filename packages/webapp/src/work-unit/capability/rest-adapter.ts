@@ -5,10 +5,10 @@
  * `packages/swift-server` expose the same `/api/*` route set, so "the Swift
  * adapter" is this adapter pointed at a different process. The wire it speaks
  * is pinned by `packages/shared-ts/fixtures/capability-rest-contract.json`,
- * which both servers' test suites replay. That fixture also records the one
- * route that is NOT universal today — `POST /api/secrets` (persisted secret
- * creation) is node-server-only, so a `secrets.set` with the default
- * `persisted` scope fails on a Swift float until #2806 lands.
+ * which both servers' test suites replay. Every route in that fixture is now
+ * universal: swift-server gained its Keychain-backed `POST /api/secrets` in
+ * #2823, closing the last gap (#2806), so `secrets.set` works at either scope
+ * on either float.
  *
  * This module is BOOT-CRITICAL — `kernel/host.ts` composes a broker before
  * the orchestrator restores scoops — so it holds only the broker's shape.

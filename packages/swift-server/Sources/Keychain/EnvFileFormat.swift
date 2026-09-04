@@ -40,11 +40,42 @@ enum EnvFileFormat {
         return entries
     }
 
+    /// Secret values are stored one per line, so a value carrying a line break
+    /// cannot survive a `serialize` → `parse` round-trip: `serialize` quotes it
+    /// with a real LF inside the quotes and `parse` then splits on `\n`, keeping
+    /// the unbalanced first line and dropping the rest. Writers reject such a
+    /// value at the boundary instead of silently truncating it (issue #2828).
+    ///
+    /// Mirrors `isSingleLineSecretValue` in
+    /// `packages/shared-ts/src/secret-env-schema.ts`; both sides are pinned by
+    /// the cross-implementation vectors.
+    /// Compares unicode scalars, not `Character`s: Swift treats CRLF as a
+    /// SINGLE grapheme cluster that equals neither `"\n"` nor `"\r"`, so a
+    /// `Character`-level check silently accepts a CRLF value that the JS
+    /// `/[\n\r]/` rejects.
+    static func isSingleLineValue(_ value: String) -> Bool {
+        !value.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
+    }
+
+    /// The single rejection message both servers return for a multiline value.
+    static func multilineValueError(_ name: String) -> String {
+        "Secret \"\(name)\" value cannot contain newlines; the secret store is "
+            + "line-oriented and would truncate it to the first line"
+    }
+
     /// Serialize entries back to `.env` text. Values containing whitespace,
     /// `#`, or quotes are double-quoted with embedded `"` escaped as `\"`.
-    static func serialize(_ entries: [EnvEntry]) -> String {
+    ///
+    /// Throws on a value containing a line break rather than emitting a blob
+    /// that would parse back truncated. This is the fail-closed backstop behind
+    /// the boundary checks in the two privileged servers' secret routes — no
+    /// write path can corrupt the blob by going around them.
+    static func serialize(_ entries: [EnvEntry]) throws -> String {
         var lines: [String] = []
         for entry in entries {
+            guard isSingleLineValue(entry.value) else {
+                throw SecretStoreError.multilineValue(name: entry.key)
+            }
             lines.append("\(entry.key)=\(serializeValue(entry.value))")
         }
         return lines.joined(separator: "\n") + "\n"
@@ -87,7 +118,7 @@ enum EnvFileFormat {
 
     /// Serialize a list of secrets into an env-file blob. Each secret emits
     /// a `KEY=value` line followed by `KEY_DOMAINS=domain1,domain2`.
-    static func blobFromSecrets(_ secrets: [Secret]) -> String {
+    static func blobFromSecrets(_ secrets: [Secret]) throws -> String {
         var entries: [EnvEntry] = []
         for secret in secrets {
             entries.append(EnvEntry(key: secret.name, value: secret.value))
@@ -97,7 +128,7 @@ enum EnvFileFormat {
                     value: secret.domains.joined(separator: ",")
                 ))
         }
-        return serialize(entries)
+        return try serialize(entries)
     }
 
     /// Split a comma-separated domain list, trimming whitespace and dropping

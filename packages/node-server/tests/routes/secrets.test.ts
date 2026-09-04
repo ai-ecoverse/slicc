@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { previewSecret } from '@slicc/shared-ts';
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerSecretRoutes } from '../../src/routes/secrets.js';
@@ -90,6 +91,27 @@ describe('registerSecretRoutes', () => {
     );
     expect(ok.status).toBe(200);
     expect(h.secretProxy.getMaskedEntries().some((e) => e.name === 'STRIPE')).toBe(true);
+  });
+
+  // #2828: the persisted .env store is line-oriented, so a multiline value
+  // would be written back truncated to its first line. The route refuses it
+  // with a 400 that names the problem, and the previous credential survives.
+  it('rejects a multiline persisted-set without touching the existing value', async () => {
+    const pem = '-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----';
+    const res = await fetch(
+      `${h.base}/api/secrets`,
+      json({ name: 'GITHUB_TOKEN', value: pem, domains: ['api.github.com'] })
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      'Secret "GITHUB_TOKEN" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line'
+    );
+
+    const peek = await fetch(`${h.base}/api/secrets/peek?name=GITHUB_TOKEN`);
+    expect(peek.status).toBe(200);
+    expect(((await peek.json()) as { preview: string }).preview).toBe(
+      previewSecret('ghp_realtoken123456789abcdef')
+    );
   });
 
   it('updates the scope of a persisted secret and 404s an unknown one', async () => {
@@ -275,5 +297,62 @@ describe('registerSecretRoutes', () => {
       expect(out.texts[0]).toContain('⟦REDACTED:known-secret:');
       expect(out.redactionCount).toBeGreaterThanOrEqual(1);
     });
+  });
+});
+
+/**
+ * Scope edits re-save the existing value, so they are a second path that could
+ * write a multiline value into the line-oriented store (#2828). A real
+ * `EnvSecretStore` can never hand one back — `parseEnvFile` splits on `\n` — so
+ * the guard is exercised through a store stub, which is also what proves the
+ * route (not the store) is what fails closed.
+ */
+describe('POST /api/secrets/scope with a multiline persisted value', () => {
+  let scopeDir: string;
+
+  afterEach(() => {
+    if (scopeDir) rmSync(scopeDir, { recursive: true, force: true });
+  });
+
+  it('refuses to re-save it and leaves the record alone', async () => {
+    scopeDir = join(tmpdir(), `slicc-secrets-scope-${randomUUID()}`);
+    mkdirSync(scopeDir, { recursive: true });
+    const file = join(scopeDir, 'secrets.env');
+    writeFileSync(file, '', { mode: 0o600 });
+
+    const secretStore = new EnvSecretStore(file);
+    const multiline = '-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----';
+    let saved = false;
+    secretStore.get = ((name: string) =>
+      name === 'PEM'
+        ? { name, value: multiline, domains: ['old.example'] }
+        : null) as EnvSecretStore['get'];
+    secretStore.set = (() => {
+      saved = true;
+    }) as EnvSecretStore['set'];
+
+    const oauthStore = new OauthSecretStore();
+    const secretProxy = new SecretProxyManager(secretStore, 'scope-multiline', oauthStore);
+    await secretProxy.reload();
+    const app = express();
+    registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: false });
+
+    const server = app.listen(0);
+    await new Promise<void>((r) => server.on('listening', () => r()));
+    const addr = server.address();
+    const base = `http://localhost:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    try {
+      const res = await fetch(
+        `${base}/api/secrets/scope`,
+        json({ name: 'PEM', domains: ['new.example'] })
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe(
+        'Secret "PEM" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line'
+      );
+      expect(saved).toBe(false);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });

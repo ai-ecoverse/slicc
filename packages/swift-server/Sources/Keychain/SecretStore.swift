@@ -36,9 +36,22 @@ struct SecretStoreAccess: Sendable {
     )
 }
 
-enum SecretStoreError: Error, Sendable, Equatable {
+enum SecretStoreError: Error, Sendable, Equatable, LocalizedError {
     case emptyDomains
+    /// A secret value carrying a line break: the `.env` schema is
+    /// line-oriented, so storing it would truncate it to its first line
+    /// (#2828). Refused by both privileged servers.
+    case multilineValue(name: String)
     case keychainError(status: Int32)
+
+    /// Only the multiline case describes itself — the other two keep the
+    /// default `NSError` description their existing callers already report.
+    var errorDescription: String? {
+        switch self {
+        case .multilineValue(let name): return EnvFileFormat.multilineValueError(name)
+        case .emptyDomains, .keychainError: return nil
+        }
+    }
 }
 
 /// Keychain service identifier used for the SLICC secrets blob.
@@ -76,6 +89,12 @@ enum SecretStore {
     static func set(name: String, value: String, domains: [String]) throws {
         guard !domains.isEmpty else {
             throw SecretStoreError.emptyDomains
+        }
+        // The blob is line-oriented, so a multiline value would be written back
+        // truncated to its first line (#2828). Refuse the write rather than
+        // report success over a corrupted credential.
+        guard EnvFileFormat.isSingleLineValue(value) else {
+            throw SecretStoreError.multilineValue(name: name)
         }
         try mutate { secrets in
             let entry = Secret(name: name, value: value, domains: domains)
@@ -219,6 +238,6 @@ enum SecretStore {
         let blob = try readBlob()
         var secrets = EnvFileFormat.secretsFromBlob(blob)
         change(&secrets)
-        try writeBlob(EnvFileFormat.blobFromSecrets(secrets))
+        try writeBlob(try EnvFileFormat.blobFromSecrets(secrets))
     }
 }

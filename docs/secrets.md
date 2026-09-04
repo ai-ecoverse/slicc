@@ -27,6 +27,8 @@ OPENAI_KEY_DOMAINS=api.openai.com
 
 Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A secret without a `_DOMAINS` entry is rejected — every secret must be domain-scoped.
 
+**Values must be single-line.** The schema is line-oriented, so a value containing a newline cannot round-trip: it would be stored quoted with a real line break inside and read back truncated to its first line. Both privileged servers refuse such a write with a 400 (`Secret "NAME" value cannot contain newlines; …`) rather than reporting success over a corrupted credential — an overwrite is refused too, so the previous value survives (#2828). To store a multi-line credential such as a PEM private key, encode it single-line first (`base64 -w0 key.pem`) and decode it at the point of use. A hand-written `secrets.env` with a multi-line value has always been read truncated; the servers now simply never produce one.
+
 **Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared-ts/src/secret-masking.ts`).
 
 ### Extending OAuth-token allowed domains

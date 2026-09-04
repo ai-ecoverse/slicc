@@ -68,3 +68,17 @@ describe('serializeEnvFile', () => {
     expect(serializeEnvFile(parsed)).toBe(original);
   });
 });
+
+describe('multiline values (#2828)', () => {
+  // The .env schema is line-oriented, so a multiline value cannot round-trip.
+  // serializeEnvFile is the fail-closed backstop behind the route-level 400s.
+  it('refuses to serialize a value containing a newline', () => {
+    expect(() =>
+      serializeEnvFile([{ key: 'PEM', value: '-----BEGIN KEY-----\nbody\n-----END KEY-----' }])
+    ).toThrow(/cannot contain newlines/);
+  });
+
+  it('would otherwise parse back truncated to the first line', () => {
+    expect(parseEnvFile('PEM="line1\nline2"\n')).toEqual([{ key: 'PEM', value: '"line1' }]);
+  });
+});

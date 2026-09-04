@@ -286,6 +286,34 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
         XCTAssertNil(fixture.get(name: "SAVED"))
     }
 
+    /// A scope edit re-saves the existing value, so it is a second path that
+    /// could write a multiline value into the line-oriented blob. It refuses
+    /// with the same named 400 as the set route and leaves the record's domains
+    /// untouched (#2828). node-server's `handleScopeEdit` mirrors this.
+    func testScopeRefusesToReSaveAMultilinePersistedValue() async throws {
+        let fixture = InMemoryPersistedSecrets([
+            Secret(name: "PEM", value: "-----BEGIN KEY-----\nbody\n-----END KEY-----", domains: ["old.example"])
+        ])
+        let injector = SecretInjector(sessionId: "scope-multiline-fixture", persistedStore: fixture.access)
+
+        try await withApp(injector: injector) { client in
+            try await client.execute(
+                uri: "/api/secrets/scope",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"name":"PEM","domains":["new.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .badRequest)
+                XCTAssertEqual(
+                    try self.decodeJSONObject(response.body)["error"]?.stringValue,
+                    EnvFileFormat.multilineValueError("PEM")
+                )
+            }
+        }
+
+        XCTAssertEqual(fixture.get(name: "PEM")?.domains, ["old.example"])
+    }
+
     func testSessionRoutesKeepThinBridgeCorsAndTokenGate() async throws {
         let fixture = InMemoryPersistedSecrets()
         let injector = SecretInjector(sessionId: "session-cors-fixture", persistedStore: fixture.access)
