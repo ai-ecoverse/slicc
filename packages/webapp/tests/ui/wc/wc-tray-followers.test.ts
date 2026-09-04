@@ -1,4 +1,11 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installWcDomStubs } from './wc-dom-stubs.js';
+
+// `buildFollowerOptions` now touches the composer chrome, which pulls the
+// component library into this module graph.
+installWcDomStubs();
+
 import { LeaderSyncManager } from '../../../src/scoops/tray-leader-sync.js';
 import type { TrayDataChannelLike } from '../../../src/scoops/tray-webrtc.js';
 import type { PageLeaderTrayHandle } from '../../../src/ui/page-leader-tray.js';

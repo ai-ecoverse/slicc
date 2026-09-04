@@ -50,7 +50,11 @@ import {
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { toKernelSudoRequest } from '../../sudo/leader-request.js';
-import { modelForUnit, toTabDescriptors } from '../../work-unit/client/presentation.js';
+import {
+  isReadOnlyUnit,
+  modelForUnit,
+  toTabDescriptors,
+} from '../../work-unit/client/presentation.js';
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { parseQualifiedModelId, qualifiedModelId, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
@@ -99,7 +103,7 @@ import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import { scoopColor } from './wc-scoop-color.js';
-import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
+import { applyComposerAvailability, type SwitcherScoop, type WcShellRefs } from './wc-shell.js';
 import { toScoopSummaries } from './wc-tray-scoops.js';
 import { rootForSelection } from './wc-unit-context.js';
 
@@ -117,6 +121,15 @@ export interface WcTrayDeps {
   getController(): WcChatController | null;
   getSelectedJid(): string;
   agentHandle: AgentHandle;
+  /**
+   * Re-publish the LEADER's own chrome — its tab strip and its model pill.
+   *
+   * A follower role overwrites both with the remote leader's answers, so
+   * leaving the tray has to hand them back; nothing else republishes until the
+   * next roster event or selection, which is long enough to read as the strip
+   * and the pill having gone blank.
+   */
+  restoreLocalChrome(): void;
   /**
    * The leader's client protocol. A follower's message and abort are delivered
    * through it because they NAME a unit — the sending follower's own selection
@@ -143,9 +156,39 @@ export interface WcTrayHandle {
 interface TrayRoleState {
   leader: PageLeaderTrayHandle | null;
   follower: PageFollowerTrayHandle | null;
+  /**
+   * Teardown for the follower role currently installed on the shared shell
+   * chrome. Held on the state because the role outlives the handle: stopping
+   * the sync leaves this float's capture listeners, its remote agent and the
+   * remote strip in place (see {@link FollowerRole.dispose}).
+   */
+  disposeFollowerRole: (() => void) | null;
   persistenceGuard: TabPersistenceGuard;
   /** Release function for the current leader lock (null when no lock held). */
   lockRelease: (() => void) | null;
+}
+
+/** A tab that has taken no tray role yet. */
+function initialRoleState(): TrayRoleState {
+  return {
+    disposeFollowerRole: null,
+    follower: null,
+    leader: null,
+    lockRelease: null,
+    persistenceGuard: new TabPersistenceGuard(),
+  };
+}
+
+/** Install a follower role, tearing down whichever one it replaces. */
+function startFollowerRole(
+  deps: WcTrayDeps,
+  state: TrayRoleState,
+  joinUrl: string
+): PageFollowerTrayHandle {
+  state.disposeFollowerRole?.();
+  const role = buildFollowerOptions(deps, joinUrl, () => state.follower?.currentSync ?? null);
+  state.disposeFollowerRole = role.dispose;
+  return startPageFollowerTray(role.options);
 }
 
 export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): TeleportFollowerInfo[] {
@@ -281,26 +324,134 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 /**
- * The leader-capable float's own follower wiring. It still installs the raw
- * sync manager as the chat agent (`setChatAgent`) and has no addressable-unit
- * gate, unlike the dedicated follower mount — it is the third follower wiring
- * and it collapses onto the one mount in #2382 PR D rather than being
- * half-migrated here.
+ * A re-pointable subscription to the shown unit's transcript.
+ *
+ * `subscribe` SEEDS a new listener synchronously with its cached snapshot, so
+ * re-pointing at the unit already being watched would replay the whole
+ * transcript — and `scoops.list` arrives on the leader's 5 s interval, which
+ * would re-render the thread (disposing and rehydrating every dip, and moving
+ * the scroll) four times a minute. Hence the dedup guard, which the dedicated
+ * follower mount carries too.
  */
+function createTranscriptWatch(
+  workUnits: RemoteWorkUnitClient,
+  getController: () => WcChatController | null
+): { watch: (jid: string) => void; forget: () => void } {
+  let unwatch: Unsubscribe | null = null;
+  let watched: string | null = null;
+  return {
+    forget: () => {
+      unwatch?.();
+      unwatch = null;
+      watched = null;
+    },
+    watch: (jid) => {
+      if (watched === jid && unwatch) return;
+      unwatch?.();
+      watched = jid;
+      unwatch = workUnits.subscribe(jid, (event) => {
+        if (event.type !== 'snapshot' || watched !== jid) return;
+        const messages = event.snapshot.messages as unknown as ChatMessage[];
+        const controller = getController();
+        controller?.loadMessages(messages, event.snapshot.queuedIds);
+        controller?.setProcessing(messages.some((message) => message.isStreaming));
+      });
+    },
+  };
+}
+
+/**
+ * The two shell events a follower role has to win while it is installed.
+ *
+ * Both are CAPTURE listeners on chrome the leader mount also owns and which
+ * outlives every join: the selection listener beats the leader's own, and the
+ * stop listener beats `wireWcComposer`'s — which closes over this float's
+ * LOCAL agent handle and would otherwise abort its own kernel while the remote
+ * turn kept running. Returns the disposer, because a role left installed
+ * publishes from a client the next role has already reset.
+ */
+function installFollowerCaptureHandlers(
+  deps: WcTrayDeps,
+  handlers: {
+    getSync: () => PageFollowerTrayHandle['currentSync'];
+    onSelect: (scoopJid: string) => void;
+    onStop: () => void;
+  }
+): () => void {
+  const onSelect = (event: Event): void => {
+    if (!handlers.getSync()) return;
+    event.stopImmediatePropagation();
+    const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
+    if (!scoopJid) return;
+    handlers.onSelect(scoopJid);
+  };
+  const onStop = (event: Event): void => {
+    if (!handlers.getSync()) return;
+    event.stopImmediatePropagation();
+    if (!deps.getController()?.processing) return;
+    handlers.onStop();
+  };
+  deps.refs.switcher.addEventListener('slicc-scoop-select', onSelect, { capture: true });
+  deps.refs.inputCard.addEventListener('stop', onStop, { capture: true });
+  return () => {
+    deps.refs.switcher.removeEventListener('slicc-scoop-select', onSelect, { capture: true });
+    deps.refs.inputCard.removeEventListener('stop', onStop, { capture: true });
+  };
+}
+
+/**
+ * The leader-capable float's own follower wiring: what this float becomes when
+ * it joins ANOTHER leader's tray.
+ *
+ * It rides the same client protocol as the dedicated follower mount (#2382 PR
+ * D1) — roster, transcript, selection, send, stop and model all come from a
+ * `RemoteWorkUnitClient` over the tray, never from `deps.client`, which is
+ * this float's own kernel and describes different units entirely.
+ *
+ * What is still separate is the MOUNT: this float already has a leader shell,
+ * so a role here decorates the existing chrome rather than building its own.
+ * That is why it returns a disposer, and why the two mounts are not yet one
+ * (#2382 PR D2b).
+ */
+/** A follower role's options plus the teardown the next role has to run. */
+export interface FollowerRole {
+  options: Parameters<typeof startPageFollowerTray>[0];
+  /**
+   * Undo everything this role installed on the SHARED shell chrome.
+   *
+   * Every join builds a fresh role, and its capture listeners live on
+   * `refs.switcher` / `refs.inputCard` — which outlive it. Left in place, a
+   * previous role's listener still wins the capture phase, still calls
+   * `stopImmediatePropagation()`, and publishes from a client whose roster was
+   * cleared by `resetSelection()`: the strip goes empty on the first click
+   * after a re-join. Leaving the tray has the same problem from the other
+   * side, so the disposer also hands the leader back its agent handle, its
+   * strip and its model pill.
+   */
+  dispose(): void;
+}
+
 export function buildFollowerOptions(
   deps: WcTrayDeps,
   joinUrl: string,
   getSync: () => PageFollowerTrayHandle['currentSync']
-): Parameters<typeof startPageFollowerTray>[0] {
+): FollowerRole {
   const { browser, client, getController } = deps;
+  /**
+   * A jid we can actually address, or `null`. An empty or missing
+   * `activeScoopJid` is a leader that could not name a unit, not a unit called
+   * `''` — and treating it as one lets a send name the empty string.
+   */
+  const usableUnitId = (jid: string | null | undefined): string | null =>
+    jid && jid.length > 0 ? jid : null;
   let selectedScoopJid: string | null = null;
   /**
    * This float's own half of the client protocol (#2382 PR D). It follows
    * ANOTHER leader, so its roster, transcript and model all come from the tray
    * — never from `deps.client`, which is the local kernel and describes
    * different units entirely. Until this landed it was the third follower
-   * wiring, rendering through the legacy `toFollowerSwitcherScoops` while the
-   * other two had moved to `toTabDescriptors`.
+   * wiring, rendering through a legacy projection while the other two had
+   * moved to `toTabDescriptors`.
    */
   const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
   const publishFollowerScoops = (): void => {
@@ -310,26 +461,22 @@ export function buildFollowerOptions(
       scoopColor
     ) as SwitcherScoop[];
   };
-  /** The live per-unit transcript subscription; re-pointed with the selection. */
-  let unitWatch: Unsubscribe | null = null;
-  /** The unit `unitWatch` is pointed at, so a re-point for it is a no-op. */
-  let watchedUnit: string | null = null;
-  const watchUnit = (jid: string): void => {
-    // Already watching it: `subscribe` SEEDS a new listener synchronously with
-    // its cached snapshot, so tearing down and re-subscribing would replay the
-    // whole transcript — and `onScoopsList` fires on the leader's 5 s roster
-    // interval, which would re-render the thread (disposing and rehydrating
-    // every dip, and moving the scroll) four times a minute.
-    if (watchedUnit === jid && unitWatch) return;
-    unitWatch?.();
-    watchedUnit = jid;
-    unitWatch = workUnits.subscribe(jid, (event) => {
-      if (event.type !== 'snapshot' || watchedUnit !== jid) return;
-      const messages = event.snapshot.messages as unknown as ChatMessage[];
-      const controller = getController();
-      controller?.loadMessages(messages, event.snapshot.queuedIds);
-      controller?.setProcessing(messages.some((message) => message.isStreaming));
-    });
+  const transcript = createTranscriptWatch(workUnits, () => deps.getController());
+  const watchUnit = transcript.watch;
+
+  /**
+   * Mount or unmount the composer for the current selection (#2312). A user
+   * never talks to a scoop: selecting one makes the transcript read-only and
+   * its asks go to the owning cone. The dedicated follower mount has done this
+   * since #2312; this float delivered the prompt to the scoop instead.
+   *
+   * A selection the roster does not describe yet KEEPS the composer — that is
+   * the pre-multiple-cones default, and a guest seat never receives a roster
+   * at all.
+   */
+  const applySelectionChrome = (): void => {
+    const shown = workUnits.currentUnits().find((unit) => unit.id === selectedScoopJid);
+    applyComposerAvailability(deps.refs, shown ? isReadOnlyUnit(shown) : false);
   };
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
@@ -352,16 +499,12 @@ export function buildFollowerOptions(
   // of me" means on a follower too. Wiring a second rail raced it for the
   // globe (two listeners, two full-screen overlays on one click). The
   // dedicated follower mount, which has no switcher of its own, wires it.
-  deps.refs.switcher.addEventListener(
-    'slicc-scoop-select',
-    (event) => {
-      const sync = getSync();
-      if (!sync) return;
-      event.stopImmediatePropagation();
-      const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
-      if (!scoopJid) return;
+  const disposeCapture = installFollowerCaptureHandlers(deps, {
+    getSync,
+    onSelect: (scoopJid) => {
       selectedScoopJid = scoopJid;
       publishFollowerScoops(); // re-order for the new selection, as the leader does
+      applySelectionChrome();
       deps.refs.switcher.setAttribute('active', scoopJid);
       // Ask BEFORE subscribing: the in-flight fetch is what tells the adapter
       // not to seed this listener with the unit's previous transcript.
@@ -370,15 +513,46 @@ export function buildFollowerOptions(
       // The leader answers a selection with a snapshot, not a `model.state`.
       modelSurface.onShownUnitChanged();
     },
-    { capture: true }
-  );
-  return workUnits.wrapOptions({
+    onStop: () => {
+      const target = usableUnitId(selectedScoopJid ?? workUnits.selectedUnitId);
+      if (!target) return;
+      void workUnits.signal(target, 'stop').catch((error) => {
+        deps.log.warn('follower stop failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  });
+
+  /**
+   * Drop everything the connection that just ended said. A reconnect is a
+   * fresh bootstrap: the leader may have dropped the unit we were viewing, and
+   * a subscription still pointed at it would make the re-point a no-op.
+   */
+  const forgetSession = (): void => {
+    workUnits.resetSelection();
+    transcript.forget();
+    modelSurface.reset();
+  };
+  const dispose = (): void => {
+    disposeCapture();
+    transcript.forget();
+    workUnits.resetSelection();
+    modelSurface.dispose();
+    // Hand the leader back what this role took over: its own agent (the
+    // controller is still holding the remote one, whose sends now reject),
+    // its strip, and its model pill.
+    deps.getController()?.setAgent(deps.agentHandle);
+    deps.restoreLocalChrome();
+  };
+  const options: Parameters<typeof startPageFollowerTray>[0] = workUnits.wrapOptions({
     joinUrl,
     onSnapshot: (_messages, scoopJid) => {
       // The transcript is rendered by `watchUnit` off the protocol; what is
       // left here is the selection bookkeeping the frame also carries.
-      selectedScoopJid = scoopJid;
-      watchUnit(scoopJid);
+      selectedScoopJid = usableUnitId(scoopJid);
+      if (selectedScoopJid) watchUnit(selectedScoopJid);
+      applySelectionChrome();
       modelSurface.onShownUnitChanged();
     },
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
@@ -389,12 +563,22 @@ export function buildFollowerOptions(
       }
     },
     setChatAgent: (agent) => {
-      // Send and stop name their unit, exactly as the dedicated follower mount
-      // does (#2382 PR A); the agent EVENT stream stays on the sync manager.
+      // Send names its unit, exactly as the dedicated follower mount does
+      // (#2382 PR A); the agent EVENT stream stays on the sync manager. STOP
+      // does not come through this handle — the leader mount's own composer
+      // listener would win — so it has its own capture listener above.
       getController()?.setAgent(
         createWorkUnitAgentHandle(workUnits, {
-          getSelectedId: () => selectedScoopJid ?? workUnits.selectedUnitId,
-          onError: (error) => deps.log.warn('follower send failed', { error }),
+          getSelectedId: () => usableUnitId(selectedScoopJid ?? workUnits.selectedUnitId),
+          onError: (error) => {
+            deps.log.warn('follower send failed', { error });
+            // The controller has already appended the bubble and cleared the
+            // input, so a log line would leave a message on screen that never
+            // left the device.
+            deps
+              .getController()
+              ?.addAssistantMessage(`_That message was not sent to the leader — ${error}_`);
+          },
           onEvent: (listener) => agent.onEvent(listener),
         })
       );
@@ -402,30 +586,26 @@ export function buildFollowerOptions(
     browserAPI: browser,
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
     getSelectedScoopJid: () => selectedScoopJid,
+    // `detachSync(false)` suppresses `onConnectionChange(false)` here, so
+    // without its own handler a give-up left the client, the subscription, the
+    // pill and `connection: 'connected'` all standing (#2382 PR D1).
+    onGaveUp: () => forgetSession(),
     onConnectionChange: (connected) => {
       deps.refs.switcher.connection = connected ? 'connected' : 'disconnected';
       if (!connected) {
-        // A reconnect is a fresh bootstrap; nothing the dead channel said
-        // survives it, and the subscription is re-pointed from the new
-        // session's first frame.
-        workUnits.resetSelection();
-        unitWatch?.();
-        unitWatch = null;
-        // The next session re-points from its own first frame; a remembered
-        // unit here would make that re-point a no-op.
-        watchedUnit = null;
-        modelSurface.reset();
+        forgetSession();
       }
     },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
     onScoopsList: (scoops, activeScoopJid) => {
       if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
-        selectedScoopJid = activeScoopJid;
+        selectedScoopJid = usableUnitId(activeScoopJid);
       }
       publishFollowerScoops();
-      deps.refs.switcher.setAttribute('active', selectedScoopJid);
+      if (selectedScoopJid) deps.refs.switcher.setAttribute('active', selectedScoopJid);
       if (selectedScoopJid) watchUnit(selectedScoopJid);
+      applySelectionChrome();
       modelSurface.onShownUnitChanged();
     },
     // #1915: this float has a mounted permissions surface (it can lead), so
@@ -438,6 +618,7 @@ export function buildFollowerOptions(
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,
   });
+  return { dispose, options };
 }
 
 function mirrorSprinkleInstances(state: TrayRoleState): void {
@@ -910,9 +1091,7 @@ function startInitialRole(
   const storedJoinUrl = win.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
   const storedWorkerBaseUrl = win.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
   if (storedJoinUrl) {
-    state.follower = startPageFollowerTray(
-      buildFollowerOptions(deps, storedJoinUrl, () => state.follower?.currentSync ?? null)
-    );
+    state.follower = startFollowerRole(deps, state, storedJoinUrl);
   } else if (storedWorkerBaseUrl) {
     acquireAndStartLeader(
       storedWorkerBaseUrl,
@@ -991,9 +1170,7 @@ function installRoleSwitchListeners(
       log.error('previous follower stop threw during tray-join switch', err);
     }
     try {
-      state.follower = startPageFollowerTray(
-        buildFollowerOptions(deps, joinUrl, () => state.follower?.currentSync ?? null)
-      );
+      state.follower = startFollowerRole(deps, state, joinUrl);
     } catch (err) {
       log.error('tray-join failed', err);
     }
@@ -1027,12 +1204,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   await loadSprinkleStyles();
 
   const { client, instanceId, window: win, log } = deps;
-  const state: TrayRoleState = {
-    leader: null,
-    follower: null,
-    persistenceGuard: new TabPersistenceGuard(),
-    lockRelease: null,
-  };
+  const state = initialRoleState();
   const lockManager = getDefaultLockManager();
 
   installLeaderModelCatalogRefresh({
@@ -1101,6 +1273,13 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
         },
         getFollower: () => state.follower,
         setFollower: (h) => {
+          // Dropping the handle is not leaving the role: without this the
+          // controller keeps the REMOTE agent (whose sends now reject), the
+          // strip keeps the remote roster and the pill stays hidden.
+          if (!h) {
+            state.disposeFollowerRole?.();
+            state.disposeFollowerRole = null;
+          }
           state.follower = h as PageFollowerTrayHandle | null;
         },
         startLeader: (workerBaseUrl) => {

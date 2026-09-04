@@ -13,18 +13,18 @@ phase 5 of [#1666](https://github.com/ai-ecoverse/slicc/issues/1666). Code:
 The WC shell renders the same five things — a tab strip, a transcript, a
 queued pile, a model pill, a composer — from two unrelated sources:
 
-|                | Leader (local)                                             | Follower (remote)                                      |
-| -------------- | ---------------------------------------------------------- | ------------------------------------------------------ |
-| roster         | `OffscreenClient.getScoops()` + `onScoopListUpdate`        | `FollowerSyncManager.onScoopsList(scoops, activeJid)`  |
-| runtime state  | page-side `Map`s in `WcLiveWiring` (statuses/fills/phases) | `ScoopSummary.state` + `activity` + `fill` on the wire |
-| ordering       | `orderForSwitcher` (`wc-unit-context.ts`)                  | `toFollowerSwitcherScoops` → `orderByOwner`            |
-| descriptors    | `toSwitcherScoops` (`wc-live-callbacks.ts`)                | `toFollowerSwitcherScoops` (`wc-tray-scoops.ts`)       |
-| transcript     | `requestScoopMessages` → `onScoopMessagesReplaced`         | `selectScoop` → `onSnapshot`                           |
-| queue          | `queuedIds` on the replay envelope (#2362)                 | not sent (a follower's local queue says nothing)       |
-| model          | `modelFor(record)`                                         | `ScoopSummary.model` + the catalog retry (#2329/#2330) |
-| role/read-only | `unitRoleFor(scoop)`                                       | `summaryRole(summary)`                                 |
-| owning root    | `rootForSelection`                                         | `rootOfSummary`                                        |
-| stop           | `OffscreenClient.stopScoop`                                | `FollowerSyncManager.stop`                             |
+|                | Leader (local)                                             | Follower (remote)                                       |
+| -------------- | ---------------------------------------------------------- | ------------------------------------------------------- |
+| roster         | `OffscreenClient.getScoops()` + `onScoopListUpdate`        | `FollowerSyncManager.onScoopsList(scoops, activeJid)`   |
+| runtime state  | page-side `Map`s in `WcLiveWiring` (statuses/fills/phases) | `ScoopSummary.state` + `activity` + `fill` on the wire  |
+| ordering       | `orderForSwitcher` (`wc-unit-context.ts`)                  | `toFollowerSwitcherScoops` → `orderByOwner` (both gone) |
+| descriptors    | `toSwitcherScoops` (`wc-live-callbacks.ts`)                | `toFollowerSwitcherScoops` (`wc-tray-scoops.ts`, gone)  |
+| transcript     | `requestScoopMessages` → `onScoopMessagesReplaced`         | `selectScoop` → `onSnapshot`                            |
+| queue          | `queuedIds` on the replay envelope (#2362)                 | not sent (a follower's local queue says nothing)        |
+| model          | `modelFor(record)`                                         | `ScoopSummary.model` + the catalog retry (#2329/#2330)  |
+| role/read-only | `unitRoleFor(scoop)`                                       | `summaryRole(summary)`                                  |
+| owning root    | `rootForSelection`                                         | `rootOfSummary`                                         |
+| stop           | `OffscreenClient.stopScoop`                                | `FollowerSyncManager.stop`                              |
 
 Every row is one concept with two implementations. They have drifted before
 and will again: three switcher orderings existed at once before #2317, and the
@@ -389,13 +389,13 @@ drifted:
   which unit it has. It no longer reads the transcript. The adapters consume
   both callbacks; that is where a kernel envelope or a tray frame becomes a
   snapshot event.
-- **Two mounts, not three.** The dedicated follower mount (`wc-follower.ts`)
-  and the leader mount (`wc-live.ts`) render from the protocol. The
-  leader-capable float's own follower path (`wc-tray.ts` `buildFollowerOptions`
-  — `onSnapshot` → `loadMessages`, `sync.selectScoop` on a tab click) is still
-  on the raw frames and has no `RemoteWorkUnitClient` of its own. It is the
-  third follower wiring and collapses onto the one mount in PR D, as it did for
-  the composer in PR A.
+- **All three follower paths now read the protocol** (the third since PR D1).
+  The dedicated follower mount (`wc-follower.ts`), the leader mount
+  (`wc-live.ts`) and the leader-capable float's own follower role (`wc-tray.ts`
+  `buildFollowerOptions`) each render from a client. What is still separate is
+  the MOUNT: that float already has a leader shell, so a follower role there
+  decorates the existing chrome and returns a disposer instead of building its
+  own. Collapsing the three mounts is PR D2b.
 - **The leader suppresses the seeded snapshot on a re-point; the follower takes
   it.** `subscribe` seeds a new listener synchronously with the last snapshot
   it published. On the leader that seed is the previous transcript of a unit
@@ -463,7 +463,7 @@ This lands in two steps:
 1. **This PR** — protocol, both adapters, the shared presentation module, the
    conformance suite, and the tab strip cut over to it on both sides. Both
    shells build their strip from `toTabDescriptors` over the protocol's roster;
-   `toSwitcherScoops` / `toFollowerSwitcherScoops` / `orderForSwitcher` /
+   `toSwitcherScoops` / `orderForSwitcher` /
    `rootForSelection` / `isReadOnlyRole` survive as thin delegations, so no
    caller moves and no export disappears. `orderByOwner` and `rootOfSummary`
    are gone — they were private, and the shared implementation IS them.

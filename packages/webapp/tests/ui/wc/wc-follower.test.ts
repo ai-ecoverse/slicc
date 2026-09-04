@@ -838,7 +838,7 @@ describe('mountWcUiFollower', () => {
   });
 
   it('re-orders the tab strip when the follower selects a cone (Codex P2)', async () => {
-    // `toFollowerSwitcherScoops` puts the SELECTED cone's scoops ahead of the
+    // `toTabDescriptors` puts the SELECTED cone's scoops ahead of the
     // rest, and the local click handler previously only moved `active` — so the
     // strip kept showing the previously selected cone's scoops first until the
     // leader happened to push a fresh roster.

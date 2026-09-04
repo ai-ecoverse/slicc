@@ -5,7 +5,7 @@
  * Before this module the leader ordered with `orderForSwitcher`
  * (`ui/wc/wc-unit-context.ts`) and the follower with `orderByOwner`
  * (`ui/wc/wc-tray-scoops.ts`), and each built its own descriptors
- * (`toSwitcherScoops` / `toFollowerSwitcherScoops`). Three orderings existed
+ * (`toSwitcherScoops` / `toFollowerSwitcherScoops`, both since retired). Three orderings existed
  * at once before #2317; this is what stops a fourth.
  *
  * Everything here is pure and transport-free — it renders

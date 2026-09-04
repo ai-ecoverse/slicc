@@ -24,11 +24,13 @@ describe('role-switch follower model controls', () => {
     const setThinkingLevel = vi.fn();
     const selectScoop = vi.fn();
     const sync = { selectModel, setThinkingLevel, selectScoop };
-    const options = buildFollowerOptions(
+    const { options } = buildFollowerOptions(
       {
         refs: {
           composerMeta,
           switcher,
+          composer: document.createElement('div'),
+          inputCard: document.createElement('div'),
           dock: document.createElement('div'),
           overlaySurfaces: new Set(),
         },
@@ -38,6 +40,8 @@ describe('role-switch follower model controls', () => {
         getController: () => null,
         addSprinkle: vi.fn(),
         removeSprinkle: vi.fn(),
+        agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+        restoreLocalChrome: vi.fn(),
       } as never,
       'https://tray.example/join/token',
       () => sync as never
@@ -88,16 +92,18 @@ describe('role-switch follower model controls', () => {
   it('re-orders the strip when this leader-capable follower selects a cone (Codex P2)', () => {
     // Third follower wiring path, after wc-live (leader) and wc-follower: a
     // standalone float that joined someone else's tray. It publishes through
-    // the same `toFollowerSwitcherScoops`, so it needs the same selection.
+    // the same `toTabDescriptors` over the client roster, so it needs the same selection.
     const composerMeta = document.createElement('div');
     const switcher = document.createElement('div') as unknown as HTMLElement & {
       scoops: Array<{ key: string }>;
     };
-    const options = buildFollowerOptions(
+    const { options } = buildFollowerOptions(
       {
         refs: {
           composerMeta,
           switcher,
+          composer: document.createElement('div'),
+          inputCard: document.createElement('div'),
           dock: document.createElement('div'),
           overlaySurfaces: new Set(),
         },
@@ -107,6 +113,8 @@ describe('role-switch follower model controls', () => {
         getController: () => null,
         addSprinkle: vi.fn(),
         removeSprinkle: vi.fn(),
+        agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+        restoreLocalChrome: vi.fn(),
       } as never,
       'https://tray.example/join/token',
       () => ({ selectScoop: vi.fn() }) as never
@@ -131,11 +139,13 @@ describe('role-switch follower model controls', () => {
   it('preserves the viewed scoop across transient disconnect and falls back when it disappears', () => {
     const composerMeta = document.createElement('div');
     const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
-    const options = buildFollowerOptions(
+    const { options } = buildFollowerOptions(
       {
         refs: {
           composerMeta,
           switcher,
+          composer: document.createElement('div'),
+          inputCard: document.createElement('div'),
           dock: document.createElement('div'),
           overlaySurfaces: new Set(),
         },
@@ -145,6 +155,8 @@ describe('role-switch follower model controls', () => {
         getController: () => null,
         addSprinkle: vi.fn(),
         removeSprinkle: vi.fn(),
+        agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+        restoreLocalChrome: vi.fn(),
       } as never,
       'https://tray.example/join/token',
       () => ({ selectScoop: vi.fn() }) as never
@@ -171,13 +183,41 @@ describe('role-switch follower model controls', () => {
 });
 
 describe('role-switch follower status', () => {
-  it('does not re-render the transcript on every roster push', () => {
-    const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
-    const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
-    const options = buildFollowerOptions(
+  /** The leader-capable float's follower role, with everything it touches. */
+  function followerRole(overrides: Record<string, unknown> = {}) {
+    const composerMeta = document.createElement('div') as HTMLElement & {
+      model?: string;
+      models?: unknown[];
+    };
+    const switcher = document.createElement('div') as HTMLElement & {
+      scoops?: Array<{ key: string }>;
+    };
+    const composer = document.createElement('div');
+    const inputCard = document.createElement('div');
+    const controller = {
+      loadMessages: vi.fn(),
+      setProcessing: vi.fn(),
+      addUserMessage: vi.fn(),
+      addAssistantMessage: vi.fn(),
+      setAgent: vi.fn(),
+      processing: false,
+    };
+    const localAgent = { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() };
+    const restoreLocalChrome = vi.fn();
+    const sync = {
+      selectScoop: vi.fn(),
+      selectModel: vi.fn(),
+      setThinkingLevel: vi.fn(),
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+      requestModels: vi.fn(),
+    };
+    const role = buildFollowerOptions(
       {
         refs: {
-          composerMeta: document.createElement('div'),
+          composerMeta,
+          composer,
+          inputCard,
           switcher,
           dock: document.createElement('div'),
           overlaySurfaces: new Set(),
@@ -188,6 +228,207 @@ describe('role-switch follower status', () => {
         getController: () => controller,
         addSprinkle: vi.fn(),
         removeSprinkle: vi.fn(),
+        agentHandle: localAgent,
+        restoreLocalChrome,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        ...overrides,
+      } as never,
+      'https://tray.example/join/token',
+      () => sync as never
+    );
+    return {
+      composerMeta,
+      controller,
+      inputCard,
+      localAgent,
+      restoreLocalChrome,
+      role,
+      switcher,
+      sync,
+    };
+  }
+
+  const CONES = [
+    {
+      jid: 'cone_a',
+      name: 'a',
+      folder: 'cone',
+      parentId: null,
+      isCone: true,
+      assistantLabel: 'sliccy',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    },
+    {
+      jid: 'cone_b',
+      name: 'b',
+      folder: 'cone-b',
+      parentId: null,
+      isCone: true,
+      assistantLabel: 'sliccy',
+      model: { provider: 'anthropic', id: 'claude-sonnet-4-6' },
+    },
+  ] as never;
+  const PILL_CATALOG = [
+    { providerName: 'A', modelId: 'anthropic:claude-opus-4-6', modelName: 'Opus', reasoning: true },
+    {
+      providerName: 'A',
+      modelId: 'anthropic:claude-sonnet-4-6',
+      modelName: 'Sonnet',
+      reasoning: true,
+    },
+  ];
+
+  it('follows the roster’s model on a tab switch with no matching model.state', () => {
+    const h = followerRole();
+    h.role.options.onScoopsList?.(CONES, 'cone_a');
+    h.role.options.onModelsList?.(PILL_CATALOG);
+    h.role.options.onModelState?.({
+      activeModelId: 'anthropic:claude-opus-4-6',
+      scoopJid: 'cone_a',
+    });
+    expect(h.composerMeta.model).toBe('Opus');
+
+    // The leader answers a selection with a snapshot, not a `model.state`, so
+    // the roster is the only answer for the newly shown cone. Before this
+    // float had a client it passed an empty roster and stayed on Opus.
+    h.switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone_b' } }));
+    expect(h.composerMeta.model).toBe('Sonnet');
+  });
+
+  it('installs the remote agent while following and hands the local one back on leave', () => {
+    const h = followerRole();
+    const remote = { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() };
+    h.role.options.setChatAgent?.(remote as never);
+    // Not the sync manager and not the local handle: a handle that names its
+    // unit over the client protocol (#2382 PR A).
+    expect(h.controller.setAgent).toHaveBeenCalledTimes(1);
+    expect(h.controller.setAgent.mock.calls[0]?.[0]).not.toBe(remote);
+    expect(h.controller.setAgent.mock.calls[0]?.[0]).not.toBe(h.localAgent);
+
+    h.role.dispose();
+    // Leaving the tray hands the leader its own agent back; without this the
+    // next composer submit rejects with "not connected to a leader" AFTER the
+    // bubble is already on the thread.
+    expect(h.controller.setAgent).toHaveBeenLastCalledWith(h.localAgent);
+    expect(h.restoreLocalChrome).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the REMOTE turn while following, not the local kernel', () => {
+    const h = followerRole();
+    h.role.options.onScoopsList?.(CONES, 'cone_a');
+    h.controller.processing = true;
+
+    h.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
+    // The leader mount's own `stop` listener closes over its LOCAL handle, so
+    // without a capture listener here a stop aborted this float's own kernel
+    // while the remote turn kept running.
+    expect(h.sync.stop).toHaveBeenCalledTimes(1);
+    expect(h.localAgent.stop).not.toHaveBeenCalled();
+
+    // …and it stops intercepting once the role is gone.
+    h.role.dispose();
+    h.sync.stop.mockClear();
+    h.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
+    expect(h.sync.stop).not.toHaveBeenCalled();
+  });
+
+  it('unmounts the composer for a scoop, as the dedicated follower does (#2312)', () => {
+    const h = followerRole();
+    h.role.options.onScoopsList?.(
+      [
+        CONES[0],
+        {
+          jid: 'scoop_1',
+          name: 'helper',
+          folder: 'helper',
+          parentId: 'cone_a',
+          isCone: false,
+          assistantLabel: 'sliccy',
+        },
+      ] as never,
+      'cone_a'
+    );
+    h.switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop_1' } }));
+    // A user never talks to a scoop: its asks go to the owning cone. This
+    // float used to deliver the prompt straight to the scoop.
+    expect(h.role.options.getSelectedScoopJid?.()).toBe('scoop_1');
+    expect(h.inputCard.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('does not let a disposed role publish an empty strip after a re-join', () => {
+    // Both roles live on the SAME shell chrome — that is the whole point: the
+    // switcher outlives every join.
+    const shared = {
+      composerMeta: document.createElement('div'),
+      composer: document.createElement('div'),
+      inputCard: document.createElement('div'),
+      switcher: document.createElement('div') as HTMLElement & { scoops?: Array<{ key: string }> },
+      dock: document.createElement('div'),
+      overlaySurfaces: new Set(),
+    };
+    const makeRole = () => {
+      const sync = {
+        selectScoop: vi.fn(),
+        selectModel: vi.fn(),
+        setThinkingLevel: vi.fn(),
+        stop: vi.fn(),
+      };
+      const role = buildFollowerOptions(
+        {
+          refs: shared,
+          browser: {},
+          client: { sendSetFollowerForwarding: vi.fn() },
+          window: { localStorage: { getItem: vi.fn(() => null) } },
+          getController: () => null,
+          addSprinkle: vi.fn(),
+          removeSprinkle: vi.fn(),
+          agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+          restoreLocalChrome: vi.fn(),
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        } as never,
+        'https://tray.example/join/token',
+        () => sync as never
+      );
+      return role;
+    };
+
+    const first = makeRole();
+    first.options.onScoopsList?.(CONES, 'cone_a');
+    expect(shared.switcher.scoops?.map((tab) => tab.key)).toEqual(['cone_a', 'cone_b']);
+
+    // Join B. The previous role is disposed; left alive its capture listener
+    // still wins the capture phase and publishes from a client whose roster
+    // `resetSelection()` cleared — an empty strip on the first click.
+    first.dispose();
+    const second = makeRole();
+    second.options.onScoopsList?.(CONES, 'cone_a');
+    shared.switcher.dispatchEvent(
+      new CustomEvent('slicc-scoop-select', { detail: { key: 'cone_b' } })
+    );
+    expect(shared.switcher.scoops?.map((tab) => tab.key)).toEqual(['cone_a', 'cone_b']);
+  });
+
+  it('does not re-render the transcript on every roster push', () => {
+    const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
+    const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
+    const { options } = buildFollowerOptions(
+      {
+        refs: {
+          composerMeta: document.createElement('div'),
+          composer: document.createElement('div'),
+          inputCard: document.createElement('div'),
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
+        browser: {},
+        client: { sendSetFollowerForwarding: vi.fn() },
+        window: { localStorage: { getItem: vi.fn(() => null) } },
+        getController: () => controller,
+        addSprinkle: vi.fn(),
+        removeSprinkle: vi.fn(),
+        agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+        restoreLocalChrome: vi.fn(),
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       } as never,
       'https://tray.example/join/token',
@@ -217,10 +458,12 @@ describe('role-switch follower status', () => {
   it('re-establishes snapshot busy state and ignores statuses for another scoop', () => {
     const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
     const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
-    const options = buildFollowerOptions(
+    const { options } = buildFollowerOptions(
       {
         refs: {
           composerMeta: document.createElement('div'),
+          composer: document.createElement('div'),
+          inputCard: document.createElement('div'),
           switcher,
           dock: document.createElement('div'),
           overlaySurfaces: new Set(),
@@ -231,6 +474,8 @@ describe('role-switch follower status', () => {
         getController: () => controller,
         addSprinkle: vi.fn(),
         removeSprinkle: vi.fn(),
+        agentHandle: { sendMessage: vi.fn(), onEvent: () => () => undefined, stop: vi.fn() },
+        restoreLocalChrome: vi.fn(),
       } as never,
       'https://tray.example/join/token',
       () => null
