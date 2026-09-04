@@ -20,10 +20,10 @@
       ]
     },
     "node-server": {
-      "lines": 83,
+      "lines": 84,
       "statements": 81,
-      "functions": 85,
-      "branches": 72,
+      "functions": 86,
+      "branches": 73,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -115,7 +115,7 @@
       "lines": 97,
       "statements": 94,
       "functions": 94,
-      "branches": 87
+      "branches": 88
     },
     "webcomponents": {
       "lines": 95,
@@ -132,9 +132,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 65,
-      "functions": 64,
-      "regions": 63
+      "lines": 66,
+      "functions": 65,
+      "regions": 64
     },
     "swift-launcher": {
       "lines": 80,
@@ -152,8 +152,8 @@
       "regions": 87
     },
     "swift-trayfollower": {
-      "lines": 69,
-      "functions": 54,
+      "lines": 70,
+      "functions": 55,
       "regions": 78
     },
     "swift-traykit": {
