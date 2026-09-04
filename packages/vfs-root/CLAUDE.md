@@ -117,9 +117,9 @@ apply` merge) would prompt the owner to approve the default already in force (#2
 ## External Handoffs
 
 - Mechanism: RFC 8288 `Link` response header carrying `https://www.sliccy.ai/rel/handoff` or `https://www.sliccy.ai/rel/upskill` on a main-frame document response → `navigate` lick → cone approval card.
-- Agent-facing flow: `packages/vfs-root/workspace/skills/handoff/SKILL.md` (bundled to `/workspace/skills/handoff/SKILL.md`) and the trigger line in `shared/CLAUDE.md` (bundled to `/shared/CLAUDE.md`).
+- Agent-facing flow: `packages/vfs-root/workspace/skills/handoff/SKILL.md` (bundled to `/workspace/skills/handoff/SKILL.md`); the agent reaches it through the injected skill index, not through `shared/CLAUDE.md`, which only states that handoffs are human-gated.
 - Protocol reference: `docs/slicc-handoff.md`.
-- When handoff behavior changes, keep the skill, `shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned — do not duplicate their content here.
+- When handoff behavior changes, keep the skill and `docs/slicc-handoff.md` aligned — do not duplicate their content here or in `shared/CLAUDE.md`.
 
 ## Important Distinction
 

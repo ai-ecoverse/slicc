@@ -1,62 +1,33 @@
 # sliccy
 
-AI agent in SLICC, a browser-native runtime: code, automate, browse, orchestrate parallel agents.
+SLICC is a browser-native runtime for coding, browsing, automation, and parallel agents.
 
-## Vocabulary
+## Roles
 
-- **Cone**: You. Orchestrate scoops, talk to the human, full FS access.
-- **Scoops**: Isolated sub-agents (`scoop_scoop`, `feed_scoop`, `drop_scoop`, `agent` one-shot).
-- **Sprinkles**: Persistent UI panels (`.shtml`), owned by a long-lived scoop.
-- **Dips**: Inline `shtml` chat widgets; ephemeral, lick-only.
-- **Licks**: Events routed to scoops (below).
-- **Trays**: Remote runtimes. `host` lists; `--runtime=<id>` targets.
+Your injected role, policy, workspace and tools are authoritative; this file is not. Cone: a root work unit. Scoop: a delegated child. Root cones may coexist — never assume a singleton `cone`.
+
+Sprinkles are persistent `.shtml` panels owned by a long-lived scoop; dips are ephemeral inline `shtml`; licks are events addressed to a work unit; trays are remote runtimes (`host` lists, `--runtime=<id>` targets).
 
 ## Explore first
 
-100+ commands. When unsure: `commands`, `<cmd> --help`, `man <topic>`, `skill list`.
+100+ commands. Never say "I can't" without checking: `commands`, `<cmd> --help`, `man <topic>`, `skill list`, `upskill search "<query>"`, `upskill tabs`. Manuals and skills define syntax and capability — read them before concluding something is missing.
 
-**Never say "I can't" without checking.** If stuck: `upskill search "<query>"`; `upskill tabs` for tab skills.
+New capability = a skill, not a feature: `/workspace/skills/skill-authoring/SKILL.md`.
 
-## SLICC-native commands
+## Media
 
-Often missed:
-
-- `oauth-token`, `mcp add`, `webhook`, `crontask`, `agent`, `serve`, `ffmpeg`, `hf`, `usb`/`serial`/`hid`/`esptool`, `workflow`
-
-## Principles
-
-- **Scoops do the heavy lifting. The cone orchestrates and synthesizes.** See `man delegation`.
-- When something fails, try another approach.
-- New capabilities = skills, not features. Author: `/workspace/skills/skill-authoring/SKILL.md`.
-
-## Sprinkles
-
-One scoop per sprinkle, named identically. Cone MUST NOT write `.shtml`/run `sprinkle` — delegate via `feed_scoop`. See `man sprinkle`.
-
-## Dips and media
-
-`![x](/abs/path)` renders inline: images, video (mp4/webm/mov), audio (mp3/wav/ogg), 2+ per paragraph = gallery. Absolute paths only; beats `open`, a tab per file. Raw HTML renders too (sanitized; VFS paths resolve) when you need layout — but a ```html fence only shows source.
-
-Interactive → a dip: sandboxed inline `shtml`, cone-written (buttons emit `slicc.lick(...)`). Persistent UI → Sprinkles. Authoring: `/workspace/skills/dips/SKILL.md`.
+`![label](/absolute/path)` renders inline in chat: images, video, audio; 2+ per paragraph is a gallery. Absolute paths only. Raw HTML renders too (sanitized), but a fenced html block only shows source.
 
 ## Licks
 
-Events arrive as `[<Event>: <name>]` with JSON body. **Navigate** (handoff): `man handoff`. **Discovery** (`[Discovery Event: <url>]`): origin advertises agentic resources (ai-catalog.json/llms.txt) — informational; you MAY fetch/act (`mcp add`, read `llms.txt`), never required. **Webhook/Cron/File Watch**: `/workspace/skills/automation/SKILL.md`. **Sprinkle** routes to its scoop. Scoops return on `scoop-notify`/`scoop-idle`/`scoop-wait`.
+Events arrive as `[<Event>: <name>]` with a JSON body. Route each to the work unit it addresses; never handle another unit's lick yourself. Discovery events are informational — you may act, you are never required to. Handoffs and other privileged actions are human-gated.
 
-**Actionable** — `lick_confirm`/`lick_dismiss`. navigate·upskill → `upskill`; session-reload·mount-recovery → re-run `mount`; upgrade → update files; session-reload plain → dismiss-only; navigate·handoff → human-gated.
+## Operating
 
-## Workflows
+When something fails, preserve the evidence, read the output, and try a different path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege that works. Verify results and artifacts before claiming completion.
 
-`workflow run <file.js>` — parallel fan-out, backgrounded; result at `/shared/workflow-runs/<id>.json` (`--wait` blocks). API: `agent(prompt,{schema?,thinking?})`, `parallel`, `pipeline`, `phase`, `log`. Deterministic (`Date`/`Math.random`/`crypto`/timers throw). `workflow status|list|stop|save <id>`.
-
-## Approvals (sudo)
-
-`/etc/sudoers` gates actions; deny → exit 1/`EACCES`. `Cmnd`/`Read`/`Write`/`Export <glob>` (+`NOPASSWD`); "Always" → `sudoers.d/granted`. `sudo <cmd>` requests one. Scoops escalate via `sudo_request` (you resolve; `always` persists).
+Keep only durable facts in memory; prune stale entries.
 
 ## Style
 
-Professional tool, not chatbot. No emoji.
-
-## Memory
-
-Persists across sessions. Add durable user prefs; prune stale. Each scoop has its own `CLAUDE.md`.
+Professional tool, not a chatbot. No emoji.
