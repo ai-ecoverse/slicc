@@ -1,8 +1,10 @@
 /**
  * `POST /api/sudo-approve` — the trusted-process approval endpoint.
  *
- * The in-browser broker (`packages/webapp/src/sudo/http-broker.ts`) POSTs the
- * gated action here; this process raises a genuine native dialog / TTY prompt
+ * The browser's `node-rest` `CapabilityBroker` adapter
+ * (`packages/webapp/src/work-unit/capability/rest-ops.ts`'s
+ * `restRequestApproval`) POSTs the gated action here; this process raises a
+ * genuine native dialog / TTY prompt
  * (the agent's browser `node` shim can't reach this process) and returns the
  * human's decision. Loopback-only, like the other local node-server endpoints.
  *

@@ -487,6 +487,10 @@ export class Orchestrator implements ConeApprovalRouter {
         this.sudoManager = new SudoManager({
           fs: sharedFs,
           watcher: fsWatcher,
+          // The one composed CapabilityBroker (#2276) — set via
+          // `setCapabilityBroker` before `init()` runs, so it's already
+          // available here for the sudo gesture leg.
+          capabilityBroker: this.capabilityBroker,
           onPolicyReload: (folder) => {
             this.lifecycle.syncReadGrants(folder);
             // Unblock any pending sudo requests the reloaded policy now
@@ -1364,6 +1368,7 @@ export class Orchestrator implements ConeApprovalRouter {
     this.sudoManager = new SudoManager({
       fs: this.sharedFs,
       watcher: this.fsWatcher,
+      capabilityBroker: this.capabilityBroker,
       onPolicyReload: (folder) => {
         this.lifecycle.syncReadGrants(folder);
         // Unblock any pending sudo requests the reloaded policy now

@@ -268,7 +268,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createOAuthTokenCommand(),
     createOAuthDomainCommand(),
     createLocalLlmCommand(),
-    createSecretCommand({ setEnv: options.setEnv }),
+    // Reuses the SAME broker as the explicit `sudo <cmd>` command and SudoFS
+    // write gating — one properly-composed broker per float (#2276), not an
+    // independent one `secret-command.ts` constructs for itself.
+    createSecretCommand({ setEnv: options.setEnv, broker: options.sudoCommand?.broker }),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),

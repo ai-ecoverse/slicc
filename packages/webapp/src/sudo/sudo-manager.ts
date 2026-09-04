@@ -42,6 +42,7 @@ import { GRANTED_FILE } from '../fs/sudo-fs.js';
 import { FsError } from '../fs/types.js';
 import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
+import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { createSudoBroker } from './index.js';
 import type { SudoBroker, SudoDecision, SudoRequest } from './types.js';
 
@@ -53,8 +54,16 @@ export interface SudoManagerDeps {
   fs: VirtualFS;
   /** Watcher to drive live reload. When omitted, reload is manual-only. */
   watcher?: FsWatcher | null;
-  /** Override the broker (tests). Defaults to the float-appropriate broker. */
+  /** Override the broker (tests). Defaults to `createSudoBroker(capabilityBroker)`. */
   broker?: SudoBroker;
+  /**
+   * The float's ONE composed `CapabilityBroker` (#2276) — the orchestrator's
+   * own field, set via `Orchestrator.setCapabilityBroker` before this
+   * manager is constructed. Only read when `broker` is omitted; `null`
+   * (never composed — a boot-ordering bug) fails the gesture leg closed,
+   * never guesses a transport.
+   */
+  capabilityBroker?: CapabilityBroker | null;
   /** Notify consumers after global or per-scoop policy reloads. */
   onPolicyReload?: (folder?: string) => void;
 }
@@ -205,7 +214,7 @@ export class SudoManager {
   constructor(deps: SudoManagerDeps) {
     this.fs = deps.fs;
     this.watcher = deps.watcher ?? null;
-    this.broker = deps.broker ?? createSudoBroker();
+    this.broker = deps.broker ?? createSudoBroker(deps.capabilityBroker ?? null);
     this.onPolicyReload = deps.onPolicyReload ?? (() => {});
   }
 

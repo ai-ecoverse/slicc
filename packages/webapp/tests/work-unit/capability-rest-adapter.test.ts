@@ -10,7 +10,8 @@
  * fails here or there, not in a float at runtime.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 import {
   createRestCapabilityBroker,
   isCapabilityFailure,
@@ -474,5 +475,74 @@ describe('node-rest adapter emits the contract wire', () => {
         matched: true,
       });
     }
+  });
+});
+
+// Restores coverage `sudo/http-broker.test.ts` used to carry before slice C
+// (#2276 round-1 review finding 2): `restRequestApproval` reaches
+// `/api/sudo-approve` through the SAME `resolveApiUrl` / `apiHeaders` every
+// other REST operation uses, so a thin-bridge misconfiguration would affect
+// approvals identically. Uses a plain captured-call mock rather than
+// `scriptedRestFetch` — that fixture's route table matches on the RELATIVE
+// path only, and the whole point here is asserting the ABSOLUTE URL
+// `resolveApiUrl` produces once a thin-bridge base is set.
+describe('node-rest adapter — thin-bridge URL + token on /api/sudo-approve', () => {
+  afterEach(() => {
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+  });
+
+  function captureCall(): {
+    fetchImpl: typeof fetch;
+    getUrl: () => string | null;
+    getHeaders: () => Record<string, string> | null;
+  } {
+    let capturedUrl: string | null = null;
+    let capturedHeaders: Record<string, string> | null = null;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = typeof input === 'string' ? input : input.toString();
+      capturedHeaders = (init?.headers ?? null) as Record<string, string> | null;
+      return new Response(JSON.stringify({ decision: 'allow' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    return { fetchImpl, getUrl: () => capturedUrl, getHeaders: () => capturedHeaders };
+  }
+
+  it('legacy / same-origin: POSTs the relative path with no X-Bridge-Token', async () => {
+    const cap = captureCall();
+    const broker = createRestCapabilityBroker({ fetchImpl: cap.fetchImpl });
+    await broker.approvals.request({ kind: 'command', detail: 'git push origin main' });
+    expect(cap.getUrl()).toBe(REST_CAPABILITY_PATHS.sudoApprove);
+    expect(cap.getHeaders()?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const broker = createRestCapabilityBroker({ fetchImpl: cap.fetchImpl });
+    await broker.approvals.request({ kind: 'command', detail: 'git push origin main' });
+    expect(cap.getUrl()).toBe(`http://localhost:5710${REST_CAPABILITY_PATHS.sudoApprove}`);
+    expect(cap.getHeaders()?.['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    const cap = captureCall();
+    const broker = createRestCapabilityBroker({ fetchImpl: cap.fetchImpl });
+    await broker.approvals.request({ kind: 'command', detail: 'git push origin main' });
+    expect(cap.getUrl()).toBe(`http://localhost:5710${REST_CAPABILITY_PATHS.sudoApprove}`);
+    expect(cap.getHeaders()?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    setBridgeToken('abc-123');
+    const cap = captureCall();
+    const broker = createRestCapabilityBroker({ fetchImpl: cap.fetchImpl });
+    await broker.approvals.request({ kind: 'command', detail: 'git push origin main' });
+    expect(cap.getUrl()).toBe(REST_CAPABILITY_PATHS.sudoApprove);
+    expect(cap.getHeaders()?.['X-Bridge-Token']).toBeUndefined();
   });
 });
