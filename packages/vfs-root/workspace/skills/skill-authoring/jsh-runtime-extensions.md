@@ -28,7 +28,7 @@ The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<na
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])`, `.start(cmdOrArgv, opts?)` (killable, buffered-stdin spawn handle) and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`.                                                                                                                                                 |
 | `sliccy:agent`                                | Callable `agent(prompt, opts?)` — spawns a one-shot sub-scoop, feeds it the prompt, blocks until the agent loop completes; resolves to trimmed final text (JSON-parsed when `opts.schema` is set), REJECTS on non-zero exit or schema-parse failure. `.spawn(prompt, opts?)` is the non-throwing variant → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
-| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                                                                                                                                                                         |
+| `sliccy:skill`                                | Frozen `{ dir, root, refs, assets, config(), config(updates), token(providerId) }`. `refs`/`assets` resolve from the skill root (parent of `scripts/` when the script lives there). Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                                                                   |
 | `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
 | `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
 | `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
@@ -181,15 +181,18 @@ The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw 
 
 The following capabilities collapse the boilerplate that 18 of 23 surveyed skills reinvented. They're available in both standalone and extension floats; each is reached through `require('sliccy:<name>')` (or the equivalent ESM `import`).
 
-### `sliccy:skill` — script-relative paths, config, tokens
+### `sliccy:skill` — skill-root paths, config, tokens
 
 Computed once at boot from `argv[1]` and frozen. Replaces ad-hoc `process.argv[1].substring(0, …)` dirname math, bespoke `.config` JSON readers, and `oauth-token` shell-outs.
+
+Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the directory containing the running script. When that directory's basename is `scripts` (`<skill-root>/scripts/<name>.jsh`), `skill.root` is the parent — the skill folder. Otherwise `skill.root` equals `skill.dir`. `skill.refs` and `skill.assets` resolve from `skill.root`. `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`) so `upskill` can preserve that dotfile.
 
 ```typescript
 const skill = require('sliccy:skill');
 skill.dir: string                                              // directory containing the running script
-skill.refs: string                                             // `<dir>/references`
-skill.assets: string                                           // `<dir>/assets`
+skill.root: string                                             // skill folder (parent of `scripts/` when applicable)
+skill.refs: string                                             // `<root>/references`
+skill.assets: string                                           // `<root>/assets`
 skill.config(): Promise<Record<string, unknown> | null>        // read parsed JSON from `<dir>/.config`
 skill.config(updates): Promise<Record<string, unknown>>        // shallow-merge + write, returns merged
 skill.token(providerId: string): Promise<string>               // shells out to `oauth-token <id>`

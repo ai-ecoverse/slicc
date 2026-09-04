@@ -1803,6 +1803,23 @@ browser.fetch(tab: TabHandle, url: string, opts?: {
 
 Runs inside the tab's origin, so session cookies and same-origin headers are automatic. Response body is JSON-parsed when content-type permits. From the shell, [`curlwright`](#curlwright) is the same capability with curl's flags.
 
+#### `sliccy:skill` — skill-root paths, config, tokens
+
+Frozen `{ dir, root, refs, assets, config(), config(updates), token(providerId) }`. Companion contract: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.
+
+Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the running script's directory. When that directory's basename is `scripts`, `skill.root` is the parent; otherwise `skill.root` equals `skill.dir`. `skill.refs` / `skill.assets` resolve from `skill.root` (`<root>/references`, `<root>/assets`). `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`).
+
+```typescript
+const skill = require('sliccy:skill');
+skill.dir: string                                              // directory containing the running script
+skill.root: string                                             // skill folder (parent of `scripts/` when applicable)
+skill.refs: string                                             // `<root>/references`
+skill.assets: string                                           // `<root>/assets`
+skill.config(): Promise<Record<string, unknown> | null>        // read parsed JSON from `<dir>/.config`
+skill.config(updates): Promise<Record<string, unknown>>        // shallow-merge + write, returns merged
+skill.token(providerId: string): Promise<string>               // shells out to `oauth-token <id>`
+```
+
 #### `http.client({ baseUrl, token, headers, retry, timeoutMs })`
 
 Standard API-client builder for the jsh realm. `token` is lazy (resolved freshly per request); `Retry-After` (seconds or HTTP date) takes precedence over exponential backoff.

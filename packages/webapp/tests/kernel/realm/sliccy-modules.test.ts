@@ -171,7 +171,7 @@ describe('sliccy: virtual-module scheme', () => {
     expect(out.stdout.split('\n').filter(Boolean)).toEqual(['function', 'function', 'function']);
   });
 
-  it("require('sliccy:skill') returns a frozen object with dir/refs/assets/config/token", async () => {
+  it("require('sliccy:skill') returns a frozen object with dir/root/refs/assets/config/token", async () => {
     const code = `
       const skill = require('sliccy:skill');
       console.log(typeof skill);
@@ -179,8 +179,16 @@ describe('sliccy: virtual-module scheme', () => {
       console.log(typeof skill.config);
       console.log(typeof skill.token);
       console.log(typeof skill.dir);
+      console.log(typeof skill.root);
+      console.log(skill.dir);
+      console.log(skill.root);
+      console.log(skill.refs);
+      console.log(skill.assets);
     `;
-    const out = await runCode(code, makeCtx(), ['node', '/workspace/x.jsh']);
+    const out = await runCode(code, makeCtx(), [
+      'node',
+      '/workspace/skills/interview-me/scripts/install.jsh',
+    ]);
     expect(out.exitCode).toBe(0);
     const lines = out.stdout.split('\n').filter(Boolean);
     expect(lines[0]).toBe('object');
@@ -188,6 +196,11 @@ describe('sliccy: virtual-module scheme', () => {
     expect(lines[2]).toBe('function');
     expect(lines[3]).toBe('function');
     expect(lines[4]).toBe('string');
+    expect(lines[5]).toBe('string');
+    expect(lines[6]).toBe('/workspace/skills/interview-me/scripts');
+    expect(lines[7]).toBe('/workspace/skills/interview-me');
+    expect(lines[8]).toBe('/workspace/skills/interview-me/references');
+    expect(lines[9]).toBe('/workspace/skills/interview-me/assets');
   });
 
   it("require('sliccy:http') returns the API-client builder", async () => {

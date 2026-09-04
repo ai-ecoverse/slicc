@@ -7,10 +7,17 @@
  * llm-wiki, and oryx each ship today, plus the bespoke per-skill
  * `.config` JSON readers and OAuth-token fetchers.
  *
+ * Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`.
+ * `argv[1]` is typically `<skill-root>/scripts/<name>.jsh`, so `skill.dir`
+ * is the script directory while `skill.root` / `refs` / `assets` live one
+ * level up. `.config` stays next to the script (`scripts/.config`) because
+ * `upskill` preserves dotfiles there.
+ *
  * Surface:
  *  - `skill.dir`     — directory containing the running script
- *  - `skill.refs`    — `<dir>/references`
- *  - `skill.assets`  — `<dir>/assets`
+ *  - `skill.root`    — skill folder (parent of `scripts/` when applicable)
+ *  - `skill.refs`    — `<root>/references`
+ *  - `skill.assets`  — `<root>/assets`
  *  - `skill.config()`            — parsed JSON at `<dir>/.config`, or `null`
  *  - `skill.config({ key: v })`  — shallow merge + write, returns the merged object
  *  - `skill.token(providerId)`   — shells out to `oauth-token <id>`
@@ -45,6 +52,7 @@ export type SkillConfig = { [key: string]: unknown };
 
 export interface SkillGlobal {
   readonly dir: string;
+  readonly root: string;
   readonly refs: string;
   readonly assets: string;
   config(updates?: SkillConfig): Promise<SkillConfig | null>;
@@ -57,6 +65,24 @@ function dirname(path: string): string {
   if (idx < 0) return '';
   if (idx === 0) return '/';
   return path.substring(0, idx);
+}
+
+function basename(path: string): string {
+  if (!path) return '';
+  const idx = path.lastIndexOf('/');
+  if (idx < 0) return path;
+  return path.substring(idx + 1);
+}
+
+/**
+ * Skill root for the Agent Skills layout: when the running script lives
+ * in a directory named `scripts`, the skill folder is that directory's
+ * parent. Otherwise the script directory is the skill folder (a `.jsh`
+ * next to `SKILL.md`).
+ */
+function skillRootFromScriptDir(dir: string): string {
+  if (basename(dir) !== 'scripts') return dir;
+  return dirname(dir);
 }
 
 function shellQuote(arg: string): string {
@@ -79,8 +105,9 @@ function joinChild(dir: string, name: string): string {
 export function createSkillGlobal(deps: SkillGlobalDeps): SkillGlobal {
   const scriptPath = deps.argv[1] ?? '';
   const dir = dirname(scriptPath);
-  const refs = joinChild(dir, 'references');
-  const assets = joinChild(dir, 'assets');
+  const root = skillRootFromScriptDir(dir);
+  const refs = joinChild(root, 'references');
+  const assets = joinChild(root, 'assets');
   const configPath = joinChild(dir, '.config');
 
   async function readConfig(): Promise<SkillConfig | null> {
@@ -138,6 +165,7 @@ export function createSkillGlobal(deps: SkillGlobalDeps): SkillGlobal {
 
   return Object.freeze({
     dir,
+    root,
     refs,
     assets,
     config,
