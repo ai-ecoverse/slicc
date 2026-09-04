@@ -9,6 +9,11 @@ import {
   nodeModulesSearchPath,
 } from '../ipk/resolver.js';
 
+// `/preview/*` URL construction lives in `base/` so the chat message renderer can
+// use it without importing this module (and with it `just-bash` + the ipk
+// resolver) onto the boot path. Re-exported here for existing shell callers.
+export { isPreviewUrl, toPreviewUrl } from '../../base/preview-url.js';
+
 export interface SqlJsResultSet {
   columns: string[];
   values: unknown[][];
@@ -133,41 +138,6 @@ export async function findProjectRoot(fs: CommandContext['fs'], startDir: string
     dir = dirname(dir);
   }
   return startDir;
-}
-
-export function toPreviewUrl(vfsPath: string, projectRoot?: string): string {
-  const isExt = isExtensionRealm();
-  const projectRootSuffix = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : '';
-  const previewPath = `/preview${vfsPath}${projectRootSuffix}`;
-  if (isExt) return chrome.runtime.getURL(previewPath);
-  // Preference: page realm (`window`) → worker realm (`self.location`) → Node/test fallback.
-  // The kernel worker has no `window`, but its bundle is served from the UI origin, so
-  // `self.location.origin` is the correct preview host there. In thin-bridge mode this
-  // avoids pointing previews at the bridge origin (e.g. `http://localhost:5710`) instead
-  // of the UI origin (e.g. `http://localhost:8787`).
-  let origin = 'http://localhost:5710';
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    origin = window.location.origin;
-  } else if (typeof self !== 'undefined' && self.location?.origin) {
-    origin = self.location.origin;
-  }
-  return `${origin}${previewPath}`;
-}
-
-/**
- * True for any preview-serving URL — both the legacy local SW path
- * (`<origin>/preview/<vfs-path>` or `chrome-extension://<id>/preview/...`)
- * and the unified worker path (`<token>.sliccy.dev` / `<token>.staging.sliccy.dev`).
- * Used by the app-tab detector to avoid identifying a preview tab as the SLICC app.
- */
-export function isPreviewUrl(url: string): boolean {
-  if (url.includes('/preview/')) return true;
-  try {
-    const host = new URL(url).host;
-    return /^[^.]+\.sliccy\.(?:now|dev)$/i.test(host);
-  } catch {
-    return false;
-  }
 }
 
 export function isSafeServeEntry(entry: string): boolean {

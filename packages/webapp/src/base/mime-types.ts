@@ -82,6 +82,10 @@ export function isVideoMimeType(mimeType: string): boolean {
   return mimeType.startsWith('video/');
 }
 
+export function isAudioMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('audio/');
+}
+
 export function isTerminalPreviewableMimeType(mimeType: string): boolean {
   return isImageMimeType(mimeType) || isVideoMimeType(mimeType);
 }

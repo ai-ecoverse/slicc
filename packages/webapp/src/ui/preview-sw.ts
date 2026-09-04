@@ -77,7 +77,15 @@ sw.addEventListener('fetch', (event) => {
     }
 
     const vfsPath = url.pathname.slice('/preview'.length);
-    event.respondWith(handlePreviewRequest(getVfsBroadcast(), vfsPath));
+    // Forward `Range` so <video>/<audio> can seek; the handler answers 206.
+    event.respondWith(
+      handlePreviewRequest(
+        getVfsBroadcast(),
+        vfsPath,
+        undefined,
+        event.request.headers.get('range')
+      )
+    );
     return;
   }
 

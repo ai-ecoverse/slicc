@@ -189,6 +189,51 @@ export async function readViaMainPage(
   });
 }
 
+/** A resolved byte range, inclusive on both ends, clamped to the entity. */
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Parse a single-range `Range: bytes=…` header against a known entity size.
+ *
+ * Returns `null` when the header is absent or is anything we do not serve
+ * (multi-range, a non-`bytes` unit) — the caller then answers 200 with the
+ * whole entity, which is always a valid response to a Range request.
+ * Returns `'unsatisfiable'` for a syntactically valid range that falls outside
+ * the entity, which owes a 416.
+ *
+ * Media elements need this: without a 206 path a `<video>` cannot seek, and
+ * Safari in particular refuses to play a source that will not honour ranges.
+ */
+export function parseByteRange(
+  header: string | null | undefined,
+  size: number
+): ByteRange | 'unsatisfiable' | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === '' && rawEnd === '') return null;
+
+  let start: number;
+  let end: number;
+  if (rawStart === '') {
+    // `bytes=-N` — the final N bytes. N greater than the entity means the
+    // whole entity, per RFC 9110.
+    const suffix = Number(rawEnd);
+    if (suffix === 0) return 'unsatisfiable';
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === '' ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  }
+  if (start >= size || start > end) return 'unsatisfiable';
+  return { start, end };
+}
+
 /**
  * Serve a `/preview/*` request by asking the responder. Preserves the
  * directory → `index.html` semantics the legacy LFS fast-path provided:
@@ -198,7 +243,8 @@ export async function readViaMainPage(
 export async function handlePreviewRequest(
   channel: PreviewChannel,
   vfsPath: string,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  rangeHeader?: string | null
 ): Promise<Response> {
   let path = vfsPath;
   let mimeType = getMimeType(path);
@@ -215,10 +261,7 @@ export async function handlePreviewRequest(
       typeof outcome.content === 'string'
         ? outcome.content
         : new Uint8Array(outcome.content as Uint8Array);
-    return new Response(body, {
-      status: 200,
-      headers: { 'Content-Type': mimeType, 'Cache-Control': 'no-cache' },
-    });
+    return rangedResponse(body, mimeType, rangeHeader);
   }
 
   if (outcome.error && !outcome.error.includes('ENOENT')) {
@@ -238,6 +281,63 @@ export async function handlePreviewRequest(
   return new Response(`Not found (${reason}): ${vfsPath}`, {
     status: 404,
     headers: { 'Content-Type': 'text/plain' },
+  });
+}
+
+/**
+ * Build the response for a successful read, honouring a `Range` request.
+ *
+ * `Accept-Ranges: bytes` is advertised unconditionally on binary reads so a
+ * media element knows seeking is available before it asks. Text reads are
+ * returned whole: they are strings here, not bytes, so a byte range over them
+ * would be wrong for any non-ASCII content, and nothing seeks a stylesheet.
+ *
+ * This still reads the whole file from the responder first — the range is
+ * sliced from the buffer. That fixes seeking (the reason `<video>` needs 206)
+ * without yet fixing peak memory; an offset/length read on the responder is
+ * the follow-up for that.
+ */
+function rangedResponse(
+  // `Uint8Array<ArrayBuffer>`, not the looser `ArrayBufferLike`: a view over a
+  // SharedArrayBuffer is not a valid `BodyInit`, and `subarray()` preserves
+  // whichever buffer type it is handed.
+  body: string | Uint8Array<ArrayBuffer>,
+  mimeType: string,
+  rangeHeader: string | null | undefined
+): Response {
+  if (typeof body === 'string') {
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': mimeType, 'Cache-Control': 'no-cache' },
+    });
+  }
+
+  const size = body.byteLength;
+  const baseHeaders: Record<string, string> = {
+    'Content-Type': mimeType,
+    'Cache-Control': 'no-cache',
+    'Accept-Ranges': 'bytes',
+  };
+
+  const range = parseByteRange(rangeHeader, size);
+  if (range === 'unsatisfiable') {
+    return new Response(null, {
+      status: 416,
+      headers: { ...baseHeaders, 'Content-Range': `bytes */${size}` },
+    });
+  }
+  if (range === null) {
+    return new Response(body, { status: 200, headers: baseHeaders });
+  }
+
+  const slice = body.subarray(range.start, range.end + 1);
+  return new Response(slice, {
+    status: 206,
+    headers: {
+      ...baseHeaders,
+      'Content-Range': `bytes ${range.start}-${range.end}/${size}`,
+      'Content-Length': String(slice.byteLength),
+    },
   });
 }
 

@@ -9,6 +9,7 @@
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { sanitize as purify } from 'isomorphic-dompurify';
 import { Marked, type Tokens } from 'marked';
+import { resolveMessageMedia } from '../base/message-media.js';
 import { stripReplyLangMarker } from '../speech/dictation-priming.js';
 
 /**
@@ -184,15 +185,105 @@ const marked = new Marked({
     },
     image({ href, title, text }: Tokens.Image): string {
       const url = href ?? '';
-      // .shtml image references render as dip iframes during hydration.
-      // Emit a standard <img> tag -- hydrateDips() will detect img[src$=".shtml"]
-      // and replace it with a sandboxed iframe that loads the referenced file.
       const altAttr = text ? ` alt="${escapeHtml(text)}"` : '';
       const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-      return `<img src="${escapeHtml(url)}"${altAttr}${titleAttr}>`;
+      // One markdown syntax, two elements: `resolveMessageMedia` rewrites VFS
+      // paths to `/preview/*` (a bare `/shared/x.png` would otherwise hit the
+      // SPA fallback and silently decode HTML as an image) and decides whether
+      // the file is a picture or a clip.
+      const media = resolveMessageMedia(url);
+      if (media?.kind === 'video' || media?.kind === 'audio') {
+        // The alt text becomes an `aria-label`: `alt` is inert on <video> and
+        // <audio>, so carrying it over would silently drop the only
+        // description the author wrote. `preload="metadata"` so a gallery of
+        // clips costs first frames rather than whole files; `playsinline`
+        // keeps iOS from hijacking video into fullscreen (inert on audio).
+        const labelAttr = text ? ` aria-label="${escapeHtml(text)}"` : '';
+        const tag = media.kind === 'video' ? 'video' : 'audio';
+        return (
+          `<${tag} class="msg__media msg__media--${tag}" src="${escapeHtml(media.src)}"` +
+          `${labelAttr}${titleAttr} controls preload="metadata" playsinline></${tag}>`
+        );
+      }
+      // .shtml image references render as dip iframes during hydration, so they
+      // come back from resolveMessageMedia() untouched: hydrateDips() detects
+      // img[src$=".shtml"] and replaces it with a sandboxed iframe. Everything
+      // else is an <img>, pointed at the resolved src.
+      const src = media ? media.src : url;
+      const classAttr = media ? ' class="msg__media msg__media--image"' : '';
+      return `<img${classAttr} src="${escapeHtml(src)}"${altAttr}${titleAttr}>`;
     },
   },
 });
+
+/**
+ * `src="/…"` on a media element in RAW HTML — the escape hatch an agent reaches
+ * for when markdown cannot express the layout (a two-column table of frames,
+ * a `<video poster>`).
+ */
+const RAW_MEDIA_SRC_RE = /(<(?:img|video|audio|source)\b[^>]*?\ssrc=")(\/[^"]*)(")/gi;
+
+/**
+ * Give raw-HTML media the same VFS resolution the markdown `image()` token
+ * gets, so `<img src="/shared/a.png">` is not a silent failure while
+ * `![a](/shared/a.png)` works. Without this the two spellings disagree, and the
+ * broken one fails invisibly — the SPA fallback answers 200 + `text/html`
+ * rather than 404.
+ *
+ * Runs on marked's output before sanitization. Only rooted paths match, so
+ * markdown-emitted media (already absolute `http(s)://…/preview/…` URLs) and
+ * remote URLs are both left alone; `.shtml` is skipped because `hydrateDips()`
+ * needs that src verbatim.
+ */
+export function resolveRawMediaSrc(html: string): string {
+  return html.replace(RAW_MEDIA_SRC_RE, (match, prefix: string, src: string, suffix: string) => {
+    const media = resolveMessageMedia(src);
+    return media ? `${prefix}${escapeHtml(media.src)}${suffix}` : match;
+  });
+}
+
+/**
+ * A paragraph whose entire content is media — the shape marked produces for
+ * `![a](x.png) ![b](y.png)` on one line, or on consecutive lines under
+ * `breaks: true` (which interleaves `<br>`). Anchored on the `msg__media`
+ * class the `image()` renderer stamps, so a hand-written `<img>` in raw HTML
+ * and a `.shtml` dip reference (which never gets the class) are both ignored.
+ */
+const MEDIA_ONLY_PARAGRAPH_RE =
+  /<p>((?:\s|<br\s*\/?>|<img class="msg__media[^>]*>|<video class="msg__media[^>]*><\/video>|<audio class="msg__media[^>]*><\/audio>)+)<\/p>/g;
+
+/** Individual media elements inside such a paragraph. */
+const MEDIA_ELEMENT_RE = /<(?:img|video|audio) class="msg__media[^>]*>(?:<\/(?:video|audio)>)?/g;
+
+/**
+ * Lay a run of two or more adjacent images/videos out as a gallery grid.
+ *
+ * Agents routinely emit several frames at once ("here are the four candidate
+ * thumbnails"). Stacked full-width they push the rest of the reply off screen,
+ * so a paragraph that is *nothing but* media becomes a grid instead. A lone
+ * image is left as a normal paragraph — a grid of one is just an image with
+ * extra rules.
+ *
+ * Runs before sanitization so DOMPurify still validates the result; `div` and
+ * `class` are already in the allowlist, so no new surface is introduced.
+ */
+export function groupMediaGalleries(html: string): string {
+  return html.replace(MEDIA_ONLY_PARAGRAPH_RE, (match, inner: string) => {
+    const items = inner.match(MEDIA_ELEMENT_RE) ?? [];
+    if (items.length < 2) return match;
+    // `data-count` is unavailable (ALLOW_DATA_ATTR is false), so the item
+    // count rides on a modifier class the stylesheet can select on. Two and
+    // four both want an explicit two-column grid — left to `auto-fit`, four
+    // items land as an unbalanced 3 + 1.
+    const sizing =
+      items.length === 2
+        ? ' msg__media-gallery--pair'
+        : items.length === 4
+          ? ' msg__media-gallery--quad'
+          : '';
+    return `<div class="msg__media-gallery${sizing}">${items.join('')}</div>`;
+  });
+}
 
 // -- DOMPurify configuration --
 
@@ -231,6 +322,11 @@ const PURIFY_CONFIG = {
     'details',
     'summary',
     'input',
+    // Media emitted by the `image()` renderer above. Without `video` here
+    // DOMPurify deletes the element outright and the clip vanishes silently.
+    'video',
+    'audio',
+    'source',
   ],
   ALLOWED_ATTR: [
     'href',
@@ -243,6 +339,16 @@ const PURIFY_CONFIG = {
     'type',
     'checked',
     'disabled',
+    // Media playback attributes. Omitting `controls` would render a video
+    // with no way to play it.
+    'controls',
+    'preload',
+    'playsinline',
+    'poster',
+    'loop',
+    'muted',
+    'width',
+    'height',
   ],
   ALLOW_DATA_ATTR: false,
 };
@@ -295,7 +401,7 @@ const DIP_PENDING_PLACEHOLDER =
 
 function renderBaseMessageContent(content: string): string {
   const raw = marked.parse(content) as string;
-  return forceNewTabLinks(sanitize(raw));
+  return forceNewTabLinks(sanitize(groupMediaGalleries(resolveRawMediaSrc(raw))));
 }
 
 function renderSurfacedErrorBlocks(html: string): string {

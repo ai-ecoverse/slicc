@@ -21,6 +21,7 @@ import {
   handlePreviewRequest,
   isSliccAppPath,
   type PreviewChannel,
+  parseByteRange,
   pathnameOf,
   projectServeVfsPath,
   readViaMainPage,
@@ -345,5 +346,131 @@ describe('projectServeVfsPath — requester scoping (#1981)', () => {
   it('passes through unknown requesters and unset project roots', () => {
     expect(projectServeVfsPath(ROOT, '/styles/main.css', null, false)).toBe(null);
     expect(projectServeVfsPath(null, '/styles/main.css', '/preview/index.html', false)).toBe(null);
+  });
+});
+
+describe('parseByteRange', () => {
+  it('returns null with no header — the caller then serves the whole entity', () => {
+    expect(parseByteRange(null, 100)).toBeNull();
+    expect(parseByteRange(undefined, 100)).toBeNull();
+    expect(parseByteRange('', 100)).toBeNull();
+  });
+
+  it('parses a closed range', () => {
+    expect(parseByteRange('bytes=0-99', 1000)).toEqual({ start: 0, end: 99 });
+  });
+
+  it('parses an open-ended range to the last byte', () => {
+    expect(parseByteRange('bytes=500-', 1000)).toEqual({ start: 500, end: 999 });
+  });
+
+  it('parses a suffix range', () => {
+    expect(parseByteRange('bytes=-100', 1000)).toEqual({ start: 900, end: 999 });
+  });
+
+  it('clamps a suffix larger than the entity to the whole entity', () => {
+    expect(parseByteRange('bytes=-5000', 1000)).toEqual({ start: 0, end: 999 });
+  });
+
+  it('clamps an end past the last byte', () => {
+    expect(parseByteRange('bytes=900-5000', 1000)).toEqual({ start: 900, end: 999 });
+  });
+
+  it('reports a start past the entity as unsatisfiable', () => {
+    expect(parseByteRange('bytes=1000-', 1000)).toBe('unsatisfiable');
+  });
+
+  it('reports a zero-length suffix as unsatisfiable', () => {
+    expect(parseByteRange('bytes=-0', 1000)).toBe('unsatisfiable');
+  });
+
+  // Anything we do not serve falls back to 200 + whole entity, which is
+  // always a valid answer to a Range request.
+  it.each(['items=0-10', 'bytes=0-10,20-30', 'bytes=abc', 'bytes=-', 'garbage'])(
+    'falls back to null for %s',
+    (header) => {
+      expect(parseByteRange(header, 1000)).toBeNull();
+    }
+  );
+
+  it('tolerates surrounding whitespace', () => {
+    expect(parseByteRange('  bytes=0-9  ', 100)).toEqual({ start: 0, end: 9 });
+  });
+});
+
+describe('handlePreviewRequest range support', () => {
+  const bytes = new Uint8Array(1000).map((_, i) => i % 256);
+  const videoChannel = () => {
+    const ch = new FakeChannel();
+    ch.reply = () => ({ content: bytes });
+    return ch;
+  };
+
+  // Without this a <video> cannot seek: the element has no way to know
+  // ranges are available.
+  it('advertises Accept-Ranges on a binary read', async () => {
+    const r = await handlePreviewRequest(videoChannel(), '/shared/cut.mp4');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Accept-Ranges')).toBe('bytes');
+    expect(r.headers.get('Content-Type')).toBe('video/mp4');
+  });
+
+  it('answers a range request with 206 and the right slice', async () => {
+    const r = await handlePreviewRequest(
+      videoChannel(),
+      '/shared/cut.mp4',
+      undefined,
+      'bytes=10-19'
+    );
+    expect(r.status).toBe(206);
+    expect(r.headers.get('Content-Range')).toBe('bytes 10-19/1000');
+    const body = new Uint8Array(await r.arrayBuffer());
+    expect(body).toHaveLength(10);
+    expect(Array.from(body)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+  });
+
+  it('serves an open-ended range to the end of the file', async () => {
+    const r = await handlePreviewRequest(
+      videoChannel(),
+      '/shared/cut.mp4',
+      undefined,
+      'bytes=990-'
+    );
+    expect(r.status).toBe(206);
+    expect(r.headers.get('Content-Range')).toBe('bytes 990-999/1000');
+    expect((await r.arrayBuffer()).byteLength).toBe(10);
+  });
+
+  it('answers 416 with a Content-Range for an unsatisfiable range', async () => {
+    const r = await handlePreviewRequest(
+      videoChannel(),
+      '/shared/cut.mp4',
+      undefined,
+      'bytes=2000-'
+    );
+    expect(r.status).toBe(416);
+    expect(r.headers.get('Content-Range')).toBe('bytes */1000');
+  });
+
+  it('serves the whole entity when the range header is unparseable', async () => {
+    const r = await handlePreviewRequest(videoChannel(), '/shared/cut.mp4', undefined, 'bytes=a-b');
+    expect(r.status).toBe(200);
+    expect((await r.arrayBuffer()).byteLength).toBe(1000);
+  });
+
+  // Text reads come back as strings, so a byte range over them would be
+  // wrong for any non-ASCII content — and nothing seeks a stylesheet.
+  it('does not range or advertise ranges on a text read', async () => {
+    const ch = new FakeChannel();
+    ch.reply = () => ({ content: 'body { color: red }' });
+    const r = await handlePreviewRequest(ch, '/shared/a.css', undefined, 'bytes=0-3');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Accept-Ranges')).toBeNull();
+  });
+
+  it('ignores a range on a 404', async () => {
+    const ch = new FakeChannel();
+    const r = await handlePreviewRequest(ch, '/missing.mp4', undefined, 'bytes=0-9');
+    expect(r.status).toBe(404);
   });
 });
