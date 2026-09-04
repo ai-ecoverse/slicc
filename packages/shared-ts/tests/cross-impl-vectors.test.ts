@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isTextRequestContentType } from '../src/content-type.js';
 import { unmaskFormBody } from '../src/form-body-unmask.js';
+import { isSingleLineSecretValue, multilineSecretValueError } from '../src/secret-env-schema.js';
 import { mask } from '../src/secret-masking.js';
 import { type FetchProxySecretSource, SecretsPipeline } from '../src/secrets-pipeline.js';
 
@@ -146,5 +147,50 @@ describe('cross-implementation form-body unmask table', () => {
     const body = input.split('%MASKED%').join(masked);
     const { text } = unmaskFormBody(pipeline, body, 'api.example.com');
     expect(text).toBe(expected);
+  });
+});
+
+/**
+ * Pinned multiline secret-value rejection parity.
+ *
+ * The same table is pinned in
+ * `packages/swift-server/Tests/CrossImplementationTests.swift`.
+ *
+ * The secret `.env` schema is line-oriented on both sides, so a value carrying
+ * a line break cannot round-trip: it serializes with a real LF inside its
+ * quotes and parses back as the truncated first line. Both privileged servers
+ * refuse such a value at the boundary instead of reporting success over a
+ * corrupted credential (#2828). If only one side rejects, `POST /api/secrets`
+ * silently eats a PEM key on one float that the other 400s — the divergence
+ * this pairing exists to prevent.
+ */
+const SINGLE_LINE_TABLE: { value: string; isSingleLine: boolean }[] = [
+  { value: 'ghp_realToken123', isSingleLine: true },
+  { value: '', isSingleLine: true },
+  { value: 'value with spaces', isSingleLine: true },
+  { value: 'has#hash and "quotes"', isSingleLine: true },
+  { value: 'tok🎉end', isSingleLine: true },
+  { value: '-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----', isSingleLine: false },
+  { value: 'line1\nline2', isSingleLine: false },
+  { value: 'trailing\n', isSingleLine: false },
+  { value: '\nleading', isSingleLine: false },
+  { value: 'crlf\r\nvalue', isSingleLine: false },
+  { value: 'bare\rreturn', isSingleLine: false },
+];
+
+describe('cross-implementation multiline secret-value rejection', () => {
+  it.each(SINGLE_LINE_TABLE)(
+    'isSingleLineSecretValue($value) is $isSingleLine',
+    ({ value, isSingleLine }) => {
+      expect(isSingleLineSecretValue(value)).toBe(isSingleLine);
+    }
+  );
+
+  // The rejection message is part of the wire contract — both servers return it
+  // verbatim in the 400 body, so it is pinned alongside the predicate.
+  it('pins the rejection message both servers return', () => {
+    expect(multilineSecretValueError('PEM_KEY')).toBe(
+      'Secret "PEM_KEY" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line'
+    );
   });
 });

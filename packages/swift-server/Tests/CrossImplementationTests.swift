@@ -327,4 +327,50 @@ final class CrossImplementationTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - Multiline secret-value rejection parity (mirrors the table in
+    // packages/shared-ts/tests/cross-impl-vectors.test.ts)
+    //
+    // The secret `.env` schema is line-oriented on both sides, so a value
+    // carrying a line break cannot round-trip: it serializes with a real LF
+    // inside its quotes and parses back as the truncated first line. Both
+    // privileged servers refuse such a value at the boundary instead of
+    // reporting success over a corrupted credential (#2828). If only one side
+    // rejects, `POST /api/secrets` silently eats a PEM key on Sliccstart that
+    // the Node CLI 400s (or the reverse) — the divergence this pairing exists
+    // to prevent.
+
+    private static let secretValueSingleLineTable: [(value: String, isSingleLine: Bool)] = [
+        ("ghp_realToken123", true),
+        ("", true),
+        ("value with spaces", true),
+        ("has#hash and \"quotes\"", true),
+        ("tok🎉end", true),
+        ("-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----", false),
+        ("line1\nline2", false),
+        ("trailing\n", false),
+        ("\nleading", false),
+        ("crlf\r\nvalue", false),
+        ("bare\rreturn", false),
+    ]
+
+    func testSingleLineSecretValueMatchesPinnedTable() {
+        for row in Self.secretValueSingleLineTable {
+            XCTAssertEqual(
+                EnvFileFormat.isSingleLineValue(row.value),
+                row.isSingleLine,
+                "secret-value line classification drift for \(row.value.debugDescription)"
+            )
+        }
+    }
+
+    /// The rejection message is part of the wire contract — both servers return
+    /// it verbatim in the 400 body, so it is pinned alongside the predicate.
+    func testMultilineValueErrorMessageIsPinned() {
+        XCTAssertEqual(
+            EnvFileFormat.multilineValueError("PEM_KEY"),
+            "Secret \"PEM_KEY\" value cannot contain newlines; the secret store is "
+                + "line-oriented and would truncate it to the first line"
+        )
+    }
 }

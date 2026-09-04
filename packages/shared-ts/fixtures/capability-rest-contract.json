@@ -56,6 +56,19 @@
       "expect": { "status": 400, "bodyKind": "object" }
     },
     {
+      "name": "persisted set rejects a multiline value rather than storing it truncated",
+      "operation": "secrets.set/persisted",
+      "method": "POST",
+      "path": "/api/secrets",
+      "body": {
+        "name": "CONTRACT_MULTILINE",
+        "value": "line1\nline2",
+        "domains": ["contract.example"]
+      },
+      "//": "#2828: the .env / Keychain schema is line-oriented, so a newline-bearing value would be persisted truncated to its first line. Both servers refuse before writing, so replaying this case stores nothing.",
+      "expect": { "status": 400, "bodyKind": "object" }
+    },
+    {
       "name": "session set rejects a body without a string value",
       "operation": "secrets.set/session",
       "method": "POST",

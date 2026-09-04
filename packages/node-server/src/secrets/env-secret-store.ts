@@ -10,7 +10,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { DOMAINS_SUFFIX, pairEnvEntriesToSecrets, type SecretEnvEntry } from '@slicc/shared-ts';
+import {
+  DOMAINS_SUFFIX,
+  isSingleLineSecretValue,
+  multilineSecretValueError,
+  pairEnvEntriesToSecrets,
+  type SecretEnvEntry,
+} from '@slicc/shared-ts';
 import { type EnvEntry, parseEnvFile, serializeEnvFile } from './env-file.js';
 import type { Secret, SecretEntry, SecretStore } from './types.js';
 
@@ -31,6 +37,12 @@ export class EnvSecretStore implements SecretStore {
   set(name: string, value: string, domains: string[]): void {
     if (domains.length === 0) {
       throw new Error(`Secret "${name}" must have at least one authorized domain`);
+    }
+    // The .env schema is line-oriented, so a multiline value would be written
+    // back truncated to its first line (#2828). Refuse the write rather than
+    // report success over a corrupted credential.
+    if (!isSingleLineSecretValue(value)) {
+      throw new Error(multilineSecretValueError(name));
     }
 
     const entries = this.readEntries();

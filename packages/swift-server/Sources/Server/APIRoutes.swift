@@ -673,6 +673,17 @@ private enum PersistedSecretAPIRoutes {
                     message: "Secret \"\(name)\" must have at least one authorized domain"
                 )
             }
+            // Fail closed at the boundary: the Keychain blob stores one value
+            // per line, so a multiline value (a PEM private key, typically)
+            // would be truncated to its first line — and an overwrite would
+            // replace a working credential with an unrecoverable one behind a
+            // 200 (#2828). node-server's route returns the same 400 + message.
+            guard EnvFileFormat.isSingleLineValue(value) else {
+                return try jsonErrorResponse(
+                    status: .badRequest,
+                    message: EnvFileFormat.multilineValueError(name)
+                )
+            }
             // Never report a success the masking pipeline will ignore. A
             // startup `--env-file` entry is re-applied over the persisted store
             // on every reload, so writing a shadowed name would leave the OLD
@@ -789,6 +800,16 @@ private enum SessionSecretAPIRoutes {
             if !((await injector.sessionStore.setDomains(name: name, domains: domains))) {
                 guard let existing = injector.persistedStore.get(name: name) else {
                     return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+                }
+                // Re-saving is a full rewrite of the value, so a value the
+                // store should never have held (a hand-edited multiline entry)
+                // must not be laundered through a scope change into a truncated
+                // one (#2828). Mirrors node-server's `handleScopeEdit`.
+                guard EnvFileFormat.isSingleLineValue(existing.value) else {
+                    return try jsonErrorResponse(
+                        status: .badRequest,
+                        message: EnvFileFormat.multilineValueError(name)
+                    )
                 }
                 do {
                     try injector.persistedStore.save(name, existing.value, domains)

@@ -45,6 +45,26 @@ export function pairEnvEntriesToSecrets(entries: EnvEntry[]): SecretEnvEntry[] {
   });
 }
 
+/**
+ * Secret values are stored one per line, so a value carrying a line break
+ * cannot survive a `serialize` → `parse` round-trip: `serializeEnvFile` quotes
+ * it with a real LF inside the quotes and `parseEnvFile` then splits on `\n`,
+ * keeping the unbalanced first line and dropping the rest. Writers reject such
+ * a value at the boundary instead of silently truncating it (issue #2828).
+ *
+ * Mirrored by `EnvFileFormat.isSingleLineValue` in
+ * `packages/swift-server/Sources/Keychain/EnvFileFormat.swift`; both sides are
+ * pinned by the cross-implementation vectors.
+ */
+export function isSingleLineSecretValue(value: string): boolean {
+  return !/[\n\r]/.test(value);
+}
+
+/** The single rejection message both servers return for a multiline value. */
+export function multilineSecretValueError(name: string): string {
+  return `Secret "${name}" value cannot contain newlines; the secret store is line-oriented and would truncate it to the first line`;
+}
+
 /** Parse the shared, deliberately small .env subset used for secret storage. */
 export function parseEnvFile(content: string): EnvEntry[] {
   const entries: EnvEntry[] = [];
@@ -82,8 +102,17 @@ export function parseEnvFilePreservingValues(content: string): EnvEntry[] {
   return entries;
 }
 
+/**
+ * Serialize entries to the line-oriented `.env` subset.
+ *
+ * Throws on a value containing a line break rather than emitting a blob that
+ * would parse back truncated. This is the fail-closed backstop behind the
+ * boundary checks in the two privileged servers' secret routes — no write path
+ * can corrupt the store by going around them.
+ */
 export function serializeEnvFile(entries: EnvEntry[]): string {
   const lines = entries.map(({ key, value }) => {
+    if (!isSingleLineSecretValue(value)) throw new Error(multilineSecretValueError(key));
     const needsQuoting = /[\s#"']/.test(value);
     const serialized = needsQuoting ? `"${value.replace(/"/g, '\\"')}"` : value;
     return `${key}=${serialized}`;

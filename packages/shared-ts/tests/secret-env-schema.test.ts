@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveS3Domains,
+  multilineSecretValueError,
   PROFILE_RE,
   pairEnvEntriesToSecrets,
   parseDomainsCsv,
@@ -72,6 +73,28 @@ describe('env file format', () => {
       ])
     ).toBe('PLAIN=value\nQUOTED="say \\"hello\\" #1"\n');
     expect(serializeEnvFile([])).toBe('\n');
+  });
+
+  // The schema is line-oriented, so a multiline value cannot round-trip: it
+  // would serialize with a real LF inside its quotes and parse back as the
+  // truncated first line. `serializeEnvFile` is the fail-closed backstop behind
+  // the route-level 400s on both privileged servers (#2828). The Swift mirror
+  // is `EnvFileFormatTests.testSerializeRejectsMultilineValue`.
+  it('refuses to serialize a value containing a newline', () => {
+    const pem = '-----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY-----';
+    expect(() => serializeEnvFile([{ key: 'PEM', value: pem }])).toThrow(
+      multilineSecretValueError('PEM')
+    );
+    expect(() => serializeEnvFile([{ key: 'CRLF', value: 'a\r\nb' }])).toThrow(
+      multilineSecretValueError('CRLF')
+    );
+    // A single-line value that merely needs quoting still serializes.
+    expect(serializeEnvFile([{ key: 'OK', value: 'a b' }])).toBe('OK="a b"\n');
+  });
+
+  it('documents the truncation the rejection prevents', () => {
+    // What the pre-#2828 serializer emitted for a multiline value, parsed back.
+    expect(parseEnvFile('PEM="line1\nline2"\n')).toEqual([{ key: 'PEM', value: '"line1' }]);
   });
 });
 
