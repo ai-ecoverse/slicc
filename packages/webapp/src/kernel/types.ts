@@ -36,6 +36,7 @@ import type {
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
   ScoopStatusMsg,
+  SprinkleLickOrigin,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
@@ -261,7 +262,7 @@ export interface KernelClientFacade {
     sprinkleName: string,
     body: unknown,
     targetScoop?: string,
-    originLabel?: string
+    origin?: SprinkleLickOrigin
   ): void;
   setSprinkleOpHandler(handler: (payload: unknown) => void): void;
 
@@ -289,6 +290,7 @@ export type {
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
   ScoopStatusMsg,
+  SprinkleLickOrigin,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,

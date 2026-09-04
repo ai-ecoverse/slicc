@@ -448,11 +448,15 @@ describe('FollowerDispatch', () => {
       sprinkleName: 'status',
       body: { action: 'refresh' },
     });
+    // Fifth arg is the unit THIS peer is looking at (its `scoops.select`
+    // above): an untargeted dip lick belongs to the cone whose transcript
+    // rendered the dip, not to the leader's oldest cone.
     expect(options.onSprinkleLick).toHaveBeenCalledWith(
       'status',
       { action: 'refresh' },
       undefined,
-      'extension follower'
+      'extension follower',
+      'scoop'
     );
     dispatch.dispatch('follower', {
       type: 'lick',

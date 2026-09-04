@@ -393,6 +393,22 @@ export interface OAuthRequestMsg {
   interactive?: boolean;
 }
 
+/**
+ * Where a sprinkle/dip lick came from, as opposed to where it is addressed.
+ *
+ * `unitJid` is the ROUTING fallback for an untargeted lick: a dip lives in one
+ * unit's transcript, so its clicks belong to that unit's cone and not to the
+ * oldest root the default fallback would pick (#2312's rule, applied to licks).
+ * `label` is presentation only — the "Forwarded from …" line a follower's lick
+ * carries into the cone's message.
+ */
+export interface SprinkleLickOrigin {
+  /** Origin label for follower-forwarded licks. */
+  label?: string;
+  /** Work-unit jid whose transcript raised the lick; routes to its root owner. */
+  unitJid?: string;
+}
+
 /** Sprinkle lick event from side panel to offscreen agent. */
 export interface SprinkleLickMsg {
   type: 'sprinkle-lick';
@@ -400,8 +416,8 @@ export interface SprinkleLickMsg {
   body: unknown;
   /** Optional target scoop for routed sprinkle lick events. */
   targetScoop?: string;
-  /** Optional origin label for follower-forwarded licks. */
-  originLabel?: string;
+  /** Optional origin of the lick (forwarding label, raising unit). */
+  origin?: SprinkleLickOrigin;
 }
 
 /**

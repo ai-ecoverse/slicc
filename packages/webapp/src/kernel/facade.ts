@@ -33,7 +33,7 @@ import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/t
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
-import { isRootUnit, rootsOf } from '../work-unit/policy.js';
+import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   chatSessionIdFor,
   coneFolderFor,
@@ -62,6 +62,7 @@ import type {
   ScoopStatusMsg,
   SetScoopModelMsg,
   SetThinkingLevelMsg,
+  SprinkleLickOrigin,
   StateSnapshotMsg,
   ToolUIActionMsg,
   TrayRuntimeStatusMsg,
@@ -669,9 +670,10 @@ export class Bridge implements KernelFacade {
   /**
    * Route a sprinkle-lick event into the orchestrator. Resolves
    * `targetScoop` by name/folder/`${folder}-scoop`, falling back to the
-   * cone when no match is found (or `targetScoop` is omitted). Builds a
-   * `ChannelMessage`, appends a buffered lick entry, persists, and
-   * dispatches via `orchestrator.handleMessage`.
+   * unit that RAISED the lick (`origin.unitJid`, resolved to its root
+   * owner) and only then to the default root. Builds a `ChannelMessage`,
+   * appends a buffered lick entry, persists, and dispatches via
+   * `orchestrator.handleMessage`.
    *
    * Extracted from the `sprinkle-lick` envelope handler so leader-side
    * `onSprinkleLick` callbacks can share the same routing logic without
@@ -682,7 +684,7 @@ export class Bridge implements KernelFacade {
     sprinkleName: string,
     body: unknown,
     targetScoop?: string,
-    originLabel?: string
+    origin?: SprinkleLickOrigin
   ): Promise<void> {
     if (!this.orchestrator) return;
     // Human-gated navigate·handoff licks: when the user resolves the approval
@@ -710,7 +712,13 @@ export class Bridge implements KernelFacade {
     // long-lived and a stale entry must not silence a live panel.
     let target = resolvedTarget ? matchLickTargetAlias(scoops, resolvedTarget) : undefined;
     if (!target) {
-      target = rootsOf(scoops)[0];
+      // A dip lives in ONE unit's transcript, so its clicks belong to that
+      // unit's cone. Falling straight through to the default root sent every
+      // inline-dip lick to the OLDEST cone: with a second cone open, the cone
+      // that rendered the dip saw nothing while a bystander cone was handed a
+      // lick for a card it never wrote (and, on a retried click, twice). Same
+      // ownership rule as `ownerRootOrDefault` (#2312) for interactive cards.
+      target = this.originRootOf(scoops, origin?.unitJid) ?? rootsOf(scoops)[0];
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
@@ -719,7 +727,7 @@ export class Bridge implements KernelFacade {
       sprinkleName,
       timestamp: new Date().toISOString(),
       body,
-      originLabel,
+      originLabel: origin?.label,
     } as Parameters<typeof formatLickEventForCone>[0]);
     const content =
       formatted?.content ??
@@ -744,6 +752,22 @@ export class Bridge implements KernelFacade {
     });
     this.persistScoop(target.jid);
     await this.orchestrator.handleMessage(channelMsg);
+  }
+
+  /**
+   * The root that owns `jid` — itself when it IS a root. A jid the roster no
+   * longer knows (a closed cone, a stale panel) resolves to `undefined` so the
+   * caller keeps its default-root fallback rather than dropping the lick.
+   */
+  private originRootOf(
+    scoops: readonly RegisteredScoop[],
+    jid: string | undefined
+  ): RegisteredScoop | undefined {
+    if (!jid) return undefined;
+    return rootOwnerOf(
+      scoops,
+      scoops.find((scoop) => scoop.jid === jid)
+    );
   }
 
   /**
@@ -1933,15 +1957,17 @@ export class Bridge implements KernelFacade {
    * Predicate is `followerActive` (sticky across reconnects) not
    * `followerSync` (transiently null during WebRTC reconnects) so a
    * flicker doesn't reroute us back to the local model-less cone.
-   * `originLabel` is intentionally not forwarded — the leader is the
-   * origin authority and re-stamps it from the connection on receive
-   * (see `tray-leader-sync.ts case 'sprinkle.lick'`).
+   * `origin` is intentionally not forwarded — the leader is the origin
+   * authority and re-stamps the label from the connection on receive
+   * (see `tray-leader-sync.ts case 'sprinkle.lick'`), and the raising
+   * unit is the leader's own, which it resolves from that connection's
+   * selection rather than from the follower's claim.
    */
   private async handleSprinkleLickMsg(lickMsg: {
     sprinkleName: string;
     body: unknown;
     targetScoop?: string;
-    originLabel?: string;
+    origin?: SprinkleLickOrigin;
   }): Promise<void> {
     if (this.followerActive) {
       if (this.followerSync) {
@@ -1957,7 +1983,7 @@ export class Bridge implements KernelFacade {
       lickMsg.sprinkleName,
       lickMsg.body,
       lickMsg.targetScoop,
-      lickMsg.originLabel
+      lickMsg.origin
     );
   }
 

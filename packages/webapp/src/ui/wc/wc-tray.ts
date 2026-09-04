@@ -846,8 +846,11 @@ export function createLeaderOptionsFactory(
         return null;
       }
     },
-    onSprinkleLick: (name, body, targetScoop, originLabel) =>
-      client.sendSprinkleLick(name, body, targetScoop, originLabel),
+    onSprinkleLick: (name, body, targetScoop, originLabel, originUnitJid) =>
+      client.sendSprinkleLick(name, body, targetScoop, {
+        label: originLabel,
+        unitJid: originUnitJid,
+      }),
     onSprinkleInstancesChanged: () => mirrorSprinkleInstances(state),
     onFollowerMessage: (text, messageId, attachments, options) =>
       deliverFollowerMessage(deps, state, text, messageId, attachments, options),

@@ -1734,12 +1734,92 @@ describe('Bridge.routeSprinkleLick', () => {
   });
 
   it('includes the forwarded origin label in the lick content', async () => {
-    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper', 'iOS follower');
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper', {
+      label: 'iOS follower',
+    });
     expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining('Forwarded from iOS follower'),
       })
     );
+  });
+
+  /**
+   * A dip lives in ONE unit's transcript, so an untargeted lick belongs to that
+   * unit's cone. It used to fall straight through to the oldest root: with a
+   * second cone open, the cone that rendered the dip saw nothing and a
+   * bystander cone was handed a lick for a card it never wrote.
+   */
+  describe('origin unit routing', () => {
+    /** Two roots — the oldest first, so a bad fallback is visible. */
+    beforeEach(() => {
+      mockOrchestrator.getScoops = vi.fn(() => [
+        {
+          jid: 'cone-1',
+          name: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          addedAt: '2024-01-01T00:00:00.000Z',
+          assistantLabel: 'sliccy',
+        },
+        {
+          jid: 'cone-2',
+          name: 'landlording',
+          folder: 'cone-landlording',
+          isCone: true,
+          parentJid: null,
+          addedAt: '2024-06-01T00:00:00.000Z',
+          assistantLabel: 'sliccy',
+        },
+        {
+          jid: 'scoop-2',
+          name: 'helper',
+          folder: 'helper',
+          isCone: false,
+          parentJid: 'cone-2',
+          addedAt: '2024-07-01T00:00:00.000Z',
+          assistantLabel: 'helper',
+        },
+      ]);
+    });
+
+    it('routes an untargeted lick to the cone that raised it, not the oldest one', async () => {
+      await bridge.routeSprinkleLick('inline', { action: 'go' }, undefined, {
+        unitJid: 'cone-2',
+      });
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'cone-2' })
+      );
+    });
+
+    it('routes a lick raised in a scoop transcript to the scoop’s owning cone', async () => {
+      await bridge.routeSprinkleLick('inline', { action: 'go' }, undefined, {
+        unitJid: 'scoop-2',
+      });
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'cone-2' })
+      );
+    });
+
+    it('keeps the default-root fallback for an origin the roster no longer knows', async () => {
+      // A closed cone or a stale panel must not silence the lick.
+      await bridge.routeSprinkleLick('inline', { action: 'go' }, undefined, {
+        unitJid: 'cone-gone',
+      });
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'cone-1' })
+      );
+    });
+
+    it('prefers an explicit targetScoop over the raising unit', async () => {
+      await bridge.routeSprinkleLick('inline', { action: 'go' }, 'helper', {
+        unitJid: 'cone-2',
+      });
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'scoop-2' })
+      );
+    });
   });
 });
 

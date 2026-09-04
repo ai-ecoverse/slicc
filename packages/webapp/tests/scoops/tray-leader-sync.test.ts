@@ -2452,11 +2452,15 @@ describe('LeaderSyncManager', () => {
         targetScoop: 'scoop-1',
       });
 
+      // Fifth arg is the unit this peer is reading, as the LEADER recorded it
+      // (the join snapshot pins it to the active unit until a `scoops.select`
+      // moves it) — never a follower claim.
       expect(onSprinkleLick).toHaveBeenCalledWith(
         'welcome',
         { action: 'click' },
         'scoop-1',
-        'iOS follower'
+        'iOS follower',
+        'cone'
       );
     });
 

@@ -472,7 +472,8 @@ export class FollowerDispatch {
         message.sprinkleName,
         message.body,
         message.targetScoop,
-        originLabel
+        originLabel,
+        follower?.selectedScoopJid
       );
     } catch (err) {
       this.context.log.warn('onSprinkleLick handler threw', {
