@@ -2,8 +2,10 @@
  * ScoopApprovalRouter - owns the cone-mediated sudo-request lifecycle.
  *
  * Implements `ConeApprovalRouter`: a non-cone scoop's `SudoBroker.requestApproval`
- * call enters here via {@link enqueueSudoRequest}, the request is registered in
- * the {@link ConeRequestRegistry}, delivered to the cone (lick chip + queued
+ * call enters here via {@link enqueueSudoRequest}. If the scoop's policy already
+ * grants the subject with `NOPASSWD`, the request resolves `allow` immediately
+ * and never reaches the cone. Otherwise it is registered in the
+ * {@link ConeRequestRegistry}, delivered to the cone (lick chip + queued
  * actionable message), and the pending promise is returned to the scoop. The
  * cone settles it via {@link resolveSudoRequest} / {@link resolveSudoRequestAndPersist};
  * unregister / shutdown drains pending requests fail-closed.
@@ -16,7 +18,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
-import { matchCommand, matchPath } from '../base/sudoers.js';
+import { matchCommand, matchPath, type SudoersPolicy } from '../base/sudoers.js';
 import {
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -151,14 +153,8 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       if (!scoop) continue;
       if (folder !== undefined && scoop.folder !== folder) continue;
       const policy = sudoManager.getPolicyForScoop(scoop.folder);
+      if (!isNopasswdGranted(policy, pending.request)) continue;
       const { kind, detail } = pending.request;
-      const granted =
-        kind === 'command'
-          ? matchCommand(policy, detail) === 'nopasswd-allow'
-          : kind === 'read' || kind === 'write'
-            ? matchPath(policy, kind, detail) === 'nopasswd-allow'
-            : false;
-      if (!granted) continue;
       // `resolve()` deletes the registry entry, so the requester's identity
       // (and with it the owning cone) must travel with the persistence call.
       if (this.registry.resolve(pending.id, { decision: 'allow' })) {
@@ -178,6 +174,28 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
     return settled;
+  }
+
+  /**
+   * Admission-time counterpart of {@link settleGrantedRequests}: if the
+   * requesting scoop's live policy already grants this subject with
+   * `NOPASSWD`, return `{ decision: 'allow' }` so the caller never
+   * registers or delivers a cone prompt. Returns `null` when the cone
+   * must decide (no manager, unknown scoop, ungranted subject).
+   */
+  private admitIfAlreadyGranted(scoopJid: string, request: SudoRequest): SudoDecision | null {
+    const scoop = this.deps.getScoops().get(scoopJid);
+    const sudoManager = this.deps.getSudoManager();
+    if (!scoop || !sudoManager) return null;
+    const policy = sudoManager.getPolicyForScoop(scoop.folder);
+    if (!isNopasswdGranted(policy, request)) return null;
+    log.info('Sudo request already granted by policy — skipping cone', {
+      scoopJid,
+      folder: scoop.folder,
+      kind: request.kind,
+      detailPreview: request.detail.slice(0, 80),
+    });
+    return { decision: 'allow' };
   }
 
   async enqueueSudoRequest(
@@ -204,6 +222,13 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       });
       return { decision: 'deny' };
     }
+
+    // Same grant match as settleGrantedRequests, but at admission: a subject
+    // the scoop's policy already NOPASSWD-grants must not raise a cone prompt
+    // (#2853). The reload sweep still covers requests that were pending when
+    // the grant landed. Identity checks above stay fail-closed first.
+    const alreadyGranted = this.admitIfAlreadyGranted(scoopJid, request);
+    if (alreadyGranted) return alreadyGranted;
 
     // The approver rides ON the registry entry, so it is retired by whichever
     // settle path fires — decision, timeout, `failScoop`, `failAll`, or a
@@ -457,6 +482,26 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
 
     await this.deps.handleMessage(msg);
   }
+}
+
+/**
+ * The grant match {@link ScoopApprovalRouter.settleGrantedRequests} uses on
+ * policy reload, and that {@link ScoopApprovalRouter.enqueueSudoRequest}
+ * uses at admission. Only a `NOPASSWD` hit short-circuits — a matching
+ * passworded rule still requires the cone. `secret` / `export` / guest
+ * kinds have no matching directive here, so they always escalate.
+ *
+ * Delegates to {@link matchPath} / {@link matchCommand} so self-protection
+ * (`/etc/sudoers`, per-scoop sudoers, layouts) stays absolute: a
+ * `NOPASSWD Write /**` cannot skip the cone for a protected write.
+ */
+function isNopasswdGranted(policy: SudoersPolicy, request: SudoRequest): boolean {
+  const { kind, detail } = request;
+  if (kind === 'command') return matchCommand(policy, detail) === 'nopasswd-allow';
+  if (kind === 'read' || kind === 'write') {
+    return matchPath(policy, kind, detail) === 'nopasswd-allow';
+  }
+  return false;
 }
 
 function formatSudoRequestNotification(
