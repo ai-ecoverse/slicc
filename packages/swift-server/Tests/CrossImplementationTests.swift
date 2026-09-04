@@ -76,6 +76,94 @@ final class CrossImplementationTests: XCTestCase {
         }
     }
 
+    // MARK: - Request content-type parity (mirrors the table in
+    // packages/shared-ts/tests/cross-impl-vectors.test.ts)
+    //
+    // Node's fetch proxy and this one must agree on which request bodies get a
+    // masked→real unmask pass; when they drift, a form POST that works on
+    // Sliccstart ships the masked token upstream on the Node CLI (#2821).
+
+    private static let requestContentTypeTable: [(contentType: String, isText: Bool)] = [
+        ("application/x-www-form-urlencoded", true),
+        ("application/x-www-form-urlencoded;charset=UTF-8", true),
+        ("Application/X-WWW-Form-Urlencoded", true),
+        ("application/json", true),
+        ("application/json; charset=utf-8", true),
+        ("text/plain", true),
+        ("application/xml", true),
+        ("image/svg+xml", true),
+        ("application/javascript", true),
+        ("application/ecmascript", true),
+        ("text/html", true),
+        ("text/css", true),
+        // Unlabeled bodies are binary on both floats: the byte-safe unmask path
+        // handles them without a lossy UTF-8 round-trip.
+        ("", false),
+        ("image/jpeg", false),
+        ("application/octet-stream", false),
+        ("application/pdf", false),
+        ("multipart/form-data; boundary=x", false),
+        ("application/x-git-receive-pack-request", false),
+    ]
+
+    func testIsTextRequestContentTypeMatchesPinnedTable() {
+        for row in Self.requestContentTypeTable {
+            XCTAssertEqual(
+                isTextRequestContentType(row.contentType),
+                row.isText,
+                "request content-type classification drift for \(row.contentType.isEmpty ? "(empty)" : row.contentType)"
+            )
+        }
+    }
+
+    // MARK: - Form-body unmask parity (mirrors the table in
+    // packages/shared-ts/tests/cross-impl-vectors.test.ts)
+    //
+    // Both floats must percent-encode a substituted secret identically. The real
+    // value carries every form-reserved character, so a drift in either the
+    // encoder's allowed set or the field walk changes an expected string.
+    // `%MASKED%` stands for the masked token, derived from the pinned `mask()`.
+
+    private static let formSessionId = "session-form-parity"
+    private static let formReal = "ab+cd/ef=gh&ij kl%mn"
+    private static let formEncoded = "ab%2Bcd%2Fef%3Dgh%26ij%20kl%25mn"
+
+    private static let formBodyTable: [(input: String, expected: String)] = [
+        (
+            "token=%MASKED%&grant_type=client_credentials",
+            "token=\(formEncoded)&grant_type=client_credentials"
+        ),
+        ("%MASKED%", formEncoded),
+        ("a=%MASKED%&b=keep&c=%MASKED%", "a=\(formEncoded)&b=keep&c=\(formEncoded)"),
+        // No masked token: forwarded byte-identical, `+` and `%2F` untouched.
+        ("a=1&b=hello+world&c=%2Fpath", "a=1&b=hello+world&c=%2Fpath"),
+        ("a=&b=", "a=&b="),
+    ]
+
+    func testUnmaskFormBodyMatchesPinnedTable() {
+        let masked = mask(
+            sessionId: Self.formSessionId,
+            secretName: "FORM_SECRET",
+            realValue: Self.formReal
+        )
+        let injector = SecretInjector(secrets: [
+            SecretInjector.LoadedSecret(
+                name: "FORM_SECRET",
+                realValue: Self.formReal,
+                maskedValue: masked,
+                domains: ["api.example.com"]
+            )
+        ])
+        for row in Self.formBodyTable {
+            let body = row.input.replacingOccurrences(of: "%MASKED%", with: masked)
+            XCTAssertEqual(
+                unmaskFormBody(text: body, hostname: "api.example.com", injector: injector),
+                row.expected,
+                "form-body unmask drift for \(row.input)"
+            )
+        }
+    }
+
     // MARK: - CDP frame unmask parity (mirrors packages/shared-ts/tests/cdp-frame-unmask.test.ts)
     //
     // Pins the same fixture (sessionId='session-fixed', API_KEY='sk-realValue123'

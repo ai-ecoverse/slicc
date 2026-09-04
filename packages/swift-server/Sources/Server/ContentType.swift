@@ -33,3 +33,37 @@ func isTextContentType(_ contentType: String) -> Bool {
         || normalized.contains("css")
         || normalized.contains("svg")
 }
+
+/// Whether a content type is `application/x-www-form-urlencoded`.
+///
+/// Callers need this on top of `isTextRequestContentType` because a form body is
+/// not just text: substituting a secret into one has to respect the
+/// percent-encoding (see `unmaskFormBody`).
+func isFormContentType(_ contentType: String) -> Bool {
+    if contentType.isEmpty { return false }
+    return contentType.lowercased().contains("urlencoded")
+}
+
+/// Request-side variant of `isTextContentType`, additionally matching
+/// `application/x-www-form-urlencoded`.
+///
+/// Mirrors `isTextRequestContentType` in `packages/shared-ts/src/content-type.ts`
+/// and gates the fetch-proxy REQUEST-body unmask, where the base predicate gates
+/// the response scrub. Form bodies are text here because they carry secrets:
+/// OAuth token exchange and a long tail of provider APIs POST
+/// `client_secret=…` / `token=…` as a form, and a masked token forwarded
+/// verbatim is a silent auth failure upstream (#2821). `urlencoded` stays OUT of
+/// the base predicate — on the response hop a form body is rare and the extra
+/// match buys nothing.
+///
+/// An EMPTY content type is deliberately not text: an unlabeled body is as
+/// likely to be a JPEG as a form, and the caller's fallback
+/// (`SecretInjector.unmaskBodyBytes`) unmasks it byte-safely anyway.
+///
+/// The request-side table is pinned on both sides by
+/// `Tests/CrossImplementationTests.swift` and
+/// `packages/shared-ts/tests/cross-impl-vectors.test.ts`.
+func isTextRequestContentType(_ contentType: String) -> Bool {
+    if contentType.isEmpty { return false }
+    return isTextContentType(contentType) || isFormContentType(contentType)
+}

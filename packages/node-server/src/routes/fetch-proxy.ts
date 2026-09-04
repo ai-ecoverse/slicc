@@ -1,6 +1,13 @@
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
-import { HMAC_SIGN_HEADER, isLoopbackOrigin, isTextContentType } from '@slicc/shared-ts';
+import {
+  HMAC_SIGN_HEADER,
+  isFormContentType,
+  isLoopbackOrigin,
+  isTextContentType,
+  isTextRequestContentType,
+  unmaskFormBody,
+} from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
   buildFetchProxyExposeHeaders,
@@ -162,6 +169,13 @@ async function applyHmacSigning(
  * Unmask masked secrets in a text request body. Non-text bodies (git
  * packfiles, octet-stream, images, …) are left untouched — `toString('utf-8')`
  * on arbitrary bytes corrupts them, and masked values never appear in binary.
+ *
+ * Uses the request-side predicate so form POSTs count as text: swift-server
+ * unmasks them and a masked `client_secret` reaching an upstream OAuth token
+ * endpoint verbatim is a silent auth failure, not a corrupt-bytes risk (#2821).
+ * A form body then takes the encoding-aware `unmaskFormBody` path — a plain
+ * substring splice would corrupt it whenever the real secret carries a
+ * form-reserved character (base64 `+` / `/` / `=`).
  */
 function unmaskRequestBody(
   secretProxy: SecretProxyManager,
@@ -170,11 +184,12 @@ function unmaskRequestBody(
   targetHostname: string
 ): Buffer {
   const contentType = headers['content-type'] ?? headers['Content-Type'] ?? '';
-  if (isTextContentType(contentType) && secretProxy.hasSecrets()) {
-    const bodyResult = secretProxy.unmaskBody(rawBody.toString('utf-8'), targetHostname);
-    return Buffer.from(bodyResult.text, 'utf-8');
-  }
-  return rawBody;
+  if (!isTextRequestContentType(contentType) || !secretProxy.hasSecrets()) return rawBody;
+  const body = rawBody.toString('utf-8');
+  const { text } = isFormContentType(contentType)
+    ? unmaskFormBody(secretProxy, body, targetHostname)
+    : secretProxy.unmaskBody(body, targetHostname);
+  return text === body ? rawBody : Buffer.from(text, 'utf-8');
 }
 
 /**
