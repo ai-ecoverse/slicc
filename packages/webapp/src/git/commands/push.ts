@@ -15,8 +15,17 @@ export async function push(
   const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.push);
   const force = flags.force === true;
   const setUpstream = flags['set-upstream'] === true;
+  const dryRun = flags['dry-run'] === true;
   const remote = positionals[0] ?? 'origin';
   const branch = positionals[1] ?? (await git.currentBranch({ fs: ctx.lfs, dir: cwd }));
+
+  if (dryRun) {
+    return {
+      stdout: `Would push to ${remote}...\n   ${branch} -> ${branch}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
 
   let output = `Pushing to ${remote}...\n`;
 
