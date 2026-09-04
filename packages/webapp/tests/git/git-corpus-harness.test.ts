@@ -396,6 +396,40 @@ describe('git corpus — push / pull offline arg-parsing', () => {
     }
   });
 
+  it('push -q origin <branch> does not swallow the remote (#2864)', async () => {
+    await seedRepo('/project');
+    await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
+    const pushSpy = vi
+      .spyOn(isoGit, 'push')
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof isoGit.push>>);
+    try {
+      const result = await git.execute(['push', '-q', 'origin', 'my-branch'], '/project');
+      expect(result.exitCode).toBe(0);
+      const call = pushSpy.mock.calls[0]?.[0] as { remote?: string; ref?: string };
+      expect(call?.remote).toBe('origin');
+      expect(call?.ref).toBe('my-branch');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  it('push --dry-run origin <branch> keeps the remote and does not push (#2864)', async () => {
+    await seedRepo('/project');
+    await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');
+    const pushSpy = vi
+      .spyOn(isoGit, 'push')
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof isoGit.push>>);
+    try {
+      const result = await git.execute(['push', '--dry-run', 'origin', 'my-branch'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(pushSpy).not.toHaveBeenCalled();
+      expect(result.stdout).toContain('origin');
+      expect(result.stdout).toContain('my-branch');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
   it('pull --ff-only origin <branch> sends remote+ref+fastForwardOnly through', async () => {
     await seedRepo('/project');
     await git.execute(['remote', 'add', 'origin', 'https://example.com/x.git'], '/project');

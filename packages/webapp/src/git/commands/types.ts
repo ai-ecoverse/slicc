@@ -89,4 +89,9 @@ export interface GitCommandContext {
   setDefaultAuthorEmail(email: string): void;
   /** Per-invocation `-c key=val` overrides, or undefined. */
   getConfigOverrides(): ReadonlyMap<string, string> | undefined;
+  /**
+   * UTF-8 stdin for this invocation. Empty when the command was not piped.
+   * `commit -F -` / `--file -` reads the commit message from here.
+   */
+  readonly stdin: string;
 }

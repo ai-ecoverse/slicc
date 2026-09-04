@@ -36,9 +36,9 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     default: { 'single-branch': true },
   },
   commit: {
-    string: ['message', 'author', 'date', 'reuse-message', 'reedit-message', 'file', 'cleanup'],
+    string: ['message', 'author', 'date', 'file', 'cleanup'],
     boolean: ['amend', 'all', 'allow-empty'],
-    alias: { m: 'message', a: 'all', C: 'reuse-message', c: 'reedit-message', F: 'file' },
+    alias: { m: 'message', a: 'all', F: 'file' },
   },
   log: {
     string: [
@@ -116,8 +116,8 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
   push: {
     string: ['o', 'push-option', 'receive-pack', 'repo', 'exec', 'signed', '4', '6'],
-    boolean: ['force', 'set-upstream'],
-    alias: { f: 'force', u: 'set-upstream' },
+    boolean: ['force', 'set-upstream', 'quiet', 'verbose', 'dry-run', 'tags', 'progress'],
+    alias: { f: 'force', u: 'set-upstream', q: 'quiet', v: 'verbose' },
   },
   'symbolic-ref': {
     string: ['m'],

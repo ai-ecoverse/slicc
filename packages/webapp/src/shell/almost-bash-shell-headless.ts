@@ -62,7 +62,7 @@ import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
-import { EMPTY_BYTES } from './just-bash-compat.js';
+import { EMPTY_BYTES, stdinAsText } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import {
   createFetchProgressObserver,
@@ -1417,7 +1417,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const gitCommands = this.gitCommands;
     return defineCommand('git', async (args, ctx) => {
       const cwd = ctx.cwd;
-      const result = await gitCommands.execute(args, cwd, ctx.env);
+      const result = await gitCommands.execute(args, cwd, ctx.env, stdinAsText(ctx.stdin));
       return {
         stdout: result.stdout,
         stderr: result.stderr,

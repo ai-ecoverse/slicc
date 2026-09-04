@@ -183,6 +183,11 @@ export class GitCommands {
    * leak across calls.
    */
   private currentConfigOverrides?: ReadonlyMap<string, string>;
+  /**
+   * UTF-8 stdin for the current `execute()` call. Used by `commit -F -`.
+   * Cleared at the end of every invocation so a later call cannot inherit it.
+   */
+  private currentStdin = '';
 
   /**
    * Cross-command isomorphic-git object/pack cache (#2710). One per INSTANCE —
@@ -264,6 +269,7 @@ export class GitCommands {
         this.authorEmail = email;
       },
       getConfigOverrides: () => this.currentConfigOverrides,
+      stdin: this.currentStdin,
     };
     return { ctx, client };
   }
@@ -426,11 +432,13 @@ export class GitCommands {
    * @param env Optional shell env vars used as an ambient auth fallback
    *   (`$GH_TOKEN`, `$GITHUB_TOKEN`) when no explicit `github.token` file is
    *   set. Matches the `gh` CLI convention.
+   * @param stdin Optional UTF-8 stdin (`commit -F -` reads the message here).
    */
   async execute(
     args: string[],
     cwd: string,
-    env?: ReadonlyMap<string, string> | Readonly<Record<string, string>>
+    env?: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
+    stdin?: string
   ): Promise<GitCommandResult> {
     if (args.length === 0) {
       return this.help();
@@ -466,6 +474,7 @@ export class GitCommands {
 
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
+    this.currentStdin = stdin ?? '';
     // One context — and with it one view of `.git/objects` (#2712) plus, for a
     // cacheable subcommand, one read memo (#2709) — per invocation, so nothing
     // a command reads is visible to any other.
@@ -581,6 +590,7 @@ export class GitCommands {
       });
       this.currentEnv = undefined;
       this.currentConfigOverrides = undefined;
+      this.currentStdin = '';
       // The adapter is per-invocation, so its readdir-primed stat cache
       // (#2716) dies with this call anyway — but a listing must never answer a
       // stat issued by the NEXT command, which can run after the host
