@@ -308,14 +308,21 @@ Test in both CLI and extension floats.
   travels through `@slicc/shared-ts`, never a deep path into a sibling package.
 - A new `isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
   `resolveFloatTopology` / `getChromeExtensionRealm` / `setChromeExtensionRealm`
-  / `hasChromeRuntimeConnect` / `canConnectToChromeRuntime` call in `scoops/` or
-  `tools/` business logic — including one reached through a re-export under a
+  / `hasChromeRuntimeConnect` / `canConnectToChromeRuntime` call in `scoops/`,
+  `tools/`, or `kernel/` (except `kernel/host.ts`, the one composition root)
+  business logic — including one reached through a re-export under a
   different name (`export const isTrayExtension = getChromeExtensionRealm` and
-  the like); a plain identifier grep does not catch a rename, so read the
-  import chain, not just the literal names. Privileged float detection belongs
-  on the injected `CapabilityBroker` (`work-unit/capability/`), composed once
-  in `kernel/host.ts` (#2276). See [`work-unit.md`](work-unit.md) Phase 6. The
+  the like). Privileged float detection belongs on the injected
+  `CapabilityBroker` (`work-unit/capability/`), composed once in
+  `kernel/host.ts` (#2276). See [`work-unit.md`](work-unit.md) Phase 6. The
   tell is the same as a back-edge: the call site is in the wrong layer.
+  CI-enforced by `check-no-float-probes.mjs` (`npm run lint:no-float-probes`,
+  baseline `float-probe-baseline.json`, empty — see
+  [`dev-tools-details.md`](dev-tools-details.md#float-probe-ratchet)); a reviewer's job is
+  everything that gate cannot see — a rename an alias-consuming import
+  reaches only through a wrapper FUNCTION that calls the probe from a
+  different, allowed layer, or a dynamic `import()` followed by property
+  access.
 
 **Historical precedents**
 

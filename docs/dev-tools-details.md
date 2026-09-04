@@ -461,6 +461,40 @@ them through would reopen the same wrong-direction dependency. A new asset mode
 is a conscious decision; the gate fails closed. Shared code belongs in
 `@slicc/shared-ts`, imported by package name.
 
+## float-probe-ratchet
+
+`check-no-float-probes.mjs` (#2276 slice D) fails on any NEW read of one of
+eight float/topology probe names (`isExtensionRealm`, `isChromeExtensionRealm`,
+`hasLocalNodeServer`, `resolveFloatTopology`, `getChromeExtensionRealm`,
+`setChromeExtensionRealm`, `hasChromeRuntimeConnect`, `canConnectToChromeRuntime`)
+under `scoops/`, `tools/`, or `kernel/` — except `kernel/host.ts`, the one
+composition root that resolves the float's topology once into a
+`CapabilityBroker` (`docs/work-unit.md` Phase 6). Privileged float detection
+belongs on that injected broker or, for a genuine transport decision, in
+`shell/` (which owns topology).
+
+The scan is import/re-export-CLAUSE based (`import { hasLocalNodeServer } from
+'…'`, `export { hasLocalNodeServer } from '…'`), not a whole-file identifier
+scan: every domain #2276 migrated reuses the SAME name for a local
+composition-time-answer const/parameter/property (`const hasLocalNodeServer =
+() => localNode.ok`), so a whole-file scan would false-positive on every
+migrated file. Scanning import clauses only catches the one thing that is
+actually banned — pulling the binding in from its defining module — which a
+same-named local can never do.
+
+A second pass folds in re-exports under a DIFFERENT name (`export const
+isTrayExtension = getChromeExtensionRealm`) discovered anywhere in
+`packages/webapp/src`, so a rename-based bypass of the banned-zone scan is
+caught if a banned-zone file ever imports the alias — without flagging a
+pre-existing, legitimate, out-of-zone rename (`core/secret-topology.ts`'s
+`resolveFloatTopology as resolveSecretTopology`) that nothing in the banned
+zone actually imports.
+
+Baseline `float-probe-baseline.json` starts EMPTY (one-way ratchet; regenerate
+after paying debt down with `--update`) — slices A–C's migration work made
+that the honest starting point. The baseline doubles as a debt list for the
+boy-scout gate. Chained into `npm run lint` and `lint:ci`.
+
 ## record-string-unknown-ratchet
 
 `check-record-string-unknown.mjs` fails on any NEW `Record<string, unknown>`

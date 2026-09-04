@@ -4,11 +4,13 @@
 // Computes the PR's changed files via `git diff --name-only <base>...HEAD`
 // and intersects them with EVERY debt list: the per-rule exemption glob lists
 // parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
-// cognitive complexity, floating promises, and misused promises — plus the two
-// ratchet baselines: layer-stack back-edges
-// (`layer-back-edge-baseline.json`, see check-layer-back-edges.mjs) and
-// untyped string-keyed bags (`record-string-unknown-baseline.json`, see
-// check-record-string-unknown.mjs), evaluated per file.
+// cognitive complexity, floating promises, and misused promises — plus three
+// ratchet baselines: layer-stack back-edges (`layer-back-edge-baseline.json`,
+// see check-layer-back-edges.mjs), untyped string-keyed bags
+// (`record-string-unknown-baseline.json`, see check-record-string-unknown.mjs),
+// and float/topology probes under scoops/tools/kernel
+// (`float-probe-baseline.json`, see check-no-float-probes.mjs), evaluated per
+// file.
 // Exits non-zero with a rule-appropriate fix-it message if any touched file
 // is still on ANY list — the PR author must pay the file's debt down and
 // delete its entry in the same PR.
@@ -31,6 +33,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { baselineFiles, BASELINE_PATH as LAYER_BASELINE_PATH } from './check-layer-back-edges.mjs';
+import { BASELINE_PATH as FLOAT_PROBE_BASELINE_PATH } from './check-no-float-probes.mjs';
 import { BASELINE_PATH as RECORD_BASELINE_PATH } from './check-record-string-unknown.mjs';
 import {
   COMPLEXITY_RULE_KEY,
@@ -48,6 +51,9 @@ const SCRIPT = 'check-touched-exemptions';
 
 const LAYER_BASELINE_REL = relative(repoRoot, LAYER_BASELINE_PATH).split('\\').join('/');
 const RECORD_BASELINE_REL = relative(repoRoot, RECORD_BASELINE_PATH).split('\\').join('/');
+const FLOAT_PROBE_BASELINE_REL = relative(repoRoot, FLOAT_PROBE_BASELINE_PATH)
+  .split('\\')
+  .join('/');
 
 const RULES = [
   {
@@ -195,6 +201,8 @@ function main() {
   const baseLayerBaseline = readBaseJson(baseRef, LAYER_BASELINE_REL);
   const recordBaseline = readBaselineFile(RECORD_BASELINE_PATH);
   const baseRecordBaseline = readBaseJson(baseRef, RECORD_BASELINE_REL);
+  const floatProbeBaseline = readBaselineFile(FLOAT_PROBE_BASELINE_PATH);
+  const baseFloatProbeBaseline = readBaseJson(baseRef, FLOAT_PROBE_BASELINE_REL);
   const ruleStates = [
     ...RULES.map((rule) => ({
       ...rule,
@@ -234,6 +242,21 @@ function main() {
       globs: baselineFiles(recordBaseline),
       baseGlobs: baselineFiles(baseRecordBaseline),
       baseReadable: baseRecordBaseline !== null,
+    },
+    {
+      label: 'float-probe',
+      listRef: FLOAT_PROBE_BASELINE_REL,
+      fixIt:
+        'Fix: in this same PR, ask the injected CapabilityBroker or take a composition-\n' +
+        'time answer instead of re-probing the float (see docs/work-unit.md Phase 6),\n' +
+        'then ratchet the baseline:\n' +
+        '  node packages/dev-tools/tools/check-no-float-probes.mjs --update',
+      addFixIt:
+        'Fix: use the injected CapabilityBroker or a composition-time answer instead of\n' +
+        'growing the baseline — see docs/work-unit.md Phase 6.',
+      globs: baselineFiles(floatProbeBaseline),
+      baseGlobs: baselineFiles(baseFloatProbeBaseline),
+      baseReadable: baseFloatProbeBaseline !== null,
     },
   ];
 
