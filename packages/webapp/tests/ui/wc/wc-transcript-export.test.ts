@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TranscriptZipResult } from '../../../src/transcript/zip-stream.js';
 import {
   downloadTranscriptBlob,
+  showTranscriptExportFailure,
   transcriptZipToBlob,
 } from '../../../src/ui/wc/wc-transcript-export.js';
 
@@ -145,5 +146,62 @@ describe('downloadTranscriptBlob', () => {
     expect(document.querySelectorAll('a[data-transcript-dl]').length).toBe(0);
 
     clickSpy.mockRestore();
+  });
+});
+
+describe('showTranscriptExportFailure', () => {
+  class StubDialog extends HTMLElement {
+    shown = false;
+    show(): void {
+      this.shown = true;
+    }
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('is a no-op when <slicc-dialog> is not registered', () => {
+    // jsdom's registry is per-realm and this spec's realm may not have the
+    // shell's elements; assert the guard rather than throwing into the void.
+    if (customElements.get('slicc-dialog')) return;
+    showTranscriptExportFailure(new TranscriptExportError('schema-invalid'));
+    expect(document.body.querySelector('slicc-dialog')).toBeNull();
+  });
+
+  it('shows the code and the validator detail when the dialog exists', () => {
+    if (!customElements.get('slicc-dialog')) {
+      customElements.define('slicc-dialog', StubDialog);
+    }
+    showTranscriptExportFailure(
+      new TranscriptExportError('schema-invalid', 'session.state must be "active" or "frozen"')
+    );
+    const dialog = document.body.querySelector('slicc-dialog');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('heading')).toBe('Export failed');
+    expect(dialog?.textContent).toContain('schema-invalid');
+    expect(dialog?.textContent).toContain('session.state must be "active" or "frozen"');
+    expect((dialog as unknown as StubDialog).shown).toBe(true);
+  });
+
+  it('falls back to the message for a non-TranscriptExportError', () => {
+    if (!customElements.get('slicc-dialog')) {
+      customElements.define('slicc-dialog', StubDialog);
+    }
+    showTranscriptExportFailure(new Error('disk full'));
+    expect(document.body.querySelector('slicc-dialog')?.textContent).toContain('disk full');
+  });
+
+  it('removes itself when the close button is clicked', () => {
+    if (!customElements.get('slicc-dialog')) {
+      customElements.define('slicc-dialog', StubDialog);
+    }
+    showTranscriptExportFailure(new TranscriptExportError('transfer-aborted'));
+    const close = document.body.querySelector<HTMLButtonElement>(
+      'button[data-transcript-export-action="close"]'
+    );
+    expect(close).not.toBeNull();
+    close!.click();
+    expect(document.body.querySelector('slicc-dialog')).toBeNull();
   });
 });

@@ -184,12 +184,107 @@ export interface TranscriptDocumentV1 {
 }
 
 // ---------------------------------------------------------------------------
+// Structural (schema-controlled) field pointers
+// ---------------------------------------------------------------------------
+
+/**
+ * RFC 6901 pointers of the string fields export redaction must leave
+ * byte-for-byte intact — with array indices normalized to a wildcard segment.
+ *
+ * Export redaction substitutes known-secret values by plain substring
+ * replacement, so a secret value that happens to occur inside one of these
+ * fields would rewrite it and break the document (#2845). A one-character
+ * secret makes that a certainty: `"active"` becomes `"acti⟦REDACTED:…⟧e"` and
+ * `session.state` no longer matches its enum.
+ *
+ * Two categories, and nothing else — every other field stays redacted, so
+ * export remains fail-closed by default:
+ *
+ *  1. **Validator-constrained.** Corrupting these fails
+ *     {@link validateTranscriptDocumentV1}: enum discriminators, the ISO
+ *     message timestamp, the SHA-256 hex, the bundle path, non-empty
+ *     tool-call ids, and the ids its relational checks join on.
+ *  2. **Join mirrors.** `conversations[].parentConversationId` and
+ *     `session.id` are not constrained beyond being strings, but each holds a
+ *     copy of a `conversations[].id` from category 1 — `session.id` is the
+ *     cone's own id on the active path. Redacting one side and not the other
+ *     would silently desync the link, so they follow the id they mirror.
+ *
+ * Deliberately ABSENT and still fully redacted: `session.title`,
+ * `conversations[].name` / `.folder`, message `.error` / `.source` /
+ * `.channel` / `.stopReason` / `.model.*`, content-block `.text`, tool-call
+ * `.input`, `attachments[].originalName` / `.mimeType` (redacted metadata by
+ * design — the handling and path decisions read the pre-redaction pending
+ * record), and every unvalidated `createdAt` / `updatedAt` / `generatedAt`.
+ *
+ * Keep category 1 in step with the validator: a field that gains a constraint
+ * there needs an entry here, or a secret occurring inside it fails the export.
+ */
+const STRUCTURAL_TRANSCRIPT_POINTERS: ReadonlySet<string> = new Set([
+  '/export/format',
+  '/export/producer/application',
+  '/session/id',
+  '/session/state',
+  '/session/completeness/status',
+  '/session/completeness/missing/*',
+  '/conversations/*/id',
+  '/conversations/*/kind',
+  '/conversations/*/parentConversationId',
+  '/conversations/*/messages/*/id',
+  '/conversations/*/messages/*/role',
+  '/conversations/*/messages/*/timestamp',
+  '/conversations/*/messages/*/toolCallId',
+  '/conversations/*/messages/*/content/*/type',
+  '/conversations/*/messages/*/content/*/id',
+  '/conversations/*/messages/*/content/*/name',
+  '/conversations/*/messages/*/content/*/attachmentId',
+  '/delegations/*/sourceConversationId',
+  '/delegations/*/targetConversationId',
+  '/delegations/*/toolCallId',
+  '/attachments/*/id',
+  '/attachments/*/path',
+  '/attachments/*/sha256',
+  '/attachments/*/sourceConversationId',
+  '/attachments/*/sourceMessageId',
+  '/attachments/*/handling',
+  '/attachments/*/missingReason',
+]);
+
+/**
+ * True when `pointer` addresses a schema-controlled string field that export
+ * redaction must leave byte-for-byte intact.
+ *
+ * `pointer` is an RFC 6901 pointer into a {@link TranscriptDocumentV1}, as
+ * produced by the transcript redactor's leaf walk. Array indices are
+ * normalized to a wildcard segment before lookup, so
+ * `/conversations/0/messages/7/role` matches the wildcard entry above.
+ *
+ * Arbitrary tool-call `input` payloads are walked with the same pointers, but
+ * every entry above is rooted at a fixed prefix that `input` never occurs
+ * under, so a numeric-keyed input object cannot alias onto one.
+ */
+export function isStructuralTranscriptPointer(pointer: string): boolean {
+  return STRUCTURAL_TRANSCRIPT_POINTERS.has(pointer.replace(/\/\d+(?=\/|$)/g, '/*'));
+}
+
+// ---------------------------------------------------------------------------
 // Error class
 // ---------------------------------------------------------------------------
 
 export class TranscriptExportError extends Error {
-  constructor(public readonly code: TranscriptExportErrorCode) {
-    super(code);
+  /**
+   * @param code   Canonical wire code. Every consumer (Cherry transport, tray
+   *               sync, `session export`) reads `.code`, never `.message`.
+   * @param detail Optional human-readable reason, folded into `.message` only.
+   *               A bare `schema-invalid` is undiagnosable from a console log,
+   *               so the throw site should pass the validator's own message
+   *               (#2845). Never widen the wire code to carry it.
+   */
+  constructor(
+    public readonly code: TranscriptExportErrorCode,
+    public readonly detail?: string
+  ) {
+    super(detail ? `${code}: ${detail}` : code);
     this.name = 'TranscriptExportError';
   }
 }

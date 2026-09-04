@@ -1446,6 +1446,11 @@ export function attachWcWorkbench(
         await downloadTranscriptBlob(blob, filename);
       } catch (err) {
         log.error('Transcript export failed', err);
+        // A failed export is silent by construction: no download arrives and
+        // the console is the only witness. Put the reason on screen (#2845).
+        void import('./wc-transcript-export.js')
+          .then(({ showTranscriptExportFailure }) => showTranscriptExportFailure(err))
+          .catch((noticeErr) => log.error('Transcript export notice failed', noticeErr));
       } finally {
         exportInFlight = false;
       }

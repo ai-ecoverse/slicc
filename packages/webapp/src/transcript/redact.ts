@@ -9,6 +9,7 @@
  *   5. TranscriptRedaction records and redactionCounts population.
  */
 import {
+  isStructuralTranscriptPointer,
   redactCredentialPatterns,
   type TranscriptDocumentV1,
   TranscriptExportError,
@@ -280,8 +281,19 @@ export async function redactTranscript(
   // overridden unconditionally at the end, so sending it to knownSecrets wastes
   // quota/bandwidth without any correctness benefit.
   const { privacy: _privacy, ...docWithoutPrivacy } = document;
-  const docLeaves: StringLeaf[] = [];
-  collectLeaves(docWithoutPrivacy, '', docLeaves);
+  const allDocLeaves: StringLeaf[] = [];
+  collectLeaves(docWithoutPrivacy, '', allDocLeaves);
+
+  // Drop the schema-controlled leaves (#2845). Known-secret redaction is plain
+  // substring replacement, so a secret value occurring inside an enum, an ISO
+  // timestamp, a SHA-256 hex, a bundle path or a relational id rewrites that
+  // field into something `validateTranscriptDocumentV1` rejects — and the whole
+  // export then fails with a bare `schema-invalid`. A degenerate one-character
+  // secret makes that certain: it turns `"active"` into `"acti⟦REDACTED:…⟧e"`.
+  // These fields are machine-generated and cannot carry a secret; every
+  // content-bearing field (titles, names, message text, tool-call input,
+  // attachment original names) is absent from the set and still redacted.
+  const docLeaves = allDocLeaves.filter((leaf) => !isStructuralTranscriptPointer(leaf.pointer));
 
   // Collect attachment strings in stable order
   const attEntries = [...textAttachments.entries()];

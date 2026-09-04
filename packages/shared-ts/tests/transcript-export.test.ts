@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isStructuralTranscriptPointer,
   SLICC_TRANSCRIPT_FORMAT,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptDocumentV1,
@@ -1796,5 +1797,109 @@ describe('validateTranscriptDocumentV1 — tool-result toolCallId enforcement', 
         })
       )
     ).toEqual({ ok: true });
+  });
+});
+
+describe('isStructuralTranscriptPointer', () => {
+  it('matches schema-controlled fields, with array indices normalized', () => {
+    for (const pointer of [
+      '/session/state',
+      '/session/completeness/status',
+      '/session/completeness/missing/0',
+      '/export/format',
+      '/export/producer/application',
+      '/conversations/0/kind',
+      '/conversations/12/messages/7/role',
+      '/conversations/0/messages/0/timestamp',
+      '/conversations/0/messages/0/content/2/type',
+      '/conversations/0/messages/0/content/2/id',
+      '/delegations/0/targetConversationId',
+      '/attachments/3/sha256',
+      '/attachments/3/path',
+      '/attachments/3/handling',
+    ]) {
+      expect(isStructuralTranscriptPointer(pointer)).toBe(true);
+    }
+  });
+
+  it('does not match content-bearing fields, which must stay redactable', () => {
+    for (const pointer of [
+      '/session/title',
+      '/conversations/0/name',
+      '/conversations/0/folder',
+      '/conversations/0/messages/0/content/0/text',
+      '/conversations/0/messages/0/error',
+      '/attachments/0/originalName',
+    ]) {
+      expect(isStructuralTranscriptPointer(pointer)).toBe(false);
+    }
+  });
+
+  it('does not match unconstrained fields — the set is not "everything machine-written"', () => {
+    // Exempting a field is fail-OPEN, so the set holds only what the validator
+    // constrains plus the ids those constrained fields join on. `source` and
+    // `channel` are free-form (a scoop name), `mimeType` is redacted metadata
+    // by design, and these timestamps are never parsed by the validator.
+    for (const pointer of [
+      '/conversations/0/messages/0/source',
+      '/conversations/0/messages/0/channel',
+      '/conversations/0/messages/0/stopReason',
+      '/conversations/0/messages/0/model/id',
+      '/conversations/0/messages/0/model/provider',
+      '/attachments/0/mimeType',
+      '/session/createdAt',
+      '/session/frozenAt',
+      '/conversations/0/updatedAt',
+      '/export/id',
+      '/export/generatedAt',
+      '/export/producer/version',
+      '/delegations/0/timestamp',
+    ]) {
+      expect(isStructuralTranscriptPointer(pointer)).toBe(false);
+    }
+  });
+
+  it('every category-1 pointer names a field the validator actually constrains', () => {
+    // Pins the JSDoc claim: break a constrained field and validation must
+    // fail. If a pointer here stops being constrained it belongs out of the
+    // set (or documented as a join mirror), not silently exempt.
+    const cases: Array<[string, (d: TranscriptDocumentV1) => void]> = [
+      ['session.state', (d) => Object.assign(d.session, { state: 'acti\u27e6X\u27e7e' })],
+      [
+        'session.completeness.status',
+        (d) => Object.assign(d.session.completeness, { status: 'x' }),
+      ],
+      ['export.format', (d) => Object.assign(d.export, { format: 'x' })],
+      [
+        'export.producer.application',
+        (d) => Object.assign(d.export.producer, { application: 'x' }),
+      ],
+      ['conversations[].kind', (d) => Object.assign(d.conversations[0]!, { kind: 'x' })],
+      ['messages[].role', (d) => Object.assign(d.conversations[0]!.messages[0]!, { role: 'x' })],
+      [
+        'messages[].timestamp',
+        (d) => Object.assign(d.conversations[0]!.messages[0]!, { timestamp: 'x' }),
+      ],
+      [
+        'content[].type',
+        (d) => Object.assign(d.conversations[0]!.messages[0]!.content[0]!, { type: 'x' }),
+      ],
+    ];
+    for (const [label, corrupt] of cases) {
+      const doc = completeDocument();
+      corrupt(doc);
+      expect(validateTranscriptDocumentV1(doc), label).toMatchObject({ ok: false });
+    }
+  });
+
+  it('does not let a numeric-keyed tool-call input alias onto a structural entry', () => {
+    // Arbitrary tool input is walked with the same pointers; every structural
+    // entry is rooted at a prefix `input` never occurs under.
+    expect(isStructuralTranscriptPointer('/conversations/0/messages/0/content/0/input/type')).toBe(
+      false
+    );
+    expect(isStructuralTranscriptPointer('/conversations/0/messages/0/content/0/input/0/id')).toBe(
+      false
+    );
   });
 });
