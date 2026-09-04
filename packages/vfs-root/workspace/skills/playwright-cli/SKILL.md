@@ -120,7 +120,7 @@ playwright-cli select --tab=<id> <ref> <value>                   # Select dropdo
 playwright-cli check --tab=<id> <ref>                            # Check checkbox/radio
 playwright-cli uncheck --tab=<id> <ref>                          # Uncheck checkbox/radio
 playwright-cli drag --tab=<id> <startRef> <endRef>               # Drag and drop
-playwright-cli upload --tab=<id> [ref] <file> [file...]          # Upload VFS files to file input (optional ref targets hidden inputs)
+playwright-cli upload --tab=<id> [ref] <file> [file...]          # Upload VFS files to file input as raw bytes (optional snapshot ref targets hidden inputs)
 playwright-cli drop --tab=<id> <ref> [--path=<vfs-path>] [--data=<mime/type=value>]  # Drop files/data onto element
 playwright-cli dialog-accept --tab=<id> [text]                   # Accept JS dialog
 playwright-cli dialog-dismiss --tab=<id>                         # Dismiss JS dialog
@@ -348,6 +348,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - **Calling the app's own backend? Use `curlwright`, not `eval-file`.** It is curl's flags run by a `fetch()` inside the tab, so cookies, origin and session come along: `curlwright -s -X POST https://app.example.com/api/items -H 'X-CSRF-Token: abc' -d '{"name":"x"}' --tab=<id>`. `-o <file>` writes a **byte-exact** body, which `eval-file` cannot do at all — that is the only way to pull a binary response out of a page. Without `--tab` it uses the tab already on that origin. `curlwright --help` for the flag list.
 - `state-save` / `state-load` persist auth state (cookies + localStorage) across sessions.
 - `pdf` saves a print-layout PDF; not available in extension mode.
+- `upload` injects VFS files as **raw bytes** (a UTF-8 text round-trip would replace every byte ≥ 0x80 with `EF BF BD`). A leading `eN` / `fNeN` token is a snapshot ref, never a filename — run `snapshot` first; without a ref, focus the file input first. To upload a file named `e2`, pass `./e2` or an absolute path.
 
 ## Low-level CDP escape hatch
 

@@ -134,10 +134,20 @@ function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> 
     writeFile: vi.fn().mockImplementation(async (path: string, content: string | Uint8Array) => {
       files.set(path, content);
     }),
-    readFile: vi.fn().mockImplementation(async (path: string) => {
-      if (files.has(path)) return files.get(path)!;
-      const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
-      throw err;
+    readFile: vi.fn().mockImplementation(async (path: string, options?: { encoding?: string }) => {
+      if (!files.has(path)) {
+        const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
+        throw err;
+      }
+      const stored = files.get(path)!;
+      const encoding = options?.encoding ?? 'utf-8';
+      if (stored instanceof Uint8Array) {
+        if (encoding === 'binary') return stored;
+        // Match VirtualFS: default UTF-8 decode substitutes U+FFFD for high bytes.
+        return new TextDecoder('utf-8').decode(stored);
+      }
+      if (encoding === 'binary') return new TextEncoder().encode(stored);
+      return stored;
     }),
     readTextFile: vi.fn().mockImplementation(async (path: string) => {
       if (files.has(path)) return String(files.get(path)!);
@@ -3972,6 +3982,43 @@ const FRAME_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+/** Issue #2878 probe page: reports file.size and scans for EF BF BD. */
+const UPLOAD_HTML = `<!DOCTYPE html>
+<html>
+<head><title>Upload Probe</title></head>
+<body>
+  <input type="file" id="f" aria-label="File">
+  <pre id="out"></pre>
+  <script>
+    document.getElementById('f').addEventListener('change', async function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      var buf = new Uint8Array(await file.arrayBuffer());
+      var replacementSeqs = 0;
+      for (var i = 0; i + 2 < buf.length; i++) {
+        if (buf[i] === 0xEF && buf[i + 1] === 0xBF && buf[i + 2] === 0xBD) {
+          replacementSeqs++;
+          i += 2;
+        }
+      }
+      var first16 = [];
+      for (var j = 0; j < Math.min(16, buf.length); j++) {
+        first16.push(buf[j].toString(16).padStart(2, '0'));
+      }
+      window.__uploadReport = {
+        name: file.name,
+        size: file.size,
+        byteLength: buf.length,
+        replacementSeqs: replacementSeqs,
+        first16: first16.join(' '),
+        bytes: Array.from(buf)
+      };
+      document.getElementById('out').textContent = JSON.stringify(window.__uploadReport);
+    });
+  </script>
+</body>
+</html>`;
+
 // -- Conditional integration tests -------------------------------------------
 
 const chromePath = findChromeExecutable();
@@ -4009,6 +4056,9 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       } else if (req.url === '/frame.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(FRAME_HTML);
+      } else if (req.url === '/upload.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(UPLOAD_HTML);
       } else {
         res.writeHead(404);
         res.end('Not found');
@@ -4295,6 +4345,68 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       );
       expect(value).toBe('hello world');
     });
+  });
+
+  it('upload of 0x00..0xFF fixture is byte-exact on the page (#2878)', async () => {
+    const fixture = Uint8Array.from({ length: 256 }, (_, i) => i);
+    mockFs._files.set('/allbytes.bin', fixture);
+
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/upload.html`);
+    const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
+    await browser.withTab(targetId, async () => {
+      while (Date.now() < deadline) {
+        try {
+          const ready = await browser.evaluate(
+            `document.readyState === 'complete' && Boolean(document.getElementById('f'))`
+          );
+          if (ready === true || ready === 'true') return;
+        } catch {
+          /* about:blank teardown */
+        }
+        await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+      }
+      throw new Error('upload probe page did not finish loading');
+    });
+
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const focus = await cmd.execute(
+      ['eval', `--tab=${targetId}`, "document.getElementById('f').focus(); 'ok'"],
+      mockCtx
+    );
+    expect(focus.exitCode).toBe(0);
+
+    const uploaded = await cmd.execute(['upload', '/allbytes.bin', `--tab=${targetId}`], mockCtx);
+    expect(uploaded.exitCode).toBe(0);
+    expect(uploaded.stdout).toContain('allbytes.bin');
+
+    const reportDeadline = Date.now() + 10_000;
+    let raw = 'null';
+    while (Date.now() < reportDeadline) {
+      const report = await cmd.execute(
+        ['eval', `--tab=${targetId}`, 'JSON.stringify(window.__uploadReport ?? null)'],
+        mockCtx
+      );
+      raw = report.stdout.trim();
+      if (raw && raw !== 'null') break;
+      await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+    }
+    expect(raw).not.toBe('null');
+    const parsed = JSON.parse(raw) as {
+      name: string;
+      size: number;
+      byteLength: number;
+      replacementSeqs: number;
+      first16: string;
+      bytes: number[];
+    };
+    expect(parsed.size).toBe(256);
+    expect(parsed.byteLength).toBe(256);
+    expect(parsed.replacementSeqs).toBe(0);
+    expect(parsed.bytes).toEqual(Array.from(fixture));
   });
 });
 
@@ -5853,6 +5965,53 @@ describe('playwright-cli upload', () => {
     const result = await cmd.execute(['upload', 'e3', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('upload requires at least one file path');
+  });
+
+  it('does not treat a leading eN token as a file path when no snapshot exists', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['upload', 'e2', '/workspace/file.txt', '--tab=tab-1'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('No snapshot available');
+    expect(result.stderr).not.toMatch(/ENOENT/);
+  });
+
+  it('uploads the 0x00..0xFF fixture without U+FFFD substitution (#2878)', async () => {
+    const fixture = Uint8Array.from({ length: 256 }, (_, i) => i);
+    fs._files.set('/workspace/allbytes.bin', fixture);
+
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        return { result: { value: 1 } };
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '/workspace/allbytes.bin', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+
+    const evalCall = transportCalls.find((c) => c.method === 'Runtime.evaluate');
+    expect(evalCall).toBeDefined();
+    const expression = evalCall!.params['expression'] as string;
+    const match = expression.match(/var filesData = (\[[\s\S]*?\]);/);
+    expect(match).toBeTruthy();
+    const filesData = JSON.parse(match![1]) as Array<{ base64: string }>;
+    const decoded = Uint8Array.from(atob(filesData[0].base64), (c) => c.charCodeAt(0));
+    expect(decoded.length).toBe(256);
+    let replacements = 0;
+    for (let i = 0; i + 2 < decoded.length; i++) {
+      if (decoded[i] === 0xef && decoded[i + 1] === 0xbf && decoded[i + 2] === 0xbd) {
+        replacements++;
+        i += 2;
+      }
+    }
+    expect(replacements).toBe(0);
+    expect(Array.from(decoded)).toEqual(Array.from(fixture));
   });
 });
 

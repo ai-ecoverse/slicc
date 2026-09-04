@@ -75,6 +75,14 @@ export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): Pl
   return state;
 }
 
+/** Snapshot element ref: `e5` in the main frame, `f1e5` in a child frame. */
+export const ELEMENT_REF_RE = /^(f[0-9]+)?e[0-9]+$/;
+
+/** True when `token` is a snapshot ref (`e5`, `f1e5`), not a file path. */
+export function isElementRef(token: string): boolean {
+  return ELEMENT_REF_RE.test(token);
+}
+
 /** Parse a ref like 'f1e5' into { framePrefix: 'f1', isIframe: true } or 'e5' into { framePrefix: '', isIframe: false } */
 export function parseRef(ref: string): { framePrefix: string; isIframe: boolean } {
   const match = ref.match(/^(f[0-9]+)(e[0-9]+)$/);

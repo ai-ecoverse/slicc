@@ -2,15 +2,19 @@
  * Upload subcommand: upload [ref] <file> [file...]
  *
  * Uploads one or more VFS files to a file input element on the page using
- * DataTransfer injection. The optional leading ref (e.g. "e3") targets the
- * element directly via DOM.resolveNode + Runtime.callFunctionOn, which handles
- * the common `<label><input type="file" hidden>` pattern where clicking the
- * label opens the picker but never focuses the hidden input. When no ref is
- * given, falls back to targeting document.activeElement.
+ * DataTransfer injection. Files are read as raw bytes — a UTF-8 text round-trip
+ * substitutes U+FFFD (`EF BF BD`) for every byte >= 0x80 (#2878). The optional
+ * leading ref (e.g. "e3") targets the element directly via DOM.resolveNode +
+ * Runtime.callFunctionOn, which handles the common
+ * `<label><input type="file" hidden>` pattern where clicking the label opens
+ * the picker but never focuses the hidden input. A leading `eN` / `fNeN` token
+ * is always a ref, never a filename. When no ref is given, falls back to
+ * targeting document.activeElement.
  */
 
-import { requireTab } from '../state.js';
-import type { PlaywrightHandler } from '../types.js';
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import { isElementRef, requireTab } from '../state.js';
+import type { PlaywrightHandler, PlaywrightHandlerCtx, TabSnapshot } from '../types.js';
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -36,13 +40,53 @@ function mimeForFilename(name: string): string {
   return MIME_MAP[ext] ?? 'application/octet-stream';
 }
 
-/** Convert a Uint8Array to a base64 string without relying on spread (avoids stack overflow for large files). */
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+/**
+ * Read a VFS file as raw bytes. Never UTF-8-decodes: a text round-trip
+ * substitutes U+FFFD for every byte >= 0x80 (#2878, same family as #2818).
+ *
+ * If a backend still returns a string, refuse any payload that already
+ * contains U+FFFD rather than uploading a silently mangled File.
+ */
+export async function readUploadBytes(
+  fs: PlaywrightHandlerCtx['fs'],
+  path: string
+): Promise<Uint8Array> {
+  const content = await fs.readFile(path, { encoding: 'binary' });
+  if (content instanceof Uint8Array) return content;
+  if (typeof content !== 'string') {
+    throw new Error(`cannot represent '${path}' faithfully: unexpected file content type`);
   }
-  return btoa(binary);
+  if (content.includes('\uFFFD')) {
+    throw new Error(
+      `cannot represent '${path}' faithfully: file was read as text (contains U+FFFD). ` +
+        'Binary files must be read as bytes, not UTF-8.'
+    );
+  }
+  return new TextEncoder().encode(content);
+}
+
+function parseUploadArgs(
+  positional: string[],
+  snapshot: TabSnapshot | undefined
+): { targetRef: string | null; filePaths: string[] } | { error: string } {
+  if (positional.length === 0) {
+    return { error: 'upload requires at least one file path\n' };
+  }
+  if (!isElementRef(positional[0])) {
+    return { targetRef: null, filePaths: positional };
+  }
+  const targetRef = positional[0];
+  const filePaths = positional.slice(1);
+  if (!snapshot) {
+    return { error: 'No snapshot available. Run "snapshot" first.\n' };
+  }
+  if (!snapshot.refToBackendNodeId.has(targetRef)) {
+    return { error: `Unknown ref "${targetRef}"\n` };
+  }
+  if (filePaths.length === 0) {
+    return { error: 'upload requires at least one file path\n' };
+  }
+  return { targetRef, filePaths };
 }
 
 export const uploadHandler: PlaywrightHandler = async ({
@@ -52,37 +96,23 @@ export const uploadHandler: PlaywrightHandler = async ({
   positional,
   flags,
 }) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'upload requires at least one file path\n', exitCode: 1 };
-  }
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
 
-  // Detect optional leading ref argument (e.g. "e3") targeting a file input directly.
-  let targetRef: string | null = null;
-  let filePaths = positional;
-
   const snapshot = state.snapshots.get(tab.targetId);
-  if (snapshot && positional.length > 0 && snapshot.refToBackendNodeId.has(positional[0])) {
-    targetRef = positional[0];
-    filePaths = positional.slice(1);
+  const parsed = parseUploadArgs(positional, snapshot);
+  if ('error' in parsed) {
+    return { stdout: '', stderr: parsed.error, exitCode: 1 };
   }
+  const { targetRef, filePaths } = parsed;
 
-  if (filePaths.length === 0) {
-    return { stdout: '', stderr: 'upload requires at least one file path\n', exitCode: 1 };
-  }
-
-  // Read files from VFS and encode as base64.
   const files: Array<{ name: string; type: string; base64: string }> = [];
   for (const filePath of filePaths) {
-    const content = await fs.readFile(filePath);
+    const bytes = await readUploadBytes(fs, filePath);
     const name = filePath.split('/').pop() ?? filePath;
-    const type = mimeForFilename(name);
-    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-    const base64 = uint8ToBase64(bytes);
-    files.push({ name, type, base64 });
+    files.push({ name, type: mimeForFilename(name), base64: uint8ToBase64(bytes) });
   }
 
   if (targetRef) {

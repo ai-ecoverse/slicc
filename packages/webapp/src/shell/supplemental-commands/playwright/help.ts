@@ -101,7 +101,9 @@ Commands:
                          Supports teleport flags and --mobile emulation.
   tab-close|close --tab=<id> Close tab by targetId
   upload [ref] <file> [file...] --tab=<id>
-                         Upload VFS files to a file input (optional ref targets hidden inputs)
+                         Upload VFS files to a file input as raw bytes (optional snapshot
+                         ref targets hidden inputs; without a ref the input must be focused.
+                         A leading eN token is a ref, never a filename.)
   pdf --tab=<id> [--filename=path]
                          Save page as PDF (not available in extension mode)
   state-save [filename] --tab=<id> [--filename=path]
