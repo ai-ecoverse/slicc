@@ -2291,6 +2291,121 @@ describe('Bridge handlePanelMessage dispatch', () => {
     expect(event?.payload.scoop.name).toBe('NewCone');
   });
 
+  it('holds a replay racing the create until the brief is buffered (#2840)', async () => {
+    // `registerScoop` is what LISTS the new cone to the page, and the page
+    // selects a cone the instant its real record lands — so its
+    // `request-scoop-messages` routinely arrives before `handleConeCreate`
+    // gets to the brief. Answering there is not a dropped request but a wrong
+    // one: every source is legitimately empty, the panel wholesale-replaces
+    // the thread with nothing, and the prompt the user just typed only
+    // reappears when the client's 5 s replay recovery re-asks.
+    let listed: () => void = () => {};
+    const registered = new Promise<void>((resolve) => {
+      listed = resolve;
+    });
+    let finishRegistration: () => void = () => {};
+    mockOrchestrator.registerScoop.mockImplementation(async (scoop: any) => {
+      // The roster the replay handler reads answers for the new cone from
+      // here on, exactly as a real registration's list update does.
+      mockOrchestrator.getScoops.mockReturnValue([scoop]);
+      listed();
+      await new Promise<void>((resolve) => {
+        finishRegistration = resolve;
+      });
+    });
+    // No history anywhere: the empty replace is the only thing the pre-fix
+    // handler could have answered with.
+    mockOrchestrator.getScoopContext.mockReturnValue(undefined);
+    mockOrchestrator.getConversationStore = vi.fn(() => ({ load: vi.fn(async () => null) }));
+    (bridge as any).sessionStore = { load: vi.fn().mockResolvedValue(undefined), save: vi.fn() };
+
+    const created = (bridge as any).handlePanelMessage({
+      type: 'cone-create',
+      name: 'Reviewer',
+      prompt: 'review the docs',
+    });
+    await registered;
+    const jid = mockOrchestrator.registerScoop.mock.calls[0][0].jid;
+    const replayed = (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: jid,
+    });
+    // Nothing is answered while the create is still in flight — an empty
+    // replace here IS the bug, not a benign early answer.
+    await Promise.resolve();
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-messages-replaced')).toBe(
+      false
+    );
+
+    finishRegistration();
+    await created;
+    await replayed;
+
+    const replace = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === jid
+    ) as any;
+    expect(replace?.payload.messages.map((m: any) => m.content)).toEqual(['review the docs']);
+  });
+
+  it('opens the replay gate on the brief being buffered, not on the turn finishing (#2840)', async () => {
+    // The gate must not wait for the model: a cone whose first turn runs for a
+    // minute would otherwise leave the thread showing the PREVIOUS cone for a
+    // minute, which is a worse bug than the one it fixes.
+    let finishTurn: () => void = () => {};
+    mockOrchestrator.handleMessage.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishTurn = resolve;
+        })
+    );
+    mockOrchestrator.registerScoop.mockImplementation(async (scoop: any) => {
+      mockOrchestrator.getScoops.mockReturnValue([scoop]);
+    });
+
+    const created = (bridge as any).handlePanelMessage({
+      type: 'cone-create',
+      name: 'Reviewer',
+      prompt: 'review the docs',
+    });
+    // Let the create reach its `handleMessage` await (the turn), which never
+    // settles until this test says so.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const jid = mockOrchestrator.registerScoop.mock.calls[0][0].jid;
+    await (bridge as any).handlePanelMessage({ type: 'request-scoop-messages', scoopJid: jid });
+
+    const replace = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === jid
+    ) as any;
+    expect(replace?.payload.messages.map((m: any) => m.content)).toEqual(['review the docs']);
+    finishTurn();
+    await created;
+  });
+
+  it('does not wedge later replays when the registration throws (#2840)', async () => {
+    mockOrchestrator.registerScoop.mockRejectedValue(new Error('quota exceeded'));
+    await expect(
+      (bridge as any).handlePanelMessage({
+        type: 'cone-create',
+        name: 'Reviewer',
+        prompt: 'review the docs',
+      })
+    ).rejects.toThrow('quota exceeded');
+
+    // A gate nothing will ever open would hang every replay for this jid
+    // forever — the thread would then be stuck on the PREVIOUS cone with no
+    // 5 s recovery to rescue it, which is strictly worse than the bug.
+    const jid = mockOrchestrator.registerScoop.mock.calls[0][0].jid;
+    mockOrchestrator.getScoops.mockReturnValue([
+      { jid, name: 'Reviewer', folder: 'cone-reviewer', parentJid: null, addedAt: '2' },
+    ]);
+    (bridge as any).getBuffer(jid).push({ id: 'm1', role: 'user', content: 'still here' });
+    await (bridge as any).handlePanelMessage({ type: 'request-scoop-messages', scoopJid: jid });
+    const replace = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === jid
+    ) as any;
+    expect(replace?.payload.messages.map((m: any) => m.content)).toEqual(['still here']);
+  });
+
   it('cone-create on an empty roster bootstraps the primary cone (folder cone, label sliccy)', async () => {
     mockOrchestrator.getScoops.mockReturnValue([]);
     await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'Cone' });
