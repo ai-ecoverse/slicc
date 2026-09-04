@@ -38,6 +38,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'tr',
       'tee',
       'diff',
+      'patch',
       'column',
       'comm',
       'egrep',
