@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "6.128.6",
+  "version": "6.128.7",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
