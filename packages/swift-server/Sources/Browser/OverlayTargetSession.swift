@@ -485,7 +485,6 @@ final class OverlayTargetSession: @unchecked Sendable {
         let urlString = request["url"] as? String ?? ""
         let method = request["method"] as? String ?? "GET"
         let headers = request["headers"] as? [String: String] ?? [:]
-        let postData = request["postData"] as? String
         let accept = headers["Accept"] ?? headers["accept"] ?? ""
 
         // Only proxy HTML document requests; everything else goes through unchanged.
@@ -494,9 +493,26 @@ final class OverlayTargetSession: @unchecked Sendable {
             return
         }
 
+        // A document POST (a navigating <form>, including multipart with a file)
+        // is a byte pipe. Recover the exact bytes or fail — never forward a guess.
+        let postBody = decodeCdpRequestPostBody(request: request)
+        if case .unrecoverable(let reason) = postBody {
+            logger.error(
+                "Cannot recover POST body byte-exactly; failing instead of forwarding corrupt bytes",
+                metadata: [
+                    "url": .string(String(urlString.prefix(80))),
+                    "reason": .string(reason),
+                ])
+            _ = await sendCommand(
+                method: "Fetch.failRequest",
+                params: ["requestId": requestId, "errorReason": "Failed"])
+            return
+        }
+        let requestBody = postBody.forwardableBytes
+
         logger.info("Proxying request to strip CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
         do {
-            let proxied = try await fetchAndStripCSP(urlString: urlString, method: method, headers: headers, postData: postData)
+            let proxied = try await fetchAndStripCSP(urlString: urlString, method: method, headers: headers, body: requestBody)
             // Fire-and-forget to match node-server (electron-controller.ts
             // `send('Fetch.fulfillRequest', ...)` with no await). Awaiting
             // here is what previously tripped the 10s command timeout on
@@ -540,7 +556,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         urlString: String,
         method: String,
         headers: [String: String],
-        postData: String?
+        body: Data?
     ) async throws -> ProxiedResponse {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
@@ -550,9 +566,9 @@ final class OverlayTargetSession: @unchecked Sendable {
         for (name, value) in headers where !stripRequestHeaders.contains(name.lowercased()) {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        if let postData {
-            request.httpBody = Data(base64Encoded: postData) ?? postData.data(using: .utf8)
-        }
+        // Raw bytes only. The old `Data(base64Encoded:) ?? .utf8` fallback either
+        // mis-read a latin1 body as base64 or UTF-8-expanded it (#2886).
+        request.httpBody = body
 
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {

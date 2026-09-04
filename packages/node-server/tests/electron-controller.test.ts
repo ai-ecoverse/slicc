@@ -7,6 +7,7 @@ import {
   BRIDGE_ROLE_LEADER,
   BRIDGE_ROLE_QUERY_PARAM,
   buildThinOverlayAppUrl,
+  decodeCdpRequestPostBody,
   ElectronOverlayInjector,
   findMatchingElectronAppPids,
   isOverlayEgressBlockError,
@@ -1643,6 +1644,248 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
 
       injector._testingCloseConnections();
     } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe('decodeCdpRequestPostBody (#2886 — overlay document POST stays byte-exact)', () => {
+  const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+
+  it('recovers every byte 0x00..0xFF from postDataEntries', () => {
+    const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [{ bytes: all.toString('base64') }],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    // The old `proxyReq.write(postData)` hop UTF-8-expanded this to 384 bytes.
+    expect(result.bytes.length).toBe(256);
+    expect(result.bytes.equals(all)).toBe(true);
+  });
+
+  it('concatenates multi-part postDataEntries in order (multipart boundary + JPEG part)', () => {
+    const head = Buffer.from('--b\r\nContent-Disposition: form-data; name="f"\r\n\r\n', 'latin1');
+    const tail = Buffer.from('\r\n--b--\r\n', 'latin1');
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [
+        { bytes: head.toString('base64') },
+        { bytes: JPEG_SOI.toString('base64') },
+        { bytes: tail.toString('base64') },
+      ],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.equals(Buffer.concat([head, JPEG_SOI, tail]))).toBe(true);
+  });
+
+  it('prefers postDataEntries over a lossy postData string for the same request', () => {
+    const result = decodeCdpRequestPostBody({
+      // What Chrome rendered into the JSON string (latin1-mapped, unusable).
+      postData: JPEG_SOI.toString('latin1'),
+      hasPostData: true,
+      postDataEntries: [{ bytes: JPEG_SOI.toString('base64') }],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.equals(JPEG_SOI)).toBe(true);
+  });
+
+  it('accepts an ASCII postData string (ordinary urlencoded form post)', () => {
+    const body = 'name=ada&note=hello+world%C3%A9';
+    const result = decodeCdpRequestPostBody({ postData: body, hasPostData: true });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.toString('latin1')).toBe(body);
+    expect(result.bytes.length).toBe(body.length);
+  });
+
+  it('refuses a non-ASCII postData string instead of guessing a codec', () => {
+    const result = decodeCdpRequestPostBody({
+      postData: JPEG_SOI.toString('latin1'),
+      hasPostData: true,
+    });
+    expect(result.kind).toBe('unrecoverable');
+  });
+
+  it('refuses a file/blob entry Chrome exposes without bytes', () => {
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [{ bytes: Buffer.from('--b\r\n', 'latin1').toString('base64') }, {}],
+    });
+    expect(result.kind).toBe('unrecoverable');
+  });
+
+  it('refuses hasPostData with the body dropped, and passes a bodyless navigation through', () => {
+    expect(decodeCdpRequestPostBody({ hasPostData: true }).kind).toBe('unrecoverable');
+    expect(decodeCdpRequestPostBody({}).kind).toBe('none');
+    expect(decodeCdpRequestPostBody({ postData: '', hasPostData: false }).kind).toBe('none');
+  });
+});
+
+describe('ElectronOverlayInjector Fetch proxy document POST (#2886)', () => {
+  /** Drive the injector to the point where the Fetch proxy is active. */
+  async function escalateToFetchProxy(
+    harness: FakeCdpHarness,
+    servePort: number
+  ): Promise<ElectronOverlayInjector> {
+    const injector = ElectronOverlayInjector._createForTesting({ servePort, probeDelayMs: 20 });
+    injector._testingConnectToTarget({
+      id: '1',
+      type: 'page',
+      title: 'AEM Desktop',
+      url: 'file:///Applications/AEM%20Desktop.app/index.html',
+      webSocketDebuggerUrl: harness.url,
+    });
+    await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload after first probe');
+    harness.socket()?.send(JSON.stringify({ method: 'Page.loadEventFired', params: {} }));
+    await harness.waitFor((m) => m.method === 'Fetch.enable', 'Fetch.enable escalation');
+    return injector;
+  }
+
+  /** Fake CDP target whose overlay probe always reports a missing host. */
+  function makeEscalatingHarness(): Promise<FakeCdpHarness> {
+    return startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'no-host' } } })
+        );
+      }
+    });
+  }
+
+  /** Origin that records the exact bytes of every request body it receives. */
+  async function startEchoOrigin(): Promise<{
+    url: string;
+    bodies: Buffer[];
+    contentLengths: Array<string | undefined>;
+    close: () => Promise<void>;
+  }> {
+    const bodies: Buffer[] = [];
+    const contentLengths: Array<string | undefined> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks));
+        contentLengths.push(req.headers['content-length']);
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<html>ok</html>');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Failed to bind echo origin');
+    return {
+      url: `http://127.0.0.1:${address.port}/upload`,
+      bodies,
+      contentLengths,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it('forwards a multipart document POST byte-for-byte (no UTF-8 expansion)', async () => {
+    const servePort = 5711;
+    const harness = await makeEscalatingHarness();
+    const origin = await startEchoOrigin();
+    try {
+      const injector = await escalateToFetchProxy(harness, servePort);
+
+      const head = Buffer.from(
+        '--b\r\nContent-Disposition: form-data; name="f"; filename="p.jpg"\r\n' +
+          'Content-Type: image/jpeg\r\n\r\n',
+        'latin1'
+      );
+      const jpeg = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+      const tail = Buffer.from('\r\n--b--\r\n', 'latin1');
+      const body = Buffer.concat([head, jpeg, tail]);
+
+      harness.socket()?.send(
+        JSON.stringify({
+          method: 'Fetch.requestPaused',
+          params: {
+            requestId: 'interception-1',
+            request: {
+              url: origin.url,
+              method: 'POST',
+              headers: {
+                Accept: 'text/html,application/xhtml+xml',
+                'Content-Type': 'multipart/form-data; boundary=b',
+                // Stale length from the browser — must be re-derived, not forwarded.
+                'Content-Length': '999',
+              },
+              hasPostData: true,
+              postDataEntries: [
+                { bytes: head.toString('base64') },
+                { bytes: jpeg.toString('base64') },
+                { bytes: tail.toString('base64') },
+              ],
+            },
+          },
+        })
+      );
+
+      await harness.waitFor(
+        (m) => m.method === 'Fetch.fulfillRequest',
+        'Fetch.fulfillRequest after proxying the POST'
+      );
+      expect(origin.bodies.length).toBe(1);
+      expect(origin.bodies[0].length).toBe(body.length);
+      expect(origin.bodies[0].equals(body)).toBe(true);
+      expect(origin.contentLengths[0]).toBe(String(body.length));
+
+      injector._testingCloseConnections();
+    } finally {
+      await origin.close();
+      await harness.close();
+    }
+  });
+
+  it('fails the request instead of forwarding a body it cannot reconstruct', async () => {
+    const servePort = 5711;
+    const harness = await makeEscalatingHarness();
+    const origin = await startEchoOrigin();
+    try {
+      const injector = await escalateToFetchProxy(harness, servePort);
+
+      harness.socket()?.send(
+        JSON.stringify({
+          method: 'Fetch.requestPaused',
+          params: {
+            requestId: 'interception-2',
+            request: {
+              url: origin.url,
+              method: 'POST',
+              headers: { Accept: 'text/html' },
+              hasPostData: true,
+              // A `<input type=file>` part: Chrome exposes the entry with no bytes.
+              postDataEntries: [{}],
+            },
+          },
+        })
+      );
+
+      const failed = await harness.waitFor(
+        (m) => m.method === 'Fetch.failRequest',
+        'Fetch.failRequest for an unrecoverable body'
+      );
+      expect((failed.params as { errorReason?: string })?.errorReason).toBe('Failed');
+      expect(origin.bodies.length).toBe(0);
+      expect(harness.messages.some((m) => m.method === 'Fetch.fulfillRequest')).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await origin.close();
       await harness.close();
     }
   });

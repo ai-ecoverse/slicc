@@ -775,6 +775,40 @@ reader doesn't go hunting for a launcher that never died.
 
 **Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
 
+### The overlay CSP-strip proxy is a DIFFERENT hop
+
+The Electron / Sliccstart overlay has its own proxy, and it is **not**
+`/api/fetch-proxy`. When `Page.setBypassCSP` + a reload still leave the overlay
+iframe blocked, the injector escalates to CDP `Fetch.enable` and re-issues the
+app's **HTML document** requests itself — `electron-controller.ts`
+(`handleFetchRequestPaused` → Node `http`/`https`) and
+`OverlayTargetSession.swift` (`fetchAndStripCSP` → `URLSession`) — then answers
+with `Fetch.fulfillRequest` minus the CSP headers. It is gated on
+`Accept: text/html` only; unlike `/api/fetch-proxy` it has no Content-Type
+classifier, so nothing there protects a binary body.
+
+A document POST is still a byte pipe: a navigating
+`<form enctype="multipart/form-data">` sends `Accept: text/html` and a body that
+is not UTF-8. Writing CDP's `request.postData` string straight to the socket
+UTF-8-expanded every byte ≥0x80 (`80` → `C2 80`), and the Swift side's
+`Data(base64Encoded:) ?? .utf8` additionally mis-decoded a latin1 body that
+happened to look like base64 — both behind a **successful** fulfill (#2886).
+
+Both floats now share one rule, `decodeCdpRequestPostBody`
+(`electron-controller.ts` / `OverlayPostBody.swift`):
+
+| Source                                                | Treatment                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `postDataEntries[].bytes`                             | Base64 over the wire → byte-exact. Preferred; `postData` is deprecated in CDP |
+| `postData`, pure ASCII                                | UTF-8 == latin1 == the raw bytes, so it cannot be lossy                       |
+| `postData`, non-ASCII, no entries                     | **Unrecoverable** → `Fetch.failRequest`                                       |
+| An entry with no `bytes` (a `<input type=file>` part) | **Unrecoverable** → `Fetch.failRequest`                                       |
+| `hasPostData` with the body dropped                   | **Unrecoverable** → `Fetch.failRequest`                                       |
+
+Failing is deliberate: a corrupt upload the origin accepts is worse than a
+visible network error. `Content-Length` is re-derived from the bytes actually
+forwarded — the intercepted header counts the browser's original body.
+
 ## Origin Contract: Forbidden Headers & Default-Origin Fallback
 
 **The Problem**
