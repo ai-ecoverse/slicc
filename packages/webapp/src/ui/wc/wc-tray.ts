@@ -312,10 +312,19 @@ export function buildFollowerOptions(
   };
   /** The live per-unit transcript subscription; re-pointed with the selection. */
   let unitWatch: Unsubscribe | null = null;
+  /** The unit `unitWatch` is pointed at, so a re-point for it is a no-op. */
+  let watchedUnit: string | null = null;
   const watchUnit = (jid: string): void => {
+    // Already watching it: `subscribe` SEEDS a new listener synchronously with
+    // its cached snapshot, so tearing down and re-subscribing would replay the
+    // whole transcript — and `onScoopsList` fires on the leader's 5 s roster
+    // interval, which would re-render the thread (disposing and rehydrating
+    // every dip, and moving the scroll) four times a minute.
+    if (watchedUnit === jid && unitWatch) return;
     unitWatch?.();
+    watchedUnit = jid;
     unitWatch = workUnits.subscribe(jid, (event) => {
-      if (event.type !== 'snapshot' || selectedScoopJid !== jid) return;
+      if (event.type !== 'snapshot' || watchedUnit !== jid) return;
       const messages = event.snapshot.messages as unknown as ChatMessage[];
       const controller = getController();
       controller?.loadMessages(messages, event.snapshot.queuedIds);
@@ -402,6 +411,9 @@ export function buildFollowerOptions(
         workUnits.resetSelection();
         unitWatch?.();
         unitWatch = null;
+        // The next session re-points from its own first frame; a remembered
+        // unit here would make that re-point a no-op.
+        watchedUnit = null;
         modelSurface.reset();
       }
     },

@@ -171,6 +171,49 @@ describe('role-switch follower model controls', () => {
 });
 
 describe('role-switch follower status', () => {
+  it('does not re-render the transcript on every roster push', () => {
+    const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
+    const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
+    const options = buildFollowerOptions(
+      {
+        refs: {
+          composerMeta: document.createElement('div'),
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
+        browser: {},
+        client: { sendSetFollowerForwarding: vi.fn() },
+        window: { localStorage: { getItem: vi.fn(() => null) } },
+        getController: () => controller,
+        addSprinkle: vi.fn(),
+        removeSprinkle: vi.fn(),
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      } as never,
+      'https://tray.example/join/token',
+      () => null
+    );
+    const roster = [
+      { jid: 'research', name: 'research', folder: 'research', parentId: null, isCone: true },
+    ] as never;
+
+    options.onScoopsList?.(roster, 'research');
+    options.onSnapshot?.(
+      [{ id: 'a1', role: 'assistant', content: 'hi', timestamp: 1 }] as never,
+      'research'
+    );
+    expect(controller.loadMessages).toHaveBeenCalledTimes(1);
+
+    // The leader broadcasts `scoops.list` on a 5 s interval. Re-pointing the
+    // subscription for the unit already being watched would replay the cached
+    // snapshot each time — the thread re-rendering four times a minute, with
+    // every dip disposed and rehydrated and the scroll moved.
+    controller.loadMessages.mockClear();
+    options.onScoopsList?.(roster, 'research');
+    options.onScoopsList?.(roster, 'research');
+    expect(controller.loadMessages).not.toHaveBeenCalled();
+  });
+
   it('re-establishes snapshot busy state and ignores statuses for another scoop', () => {
     const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
     const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
