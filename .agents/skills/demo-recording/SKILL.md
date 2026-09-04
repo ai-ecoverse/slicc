@@ -632,10 +632,11 @@ Use `-` and `->` instead.
 Upload the recording with `gh`'s repeatable `--attach` flag. It needs
 **gh >= 2.99** — check with `gh --version` before recording, because a failed
 upload after a long capture wastes the whole run. The file is uploaded to
-`https://github.com/user-attachments/assets/<uuid>` and the embed markdown is
-written into the body, so agents get a programmatic upload path (no browser
-drag-and-drop). Supported: `mp4 mov webm` (plus image types), up to 50 files
-per command.
+`https://github.com/user-attachments/assets/<uuid>` and the embed markdown
+lands in the body — appended to the end, or in place if the body references
+the local path (see § Controlling where the media lands) — so agents get a
+programmatic upload path (no browser drag-and-drop). Supported: `mp4 mov webm`
+(plus image types), up to 50 files per command.
 
 `--attach` works on `gh pr comment`, `gh pr create`, `gh pr edit`,
 `gh issue comment` and `gh issue create`:
