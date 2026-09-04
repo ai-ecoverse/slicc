@@ -345,8 +345,8 @@ Unknown commit flags name the switch that was passed (`unknown option 'bogus'`,
 
 `-q`/`--quiet`, `-v`/`--verbose`, `--dry-run`, `--tags`, and `--progress` are
 booleans, so they may appear **before** the remote (`git push -q origin branch`)
-without consuming it as a flag value (#2864). `--dry-run` skips the network
-call.
+without consuming it as a flag value (#2864). `--dry-run` is a local no-op: it
+skips the network call and does not verify that the remote exists.
 
 ### `ipk install -g` / `npm install -g`
 

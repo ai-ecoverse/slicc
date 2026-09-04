@@ -36,9 +36,9 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     default: { 'single-branch': true },
   },
   commit: {
-    string: ['message', 'author', 'date', 'reuse-message', 'reedit-message', 'file', 'cleanup'],
+    string: ['message', 'author', 'date', 'file', 'cleanup'],
     boolean: ['amend', 'all', 'allow-empty'],
-    alias: { m: 'message', a: 'all', C: 'reuse-message', c: 'reedit-message', F: 'file' },
+    alias: { m: 'message', a: 'all', F: 'file' },
   },
   log: {
     string: [

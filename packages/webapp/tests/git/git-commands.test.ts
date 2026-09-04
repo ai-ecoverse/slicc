@@ -2265,6 +2265,37 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('piped subject');
     });
 
+    it('reads -F - from a quoted heredoc', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(`git commit -F - <<'EOF'
+heredoc subject
+
+body with 'quotes' and $not_expanded
+EOF`);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain('heredoc subject');
+      expect(result.stdout).toContain("body with 'quotes' and $not_expanded");
+      const log = await shell.executeCommand('git log --format %s -n 1');
+      expect(log.stdout.trim()).toBe('heredoc subject');
+    });
+
+    it('reads -F - from a heredoc piped through cat', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(`cat <<'EOF' | git commit -F -
+piped-heredoc subject
+
+second paragraph
+EOF`);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain('piped-heredoc subject');
+    });
+
     it('names an unknown long option instead of blaming -m', async () => {
       await git.execute(['init'], '/project');
       const result = await git.execute(['commit', '--bogus', 'x'], '/project');
@@ -2279,6 +2310,20 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(129);
       expect(result.stderr).toContain('unknown switch `Q`');
       expect(result.stderr).not.toContain('switch `m`');
+    });
+
+    it('names unimplemented -C/--reuse-message instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const short = await git.execute(['commit', '-C', 'HEAD'], '/project');
+      expect(short.exitCode).toBe(129);
+      expect(short.stderr).toContain('unknown switch `C`');
+      expect(short.stderr).not.toContain('switch `m`');
+      expect(short.stderr).not.toContain("`-m' or `-F'");
+
+      const long = await git.execute(['commit', '--reuse-message', 'HEAD'], '/project');
+      expect(long.exitCode).toBe(129);
+      expect(long.stderr).toContain('unknown option `reuse-message`');
+      expect(long.stderr).not.toContain('switch `m`');
     });
 
     it('reports that -F requires a value when --file= is empty', async () => {

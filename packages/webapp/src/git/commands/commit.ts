@@ -10,8 +10,6 @@ const COMMIT_FLAG_NAMES = new Set([
   'message',
   'author',
   'date',
-  'reuse-message',
-  'reedit-message',
   'file',
   'cleanup',
   'amend',
@@ -19,8 +17,6 @@ const COMMIT_FLAG_NAMES = new Set([
   'allow-empty',
   'm',
   'a',
-  'C',
-  'c',
   'F',
 ]);
 
