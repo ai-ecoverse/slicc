@@ -419,7 +419,11 @@ drifted:
   re-asks once on timeout, and if that is dropped too it publishes the unit's
   OWN last-known transcript (or an empty one) with `queuedIds` absent, so the
   held pile stands. That answer is emitted, never cached: it is the client's,
-  not the transport's.
+  not the transport's. The fallback timer is cancelled when the replay
+  arrives: a snapshot the transport already answered must not earn a second
+  `requestScoopMessages` 5 s later (#2859). `publishSnapshot` still clears
+  `retriedSnapshots` on success so a later unanswered stretch gets a fresh
+  retry; that mark is the budget, not the cancel.
 - **`resetSelection` drops the dead channel's transcripts.** A reconnect
   re-sends a snapshot and the roster back to back and the roster can win that
   race, so a seed from the previous session could paint a transcript the leader

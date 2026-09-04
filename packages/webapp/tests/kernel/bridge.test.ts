@@ -2376,9 +2376,9 @@ describe('Bridge handlePanelMessage dispatch', () => {
     // selects a cone the instant its real record lands — so its
     // `request-scoop-messages` routinely arrives before `handleConeCreate`
     // gets to the brief. Answering there is not a dropped request but a wrong
-    // one: every source is legitimately empty, the panel wholesale-replaces
-    // the thread with nothing, and the prompt the user just typed only
-    // reappears when the client's 5 s replay recovery re-asks.
+    // one: every source is legitimately empty and the panel wholesale-replaces
+    // the thread with nothing. The client's 5 s recovery only re-asks a
+    // genuinely unanswered snapshot (#2859), so this gate is what waits.
     let listed: () => void = () => {};
     const registered = new Promise<void>((resolve) => {
       listed = resolve;

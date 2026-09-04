@@ -162,4 +162,43 @@ describe('LocalWorkUnitClient replay recovery', () => {
     // and gets its own single retry rather than inheriting the spent budget.
     expect(harness.transcriptRequests).toHaveLength(5);
   });
+
+  it('does not re-ask 5 s after a replay that already landed (#2859)', async () => {
+    const harness = makeLocalHarness();
+    harness.setRoster(ROSTER, 'cone_1');
+    const seen: WorkUnitClientEvent[] = [];
+
+    const pending = harness.client.snapshot('cone_1');
+    // Stay subscribed: recoverUnanswered no-ops when nobody is listening, and
+    // sitting on the unit you just selected is the common case the leak hit.
+    harness.client.subscribe('cone_1', (event) => seen.push(event));
+    expect(harness.transcriptRequests).toEqual(['cone_1']);
+
+    harness.emitSnapshot('cone_1', [{ content: 'prompt', id: 'm1', role: 'user', timestamp: 1 }]);
+    await pending;
+    expect(seen.filter((event) => event.type === 'snapshot')).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(5000);
+    // A timer that was never cancelled would recoverUnanswered here and issue
+    // a second requestScoopMessages, which the panel applies as a wholesale
+    // scoop-messages-replaced (dips disposed, held-queue restore spent).
+    expect(harness.transcriptRequests).toEqual(['cone_1']);
+  });
+
+  it('treats an empty replay as an answer, not as silence (#2859)', async () => {
+    const harness = makeLocalHarness();
+    harness.setRoster(ROSTER, 'cone_1');
+    const pending = harness.client.snapshot('cone_1');
+    harness.client.subscribe('cone_1', () => undefined);
+    expect(harness.transcriptRequests).toEqual(['cone_1']);
+
+    harness.emitSnapshot('cone_1', []);
+    await pending;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // The transport spoke. Wrong or empty content is a kernel-side defect
+    // (#2840 / #2856); this timer only recovers a request that never landed.
+    expect(harness.transcriptRequests).toEqual(['cone_1']);
+  });
 });

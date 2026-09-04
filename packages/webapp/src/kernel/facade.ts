@@ -151,10 +151,11 @@ export class Bridge implements KernelFacade {
    * {@link handleConeCreate} gets to the brief, and the page selects a cone
    * the instant its real record lands — so its `request-scoop-messages`
    * routinely arrives inside that window. Answering it there is not a dropped
-   * request but a WRONG one: every source is legitimately empty, the panel
-   * wholesale-replaces the thread with nothing, and the prompt the user just
-   * typed does not reappear until the client's 5 s replay recovery re-asks.
-   * A replay for a unit still being created waits for the create instead.
+   * request but a WRONG one: every source is legitimately empty and the panel
+   * wholesale-replaces the thread with nothing. The client's 5 s recovery
+   * only re-asks a genuinely unanswered snapshot (#2859), so an empty replace
+   * would stay empty. A replay for a unit still being created waits for the
+   * create instead.
    */
   private readonly conesBeingCreated = new Map<string, Promise<void>>();
   /** Current assistant message ID per scoop */

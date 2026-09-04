@@ -122,7 +122,10 @@ export class LocalWorkUnitClient implements WorkUnitClient {
   /** Emit a snapshot to this unit's subscribers and settle anyone awaiting it. */
   private publishSnapshot(id: WorkUnitId, snapshot: WorkUnitSnapshot): void {
     // The transport is answering for this unit again, so a future unanswered
-    // request earns its own retry rather than inheriting this one's.
+    // request earns its own retry rather than inheriting this one's. Keep
+    // clearing this mark: it is the fresh-budget rule, not the way a landed
+    // replay suppresses the 5 s fallback — that timer is cancelled in
+    // {@link snapshot} instead (#2859).
     this.retriedSnapshots.delete(id);
     this.lastSnapshots.set(id, snapshot);
     this.emit(id, { snapshot, type: 'snapshot' });
@@ -325,6 +328,8 @@ export class LocalWorkUnitClient implements WorkUnitClient {
    * A kernel that never answers resolves with the roster entry and no
    * messages rather than hanging — and with `queuedIds` ABSENT, which the
    * protocol reads as "nobody could answer" rather than "the queue is empty".
+   * The 5 s fallback is cancelled when a replay lands (#2859); recovery is
+   * only for a request that stayed unanswered.
    */
   snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot> {
     const client = this.deps.getClient();
@@ -339,16 +344,32 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     });
     client.setSelectedScoopJid(id);
     client.requestScoopMessages(id);
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     const fallback = new Promise<WorkUnitSnapshot | null>((resolve) => {
-      setTimeout(() => {
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = undefined;
         // Drop THIS caller's waiter (not the set: a concurrent call for the
         // same unit still has its own pending promise and its own fallback).
+        // Recover only if this waiter was still outstanding — a replay that
+        // already landed settled it and cleared `retriedSnapshots`, and
+        // recovering then would treat that success as a new unanswered
+        // stretch and re-ask (#2859).
+        const stillWaiting = this.pendingSnapshots.get(id)?.has(resolveReplay) === true;
         this.forgetWaiter(id, resolveReplay);
-        this.recoverUnanswered(id);
+        if (stillWaiting) this.recoverUnanswered(id);
         resolve(this.snapshotFor(id, [], undefined));
       }, SNAPSHOT_TIMEOUT_MS);
     });
-    return Promise.race([replay, fallback]).then((snapshot) => {
+    return Promise.race([
+      replay.then((snapshot) => {
+        if (fallbackTimer !== undefined) {
+          clearTimeout(fallbackTimer);
+          fallbackTimer = undefined;
+        }
+        return snapshot;
+      }),
+      fallback,
+    ]).then((snapshot) => {
       if (!snapshot) throw new Error(`unknown work unit: ${id}`);
       return snapshot;
     });
