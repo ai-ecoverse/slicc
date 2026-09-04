@@ -13,8 +13,12 @@ type CommandResult = { stdout: string; stderr: string; exitCode: number };
  * `hasLocalNodeServer` is the caller's already-resolved topology fact
  * (#2276) — mirrors `WebhookCommandOptions` in `webhook-command.ts`, which
  * `createSupplementalCommands` threads from the SAME composed answer
- * (`shell-and-skills.ts`). Defaults to `true` (node-rest) only for callers
- * outside production wiring, e.g. ad hoc tests.
+ * (`shell-and-skills.ts`). Defaults to `false` when omitted — fails CLOSED
+ * to the worker LickManager path, which works on every float, rather than
+ * assuming the privileged `node-rest` REST path an unwired caller has no
+ * business claiming (round-1 review, #2841: an unwired panel-terminal
+ * construction on `extension-delegate` silently POSTed to a REST endpoint
+ * that doesn't exist there instead of routing through the LickManager).
  */
 export interface CrontaskCommandOptions {
   hasLocalNodeServer?: () => boolean;
@@ -272,7 +276,7 @@ async function handleDelete(
 }
 
 export function createCrontaskCommand(commandOptions: CrontaskCommandOptions = {}): Command {
-  const hasLocalNodeServer = commandOptions.hasLocalNodeServer ?? (() => true);
+  const hasLocalNodeServer = commandOptions.hasLocalNodeServer ?? (() => false);
   return defineCommand('crontask', async (args, ctx) => {
     const subcommand = args[0];
     if (!subcommand || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) {

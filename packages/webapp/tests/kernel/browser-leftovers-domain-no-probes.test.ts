@@ -154,7 +154,10 @@ describe('#2276 slice C — shell/supplemental-commands/crontask-command.ts has 
     expect(source).toContain(
       'export function createCrontaskCommand(commandOptions: CrontaskCommandOptions = {}): Command {'
     );
-    expect(source).toContain('commandOptions.hasLocalNodeServer ?? (() => true)');
+    // Fails CLOSED to the LickManager path (round-1 review on #2841, P1):
+    // an unwired caller must not silently assume the privileged node-rest
+    // REST path.
+    expect(source).toContain('commandOptions.hasLocalNodeServer ?? (() => false)');
   });
 });
 
@@ -173,6 +176,44 @@ describe('#2276 slice C — createSupplementalCommands / HeadlessShellOptions th
 
   it('shell-and-skills.ts reuses the SAME hasLocalNodeServer closure it already built for webhook', () => {
     const source = src('scoops', 'scoop-context', 'shell-and-skills.ts');
+    expect(source).toContain('crontask: { hasLocalNodeServer },');
+  });
+});
+
+describe('#2276 round-1 review on #2841 (P1) — kernel/panel-terminal-host.ts has no float/topology read', () => {
+  // The one production human-typed shell (the panel terminal) was missed in
+  // the original browser+leftovers pass: it had a live `hasLocalNodeServer`
+  // import as a webhook fallback, AND never threaded `crontask` at all — so
+  // after crontask-command.ts stopped defaulting to a raw probe, the panel
+  // terminal's `crontask create` silently assumed node-rest on every float
+  // (Grok's repro: a 404 fetch on extension-delegate where the LickManager
+  // should have been used instead).
+  it('contains none of the float-probe names (besides its own injected parameter names)', () => {
+    const source = src('kernel', 'panel-terminal-host.ts');
+    const found = FLOAT_PROBE_NAMES.filter((n) => n !== 'hasLocalNodeServer').filter((name) =>
+      source.includes(name)
+    );
+    expect(found).toEqual([]);
+  });
+
+  it('does not import hasLocalNodeServer from core/float-topology.js — it is an injected parameter', () => {
+    const source = src('kernel', 'panel-terminal-host.ts');
+    expect(source).not.toMatch(/import\s*\{[^}]*hasLocalNodeServer/);
+    expect(source).not.toContain("from '../core/float-topology.js'");
+  });
+
+  it('threads crontask through to PanelTerminalShell, mirroring webhook', () => {
+    const source = src('kernel', 'panel-terminal-host.ts');
+    expect(source).toContain("crontask?: HeadlessShellOptions['crontask'];");
+    expect(source).toContain('crontask: options.crontask,');
+  });
+
+  it('kernel-worker.ts supplies BOTH webhook and crontask from the one resolved capabilityBroker.adapter', () => {
+    const source = src('kernel', 'kernel-worker.ts');
+    expect(source).toContain(
+      "const hasLocalNodeServer = () => deps.host.capabilityBroker.adapter === 'node-rest';"
+    );
+    expect(source).toContain('webhook: { hasLocalNodeServer },');
     expect(source).toContain('crontask: { hasLocalNodeServer },');
   });
 });

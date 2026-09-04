@@ -31,7 +31,10 @@ describe('crontask command - CLI mode', () => {
 
     mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
-    command = createCrontaskCommand();
+    // node-rest: production wiring resolves this once and injects it — the
+    // default (used only when unwired) now fails CLOSED to false, so CLI
+    // mode must say so explicitly (#2276, round-1 review on #2841).
+    command = createCrontaskCommand({ hasLocalNodeServer: () => true });
   });
 
   afterEach(() => {
@@ -494,6 +497,38 @@ describe('crontask command - CLI mode', () => {
   });
 });
 
+// #2276 round-1 review on #2841 (P1 regression): the constructor's OWN
+// default — used only by a caller that fails to inject a topology answer —
+// must fail CLOSED to the worker LickManager (works on every float), never
+// silently assume the privileged node-rest REST path. `kernel/panel-
+// terminal-host.ts`'s equivalent live-wiring proof is in its own test file.
+describe('crontask command — unwired constructor defaults fail-closed (not fetch)', () => {
+  it('with zero options and no chrome global, still routes through the worker LickManager, never fetch', async () => {
+    vi.stubGlobal('chrome', undefined);
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+    const mockLm: MockLickManager = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'nightly', cron: '0 0 * * *' }),
+      listCronTasks: vi.fn().mockReturnValue([]),
+      deleteCronTask: vi.fn().mockResolvedValue(true),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    try {
+      const command = createCrontaskCommand();
+      const result = await (command as any).execute(
+        ['create', '--name', 'nightly', '--cron', '0 0 * * *'],
+        { cwd: '/', env: {}, fs: {} as any }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(mockLm.createCronTask).toHaveBeenCalledWith('nightly', '0 0 * * *', undefined);
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('crontask command - Extension mode', () => {
   let mockLickManager: MockLickManager;
   let command: ReturnType<typeof createCrontaskCommand>;
@@ -765,7 +800,9 @@ describe('crontask command — thin-bridge routing', () => {
     vi.stubGlobal('chrome', undefined);
     mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
-    command = createCrontaskCommand();
+    // node-rest (thin bridge IS a node-server peer) — explicit for the same
+    // reason as CLI mode above: the default now fails closed to false.
+    command = createCrontaskCommand({ hasLocalNodeServer: () => true });
     setLocalApiBaseUrl('http://localhost:5710');
     setBridgeToken('bridge-tok');
   });
