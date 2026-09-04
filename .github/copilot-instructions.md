@@ -52,10 +52,10 @@ origins, comparisons without slash normalization.
 ## 10. Layer import direction (Major)
 
 Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
-(even types/helpers) and relative imports out of `packages/webapp/src` (→
-`@slicc/shared-ts`); move down, never grow baselines. Registries move wholesale,
-never re-declare; setter injection needs a registrar in each reading realm.
-`isExtensionRealm`/`getChromeExtensionRealm` in `scoops/`/`tools/` → `CapabilityBroker` (#2276).
+and relative imports out of `packages/webapp/src` (→ `@slicc/shared-ts`); move down,
+never grow baselines. Registries move wholesale, never re-declare; setter injection
+needs a registrar in each reading realm. `isExtensionRealm`/`getChromeExtensionRealm`
+in `scoops/`/`tools/`/`kernel/` (not `host.ts`) → `CapabilityBroker` (#2276).
 
 ## 11. Untyped string-keyed bags
 
