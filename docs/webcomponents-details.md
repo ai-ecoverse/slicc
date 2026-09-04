@@ -406,6 +406,33 @@ Non-obvious rules:
   spread alone leaves the nested array shared, so a caller splicing
   `monitor.model` markers would mutate component state.
 
+## Compaction marker (`<slicc-compaction-marker>`)
+
+The transcript seam for one context-compaction round: a hairline rule broken by
+a chip. Three design points, all load-bearing.
+
+- **State on the wire, prose in the component.** The `compaction_notice`
+  AgentEvent carries `trigger` (`threshold` / `overflow` / `idle`) and `state`
+  (`summarizing` / `summarized` / `fallback`), never a sentence. The copy table
+  lives here and a MATCHING one lives in the iOS follower's
+  `CompactionMarkerRow`, so the same envelope reads correctly on both surfaces
+  and neither ships the other's wording. Change one table, change the other. The
+  `discarded` state deliberately has no rendering: the host removes the row,
+  because a transcript that keeps announcing a compaction which did not happen is
+  worse than one that says nothing.
+- **A compaction is not a turn.** This exists because the notice used to be an
+  assistant bubble, fabricated from a fake `message_start` → `content_delta` →
+  `content_done` sequence. That put the model's voice on bookkeeping AND stranded
+  every consumer holding turn state, since nothing closes a fake turn. Anything
+  that renders bookkeeping must not borrow the turn lifecycle to do it.
+- **The degraded state must not skim past.** `fallback` means older messages were
+  dropped with NO summary standing in for them, so it is the one state that
+  changes color. `--amber` straight is unreadable as 11px text on the light
+  canvas, so the ink is `color-mix(--amber 55%, --ink)` — tinted in both themes,
+  legible in both — while the border and wash carry the hue at full strength.
+  The `summarizing` breath is a CSS animation, not a rAF loop: no frame budget,
+  and it pauses with the tab on its own.
+
 ## Slotted containment + chat-prose wrapping
 
 Extended reference for two related Conventions bullets in the package guide.
