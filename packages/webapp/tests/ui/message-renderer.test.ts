@@ -269,3 +269,173 @@ describe('renderToolInput', () => {
     expect(result).toContain('[object Object]');
   });
 });
+
+describe('markdown media', () => {
+  describe('images', () => {
+    it('rewrites a rooted VFS path to a /preview URL', () => {
+      const html = renderMessageContent('![shot](/shared/clip/frame.png)');
+      expect(html).toContain('/preview/shared/clip/frame.png');
+      expect(html).toContain('<img');
+    });
+
+    it('stamps the media class so the gallery grouper and CSS can find it', () => {
+      expect(renderMessageContent('![shot](/shared/a.png)')).toContain('msg__media--image');
+    });
+
+    it('keeps the alt text', () => {
+      expect(renderMessageContent('![a cat](/shared/cat.png)')).toContain('alt="a cat"');
+    });
+
+    it('leaves a remote URL untouched', () => {
+      const html = renderMessageContent('![x](https://example.com/a.png)');
+      expect(html).toContain('src="https://example.com/a.png"');
+      expect(html).not.toContain('/preview/');
+    });
+  });
+
+  describe('videos', () => {
+    it('renders a .mp4 as a video player, not an image', () => {
+      const html = renderMessageContent('![cut](/shared/clip/cut.mp4)');
+      expect(html).toContain('<video');
+      expect(html).not.toContain('<img');
+    });
+
+    it('survives sanitization with its controls intact', () => {
+      const html = renderMessageContent('![cut](/shared/cut.mp4)');
+      expect(html).toContain('controls');
+      expect(html).toContain('preload="metadata"');
+      expect(html).toContain('playsinline');
+    });
+
+    it('points at the /preview URL so the SW serves real bytes', () => {
+      expect(renderMessageContent('![cut](/shared/cut.webm)')).toContain(
+        '/preview/shared/cut.webm'
+      );
+    });
+
+    // `alt` is inert on <video>; carrying it over verbatim would silently drop
+    // the only description the author wrote.
+    it('carries the alt text over as an aria-label, not an alt', () => {
+      const html = renderMessageContent('![the cut](/shared/cut.mp4)');
+      expect(html).toContain('aria-label="the cut"');
+      expect(html).not.toContain('alt=');
+    });
+  });
+
+  describe('dip references', () => {
+    // hydrateDips() looks for img[src$=".shtml"]; a rewritten src or a
+    // <video> would both break the handshake.
+    it('leaves a .shtml reference as a bare img with its original src', () => {
+      const html = renderMessageContent('![palette](/shared/palette.shtml)');
+      expect(html).toContain('src="/shared/palette.shtml"');
+      expect(html).not.toContain('/preview/');
+      expect(html).not.toContain('msg__media');
+    });
+  });
+
+  describe('galleries', () => {
+    it('groups two images on one line into a pair gallery', () => {
+      const html = renderMessageContent('![a](/shared/a.png) ![b](/shared/b.png)');
+      expect(html).toContain('msg__media-gallery');
+      expect(html).toContain('msg__media-gallery--pair');
+    });
+
+    it('groups images written on consecutive lines', () => {
+      const html = renderMessageContent('![a](/shared/a.png)\n![b](/shared/b.png)');
+      expect(html).toContain('msg__media-gallery');
+    });
+
+    it('groups four images as an explicit 2x2 rather than an auto-fit 3 + 1', () => {
+      const html = renderMessageContent(
+        '![a](/shared/a.png) ![b](/shared/b.png) ![c](/shared/c.png) ![d](/shared/d.png)'
+      );
+      expect(html).toContain('msg__media-gallery--quad');
+      expect(html).not.toContain('--pair');
+      expect(html.match(/<img/g)).toHaveLength(4);
+    });
+
+    it('leaves three items to auto-fit — no count modifier', () => {
+      const html = renderMessageContent(
+        '![a](/shared/a.png) ![b](/shared/b.png) ![c](/shared/c.png)'
+      );
+      expect(html).toContain('msg__media-gallery"');
+      expect(html).not.toContain('--pair');
+      expect(html).not.toContain('--quad');
+    });
+
+    it('mixes images and video in one gallery', () => {
+      const html = renderMessageContent('![a](/shared/a.png) ![b](/shared/b.mp4)');
+      expect(html).toContain('msg__media-gallery');
+      expect(html).toContain('<video');
+      expect(html).toContain('<img');
+    });
+
+    it('leaves a lone image as a normal paragraph', () => {
+      const html = renderMessageContent('![a](/shared/a.png)');
+      expect(html).not.toContain('msg__media-gallery');
+    });
+
+    // A caption is content; grouping would silently drop it.
+    it('does not group when the paragraph also carries text', () => {
+      const html = renderMessageContent('before ![a](/shared/a.png) ![b](/shared/b.png) after');
+      expect(html).not.toContain('msg__media-gallery');
+      expect(html).toContain('before');
+      expect(html).toContain('after');
+    });
+
+    it('does not group images across separate paragraphs', () => {
+      const html = renderMessageContent('![a](/shared/a.png)\n\n![b](/shared/b.png)');
+      expect(html).not.toContain('msg__media-gallery');
+    });
+  });
+
+  // Markdown and raw HTML must agree: an agent that reaches for raw HTML to
+  // get a layout markdown cannot express should not silently lose its media.
+  describe('raw HTML media', () => {
+    it('resolves a rooted src on a raw <img>', () => {
+      expect(renderMessageContent('<img src="/shared/a.png">')).toContain('/preview/shared/a.png');
+    });
+
+    it('resolves a rooted src on a raw <video>', () => {
+      const html = renderMessageContent('<video src="/shared/a.mp4" controls></video>');
+      expect(html).toContain('/preview/shared/a.mp4');
+      expect(html).toContain('<video');
+    });
+
+    it('resolves media nested in a raw table', () => {
+      const html = renderMessageContent(
+        '<table><tr><td><img src="/shared/a.png"></td></tr></table>'
+      );
+      expect(html).toContain('/preview/shared/a.png');
+    });
+
+    it('leaves a raw .shtml dip reference verbatim', () => {
+      expect(renderMessageContent('<img src="/shared/p.shtml">')).toContain(
+        'src="/shared/p.shtml"'
+      );
+    });
+
+    it('leaves a remote src alone', () => {
+      expect(renderMessageContent('<img src="https://e.com/a.png">')).toContain(
+        'src="https://e.com/a.png"'
+      );
+    });
+
+    it('does not double-resolve markdown-emitted media', () => {
+      const html = renderMessageContent('![a](/shared/a.png)');
+      expect(html.match(/\/preview\//g)).toHaveLength(1);
+    });
+  });
+
+  describe('sanitization', () => {
+    it('strips a javascript: image href instead of rewriting it', () => {
+      const html = renderMessageContent('![x](javascript:alert(1))');
+      expect(html).not.toContain('javascript:alert');
+    });
+
+    it('drops an onerror handler from raw video HTML', () => {
+      const html = renderMessageContent('<video src="/x.mp4" onerror="alert(1)"></video>');
+      expect(html).not.toContain('onerror');
+    });
+  });
+});

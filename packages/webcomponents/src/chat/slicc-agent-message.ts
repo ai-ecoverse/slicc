@@ -66,6 +66,26 @@ slicc-agent-message .body pre code { background: none; border: none; color: var(
 slicc-agent-message .body table { display: block; max-width: 100%; width: fit-content; overflow-x: auto; border-collapse: collapse; margin: 2px 0 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; }
 slicc-agent-message .body th, slicc-agent-message .body td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; }
 slicc-agent-message .body th { background: var(--ghost); font-weight: 600; }
+/* Inline media from markdown ![alt](path). Both elements cap at the column
+   width and keep their aspect ratio, so a 4K frame cannot widen the transcript.
+   The dark checkerboard-free neutral backdrop keeps a transparent PNG legible
+   in both themes while the poster/first frame decodes. */
+slicc-agent-message .body .msg__media { display: block; max-width: 100%; height: auto; margin: 8px 0; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ctx) 6%, var(--canvas)); }
+/* A clip needs a floor: preload="metadata" means the element has no
+   intrinsic height until metadata lands, and a 0px-tall video with controls is
+   unclickable. */
+slicc-agent-message .body .msg__media--video { width: 100%; min-height: 120px; background: #000; }
+slicc-agent-message .body .msg__media--image { cursor: zoom-in; }
+/* Two or more adjacent media items lay out as a grid instead of a tall stack,
+   so a batch of frames stays glanceable and the prose after it remains on
+   screen. auto-fit + minmax collapses to one column in a narrow chat pane. */
+slicc-agent-message .body .msg__media-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+/* Two and four both want an explicit two-column grid: left to auto-fit, four
+   items land as a lopsided 3 + 1 rather than a balanced 2 x 2. */
+slicc-agent-message .body .msg__media-gallery--pair,
+slicc-agent-message .body .msg__media-gallery--quad { grid-template-columns: repeat(2, 1fr); }
+slicc-agent-message .body .msg__media-gallery .msg__media { margin: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+slicc-agent-message .body .msg__media-gallery .msg__media--video { min-height: 0; object-fit: contain; }
 slicc-agent-message .plan { list-style: none; margin: 4px 0 0; padding: 0; }
 slicc-agent-message .plan li { position: relative; padding-left: 20px; margin: 5px 0; font-size: 14px; }
 slicc-agent-message .plan li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px; border-radius: 50%; }

@@ -33,7 +33,11 @@ const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
 const ROOT_CLAUDE_MAX_CHARS = 15000;
-const AGENT_CLAUDE_MAX_BYTES = 3000;
+// Raised from 3000 in the markdown-media change: the file had 5 bytes of
+// headroom, and inline image/video syntax has no other discovery path (there
+// is no `--help` for markdown). Everything still in the file is a deliberate
+// instruction, so the budget moved rather than the guidance being thinned.
+const AGENT_CLAUDE_MAX_BYTES = 3300;
 const COPILOT_INSTRUCTIONS_MAX_CHARS = 4000;
 
 const measureChars = (text) => text.length;

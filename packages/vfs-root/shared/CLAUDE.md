@@ -33,9 +33,11 @@ Often missed:
 
 One scoop per sprinkle, named identically. Cone MUST NOT write `.shtml`/run `sprinkle` — delegate via `feed_scoop`. See `man sprinkle`.
 
-## Dips
+## Dips and media
 
-Inline `shtml` chat widgets — sandboxed, ephemeral, lick-only; the cone writes them directly (buttons emit `slicc.lick(...)`). Persistent UI → Sprinkles. Authoring: `/workspace/skills/dips/SKILL.md`.
+`![x](/abs/path)` renders inline: images and video (mp4/webm/mov), 2+ per paragraph = gallery. Absolute paths only; beats `open`, a tab per file. Raw HTML renders too (sanitized; VFS paths resolve) when you need layout — but a ```html fence only shows source.
+
+Interactive → a dip: sandboxed inline `shtml`, cone-written (buttons emit `slicc.lick(...)`). Persistent UI → Sprinkles. Authoring: `/workspace/skills/dips/SKILL.md`.
 
 ## Licks
 

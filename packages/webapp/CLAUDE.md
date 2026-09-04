@@ -128,6 +128,12 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
 - **Tool-output images**: `<img:data:…>` markers are parsed in exactly one place
   (`base/image-markers.ts`) so every consumer agrees what is an image; marker-shaped prose
   and markers sliced mid-payload stay inert.
+- **Markdown media in messages**: `![alt](path)` carries images AND video — `base/message-media.ts`
+  decides which element, and rewrites rooted VFS paths through `base/preview-url.ts`. A bare
+  `/shared/x.png` in an `<img src>` hits the SPA fallback, which answers **200 + `text/html`**,
+  so the element fails to decode with nothing logged; always route media through `/preview/*`.
+  Video needs `video` in the DOMPurify allowlist (`ui/message-renderer.ts`) or it is deleted
+  silently. `.shtml` refs are dips and must stay untouched for `hydrateDips()`.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and extension. The
   thin extension runs no dynamic code itself — realms, WASM, sprinkles/dips run in the hosted
   leader tab / kernel worker.
