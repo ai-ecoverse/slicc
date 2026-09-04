@@ -23,7 +23,7 @@ import { formatMessageTimestamp, initTimestampPreference } from '../timestamp-pr
 // preventing a flash of unstyled timestamps on page load.
 initTimestampPreference();
 
-import type { ToolProgressEvent } from '@slicc/shared-ts';
+import type { ChatCompactionMarker, ToolProgressEvent } from '@slicc/shared-ts';
 import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
@@ -1031,6 +1031,9 @@ const CHAIN_BREAK_TAGS = new Set([
   'slicc-error-card',
   'slicc-delegation-line',
   'slicc-day-separator',
+  // A compaction seam is a discontinuity in the thread — clustering tool rows
+  // across it would hoist calls from before the summary in with calls after it.
+  'slicc-compaction-marker',
 ]);
 
 function isChainBreak(node: Node): boolean {
@@ -1226,6 +1229,24 @@ function errorCardEl(message: ChatMessage, readOnly: boolean): HTMLElement {
   return el('slicc-error-card', attrs);
 }
 
+/**
+ * `slicc-compaction-marker` for a compaction-marker row. The wire carries
+ * state, not prose, so nothing is worded here — the element derives its own
+ * copy from `trigger` + `state` (the iOS follower's `CompactionMarkerRow`
+ * holds the matching table).
+ *
+ * A `discarded` marker never reaches this function: the chat controller
+ * removes the row instead of rendering it, because a round that kept nothing
+ * must stop claiming a compaction happened (#2843).
+ */
+function compactionMarkerEl(marker: ChatCompactionMarker): HTMLElement {
+  return el('slicc-compaction-marker', {
+    trigger: marker.trigger,
+    state: marker.state,
+    ...(marker.transcriptPath ? { transcript: marker.transcriptPath } : {}),
+  });
+}
+
 /** Rendering options shared by {@link messageEls} and {@link buildThreadChildren}. */
 export interface MessageRenderOptions {
   /**
@@ -1237,6 +1258,14 @@ export interface MessageRenderOptions {
 
 /** Elements for a single chat message, in thread order. */
 export function messageEls(message: ChatMessage, opts: MessageRenderOptions = {}): HTMLElement[] {
+  // Ahead of the lick check: a compaction row is bookkeeping, and nothing about
+  // the message it rides on (role, source, an empty body) should be able to
+  // reclassify it. A `discarded` marker is not a row at all — belt to the chat
+  // controller's braces, so a persisted history that somehow carries one does
+  // not resurrect a retracted announcement.
+  if (message.compaction) {
+    return message.compaction.state === 'discarded' ? [] : [compactionMarkerEl(message.compaction)];
+  }
   if (message.source === 'lick') return [lickCardEl(message)];
   if (message.source === 'delegation' || message.channel === 'delegation') {
     return delegationEls(message);

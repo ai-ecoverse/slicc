@@ -1283,43 +1283,116 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     client = new OffscreenClient(callbacks);
   });
 
-  function collect(): Array<{ type: string; messageId?: string; text?: string }> {
-    const events: Array<{ type: string; messageId?: string; text?: string }> = [];
-    client.createAgentHandle().onEvent((e) => events.push(e as (typeof events)[number]));
+  type CollectedEvent = {
+    type: string;
+    messageId?: string;
+    text?: string;
+    marker?: { trigger: string; state: string; transcriptPath?: string };
+  };
+
+  function collect(): CollectedEvent[] {
+    const events: CollectedEvent[] = [];
+    client.createAgentHandle().onEvent((e) => events.push(e as CollectedEvent));
     return events;
   }
 
-  it('renders "summarizing" as a standalone completed bubble', () => {
+  function phase(state: string, extra: Record<string, unknown> = {}, jid = 'cone_123'): void {
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: jid,
+      state,
+      ...extra,
+    });
+  }
+
+  it('emits one compaction_notice for the opening phase, not a fake turn', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
 
-    simulateMessage('offscreen', {
-      type: 'compaction-state',
-      scoopJid: 'cone_123',
-      state: 'summarizing',
-    });
+    phase('summarizing');
 
-    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta', 'content_done']);
-    expect(events[1].text).toContain('compacting history');
-    // All three events target the same synthetic bubble.
-    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+    // The whole point of #2843: no `message_start`, so nothing downstream
+    // declares the cone busy for a round nobody is waiting on.
+    expect(events.map((e) => e.type)).toEqual(['compaction_notice']);
+    expect(events[0].marker).toEqual({ trigger: 'threshold', state: 'summarizing' });
     expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
       trigger: 'threshold',
     });
   });
 
-  it('renders "fallback" as a truncation notice and stays silent for other states', () => {
+  it('settles the SAME row on the terminal phase instead of appending a second', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
 
-    for (const state of ['extracting-memory', 'idle', 'fallback']) {
-      simulateMessage('offscreen', { type: 'compaction-state', scoopJid: 'cone_123', state });
+    phase('summarizing', { trigger: 'idle' });
+    phase('idle', { trigger: 'idle' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
+  it('ignores extracting-memory: it changes nothing the row shows', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('extracting-memory');
+
+    expect(events).toHaveLength(1);
+    // The callback still sees every phase — only the ROW is unchanged.
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks a degraded round fallback', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('fallback');
+    phase('idle');
+
+    // `idle` after a settled round has no open row left to touch.
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'fallback']);
+  });
+
+  it('retracts the row when the round was cancelled', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle' });
+    phase('cancelled', { trigger: 'idle' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'discarded']);
+    expect(events[1].messageId).toBe(events[0].messageId);
+  });
+
+  // A round whose opening phase never reached this panel (the tab attached
+  // mid-round) has no row here, so a terminal phase must not conjure one.
+  it('stays silent for a terminal phase with no open row', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    for (const state of ['idle', 'fallback', 'cancelled', 'extracting-memory']) {
+      phase(state);
     }
 
-    // Only 'fallback' produced a bubble.
-    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta', 'content_done']);
-    expect(events[1].text).toContain('Compaction summarization failed');
-    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(3);
+    expect(events).toHaveLength(0);
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(4);
+  });
+
+  it('gives each round its own row', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('idle');
+    phase('summarizing');
+    phase('idle');
+
+    const ids = events.map((e) => e.messageId as string);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[0]).not.toBe(ids[2]);
   });
 
   it('does not disturb an in-flight assistant stream', () => {
@@ -1334,11 +1407,7 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     });
     const streamId = events[0].messageId;
 
-    simulateMessage('offscreen', {
-      type: 'compaction-state',
-      scoopJid: 'cone_123',
-      state: 'summarizing',
-    });
+    phase('summarizing');
     simulateMessage('offscreen', {
       type: 'agent-event',
       scoopJid: 'cone_123',
@@ -1347,30 +1416,41 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     });
 
     // The stream resumes into ITS bubble — no fresh message_start, same id —
-    // rather than being captured by (or appended to) the notice bubble.
+    // and the marker row carries an id of its own so a real stream can never
+    // append into it.
     const tail = events[events.length - 1];
     expect(tail).toMatchObject({ type: 'content_delta', text: 'part two', messageId: streamId });
-    const noticeIds = events
-      .filter((e) => e.type === 'content_done')
-      .map((e) => e.messageId as string);
-    expect(noticeIds).toHaveLength(1);
-    expect(noticeIds[0]).not.toBe(streamId);
+    const markers = events.filter((e) => e.type === 'compaction_notice');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].messageId).not.toBe(streamId);
   });
 
-  it('drops notices for non-selected scoops but still forwards the state callback', () => {
+  it('drops rows for non-selected scoops but still forwards the state callback', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
 
-    simulateMessage('offscreen', {
-      type: 'compaction-state',
-      scoopJid: 'scoop_other',
-      state: 'fallback',
-    });
+    phase('summarizing', {}, 'scoop_other');
 
     expect(events).toHaveLength(0);
-    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'fallback', {
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'summarizing', {
       trigger: 'threshold',
     });
+  });
+
+  // Bookkeeping runs BEFORE the selection gate, so a round that spans a switch
+  // closes its own id out instead of leaving a row id stranded forever.
+  it('closes out a round whose scoop was selected only for the terminal phase', () => {
+    client.setSelectedScoopJid('scoop_other');
+    const events = collect();
+
+    phase('summarizing');
+    client.setSelectedScoopJid('cone_123');
+    phase('idle');
+    // The next round opens cleanly rather than reusing the stranded id.
+    phase('summarizing');
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarized', 'summarizing']);
+    expect(events[0].messageId).not.toBe(events[1].messageId);
   });
 
   it('carries the erase intent on clear-chat only when asked', async () => {
@@ -1383,39 +1463,42 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     expect(clears[1]).not.toHaveProperty('discardLiveSnapshot');
   });
 
-  it('words an idle round as one and appends the transcript pointer', () => {
+  // Trigger and transcript path ride the wire; the WORDING is the renderer's.
+  it('carries the trigger and the transcript pointer, not prose', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
 
-    simulateMessage('offscreen', {
-      type: 'compaction-state',
-      scoopJid: 'cone_123',
-      state: 'summarizing',
+    phase('summarizing', { trigger: 'idle', transcriptPath: '/sessions/live-cone-abc.md' });
+
+    expect(events[0].marker).toEqual({
       trigger: 'idle',
+      state: 'summarizing',
       transcriptPath: '/sessions/live-cone-abc.md',
     });
-
-    expect(events[1].text).toContain('Cone idle — compacting history in the background');
-    expect(events[1].text).toContain('Full transcript: /sessions/live-cone-abc.md');
+    expect(events[0].text).toBeUndefined();
     expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
       trigger: 'idle',
       transcriptPath: '/sessions/live-cone-abc.md',
     });
   });
 
-  it('keeps the threshold wording for an overflow round and omits a missing pointer', () => {
+  it('omits transcriptPath entirely when the round wrote no snapshot', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
 
-    simulateMessage('offscreen', {
-      type: 'compaction-state',
-      scoopJid: 'cone_123',
-      state: 'summarizing',
-      trigger: 'overflow',
-    });
+    phase('summarizing', { trigger: 'overflow' });
 
-    expect(events[1].text).toContain('Context window almost exceeded');
-    expect(events[1].text).not.toContain('Full transcript');
+    expect(events[0].marker).toEqual({ trigger: 'overflow', state: 'summarizing' });
+    expect(events[0].marker).not.toHaveProperty('transcriptPath');
+  });
+
+  it('defaults a trigger-less phase to threshold', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+
+    expect(events[0].marker?.trigger).toBe('threshold');
   });
 });
 

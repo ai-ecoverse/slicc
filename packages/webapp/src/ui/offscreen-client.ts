@@ -68,9 +68,27 @@ import {
  */
 const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
 
+import type { CompactionMarkerState } from '../scoops/chat-types.js';
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
+
+/**
+ * Compaction PHASE (what the round is doing) → marker STATE (what the row
+ * says). `extracting-memory` never reaches this map: it is a phase of a round
+ * whose row is already up, and it changes nothing the row shows.
+ */
+const COMPACTION_MARKER_STATE: Record<
+  'summarizing' | 'fallback' | 'cancelled' | 'idle',
+  CompactionMarkerState
+> = {
+  summarizing: 'summarizing',
+  fallback: 'fallback',
+  cancelled: 'discarded',
+  // `idle` is the resting state the compactor reaches after a round it did
+  // NOT abort — so for a row still open, the history really was summarized.
+  idle: 'summarized',
+};
 
 // Compile-time guard: the real `LickEvent`'s carrier fields must stay
 // assignable to the wire mirror `ForwardedLickEvent` (messages.ts can't import
@@ -160,7 +178,7 @@ export interface OffscreenClientCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle',
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'cancelled' | 'idle',
     detail: CompactionNoticeDetail
   ) => void;
   /**
@@ -191,6 +209,15 @@ export class OffscreenClient implements KernelClientFacade {
   private scoops: RegisteredScoop[] = [];
   private scoopStatuses = new Map<string, ScoopTabState['status']>();
   private currentMessageId = new Map<string, string>();
+  /**
+   * Transcript-row id of each scoop's OPEN compaction round, keyed by jid.
+   * Set by the round's opening phase and consumed by its terminal one, so a
+   * round is exactly one row that settles (or retracts) in place instead of a
+   * fresh bubble per phase. Deliberately separate from `currentMessageId`: a
+   * compaction row must never become the target a real assistant stream
+   * appends to (#2843).
+   */
+  private compactionNoticeIds = new Map<string, string>();
   /**
    * Tool calls in flight per scoop — incremented on `tool_start`, decremented
    * on the matching `tool_end`. A scoop is in the `tool` phase while this is
@@ -1340,38 +1367,55 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
-   * Surface the two compaction phases worth a transcript line (#1985) as a
-   * standalone, already-completed assistant bubble. The notice id is
-   * deliberately NOT recorded in `currentMessageId`, so an in-flight (or
-   * subsequent) real assistant stream keeps appending to its own bubble —
-   * routing the notice through the response path instead would overwrite the
-   * streaming buffer and, for non-cone scoops, poison the completion summary
-   * sent back to the cone.
+   * Surface a compaction round as its own transcript row (#1985) via the
+   * dedicated `compaction_notice` event.
+   *
+   * This used to fake an assistant turn (`message_start` → `content_delta` →
+   * `content_done`). Two things were wrong with that. The `message_start`
+   * made `WcChatController` declare the cone busy and nothing ever cleared it
+   * — `content_done` does not, no `turn_end` follows a notice, and a live
+   * float's scoop-status broadcasts only fire on a CHANGE, which an idle round
+   * never causes because it never leaves `ready`. Every later submission then
+   * parked in the queued stack while the agent answered it anyway, and the
+   * bubbles surfaced dozens of rows after their own replies. The notice was
+   * also prose on the wire, so it could not be restyled, retracted, or
+   * rendered by a follower that words things differently (#2843).
+   *
+   * One row per ROUND: `noticeIds` holds the id from the opening phase so the
+   * terminal phase updates that row instead of appending a second one, and
+   * `cancelled` retracts it entirely.
    */
   private renderCompactionNotice(
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle',
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'cancelled' | 'idle',
     detail: CompactionNoticeDetail
   ): void {
-    if (scoopJid !== this.selectedScoopJid) return;
-    let notice: string;
-    if (state === 'summarizing') {
-      notice =
-        detail.trigger === 'idle'
-          ? 'Cone idle — compacting history in the background…'
-          : 'Context window almost exceeded — compacting history…';
-    } else if (state === 'fallback') {
-      notice = 'Compaction summarization failed — continuing with older messages truncated.';
-    } else {
-      return;
+    // `extracting-memory` is a phase of a round already announced by
+    // `summarizing`; it changes nothing the row shows.
+    if (state === 'extracting-memory') return;
+    const existing = this.compactionNoticeIds.get(scoopJid);
+    // A terminal phase with no open row is a round whose opening phase never
+    // reached this panel (it started before the tab attached, or against a
+    // scoop that was not selected). There is nothing to settle or retract.
+    if (state !== 'summarizing' && !existing) return;
+    if (state === 'idle' || state === 'cancelled' || state === 'fallback') {
+      this.compactionNoticeIds.delete(scoopJid);
     }
-    // The pointer is the user-facing half of the snapshot: the same path
-    // the agent was told about, so both can find what the summary replaced.
-    if (detail.transcriptPath) notice += ` Full transcript: ${detail.transcriptPath}`;
-    const noticeId = `compaction-${scoopJid}-${uid()}`;
-    this.emitToUI({ type: 'message_start', messageId: noticeId });
-    this.emitToUI({ type: 'content_delta', messageId: noticeId, text: notice });
-    this.emitToUI({ type: 'content_done', messageId: noticeId });
+    const messageId = existing ?? `compaction-${scoopJid}-${uid()}`;
+    if (state === 'summarizing') this.compactionNoticeIds.set(scoopJid, messageId);
+    // Selection is checked AFTER the bookkeeping so a round that spans a scoop
+    // switch still closes its own id out; the row itself belongs to the
+    // selected thread only.
+    if (scoopJid !== this.selectedScoopJid) return;
+    this.emitToUI({
+      type: 'compaction_notice',
+      messageId,
+      marker: {
+        trigger: detail.trigger,
+        state: COMPACTION_MARKER_STATE[state],
+        ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
+      },
+    });
   }
 
   private handleScoopStatus(msg: ScoopStatusMsg): void {

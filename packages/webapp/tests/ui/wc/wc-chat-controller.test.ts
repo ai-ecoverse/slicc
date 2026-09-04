@@ -1531,3 +1531,154 @@ describe('WcChatController readOnlyToolUi (tray follower tool_ui rendering)', ()
     expect(thread.querySelector('[data-tool-ui-request="req-1"]')).toBeNull();
   });
 });
+
+/**
+ * A compaction is bookkeeping, not a turn. The predecessor faked an assistant
+ * turn to get a notice into the transcript, which left `#processing` stuck at
+ * `true` for the rest of the session: every later send parked in the queued
+ * stack while the agent answered it anyway, so bubbles surfaced dozens of rows
+ * after their own replies (#2843). These tests are that bug's headstone.
+ */
+describe('WcChatController compaction markers (#2843)', () => {
+  let thread: HTMLElement;
+  let agent: FakeAgent;
+  let controller: WcChatController;
+  let processingStates: boolean[];
+
+  beforeEach(() => {
+    installWcDomStubs();
+    document.body.replaceChildren();
+    thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    agent = new FakeAgent();
+    processingStates = [];
+    controller = new WcChatController({
+      thread,
+      agent,
+      onProcessingChange: (processing) => processingStates.push(processing),
+    });
+  });
+
+  const notice = (
+    messageId: string,
+    state: 'summarizing' | 'summarized' | 'fallback' | 'discarded',
+    extra: { trigger?: 'idle' | 'threshold' | 'overflow'; transcriptPath?: string } = {}
+  ): void => {
+    agent.emit({
+      type: 'compaction_notice',
+      messageId,
+      marker: { trigger: extra.trigger ?? 'idle', state, ...extra },
+    });
+  };
+
+  const markers = () => Array.from(thread.querySelectorAll('slicc-compaction-marker'));
+
+  it('renders a marker row without ever going busy', () => {
+    notice('c1', 'summarizing');
+
+    expect(markers()).toHaveLength(1);
+    // THE regression: nothing declared the cone busy for a round nobody is
+    // waiting on, so no queued-stack parking follows.
+    expect(processingStates).toEqual([]);
+  });
+
+  it('does not park a following send in the queued stack', () => {
+    const queuedChanges: Array<readonly { id: string; text: string }[]> = [];
+    const local = document.createElement('slicc-chat-thread');
+    document.body.appendChild(local);
+    const localAgent = new FakeAgent();
+    const ctl = new WcChatController({
+      thread: local,
+      agent: localAgent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+
+    localAgent.emit({
+      type: 'compaction_notice',
+      messageId: 'c1',
+      marker: { trigger: 'idle', state: 'summarizing' },
+    });
+    ctl.sendUserMessage('are you still there?');
+
+    // The bubble lands in the thread NOW, in its own order, instead of being
+    // held back until some later rising edge flushed the stack.
+    expect(local.querySelectorAll('slicc-user-message')).toHaveLength(1);
+    expect(queuedChanges).toEqual([]);
+    expect(localAgent.sent.map((s) => s.text)).toEqual(['are you still there?']);
+  });
+
+  it('updates the row in place on the terminal state', () => {
+    notice('c1', 'summarizing', { transcriptPath: '/sessions/live-cone-a.md' });
+    notice('c1', 'summarized', { transcriptPath: '/sessions/live-cone-a.md' });
+
+    expect(markers()).toHaveLength(1);
+    expect(markers()[0].getAttribute('state')).toBe('summarized');
+    expect(markers()[0].getAttribute('transcript')).toBe('/sessions/live-cone-a.md');
+    expect(controller.getMessages().filter((m) => m.compaction)).toHaveLength(1);
+  });
+
+  it('carries the trigger and the transcript path onto the element', () => {
+    notice('c1', 'summarizing', { trigger: 'overflow', transcriptPath: '/sessions/x.md' });
+
+    expect(markers()[0].getAttribute('trigger')).toBe('overflow');
+    expect(markers()[0].getAttribute('transcript')).toBe('/sessions/x.md');
+  });
+
+  it('omits the transcript attribute when the round wrote no snapshot', () => {
+    notice('c1', 'fallback', { trigger: 'threshold' });
+
+    expect(markers()[0].hasAttribute('transcript')).toBe(false);
+  });
+
+  it('retracts the row when the round is discarded', () => {
+    notice('c1', 'summarizing');
+    notice('c1', 'discarded');
+
+    // Gone from the DOM AND from the model — a persisted history must not
+    // resurrect an announcement of a compaction that never happened.
+    expect(markers()).toHaveLength(0);
+    expect(controller.getMessages().some((m) => m.id === 'c1')).toBe(false);
+  });
+
+  it('is a no-op when a discarded notice arrives with no row open', () => {
+    expect(() => notice('never-seen', 'discarded')).not.toThrow();
+    expect(markers()).toHaveLength(0);
+    expect(controller.getMessages()).toHaveLength(0);
+  });
+
+  it('keeps a real user bubble when a marker is retracted from between rows', () => {
+    controller.sendUserMessage('before');
+    notice('c1', 'summarizing');
+    agent.emit({ type: 'message_start', messageId: 'a1' });
+    agent.emit({ type: 'turn_end', messageId: 'a1' });
+    notice('c1', 'discarded');
+
+    expect(markers()).toHaveLength(0);
+    expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+    expect(controller.getMessages().map((m) => m.id)).toContain('a1');
+  });
+
+  it('does not capture a real assistant stream that follows it', async () => {
+    notice('c1', 'summarizing');
+    agent.emit({ type: 'message_start', messageId: 'a1' });
+    agent.emit({ type: 'content_delta', messageId: 'a1', text: 'hello' });
+    await nextFrame();
+    agent.emit({ type: 'turn_end', messageId: 'a1' });
+
+    // The stream got its own row and its own turn lifecycle: busy on the way
+    // in, not busy on the way out.
+    expect(processingStates).toEqual([true, false]);
+    const assistant = controller.getMessages().find((m) => m.id === 'a1');
+    expect(assistant?.content).toBe('hello');
+    expect(assistant?.compaction).toBeUndefined();
+    expect(markers()).toHaveLength(1);
+  });
+
+  it('gives each round its own row', () => {
+    notice('c1', 'summarizing');
+    notice('c1', 'summarized');
+    notice('c2', 'summarizing', { trigger: 'threshold' });
+
+    expect(markers().map((m) => m.getAttribute('state'))).toEqual(['summarized', 'summarizing']);
+  });
+});
