@@ -121,6 +121,14 @@ describe('id — a scoop', () => {
     expect(result.stdout).not.toContain(`uid=${CONE_UID}`);
   });
 
+  it('names a scoop by its folder even when $USER is missing', async () => {
+    // `/scoops/<folder>/home` is one level deeper than a cone's home, so a
+    // plain basename would name every scoop `home` — an invented identity.
+    const result = await run([], { HOME: '/scoops/researcher/home' });
+    expect(result.stdout).toContain('(researcher)');
+    expect(result.stdout).not.toContain('(home)');
+  });
+
   it('derives a uid that is stable and distinct per folder', () => {
     expect(scoopUid('researcher')).toBe(scoopUid('researcher'));
     expect(scoopUid('researcher')).not.toBe(scoopUid('writer'));

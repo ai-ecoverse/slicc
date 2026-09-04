@@ -137,9 +137,24 @@ export function renderIdentity(identity: Identity): string {
 export async function currentIdentity(ctx: ResolvedCommandContext): Promise<Identity> {
   const home = ctx.env.get('HOME') ?? '';
   const role: IdentityRole = home.startsWith(SCOOP_HOME_PREFIX) ? 'scoop' : 'cone';
-  const fromEnv = ctx.env.get('USER') || (home ? userFromHome(home) : '');
+  const fromEnv = ctx.env.get('USER') || nameFromHome(home, role);
   if (fromEnv) return identityFor(fromEnv, role);
   return identityFor(userFromHome(await resolveHomeDir(homeDirFsFor(ctx.fs))), 'cone');
+}
+
+/**
+ * The user name a home directory implies. A cone's home IS the user
+ * (`/home/<slug>`), but a scoop's is one level deeper —
+ * `/scoops/<folder>/home` — so a scoop's identity is its parent folder.
+ * Taking the basename for both would name every scoop `home`, which is the
+ * kind of plausible-but-invented identity the `USER` operand path refuses to
+ * produce (Claude review on #2871). Unreachable today, since
+ * `buildScoopShellEnv` pins `$USER` for every scoop; correct anyway.
+ */
+function nameFromHome(home: string, role: IdentityRole): string {
+  if (home === '') return '';
+  if (role === 'cone') return userFromHome(home);
+  return home.slice(SCOOP_HOME_PREFIX.length).split('/')[0] ?? '';
 }
 
 /**
