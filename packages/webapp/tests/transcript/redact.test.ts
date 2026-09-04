@@ -309,6 +309,30 @@ describe('redactTranscript schema stability (#2845)', () => {
     expect(conv.messages[1]!.content[1]).toMatchObject({ type: 'tool-call', id: 'call-1' });
   });
 
+  it('still redacts free-form message metadata (source, channel)', async () => {
+    // `source`/`channel` are unconstrained and can hold a scoop name — the same
+    // kind of content kept redactable as conversations[].name. Exempting them
+    // would be fail-open, so they must not be in the structural set.
+    const base = makeTranscriptDocument({ text: 'nothing' });
+    const doc: TranscriptDocumentV1 = {
+      ...base,
+      conversations: [
+        {
+          ...base.conversations[0]!,
+          messages: [
+            { ...base.conversations[0]!.messages[0]!, source: 'vault-scoop', channel: 'vpn' },
+            ...base.conversations[0]!.messages.slice(1),
+          ],
+        },
+      ],
+    };
+    const result = await redactTranscript(doc, new Map(), substringRedactor('v'));
+    const msg = result.document.conversations[0]!.messages[0]!;
+    expect(msg.source).not.toContain('v');
+    expect(msg.channel).not.toContain('v');
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+  });
+
   it('still redacts every content-bearing field the same secret reaches', async () => {
     // Fail-closed is preserved: sparing the schema fields must not spare
     // titles, conversation names, message text, tool input or attachment names.

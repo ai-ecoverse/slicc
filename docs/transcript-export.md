@@ -172,22 +172,33 @@ Pointer to the redacted location. `privacy.redactionCounts` gives per-category t
 
 #### Schema-controlled fields are never redacted
 
-Both detectors run over every _content-bearing_ string in the document — `session.title`,
-conversation names and folders, message text, tool-call `input`, message `error`, and
-`attachments[].originalName` — plus the text attachments themselves.
+Both detectors run over every string in the document **except** two narrow categories, so
+redaction is fail-closed by default — `session.title`, conversation names and folders, message
+text, message `error`, `source`, `channel`, `stopReason`, `model.*`, tool-call `input`, and
+`attachments[].originalName` / `.mimeType` are all still redacted, as are the text attachments.
 
-They deliberately skip the **schema-controlled** fields: enum discriminators
-(`session.state`, `conversations[].kind`, message `role`, content-block `type`,
-`attachments[].handling`), ISO timestamps, SHA-256 hexes, bundle paths, and the ids the
-relational checks join on. Those are machine-generated and cannot carry a secret, while
-known-secret redaction is plain substring replacement — so a stored secret value that merely
-_occurs_ inside one of them would rewrite it into something `validateTranscriptDocumentV1`
-rejects, failing the whole export instead of the one field. A one-character secret makes that
-certain: it turns `"active"` into `"acti⟦REDACTED:…⟧e"`.
+The two exempt categories:
+
+1. **Validator-constrained** — corrupting them fails `validateTranscriptDocumentV1`: the enum
+   discriminators (`session.state`, `session.completeness.status`, `export.format`,
+   `export.producer.application`, `conversations[].kind`, message `role`, content-block `type`,
+   `attachments[].handling` / `.missingReason`), the ISO message `timestamp`, the SHA-256 hex,
+   the bundle `path`, the non-empty tool-call `id` / `name`, and the ids the relational checks
+   join on.
+2. **Join mirrors** — `session.id` and `conversations[].parentConversationId` are not themselves
+   constrained, but each holds a copy of a `conversations[].id` from category 1. Redacting one
+   side and not the other would silently desync the link.
+
+The reason these have to be exempt: known-secret redaction is plain substring replacement, so a
+stored secret value that merely _occurs_ inside one of them would rewrite it into something the
+validator rejects, failing the whole export instead of the one field. A one-character secret makes
+that certain — it turns `"active"` into `"acti⟦REDACTED:…⟧e"`.
 
 The list lives in `isStructuralTranscriptPointer()`
 (`packages/shared-ts/src/transcript-export.ts`), next to the validator that constrains the same
-fields. A field that gains a constraint in the validator needs an entry there too.
+fields. Adding an entry is fail-open, so category 1 must stay in step with the validator: a field
+that gains a constraint there needs an entry here, and a field that loses one should lose its
+entry.
 
 ### Binary attachments — unchanged and potentially sensitive
 

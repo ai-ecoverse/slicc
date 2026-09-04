@@ -188,57 +188,52 @@ export interface TranscriptDocumentV1 {
 // ---------------------------------------------------------------------------
 
 /**
- * RFC 6901 pointers of every string field this schema *constrains* — with
- * array indices normalized to `*`.
- *
- * These are machine-generated: enum discriminators, ISO timestamps, SHA-256
- * hexes, bundle paths and the ids the relational checks below join on. None of
- * them can carry a user or model secret, and all of them are validated by
- * {@link validateTranscriptDocumentV1}.
+ * RFC 6901 pointers of the string fields export redaction must leave
+ * byte-for-byte intact — with array indices normalized to a wildcard segment.
  *
  * Export redaction substitutes known-secret values by plain substring
- * replacement, so any secret value that happens to occur inside one of these
- * fields rewrites it into something the validator then rejects — failing the
- * whole export rather than the one field (#2845). A one-character secret makes
- * that a certainty: `"active"` becomes `"acti⟦REDACTED:…⟧e"` and
+ * replacement, so a secret value that happens to occur inside one of these
+ * fields would rewrite it and break the document (#2845). A one-character
+ * secret makes that a certainty: `"active"` becomes `"acti⟦REDACTED:…⟧e"` and
  * `session.state` no longer matches its enum.
  *
- * Content-bearing siblings are deliberately ABSENT and stay fully redacted:
- * `session.title`, `conversations[].name` / `.folder`, message `.error`,
- * content-block `.text`, tool-call `.input`, and `attachments[].originalName`.
+ * Two categories, and nothing else — every other field stays redacted, so
+ * export remains fail-closed by default:
  *
- * Keep this list in step with the validator: a field that gains a constraint
+ *  1. **Validator-constrained.** Corrupting these fails
+ *     {@link validateTranscriptDocumentV1}: enum discriminators, the ISO
+ *     message timestamp, the SHA-256 hex, the bundle path, non-empty
+ *     tool-call ids, and the ids its relational checks join on.
+ *  2. **Join mirrors.** `conversations[].parentConversationId` and
+ *     `session.id` are not constrained beyond being strings, but each holds a
+ *     copy of a `conversations[].id` from category 1 — `session.id` is the
+ *     cone's own id on the active path. Redacting one side and not the other
+ *     would silently desync the link, so they follow the id they mirror.
+ *
+ * Deliberately ABSENT and still fully redacted: `session.title`,
+ * `conversations[].name` / `.folder`, message `.error` / `.source` /
+ * `.channel` / `.stopReason` / `.model.*`, content-block `.text`, tool-call
+ * `.input`, `attachments[].originalName` / `.mimeType` (redacted metadata by
+ * design — the handling and path decisions read the pre-redaction pending
+ * record), and every unvalidated `createdAt` / `updatedAt` / `generatedAt`.
+ *
+ * Keep category 1 in step with the validator: a field that gains a constraint
  * there needs an entry here, or a secret occurring inside it fails the export.
  */
 const STRUCTURAL_TRANSCRIPT_POINTERS: ReadonlySet<string> = new Set([
-  '/export/id',
-  '/export/generatedAt',
   '/export/format',
   '/export/producer/application',
-  '/export/producer/version',
   '/session/id',
   '/session/state',
-  '/session/createdAt',
-  '/session/updatedAt',
-  '/session/frozenAt',
-  '/session/snapshotAt',
   '/session/completeness/status',
   '/session/completeness/missing/*',
   '/conversations/*/id',
   '/conversations/*/kind',
   '/conversations/*/parentConversationId',
-  '/conversations/*/createdAt',
-  '/conversations/*/updatedAt',
   '/conversations/*/messages/*/id',
   '/conversations/*/messages/*/role',
   '/conversations/*/messages/*/timestamp',
   '/conversations/*/messages/*/toolCallId',
-  '/conversations/*/messages/*/source',
-  '/conversations/*/messages/*/channel',
-  '/conversations/*/messages/*/stopReason',
-  '/conversations/*/messages/*/model/provider',
-  '/conversations/*/messages/*/model/id',
-  '/conversations/*/messages/*/model/api',
   '/conversations/*/messages/*/content/*/type',
   '/conversations/*/messages/*/content/*/id',
   '/conversations/*/messages/*/content/*/name',
@@ -246,10 +241,8 @@ const STRUCTURAL_TRANSCRIPT_POINTERS: ReadonlySet<string> = new Set([
   '/delegations/*/sourceConversationId',
   '/delegations/*/targetConversationId',
   '/delegations/*/toolCallId',
-  '/delegations/*/timestamp',
   '/attachments/*/id',
   '/attachments/*/path',
-  '/attachments/*/mimeType',
   '/attachments/*/sha256',
   '/attachments/*/sourceConversationId',
   '/attachments/*/sourceMessageId',
