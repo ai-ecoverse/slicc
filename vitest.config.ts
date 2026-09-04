@@ -222,10 +222,18 @@ export default defineConfig({
         // Repo-level tooling under packages/dev-tools/ (plain .mjs, not a
         // workspace). Co-located *.test.mjs so `npm test` covers the triage
         // logic; no per-package coverage gate applies to this project.
+        // `fileParallelism: false` (#2276 slice D round-1 review, #2843):
+        // check-no-float-probes.test.mjs and check-touched-exemptions.test.mjs
+        // both temporarily overwrite the real, shared
+        // float-probe-baseline.json on disk (there is no injectable path —
+        // both scripts read it via a hardcoded import) and restore it in
+        // `afterEach`; running the two FILES in separate parallel workers
+        // raced their overwrites against each other's reads.
         extends: true,
         test: {
           name: 'dev-tools',
           include: ['packages/dev-tools/**/*.test.mjs'],
+          fileParallelism: false,
         },
       },
       {

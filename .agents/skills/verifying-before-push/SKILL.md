@@ -70,6 +70,13 @@ then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up the layer stack — baseline-ratcheted;
 fix the layering, never grow `layer-back-edge-baseline.json`),
+`lint:no-float-probes` (the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` —
+`isExtensionRealm`, `isChromeExtensionRealm`, `hasLocalNodeServer`, `resolveFloatTopology`,
+`getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
+`canConnectToChromeRuntime`, `getExtensionDelegateId`, `setExtensionDelegateId` — plus the raw
+`__slicc_connect_mode` global-bag key; no new read under `scoops/`, `tools/`, `kernel/` except
+`kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — baseline-ratcheted,
+starts empty; ask the injected `CapabilityBroker` instead, never grow `float-probe-baseline.json`),
 `lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `// biome-ignore lint/plugin: <reason>`, never grow
@@ -209,7 +216,7 @@ node packages/dev-tools/tools/check-touched-exemptions.mjs
 CI's `lint` job runs this step **after** `lint:ci`. It is **not** part of `npm run lint`, so
 it is easy to miss locally.
 
-The gate enforces five "debt lists" of files grandfathered out of a rule:
+The gate enforces seven "debt lists" of files grandfathered out of a rule:
 
 - `complexity.noExcessiveCognitiveComplexity` (`biome.json` `overrides`; cap: cognitive
   complexity **≤ 25**)
@@ -221,6 +228,11 @@ The gate enforces five "debt lists" of files grandfathered out of a rule:
   synchronous callbacks or conditions)
 - Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json`; cap:
   **0** imports pointing up the stack `fs → shell/git → cdp → tools → core → scoops → ui`)
+- Float/topology probes (`packages/dev-tools/tools/float-probe-baseline.json`; cap: **0**
+  reads of the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` plus the raw
+  `__slicc_connect_mode` global-bag key, under `scoops/`, `tools/`, `kernel/` except
+  `kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — ask the
+  injected `CapabilityBroker` instead)
 - Untyped string-keyed bags (`packages/dev-tools/tools/record-string-unknown-baseline.json`;
   cap: **0** `Record<string, unknown>` in non-test source)
 
@@ -232,12 +244,15 @@ in the same change, you pay the file's debt down and remove its entry:
 - Back-edge baseline: remove every up-the-stack import from the file (move the pure helper
   into the lower layer), then run
   `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`.
+- Float-probe baseline: ask the injected `CapabilityBroker` (or take a composition-time
+  answer) instead of reading the probe directly, then run
+  `node packages/dev-tools/tools/check-no-float-probes.mjs --update`.
 - `Record<string, unknown>` baseline: replace every occurrence in the file with a named type
   for the shape you actually accept (or, for a genuinely untyped payload, a
   `// biome-ignore lint/plugin: <reason>` line), then run
   `node packages/dev-tools/tools/check-record-string-unknown.mjs --update`.
 
-Treat all six as one-way ratchets: never add a file to a debt list to silence it — the gate
+Treat all seven as one-way ratchets: never add a file to a debt list to silence it — the gate
 also fails when a PR grows any list vs the base ref. The gate auto-skips on `merge_group` /
 `push` events (it resolves the merge-base against `$GITHUB_BASE_REF`), so always run it
 locally before pushing if you touched a listed file.
@@ -247,8 +262,8 @@ touch a debt-listed file, you must fully pay down that file's debt in the same P
 touching that file.
 
 To check whether a file is exempt, search `biome.json` for its path under a single-rule
-`"off"` override, and `layer-back-edge-baseline.json` / `record-string-unknown-baseline.json`
-for its path key.
+`"off"` override, and `layer-back-edge-baseline.json` / `float-probe-baseline.json` /
+`record-string-unknown-baseline.json` for its path key.
 
 ## Coverage
 
