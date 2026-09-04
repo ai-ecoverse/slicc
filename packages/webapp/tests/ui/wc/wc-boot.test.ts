@@ -60,6 +60,7 @@ import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient, SessionStats } from '../../../src/ui/offscreen-client.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { attachWcClient, prepareWcShell } from '../../../src/ui/wc/wc-live.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 
 function cone(): RegisteredScoop {
   return {
@@ -161,7 +162,7 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     expect(root.querySelector('slicc-shell')).toBeTruthy();
     boot.refs.inputCard.setAttribute('value', 'hello cone');
@@ -190,11 +191,11 @@ describe('prepareWcShell + attachWcClient', () => {
     attachWcClient(boot, fake.client, log);
 
     boot.refs.inputCard.setAttribute('disabled', '');
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
     expect(fake.raw.setSelectedScoopJid).toHaveBeenCalledWith('cone-1');
     expect(fake.raw.requestScoopMessages).toHaveBeenCalledWith('cone-1');
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(false);
-    expect(boot.getSelected()?.jid).toBe('cone-1');
+    expect(boot.getSelected()?.id).toBe('cone-1');
     // Boot default: the first selection wears the navbar eyes until real
     // activity (message/input) moves them.
     expect(boot.refs.switcher.getAttribute('attention')).toBe('cone-1');
@@ -206,7 +207,7 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
     boot.refs.switcher.setAttribute('attention', 'scoop-elsewhere');
 
     boot.refs.inputCard.dispatchEvent(
@@ -221,7 +222,7 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     boot.refs.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
     expect(fake.raw.stopScoop).not.toHaveBeenCalled();
@@ -239,7 +240,7 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
     attachWcClient(boot, fake.client, log);
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     boot.refs.composerMeta.dispatchEvent(
       new CustomEvent('thinking-change', { bubbles: true, detail: { thinking: 'max' } })
@@ -494,7 +495,7 @@ describe('URL state sync (live boot)', () => {
     } as RegisteredScoop;
     fake.raw.getScoops.mockReturnValue([cone(), researcher]);
     attachWcClient(boot, fake.client, log);
-    boot.selectScoop(cone());
+    boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     // Back/forward: the URL now names the scoop context; the thread asks the
     // host to route it via `slicc-url-context`.
@@ -503,7 +504,7 @@ describe('URL state sync (live boot)', () => {
     history.replaceState(null, '', url);
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(fake.raw.setSelectedScoopJid).toHaveBeenLastCalledWith('scoop-r');
-    expect(boot.getSelected()?.jid).toBe('scoop-r');
+    expect(boot.getSelected()?.id).toBe('scoop-r');
     clearUrlParams();
   });
 

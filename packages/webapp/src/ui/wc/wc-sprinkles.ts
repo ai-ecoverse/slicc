@@ -10,6 +10,7 @@
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { SprinkleSendTarget } from '../../shell/sprinkle-manager-handle.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
@@ -451,6 +452,8 @@ export class WcSprinkleZone {
 export interface WireWcSprinklesDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
+  /** The client protocol's roster — the default root is resolved from it (#2382 D2a). */
+  getUnits(): readonly WorkUnitSummary[];
   fs: import('../../fs/virtual-fs.js').VirtualFS;
   /**
    * Standalone kernel-worker id; enables the worker→panel sprinkle-ops
@@ -589,8 +592,8 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     },
     zone.callbacks(),
     () => {
-      const cone = defaultRootOf(client.getScoops());
-      if (cone) client.stopScoop(cone.jid);
+      const cone = defaultRootOf(deps.getUnits());
+      if (cone) client.stopScoop(cone.id);
     },
     {
       // Extension etiquette: auto-open sprinkles pulse for attention instead

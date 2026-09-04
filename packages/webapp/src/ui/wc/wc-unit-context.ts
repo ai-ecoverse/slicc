@@ -8,58 +8,70 @@
  * unchanged; extra cones are addressed by their folder.
  */
 
-import type { RegisteredScoop } from '../../scoops/types.js';
-import { recordToWorkUnitSummary } from '../../work-unit/client/from-record.js';
-import { isReadOnlyUnit, orderUnits, ownerRootOf } from '../../work-unit/client/presentation.js';
-import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
-import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
+import {
+  isReadOnlyUnit,
+  isRootSummary,
+  orderUnits,
+  ownerRootOf,
+} from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
+import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 
-type UnitLike = Pick<RegisteredScoop, 'parentJid' | 'folder' | 'name' | 'assistantLabel'>;
+/**
+ * These helpers read the SUMMARY, not the record (#2382 D2a). Every field they
+ * need — the ownership edge, the folder, the name, the assistant label — is on
+ * the protocol's projection, so the same helper answers for a leader's own
+ * roster and for a follower's, and the shell's selection can be one type.
+ */
+type UnitLike = Pick<WorkUnitSummary, 'role' | 'folder' | 'name' | 'assistantLabel'>;
+
+/** The primary root keeps the historical spellings: chip `sliccy`, context `cone`. */
+function isPrimaryRootSummary(unit: Pick<UnitLike, 'role' | 'folder'>): boolean {
+  return isRootSummary(unit) && unit.folder === PRIMARY_CONE_FOLDER;
+}
 
 /** Switcher chip / tooltip label. */
-export function switcherLabelFor(
-  scoop: Pick<UnitLike, 'parentJid' | 'name' | 'assistantLabel'>
-): string {
-  return isRootUnit(scoop) ? scoop.assistantLabel : scoop.name;
+export function switcherLabelFor(unit: Pick<UnitLike, 'role' | 'name' | 'assistantLabel'>): string {
+  return isRootSummary(unit) ? unit.assistantLabel : unit.name;
 }
 
 /**
  * The `context` attribute of the chat thread, mirrored into `?ctx=`:
  * `cone` (primary root), `cone:<folder>` (extra root), `scoop:<name>` (child).
  */
-export function threadContextFor(scoop: UnitLike): string {
-  if (isPrimaryRoot(scoop)) return 'cone';
-  return isRootUnit(scoop) ? `cone:${scoop.folder}` : `scoop:${scoop.name}`;
+export function threadContextFor(unit: UnitLike): string {
+  if (isPrimaryRootSummary(unit)) return 'cone';
+  return isRootSummary(unit) ? `cone:${unit.folder}` : `scoop:${unit.name}`;
 }
 
 /**
  * Short identifier used where the shell needs a stable unit name rather
  * than a label (lick backpressure notices, the `agent` command's caller).
  */
-export function unitSlugFor(scoop: UnitLike): string {
-  if (isPrimaryRoot(scoop)) return 'cone';
-  return isRootUnit(scoop) ? scoop.folder : scoop.name;
+export function unitSlugFor(unit: UnitLike): string {
+  if (isPrimaryRootSummary(unit)) return 'cone';
+  return isRootSummary(unit) ? unit.folder : unit.name;
 }
 
 /** Resolve a thread/URL context back to a registered unit. */
 export function unitForContext(
-  scoops: readonly RegisteredScoop[],
+  units: readonly WorkUnitSummary[],
   ctx: string
-): RegisteredScoop | undefined {
+): WorkUnitSummary | undefined {
   if (ctx.startsWith('scoop:')) {
     const name = ctx.slice('scoop:'.length);
-    return scoops.find((s) => !isRootUnit(s) && s.name === name);
+    return units.find((unit) => !isRootSummary(unit) && unit.name === name);
   }
   if (ctx.startsWith('cone:')) {
     const folder = ctx.slice('cone:'.length);
-    return scoops.find((s) => isRootUnit(s) && s.folder === folder);
+    return units.find((unit) => isRootSummary(unit) && unit.folder === folder);
   }
-  return defaultRootOf(scoops);
+  return defaultRootOf(units);
 }
 
 /** The primary root when present, else the oldest root. */
-export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredScoop | undefined {
-  return scoops.find((s) => isPrimaryRoot(s)) ?? rootsOf(scoops)[0];
+export function defaultRootOf(units: readonly WorkUnitSummary[]): WorkUnitSummary | undefined {
+  return units.find(isPrimaryRootSummary) ?? units.find(isRootSummary);
 }
 
 /**
@@ -71,18 +83,10 @@ export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredSco
  * record-side entry point: project, order, project back.
  */
 export function orderForSwitcher(
-  scoops: readonly RegisteredScoop[],
+  units: readonly WorkUnitSummary[],
   selectedJid?: string | null
-): RegisteredScoop[] {
-  const byId = new Map(scoops.map((scoop) => [scoop.jid, scoop]));
-  const ordered = orderUnits(
-    scoops.map((scoop) => recordToWorkUnitSummary(scoop)),
-    selectedJid
-  );
-  return ordered.flatMap((unit) => {
-    const scoop = byId.get(unit.id);
-    return scoop ? [scoop] : [];
-  });
+): WorkUnitSummary[] {
+  return [...orderUnits(units, selectedJid)];
 }
 
 /**
@@ -94,14 +98,10 @@ export function orderForSwitcher(
  * before multiple cones existed.
  */
 export function rootForSelection(
-  scoops: readonly RegisteredScoop[],
-  selected: Pick<RegisteredScoop, 'jid' | 'parentJid'> | null | undefined
-): RegisteredScoop | undefined {
-  const owner = ownerRootOf(
-    scoops.map((scoop) => recordToWorkUnitSummary(scoop)),
-    selected?.jid
-  );
-  return (owner && scoops.find((scoop) => scoop.jid === owner.id)) ?? defaultRootOf(scoops);
+  units: readonly WorkUnitSummary[],
+  selected: Pick<WorkUnitSummary, 'id'> | null | undefined
+): WorkUnitSummary | undefined {
+  return ownerRootOf(units, selected?.id) ?? defaultRootOf(units);
 }
 
 /**
@@ -117,11 +117,13 @@ export function rootFolderForContext(ctx: string | null | undefined): string | n
 
 /** Resolve the root that owns a frozen archive's `cone` folder, if it still exists. */
 export function rootForConeFolder(
-  scoops: readonly RegisteredScoop[],
+  units: readonly WorkUnitSummary[],
   folder: string | undefined
-): RegisteredScoop | undefined {
-  if (!folder) return defaultRootOf(scoops);
-  return scoops.find((s) => isRootUnit(s) && s.folder === folder) ?? defaultRootOf(scoops);
+): WorkUnitSummary | undefined {
+  if (!folder) return defaultRootOf(units);
+  return (
+    units.find((unit) => isRootSummary(unit) && unit.folder === folder) ?? defaultRootOf(units)
+  );
 }
 
 /**
@@ -132,8 +134,8 @@ export function rootForConeFolder(
 export type UnitRole = 'cone' | 'scoop';
 
 /** The role of a registered unit: a root is a cone, anything owned is a scoop. */
-export function unitRoleFor(unit: Pick<RegisteredScoop, 'parentJid'>): UnitRole {
-  return isRootUnit(unit) ? 'cone' : 'scoop';
+export function unitRoleFor(unit: Pick<WorkUnitSummary, 'role'>): UnitRole {
+  return isRootSummary(unit) ? 'cone' : 'scoop';
 }
 
 /**

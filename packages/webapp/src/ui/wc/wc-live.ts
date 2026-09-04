@@ -19,7 +19,7 @@ import { registerTranscriptExportService } from '../../transcript/export-provide
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
-import type { Unsubscribe, WorkUnitClient } from '../../work-unit/client/types.js';
+import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import { isRootUnit } from '../../work-unit/policy.js';
 import {
@@ -88,8 +88,8 @@ export interface WcShellBoot {
   refs: WcShellRefs;
   wiring: WcLiveWiring;
   setClient(client: OffscreenClient): void;
-  selectScoop(scoop: RegisteredScoop): void;
-  getSelected(): RegisteredScoop | null;
+  selectScoop(unit: WorkUnitSummary): void;
+  getSelected(): WorkUnitSummary | null;
   clearSelection(): void;
   getController(): WcChatController | null;
   setController(controller: WcChatController): void;
@@ -134,7 +134,7 @@ function reconcileQueueForSwitch(args: {
   destination: string;
   previousJid: string | null;
   readOnly: boolean;
-  roster: readonly RegisteredScoop[];
+  roster: readonly WorkUnitSummary[];
   stashed: { jid: string; items: ChatMessage[] } | null;
 }): { jid: string; items: ChatMessage[] } | null {
   const { controller, deleteQueued, destination, previousJid, readOnly, roster } = args;
@@ -151,8 +151,8 @@ function reconcileQueueForSwitch(args: {
    * behaviour that predates the hold.
    */
   const ownerOf = (jid: string | undefined): string | undefined => {
-    const unit = jid === undefined ? undefined : roster.find((s) => s.jid === jid);
-    return unit ? (rootForSelection(roster, unit)?.jid ?? unit.jid) : undefined;
+    const unit = jid === undefined ? undefined : roster.find((u) => u.id === jid);
+    return unit ? (rootForSelection(roster, unit)?.id ?? unit.id) : undefined;
   };
   const destinationOwner = ownerOf(destination);
   // Snapshot the OLD unit's queued ids and cancel them BEFORE the selection
@@ -233,7 +233,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
 
   let controller: WcChatController | null = null;
   let client: OffscreenClient | null = null;
-  let selected: RegisteredScoop | null = null;
+  let selected: WorkUnitSummary | null = null;
   const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
   let workbench: WorkbenchActivator | null = null;
@@ -255,28 +255,28 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   /** Re-points the transcript subscription; see {@link createUnitWatcher}. */
   const watchUnit = createUnitWatcher(
     () => ensureWorkUnitClient(wiring),
-    () => selected?.jid ?? null,
+    () => selected?.id ?? null,
     (messages, queuedIds) => controller?.loadMessages(messages, queuedIds)
   );
 
-  const selectScoop = (scoop: RegisteredScoop): void => {
-    selected = scoop;
+  const selectScoop = (unit: WorkUnitSummary): void => {
+    selected = unit;
     if (!client) return;
-    const readOnly = isReadOnlyRole(unitRoleFor(scoop));
+    const readOnly = isReadOnlyRole(unitRoleFor(unit));
     stashedQueue = reconcileQueueForSwitch({
       controller,
       deleteQueued: (jid, id) => void client?.deleteQueuedMessage(jid, id).catch(() => undefined),
-      destination: scoop.jid,
+      destination: unit.id,
       previousJid: client.selectedScoopJid,
       readOnly,
-      roster: client.getScoops(),
+      roster: ensureWorkUnitClient(wiring).currentUnits(),
       stashed: stashedQueue,
     });
-    const cachedBackpressure = lickBackpressure.get(scoop.jid);
+    const cachedBackpressure = lickBackpressure.get(unit.id);
     controller?.setLickBackpressure(
       cachedBackpressure?.count ?? 0,
       cachedBackpressure?.waitingMs ?? 0,
-      unitSlugFor(scoop)
+      unitSlugFor(unit)
     );
     // A cone gets its composer back (text and queue intact — the band is
     // hidden, never rebuilt); `applyThreadContext` re-locks it for a scoop.
@@ -284,7 +284,12 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // selection is the first thing rendered under the new mode.
     controller?.setReadOnly(readOnly);
     if (!readOnly) refs.inputCard.removeAttribute('disabled');
-    void applyThreadContext(refs, scoop, ensureWorkUnitClient(wiring).currentUnits());
+    // The thinking level is the one field the summary does not carry, so it is
+    // read from the record at the leaf — off the same roster the rest of this
+    // file reads, never by widening the selection back to a record.
+    void applyThreadContext(refs, unit, ensureWorkUnitClient(wiring).currentUnits(), (id) =>
+      client?.getScoops().find((scoop) => scoop.jid === id)
+    );
     // Selection IS the snapshot call on this protocol (#2382): it sets the
     // panel's selected jid and asks the kernel for the replay, which used to
     // be `setSelectedScoopJid` + `requestScoopMessages` here. The transcript
@@ -298,16 +303,16 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // the kernel leaves the previous transcript up, and the next roster or
     // status event re-drives it. There is no logger in this factory.
     void ensureWorkUnitClient(wiring)
-      .snapshot(scoop.jid)
+      .snapshot(unit.id)
       .catch(() => undefined);
-    watchUnit(scoop.jid);
+    watchUnit(unit.id);
     // Ahead of the replay on purpose: the held-queue reconcile that runs when
     // it lands reads the turn state (see `#applyPendingQueueRestore`, #2354).
-    controller?.setProcessing(client.isProcessing(scoop.jid));
+    controller?.setProcessing(client.isProcessing(unit.id));
     // Boot default for the navbar eyes: until any message/input lands, the
     // first-selected scoop wears them (selection itself is not "activity").
     if (!refs.switcher.hasAttribute('attention')) {
-      refs.switcher.setAttribute('attention', scoop.jid);
+      refs.switcher.setAttribute('attention', unit.id);
     }
     // The strip orders every cone first, then the SELECTED cone's scoops
     // (`orderForSwitcher`), so the descriptors are stale the moment selection
@@ -468,7 +473,7 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
         wiring.fills,
         wiring.phases,
         wiring.awaitingInput,
-        wiring.getSelected()?.jid
+        wiring.getSelected()?.id
       );
     });
   };
@@ -495,13 +500,34 @@ function wireWcBrowserOverlay(
     .catch((err) => log.error('WC browser overlay wiring failed', err));
 }
 
+/**
+ * A record in the shape `switcherLabelFor` reads (#2382 D2a). The chip tips
+ * still walk records — they are a leader-only hover affordance over
+ * `getScoops()` — so the role is derived from the ownership edge here rather
+ * than re-widening the shared helper back onto records.
+ */
+function labelSourceOf(scoop: Pick<RegisteredScoop, 'parentJid' | 'name' | 'assistantLabel'>): {
+  role: 'primary' | 'child';
+  name: string;
+  assistantLabel: string;
+} {
+  return {
+    assistantLabel: scoop.assistantLabel,
+    name: scoop.name,
+    role: isRootUnit(scoop) ? 'primary' : 'child',
+  };
+}
+
 /** Switcher wiring: tab clicks select scoops; hovered segments get LLM tooltips. */
 function wireWcSwitcher(boot: WcShellBoot, client: OffscreenClient): void {
   const { refs } = boot;
   refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const key = (event as CustomEvent<{ key?: string }>).detail?.key;
-    const scoop = client.getScoops().find((s) => s.jid === key);
-    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
+    // The client's roster: a tab click selects a SUMMARY (#2382 D2a).
+    const unit = ensureWorkUnitClient(boot.wiring)
+      .currentUnits()
+      .find((candidate) => candidate.id === key);
+    if (unit && unit.id !== boot.getSelected()?.id) boot.selectScoop(unit);
   });
   wireWcChipTips({
     switcher: refs.switcher,
@@ -522,7 +548,7 @@ function makeTurnFinishedHook(deps: {
 }): () => void {
   return () => {
     deps.triggerPlaceholder();
-    const jid = deps.boot.getSelected()?.jid;
+    const jid = deps.boot.getSelected()?.id;
     // The turn is over and the composer is ready: that scoop's avatar switches
     // from idle's lazy wander to eye contact with the composer (and, if it is
     // kept waiting, the drowse). Set BEFORE the stats refresh so the rebuilt
@@ -578,7 +604,7 @@ export function wireWcChipTips(deps: {
       chip.title = cached.tip;
       return;
     }
-    if (!chip.title) chip.title = switcherLabelFor(scoop);
+    if (!chip.title) chip.title = switcherLabelFor(labelSourceOf(scoop));
     if (!activity || inFlight.has(jid)) return;
     inFlight.add(jid);
     void (async () => {
@@ -590,7 +616,7 @@ export function wireWcChipTips(deps: {
             'no quotes, no trailing period.',
           prompt:
             `Summarize what this agent has been doing.\n` +
-            `Agent: ${isRootUnit(scoop) ? `${switcherLabelFor(scoop)} (a main agent)` : scoop.name}\n` +
+            `Agent: ${isRootUnit(scoop) ? `${switcherLabelFor(labelSourceOf(scoop))} (a main agent)` : scoop.name}\n` +
             `Most recent activity:\n${activity}`,
           maxTokens: 40,
         });
@@ -662,8 +688,8 @@ function wireWcUrlContext(
       void openFrozen(ctx.slice('freezer:'.length));
       return;
     }
-    const scoop = unitForContext(client.getScoops(), ctx);
-    if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
+    const unit = unitForContext(ensureWorkUnitClient(boot.wiring).currentUnits(), ctx);
+    if (unit && unit.id !== boot.getSelected()?.id) boot.selectScoop(unit);
   };
   boot.refs.thread.addEventListener('slicc-url-context', (event) => {
     const ctx = (event as CustomEvent<{ context?: string }>).detail?.context;
@@ -958,7 +984,12 @@ export function attachWcClient(
     // The workbench shows the files and memory of the cone that owns the
     // current selection — the primary's `/workspace` until an extra cone is
     // selected (#2271).
-    getWorkspace: () => ownerWorkspaceFor(client.getScoops(), boot.getSelected() ?? undefined),
+    getWorkspace: () => {
+      // A record operation: the workspace lives on the record, so resolve the
+      // selected SUMMARY back to it at this leaf (#2382 D2a).
+      const id = boot.getSelected()?.id;
+      return ownerWorkspaceFor(client.getScoops(), id ? client.getScoop(id) : undefined);
+    },
     mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
@@ -1016,6 +1047,7 @@ export function attachWcClient(
     refs,
     openVfs,
     client,
+    getUnits: () => workUnits.currentUnits(),
     getController: () => boot.getController(),
     getSelected: () => boot.getSelected(),
     selectScoop: boot.selectScoop,
@@ -1099,6 +1131,8 @@ export function attachWcClient(
       const sprinkles = await wireWcSprinkles({
         refs,
         client,
+        getUnits: () => workUnits.currentUnits(),
+
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
         onAttachImage: makeSprinkleAttachImage(composer, log),
@@ -1158,13 +1192,16 @@ export function attachWcClient(
           addSprinkle: (name, title, element) => zoneCallbacks.addSprinkle(name, title, element),
           removeSprinkle: (name) => zoneCallbacks.removeSprinkle(name),
           getController: () => boot.getController(),
-          getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
+          getSelectedJid: () => boot.getSelected()?.id ?? 'cone',
           agentHandle,
           workUnits,
           restoreLocalChrome: () => {
             boot.wiring.refreshScoops?.();
             const selected = boot.getSelected();
-            if (selected) void applyThreadContext(refs, selected, workUnits.currentUnits());
+            if (selected)
+              void applyThreadContext(refs, selected, workUnits.currentUnits(), (id) =>
+                client.getScoop(id)
+              );
           },
           openFs: openReader,
           openWriter: async () => (await openVfs()).writer,
@@ -1213,8 +1250,8 @@ export function attachWcClient(
         stat: async (path) => (await openVfs()).reader.stat(path),
       },
       getActiveSessionInfo: () => {
-        const cone = defaultRootOf(client.getScoops());
-        return { id: cone?.jid ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
+        const cone = defaultRootOf(ensureWorkUnitClient(boot.wiring).currentUnits());
+        return { id: cone?.id ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
       },
       version: __SLICC_VERSION__,
     });
@@ -1261,6 +1298,7 @@ export function attachWcClient(
         refs,
         client,
         workUnits,
+        getUnits: () => workUnits.currentUnits(),
         log,
         onExportTranscript,
         shortcuts: refs.shortcuts,

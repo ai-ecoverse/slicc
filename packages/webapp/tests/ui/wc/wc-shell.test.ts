@@ -139,7 +139,7 @@ describe('mountWcUiPreview', () => {
       error() {},
       debug() {},
     } as unknown as import('../../../src/ui/boot/types.js').BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, log });
+    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
 
     const dockTree = refs.dockTree as unknown as HTMLElement & { getSurfaceIds(): string[] };
     refs.dock.dispatchEvent(

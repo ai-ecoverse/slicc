@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   defaultRootOf,
   isReadOnlyRole,
@@ -13,18 +12,31 @@ import {
   unitRoleFor,
   unitSlugFor,
 } from '../../../src/ui/wc/wc-unit-context.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
-function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
+/**
+ * These helpers read the client protocol's SUMMARY since #2382 D2a, so the
+ * fixtures are summaries: `id` / `parentId` / `role` rather than the record's
+ * `jid` / `parentJid`.
+ */
+function unit(
+  over: Partial<WorkUnitSummary> & { jid?: string; parentJid?: string | null }
+): WorkUnitSummary {
+  const parentId = 'parentJid' in over ? over.parentJid : (over.parentId ?? 'cone_1');
   return {
-    jid: over.jid ?? 'jid',
-    name: 'Name',
-    folder: 'folder',
-    requiresTrigger: false,
     assistantLabel: 'label',
     addedAt: '2026-01-01T00:00:00.000Z',
-    parentJid: 'cone_1',
-    ...over,
-  };
+    fill: 0,
+    folder: 'folder',
+    id: over.jid ?? over.id ?? 'jid',
+    name: 'Name',
+    parentId: parentId ?? null,
+    role: (parentId ?? null) === null ? 'primary' : 'child',
+    state: 'idle',
+    ...Object.fromEntries(
+      Object.entries(over).filter(([key]) => key !== 'jid' && key !== 'parentJid')
+    ),
+  } as WorkUnitSummary;
 }
 
 const primary = unit({
@@ -82,18 +94,18 @@ describe('wc-unit-context', () => {
 
   it('resolves every context shape back to its unit', () => {
     const all = [worker, research, primary, helper];
-    expect(unitForContext(all, 'cone')?.jid).toBe('cone_1');
-    expect(unitForContext(all, 'cone:cone-research')?.jid).toBe('cone_2');
+    expect(unitForContext(all, 'cone')?.id).toBe('cone_1');
+    expect(unitForContext(all, 'cone:cone-research')?.id).toBe('cone_2');
     expect(unitForContext(all, 'cone:nope')).toBeUndefined();
-    expect(unitForContext(all, 'scoop:helper')?.jid).toBe('scoop_2');
+    expect(unitForContext(all, 'scoop:helper')?.id).toBe('scoop_2');
     expect(unitForContext(all, 'scoop:cone')).toBeUndefined();
     // an unknown plain context falls back to the default root
-    expect(unitForContext(all, 'whatever')?.jid).toBe('cone_1');
+    expect(unitForContext(all, 'whatever')?.id).toBe('cone_1');
   });
 
   it('prefers the primary root, else the oldest root, as default', () => {
-    expect(defaultRootOf([worker, research, primary])?.jid).toBe('cone_1');
-    expect(defaultRootOf([worker, research])?.jid).toBe('cone_2');
+    expect(defaultRootOf([worker, research, primary])?.id).toBe('cone_1');
+    expect(defaultRootOf([worker, research])?.id).toBe('cone_2');
     expect(defaultRootOf([worker])).toBeUndefined();
   });
 
@@ -103,7 +115,7 @@ describe('wc-unit-context', () => {
     // Before the leader and the follower shared one ordering the leader kept
     // registry order here and the follower grouped by owner — the same roster
     // rendered two ways on two screens.
-    expect(orderForSwitcher([helper, research, worker, primary]).map((s) => s.jid)).toEqual([
+    expect(orderForSwitcher([helper, research, worker, primary]).map((s) => s.id)).toEqual([
       'cone_1',
       'cone_2',
       'scoop_1',
@@ -115,7 +127,7 @@ describe('wc-unit-context', () => {
     const roster = [helper, research, worker, primary];
     // Selecting the primary cone, or one of its scoops, pulls `worker` forward.
     for (const selected of ['cone_1', 'scoop_1']) {
-      expect(orderForSwitcher(roster, selected).map((s) => s.jid)).toEqual([
+      expect(orderForSwitcher(roster, selected).map((s) => s.id)).toEqual([
         'cone_1',
         'cone_2',
         'scoop_1',
@@ -123,14 +135,14 @@ describe('wc-unit-context', () => {
       ]);
     }
     // Cones never move; an unknown selection keeps registry order.
-    expect(orderForSwitcher(roster, 'cone_2').map((s) => s.jid)).toEqual([
+    expect(orderForSwitcher(roster, 'cone_2').map((s) => s.id)).toEqual([
       'cone_1',
       'cone_2',
       'scoop_2',
       'scoop_1',
     ]);
-    expect(orderForSwitcher(roster, 'nope').map((s) => s.jid)).toEqual(
-      orderForSwitcher(roster).map((s) => s.jid)
+    expect(orderForSwitcher(roster, 'nope').map((s) => s.id)).toEqual(
+      orderForSwitcher(roster).map((s) => s.id)
     );
   });
 
@@ -138,35 +150,35 @@ describe('wc-unit-context', () => {
     const all = [worker, research, primary, helper];
 
     it('returns a selected root unchanged', () => {
-      expect(rootForSelection(all, research)?.jid).toBe('cone_2');
-      expect(rootForSelection(all, primary)?.jid).toBe('cone_1');
+      expect(rootForSelection(all, research)?.id).toBe('cone_2');
+      expect(rootForSelection(all, primary)?.id).toBe('cone_1');
     });
 
     it('walks a selected child up to the root that owns it', () => {
-      expect(rootForSelection(all, worker)?.jid).toBe('cone_1');
-      expect(rootForSelection(all, helper)?.jid).toBe('cone_2');
+      expect(rootForSelection(all, worker)?.id).toBe('cone_1');
+      expect(rootForSelection(all, helper)?.id).toBe('cone_2');
     });
 
     it('walks a grandchild up through its parent chain', () => {
       const grandchild = unit({ jid: 'scoop_3', parentJid: 'scoop_2', folder: 'deep' });
-      expect(rootForSelection([...all, grandchild], grandchild)?.jid).toBe('cone_2');
+      expect(rootForSelection([...all, grandchild], grandchild)?.id).toBe('cone_2');
     });
 
     it('falls back to the default root with nothing selected', () => {
-      expect(rootForSelection(all, null)?.jid).toBe('cone_1');
-      expect(rootForSelection(all, undefined)?.jid).toBe('cone_1');
+      expect(rootForSelection(all, null)?.id).toBe('cone_1');
+      expect(rootForSelection(all, undefined)?.id).toBe('cone_1');
     });
 
     it('falls back to the default root for a stale selection or an orphan', () => {
-      expect(rootForSelection(all, { jid: 'gone', parentJid: null })?.jid).toBe('cone_1');
+      expect(rootForSelection(all, { id: 'gone' })?.id).toBe('cone_1');
       const orphan = unit({ jid: 'scoop_9', parentJid: 'vanished', folder: 'orphan' });
-      expect(rootForSelection([...all, orphan], orphan)?.jid).toBe('cone_1');
+      expect(rootForSelection([...all, orphan], orphan)?.id).toBe('cone_1');
     });
 
     it('does not spin on a cyclic parent chain', () => {
       const a = unit({ jid: 'a', parentJid: 'b', folder: 'a' });
       const b = unit({ jid: 'b', parentJid: 'a', folder: 'b' });
-      expect(rootForSelection([primary, a, b], a)?.jid).toBe('cone_1');
+      expect(rootForSelection([primary, a, b], a)?.id).toBe('cone_1');
     });
 
     it('returns undefined when the roster has no root at all', () => {
@@ -196,17 +208,17 @@ describe('wc-unit-context', () => {
     const all = [worker, research, primary, helper];
 
     it('resolves an archive folder back to its root', () => {
-      expect(rootForConeFolder(all, 'cone-research')?.jid).toBe('cone_2');
-      expect(rootForConeFolder(all, 'cone')?.jid).toBe('cone_1');
+      expect(rootForConeFolder(all, 'cone-research')?.id).toBe('cone_2');
+      expect(rootForConeFolder(all, 'cone')?.id).toBe('cone_1');
     });
 
     it('falls back to the default root for a legacy (missing) or removed folder', () => {
-      expect(rootForConeFolder(all, undefined)?.jid).toBe('cone_1');
-      expect(rootForConeFolder(all, 'cone-deleted')?.jid).toBe('cone_1');
+      expect(rootForConeFolder(all, undefined)?.id).toBe('cone_1');
+      expect(rootForConeFolder(all, 'cone-deleted')?.id).toBe('cone_1');
     });
 
     it('never resolves a child folder as a root', () => {
-      expect(rootForConeFolder(all, 'worker-scoop')?.jid).toBe('cone_1');
+      expect(rootForConeFolder(all, 'worker-scoop')?.id).toBe('cone_1');
     });
   });
 });

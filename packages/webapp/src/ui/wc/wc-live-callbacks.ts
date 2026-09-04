@@ -5,6 +5,7 @@ import {
   recordToWorkUnitSummary,
 } from '../../work-unit/client/from-record.js';
 import { toTabDescriptors } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import type {
   OffscreenClient,
   OffscreenClientCallbacks,
@@ -38,8 +39,8 @@ export interface WcLiveWiring {
   awaitingInput?: string | null;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
-  getSelected(): RegisteredScoop | null;
-  selectScoop(scoop: RegisteredScoop): void;
+  getSelected(): WorkUnitSummary | null;
+  selectScoop(unit: WorkUnitSummary): void;
   notifyScoopStateChanged?(): void;
   refreshScoops?(): void;
   notifyReady?(): void;
@@ -116,7 +117,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     if (wiring.getClient()) {
       wiring.refs.switcher.scoops = toTabDescriptors(
         workUnits.currentUnits(),
-        wiring.getSelected()?.jid,
+        wiring.getSelected()?.id,
         scoopColor
       ) as SwitcherScoop[];
     }
@@ -133,18 +134,20 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
 
   const ensureSelection = (): void => {
     if (wiring.getSelected() || viewingFrozen()) return;
-    const scoops = wiring.getClient()?.getScoops() ?? [];
+    // The client's roster, not the records: selection is expressed in
+    // summaries now (#2382 D2a).
+    const units = workUnits.currentUnits();
     const pending = wiring.pendingUrlContext;
     if (pending?.startsWith('freezer:')) return;
     if (pending?.startsWith('scoop:') || pending?.startsWith('cone:')) {
-      const scoop = unitForContext(scoops, pending);
-      if (scoop) {
+      const unit = unitForContext(units, pending);
+      if (unit) {
         wiring.pendingUrlContext = null;
-        wiring.selectScoop(scoop);
+        wiring.selectScoop(unit);
         return;
       }
     }
-    const cone = defaultRootOf(scoops);
+    const cone = defaultRootOf(units);
     if (cone) {
       wiring.pendingUrlContext = null;
       wiring.selectScoop(cone);
@@ -164,13 +167,16 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         refreshScoops();
         wiring.notifyScoopStateChanged?.();
       }
-      if (wiring.getSelected()?.jid !== jid) return;
+      if (wiring.getSelected()?.id !== jid) return;
       wiring.getController()?.setProcessing(status === 'processing');
     },
     onScoopCreated: (scoop) => {
       refreshScoops();
       if (!wiring.getSelected() && !viewingFrozen() && !wiring.pendingUrlContext) {
-        wiring.selectScoop(scoop);
+        // The adapter has already folded the new record into its roster, so
+        // ask it for the summary rather than projecting a second time.
+        const created = workUnits.currentUnits().find((unit) => unit.id === scoop.jid);
+        if (created) wiring.selectScoop(created);
       }
     },
     onScoopListUpdate: (scoops) => {
@@ -192,7 +198,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     onIncomingMessage: (jid, message) => {
       wiring.refs.switcher.setAttribute('attention', jid);
       wiring.lastActivity.set(jid, String(message.content ?? '').slice(0, 600));
-      if (wiring.getSelected()?.jid !== jid) return;
+      if (wiring.getSelected()?.id !== jid) return;
       if (message.channel !== 'web' && isLickChannel(message.channel)) {
         wiring
           .getController()
@@ -209,12 +215,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       if (info.count <= 0) wiring.lickBackpressure.delete(jid);
       else wiring.lickBackpressure.set(jid, info);
       const selected = wiring.getSelected();
-      if (selected?.jid !== jid) return;
+      if (selected?.id !== jid) return;
       const scoopName = unitSlugFor(selected);
       wiring.getController()?.setLickBackpressure(info.count, info.waitingMs, scoopName);
     },
     onMessageUpdate: (jid, update) => {
-      if (wiring.getSelected()?.jid !== jid) return;
+      if (wiring.getSelected()?.id !== jid) return;
       if (update.lickId && update.lickState) {
         wiring.getController()?.updateLickState(update.lickId, update.lickState);
       }

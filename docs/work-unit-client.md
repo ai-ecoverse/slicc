@@ -456,6 +456,32 @@ a catalog that is leader-global on both sides — `resolveModelById` locally,
 `models.list` remotely. That is why `wc-follower-model-surface.ts` still
 exists: it is the catalog, and nothing else.
 
+### The selection surface: summaries, not records (PR D2a)
+
+`WcShellBoot.selectScoop` / `getSelected` and everything downstream of them
+speak `WorkUnitSummary`. They took a `RegisteredScoop` — a leader-only record
+that a follower simply does not have — which is what blocked one mount path:
+`attachWcChat` could not hand a follower's unit to a shell whose selection type
+only a leader can produce.
+
+Nothing in the rendering changed; the fields did:
+
+- `unit.jid` → `unit.id`, `unit.parentJid === null` → `isRootSummary(unit)`,
+  and the switcher label reads the carried `role` instead of re-deriving it.
+- `wc-unit-context.ts`'s helpers (`orderForSwitcher`, `rootForSelection`,
+  `rootForConeFolder`, `chatSessionIdFor`) are typed on summaries and read the
+  roster from `WorkUnitClient.subscribeList` — the shell's `getUnits()` — not
+  from `OffscreenClient.getScoops()`.
+- **Record-only fields are read at the LEAF, never by re-widening the
+  selection.** Two survive on the leader: the reasoning level behind the
+  thinking pill (`applyThreadContext`'s optional `getRecord`) and the session
+  archive's folder work in the freezer rail, which resolves its cone summary
+  back to a record with a single lookup. A follower passes neither and renders
+  correctly without them — it has no thinking pill and no freezer.
+
+The mount collapse itself (`attachWcChat` / `attachWcWorkbench` /
+`mountWcShell`) is PR D2b.
+
 ## Sequencing and scope
 
 This lands in two steps:

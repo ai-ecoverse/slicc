@@ -19,7 +19,7 @@ import {
   getConnectedFollowersWithFallback,
   getTrayResetter,
 } from '../../shell/supplemental-commands/host-command.js';
-import type { WorkUnitClient } from '../../work-unit/client/types.js';
+import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { parseQualifiedModelId } from '../../work-unit/record.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { copyTextToClipboard } from '../clipboard.js';
@@ -107,6 +107,8 @@ export interface WcNavDeps {
   client: OffscreenClient;
   /** The client protocol the model pick writes through (#2382). */
   workUnits: Pick<WorkUnitClient, 'setModel'>;
+  /** The client protocol's roster — the model pick resolves its cone from it. */
+  getUnits(): readonly WorkUnitSummary[];
   log: BootStageLogger;
   /**
    * Called when the user picks "Export transcript" from the avatar menu.
@@ -240,7 +242,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // model-picker `model-change` handler consumes it on the next pick by
   // dispatching `slicc-error-retry` (with that id) onto the thread.
   let pendingReplayMessageId: string | null = null;
-  await wireModelPicker(refs, client, deps.workUnits, () => {
+  await wireModelPicker(refs, client, deps.workUnits, deps.getUnits, () => {
     const id = pendingReplayMessageId;
     pendingReplayMessageId = null;
     if (id == null) return;
@@ -612,6 +614,7 @@ async function wireModelPicker(
   refs: WcShellRefs,
   client: OffscreenClient,
   workUnits: Pick<WorkUnitClient, 'setModel'>,
+  getUnits: () => readonly WorkUnitSummary[],
   onAfterModelChange?: () => void
 ): Promise<void> {
   const { resolveModelById, resolveCurrentModel, setSelectedModelId } = await import(
@@ -650,7 +653,7 @@ async function wireModelPicker(
     // guaranteed even if the picker ever hands us a bare id.
     setSelectedModelId(id);
     applyThinkingCapability(id);
-    void applyModelPickToSelectedCone(client, workUnits, id);
+    void applyModelPickToSelectedCone(client, workUnits, getUnits(), id);
     // The change-model CTA stages a pending retry: now that a new model is
     // selected, fire it so the originating turn re-runs without a second
     // click. The hook is a no-op when no retry is staged.
@@ -678,22 +681,22 @@ async function wireModelPicker(
  * next spawn on.
  */
 export async function applyModelPickToSelectedCone(
-  client: Pick<OffscreenClient, 'getScoops' | 'getScoop' | 'selectedScoopJid'>,
+  client: Pick<OffscreenClient, 'selectedScoopJid'>,
   workUnits: Pick<WorkUnitClient, 'setModel'>,
+  units: readonly WorkUnitSummary[],
   qualified: string,
   notify: () => void = notifyLeaderLocalModelStateChanged
 ): Promise<boolean> {
   const model = parseQualifiedModelId(qualified);
   if (!model) return false;
   const selectedJid = client.selectedScoopJid;
-  const selected = selectedJid ? (client.getScoop(selectedJid) ?? null) : null;
-  const root = rootForSelection(client.getScoops(), selected);
+  const root = rootForSelection(units, selectedJid ? { id: selectedJid } : null);
   if (!root) return false;
   // The write goes through the client protocol (#2382), so the leader's model
   // pick and a follower's are the same call. A local client always answers
   // `true`/`false` (the kernel acks); `undefined` is the remote transport's
   // "nobody could answer", which this leader-only path cannot see.
-  const applied = await workUnits.setModel(root.jid, model);
+  const applied = await workUnits.setModel(root.id, model);
   // Followers mirror the leader's per-cone selection; refresh only once the
   // record actually changed.
   if (applied) notify();

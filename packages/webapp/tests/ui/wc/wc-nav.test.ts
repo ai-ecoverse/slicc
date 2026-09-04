@@ -59,7 +59,7 @@ import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
-import type { WorkUnitClient } from '../../../src/work-unit/client/types.js';
+import type { WorkUnitClient, WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 afterEach(() => {
   localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
@@ -137,6 +137,23 @@ function makeClient(overrides: Record<string, unknown> = {}): OffscreenClient {
  * `setModel`, and the local adapter is exactly `setScoopModel`, so the
  * assertions stay on the kernel call the pick has to reach.
  */
+/** The roster the model pick resolves its cone from (#2382 D2a). */
+function coneSummaries(): WorkUnitSummary[] {
+  return [
+    {
+      assistantLabel: 'sliccy',
+      addedAt: '2026-08-22T00:00:00.000Z',
+      fill: 0,
+      folder: 'cone',
+      id: 'cone_1',
+      name: 'Cone',
+      parentId: null,
+      role: 'primary',
+      state: 'idle',
+    },
+  ];
+}
+
 function workUnitsOver(client: OffscreenClient): Pick<WorkUnitClient, 'setModel'> {
   const kernel = client as unknown as {
     setScoopModel(jid: string, model: WorkUnitModel): Promise<boolean>;
@@ -164,6 +181,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -201,6 +219,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -222,6 +241,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
     expect(refs.avatarMenu.items.some((item) => item.id === 'experimental-settings')).toBe(true);
@@ -244,6 +264,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -267,6 +288,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -296,6 +318,7 @@ describe('wireWcNav', () => {
         refs,
         client,
         workUnits: workUnitsOver(client),
+        getUnits: () => coneSummaries(),
         log: { error: vi.fn() } as never,
       });
 
@@ -316,6 +339,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -335,6 +359,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -362,6 +387,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -378,6 +404,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -396,6 +423,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
     // `wireWcNav` resets `models` from the (empty) provider registry; seed
@@ -423,6 +451,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
     (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [
@@ -475,6 +504,7 @@ describe('wireWcNav', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
 
@@ -541,6 +571,7 @@ describe('wireWcNav', () => {
         refs,
         client,
         workUnits: workUnitsOver(client),
+        getUnits: () => coneSummaries(),
         log: { error: vi.fn() } as never,
       });
 
@@ -592,6 +623,7 @@ describe('wireWcNav', () => {
         refs,
         client,
         workUnits: workUnitsOver(client),
+        getUnits: () => coneSummaries(),
         log: { error: vi.fn() } as never,
       });
 
@@ -639,6 +671,7 @@ describe('wireWcNav', () => {
         refs,
         client,
         workUnits: workUnitsOver(client),
+        getUnits: () => coneSummaries(),
         log: { error: vi.fn() } as never,
       });
 
@@ -689,6 +722,7 @@ describe('session-sharing entry points', () => {
       refs,
       client,
       workUnits: workUnitsOver(client),
+      getUnits: () => coneSummaries(),
       log: { error: vi.fn() } as never,
     });
     return refs;

@@ -44,6 +44,8 @@ import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { resetNewSessionTmp } from '../../../src/ui/new-session.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import { frozenProvenanceEl, wireFreezerRail } from '../../../src/ui/wc/wc-live-freezer.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -85,13 +87,13 @@ interface Harness {
   loaded: unknown[][];
   log: { debug: Mock; info: Mock; warn: Mock; error: Mock };
   clearCalls: Array<string | undefined>;
-  selected: RegisteredScoop | null;
+  selected: WorkUnitSummary | null;
   selections: string[];
   files: Map<string, string>;
   handles: ReturnType<typeof wireFreezerRail>;
 }
 
-function harness(selected: RegisteredScoop | null): Harness {
+function harness(selected: WorkUnitSummary | null): Harness {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const files = new Map<string, string>();
   const clearCalls: Array<string | undefined> = [];
@@ -151,9 +153,10 @@ function harness(selected: RegisteredScoop | null): Harness {
         },
       }) as never,
     getSelected: () => state.selected,
-    selectScoop: (scoop) => {
-      state.selected = scoop;
-      selections.push(scoop.jid);
+    getUnits: () => ROSTER.map((scoop) => recordToWorkUnitSummary(scoop, {})),
+    selectScoop: (unit) => {
+      state.selected = unit;
+      selections.push(unit.id);
     },
     clearSelection: () => {
       state.selected = null;
@@ -173,7 +176,7 @@ async function runNewChat(state: Harness, action: 'save' | 'skip' | 'erase'): Pr
 describe('New chat targets the selected cone (#2272)', () => {
   it('freezes and clears the selected extra cone, never the primary one', async () => {
     freezeCalls.length = 0;
-    const state = harness(research);
+    const state = harness(recordToWorkUnitSummary(research, {}));
 
     await runNewChat(state, 'save');
 
@@ -187,7 +190,7 @@ describe('New chat targets the selected cone (#2272)', () => {
 
   it('resolves a selected scoop to the cone that owns it', async () => {
     freezeCalls.length = 0;
-    const state = harness(helper);
+    const state = harness(recordToWorkUnitSummary(helper, {}));
 
     await runNewChat(state, 'skip');
 
@@ -211,7 +214,7 @@ describe('New chat targets the selected cone (#2272)', () => {
 
   it('erase clears the selected cone without archiving anything', async () => {
     freezeCalls.length = 0;
-    const state = harness(research);
+    const state = harness(recordToWorkUnitSummary(research, {}));
 
     await runNewChat(state, 'erase');
 
@@ -233,7 +236,7 @@ describe('scratch cleanup never blocks the clear', () => {
         code: 'ENOENT',
       });
       vi.mocked(resetNewSessionTmp).mockRejectedValueOnce(enoent);
-      const state = harness(research);
+      const state = harness(recordToWorkUnitSummary(research, {}));
 
       await runNewChat(state, action);
 
@@ -267,7 +270,7 @@ describe('thaw fallback follows the archive (#2272)', () => {
     // The archive file itself is missing, so the thaw throws.
     await state.handles.openFrozen('gone.md');
 
-    expect(state.selected?.jid).toBe('cone_2');
+    expect(state.selected?.id).toBe('cone_2');
   });
 
   it('lands on the default root for a legacy archive with no cone field', async () => {
@@ -286,14 +289,14 @@ describe('thaw fallback follows the archive (#2272)', () => {
 
     await state.handles.openFrozen('legacy.md');
 
-    expect(state.selected?.jid).toBe('cone_1');
+    expect(state.selected?.id).toBe('cone_1');
   });
 });
 
 describe('drop cone freezes without memory (#2272)', () => {
   it('archives the cone with the archive-only path and refreshes the rail', async () => {
     freezeCalls.length = 0;
-    const state = harness(primary);
+    const state = harness(recordToWorkUnitSummary(primary, {}));
 
     await state.handles.freezeCone(research);
 
