@@ -278,11 +278,16 @@ function main() {
     .filter((v) => v.touched.length > 0);
 
   // Added-entry check: a PR may not GROW any debt list vs the base ref.
-  // Bootstrapping exemption: if base has no entries for a rule, the list is
-  // being introduced — skip the added-entry check for that rule. If we
-  // couldn't read a rule's base list at all, skip the check for that rule (do
-  // not fail the build on infra/read errors); the touched-files check still
-  // runs.
+  // Bootstrapping exemption: skip the check ONLY when the debt-list FILE
+  // itself could not be read at the base ref (`readBaseJson` returns `null`
+  // — the file didn't exist yet, so the list is genuinely being introduced).
+  // A file that DID exist and parsed to `{}` (an empty-but-PRESENT baseline,
+  // e.g. a freshly-introduced ratchet with zero grandfathered violations —
+  // `float-probe-baseline.json` at #2276 slice D) is NOT bootstrapping: it
+  // is already frozen at zero, and `baseGlobs.length === 0` must not be
+  // conflated with "no base to compare against" — a PR that adds even one
+  // entry to a debt list that started empty is still growth (round-1 review,
+  // #2843: an empty baseline previously bypassed this check entirely).
   for (const rule of ruleStates) {
     if (!rule.baseReadable) {
       console.log(
@@ -292,7 +297,7 @@ function main() {
     }
   }
   const addedViolations = ruleStates
-    .filter((rule) => rule.baseReadable && rule.baseGlobs.length > 0)
+    .filter((rule) => rule.baseReadable)
     .map((rule) => ({ rule, added: findAddedExemptions(rule.baseGlobs, rule.globs) }))
     .filter((v) => v.added.length > 0);
 

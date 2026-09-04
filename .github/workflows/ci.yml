@@ -236,10 +236,11 @@ jobs:
         # They land via commits that skip the pre-commit hook (GitHub web UI,
         # Copilot Autofix).
         run: npm run lint:autofix-drift
-      - name: Debt boy-scout gate (biome rules + layer back-edges)
+      - name: Debt boy-scout gate (biome rules + layer back-edges + float probes + record<string,unknown>)
         # Fail when this PR touches a file that is still on a debt list —
-        # a per-rule biome.json exemption list or the layer back-edge
-        # baseline — without removing its entry. Skips on merge_group / push.
+        # a per-rule biome.json exemption list, or one of the three ratchet
+        # baselines (layer back-edges, float probes, record<string,unknown>)
+        # — without removing its entry. Skips on merge_group / push.
         run: node packages/dev-tools/tools/check-touched-exemptions.mjs
       - name: Check Chrome Web Store manifest justifications
         # Fail if the extension manifest gains/drops a permission without a

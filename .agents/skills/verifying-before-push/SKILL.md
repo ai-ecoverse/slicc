@@ -70,9 +70,13 @@ then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up the layer stack — baseline-ratcheted;
 fix the layering, never grow `layer-back-edge-baseline.json`),
-`lint:no-float-probes` (no new float/topology probe read under `scoops/`, `tools/`,
-`kernel/` except `kernel/host.ts` — baseline-ratcheted, starts empty; ask the injected
-`CapabilityBroker` instead, never grow `float-probe-baseline.json`),
+`lint:no-float-probes` (the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` —
+`isExtensionRealm`, `isChromeExtensionRealm`, `hasLocalNodeServer`, `resolveFloatTopology`,
+`getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
+`canConnectToChromeRuntime`, `getExtensionDelegateId`, `setExtensionDelegateId` — plus the raw
+`__slicc_connect_mode` global-bag key; no new read under `scoops/`, `tools/`, `kernel/` except
+`kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — baseline-ratcheted,
+starts empty; ask the injected `CapabilityBroker` instead, never grow `float-probe-baseline.json`),
 `lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `// biome-ignore lint/plugin: <reason>`, never grow
@@ -225,8 +229,10 @@ The gate enforces seven "debt lists" of files grandfathered out of a rule:
 - Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json`; cap:
   **0** imports pointing up the stack `fs → shell/git → cdp → tools → core → scoops → ui`)
 - Float/topology probes (`packages/dev-tools/tools/float-probe-baseline.json`; cap: **0**
-  reads of the eight float/topology probe names under `scoops/`, `tools/`, `kernel/` except
-  `kernel/host.ts` — ask the injected `CapabilityBroker` instead)
+  reads of the ten names in `check-no-float-probes.mjs`'s `FLOAT_PROBE_NAMES` plus the raw
+  `__slicc_connect_mode` global-bag key, under `scoops/`, `tools/`, `kernel/` except
+  `kernel/host.ts` / `kernel/kernel-worker.ts` / `kernel/port-bridge-client.ts` — ask the
+  injected `CapabilityBroker` instead)
 - Untyped string-keyed bags (`packages/dev-tools/tools/record-string-unknown-baseline.json`;
   cap: **0** `Record<string, unknown>` in non-test source)
 

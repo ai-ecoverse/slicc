@@ -464,36 +464,72 @@ is a conscious decision; the gate fails closed. Shared code belongs in
 ## float-probe-ratchet
 
 `check-no-float-probes.mjs` (#2276 slice D) fails on any NEW read of one of
-eight float/topology probe names (`isExtensionRealm`, `isChromeExtensionRealm`,
-`hasLocalNodeServer`, `resolveFloatTopology`, `getChromeExtensionRealm`,
-`setChromeExtensionRealm`, `hasChromeRuntimeConnect`, `canConnectToChromeRuntime`)
-under `scoops/`, `tools/`, or `kernel/` — except `kernel/host.ts`, the one
-composition root that resolves the float's topology once into a
-`CapabilityBroker` (`docs/work-unit.md` Phase 6). Privileged float detection
-belongs on that injected broker or, for a genuine transport decision, in
-`shell/` (which owns topology).
+ten float/topology identifiers (`FLOAT_PROBE_NAMES`: `isExtensionRealm`,
+`isChromeExtensionRealm`, `hasLocalNodeServer`, `resolveFloatTopology`,
+`getChromeExtensionRealm`, `setChromeExtensionRealm`, `hasChromeRuntimeConnect`,
+`canConnectToChromeRuntime`, `getExtensionDelegateId`,
+`setExtensionDelegateId`), plus the raw `__slicc_connect_mode` global-bag key
+`resolveFloatTopology` reads directly, under `scoops/`, `tools/`, or
+`kernel/` — except three composition roots: `kernel/host.ts` and
+`kernel/kernel-worker.ts` (each resolves the float's topology once, into a
+`CapabilityBroker` or an extension-delegate id — `docs/work-unit.md` Phase
+6), and `kernel/port-bridge-client.ts` (the extension-delegate Port/panel-RPC
+transport factory every kernel-side bridge client shares — conceptually
+`shell/`-owned, but moving it there would add a `shell/` → `kernel/`
+`PanelRpcOp` type dependency against the stack's direction, so it is a named
+exemption instead). Privileged float detection belongs on the injected
+broker or, for a genuine transport decision, in `shell/` (which owns
+topology).
 
-The scan is import/re-export-CLAUSE based (`import { hasLocalNodeServer } from
-'…'`, `export { hasLocalNodeServer } from '…'`), not a whole-file identifier
-scan: every domain #2276 migrated reuses the SAME name for a local
-composition-time-answer const/parameter/property (`const hasLocalNodeServer =
-() => localNode.ok`), so a whole-file scan would false-positive on every
-migrated file. Scanning import clauses only catches the one thing that is
-actually banned — pulling the binding in from its defining module — which a
-same-named local can never do.
+Round-1 review (Grok + human) planted a batch of evasions against the first
+cut of this gate and every one passed silently — a gate that passes on a
+planted violation is worse than no gate. The design is now two layers:
 
-A second pass folds in re-exports under a DIFFERENT name (`export const
-isTrayExtension = getChromeExtensionRealm`) discovered anywhere in
-`packages/webapp/src`, so a rename-based bypass of the banned-zone scan is
-caught if a banned-zone file ever imports the alias — without flagging a
-pre-existing, legitimate, out-of-zone rename (`core/secret-topology.ts`'s
-`resolveFloatTopology as resolveSecretTopology`) that nothing in the banned
-zone actually imports.
+- A **module-path ban**: `shell/float-topology.ts`, `core/float-topology.ts`,
+  `base/runtime-env.ts`, `core/runtime-env.ts` exist for nothing but float
+  detection, so importing from one, in ANY form (named, default, namespace
+  `import * as`, dynamic `import(…)`, `export * from`, type-only), is banned
+  regardless of what name the importer binds it to — `import * as topo from
+'…/float-topology.js'` names the MODULE, not a banned identifier, and a
+  pure name scan cannot see it.
+- A **named-clause scan**, line-anchored to the statement's own start (so a
+  string literal containing import-shaped text elsewhere on the line can
+  never match — `export const x = "import { hasLocalNodeServer } from
+'…'"` used to trip the unanchored version), for everything else: the
+  mixed-surface `base/api-endpoint.ts` / `shell/proxied-fetch.ts` (which
+  also export plenty of non-probe bindings) and `@slicc/shared-ts`'s two
+  probe exports specifically (never the whole package). Every domain #2276
+  migrated reuses a probe's OWN name for a local composition-time-answer
+  const/parameter/property (`const hasLocalNodeServer = () =>
+localNode.ok`), so this stays clause-based rather than a whole-file scan —
+  a whole-file scan cannot tell that reuse apart from an actual import.
 
-Baseline `float-probe-baseline.json` starts EMPTY (one-way ratchet; regenerate
-after paying debt down with `--update`) — slices A–C's migration work made
-that the honest starting point. The baseline doubles as a debt list for the
-boy-scout gate. Chained into `npm run lint` and `lint:ci`.
+A discovery pass folds three alias shapes, found anywhere in
+`packages/webapp/src`, into the named-clause scan: a bare value re-export
+(`export const isTrayExtension = getChromeExtensionRealm`), a renamed
+`export { … as … }`, and a THIN wrapper whose entire body is `return
+PROBE(...)` (`export function inExtension() { return isExtensionRealm();
+}`) — narrow enough on purpose that `shell/tray-fetch.ts`'s
+`createTrayFetch` (a substantive function that merely reads topology as one
+of several statements, already reviewed in the network-domain slice) is not
+mistaken for a probe-identity wrapper. A pre-existing, legitimate,
+out-of-zone rename (`core/secret-topology.ts`'s `resolveFloatTopology as
+resolveSecretTopology`) is not itself flagged — the alias name is folded
+into the banned-zone scan instead, so the violation would surface at a
+banned-zone IMPORT site if one ever appeared, not at the file that defined
+the alias.
+
+Baseline `float-probe-baseline.json` starts EMPTY (one-way ratchet;
+regenerate after paying debt down with `--update`) — slices A–C's migration
+work made that the honest starting point — and `--update` refuses to WRITE a
+larger baseline than the one already on disk unless `--allow-growth` is also
+passed, so a careless local `--update` cannot silently grandfather a new
+violation before it is even committed. The baseline doubles as a debt list
+for the boy-scout gate (`check-touched-exemptions.mjs`, whose own
+"list must not grow" check used to skip entirely whenever a debt list's
+base-ref state was empty — indistinguishable from the list not existing yet
+— fixed for all three ratcheted debt lists, not just this one). Chained into
+`npm run lint` and `lint:ci`.
 
 ## record-string-unknown-ratchet
 
