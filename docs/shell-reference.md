@@ -1807,7 +1807,7 @@ Runs inside the tab's origin, so session cookies and same-origin headers are aut
 
 Frozen `{ dir, root, refs, assets, config(), config(updates), token(providerId) }`. Companion contract: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.
 
-Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the running script's directory. When that directory's basename is `scripts`, `skill.root` is the parent; otherwise `skill.root` equals `skill.dir`. `skill.refs` / `skill.assets` resolve from `skill.root` (`<root>/references`, `<root>/assets`). `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`).
+Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the running script's directory. When any path segment of that directory is `scripts` (including helpers under `scripts/<subdir>/`), `skill.root` is the parent of that segment; otherwise `skill.root` equals `skill.dir`. `skill.refs` / `skill.assets` resolve from `skill.root` (`<root>/references`, `<root>/assets`). `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`).
 
 ```typescript
 const skill = require('sliccy:skill');

@@ -138,7 +138,7 @@ Reach these via `require('sliccy:<name>')`. Full reference: `./jsh-runtime-exten
 - **`browser.fetch(tab, url, opts)`** — page-context fetch (runs inside the tab's origin, so cookies + same-origin headers are automatic). Replaces the `eval-file` temp-file + double-JSON-unwrap dance.
 - **`browser.websocket.on(tab, …).filter({…}).forward({ sink })`** — declarative WebSocket observer with a closed sink set (`webhook` / `scoop` / `vfs` / `log`). **Required** for any new WS-watch use case; do not author page-context `WebSocket.prototype` patches in skill code.
 - **`require('sliccy:http').client({ baseUrl, token, headers, retry })`** — `get`/`post`/`put`/`delete` with merged headers, lazy token resolution, and Retry-After-aware backoff for `retry.on` statuses.
-- **`require('sliccy:skill')`** — `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)`: replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs. `refs`/`assets` resolve from the skill root (parent of `scripts/` when the script lives there).
+- **`require('sliccy:skill')`** — `dir` / `root` / `refs` / `assets` / `config()` / `token(providerId)`: replace the per-skill `process.argv[1]` dirname math, ad-hoc `.config` JSON readers, and bespoke `oauth-token` shell-outs. `refs`/`assets` resolve from the skill root (parent of the `scripts/` path segment, including nested helpers).
 
 Ship a `.jsh` when the skill needs deterministic, parameterizable behavior the agent shouldn't have to re-derive each time (e.g. a `slicc-handoff` helper, a custom diff formatter, a domain-specific lint).
 

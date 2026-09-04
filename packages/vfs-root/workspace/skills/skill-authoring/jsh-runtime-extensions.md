@@ -185,7 +185,7 @@ The following capabilities collapse the boilerplate that 18 of 23 surveyed skill
 
 Computed once at boot from `argv[1]` and frozen. Replaces ad-hoc `process.argv[1].substring(0, …)` dirname math, bespoke `.config` JSON readers, and `oauth-token` shell-outs.
 
-Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the directory containing the running script. When that directory's basename is `scripts` (`<skill-root>/scripts/<name>.jsh`), `skill.root` is the parent — the skill folder. Otherwise `skill.root` equals `skill.dir`. `skill.refs` and `skill.assets` resolve from `skill.root`. `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`) so `upskill` can preserve that dotfile.
+Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`. `skill.dir` is the directory containing the running script. When any path segment of that directory is `scripts` (`<skill-root>/scripts/<name>.jsh`, including helpers under `scripts/<subdir>/`), `skill.root` is the parent of that segment — the skill folder. Otherwise `skill.root` equals `skill.dir`. `skill.refs` and `skill.assets` resolve from `skill.root`. `skill.config()` still reads/writes `<dir>/.config` (typically `scripts/.config`) so `upskill` can preserve that dotfile.
 
 ```typescript
 const skill = require('sliccy:skill');

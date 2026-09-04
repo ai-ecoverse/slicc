@@ -79,6 +79,18 @@ describe('createSkillGlobal — path math', () => {
     expect(skill.assets).toBe('/workspace/skills/remotion-clipper/assets');
   });
 
+  it('resolves refs/assets from the skill root when the script is nested under scripts/', () => {
+    const skill = createSkillGlobal({
+      argv: ['node', '/workspace/skills/interview-me/scripts/lib/install.jsh'],
+      fs: makeFs(),
+      exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
+    });
+    expect(skill.dir).toBe('/workspace/skills/interview-me/scripts/lib');
+    expect(skill.root).toBe('/workspace/skills/interview-me');
+    expect(skill.refs).toBe('/workspace/skills/interview-me/references');
+    expect(skill.assets).toBe('/workspace/skills/interview-me/assets');
+  });
+
   it('does not treat a directory whose name merely ends in scripts as the scripts/ folder', () => {
     const skill = createSkillGlobal({
       argv: ['node', '/workspace/skills/my-scripts/run.jsh'],

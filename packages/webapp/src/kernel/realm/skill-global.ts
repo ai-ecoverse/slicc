@@ -8,10 +8,11 @@
  * `.config` JSON readers and OAuth-token fetchers.
  *
  * Agent Skills layout is `<skill-root>/{SKILL.md,scripts/,references/,assets/}`.
- * `argv[1]` is typically `<skill-root>/scripts/<name>.jsh`, so `skill.dir`
- * is the script directory while `skill.root` / `refs` / `assets` live one
- * level up. `.config` stays next to the script (`scripts/.config`) because
- * `upskill` preserves dotfiles there.
+ * `argv[1]` is typically `<skill-root>/scripts/<name>.jsh` (or a helper
+ * under `scripts/`), so `skill.dir` is the script directory while
+ * `skill.root` / `refs` / `assets` live at the skill folder. `.config`
+ * stays next to the script (`scripts/.config`) because `upskill`
+ * preserves dotfiles there.
  *
  * Surface:
  *  - `skill.dir`     — directory containing the running script
@@ -67,22 +68,22 @@ function dirname(path: string): string {
   return path.substring(0, idx);
 }
 
-function basename(path: string): string {
-  if (!path) return '';
-  const idx = path.lastIndexOf('/');
-  if (idx < 0) return path;
-  return path.substring(idx + 1);
-}
-
 /**
- * Skill root for the Agent Skills layout: when the running script lives
- * in a directory named `scripts`, the skill folder is that directory's
- * parent. Otherwise the script directory is the skill folder (a `.jsh`
- * next to `SKILL.md`).
+ * Skill root for the Agent Skills layout. When any path segment is
+ * exactly `scripts` (`<skill-root>/scripts/<name>.jsh` or a nested
+ * helper under `scripts/`), the skill folder is the parent of that
+ * segment. Otherwise the script directory is the skill folder (a
+ * `.jsh` next to `SKILL.md`).
  */
 function skillRootFromScriptDir(dir: string): string {
-  if (basename(dir) !== 'scripts') return dir;
-  return dirname(dir);
+  if (!dir) return dir;
+  const absolute = dir.startsWith('/');
+  const parts = dir.split('/').filter((part) => part.length > 0);
+  const scriptsIdx = parts.indexOf('scripts');
+  if (scriptsIdx < 0) return dir;
+  const rootParts = parts.slice(0, scriptsIdx);
+  if (rootParts.length === 0) return absolute ? '/' : '';
+  return (absolute ? '/' : '') + rootParts.join('/');
 }
 
 function shellQuote(arg: string): string {
