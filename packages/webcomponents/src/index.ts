@@ -32,6 +32,11 @@ export { SliccActionRow } from './chat/slicc-action-row.js';
 export { SliccAgentMessage } from './chat/slicc-agent-message.js';
 export { SliccChatTable } from './chat/slicc-chat-table.js';
 export { SliccChatThread } from './chat/slicc-chat-thread.js';
+export {
+  type CompactionMarkerState,
+  type CompactionMarkerTrigger,
+  SliccCompactionMarker,
+} from './chat/slicc-compaction-marker.js';
 export { SliccDelegationLine } from './chat/slicc-delegation-line.js';
 export { SliccDip } from './chat/slicc-dip.js';
 export { SliccErrorCard } from './chat/slicc-error-card.js';
