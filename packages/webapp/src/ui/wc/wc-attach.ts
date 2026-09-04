@@ -705,30 +705,68 @@ async function persistStagedUpload(
   return { ...attachment, error: 'could not be saved to the virtual filesystem' };
 }
 
-/** Stage a VFS file pick by reference — the pick already HAS a canonical path,
- *  so link it directly instead of reading + inlining its contents. */
-async function stageVfsFile(
+/**
+ * RAW bytes of a VFS image, for the inline vision copy.
+ *
+ * The read MUST pass `encoding: 'binary'`. `VirtualFS.readFile` defaults to
+ * `'utf-8'` and runs the file through a non-fatal `TextDecoder`, so every byte
+ * that isn't valid UTF-8 collapses to U+FFFD; re-encoding that string handed
+ * the model a JPEG whose `FF D8 FF` magic had become `EF BF BD …` (#2884).
+ *
+ * A reader that answers a binary read with a string has ALREADY lost the
+ * bytes. There is no recovering them, so log and return `null` — the caller
+ * falls back to a path-only reference instead of inlining mojibake.
+ */
+async function readVfsImageBytes(
   id: string,
   openReader: () => Promise<LocalVfsClient>,
-  stage: WcAttachmentStage
-) {
-  const name = id.split('/').pop() ?? id;
-  if (IMAGE_EXT.test(name)) {
-    // Images keep an inline copy for vision alongside the existing path.
-    const reader = await openReader();
-    const raw = await reader.readFile(id);
-    const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-    const attachment = attachmentFromBytes(name, bytes);
-    stage.add({ ...attachment, error: undefined, path: id });
-    return;
-  }
+  log: WireWcAttachDeps['log']
+): Promise<Uint8Array | null> {
+  const reader = await openReader();
+  const raw = await reader.readFile(id, { encoding: 'binary' });
+  if (typeof raw !== 'string') return raw;
+  log.error('VFS image pick returned text, not bytes — skipping the inline copy', id);
+  return null;
+}
+
+/** Path-only attachment for a VFS pick: no inline content, `stat` for the
+ *  size so the chip and the prompt line read right. */
+async function referenceVfsFile(
+  id: string,
+  name: string,
+  openReader: () => Promise<LocalVfsClient>
+): Promise<MessageAttachment> {
   let size = 0;
   try {
     size = (await (await openReader()).stat(id)).size;
   } catch {
     // Stat failure leaves size at 0 — the reference line still renders.
   }
-  stage.add({ id: uid(), name, mimeType: mimeFor(name), size, kind: 'file', path: id });
+  return { id: uid(), name, mimeType: mimeFor(name), size, kind: 'file', path: id };
+}
+
+/** Stage a VFS file pick by reference — the pick already HAS a canonical path,
+ *  so link it directly instead of reading + inlining its contents. Images are
+ *  the one exception: they also carry an inline base64 copy for vision. */
+async function stageVfsFile(
+  id: string,
+  openReader: () => Promise<LocalVfsClient>,
+  stage: WcAttachmentStage,
+  log: WireWcAttachDeps['log']
+) {
+  const name = id.split('/').pop() ?? id;
+  if (IMAGE_EXT.test(name)) {
+    // Images keep an inline copy for vision alongside the existing path.
+    const bytes = await readVfsImageBytes(id, openReader, log);
+    if (bytes) {
+      const attachment = attachmentFromBytes(name, bytes);
+      stage.add({ ...attachment, error: undefined, path: id });
+      return;
+    }
+    // No bytes to inline: the file on disk is still good, so keep the path
+    // reference (the agent can `read` it) rather than staging garbage.
+  }
+  stage.add(await referenceVfsFile(id, name, openReader));
 }
 
 /** Append a skill mention to the composer's draft. */
@@ -757,7 +795,7 @@ async function handleAdd(
     await stageCapture(detail, deps, stage);
   } else if (detail.kind === 'file' && typeof detail.id === 'string' && deps.openReader) {
     // VFS file picks only exist when the float has a reader (leader, not follower).
-    await stageVfsFile(detail.id, deps.openReader, stage);
+    await stageVfsFile(detail.id, deps.openReader, stage, deps.log);
   } else if (detail.kind === 'skill' && typeof detail.label === 'string') {
     insertSkillMention(detail.label, deps.inputCard);
   } else if (detail.kind === 'conversation' && typeof detail.id === 'string') {
