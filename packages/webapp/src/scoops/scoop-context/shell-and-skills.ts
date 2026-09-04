@@ -119,8 +119,10 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
   }
 
   const effectiveSkillsFs = (skillsFs ?? fs) as VirtualFS;
-  // #2276: secrets + webhook topology come from the injected broker, never a
-  // probe. Remaining call sites: `work-unit/capability/index.ts`.
+  // #2276: secrets + webhook/crontask topology come from the injected
+  // broker, never a probe. See `work-unit/capability/index.ts` for the full
+  // slice-C inventory (now empty except `ui/` and documented `shell/`
+  // topology owners).
   const broker = deps.capabilityBroker ?? createRestCapabilityBroker();
   const secretEnv = await loadSecretEnv(broker);
   const localNode = await broker.network.localNodeServer();
@@ -168,6 +170,7 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
       hasLocalNodeServer,
       getLeaderStatus: getLeaderStatusWithFallback,
     },
+    crontask: { hasLocalNodeServer },
     jshDiscoveryFs: skillsFs ? effectiveSkillsFs : undefined,
     allowedCommands: scoop.config?.allowedCommands,
     getParentJid: () => scoop.jid,

@@ -17,7 +17,6 @@
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { hasLocalNodeServer } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { getLeaderStatusWithFallback } from '../scoops/tray-leader.js';
 import {
@@ -50,8 +49,17 @@ export interface PanelTerminalHostOptions {
    * still run ungated. Omit to leave the panel shell completely sudo-free.
    */
   sudoManager?: SudoManager | null;
-  /** Runtime readers for webhook URL routing. Defaults to the live topology and tray status. */
+  /**
+   * Runtime readers for webhook URL routing. `hasLocalNodeServer` is the
+   * caller's already-resolved topology fact (#2276) — this file reads no
+   * float probe of its own; its own default (used only if a caller ever
+   * fails to inject one, like `crontask`'s) fails CLOSED to the worker
+   * LickManager path, never the privileged REST one. `getLeaderStatus`
+   * defaults to the real tray status reader when omitted.
+   */
   webhook?: HeadlessShellOptions['webhook'];
+  /** Runtime topology reader for the crontask command. Same composition-time answer as `webhook`. */
+  crontask?: HeadlessShellOptions['crontask'];
   /** Optional logger override. Defaults to `console`. */
   logger?: TerminalSessionHostOptions['logger'];
 }
@@ -112,9 +120,10 @@ export function createPanelTerminalHost(
         env: opts.env,
         browserAPI: browser,
         webhook: {
-          hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? hasLocalNodeServer,
+          hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? (() => false),
           getLeaderStatus: options.webhook?.getLeaderStatus ?? getLeaderStatusWithFallback,
         },
+        crontask: options.crontask,
         processManager,
         processOwner: { kind: 'system' },
         sudo: shellSudo,

@@ -1,47 +1,32 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 // Static, not `await import()` inside each test: `src/kernel/host.js` pulls a
 // large graph, and vitest charges that transform+evaluation to whichever test
 // triggers it — the first one here measured >1.2s of a 5s budget and timed out
-// under load. Both gates below read `globalThis.chrome` / the delegate id at
-// CALL time (`resolveFloatTopology`), never at module scope, so importing
-// ahead of the per-test global stubbing is behaviour-preserving.
+// under load.
 import { shouldStartLickWsBridge } from '../../src/kernel/host.js';
-import { setExtensionDelegateId } from '../../src/shell/proxied-fetch.js';
 
 describe('shouldStartLickWsBridge (kernel host lick-ws gate)', () => {
-  let originalChrome: unknown;
-  let originalConnectMode: unknown;
-
-  beforeEach(() => {
-    originalChrome = (globalThis as { chrome?: unknown }).chrome;
-    originalConnectMode = (globalThis as Record<string, unknown>).__slicc_connect_mode;
+  // #2276 slice C: takes the already-resolved topology (`capabilityBroker.adapter`
+  // in `bootOrchestrator`) as a parameter instead of re-probing
+  // `hasLocalNodeServer()` itself, so this is a pure function over its input —
+  // no more `globalThis.chrome` / extension-delegate-id stubbing needed.
+  it('starts the bridge for node-rest', () => {
+    expect(shouldStartLickWsBridge('node-rest')).toBe(true);
   });
 
-  afterEach(async () => {
-    (globalThis as { chrome?: unknown }).chrome = originalChrome;
-    (globalThis as Record<string, unknown>).__slicc_connect_mode = originalConnectMode;
-    setExtensionDelegateId(null);
+  it('does NOT start the bridge for extension-delegate', () => {
+    expect(shouldStartLickWsBridge('extension-delegate')).toBe(false);
   });
 
-  it('starts the bridge for node-rest', async () => {
-    (globalThis as { chrome?: unknown }).chrome = undefined;
-    setExtensionDelegateId(null);
-    expect(shouldStartLickWsBridge()).toBe(true);
+  it('does NOT start the bridge for extension-direct', () => {
+    expect(shouldStartLickWsBridge('extension-direct')).toBe(false);
   });
 
-  it('does NOT start the bridge for extension-delegate', async () => {
-    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => undefined } };
-    setExtensionDelegateId('delegate-id');
-    expect(shouldStartLickWsBridge()).toBe(false);
-  });
-
-  it('does NOT start the bridge for extension-direct', async () => {
-    (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'real-ext-id' } };
-    setExtensionDelegateId(null);
-    expect(shouldStartLickWsBridge()).toBe(false);
+  it('does NOT start the bridge for connect', () => {
+    expect(shouldStartLickWsBridge('connect')).toBe(false);
   });
 });
 
@@ -52,7 +37,7 @@ describe('host.ts lick-ws gate wiring (source)', () => {
   it('guards startLickWsBridgeForHost with shouldStartLickWsBridge()', () => {
     // The bridge start is reached ONLY when the (unit-tested) predicate is true.
     expect(source).toMatch(
-      /if \(shouldStartLickWsBridge\(\)\)\s*\{[\s\S]*?startLickWsBridgeForHost\(/
+      /if \(shouldStartLickWsBridge\(capabilityBroker\.adapter\)\)\s*\{[\s\S]*?startLickWsBridgeForHost\(/
     );
   });
 

@@ -28,27 +28,32 @@ describe('ui/main.ts telemetry wiring', () => {
   });
 
   it('calls initTelemetry() with a swallowed catch', () => {
-    expect(source).toMatch(/initTelemetry\(\)\s*\.catch\(/);
+    expect(source).toMatch(/initTelemetry\(\{ isExtensionRealm: isExtension \}\)\s*\.catch\(/);
   });
 
   it('calls initTelemetry after the fixture early-return', () => {
     const fixtureIdx = source.indexOf('isFixtureRequested(window.location.href)');
-    const initIdx = source.indexOf('initTelemetry()');
+    const initIdx = source.indexOf('initTelemetry(');
     expect(fixtureIdx).toBeGreaterThan(-1);
     expect(initIdx).toBeGreaterThan(-1);
     expect(initIdx).toBeGreaterThan(fixtureIdx);
   });
 
   it('calls initTelemetry before the heavy boot (registerProviders)', () => {
-    const initIdx = source.indexOf('initTelemetry()');
+    const initIdx = source.indexOf('initTelemetry(');
     const providersIdx = source.indexOf('await registerProviders');
     expect(initIdx).toBeGreaterThan(-1);
     expect(providersIdx).toBeGreaterThan(-1);
     expect(initIdx).toBeLessThan(providersIdx);
   });
 
-  it('gates initTelemetry on a non-connect runtime mode', () => {
-    expect(source).toMatch(/runtimeMode\s*!==\s*['"]connect['"][\s\S]{0,200}initTelemetry\(\)/);
+  it('passes the already-resolved isExtension local — not a fresh probe — and gates on a non-connect runtime mode', () => {
+    // #2276: `kernel/telemetry.ts` no longer probes `isExtensionRealm()`
+    // itself (banned in `kernel/` outside `kernel/host.ts`); the page-realm
+    // caller passes its own already-resolved `isExtension` local instead.
+    expect(source).toMatch(
+      /runtimeMode\s*!==\s*['"]connect['"][\s\S]{0,200}initTelemetry\(\{ isExtensionRealm: isExtension \}\)/
+    );
   });
 
   it('marks connect mode via a named ConnectModeGlobal cast', () => {

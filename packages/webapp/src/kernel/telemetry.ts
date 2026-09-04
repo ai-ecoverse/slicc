@@ -14,7 +14,6 @@
  */
 
 import { isUserFixableError } from '../core/error-families.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
@@ -65,13 +64,18 @@ function isWorkerLikeRealm(): boolean {
 /**
  * Get the deployment mode label for telemetry. `standalone-worker` covers
  * the standalone kernel-worker DedicatedWorker (no `window`), distinguishing
- * it from the page-side standalone shell.
+ * it from the page-side standalone shell. `isExtensionRealm` is the caller's
+ * ALREADY-RESOLVED answer (#2276) — `kernel/` reads no float probe of its
+ * own except `kernel/host.ts`'s one composition root, and this module isn't
+ * that root.
  */
-function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' {
+function getModeLabel(
+  isExtensionRealm: boolean
+): 'cli' | 'extension' | 'electron' | 'standalone-worker' {
   // Workers have no `window`. `chrome` / `document` / `localStorage` are
   // also unavailable, so this check has to come first.
   if (isWorkerLikeRealm()) return 'standalone-worker';
-  if (isExtensionRealm()) return 'extension';
+  if (isExtensionRealm) return 'extension';
   if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay)
     return 'electron';
   return 'cli';
@@ -83,6 +87,14 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' 
  * `chrome-extension/src/offscreen.ts` (extension agent realm), and
  * `kernel/kernel-worker.ts` (standalone agent realm).
  *
+ * `opts.isExtensionRealm` is the page-realm caller's own already-resolved
+ * realm fact (`ui/main.ts` computes it once, at the top of `main()`, for its
+ * own routing) — passed in rather than re-probed here. It only matters for
+ * the page-realm branch below: the worker branch short-circuits on
+ * `isWorkerLikeRealm()` first, so `kernel/kernel-worker.ts`'s call (running
+ * inside the DedicatedWorker in every float, extension included) never
+ * reaches it and can omit the option entirely.
+ *
  * In worker contexts (`standalone-worker`) the inlined `rum.js` is replaced
  * by `rum-worker.js`, error listeners are registered on `self` instead of
  * `window`, and the `RUM_GENERATION` / `SAMPLE_PAGEVIEWS_AT_RATE` writes
@@ -90,7 +102,7 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' 
  *
  * No-op if telemetry is disabled via localStorage toggle.
  */
-export async function initTelemetry(): Promise<void> {
+export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): Promise<void> {
   if (initialized) return;
   if (
     typeof localStorage !== 'undefined' &&
@@ -117,7 +129,7 @@ export async function initTelemetry(): Promise<void> {
   setAgentErrorTelemetrySink(trackError);
 
   try {
-    const mode = getModeLabel();
+    const mode = getModeLabel(opts.isExtensionRealm ?? false);
 
     if (mode !== 'standalone-worker' && typeof window !== 'undefined') {
       window.RUM_GENERATION = `slicc-${mode}`;

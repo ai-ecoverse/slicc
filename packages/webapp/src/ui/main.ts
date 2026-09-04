@@ -111,7 +111,7 @@ async function main(): Promise<void> {
   // `?connect=1` login-only surface, which has no kernel and no shell.
   // Fire-and-forget — telemetry init must never block the boot.
   if (runtimeMode !== 'connect') {
-    initTelemetry().catch(() => {});
+    initTelemetry({ isExtensionRealm: isExtension }).catch(() => {});
   }
 
   // Service-worker registration (preview SW + connect-mode SW detach). The

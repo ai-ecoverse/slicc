@@ -55,7 +55,7 @@ import { setLastSeenVersionReader } from '../base/slicc-version.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
-import { hasLocalNodeServer, resolveFloatTopology } from '../core/float-topology.js';
+import { resolveFloatTopology } from '../core/float-topology.js';
 import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
@@ -1015,9 +1015,13 @@ async function startBshWatchdogForHost(
  * cone, serve-only. Extension-delegate (and the unreachable extension-direct)
  * have no node-server — their licks arrive via the tray worker — so the
  * bridge MUST NOT start there or it dials a dead `wss://.../licks-ws`.
+ *
+ * Takes the float's topology as resolved ONCE in `bootOrchestrator`
+ * (`capabilityBroker.adapter`) rather than re-probing `hasLocalNodeServer()`
+ * — same fact, one resolution (#2276).
  */
-export function shouldStartLickWsBridge(): boolean {
-  return hasLocalNodeServer();
+export function shouldStartLickWsBridge(adapter: CapabilityAdapterId): boolean {
+  return adapter === 'node-rest';
 }
 
 /**
@@ -1104,7 +1108,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     local node-server peer; extension-delegate / extension-direct route
   //     licks through the tray worker instead (see lick-ws-bridge.ts).
   let lickWsBridgeStop: (() => void) | null = null;
-  if (shouldStartLickWsBridge()) {
+  if (shouldStartLickWsBridge(capabilityBroker.adapter)) {
     lickWsBridgeStop = await startLickWsBridgeForHost(
       lickManager,
       log,

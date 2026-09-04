@@ -366,6 +366,114 @@ describe('createPanelTerminalHost — webhook runtime wiring', () => {
   });
 });
 
+// #2276 round-1 review on #2841 (P1 regression): the panel terminal is the
+// ONE production human-typed shell and was missed in the original browser+
+// leftovers migration — it never threaded `crontask` at all, so after
+// crontask-command.ts's constructor stopped reading the raw probe itself,
+// an unwired `createPanelTerminalHost` call silently assumed node-rest on
+// every float. `kernel-worker.ts` now supplies both `webhook` and
+// `crontask` from the same resolved `capabilityBroker.adapter`; the second
+// test here proves the FACTORY's own default (used only if a caller ever
+// fails to do that again) fails closed to the LickManager instead.
+describe('createPanelTerminalHost — crontask runtime wiring', () => {
+  afterEach(() => {
+    delete globals.__slicc_lickManager;
+  });
+
+  it('uses an injected hasLocalNodeServer: false to route through the worker LickManager, never fetch', async () => {
+    const mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'nightly', cron: '0 0 * * *' }),
+    };
+    globals.__slicc_lickManager = mockLm;
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+    const fs = await VirtualFS.create({
+      dbName: `pthost-crontask-injected-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const handle = createPanelTerminalHost({
+      transport: createBridgeMessageChannelTransport(channel.port2),
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      crontask: { hasLocalNodeServer: () => false },
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      createPanelMessageChannelTransport(channel.port1)
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'crontask1' });
+
+    await client.open();
+    const result = await client.exec('crontask create --name nightly --cron "0 0 * * *"');
+
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('nightly', '0 0 * * *', undefined);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+    vi.unstubAllGlobals();
+  });
+
+  it('with NO injected crontask option at all, still fails closed to the LickManager — not fetch', async () => {
+    const mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c2', name: 'digest', cron: '0 9 * * *' }),
+    };
+    globals.__slicc_lickManager = mockLm;
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+    const fs = await VirtualFS.create({
+      dbName: `pthost-crontask-default-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const handle = createPanelTerminalHost({
+      transport: createBridgeMessageChannelTransport(channel.port2),
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      // No `crontask` at all — proves the FACTORY's default, not an
+      // injected answer, is what fails closed.
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      createPanelMessageChannelTransport(channel.port1)
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'crontask2' });
+
+    await client.open();
+    const result = await client.exec('crontask create --name digest --cron "0 9 * * *"');
+
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', undefined);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('createPanelTerminalHost — parity wiring', () => {
   it('registers a kind:"shell" process for every panel-typed exec', async () => {
     const w = await wirePanelHost();

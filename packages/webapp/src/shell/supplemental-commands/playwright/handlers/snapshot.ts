@@ -215,6 +215,11 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratc
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // #2276: stays a `shell/`-owned realm read, not a CapabilityBroker op —
+    // it only selects which user-facing error STRING to print after
+    // `Page.printToPDF` already failed over `/cdp` (browser automation has no
+    // privileged transport of its own; every adapter rides `/cdp`, so there
+    // is no `browser.*` capability to route this through).
     const isExtension = isExtensionRealm();
     if (isExtension) {
       return {

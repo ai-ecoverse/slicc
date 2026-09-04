@@ -591,6 +591,9 @@ async function startSharedFsSurfaces(deps: {
     console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
     return null;
   }
+  // The topology `bootOrchestrator` already resolved once, composed into
+  // `capabilityBroker` — read off it here rather than re-probing (#2276).
+  const hasLocalNodeServer = () => deps.host.capabilityBroker.adapter === 'node-rest';
   const handle = createPanelTerminalHost({
     transport: deps.transport,
     fs: sharedFs,
@@ -600,6 +603,8 @@ async function startSharedFsSurfaces(deps: {
     // explicit `sudo <cmd...>` prompts the human via the same broker the
     // agent uses (the factory pins `transparentGating: false`).
     sudoManager: deps.host.orchestrator.getSudoManager(),
+    webhook: { hasLocalNodeServer },
+    crontask: { hasLocalNodeServer },
     logger: console,
   });
   const vfsHandle = startVfsRpcHost({
