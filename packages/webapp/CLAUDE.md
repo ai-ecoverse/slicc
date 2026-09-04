@@ -35,6 +35,14 @@ Per-subsystem file paths + invariants live in
 - Core agent — `src/core/` (pi-agent-core + pi-ai; `tool-adapter.ts` bridges legacy tools;
   feature flags + context compaction)
 - UI + layouts — `src/ui/` and `ui/wc/` (also `docs/layouts.md`)
+- Keyboard mode — `ui/wc/wc-shortcuts.ts` (keymap + modal grammar + the help sheet),
+  `wc-shortcut-surfaces.ts` (the DOM-reached commands), `wc-shortcut-caps.ts` (a floating
+  `<slicc-keycap>` per control, in one fixed click-through layer over measured ghosts —
+  deliberately NOT the transcript, whose mutation rate is the hot path),
+  `wc-shortcut-usage.ts` (session-only counts behind the sheet's "your frequent actions";
+  counts POINTER use off the surfaces' own events, which is the point — it tells you the
+  key for what you have been CLICKING). Help sections come from `Command.group`, never
+  from the keymap, so a rebind never reshuffles the sheet.
 - Skills — `src/skills/`; Sprinkles + Dips — `ui/sprinkle-*.ts`, `ui/dip.ts`
 - Stale-asset recovery — `setup-preload-error-reload.ts` + `stale-asset-channel.ts`
 - Storage persistence — `boot/setup-storage-persistence.ts` (OPFS is _evictable_ best-effort
