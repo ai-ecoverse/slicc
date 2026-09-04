@@ -127,7 +127,7 @@
     "esbuild": "0.28.2",
     "husky": "9.1.7",
     "jscpd": "5.0.16",
-    "knip": "6.32.3",
+    "knip": "6.33.0",
     "lint-staged": "17.3.0",
     "patch-package": "8.0.1",
     "playwright": "1.62.1",
