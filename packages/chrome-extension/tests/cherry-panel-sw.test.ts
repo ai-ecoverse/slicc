@@ -87,6 +87,25 @@ describe('cherry-panel-sw', () => {
     expect(openSettingsOnLeader).not.toHaveBeenCalled();
   });
 
+  it('a focus-leader message swallows a focusLeaderTab rejection (fire-and-forget, no unhandled rejection)', async () => {
+    // The panel's card already told the user; a focus failure isn't fatal —
+    // it must not surface as an unhandled promise rejection.
+    const focusLeaderTab = vi.fn(async () => {
+      throw new Error('tab gone');
+    });
+    const openSettingsOnLeader = vi.fn();
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      focusLeaderTab,
+      openSettingsOnLeader,
+    });
+    expect(() => p._rx({ kind: 'focus-leader' })).not.toThrow();
+    expect(focusLeaderTab).toHaveBeenCalledTimes(1);
+    // Flush the fire-and-forget rejection's microtask before the test ends.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   it('a focus-leader message with no openSettingsOnLeader dep still focuses (no throw)', async () => {
     const focusLeaderTab = vi.fn(async () => {});
     const p = fakePort();

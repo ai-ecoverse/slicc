@@ -26,8 +26,8 @@
  * sessionId -> tab mappings.
  */
 
-import { type CDPPayload, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
+  type CDPPayload,
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeCdpRequest,
@@ -37,8 +37,9 @@ import {
   type ExtensionBridgeOpenSettings,
   isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
-} from '../../webapp/src/cdp/extension-bridge-protocol.js';
-import type { TargetInfo } from '../../webapp/src/cdp/types.js';
+  SLICC_HOSTED_ORIGIN,
+  type TargetInfo,
+} from '@slicc/shared-ts';
 
 /** Result of the bridge's Target.attachToTarget shim. */
 interface BridgeTargetAttachResult extends CDPPayload {

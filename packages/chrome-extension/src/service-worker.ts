@@ -17,7 +17,11 @@ import {
   type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
+  extractHandoffFromWebRequest,
   type FetchProxySecretSource,
+  type HandoffMatch,
+  handoffFingerprint,
+  LEADER_EXT_ID_QUERY_NAME,
   previewSecret,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
@@ -27,6 +31,14 @@ import {
   SLICC_HOSTED_ORIGIN,
   unmaskCdpFrame,
 } from '@slicc/shared-ts';
+// Only `import type` from packages/webapp/src is permitted in
+// packages/chrome-extension/src (#2276 slice E, category 10): these unions
+// are core webapp-internal kernel↔panel infrastructure (11 files import
+// them), not extension-specific, so they stay in webapp rather than moving
+// to @slicc/shared-ts. `import type` compiles away — it carries no
+// runtime/bundle coupling, which is what category 10's exit criterion is
+// about. See docs/review-patterns.md category 10 and
+// packages/chrome-extension/CLAUDE.md.
 import type {
   CdpCommandMsg,
   CdpEventMsg,
@@ -41,12 +53,6 @@ import type {
   TraySocketOpenedMsg,
   TraySocketOpenMsg,
 } from '../../webapp/src/kernel/messages.js';
-import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';
-import {
-  extractHandoffFromWebRequest,
-  type HandoffMatch,
-  handoffFingerprint,
-} from '../../webapp/src/net/handoff-link.js';
 import {
   BRIDGE_ALLOWED_ORIGINS,
   BRIDGE_DEV_ORIGINS,

@@ -7,7 +7,7 @@ import {
   getLinkHeaderValuesFromHeaders,
   getLinkHeaderValuesFromWebRequest,
   parseLinkHeader,
-} from '../../src/net/link-header.js';
+} from '../src/link-header.js';
 
 describe('parseLinkHeader — single value', () => {
   it('parses a minimal link with one rel', () => {
@@ -112,6 +112,11 @@ describe('parseLinkHeader — base URL resolution', () => {
     expect(links[0].href).toBe('https://example.com/foo');
   });
 
+  it('falls back to the raw URI when the base makes URL construction throw', () => {
+    const links = parseLinkHeader('</foo>; rel="next"', 'not a valid base url');
+    expect(links[0].href).toBe('/foo');
+  });
+
   it('preserves absolute href', () => {
     const links = parseLinkHeader('<https://other.example/x>; rel="next"', 'https://example.com/');
     expect(links[0].href).toBe('https://other.example/x');
@@ -148,8 +153,30 @@ describe('parseLinkHeader — robustness', () => {
     expect(parseLinkHeader([])).toEqual([]);
   });
 
+  it('returns [] for a value outside the declared input type (defensive)', () => {
+    // Callers on an untyped wire (CDP, chrome.webRequest, JSON.parse) can
+    // hand back something that isn't string | string[] at runtime even
+    // though the TS signature disallows it.
+    expect(parseLinkHeader(42 as unknown as string)).toEqual([]);
+  });
+
   it('skips a malformed value and continues to the next', () => {
     const links = parseLinkHeader('garbage, </ok>; rel="next"');
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe('/ok');
+  });
+
+  it('skips a malformed value containing a backslash-escaped quoted string', () => {
+    // Exercises skipToNextValue's in-quote state machine: opening a quote,
+    // skipping a backslash-escaped char inside it, closing the quote, then
+    // finding the terminating comma.
+    const links = parseLinkHeader('bad"x\\"y", </ok>; rel="next"');
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe('/ok');
+  });
+
+  it('skips trailing unterminated garbage with no comma at the end', () => {
+    const links = parseLinkHeader('</ok>; rel="next", garbage');
     expect(links).toHaveLength(1);
     expect(links[0].href).toBe('/ok');
   });
@@ -161,6 +188,37 @@ describe('parseLinkHeader — robustness', () => {
 
   it('does not throw on unterminated angle bracket', () => {
     expect(() => parseLinkHeader('</broken')).not.toThrow();
+  });
+
+  it('accepts a bare parameter with no `=` value', () => {
+    const links = parseLinkHeader('</>; rel="x"; bareflag');
+    expect(links[0].params.bareflag).toBe('');
+  });
+
+  it('tolerates trailing whitespace after the last parameter', () => {
+    const links = parseLinkHeader('</>; rel="x"  ');
+    expect(links).toHaveLength(1);
+  });
+
+  it('tolerates trailing whitespace between link-values with nothing after', () => {
+    const links = parseLinkHeader('</a>; rel="x",   ');
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe('/a');
+  });
+
+  it('recovers from a stray token after a parameter with no separator', () => {
+    const links = parseLinkHeader('</a>; rel="x" garbage, </b>; rel="y"');
+    expect(links.map((l) => l.href)).toEqual(['/a', '/b']);
+  });
+
+  it('recovers from a semicolon immediately followed by an invalid name start', () => {
+    const links = parseLinkHeader('</a>; rel="x";=oops, </b>; rel="y"');
+    expect(links.map((l) => l.href)).toEqual(['/a', '/b']);
+  });
+
+  it('normalizes an uppercase parameter name to lowercase', () => {
+    const links = parseLinkHeader('</>; REL="next"');
+    expect(links[0].rel).toEqual(['next']);
   });
 });
 
@@ -223,6 +281,23 @@ describe('formatLink / formatLinkHeader', () => {
     expect(out).not.toContain('\n');
   });
 
+  it('skips reserved param names already emitted from top-level fields', () => {
+    // `rel` is both a top-level LinkInput field (always emitted first) and
+    // present in `params` here — the reserved-name skip must not double-emit
+    // it via the generic params loop.
+    const out = formatLink({ href: '/', rel: 'x', params: { rel: 'duplicate', foo: 'bar' } });
+    expect(out).toBe('</>; rel=x; foo=bar');
+  });
+
+  it('percent-encodes CR/LF carried directly in `rel` (bypasses ext-encoding)', () => {
+    // `rel` always goes through the plain quoted-string formatter, not the
+    // needsExtEncoding()-gated appendParam() path other fields use.
+    const out = formatLink({ href: '/', rel: 'foo\r\nbar' });
+    expect(out).toContain('%0D%0A');
+    expect(out).not.toContain('\r');
+    expect(out).not.toContain('\n');
+  });
+
   it('joins multiple links with comma-space', () => {
     const out = formatLinkHeader([
       { href: '/a', rel: 'next' },
@@ -266,11 +341,19 @@ describe('header-shape adapters', () => {
     ).toEqual(['</a>; rel="x"']);
   });
 
+  it('returns [] for an undefined webRequest headers array', () => {
+    expect(getLinkHeaderValuesFromWebRequest(undefined)).toEqual([]);
+  });
+
   it('extracts Link from a Headers object', () => {
     const h = new Headers();
     h.append('link', '</a>; rel="next"');
     h.append('link', '</b>; rel="prev"');
     // Headers.get() returns comma-joined for multi-value names.
     expect(getLinkHeaderValuesFromHeaders(h)).toEqual(['</a>; rel="next", </b>; rel="prev"']);
+  });
+
+  it('returns [] for undefined Headers', () => {
+    expect(getLinkHeaderValuesFromHeaders(undefined)).toEqual([]);
   });
 });

@@ -1,12 +1,12 @@
 import {
   base64ToUint8,
+  decodeForbiddenRequestHeaders,
   type FetchProxyRequestMsg,
   type FetchProxyResponseMsg,
   HMAC_SIGN_HEADER,
   type SecretsPipeline,
   uint8ToBase64,
 } from '@slicc/shared-ts';
-import { decodeForbiddenRequestHeaders } from '../../webapp/src/shell/proxy-headers.js';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 

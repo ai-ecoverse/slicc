@@ -20,12 +20,13 @@
  * it to the global `fetch` and `postDiscoveryToWelcomedLeaderPorts`.
  */
 
-import type { DiscoveryKind } from '@slicc/shared-ts';
 import {
+  type DiscoveryKind,
   discoveryFingerprint,
   extractCatalogFromWebRequest,
-} from '../../webapp/src/net/discovery-link.js';
-import { type ProbeFetch, probeWellKnown } from '../../webapp/src/net/well-known-probe.js';
+  type ProbeFetch,
+  probeWellKnown,
+} from '@slicc/shared-ts';
 
 /** A discovery artifact the observer surfaces, minus the bridge envelope wrap. */
 export interface ObservedDiscovery {

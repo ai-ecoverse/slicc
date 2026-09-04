@@ -912,14 +912,10 @@ export type VfsWatchPushMsg = VfsWatchResultMsg | VfsWatchEventMsg;
  */
 export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
 
-/**
- * URL query parameter the service worker appends to the pinned leader-tab
- * URL carrying the extension id. The leader page reads it to open the
- * `chrome.runtime.connect(<id>, { name: EXTENSION_BRIDGE_PORT_NAME })` Port
- * — `chrome.runtime.id` is undefined on an externally_connectable page, so
- * the id must be passed in out of band.
- */
-export const LEADER_EXT_ID_QUERY_NAME = 'ext';
+// LEADER_EXT_ID_QUERY_NAME moved to @slicc/shared-ts's extension-bridge-protocol.ts
+// (#2276 slice E), next to EXTENSION_BRIDGE_PORT_NAME which its doc comment
+// references. Re-exported here so no webapp-internal import path changes.
+export { LEADER_EXT_ID_QUERY_NAME } from '@slicc/shared-ts';
 
 /** URL query name/value marking the pinned hosted leader tab the thin extension opens. */
 export const LEADER_RUNTIME_QUERY_NAME = 'slicc';

@@ -8,8 +8,8 @@
  * `?cherry=1` follower on the `sliccy.ai` origin — there is no extension sandbox.
  */
 
+import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
-import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import type { SprinkleAgentOptions, SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 

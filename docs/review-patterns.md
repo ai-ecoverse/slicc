@@ -331,6 +331,25 @@ isTrayExtension = getChromeExtensionRealm` and the like). Privileged float
   (`base/api-endpoint.ts` / `shell/proxied-fetch.ts`) followed by property
   access (`api.getChromeExtensionRealm()`), or a dynamic `import()` of one of
   those same mixed modules followed by property access.
+- A relative import in `packages/chrome-extension/src` reaching into
+  `packages/webapp/src` (#2276 slice E). This is the _reciprocal_ of the
+  cross-package-escape check above: it catches the thin extension depending
+  on webapp's runtime instead of the other direction. Value imports, dynamic
+  `import()` (quoted, template-literal, or `+`-concatenated), mixed `{ type
+X, Y }` clauses, `export type { ... } from` re-exports, namespace/default
+  imports, and TS triple-slash `/// <reference path="..." />` directives are
+  all banned outright. **Only a top-level `import type { ... } from
+'.../kernel/messages.js'` clause is granted** — nothing else, including a
+  type-only import of any OTHER webapp module, or a type-only import of
+  `kernel/messages.js` in any other shape (mixed, `export type`, namespace).
+  That one exemption exists because it compiles away entirely, so it carries
+  no runtime/bundle coupling, which is what this category's exit criterion is
+  about; the message-envelope union it names is core webapp-internal kernel
+  infrastructure (11+ webapp files), not extension-specific, so moving it
+  would invert the dependency for no bundle-coupling benefit. CI-enforced by
+  `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` /
+  `scanChromeExtensionWebappEscapes` — zero tolerance, no baseline, and the
+  allowlist names exactly one path in exactly one clause shape.
 
 **Historical precedents**
 
@@ -358,6 +377,15 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   `base/` at `node-server/src/tray-url-shared.ts`, so the webapp's _bottom_ rung depended on
   the Node CLI package. Pure helpers, wrong package. Moving them to `@slicc/shared-ts` flipped
   the arrow; the gate now scans for the escape so the class cannot recur.
+- **#2276 slice E** — the reciprocal cross-package form: `packages/chrome-extension/src`
+  imported six pure protocol modules (`cdp/extension-bridge-protocol`, the `cdp/types`
+  `TargetInfo` subset, `shell/proxy-headers`, `net/discovery-link`, `net/well-known-probe`,
+  `net/handoff-link`, plus the transitively-required `net/link-header`) and the
+  `LEADER_EXT_ID_QUERY_NAME` constant straight out of `packages/webapp/src`. Moved to
+  `@slicc/shared-ts` with webapp re-export shims at the original paths, so no webapp-internal
+  caller's import path changed. The 12 `kernel/messages.ts` types `service-worker.ts` needs
+  stayed put and stayed `import type` — this category's exit criterion is closed with this
+  slice.
 
 **Class size** — 152 grandfathered back-edges across 92 files at full-stack baseline freeze
 (2026-08); 34 across 27 files at the original ui-only freeze (2026-07).

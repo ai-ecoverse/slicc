@@ -7,8 +7,8 @@ import {
   HANDOFF_REL,
   handoffFingerprint,
   UPSKILL_REL,
-} from '../../src/net/handoff-link.js';
-import { parseLinkHeader } from '../../src/net/link-header.js';
+} from '../src/handoff-link.js';
+import { parseLinkHeader } from '../src/link-header.js';
 
 describe('extractHandoff', () => {
   it('matches the upskill rel and returns the GitHub URL as target', () => {
@@ -51,6 +51,17 @@ describe('extractHandoff', () => {
   it('rejects rels with wrong case (URI comparison is case-sensitive)', () => {
     const links = parseLinkHeader('</>; rel="https://www.SLICCY.ai/rel/handoff"');
     expect(extractHandoff(links)).toBeNull();
+  });
+
+  it('surfaces a title as instruction on the upskill verb too (not handoff-only)', () => {
+    const links = parseLinkHeader(
+      `<https://github.com/o/r>; rel="${UPSKILL_REL}"; title="Install this skill"`
+    );
+    expect(extractHandoff(links)).toEqual({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      instruction: 'Install this skill',
+    });
   });
 
   it('returns the first match when multiple recognised rels are present', () => {
@@ -224,6 +235,20 @@ describe('extractHandoff', () => {
       );
       expect(extractHandoff(links)?.branch).toBe('release/v1.2_hotfix-3');
     });
+
+    it('drops a branch containing .. (traversal-shaped, matches the path rule)', () => {
+      const links = parseLinkHeader(
+        `<https://github.com/o/r>; rel="${UPSKILL_REL}"; branch="feature..name"`
+      );
+      expect(extractHandoff(links)?.branch).toBeUndefined();
+    });
+
+    it('drops a branch ending in .lock (git ref-format rule)', () => {
+      const links = parseLinkHeader(
+        `<https://github.com/o/r>; rel="${UPSKILL_REL}"; branch="feature.lock"`
+      );
+      expect(extractHandoff(links)?.branch).toBeUndefined();
+    });
   });
 
   describe('shell-injection defense — path param', () => {
@@ -331,12 +356,24 @@ describe('extractHandoffFrom* adapters', () => {
     expect(result.match?.instruction).toBe('do it');
   });
 
+  it('extractHandoffFromWebRequest returns nulls when no Link header', () => {
+    const result = extractHandoffFromWebRequest([{ name: 'Content-Type', value: 'text/html' }]);
+    expect(result.match).toBeNull();
+    expect(result.links).toEqual([]);
+  });
+
   it('extractHandoffFromFetchHeaders parses Headers object', () => {
     const headers = new Headers();
     headers.set('Link', `<https://github.com/o/r>; rel="${UPSKILL_REL}"`);
     const result = extractHandoffFromFetchHeaders(headers);
     expect(result.match?.verb).toBe('upskill');
     expect(result.match?.target).toBe('https://github.com/o/r');
+  });
+
+  it('extractHandoffFromFetchHeaders returns nulls when no Link header', () => {
+    const result = extractHandoffFromFetchHeaders(new Headers());
+    expect(result.match).toBeNull();
+    expect(result.links).toEqual([]);
   });
 });
 
@@ -346,6 +383,23 @@ describe('handoffFingerprint', () => {
     const a = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
     const b = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
     expect(a).toBe(b);
+  });
+
+  it('does not collide two identities that concatenate to the same string under a naive join (NUL-separator regression)', () => {
+    // Under a plain '' join, 'upskill' + 'https://github.com/o/r' + 'next' + '' + ''
+    // equals 'upskill' + 'https://github.com/o/rnext' + '' + '' + '' — the target
+    // and branch fields shift into each other. Only a separator that can't appear
+    // in any field (NUL, per the source doc comment) keeps them apart.
+    const branchOnR = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      branch: 'next',
+    });
+    const targetOnly = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/rnext',
+    });
+    expect(branchOnR).not.toBe(targetOnly);
   });
 
   it('distinguishes branch and path', () => {

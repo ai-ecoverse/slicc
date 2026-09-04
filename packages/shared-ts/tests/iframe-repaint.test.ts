@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isNestedInAnotherFrame, nudgeIframeRepaint } from '../../src/ui/iframe-repaint.js';
+import { isNestedInAnotherFrame, nudgeIframeRepaint } from '../src/iframe-repaint.js';
 
 describe('isNestedInAnotherFrame', () => {
   it('is false at the top level (jsdom: self === top)', () => {

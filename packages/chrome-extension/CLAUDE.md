@@ -134,6 +134,27 @@ popup posts bytes over `chrome.runtime` messaging.
 `ffmpeg-command.ts` / `screencapture-command.ts` gate this behind
 `isExtensionFloat()`.
 
+## Import Boundary (#2276 slice E)
+
+`src/` must not depend on `packages/webapp/src` at runtime — enforced zero-tolerance by
+`check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` (`npm run
+lint:layer-back-edges`), which covers quoted, template-literal, and `+`-concatenated
+`import()`/`require()` specifiers plus TS triple-slash reference paths. The pure protocol
+modules the extension needs (CDP bridge envelope, `LEADER_EXT_ID_QUERY_NAME`, proxy-headers,
+discovery/handoff/well-known-probe link extraction, the `cdp/types` `TargetInfo` subset, the
+`iframe-repaint.ts` DOM helper) all live in `@slicc/shared-ts` — `@slicc/shared-ts`'s
+`tsconfig.json` already includes the `DOM` lib, so a DOM-touching helper is not a barrier to
+moving it there too. Webapp keeps thin re-export shims at every original path so no
+webapp-internal caller moved.
+
+The one exception: `service-worker.ts`'s `import type { ... } from
+'../../webapp/src/kernel/messages.js'` block (12 names). That message-envelope union is core
+webapp-internal kernel infrastructure (11+ webapp files use it), not extension-specific —
+moving it would invert the dependency for no benefit, because `import type` compiles away
+entirely and carries no runtime/bundle coupling. The guard allowlists exactly that one path,
+and only as a top-level `import type { ... }` clause — a value import, a mixed `{ type X, Y
+}` clause, or a type-only import of any OTHER webapp module all still fail the gate.
+
 ## Runtime Conventions
 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
