@@ -92,6 +92,7 @@ describe('IdleCompaction', () => {
     expect(compactFn).toHaveBeenCalledWith(expect.any(Array), expect.any(AbortSignal), {
       force: true,
       trigger: 'idle',
+      roundId: expect.any(String),
       deferMemoryExtraction: expect.any(Function),
     });
     expect(agent.state.messages).toEqual([summary()]);
@@ -277,6 +278,28 @@ describe('IdleCompaction', () => {
       };
       expect(await new IdleCompaction(failing.deps).runNow()).toBe('failed');
       expect(failing.deps.onDiscarded).toHaveBeenCalledTimes(1);
+    });
+
+    // The retraction has to name its own round: the compactor's terminal state
+    // settles the transcript row before adoption is decided, so the consumer
+    // can only tell "take THIS round's row back" from "take back whatever row
+    // is there" by matching the id the round ran under (#2843).
+    it('reports the same round id it handed the compactor', async () => {
+      const same = deps();
+      const seen: (string | undefined)[] = [];
+      same.deps.getCompactFn = () => async (messages, _signal, options) => {
+        seen.push(options?.roundId);
+        return [...messages];
+      };
+      const idle = new IdleCompaction(same.deps);
+      expect(await idle.runNow()).toBe('no-progress');
+      expect(await idle.runNow()).toBe('no-progress');
+
+      expect(seen.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+      // A fresh id per round, so a late retraction cannot land on the wrong one.
+      expect(new Set(seen).size).toBe(2);
+      expect(same.deps.onDiscarded).toHaveBeenNthCalledWith(1, seen[0]);
+      expect(same.deps.onDiscarded).toHaveBeenNthCalledWith(2, seen[1]);
     });
 
     it('does NOT fire for an adopted round', async () => {

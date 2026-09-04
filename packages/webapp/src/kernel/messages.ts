@@ -1075,6 +1075,13 @@ export interface CompactionStateMsg {
   trigger?: 'threshold' | 'overflow' | 'idle';
   /** `/sessions` path of the pre-compaction transcript snapshot, once written. */
   transcriptPath?: string;
+  /**
+   * Opaque id of the round, present only for a round whose caller decides
+   * adoption after the compactor returns (the idle timer). It lets a late
+   * `cancelled` retract the row THIS round opened rather than whichever
+   * compaction row is currently on the transcript (#2843).
+   */
+  roundId?: string;
 }
 
 /**

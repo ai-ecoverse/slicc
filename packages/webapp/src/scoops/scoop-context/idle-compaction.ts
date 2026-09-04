@@ -62,8 +62,14 @@ export interface IdleCompactionDeps {
    * showed when the round opened. The compactor's own `cancelled` emission
    * only covers the abort it can see; the adoption gate here is the only place
    * that knows a completed summary was thrown away (#2843).
+   *
+   * Carries the round's id (the one handed to the compactor) so a consumer can
+   * tell "retract the row THIS round opened" from "retract whatever compaction
+   * row is on the transcript". They differ: a round the compactor completed
+   * emits its terminal state long before adoption is decided, and a round that
+   * found nothing to summarize never opened a row at all.
    */
-  onDiscarded: () => void;
+  onDiscarded: (roundId: string) => void;
   folder: string;
 }
 
@@ -92,6 +98,8 @@ export class IdleCompaction {
   private running = false;
   /** Aborts the round in flight; replaced per round. */
   private round: AbortController | null = null;
+  /** Rounds started by this instance, for a per-instance unique round id. */
+  private rounds = 0;
 
   constructor(private readonly deps: IdleCompactionDeps) {}
 
@@ -167,14 +175,17 @@ export class IdleCompaction {
       return 'below-minimum';
     }
 
-    const outcome = await this.runRound(agent, compactFn, messages, tokens);
+    // Names this round on every state it emits, so the retraction below can
+    // say WHICH round came to nothing (#2843).
+    const roundId = `idle-${Date.now().toString(36)}-${((this.rounds += 1)).toString(36)}`;
+    const outcome = await this.runRound(agent, compactFn, messages, tokens, roundId);
     // Every non-adopted outcome of a STARTED round retracts the notice the
     // round's `summarizing` state put in the transcript. Gate rejections and
     // `below-minimum` return above this line precisely because they never
     // opened one.
     if (outcome !== 'compacted') {
       try {
-        this.deps.onDiscarded();
+        this.deps.onDiscarded(roundId);
       } catch (err) {
         log.warn('onDiscarded hook threw', {
           folder: this.deps.folder,
@@ -190,7 +201,8 @@ export class IdleCompaction {
     agent: Agent,
     compactFn: CompactFn,
     messages: AgentMessage[],
-    tokens: number
+    tokens: number,
+    roundId: string
   ): Promise<IdleCompactionOutcome> {
     const before = fingerprint(messages);
     const input = messages.slice();
@@ -207,6 +219,7 @@ export class IdleCompaction {
       const compacted = await compactFn(input, round.signal, {
         force: true,
         trigger: 'idle',
+        roundId,
         deferMemoryExtraction: (extract) => {
           extractMemories = extract;
         },

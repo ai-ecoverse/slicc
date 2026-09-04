@@ -188,6 +188,14 @@ export interface CompactionStateDetail {
   trigger: CompactionTrigger;
   /** Set from the `summarizing` phase on, once the snapshot hook has answered. */
   transcriptPath?: string;
+  /**
+   * Opaque id of the round these states belong to, echoed from
+   * {@link CompactionOptions.roundId}. Only a caller that decides adoption
+   * AFTER the compactor returns sets one — the idle timer, whose late
+   * `cancelled` has to name the round it is retracting rather than whatever
+   * compaction row happens to be on the transcript (#2843).
+   */
+  roundId?: string;
 }
 
 export interface CompactionOptions {
@@ -208,6 +216,12 @@ export interface CompactionOptions {
    * `force` caller.
    */
   trigger?: CompactionTrigger;
+  /**
+   * Tag every state this round emits with an opaque id. Set by a caller whose
+   * adoption decision lands after the round returns, so its own later
+   * `cancelled` can be matched to the row this round opened (#2843).
+   */
+  roundId?: string;
 }
 
 /**
@@ -694,6 +708,18 @@ export function hasCompactionProgress(
   return messages.some((message, index) => message !== compacted[index]);
 }
 
+/**
+ * The detail every state of one round carries. A caller that decides adoption
+ * after the round returns names the round (see {@link CompactionOptions.roundId});
+ * everyone else emits the trigger alone.
+ */
+function stateDetailFor(
+  trigger: CompactionTrigger,
+  options: CompactionOptions | undefined
+): CompactionStateDetail {
+  return options?.roundId ? { trigger, roundId: options.roundId } : { trigger };
+}
+
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
 function emitCompactionState(
   config: CompactionConfig,
@@ -1093,7 +1119,7 @@ export function createCompactContext(
     // saw it BEFORE any elision touches a message, so the transcript on disk
     // is the real one, not the stubbed one.
     const trigger = options?.trigger ?? (options?.force ? 'overflow' : 'threshold');
-    const detail: CompactionStateDetail = { trigger };
+    const detail = stateDetailFor(trigger, options);
     const snapshot = await snapshotBeforeCompaction(config, messages, trigger);
     if (snapshot) detail.transcriptPath = snapshot.transcriptPath;
 

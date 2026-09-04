@@ -14,6 +14,7 @@ import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,
   AgentSpawnResultMsg,
+  CompactionStateMsg,
   ErrorMsg,
   ExtensionMessage,
   ForwardedLickEvent,
@@ -130,6 +131,8 @@ export interface SessionStats {
 export interface CompactionNoticeDetail {
   trigger: 'threshold' | 'overflow' | 'idle';
   transcriptPath?: string;
+  /** Set only by a round whose adoption is decided after it returns. */
+  roundId?: string;
 }
 
 export interface OffscreenClientCallbacks {
@@ -218,6 +221,25 @@ export class OffscreenClient implements KernelClientFacade {
    * appends to (#2843).
    */
   private compactionNoticeIds = new Map<string, string>();
+  /**
+   * Transcript-row id of the round a scoop has already SETTLED but whose fate
+   * is still open, keyed by jid, together with the round that owns it.
+   *
+   * The idle timer decides adoption after the compactor has returned, so a
+   * round that summarized fine still emits its terminal state (`idle` →
+   * "Compacted while idle") before anyone knows whether the conversation kept
+   * the result. When it did not, the retraction arrives here as a `cancelled`
+   * with no open row left to remove. Remembering the settled row — and the
+   * round id it belongs to — is what lets that late `cancelled` take the row
+   * back instead of leaving the transcript claiming a compaction that was
+   * thrown away (#2843).
+   *
+   * The round id is load-bearing, not decoration: a round that finds nothing
+   * to summarize never opens a row and still reports itself discarded, so an
+   * unqualified "remove the last compaction row" would delete a PREVIOUS
+   * round's honest one.
+   */
+  private compactionSettledRows = new Map<string, { messageId: string; roundId: string }>();
   /**
    * Tool calls in flight per scoop — incremented on `tool_start`, decremented
    * on the matching `tool_end`. A scoop is in the `tool` phase while this is
@@ -959,15 +981,9 @@ export class OffscreenClient implements KernelClientFacade {
         this.handleScoopStatus(msg as ScoopStatusMsg);
         break;
 
-      case 'compaction-state': {
-        const detail: CompactionNoticeDetail = {
-          trigger: msg.trigger ?? 'threshold',
-          ...(msg.transcriptPath ? { transcriptPath: msg.transcriptPath } : {}),
-        };
-        this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);
-        this.renderCompactionNotice(msg.scoopJid, msg.state, detail);
+      case 'compaction-state':
+        this.handleCompactionState(msg as CompactionStateMsg);
         break;
-      }
 
       case 'clear-chat-ack': {
         const resolve = this.pendingClearAcks.get(msg.requestId);
@@ -1393,16 +1409,23 @@ export class OffscreenClient implements KernelClientFacade {
     // `extracting-memory` is a phase of a round already announced by
     // `summarizing`; it changes nothing the row shows.
     if (state === 'extracting-memory') return;
-    const existing = this.compactionNoticeIds.get(scoopJid);
+    const existing =
+      this.compactionNoticeIds.get(scoopJid) ?? this.lateRetraction(scoopJid, state, detail);
     // A terminal phase with no open row is a round whose opening phase never
     // reached this panel (it started before the tab attached, or against a
     // scoop that was not selected). There is nothing to settle or retract.
     if (state !== 'summarizing' && !existing) return;
     if (state === 'idle' || state === 'cancelled' || state === 'fallback') {
       this.compactionNoticeIds.delete(scoopJid);
+      this.compactionSettledRows.delete(scoopJid);
     }
     const messageId = existing ?? `compaction-${scoopJid}-${uid()}`;
     if (state === 'summarizing') this.compactionNoticeIds.set(scoopJid, messageId);
+    // A round that named itself keeps its settled row retractable: its own
+    // adoption verdict has not arrived yet (see `compactionSettledRows`).
+    if ((state === 'idle' || state === 'fallback') && detail.roundId) {
+      this.compactionSettledRows.set(scoopJid, { messageId, roundId: detail.roundId });
+    }
     // Selection is checked AFTER the bookkeeping so a round that spans a scoop
     // switch still closes its own id out; the row itself belongs to the
     // selected thread only.
@@ -1416,6 +1439,37 @@ export class OffscreenClient implements KernelClientFacade {
         ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
       },
     });
+  }
+
+  /**
+   * The row a late `cancelled` is allowed to take back: one this scoop already
+   * settled, belonging to the SAME round as the retraction.
+   *
+   * Only the idle timer produces this sequence (`summarizing` → `idle` →
+   * `cancelled`), because only it decides adoption after the compactor has
+   * returned. Matching on the round id keeps a discarded round that never
+   * opened a row — nothing to summarize, so the compactor emitted nothing —
+   * from retracting a previous round's honest row (#2843).
+   */
+  private lateRetraction(
+    scoopJid: string,
+    state: 'summarizing' | 'fallback' | 'cancelled' | 'idle',
+    detail: CompactionNoticeDetail
+  ): string | undefined {
+    if (state !== 'cancelled' || !detail.roundId) return undefined;
+    const settled = this.compactionSettledRows.get(scoopJid);
+    return settled?.roundId === detail.roundId ? settled.messageId : undefined;
+  }
+
+  /** Decode one compaction phase and hand it to both the host and the thread. */
+  private handleCompactionState(msg: CompactionStateMsg): void {
+    const detail: CompactionNoticeDetail = {
+      trigger: msg.trigger ?? 'threshold',
+      ...(msg.transcriptPath ? { transcriptPath: msg.transcriptPath } : {}),
+      ...(msg.roundId ? { roundId: msg.roundId } : {}),
+    };
+    this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);
+    this.renderCompactionNotice(msg.scoopJid, msg.state, detail);
   }
 
   private handleScoopStatus(msg: ScoopStatusMsg): void {

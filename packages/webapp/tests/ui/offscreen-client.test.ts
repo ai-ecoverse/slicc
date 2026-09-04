@@ -1380,6 +1380,77 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(4);
   });
 
+  // The realistic idle sequence, and the one that shipped broken: the
+  // compactor summarizes fine and emits its terminal state, and only THEN does
+  // the idle timer find the thread moved / nothing gained and throw the result
+  // away. Without the round id the row stayed on the transcript claiming
+  // "Compacted while idle" for a round that changed nothing (#2843).
+  it('retracts a settled row when its own round is discarded afterwards', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized', 'discarded']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
+  // The retraction is scoped to its own round on purpose: a round that found
+  // nothing to summarize never opens a row, yet still reports itself
+  // discarded. An unqualified "remove the last compaction row" would delete
+  // the previous round's honest one.
+  it('leaves a settled row alone when a DIFFERENT round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-2' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+  });
+
+  // A threshold round's adoption is decided inside the compactor, so it never
+  // names a round — and an unnamed `cancelled` must not reach back either.
+  it('leaves a settled row alone when an unnamed round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { roundId: 'idle-1' });
+    phase('idle', { roundId: 'idle-1' });
+    phase('cancelled');
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+  });
+
+  // One retraction only: the settled row is forgotten once it is taken back.
+  it('retracts a settled row at most once', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.filter((e) => e.marker?.state === 'discarded')).toHaveLength(1);
+  });
+
+  // A degraded round is still a round awaiting adoption.
+  it('retracts a settled FALLBACK row when its round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('fallback', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'fallback', 'discarded']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
   it('gives each round its own row', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();
