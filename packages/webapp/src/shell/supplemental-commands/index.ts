@@ -50,6 +50,7 @@ import { createNukeCommand } from './nuke-command.js';
 import { createOAuthDomainCommand } from './oauth-domain-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createOpenCommand } from './open-command.js';
+import { createPatchCommand } from './patch-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPdftoppmCommand } from './pdftoppm-command.js';
 import { createPdftotextCommand } from './pdftotext-command.js';
@@ -245,6 +246,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
     createSprinkleCommand(),
+    createPatchCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
     // Both spellings: `biscotti` with no args lists, which is how anyone who
