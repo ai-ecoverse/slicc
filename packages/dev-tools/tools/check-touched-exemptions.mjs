@@ -186,10 +186,13 @@ function resolveChangedFiles() {
 }
 
 function main() {
-  // Skip gracefully on non-PR CI events (push, merge_group). The gate is
-  // PR-only by design; merge_group runs against the queue commit and has no
-  // meaningful merge base to diff against.
-  if (process.env.GITHUB_ACTIONS === 'true' && !isPullRequestEvent()) {
+  // Skip gracefully on non-PR CI events (push, merge_group) — UNLESS the
+  // caller passed CHANGED_FILES explicitly, which makes the changed-file set
+  // hermetic and unambiguous regardless of what CI event this runs under
+  // (e.g. a test driving the script directly). The gate is otherwise PR-only
+  // by design; merge_group runs against the queue commit and has no
+  // meaningful merge base to diff against automatically.
+  if (process.env.GITHUB_ACTIONS === 'true' && !isPullRequestEvent() && !getChangedFilesFromEnv()) {
     console.log(`${SCRIPT}: skipped (not a pull_request event)`);
     return 0;
   }

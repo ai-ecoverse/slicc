@@ -13,6 +13,21 @@ const scriptPath = resolve(repoRoot, 'packages/dev-tools/tools/check-touched-exe
 // at module load (no `import.meta.url === …` entry guard), so it cannot be
 // imported for unit testing — every test here runs it as a real subprocess,
 // mirroring `check-layer-back-edges.test.mjs`'s `runGuard()`.
+//
+// Round-1 review, #2843 CI failure: the FIRST version of this test relied on
+// `process.env`'s ambient CI-event vars (or their absence) to reach the
+// script's normal PR-diff path — passing under `pull_request` (or no CI env
+// at all, locally) but silently hitting the script's `skipped (not a
+// pull_request event)` early-return under `merge_group`, where
+// `GITHUB_ACTIONS=true` and `GITHUB_EVENT_NAME=merge_group` are real and
+// `GITHUB_BASE_REF` is unset. `run()` now PINS the worst case — exactly
+// `merge_group`'s env shape — on every call, so the test can never again
+// pass locally by accident while failing under a CI event it didn't
+// exercise. CHANGED_FILES is what makes this legitimate rather than a hack:
+// the script's skip check now exempts an explicit CHANGED_FILES (see
+// `check-touched-exemptions.mjs`'s `main()`), so a caller that already knows
+// its changed-file set — this test, but also plausibly a future non-PR
+// caller — gets a hermetic, event-independent run.
 function run(env) {
   try {
     return {
@@ -20,7 +35,13 @@ function run(env) {
       out: execFileSync('node', [scriptPath, 'origin/main'], {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: { ...process.env, ...env },
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          GITHUB_EVENT_NAME: 'merge_group',
+          GITHUB_BASE_REF: '',
+          ...env,
+        },
       }),
     };
   } catch (err) {
@@ -66,5 +87,22 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
     const { code, out } = run({ CHANGED_FILES: FAKE_PATH });
     expect(code).toBe(0);
     expect(out).toContain('no debt lists found');
+  });
+});
+
+describe('check-touched-exemptions: merge_group skip branch (round-1 review #2843 CI failure)', () => {
+  it('still skips under merge_group when CHANGED_FILES is NOT given (the legitimate case)', () => {
+    const { code, out } = run({ CHANGED_FILES: '' });
+    expect(code).toBe(0);
+    expect(out).toContain('skipped (not a pull_request event)');
+  });
+
+  it('does NOT skip under merge_group when CHANGED_FILES IS given — the fix', () => {
+    // No baseline mutation needed: CHANGED_FILES alone is enough to prove the
+    // skip branch was bypassed — a real skip would print "skipped", not
+    // "no debt lists found" / "OK".
+    const { code, out } = run({ CHANGED_FILES: FAKE_PATH });
+    expect(code).toBe(0);
+    expect(out).not.toContain('skipped');
   });
 });
