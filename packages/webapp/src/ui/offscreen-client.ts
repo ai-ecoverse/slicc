@@ -32,6 +32,7 @@ import type {
   SessionStatsMsg,
   SetScoopModelAckMsg,
   SetThinkingLevelAckMsg,
+  SprinkleLickOrigin,
   StateSnapshotMsg,
   SudoApprovalMsg,
   TrayFollowerStatusSnapshot,
@@ -757,19 +758,25 @@ export class OffscreenClient implements KernelClientFacade {
   private sprinkleOpHandler: ((payload: unknown) => void) | null = null;
   private forwardLickHandler: ((event: LickEvent) => void) | null = null;
 
-  /** Send a sprinkle lick event to the offscreen orchestrator. */
+  /**
+   * Send a sprinkle lick event to the offscreen orchestrator. `origin` names
+   * where the lick came from — the forwarding label for a follower-relayed
+   * lick, and the work unit whose transcript raised it, which is how an
+   * untargeted inline-dip lick reaches the cone that rendered the dip instead
+   * of the oldest one.
+   */
   sendSprinkleLick(
     sprinkleName: string,
     body: unknown,
     targetScoop?: string,
-    originLabel?: string
+    origin?: SprinkleLickOrigin
   ): void {
     this.send({
       type: 'sprinkle-lick',
       sprinkleName,
       body,
       targetScoop,
-      originLabel,
+      origin,
     } as PanelToOffscreenMessage);
   }
 

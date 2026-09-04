@@ -57,13 +57,20 @@ export function createWcController(
     units = next;
   });
 
+  /**
+   * The unit the SHELL says it is showing. A follower narrows this: until its
+   * leader has named a unit for this session there is nothing to address, and a
+   * send would be dropped after the bubble was already rendered (see
+   * `WcChatHost.addressableUnitId`).
+   *
+   * Shared by the composer and by a dip's lick, because a dip's button is the
+   * same conversation the composer writes to.
+   */
+  const addressedUnitId = () =>
+    host.addressableUnitId ? host.addressableUnitId() : (getSelected()?.id ?? null);
+
   const agentHandle = createWorkUnitAgentHandle(workUnits, {
-    // The unit the SHELL says it is showing. A follower narrows this: until
-    // its leader has named a unit for this session there is nothing to
-    // address, and a send would be dropped after the bubble was already
-    // rendered (see `WcChatHost.addressableUnitId`).
-    getSelectedId: () =>
-      host.addressableUnitId ? host.addressableUnitId() : (getSelected()?.id ?? null),
+    getSelectedId: addressedUnitId,
     onError: (error) => host.emitAgentError(error),
     onEvent: (listener) => host.onAgentEvent(listener),
   });
@@ -142,6 +149,10 @@ export function createWcController(
       // Before hydration on purpose: a float that replaces a dip wants the
       // replacement instead of the live one, not on top of it.
       host.onMessageRendered?.(messageHost);
+      // Captured AT RENDER, not read at click time: the dip belongs to the
+      // transcript it was rendered into, and a lick must not follow a later
+      // selection into a cone that never wrote the card.
+      const originUnitId = addressedUnitId() ?? undefined;
       dipInstances.set(
         message.id,
         hydrateDips(messageHost, (action, data) => {
@@ -152,7 +163,7 @@ export function createWcController(
             body: { action, data },
           };
           if (welcome?.intercept?.(event)) return;
-          host.sendSprinkleLick('inline', { action, data });
+          host.sendSprinkleLick('inline', { action, data }, undefined, originUnitId);
         })
       );
     },

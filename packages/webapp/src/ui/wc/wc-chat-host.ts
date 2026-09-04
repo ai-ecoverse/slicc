@@ -40,11 +40,20 @@ export interface WcChatHost {
   /**
    * Route an inline dip's lick (a ```shtml block's button) to the cone.
    *
+   * `originUnitId` is the unit whose transcript the dip was rendered in. An
+   * untargeted lick without it falls back to the OLDEST cone, so with two cones
+   * open the clicks landed in a bystander's chat (#2312's rule for cards).
+   *
    * LEADER-ONLY in the sense that only a leader can HANDLE it; a follower
    * still forwards one over the tray, which is why its host implements this
    * rather than dropping it.
    */
-  sendSprinkleLick(name: string, body: unknown, targetScoop?: string): void;
+  sendSprinkleLick(
+    name: string,
+    body: unknown,
+    targetScoop?: string,
+    originUnitId?: WorkUnitId
+  ): void;
   /** Answer a tool-UI card's button. A follower renders those read-only. */
   sendToolUiAction(requestId: string, action: string, data: unknown): void;
   /**
@@ -172,7 +181,13 @@ export function createLeaderChatHost(
   let turnIdle: (() => void) | null = null;
   return {
     onAgentEvent: (listener) => kernelEvents.onEvent(listener),
-    sendSprinkleLick: (name, body, targetScoop) => client.sendSprinkleLick(name, body, targetScoop),
+    sendSprinkleLick: (name, body, targetScoop, originUnitId) =>
+      client.sendSprinkleLick(
+        name,
+        body,
+        targetScoop,
+        originUnitId ? { unitJid: originUnitId } : undefined
+      ),
     sendToolUiAction: (requestId, action, data) => client.sendToolUiAction(requestId, action, data),
     deleteQueuedMessage: (unitId, messageId) => client.deleteQueuedMessage(unitId, messageId),
     emitAgentError: (error) => client.emitAgentError(error),
@@ -230,7 +245,10 @@ export function createFollowerChatHost(deps: {
 }): WcChatHost {
   return {
     onAgentEvent: deps.onAgentEvent,
-    // Forwarded, not handled: the cone's lick router runs on the leader.
+    // Forwarded, not handled: the cone's lick router runs on the leader. The
+    // raising unit is deliberately NOT sent — the leader stamps it from the
+    // selection it already records for this peer (`follower-dispatch.ts`),
+    // which is the same authority that re-stamps the origin label.
     sendSprinkleLick: (name, body, targetScoop) =>
       deps.getSync()?.sendSprinkleLick(name, body, targetScoop),
     // A follower has no `installLeaderPermissionsSurface` and no tool-UI

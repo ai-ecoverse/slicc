@@ -573,10 +573,27 @@ cannot matter.)
 **Two dispositions for a target that resolves to nothing, deliberately
 different:**
 
-| Lick                                       | Disposition                                                       |
-| ------------------------------------------ | ----------------------------------------------------------------- |
-| **untargeted** (no `targetScoop`)          | the default root — `rootsOf(scoops)[0]`, the oldest surviving one |
-| **targeted at a unit that does not exist** | `log.warn('Lick target scoop not found', …)` and **drop**         |
+| Lick                                       | Disposition                                                                                     |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **untargeted** (no `targetScoop`)          | the raising unit's root, else the default root — `rootsOf(scoops)[0]`, the oldest surviving one |
+| **targeted at a unit that does not exist** | `log.warn('Lick target scoop not found', …)` and **drop**                                       |
+
+**A sprinkle/dip lick carries the unit that RAISED it**, and that beats the
+oldest-root fallback (`SprinkleLickOrigin.unitJid` → `Bridge.routeSprinkleLick`,
+`kernel/facade.ts`). A dip lives in one transcript, so its buttons belong to that
+transcript's cone; without the stamp every inline-dip click went to the oldest
+cone, so with a second cone open the cone that wrote the card saw nothing while a
+bystander was handed the lick — and handed it again when the user re-clicked a
+button that looked dead. A scoop's transcript resolves to its owning cone
+(`rootOwnerOf`), the same ownership rule interactive cards use
+(`ownerRootOrDefault`, #2312), and an origin the roster no longer knows falls
+back to the default root rather than dropping the lick. Both sides of the stamp
+are the LEADER's own answer: the page stamps the unit it rendered the dip into
+(captured at render, not read at click time, so a later selection cannot steal
+the lick), and a follower-forwarded lick is stamped from the selection the leader
+already records for that peer — never from a follower claim. `routeFormattedLickToCone`
+(`kernel/host.ts`) is unchanged: an event observed outside any conversation has
+no raising unit, and `discovery` keeps its own recent-history heuristic.
 
 A dropped targeted lick is not a bug to be papered over: the cone or scoop it
 named is gone (or was misspelled), and silently redirecting it would post

@@ -117,12 +117,19 @@ export interface LeaderSyncManagerOptions {
   ) => void | Promise<unknown>;
   /** Resolve a sprinkle's raw .shtml content for follower-side rendering. */
   readSprinkleContent?: (sprinkleName: string) => Promise<string | null> | string | null;
-  /** Forward a sprinkle lick (from a follower's open or inline sprinkle) to the leader's lick router. */
+  /**
+   * Forward a sprinkle lick (from a follower's open or inline sprinkle) to the
+   * leader's lick router. `originUnitJid` is the unit that follower was looking
+   * at — the leader's own `scoops.select` record for the peer, not a follower
+   * claim — so an untargeted dip lick lands in the cone whose transcript
+   * rendered the dip rather than in the leader's oldest cone.
+   */
   onSprinkleLick?: (
     sprinkleName: string,
     body: unknown,
     targetScoop?: string,
-    originLabel?: string
+    originLabel?: string,
+    originUnitJid?: string
   ) => void;
   /**
    * Handle a generic lick (e.g. `navigate`) forwarded by a follower.
