@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,78 +60,64 @@ function run(env, baseRef = 'origin/main') {
 }
 
 /**
- * Build a scratch commit — a child of HEAD with exactly one file's blob
- * swapped for `content` — without touching the real index or working tree.
- * Returns the commit SHA, which `readBaseJson`'s `git show <ref>:<path>`
- * accepts directly (no branch/tag needs to exist). Uses a throwaway
- * `GIT_INDEX_FILE` so the developer's / CI runner's real index is never
- * touched; the commit itself is a dangling object once the test ends (never
- * referenced by a branch), so it needs no cleanup beyond the scratch index
- * file.
- *
- * This is what makes the "the changed file is not on the debt list" test
- * hermetic to checkout depth: the base ref it diffs against is guaranteed
- * to already contain the fake entry, so the added-entry check has nothing
- * to find regardless of whether `origin/main` happens to be resolvable.
- *
- * Uses `os.tmpdir()`, not a path under `repoRoot/.git/` — in a git
- * *worktree* (like this repo commonly runs in), `.git` is a text file
- * pointing at the real gitdir elsewhere, not a directory, so treating it as
- * one throws ENOTDIR.
- *
- * `commit-tree` also needs an author/committer identity, which a developer's
- * machine has (global `user.name`/`user.email`) but a CI runner may not —
- * `node-matrix-tests` has none, so this failed there with `fatal: empty
- * ident name` even though it passed on every local machine. GIT_AUTHOR_* /
- * GIT_COMMITTER_* are set explicitly so the fixture never depends on
- * config/GECOS/hostname fallback being present anywhere, and
- * GIT_CONFIG_GLOBAL=/dev/null keeps a developer's global git config (hooks,
- * aliases, unrelated settings) from leaking into the scratch commit either.
+ * Explicit git identity for every scratch git invocation below.
+ * `commit-tree`/`commit` need an author/committer identity, which a
+ * developer's machine has (global `user.name`/`user.email`, or at worst a
+ * GECOS/hostname fallback) but a CI runner may not — `node-matrix-tests` has
+ * none of those, so an earlier version of this fixture failed there with
+ * `fatal: empty ident name` despite passing on every machine it was tested
+ * on before pushing (#2899). Set explicitly so the fixture never depends on
+ * config/GECOS/hostname being present anywhere; GIT_CONFIG_GLOBAL=/dev/null
+ * also keeps a developer's global git config (hooks, aliases, unrelated
+ * settings) from leaking in.
  */
-function makeScratchCommit(fileRelPath, content) {
-  const scratchIndex = resolve(tmpdir(), `touched-exemptions-test-index-${process.pid}`);
-  const env = {
-    ...process.env,
-    GIT_INDEX_FILE: scratchIndex,
-    GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_AUTHOR_NAME: 'check-touched-exemptions test',
-    GIT_AUTHOR_EMAIL: 'noreply@slicc.test',
-    GIT_COMMITTER_NAME: 'check-touched-exemptions test',
-    GIT_COMMITTER_EMAIL: 'noreply@slicc.test',
+const SCRATCH_GIT_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_AUTHOR_NAME: 'check-touched-exemptions test',
+  GIT_AUTHOR_EMAIL: 'noreply@slicc.test',
+  GIT_COMMITTER_NAME: 'check-touched-exemptions test',
+  GIT_COMMITTER_EMAIL: 'noreply@slicc.test',
+};
+
+/**
+ * Build a throwaway git repo under `os.tmpdir()` containing exactly one
+ * file, at `fileRelPath`, holding `content`, committed at its root. Returns
+ * the commit SHA and that repo's own object directory.
+ *
+ * `readBaseJson`'s `git show <ref>:<path>` (run against THIS repo, in
+ * `check-touched-exemptions.mjs`) can still resolve that SHA — pass
+ * `objectsDir` as `GIT_ALTERNATE_OBJECT_DIRECTORIES` to the `run()` call
+ * that exercises it, and git will search the alternate directory to
+ * resolve objects without ever copying them in. This repo is commonly a git
+ * *worktree* sharing ONE object store with every sibling worktree/session;
+ * an earlier version of this fixture built the scratch commit directly
+ * there (`commit-tree`/`hash-object -w` against `repoRoot`), leaving
+ * dangling blob/tree/commit objects in that SHARED store permanently
+ * (#2899 round-2 review). A fully separate throwaway repo, resolved only
+ * via the alternates mechanism, writes nothing there at all — the same
+ * pattern `check-swift-resolved-drift.test.mjs` uses for its end-to-end
+ * fixture, minus the object-database isolation this one additionally needs
+ * (that guard's throwaway repo is also the CWD the guard runs against, so
+ * it never touches the real repo's objects to begin with).
+ *
+ * Call `cleanup()` when done.
+ */
+function makeScratchBaseRef(fileRelPath, content) {
+  const repoDir = mkdtempSync(resolve(tmpdir(), 'touched-exemptions-scratch-'));
+  const env = { ...process.env, ...SCRATCH_GIT_ENV };
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repoDir, env, encoding: 'utf8' }).trim();
+  git('init', '-q');
+  const filePath = resolve(repoDir, fileRelPath);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content);
+  git('add', fileRelPath);
+  git('commit', '-q', '-m', 'scratch: check-touched-exemptions test fixture');
+  return {
+    sha: git('rev-parse', 'HEAD'),
+    objectsDir: resolve(repoDir, '.git', 'objects'),
+    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
-  try {
-    execFileSync('git', ['read-tree', 'HEAD'], { cwd: repoRoot, env });
-    const blobSha = execFileSync('git', ['hash-object', '-w', '--stdin'], {
-      cwd: repoRoot,
-      env,
-      input: content,
-      encoding: 'utf8',
-    }).trim();
-    execFileSync(
-      'git',
-      ['update-index', '--add', '--cacheinfo', `100644,${blobSha},${fileRelPath}`],
-      { cwd: repoRoot, env }
-    );
-    const treeSha = execFileSync('git', ['write-tree'], {
-      cwd: repoRoot,
-      env,
-      encoding: 'utf8',
-    }).trim();
-    return execFileSync(
-      'git',
-      [
-        'commit-tree',
-        treeSha,
-        '-p',
-        'HEAD',
-        '-m',
-        'scratch: check-touched-exemptions test fixture',
-      ],
-      { cwd: repoRoot, env, encoding: 'utf8' }
-    ).trim();
-  } finally {
-    rmSync(scratchIndex, { force: true });
-  }
 }
 
 const FAKE_PATH = 'packages/webapp/src/scoops/__fake_float_probe_test_file__.ts';
@@ -172,14 +158,52 @@ describe('check-touched-exemptions: float-probe debt list wiring', () => {
     // resolvable there, which degrades the added-entry check to a no-op
     // instead of genuinely exercising this scenario).
     const fakeContent = `${JSON.stringify({ [FAKE_PATH]: 1 }, null, 2)}\n`;
-    const scratchBaseRef = makeScratchCommit(FLOAT_PROBE_BASELINE_REL, fakeContent);
+    const scratch = makeScratchBaseRef(FLOAT_PROBE_BASELINE_REL, fakeContent);
     writeFileSync(FLOAT_PROBE_BASELINE_PATH, fakeContent);
-    const { code, out } = run(
-      { CHANGED_FILES: 'packages/webapp/src/scoops/unrelated-file.ts' },
-      scratchBaseRef
-    );
-    expect(code).toBe(0);
-    expect(out).toContain('OK');
+    try {
+      const { code, out } = run(
+        {
+          CHANGED_FILES: 'packages/webapp/src/scoops/unrelated-file.ts',
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: scratch.objectsDir,
+        },
+        scratch.sha
+      );
+      expect(code).toBe(0);
+      expect(out).toContain('OK');
+      // A skip (base ref unresolvable — see the describe block below) must
+      // never be mistaken for a genuine "nothing added" pass; the very next
+      // test proves this same mechanism genuinely gates growth rather than
+      // always skipping.
+      expect(out).not.toContain('could not read the float-probe debt list');
+    } finally {
+      scratch.cleanup();
+    }
+  });
+
+  it('FAILS — does not silently skip — when an untouched file made the debt list grow', () => {
+    // Companion to the pass above, round-2 review (#2899, Grok): none of
+    // the pre-existing cases actually required the added-entry check to
+    // RUN to pass — a script that always skipped it (or the original #2843
+    // empty-baseline bug) would have passed every one of them too. This is
+    // the base ref genuinely containing FEWER entries than the working
+    // tree, so a correct run must fail even though CHANGED_FILES names an
+    // unrelated file.
+    const scratch = makeScratchBaseRef(FLOAT_PROBE_BASELINE_REL, '{}\n');
+    writeFileSync(FLOAT_PROBE_BASELINE_PATH, `${JSON.stringify({ [FAKE_PATH]: 1 }, null, 2)}\n`);
+    try {
+      const { code, out } = run(
+        {
+          CHANGED_FILES: 'packages/webapp/src/scoops/unrelated-file.ts',
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: scratch.objectsDir,
+        },
+        scratch.sha
+      );
+      expect(code).toBe(1);
+      expect(out).toContain('must not grow');
+      expect(out).not.toContain('could not read the float-probe debt list');
+    } finally {
+      scratch.cleanup();
+    }
   });
 
   it('passes with the real, empty baseline untouched (sanity: no debt lists at all today)', () => {
