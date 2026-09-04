@@ -335,6 +335,38 @@ When adding a diff variant, keep the OID comparison ahead of the content read an
 the pathspec test ahead of the walk: the pre-2719 code compared decoded strings
 and pulled all 3,549 tracked blobs out of the packfile on every invocation.
 
+### `git stash` moves bytes, not text
+
+Push and pop/apply are byte paths end to end (#2885). Push reads each dirty
+working-tree file with `{ encoding: 'binary' }`, compares it to the HEAD blob
+byte for byte, and hands the `Uint8Array` straight to `writeBlob`; pop/apply
+reads the stashed blob, the stash base, and the working-tree copy as bytes and
+writes the result back as bytes.
+
+Before that, both halves round-tripped through `readTextFile` (a **non-fatal**
+`TextDecoder`) and `TextEncoder.encode`, so a dirty JPEG, zip, wasm or packfile
+was stashed as U+FFFD and restored as `EF BF BD` — silently, with exit code 0.
+An unmodified binary was fine, because it took the raw-blob path; only dirty
+ones corrupted.
+
+The three-way merge is still available, but only for a path both sides changed
+whose working-tree, base, and stashed versions are **all** lossless UTF-8
+(no NUL, strict decode over the whole file — stricter than `looksLikeText`,
+which samples 4 KB and answers "can a human read this?"). When both sides moved
+a binary, stash does what git does instead of inventing bytes:
+
+```text
+warning: Cannot merge binary files: logo.png (Updated upstream vs Stashed changes)
+CONFLICT (content): Merge conflict in logo.png
+```
+
+Exit code 1, the working-tree copy is left verbatim (no markers spliced into
+it), and the stash entry is kept so the stashed bytes stay recoverable.
+
+`git merge-file` is explicitly a text tool and keeps its text contract; `git
+show` / `diff` / `revert` still decode blobs for display, but never write the
+decoded result back.
+
 ### `git commit -F` reads the message from a file
 
 `-F` / `--file` is the scripted way to supply a multi-paragraph commit message
