@@ -1,6 +1,5 @@
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
-import type { RegisteredScoop } from '../../scoops/types.js';
 import { modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -21,7 +20,7 @@ export function createWcController(
   refs: WcShellRefs,
   client: OffscreenClient,
   workUnits: WorkUnitClient,
-  getSelected: () => RegisteredScoop | null,
+  getSelected: () => WorkUnitSummary | null,
   onIdle?: () => void,
   welcome?: WelcomeInterceptHolder
 ): { controller: WcChatController; agentHandle: AgentHandle } {
@@ -73,13 +72,13 @@ export function createWcController(
     thread: refs.thread,
     agent: agentHandle,
     resolveTelemetryContext: () => {
-      const scoop = getSelected();
-      if (!scoop) return null;
-      const scoopName = unitSlugFor(scoop);
+      const unit = getSelected();
+      if (!unit) return null;
+      const scoopName = unitSlugFor(unit);
       try {
         // One per-unit model read (#2382 PR C): the client's summary, which is
         // the same answer the pill and the picker use.
-        const pinned = modelForUnit(units, scoop.jid);
+        const pinned = modelForUnit(units, unit.id);
         const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
         return { scoopName, model: model.id };
       } catch {

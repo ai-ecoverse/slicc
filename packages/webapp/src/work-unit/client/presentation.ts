@@ -153,7 +153,7 @@ export function orderUnits(
  * carry `addedAt` would interleave a real ordering with a positional one and
  * produce something neither side ever rendered.
  */
-function orderRoots(roots: readonly WorkUnitSummary[]): WorkUnitSummary[] {
+export function orderRoots(roots: readonly WorkUnitSummary[]): WorkUnitSummary[] {
   if (roots.length < 2 || !roots.every((root) => root.addedAt)) return [...roots];
   return [...roots].sort(
     (a, b) => (a.addedAt ?? '').localeCompare(b.addedAt ?? '') || a.id.localeCompare(b.id)

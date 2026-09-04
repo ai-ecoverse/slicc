@@ -95,7 +95,7 @@ export function wireWcComposer(deps: {
       steer: submittedSteer(event),
     });
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
-    const jid = boot.getSelected()?.jid;
+    const jid = boot.getSelected()?.id;
     if (jid) {
       refs.switcher.setAttribute('attention', jid);
       boot.wiring.lastActivity.set(jid, text.slice(0, 600));
@@ -119,7 +119,7 @@ export function wireWcComposer(deps: {
     const effort = effortOverrideForAgent(metaLevel);
     const selected = boot.getSelected();
     if (selected && level) {
-      void applyLeaderLocalThinkingChange(client, selected.jid, level, effort).catch((err) =>
+      void applyLeaderLocalThinkingChange(client, selected.id, level, effort).catch((err) =>
         log.warn('local thinking update failed', err)
       );
     }

@@ -1,6 +1,8 @@
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { tmpDirFor } from '../../work-unit/descriptor.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { FrozenSession } from '../session-freezer.js';
@@ -36,8 +38,10 @@ export interface FreezerRailDeps {
   openVfs(): Promise<WcPageVfs>;
   client: OffscreenClient;
   getController(): WcChatController | null;
-  getSelected(): RegisteredScoop | null;
-  selectScoop(scoop: RegisteredScoop): void;
+  getSelected(): WorkUnitSummary | null;
+  selectScoop(unit: WorkUnitSummary): void;
+  /** The client protocol's roster — selection is expressed in summaries (#2382 D2a). */
+  getUnits(): readonly WorkUnitSummary[];
   clearSelection(): void;
   log: BootStageLogger;
 }
@@ -87,13 +91,45 @@ async function captureCompleteSnapshotFor(
   });
 }
 
+/**
+ * The record behind a unit summary, or `undefined` when the roster has moved
+ * on. Selection is expressed in summaries (#2382 D2a) while the session
+ * operations below are record operations, so the two meet here.
+ */
+function recordFor(
+  client: OffscreenClient,
+  unit: { id: string } | undefined
+): RegisteredScoop | undefined {
+  if (!unit) return undefined;
+  return client.getScoops().find((scoop) => scoop.jid === unit.id);
+}
+
+/**
+ * The archive's cone descriptor, built from the cone's RECORD.
+ *
+ * The session archive is a record operation — it keys off `folder` and carries
+ * `jid` so a curator pass is parented to the cone it curates (#2271) — while
+ * `switcherLabelFor` reads a summary's role (#2382 D2a). A record answers the
+ * same question through its ownership edge, so the role is resolved here once
+ * rather than at each archive call.
+ */
+function archiveConeTarget(root: RegisteredScoop): { folder: string; label: string; jid: string } {
+  return {
+    folder: root.folder,
+    label: switcherLabelFor({
+      assistantLabel: root.assistantLabel,
+      name: root.name,
+      role: isRootUnit(root) ? 'primary' : 'child',
+    }),
+    jid: root.jid,
+  };
+}
+
 async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   const { root } = deps;
   // `jid` rides along so an agentic curator pass is parented to the cone it
   // curates (#2271); every other freezer step keys off `folder`.
-  const cone = root
-    ? { folder: root.folder, label: switcherLabelFor(root), jid: root.jid }
-    : undefined;
+  const cone = root ? archiveConeTarget(root) : undefined;
   const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
     captureCompleteSnapshotFor(root, frozen);
   if (deps.action !== 'save') {
@@ -188,9 +224,9 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
   let currentFrozenSessionId: string | null = null;
-  const selectScoop = (scoop: RegisteredScoop): void => {
+  const selectScoop = (unit: WorkUnitSummary): void => {
     currentFrozenSessionId = null;
-    deps.selectScoop(scoop);
+    deps.selectScoop(unit);
   };
 
   let refreshSeq = 0;
@@ -243,7 +279,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       // selected scoop resolves to the root that owns it, nothing selected
       // to the default root. Captured BEFORE the awaits so a roster refresh
       // mid-freeze cannot move the target between archive and clear.
-      const root = rootForSelection(client.getScoops(), getSelected());
+      const root = recordFor(client, rootForSelection(deps.getUnits(), getSelected()));
       try {
         const { writer } = await openVfs();
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
@@ -275,8 +311,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // Stay on the cone we just cleared — its record may have been
         // replaced by a roster refresh, so re-resolve by jid.
         const next =
-          client.getScoops().find((scoop) => scoop.jid === root?.jid) ??
-          defaultRootOf(client.getScoops());
+          deps.getUnits().find((unit) => unit.id === root?.jid) ?? defaultRootOf(deps.getUnits());
         if (next) selectScoop(next);
       } catch (err) {
         log.error('WC new session failed', err);
@@ -298,7 +333,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     const { runNewSessionArchiveOnly } = await import('../new-session.js');
     await runNewSessionArchiveOnly({
       vfs: writer,
-      cone: { folder: root.folder, label: switcherLabelFor(root), jid: root.jid },
+      cone: archiveConeTarget(root),
       captureCompleteSnapshot: (frozen) => captureCompleteSnapshotFor(root, frozen),
     });
     refreshFreezer();
@@ -342,7 +377,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // Fall back to the cone the archive came from, not blindly to the
         // primary one (#2272); legacy archives carry no `cone` field and
         // resolve to the default root as before.
-        const cone = rootForConeFolder(client.getScoops(), entry?.cone);
+        const cone = rootForConeFolder(deps.getUnits(), entry?.cone);
         if (cone) selectScoop(cone);
       }
     }

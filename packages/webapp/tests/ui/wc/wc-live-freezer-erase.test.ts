@@ -27,6 +27,7 @@ vi.mock('../../../src/speech/dictation-priming.js', () => ({
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import { wireFreezerRail } from '../../../src/ui/wc/wc-live-freezer.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 
 const research = {
   jid: 'cone_2',
@@ -74,7 +75,8 @@ function harness() {
       spawnAgent: vi.fn(),
     } as unknown as OffscreenClient,
     getController: () => ({ loadMessages: vi.fn() }) as never,
-    getSelected: () => research,
+    getSelected: () => recordToWorkUnitSummary(research, {}),
+    getUnits: () => [recordToWorkUnitSummary(research, {})],
     selectScoop: vi.fn(),
     clearSelection: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,

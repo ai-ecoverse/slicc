@@ -154,7 +154,9 @@ describe('wireWcSprinkles boot resilience', () => {
     } as unknown as BootStageLogger;
 
     const settled = await Promise.race([
-      wireWcSprinkles({ refs: makeRefs(), client, fs, log }).then(() => 'resolved' as const),
+      wireWcSprinkles({ refs: makeRefs(), client, fs, getUnits: () => [], log }).then(
+        () => 'resolved' as const
+      ),
       new Promise<'blocked'>((resolve) => {
         setTimeout(() => resolve('blocked'), 1000);
       }),
@@ -182,6 +184,7 @@ describe('wireWcSprinkles boot resilience', () => {
       refs: makeRefs(),
       client,
       fs,
+      getUnits: () => [],
       onAttachImage: handler,
       log,
     });
@@ -566,7 +569,15 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
     const onToolPanelActivate = vi.fn();
     const onToolPanelDeactivate = vi.fn();
-    await wireWcSprinkles({ refs, client, fs, log, onToolPanelActivate, onToolPanelDeactivate });
+    await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      log,
+      onToolPanelActivate,
+      onToolPanelDeactivate,
+    });
 
     refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-select', { detail: { id: 'files' }, bubbles: true })
@@ -587,7 +598,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
     const onToolPanelDeactivate = vi.fn();
-    await wireWcSprinkles({ refs, client, fs, log, onToolPanelDeactivate });
+    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log, onToolPanelDeactivate });
 
     refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-collapse', { detail: { id: 'term' }, bubbles: true })
@@ -666,7 +677,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const handle = await wireWcSprinkles({ refs, client, fs, log });
+    const handle = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
 
     // The select-triggered activation is what places the surface — model it
     // landing a couple of frames later, like a real (async) open would.
@@ -716,7 +727,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, log });
+    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
 
     const surface = document.createElement('div');
     surface.setAttribute('surface-id', 'term');
@@ -762,7 +773,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, log });
+    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
 
     const layout = document.createElement('div');
     layout.className = 'slicc-layout';
@@ -794,7 +805,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const handle = await wireWcSprinkles({ refs, client, fs, log });
+    const handle = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
     vi.spyOn(handle.manager, 'activate').mockResolvedValue(undefined);
 
     // A parked surface EXISTS in the tree but is display:none — fullscreen
@@ -830,7 +841,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const { manager } = await wireWcSprinkles({ refs, client, fs, log });
+    const { manager } = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
     await manager.open('hero');
     treeSpies(refs).removeSurface.mockClear();
 

@@ -144,7 +144,7 @@ describe('freezer boot deep link vs corrupt index', () => {
 
     // The dead-end guard lands the user on the cone instead of leaving the
     // shell with no selection and an empty thread.
-    await vi.waitFor(() => expect(boot.getSelected()?.parentJid).toBeNull());
+    await vi.waitFor(() => expect(boot.getSelected()?.parentId).toBeNull());
     clearCtx();
   });
 });

@@ -702,8 +702,7 @@ function leaderModelCallbacks(
       if (!entry) return false;
       // A follower changes the model of the cone IT is looking at — never the
       // leader's selected cone and never a global setting.
-      const named = scoopJid ? client.getScoop(scoopJid) : undefined;
-      const target = rootForSelection(client.getScoops(), named ?? null);
+      const target = rootForSelection(units, scoopJid ? { id: scoopJid } : null);
       if (!target) return false;
       const picked = parseQualifiedModelId(entry.modelId);
       if (!picked) return false;
@@ -711,12 +710,12 @@ function leaderModelCallbacks(
       // the follower's new `model.state` off this promise, and broadcasting
       // early would recompute it from the record's old value.
       return client
-        .setScoopModel(target.jid, picked)
+        .setScoopModel(target.id, picked)
         .then((applied) => {
           // Reflect the pick locally only while the follower is on the cone
           // the leader has selected; otherwise the leader's pill would show
           // another cone's model.
-          if (applied && target.jid === deps.getSelectedJid()) {
+          if (applied && target.id === deps.getSelectedJid()) {
             refs.composerMeta.dispatchEvent(
               new CustomEvent('model-change', {
                 bubbles: true,

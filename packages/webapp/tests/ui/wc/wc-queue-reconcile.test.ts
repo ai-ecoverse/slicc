@@ -26,6 +26,7 @@ import type { ChatMessage } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
 import { createWcLiveCallbacks } from '../../../src/ui/wc/wc-live-callbacks.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 
 function prompt(id: string): ChatMessage {
   return {
@@ -275,7 +276,9 @@ describe('replay envelope plumbing', () => {
           config: {},
         }) as never
     );
-    const unit = units[0] as never;
+    // The shell selects SUMMARIES; the client still answers with records.
+    const summaries = units.map((record) => recordToWorkUnitSummary(record, {}));
+    const unit = summaries[0] as never;
     let selectedScoopJid = jids[0] ?? null;
     boot.setClient({
       get selectedScoopJid() {
@@ -303,7 +306,7 @@ describe('replay envelope plumbing', () => {
     boot.selectScoop(unit);
     return {
       callbacks,
-      selectUnit: (jid: string) => boot.selectScoop(units[jids.indexOf(jid)] as never),
+      selectUnit: (jid: string) => boot.selectScoop(summaries[jids.indexOf(jid)] as never),
     };
   }
 

@@ -1,8 +1,7 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
-import { modelForUnit } from '../../work-unit/client/presentation.js';
+import { isRootSummary, modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
-import { isRootUnit } from '../../work-unit/policy.js';
 import { chatSessionIdFor, thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
@@ -72,35 +71,51 @@ export function shouldSkipSessionHydration(
  */
 export async function applyThreadContext(
   refs: WcShellRefs,
-  scoop: RegisteredScoop,
-  units: readonly WorkUnitSummary[]
+  unit: WorkUnitSummary,
+  units: readonly WorkUnitSummary[],
+  /**
+   * The unit's RECORD, for the one field the summary does not carry: the
+   * reasoning level. Read at the leaf (#2382 D2a) rather than by widening the
+   * selection back to a record, so this stays callable with a follower's
+   * summary — which simply has no record and no thinking pill.
+   */
+  getRecord?: (id: string) => Pick<RegisteredScoop, 'thinking' | 'config'> | undefined
 ): Promise<void> {
-  const role = unitRoleFor(scoop);
+  const role = unitRoleFor(unit);
   const readOnly = isReadOnlyRole(role);
-  refs.thread.setAttribute('context', threadContextFor(scoop));
-  const isRoot = isRootUnit(scoop);
-  const accent = scoopColor({ isRoot, name: scoop.name });
+  refs.thread.setAttribute('context', threadContextFor(unit));
+  const isRoot = isRootSummary(unit);
+  const accent = scoopColor({ isRoot, name: unit.name });
   refs.thread.setAttribute('accent', accent);
-  refs.switcher.setAttribute('active', scoop.jid);
+  refs.switcher.setAttribute('active', unit.id);
   // The 'scoop' shell mood (shader + accent) is unchanged — only the
   // interactive chrome goes away.
   applyShellContext(refs, isRoot ? { kind: 'cone' } : { kind: 'scoop', accent });
   applyComposerAvailability(refs, readOnly);
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
-  const thinking = thinkingFor(scoop);
-  refs.composerMeta.setAttribute(
-    'thinking',
-    metaThinkingForScoop(
-      (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
-      thinking.effortOverride
-    )
-  );
+  const record = getRecord?.(unit.id);
+  // Absent is "not known yet", never "off" — the same rule the model pill
+  // follows (#2329). `metaThinkingForScoop` answers `off` for an unknown
+  // level, which for a caller that carries no records (a follower, #2382
+  // D2b) would report reasoning as DISABLED on every selection. With nothing
+  // to say the pill keeps the value it had. A locked effort level is an
+  // answer in its own right and is written whether or not a record answered.
+  if (record || lockedEffort) {
+    const thinking = record ? thinkingFor(record) : {};
+    refs.composerMeta.setAttribute(
+      'thinking',
+      metaThinkingForScoop(
+        (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
+        thinking.effortOverride
+      )
+    );
+  }
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     // The pill follows the model of the cone the picker writes to (#2310) —
     // switching cones switches the model shown. Absent is "not known yet",
     // so the profile default answers rather than the pill going blank (#2329).
-    const pinned = modelForUnit(units, scoop.jid);
+    const pinned = modelForUnit(units, unit.id);
     const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
     refs.composerMeta.toggleAttribute(

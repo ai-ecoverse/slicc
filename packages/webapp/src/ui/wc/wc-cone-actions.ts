@@ -15,6 +15,7 @@
  */
 
 import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
+import { recordToWorkUnitSummary } from '../../work-unit/client/from-record.js';
 import { modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { buildWorkUnitRecord } from '../../work-unit/manager.js';
@@ -26,14 +27,14 @@ export interface ConeActionsDeps {
   /** The freezer rail; the action row is its `<slicc-freezer-new>` child. */
   freezer: HTMLElement;
   client: Pick<OffscreenClient, 'getScoops' | 'registerScoop' | 'unregisterScoop'>;
-  getSelected(): RegisteredScoop | null;
+  getSelected(): WorkUnitSummary | null;
   /**
    * The client protocol's roster, for the one per-unit model read (#2382 PR
    * C). A new cone starts on the model of the cone the user was on, and that
    * model is read from the same summary the pill renders.
    */
   getUnits(): readonly WorkUnitSummary[];
-  selectScoop(scoop: RegisteredScoop): void;
+  selectScoop(unit: WorkUnitSummary): void;
   /**
    * Archive the cone's chat before it goes (the freezer, no memory
    * extraction). Resolves once the archive is durable; a failure is logged
@@ -169,8 +170,25 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
   const row = (): HTMLElement | null => freezer.querySelector('slicc-freezer-new');
 
   /** The root the actions apply to: the selected cone (or the one owning the selected scoop). */
-  const currentRoot = (): RegisteredScoop | undefined =>
-    rootForSelection(client.getScoops(), deps.getSelected());
+  /**
+   * The root the actions apply to, as a SUMMARY (#2382 D2a). The record
+   * operations below (freeze, unregister, create) look their unit up by id at
+   * the point they need one.
+   */
+  const currentRoot = (): WorkUnitSummary | undefined =>
+    rootForSelection(deps.getUnits(), deps.getSelected());
+  /**
+   * The unit as the protocol carries it, projecting the record when the
+   * client's roster cannot answer yet.
+   *
+   * The two rosters are views of the same `scoop-list` event and either can
+   * be a tick behind. Giving up on a miss would silently drop a selection the
+   * user just asked for, so the leader falls back to its own projection of
+   * the record it is already holding — the same projection
+   * `toSwitcherScoops` makes.
+   */
+  const unitFor = (record: RegisteredScoop): WorkUnitSummary =>
+    deps.getUnits().find((unit) => unit.id === record.jid) ?? recordToWorkUnitSummary(record);
 
   const closeDialog = (): void => {
     if (!dialog) return;
@@ -206,7 +224,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
     const record = buildNewConeRecord(
       draft.name,
       client.getScoops(),
-      modelForUnit(deps.getUnits(), selected?.jid)
+      modelForUnit(deps.getUnits(), selected?.id)
     );
     pendingSelect = draft.name;
     void client
@@ -253,7 +271,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       }
       // Move off the cone first so nothing renders a unit that is going away;
       // the oldest surviving root is the primary, so that is the fallback.
-      const wasMine = currentRoot()?.jid === root.jid;
+      const wasMine = currentRoot()?.id === root.jid;
       try {
         await client.unregisterScoop(root.jid);
       } catch (err) {
@@ -261,14 +279,14 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       }
       if (wasMine) {
         const next = rootsOf(client.getScoops()).find((s) => s.jid !== root.jid);
-        if (next) deps.selectScoop(next);
+        if (next) deps.selectScoop(unitFor(next));
       }
       dropping = false;
       render();
     })();
   };
 
-  const askDrop = (root: RegisteredScoop): void => {
+  const askDrop = (root: WorkUnitSummary): void => {
     const label = switcherLabelFor(root);
     const body = doc.createElement('p');
     body.textContent = 'Its chat goes to the Freezer.';
@@ -277,7 +295,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       heading: `Drop ${label}?`,
       body,
       actions: [
-        { text: 'Drop', style: BTN_DANGER, data: 'drop', onClick: () => drop(root.jid) },
+        { text: 'Drop', style: BTN_DANGER, data: 'drop', onClick: () => drop(root.id) },
         { text: 'Cancel', style: BTN_PLAIN, data: 'cancel', onClick: closeDialog },
       ],
     });
@@ -293,7 +311,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
       );
       if (landed) {
         pendingSelect = null;
-        if (deps.getSelected()?.jid !== landed.jid) deps.selectScoop(landed);
+        if (deps.getSelected()?.id !== landed.jid) deps.selectScoop(unitFor(landed));
       }
     }
     const r = row();

@@ -19,6 +19,8 @@ import type { ChatMessage } from '../../../src/ui/types.js';
 import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
 import { createWcLiveCallbacks } from '../../../src/ui/wc/wc-live-callbacks.js';
 import { messageEls } from '../../../src/ui/wc/wc-message-view.js';
+import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -33,6 +35,14 @@ function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
     parentJid: 'cone-1',
     ...over,
   } as RegisteredScoop;
+}
+
+/**
+ * The same unit as the client protocol carries it. Selection is expressed in
+ * summaries since #2382 D2a, while the fake kernel still answers with records.
+ */
+function summaryOf(record: RegisteredScoop): WorkUnitSummary {
+  return recordToWorkUnitSummary(record, {});
 }
 
 const cone = unit({ jid: 'cone-1', name: 'sliccy', folder: 'cone', parentJid: null });
@@ -87,11 +97,11 @@ describe('read-only scoop view (leader)', () => {
   it('unmounts the composer band when a scoop is selected and restores it for a cone', () => {
     const boot = bootShell();
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(false);
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(false);
 
-    boot.selectScoop(worker);
+    boot.selectScoop(summaryOf(worker));
     // `hidden` on `<slicc-composer>` is `display:none` in the component's own
     // sheet — the queued pile, model picker, thinking pill, dictation and
     // attachments all live inside it, so nothing is left and nothing is
@@ -99,18 +109,18 @@ describe('read-only scoop view (leader)', () => {
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(true);
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(true);
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(false);
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps the composer text across a scoop round trip', () => {
     const boot = bootShell();
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     (boot.refs.inputCard as HTMLElement & { value: string }).value = 'half-written thought';
 
-    boot.selectScoop(worker);
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(worker));
+    boot.selectScoop(summaryOf(cone));
 
     expect((boot.refs.inputCard as HTMLElement & { value: string }).value).toBe(
       'half-written thought'
@@ -138,14 +148,14 @@ describe('read-only scoop view (leader)', () => {
       deleteQueuedMessage: { mock: { calls: unknown[][] } };
     };
 
-    boot.selectScoop(cone);
-    boot.selectScoop(worker);
+    boot.selectScoop(summaryOf(cone));
+    boot.selectScoop(summaryOf(worker));
     // Nothing was cancelled on the backend: there is nowhere else to talk, so
     // reading a scoop is not the user abandoning the prompt.
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
     expect(controller.stashQueued).toHaveBeenCalledOnce();
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(controller.restoreQueued).toHaveBeenCalledWith(stashed);
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
   });
@@ -177,8 +187,8 @@ describe('read-only scoop view (leader)', () => {
     };
     client.getScoops.mockReturnValue([cone, worker, otherCone, otherScoop]);
 
-    boot.selectScoop(cone);
-    boot.selectScoop(otherScoop);
+    boot.selectScoop(summaryOf(cone));
+    boot.selectScoop(summaryOf(otherScoop));
 
     expect(controller.stashQueued).not.toHaveBeenCalled();
     expect(client.deleteQueuedMessage.mock.calls).toEqual([['cone-1', 'q1']]);
@@ -207,12 +217,12 @@ describe('read-only scoop view (leader)', () => {
     };
     client.getScoops.mockReturnValue([cone, worker, sibling]);
 
-    boot.selectScoop(cone);
-    boot.selectScoop(worker);
-    boot.selectScoop(sibling); // still inside cone-1's subtree
+    boot.selectScoop(summaryOf(cone));
+    boot.selectScoop(summaryOf(worker));
+    boot.selectScoop(summaryOf(sibling)); // still inside cone-1's subtree
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(controller.restoreQueued).toHaveBeenCalledWith(stashed);
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
   });
@@ -238,9 +248,9 @@ describe('read-only scoop view (leader)', () => {
       getScoops: { mockReturnValue(v: unknown): void };
     };
     client.getScoops.mockReturnValue([cone, worker, otherCone]);
-    boot.selectScoop(cone);
-    boot.selectScoop(worker);
-    boot.selectScoop(otherCone);
+    boot.selectScoop(summaryOf(cone));
+    boot.selectScoop(summaryOf(worker));
+    boot.selectScoop(summaryOf(otherCone));
 
     expect(client.deleteQueuedMessage.mock.calls).toEqual([['cone-1', 'q1']]);
   });
@@ -260,20 +270,20 @@ describe('read-only scoop view (leader)', () => {
     expect(isFeatureEnabled('multiple-cones')).toBe(false);
     const boot = bootShell();
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(false);
 
-    boot.selectScoop(worker);
+    boot.selectScoop(summaryOf(worker));
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(true);
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(true);
 
-    boot.selectScoop(cone);
+    boot.selectScoop(summaryOf(cone));
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(false);
   });
 
   it('keeps the scoop shell mood — only the interactive chrome goes away', () => {
     const boot = bootShell();
-    boot.selectScoop(worker);
+    boot.selectScoop(summaryOf(worker));
     expect(boot.refs.shader.getAttribute('mode')).toBe('scoop');
     expect(boot.refs.shader.getAttribute('tint')).toBeTruthy();
     expect(boot.refs.thread.getAttribute('context')).toBe('scoop:worker');
@@ -292,7 +302,7 @@ describe('read-only scoop view (leader)', () => {
 
     createWcLiveCallbacks(boot.wiring).onReady?.();
 
-    expect(boot.getSelected()?.jid).toBe('scoop-1');
+    expect(boot.getSelected()?.id).toBe('scoop-1');
     expect(boot.refs.thread.getAttribute('context')).toBe('scoop:worker');
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(true);
     expect(boot.refs.inputCard.hasAttribute('disabled')).toBe(true);
@@ -303,10 +313,10 @@ describe('read-only scoop view (leader)', () => {
   it('opens the read-only view for a `scoop:<name>` URL context', async () => {
     const { unitForContext } = await import('../../../src/ui/wc/wc-unit-context.js');
     const boot = bootShell();
-    const addressed = unitForContext([cone, worker], 'scoop:worker');
-    expect(addressed?.jid).toBe('scoop-1');
+    const addressed = unitForContext([cone, worker].map(summaryOf), 'scoop:worker');
+    expect(addressed?.id).toBe('scoop-1');
 
-    boot.selectScoop(addressed as RegisteredScoop);
+    boot.selectScoop(addressed as WorkUnitSummary);
 
     expect(boot.refs.thread.getAttribute('context')).toBe('scoop:worker');
     expect(boot.refs.composer.hasAttribute('hidden')).toBe(true);
@@ -326,7 +336,7 @@ describe('read-only scoop view (leader)', () => {
     };
     client.requestScoopMessages.mockImplementation(() => order.push('requestMessages'));
 
-    boot.selectScoop(worker);
+    boot.selectScoop(summaryOf(worker));
 
     expect(order).toEqual(['readOnly=true', 'requestMessages']);
   });

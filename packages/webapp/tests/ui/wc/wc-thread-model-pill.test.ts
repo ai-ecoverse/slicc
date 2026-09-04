@@ -74,16 +74,31 @@ function summaries(records: readonly RegisteredScoop[]) {
   return records.map((record) => recordToWorkUnitSummary(record, {}));
 }
 
+/** The thinking pill is the one field read from the record, at the leaf. */
+function byId(records: RegisteredScoop[]) {
+  return (id: string) => records.find((record) => record.jid === id);
+}
+
 describe('composer model pill per selected unit (#2310)', () => {
   it('shows the selected cone’s own model', async () => {
     const r = refs();
-    await applyThreadContext(r, cone, summaries([cone, scoop]));
+    await applyThreadContext(
+      r,
+      summaries([cone])[0],
+      summaries([cone, scoop]),
+      byId([cone, scoop])
+    );
     expect(r.composerMeta.getAttribute('model')).toBe('anthropic/claude-opus-4-6');
   });
 
   it('shows the owning cone’s model for a selected scoop, with the scoop’s own thinking', async () => {
     const r = refs();
-    await applyThreadContext(r, scoop, summaries([cone, scoop]));
+    await applyThreadContext(
+      r,
+      summaries([scoop])[0],
+      summaries([cone, scoop]),
+      byId([cone, scoop])
+    );
     expect(r.composerMeta.getAttribute('model')).toBe('anthropic/claude-opus-4-6');
     expect(r.composerMeta.getAttribute('thinking')).toBe('high');
     // …but the user never sees it: the whole band is hidden for a scoop
@@ -92,11 +107,25 @@ describe('composer model pill per selected unit (#2310)', () => {
     expect(r.composer.hasAttribute('hidden')).toBe(true);
   });
 
+  it('keeps the thinking pill when no record answers, never writing off (#2382 D2b)', async () => {
+    // A caller with no records at all — a follower, once its summary reaches
+    // this surface — must not be told reasoning is DISABLED.
+    // `metaThinkingForScoop` answers `off` for an unknown level, so the write
+    // is skipped entirely and the pill keeps what it had. Same rule the model
+    // pill follows for an absent model (#2329).
+    const r = refs();
+    await applyThreadContext(r, summaries([scoop])[0], summaries([cone, scoop]), byId([scoop]));
+    expect(r.composerMeta.getAttribute('thinking')).toBe('high');
+
+    await applyThreadContext(r, summaries([cone])[0], summaries([cone, scoop]));
+    expect(r.composerMeta.getAttribute('thinking')).toBe('high');
+  });
+
   it('falls back to the selected unit when its owning cone is not in the roster', async () => {
     const r = refs();
     // A roster the scoop's cone is missing from: the chain cannot be walked,
     // so the unit answers for itself rather than the pill going blank.
-    await applyThreadContext(r, scoop, summaries([scoop]));
+    await applyThreadContext(r, summaries([scoop])[0], summaries([scoop]), byId([scoop]));
     expect(r.composerMeta.getAttribute('model')).toBe('adobe/claude-sonnet-4-6');
   });
 });
