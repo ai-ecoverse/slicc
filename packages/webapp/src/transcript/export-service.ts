@@ -163,7 +163,10 @@ function buildTranscriptMessages(
 function assertValid(document: TranscriptDocumentV1): void {
   const validation = validateTranscriptDocumentV1(document);
   if (!validation.ok) {
-    throw new TranscriptExportError('schema-invalid');
+    // Carry the validator's own message into the error `detail` (#2845). The
+    // wire code stays `schema-invalid`; without the detail a failed export is
+    // a bare code in the console and the offending field is unknowable.
+    throw new TranscriptExportError('schema-invalid', validation.error);
   }
 }
 

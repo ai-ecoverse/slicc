@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isStructuralTranscriptPointer,
   SLICC_TRANSCRIPT_FORMAT,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptDocumentV1,
@@ -1796,5 +1797,52 @@ describe('validateTranscriptDocumentV1 — tool-result toolCallId enforcement', 
         })
       )
     ).toEqual({ ok: true });
+  });
+});
+
+describe('isStructuralTranscriptPointer', () => {
+  it('matches schema-controlled fields, with array indices normalized', () => {
+    for (const pointer of [
+      '/session/state',
+      '/session/completeness/status',
+      '/session/completeness/missing/0',
+      '/export/format',
+      '/export/producer/application',
+      '/conversations/0/kind',
+      '/conversations/12/messages/7/role',
+      '/conversations/0/messages/0/timestamp',
+      '/conversations/0/messages/0/content/2/type',
+      '/conversations/0/messages/0/content/2/id',
+      '/delegations/0/targetConversationId',
+      '/attachments/3/sha256',
+      '/attachments/3/path',
+      '/attachments/3/handling',
+    ]) {
+      expect(isStructuralTranscriptPointer(pointer)).toBe(true);
+    }
+  });
+
+  it('does not match content-bearing fields, which must stay redactable', () => {
+    for (const pointer of [
+      '/session/title',
+      '/conversations/0/name',
+      '/conversations/0/folder',
+      '/conversations/0/messages/0/content/0/text',
+      '/conversations/0/messages/0/error',
+      '/attachments/0/originalName',
+    ]) {
+      expect(isStructuralTranscriptPointer(pointer)).toBe(false);
+    }
+  });
+
+  it('does not let a numeric-keyed tool-call input alias onto a structural entry', () => {
+    // Arbitrary tool input is walked with the same pointers; every structural
+    // entry is rooted at a prefix `input` never occurs under.
+    expect(isStructuralTranscriptPointer('/conversations/0/messages/0/content/0/input/type')).toBe(
+      false
+    );
+    expect(isStructuralTranscriptPointer('/conversations/0/messages/0/content/0/input/0/id')).toBe(
+      false
+    );
   });
 });

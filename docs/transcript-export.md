@@ -170,6 +170,25 @@ Redaction is **fail-closed**: if the redactor cannot initialize, the export abor
 Each redaction entry in `privacy.redactions[]` records the detector, category, and JSON
 Pointer to the redacted location. `privacy.redactionCounts` gives per-category totals.
 
+#### Schema-controlled fields are never redacted
+
+Both detectors run over every _content-bearing_ string in the document — `session.title`,
+conversation names and folders, message text, tool-call `input`, message `error`, and
+`attachments[].originalName` — plus the text attachments themselves.
+
+They deliberately skip the **schema-controlled** fields: enum discriminators
+(`session.state`, `conversations[].kind`, message `role`, content-block `type`,
+`attachments[].handling`), ISO timestamps, SHA-256 hexes, bundle paths, and the ids the
+relational checks join on. Those are machine-generated and cannot carry a secret, while
+known-secret redaction is plain substring replacement — so a stored secret value that merely
+_occurs_ inside one of them would rewrite it into something `validateTranscriptDocumentV1`
+rejects, failing the whole export instead of the one field. A one-character secret makes that
+certain: it turns `"active"` into `"acti⟦REDACTED:…⟧e"`.
+
+The list lives in `isStructuralTranscriptPointer()`
+(`packages/shared-ts/src/transcript-export.ts`), next to the validator that constrains the same
+fields. A field that gains a constraint in the validator needs an entry there too.
+
 ### Binary attachments — unchanged and potentially sensitive
 
 Text attachments (`text/*` MIME types) are redacted inline before export. Binary attachments
@@ -358,15 +377,15 @@ Any export can be cancelled via `AbortSignal`. On cancellation:
 
 ### Stable error codes
 
-| Code                    | Cause                                                                                                                                                            | Retry?                                                                                                                           |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `permission-denied`     | User denied the approval dialog. In the cloud float this also covers a delegated prompt that timed out (120 s), was never shown, or whose follower disconnected. | Only after a new approval.                                                                                                       |
-| `redaction-unavailable` | Redactor failed to initialize.                                                                                                                                   | Not useful — log and report.                                                                                                     |
-| `session-not-found`     | The export service is not registered, or the frozen session ID does not exist.                                                                                   | Wait for boot to complete, or check the session ID.                                                                              |
-| `transfer-aborted`      | Cancelled or disconnected mid-stream.                                                                                                                            | Retry from start — no partial resume.                                                                                            |
-| `transfer-corrupt`      | Byte length or SHA-256 mismatch.                                                                                                                                 | Retry from start — the entire transfer must be re-run.                                                                           |
-| `schema-invalid`        | The assembled transcript failed v1 validation.                                                                                                                   | Report as a bug.                                                                                                                 |
-| `attachment-unreadable` | A text attachment could not be decoded or redacted (fail-closed safety guard).                                                                                   | Do not retry — report as a bug. Binary or missing files do NOT throw this error; they complete as partial with `present: false`. |
+| Code                    | Cause                                                                                                                                                                                                     | Retry?                                                                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `permission-denied`     | User denied the approval dialog. In the cloud float this also covers a delegated prompt that timed out (120 s), was never shown, or whose follower disconnected.                                          | Only after a new approval.                                                                                                       |
+| `redaction-unavailable` | Redactor failed to initialize.                                                                                                                                                                            | Not useful — log and report.                                                                                                     |
+| `session-not-found`     | The export service is not registered, or the frozen session ID does not exist.                                                                                                                            | Wait for boot to complete, or check the session ID.                                                                              |
+| `transfer-aborted`      | Cancelled or disconnected mid-stream.                                                                                                                                                                     | Retry from start — no partial resume.                                                                                            |
+| `transfer-corrupt`      | Byte length or SHA-256 mismatch.                                                                                                                                                                          | Retry from start — the entire transfer must be re-run.                                                                           |
+| `schema-invalid`        | The assembled transcript failed v1 validation. The thrown error's `detail` carries the validator's own message (e.g. `session.state must be "active" or "frozen"`); the wire code stays `schema-invalid`. | Report as a bug, with the `detail`.                                                                                              |
+| `attachment-unreadable` | A text attachment could not be decoded or redacted (fail-closed safety guard).                                                                                                                            | Do not retry — report as a bug. Binary or missing files do NOT throw this error; they complete as partial with `present: false`. |
 
 ### Retry semantics
 

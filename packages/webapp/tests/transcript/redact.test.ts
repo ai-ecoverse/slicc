@@ -1,4 +1,9 @@
-import { redactCredentialPatterns, TranscriptExportError } from '@slicc/shared-ts';
+import {
+  redactCredentialPatterns,
+  type TranscriptDocumentV1,
+  TranscriptExportError,
+  validateTranscriptDocumentV1,
+} from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import { redactTranscript } from '../../src/transcript/redact.js';
 import { makeTranscriptDocument } from './fixtures.js';
@@ -229,5 +234,96 @@ describe('redactCredentialPatterns — bearer-token case-insensitive', () => {
     expect(result.document.privacy.redactions.some((r) => r.category === 'bearer-token')).toBe(
       true
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: redacted output must still satisfy the schema (#2845)
+// ---------------------------------------------------------------------------
+
+/**
+ * A known-secret redactor that behaves exactly like the real one
+ * (`SecretsPipeline.redactForExport`): plain `replaceAll` of the secret's
+ * value, with no regard for where in the document that value happens to occur.
+ *
+ * A stored secret shorter than `MIN_MASKABLE_SECRET_LENGTH` is deliberately
+ * still substituted on the export path, so `value` can legitimately be one
+ * character — which is what turned a developer's transcript export into a bare
+ * `schema-invalid` (#2845). CI never saw it because CI's secret store is empty.
+ */
+function substringRedactor(value: string): {
+  redact: (texts: readonly string[]) => Promise<string[]>;
+} {
+  return {
+    redact: async (texts: readonly string[]) =>
+      texts.map((t) => t.replaceAll(value, '⟦REDACTED:known-secret:k1⟧')),
+  };
+}
+
+/** Fixture document extended with the constrained fields the base one omits. */
+function documentWithAttachment(text: string): TranscriptDocumentV1 {
+  const doc = makeTranscriptDocument({ text });
+  return {
+    ...doc,
+    attachments: [
+      {
+        id: 'att-bin-1',
+        path: 'attachments/att-bin-1.bin',
+        originalName: 'fixture.bin',
+        mimeType: 'application/octet-stream',
+        byteLength: 8,
+        sha256: '0'.repeat(64),
+        sourceConversationId: 'cone',
+        sourceMessageId: 'cone-msg-000001',
+        handling: 'binary-unchanged',
+        present: true,
+      },
+    ],
+  };
+}
+
+describe('redactTranscript schema stability (#2845)', () => {
+  it('leaves session.state intact when a one-character secret occurs inside it', async () => {
+    // 'v' occurs in "active" — the exact failure seen locally, where the
+    // redactor rewrote session.state to 'acti⟦REDACTED:…⟧e'.
+    const doc = makeTranscriptDocument({ text: 'no match here' });
+    const result = await redactTranscript(doc, new Map(), substringRedactor('v'));
+    expect(result.document.session.state).toBe('active');
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+  });
+
+  it('keeps enums, ids, timestamps, paths and hashes valid against a degenerate secret', async () => {
+    // '0' occurs in every ISO timestamp, in the SHA-256 hex, in the message ids
+    // and in the attachment path — i.e. in every constrained field at once.
+    const doc = documentWithAttachment('nothing to redact');
+    const result = await redactTranscript(doc, new Map(), substringRedactor('0'));
+    const validation = validateTranscriptDocumentV1(result.document);
+    expect(validation).toEqual({ ok: true });
+
+    const att = result.document.attachments[0]!;
+    expect(att.sha256).toBe('0'.repeat(64));
+    expect(att.path).toBe('attachments/att-bin-1.bin');
+    const conv = result.document.conversations[0]!;
+    expect(conv.kind).toBe('cone');
+    expect(conv.messages[0]!.id).toBe('cone-msg-000001');
+    expect(conv.messages[1]!.content[1]).toMatchObject({ type: 'tool-call', id: 'call-1' });
+  });
+
+  it('still redacts every content-bearing field the same secret reaches', async () => {
+    // Fail-closed is preserved: sparing the schema fields must not spare
+    // titles, conversation names, message text, tool input or attachment names.
+    const doc = documentWithAttachment('the vault token is vvv');
+    const result = await redactTranscript(
+      { ...doc, session: { ...doc.session, title: 'v-titled session' } },
+      new Map([['att-bin-1', 'v-bearing attachment text']]),
+      substringRedactor('v')
+    );
+    expect(result.document.session.title).not.toContain('v');
+    expect(result.document.conversations[0]!.messages[1]!.content[0]).toEqual({
+      type: 'text',
+      text: 'the ⟦REDACTED:known-secret:k1⟧ault token is ⟦REDACTED:known-secret:k1⟧⟦REDACTED:known-secret:k1⟧⟦REDACTED:known-secret:k1⟧',
+    });
+    expect(result.textAttachments.get('att-bin-1')).not.toContain('v');
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
   });
 });
