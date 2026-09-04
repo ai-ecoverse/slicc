@@ -472,6 +472,35 @@ All paths in VirtualFS must follow these rules:
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
+## `readFile` Defaults to utf-8 — Binary Callers Must Ask
+
+**Files**: `packages/webapp/src/fs/virtual-fs.ts` (`readFile`),
+`packages/webapp/src/kernel/local-vfs-client.ts`,
+`packages/webapp/src/ui/wc/wc-attach.ts`.
+
+`VirtualFS.readFile(path)` with no options returns a **`string`**: the encoding
+defaults to `'utf-8'` and the bytes go through a non-fatal `TextDecoder`, so
+every byte that is not valid UTF-8 collapses to U+FFFD. Nothing throws. Bytes
+you need as bytes must ask for them:
+
+```ts
+const bytes = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+```
+
+`LocalVfsClient.readFile` declares `Promise<string | Uint8Array>` and the
+`encoding` option is what discriminates the two, so a caller that omits it and
+then narrows with `typeof raw === 'string'` compiles fine and is wrong at
+runtime — the string branch is the one production takes.
+
+**Never re-encode the decoded string.** `new TextEncoder().encode(raw)` does not
+undo the decode; it bakes it in. The composer's VFS image pick did exactly this
+and handed vision a JPEG whose `FF D8 FF` magic had become `EF BF BD …`, 9 bytes
+grown to 21 (#2884). It was silent: the chip rendered, the `path` still pointed
+at the good file on disk, and only the model saw the mojibake.
+
+If a reader answers a binary read with a string anyway, the bytes are already
+gone. Log and degrade to a path-only reference — do not inline the round-trip.
+
 ## Stat Identity: A File Is Not Its Path
 
 **Files**: `packages/webapp/src/fs/types.ts` (`Stats.ino`),

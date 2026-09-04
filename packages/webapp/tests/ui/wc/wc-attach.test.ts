@@ -446,6 +446,70 @@ describe('wireWcAttach action routing', () => {
     expect(item.path).toBe('/workspace/notes.md');
   });
 
+  // Two probes that a utf-8 hop cannot survive: the full 0x00..0xFF ramp
+  // (128 invalid single bytes) and the JPEG SOI from #2818. `TextDecoder`
+  // (non-fatal) folds each high byte to U+FFFD and `TextEncoder` re-expands it
+  // to `EF BF BD`, so both the bytes AND the length change (#2884).
+  const BYTE_RAMP = new Uint8Array(256).map((_, i) => i);
+  const JPEG_SOI = new Uint8Array([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+
+  it.each<[string, Uint8Array]>([
+    ['ramp.png', BYTE_RAMP],
+    ['probe.jpg', JPEG_SOI],
+  ])('inlines VFS-picked %s byte-for-byte for vision', async (name, bytes) => {
+    const { fs, inputCard, stage } = await setup();
+    await fs.writeFile(`/shared/${name}`, bytes);
+    emitAdd(inputCard, { kind: 'file', id: `/shared/${name}`, label: name });
+    await vi.waitFor(() => {
+      expect(stage.items.map((a) => a.name)).toEqual([name]);
+    });
+    const item = stage.items[0];
+    expect(item.kind).toBe('image');
+    // The path still points at the good file — the inline copy must agree.
+    expect(item.path).toBe(`/shared/${name}`);
+    expect(item.error).toBeUndefined();
+    expect(item.size).toBe(bytes.length);
+    expect(Array.from(atob(item.data as string), (c) => c.charCodeAt(0))).toEqual(
+      Array.from(bytes)
+    );
+  });
+
+  it('keeps a VFS image path-only (and logs) when the reader hands back text', async () => {
+    // A reader that ignores `encoding:'binary'` has already destroyed the
+    // bytes; re-encoding its string would ship EF BF BD to vision. Fail loud.
+    const fs = await seededFs();
+    await fs.writeFile('/shared/probe.png', JPEG_SOI);
+    const errLog = vi.fn();
+    const inputCard = document.createElement('slicc-input-card');
+    const freezer = document.createElement('slicc-freezer');
+    document.body.append(inputCard, freezer);
+    const stage = wireWcAttach({
+      inputCard,
+      freezer,
+      openReader: async () => ({
+        readDir: (path: string) => fs.readDir(path),
+        stat: (path: string) => fs.stat(path),
+        readFile: async () => new TextDecoder().decode(JPEG_SOI),
+      }),
+      listConversations: async () => [],
+      log: { error: errLog },
+    });
+    inputCard.dispatchEvent(
+      new CustomEvent('slicc-add', {
+        bubbles: true,
+        detail: { kind: 'file', id: '/shared/probe.png', label: 'probe.png' },
+      })
+    );
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    const item = stage.items[0];
+    expect(item.data).toBeUndefined();
+    expect(item.path).toBe('/shared/probe.png');
+    expect(item.size).toBe(JPEG_SOI.length);
+    expect(errLog).toHaveBeenCalled();
+  });
+
   it('inserts a skill mention into the composer value', async () => {
     const { inputCard } = await setup();
     inputCard.setAttribute('value', 'please');
