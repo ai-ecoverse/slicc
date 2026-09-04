@@ -214,6 +214,11 @@ export { type FollowerHudRow, SliccFollowerHud } from './primitives/slicc-follow
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
 export { SliccImagePreview } from './primitives/slicc-image-preview.js';
+export {
+  SliccKeycap,
+  type SliccKeycapPlacement,
+  type SliccKeycapVariant,
+} from './primitives/slicc-keycap.js';
 export { SliccPane } from './primitives/slicc-pane.js';
 export { SliccPressButton } from './primitives/slicc-press-button.js';
 export { SliccSendButton } from './primitives/slicc-send-button.js';

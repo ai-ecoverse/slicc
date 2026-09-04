@@ -48,6 +48,7 @@ import './primitives/slicc-follower-hud.js';
 import './primitives/slicc-googly-eyes.js';
 import './primitives/slicc-icon-button.js';
 import './primitives/slicc-image-preview.js';
+import './primitives/slicc-keycap.js';
 import './primitives/slicc-pane.js';
 import './primitives/slicc-press-button.js';
 import './primitives/slicc-send-button.js';
