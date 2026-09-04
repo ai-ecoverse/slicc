@@ -457,7 +457,11 @@ sudoers-file edit), the orchestrator re-evaluates that scoop's pending requests
 and auto-resolves as `allow` those the policy now covers with a `NOPASSWD`
 grant (`ScoopApprovalRouter.settleGrantedRequests`, #2416), so one "Always"
 approval unblocks the scoop's other queued requests for the same subtree
-instead of stalling them until each is individually approved. The timeout path
+instead of stalling them until each is individually approved. The same grant
+match also runs at request admission (`enqueueSudoRequest`): a `sudo_request`
+whose subject is already `NOPASSWD`-granted resolves `allow` immediately and
+never raises a cone prompt (#2853). The reload sweep remains for requests that
+were already pending when the grant landed. The timeout path
 tags its decision `reason: 'cone-timeout'` so the scoop is told its escalation
 went unanswered rather than refused — and, unlike the cone → user leg, is not
 told to wait for a user who was never prompted.

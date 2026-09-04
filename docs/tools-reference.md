@@ -461,7 +461,8 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 Scoop-only. Ask the cone for an explicit sudo escalation before running a sensitive
 action. The call blocks until the cone resolves via `lick_confirm` / `lick_dismiss` (or
-the registry times out fail-closed).
+the registry times out fail-closed). If the scoop's sudoers already grants the subject
+with `NOPASSWD`, the call resolves `allow` immediately without a cone prompt.
 
 | Property   | Value                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------------- |

@@ -75,7 +75,10 @@ describe('ScoopApprovalRouter persistence settlement', () => {
           finishAppend = resolve;
         })
     );
-    const sudoManager = { appendScoopRule } as unknown as SudoManager;
+    const sudoManager = {
+      appendScoopRule,
+      getPolicyForScoop: () => parseSudoers(''),
+    } as unknown as SudoManager;
     const h = makeHarness(sudoManager);
     const pendingDecision = h.router.enqueueSudoRequest('scoop_a', {
       kind: 'read',
@@ -108,14 +111,22 @@ describe('ScoopApprovalRouter persistence settlement', () => {
 // covers must resolve as allow instead of stalling until individually approved
 // (which also appended duplicate rules).
 describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
-  function managerGranting(rules: string): SudoManager {
+  /** Mutable so tests can enqueue under an empty policy, then apply a grant. */
+  function managerGranting(rules: string): SudoManager & { setRules(next: string): void } {
+    let current = rules;
     return {
-      getPolicyForScoop: () => parseSudoers(rules),
-    } as unknown as SudoManager;
+      getPolicyForScoop: () => parseSudoers(current),
+      setRules(next: string) {
+        current = next;
+      },
+    } as unknown as SudoManager & { setRules(next: string): void };
   }
 
   it('resolves pending path requests now covered by a NOPASSWD grant', async () => {
-    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    // Enqueue first (ungranted), then widen policy — the reload sweep, not
+    // admission. Admission would short-circuit a request already granted.
+    const mgr = managerGranting('');
+    const h = makeHarness(mgr);
     const covered = h.router.enqueueSudoRequest('scoop_a', {
       kind: 'write',
       detail: '/.playwright/screenshots/x.png',
@@ -127,6 +138,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
     await flush();
     expect(h.router.listPendingSudoRequests()).toHaveLength(2);
 
+    mgr.setRules('NOPASSWD Write /.playwright/**');
     const settled = h.router.settleGrantedRequests('scoop_a-folder');
     await flush();
 
@@ -142,25 +154,29 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
   });
 
   it('resolves pending command requests now covered by a NOPASSWD Cmnd grant', async () => {
-    const h = makeHarness(managerGranting('NOPASSWD Cmnd git *'));
+    const mgr = managerGranting('');
+    const h = makeHarness(mgr);
     const covered = h.router.enqueueSudoRequest('scoop_a', {
       kind: 'command',
       detail: 'git status',
     });
     await flush();
 
+    mgr.setRules('NOPASSWD Cmnd git *');
     expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(1);
     await expect(covered).resolves.toEqual({ decision: 'allow' });
   });
 
   it('only settles requests from the scoop whose policy reloaded', async () => {
-    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const mgr = managerGranting('');
+    const h = makeHarness(mgr);
     const other = h.router.enqueueSudoRequest('scoop_a', {
       kind: 'write',
       detail: '/.playwright/x.png',
     });
     await flush();
 
+    mgr.setRules('NOPASSWD Write /.playwright/**');
     expect(h.router.settleGrantedRequests('some-other-folder')).toBe(0);
     expect(h.router.listPendingSudoRequests()).toHaveLength(1);
     h.router.failAll();
@@ -180,6 +196,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
       [requester.jid, requester],
     ]);
     const store: ChannelMessage[] = [];
+    let rules = '';
     const deps: ScoopApprovalRouterDeps = {
       getScoops: () => scoops,
       // Real approver semantics: the requesting scoop's parent; the DEFAULT
@@ -188,7 +205,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
       findApprover: (jid) => (jid === requester.jid ? coneB : coneA),
       getSudoManager: () =>
         ({
-          getPolicyForScoop: () => parseSudoers('NOPASSWD Write /.playwright/**'),
+          getPolicyForScoop: () => parseSudoers(rules),
         }) as unknown as SudoManager,
       getLickManager: () => null,
       handleMessage: async (msg) => {
@@ -212,6 +229,7 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
     const card = store.find((m) => m.chatJid === coneB.jid);
     expect(card?.lickState).toBe('pending');
 
+    rules = 'NOPASSWD Write /.playwright/**';
     expect(router.settleGrantedRequests(requester.folder)).toBe(1);
     await flush();
 
@@ -289,8 +307,123 @@ describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
     await expect(second).resolves.toEqual({ decision: 'allow' });
     expect(h.router.listPendingSudoRequests()).toHaveLength(0);
 
+    // #2853: a NEW request for the now-granted subtree must not trouble the cone.
+    const third = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/screenshots/two.png',
+    });
+    await expect(third).resolves.toEqual({ decision: 'allow' });
+    expect(h.handleMessage).toHaveBeenCalledTimes(2);
+    expect(h.router.listPendingSudoRequests()).toHaveLength(0);
+
     mgr.dispose();
     await vfs.dispose?.();
+  });
+});
+
+describe('ScoopApprovalRouter admission-time grant match (issue #2853)', () => {
+  function managerGranting(rules: string): SudoManager {
+    return {
+      getPolicyForScoop: () => parseSudoers(rules),
+    } as unknown as SudoManager;
+  }
+
+  it('resolves allow immediately for a NOPASSWD-granted write path without prompting the cone', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/snapshots',
+      suggestedPattern: '/.playwright/**',
+    });
+
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+    expect(h.handleMessage).not.toHaveBeenCalled();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(0);
+    expect(h.store).toHaveLength(0);
+  });
+
+  it('still escalates an ungranted write path', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const uncovered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.nogrant-test',
+    });
+    await flush();
+
+    expect(h.handleMessage).toHaveBeenCalledOnce();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    expect(h.store[0]?.lickState).toBe('pending');
+    h.router.failAll();
+    await expect(uncovered).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('resolves allow immediately for a NOPASSWD-granted command', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Cmnd git *'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'command',
+      detail: 'git status',
+    });
+
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+    expect(h.handleMessage).not.toHaveBeenCalled();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(0);
+  });
+
+  it('still escalates a matching rule that is not NOPASSWD', async () => {
+    const h = makeHarness(managerGranting('Write /.playwright/**'));
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+
+    expect(h.handleMessage).toHaveBeenCalledOnce();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('does not let a granted suggested_pattern smuggle an ungranted detail', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.nogrant-test',
+      suggestedPattern: '/.playwright/**',
+    });
+    await flush();
+
+    expect(h.handleMessage).toHaveBeenCalledOnce();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('still escalates a self-protected sudoers write despite NOPASSWD Write /**', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /**'));
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/scoops/scoop_a-folder/etc/sudoers',
+    });
+    await flush();
+
+    expect(h.handleMessage).toHaveBeenCalledOnce();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('still escalates a secret request even when other grants exist', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /**\nNOPASSWD Cmnd *'));
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'secret',
+      detail: 'GITHUB_TOKEN',
+    });
+    await flush();
+
+    expect(h.handleMessage).toHaveBeenCalledOnce();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
   });
 });
 

@@ -3206,6 +3206,35 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await pendingDecision;
   });
 
+  it('skips the cone when the scoop policy already grants the subject (issue #2853)', async () => {
+    const onIncoming = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: onIncoming,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+
+    // Default scoop sudoers includes `NOPASSWD Cmnd *`.
+    await expect(
+      orch.enqueueSudoRequest(testScoop.jid, { kind: 'command', detail: 'git status' })
+    ).resolves.toEqual({ decision: 'allow' });
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(onIncoming).not.toHaveBeenCalled();
+    expect(orch.listPendingSudoRequests()).toHaveLength(0);
+  });
+
   it.each([
     ['allow', 'confirmed'],
     ['always', 'confirmed'],
@@ -3233,10 +3262,13 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
       const emitEvent = vi.fn();
       orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
 
+      // Default scoop policy is `NOPASSWD Cmnd *`, so a command request is
+      // already granted and would skip the cone (#2853). Use a write outside
+      // writablePaths so this still exercises delivery + persist.
       const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
-        kind: 'command',
-        detail: 'rm -rf /tmp/x',
-        suggestedPattern: 'rm *',
+        kind: 'write',
+        detail: '/workspace/build/output.txt',
+        suggestedPattern: '/workspace/build/**',
       });
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -3288,8 +3320,8 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     // No setLickManager call — `lickManager` stays null.
 
     const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
-      kind: 'command',
-      detail: 'rm -rf /tmp/x',
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
     });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
