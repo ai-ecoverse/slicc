@@ -164,18 +164,20 @@ describe('node-rest adapter emits the contract wire', () => {
     expect(log[1].body).toEqual({ name: 'B', value: 'y', domains: [] });
   });
 
-  it('reports the Swift persisted-write gap as unavailable, not as a retryable failure', async () => {
+  it('reports a missing persisted-write route as unavailable, not as a retryable failure', async () => {
     const notFound = createRestCapabilityBroker({
       resolveUrl: (path) => path,
       fetchImpl: (async () =>
         new Response(JSON.stringify({ error: 'not found' }), { status: 404 })) as typeof fetch,
     });
-    // swift-server has no `POST /api/secrets` (#2806). A caller that retried
-    // that 404 would retry forever, so it is a permanent shape fact.
+    // Both servers register `POST /api/secrets` today (swift-server since
+    // #2823), so this 404 means an older Swift binary on the other end. Either
+    // way a caller that retried it would retry forever — no amount of waiting
+    // adds a route to a running process — so it is a permanent shape fact.
     const persisted = await notFound.secrets.set({ name: 'A', value: 'x', scope: 'persisted' });
     expect(isCapabilityUnavailable(persisted)).toBe(true);
     if (isCapabilityUnavailable(persisted)) {
-      expect(persisted.message).toContain('#2806');
+      expect(persisted.message).toContain('#2823');
       expect(persisted.message).toContain('session');
     }
     // The session route exists on both servers, so its 404 stays a failure —

@@ -1,7 +1,7 @@
 {
   "//": "Shared REST contract for the `node-rest` CapabilityBroker adapter (#2276 slice B). One file, three replayers: packages/webapp/tests/work-unit/capability-rest-adapter.test.ts pins the requests the adapter EMITS; packages/node-server/tests/routes/capability-rest-contract.test.ts and packages/swift-server/Tests/CapabilityRestContractTests.swift replay `serverCases` against a live router so both privileged servers stay on one wire. A route rename on either server, or in the adapter, breaks this file's replayers rather than a float at runtime.",
   "//substitutions": "`{{unknownSecret}}` in a path is replaced by the replayer with a name that provably does not exist in that run's store.",
-  "//servers": "`servers` names which privileged servers must answer an entry; a replayer skips what its server is not listed for. Absent means both. Today exactly one entry is not universal: `POST /api/secrets` (persisted secret creation) exists on node-server and NOT on swift-server. `secrets.set` DEFAULTS to session scope, which works on both, so the gap is only reachable via an explicit `scope: 'persisted'` — the adapter reports that server's 404 as CapabilityUnavailable naming this note, not as a retryable failure. Recorded here rather than hidden so the gap is visible; closing it is issue #2806 (a Keychain-backed write route on swift-server), after which both `servers` markers and this note come out and the existing Swift replayer starts enforcing the two entries with no test changes.",
+  "//servers": "`servers` names which privileged servers must answer an entry; a replayer skips what its server is not listed for. Absent means both, which is now every entry: swift-server gained its Keychain-backed `POST /api/secrets` in #2823, closing the last gap (#2806). The `secrets.set/persisted` markers are gone and the Swift replayer enforces those entries. Keep this key: the mechanism is still how a future one-sided route gets recorded instead of hidden.",
   "version": 1,
   "operations": [
     {
@@ -21,7 +21,6 @@
       "operation": "secrets.set/persisted",
       "method": "POST",
       "path": "/api/secrets",
-      "servers": ["node"],
       "//": "Only reached by an explicit `scope: 'persisted'`; the default session scope uses the route below."
     },
     { "operation": "secrets.set/session", "method": "POST", "path": "/api/secrets/session" },
@@ -52,7 +51,6 @@
       "method": "POST",
       "path": "/api/secrets",
       "body": { "name": "CONTRACT_NO_DOMAINS", "value": "v" },
-      "servers": ["node"],
       "expect": { "status": 400, "bodyKind": "object" }
     },
     {

@@ -242,17 +242,19 @@ function restSecrets(transport: RestTransport): Partial<SecretCapability> {
         value: request.value,
         domains: [...(request.domains ?? [])],
       });
-      // swift-server does not register `POST /api/secrets` (issue #2806), so
-      // its 404 means "this float can never persist a secret" — permanent,
-      // not retryable. Reporting it as a failure would have a caller retry
-      // forever. The session route exists on both servers, which is why the
-      // operation stays on the allowlist.
+      // Both servers register `POST /api/secrets` today (swift-server since
+      // #2823, which closed #2806), so this 404 now only means an OLDER
+      // swift-server binary is on the other end. It stays a permanent shape
+      // fact rather than a failure either way: a caller that retried it would
+      // retry forever, because no amount of waiting adds the route to a
+      // running process. The session route has always existed on both, which
+      // is why the operation stays on the allowlist.
       if (persisted && call.status === 404) {
         return capabilityUnavailable(
           'secrets',
           'set',
-          'this server has no persisted-secret write route (see issue #2806); ' +
-            "retry with scope: 'session'"
+          'this server has no persisted-secret write route (upgrade it; the ' +
+            "route shipped in #2823), retry with scope: 'session'"
         );
       }
       if (!call.ok) return failed('secrets', 'set', call, 'set secret failed');
