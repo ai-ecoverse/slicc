@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { BASH_BUILTIN_COMMAND_NAMES } from './bash-builtins-command.js';
 import { PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 
 const COMMAND_CATEGORIES = new Map<string, string[]>([
@@ -121,6 +122,9 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Filesystem', ['mount', 'umount', 'fswatch']],
   ['Scoops & agents', ['agent', 'mcp', 'webhook', 'crontask']],
   ['Process', ['ps', 'kill', 'meminfo']],
+  // Advertised by bash's `help` table but unimplemented upstream — SLICC
+  // registers them so they answer honestly instead of 127 (#2816).
+  ['Shell builtins (limited)', [...BASH_BUILTIN_COMMAND_NAMES]],
 ]);
 
 function formatHelp(

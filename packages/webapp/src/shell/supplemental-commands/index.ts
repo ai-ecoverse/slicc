@@ -5,6 +5,7 @@ import type { JshProcessConfig } from '../jsh-executor.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
+import { createBashBuiltinCommands } from './bash-builtins-command.js';
 import { createBiomeCommand } from './biome-command.js';
 import { createBiscottoCommand } from './biscotto-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
@@ -291,6 +292,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    // bash builtins `help` advertises that just-bash never implemented — they
+    // answered 127 until #2816. See bash-builtins-command.ts.
+    ...createBashBuiltinCommands(),
     createMeminfoCommand(),
     createLayoutCommand(),
     createUsbCommand(),

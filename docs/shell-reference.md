@@ -32,6 +32,43 @@ This is a **convention, not a sandbox** — one unit can still read and write an
 
 Its cleanup boundary is the explicit **New session** control: **Save & start new**, **New chat — skip memory**, and **Erase & start new** each remove the entries under the selected cone's own `$TMPDIR` before its chat is cleared — a sibling cone's scratch is never in the blast radius. Active mount roots below it and the directories containing them stay attached and are never traversed, so mounted Local, S3, and DA contents are not treated as scratch data. Page reload, app restart, and scoop creation do not clear `/tmp`.
 
+### Bash builtins: `help` lists more than just-bash implements
+
+just-bash ships bash's complete `help` topic table while implementing only part of it. Thirteen advertised names — `bg`, `caller`, `disown`, `enable`, `fc`, `fg`, `jobs`, `logout`, `suspend`, `times`, `trap`, `ulimit`, `umask` — reached command lookup and answered `command not found` (127). `trap` was the dangerous one: the parser accepted `trap 'cleanup' EXIT`, the script kept running, and a handler that was never installed looked like it had worked.
+
+`packages/webapp/src/shell/supplemental-commands/bash-builtins-command.ts` registers all thirteen; the behaviour and usage text live in `bash-builtins/run.ts`, imported on first use because `index.ts` is boot-critical. Custom commands are consulted only after builtins, so these names reach dispatch precisely because upstream has no builtin for them — they can never shadow one just-bash later implements. Two behaviours, no third:
+
+**Faithful** — where real bash without job control already answers with a diagnostic, this shell answers with bash's own text and exit code:
+
+| command            | behaviour                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `jobs`             | empty table, exit 0; a jobspec gets `%1: no such job`, exit 1                                    |
+| `fg` / `bg`        | `bash: fg: no job control`, exit 1                                                               |
+| `suspend`          | `bash: suspend: cannot suspend: no job control`, exit 1                                          |
+| `disown`           | `-a`/`-r` sweep the empty table and exit 0; every other form gets `current: no such job`, exit 1 |
+| `logout`           | ``bash: logout: not login shell: use `exit'``, exit 1                                            |
+| `trap -l`          | the five signals the kernel can deliver (see `kill --help`)                                      |
+| `trap` / `trap -p` | empty trap table, exit 0                                                                         |
+| `trap - SPEC`      | exit 0 — restores the default disposition, which is what an untrapped signal already gets        |
+
+`jobs` is empty rather than wrong: `&` runs its command synchronously here, so a backgrounded command has already finished by the time `jobs` runs. For long-lived kernel processes use `ps` and `kill`.
+
+**Loud** — everything this shell genuinely cannot do exits **2** with a one-line reason and, where one exists, the working alternative. Never a silent no-op, so `set -e` scripts stop instead of carrying on:
+
+| command           | why, and what to use instead                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `trap 'cmd' SPEC` | no signal-delivery path into a running script — the handler could never fire. Run cleanup on the normal path or in a `\|\|` branch |
+| `caller`          | the interpreter exposes no caller frames                                                                                           |
+| `enable`          | builtins cannot be enabled/disabled/loaded; list with `help` or `commands`                                                         |
+| `fc`              | no history editing; use `history`                                                                                                  |
+| `times`           | no per-process CPU accounting; use `time <command>`                                                                                |
+| `ulimit`          | interpreter limits are fixed at boot; see `df` and `meminfo`                                                                       |
+| `umask`           | the VFS has no file-creation mask; use `chmod`                                                                                     |
+
+`select` is a separate gap: it is a missing shell **keyword**, not a builtin, so it fails in just-bash's parser (`syntax error near unexpected token 'select'`, exit 2) before command lookup happens and no registration can reach it. It is not in the `help` table either, so nothing advertises it.
+
+`bash-builtins-command.test.ts` walks the live `help` listing through a real shell and asserts no advertised name answers 127 — that is what keeps the table and dispatch from drifting apart across a just-bash upgrade.
+
 ---
 
 ## Supplemental Commands
