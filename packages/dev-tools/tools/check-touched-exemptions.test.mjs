@@ -78,10 +78,27 @@ function run(env, baseRef = 'origin/main') {
  * *worktree* (like this repo commonly runs in), `.git` is a text file
  * pointing at the real gitdir elsewhere, not a directory, so treating it as
  * one throws ENOTDIR.
+ *
+ * `commit-tree` also needs an author/committer identity, which a developer's
+ * machine has (global `user.name`/`user.email`) but a CI runner may not —
+ * `node-matrix-tests` has none, so this failed there with `fatal: empty
+ * ident name` even though it passed on every local machine. GIT_AUTHOR_* /
+ * GIT_COMMITTER_* are set explicitly so the fixture never depends on
+ * config/GECOS/hostname fallback being present anywhere, and
+ * GIT_CONFIG_GLOBAL=/dev/null keeps a developer's global git config (hooks,
+ * aliases, unrelated settings) from leaking into the scratch commit either.
  */
 function makeScratchCommit(fileRelPath, content) {
   const scratchIndex = resolve(tmpdir(), `touched-exemptions-test-index-${process.pid}`);
-  const env = { ...process.env, GIT_INDEX_FILE: scratchIndex };
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: scratchIndex,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_AUTHOR_NAME: 'check-touched-exemptions test',
+    GIT_AUTHOR_EMAIL: 'noreply@slicc.test',
+    GIT_COMMITTER_NAME: 'check-touched-exemptions test',
+    GIT_COMMITTER_EMAIL: 'noreply@slicc.test',
+  };
   try {
     execFileSync('git', ['read-tree', 'HEAD'], { cwd: repoRoot, env });
     const blobSha = execFileSync('git', ['hash-object', '-w', '--stdin'], {
