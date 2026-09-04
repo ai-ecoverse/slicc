@@ -83,17 +83,22 @@ test.describe('compaction robustness', () => {
     await waitForTurnComplete(page, STORY_TURN);
 
     const thread = page.locator('slicc-chat-thread');
-    // The compaction is no longer invisible: the transcript carries the notice…
-    await expect(thread).toContainText('Context window almost exceeded — compacting history');
+    // The compaction is no longer invisible: the transcript carries a marker
+    // row for the round. One row per round, settled in place — the opening
+    // state does not leave a second row behind (#2843).
+    const marker = thread.locator('slicc-compaction-marker');
+    await expect(marker).toHaveCount(1);
+    await expect(marker).toHaveAttribute('trigger', 'threshold');
+    await expect(marker).toHaveAttribute('state', 'summarized');
     // …and the turn completed against the compacted context.
     await expect(thread).toContainText('COMPACTION-DONE-ANSWER');
-    // The clean path never shows the degradation notice.
-    await expect(thread).not.toContainText('Compaction summarization failed');
-    // The notice is its own bubble — the reply must not bleed into it
-    // (onResponse-style emission would concatenate them; see PR review).
-    const noticeBubble = page.locator('slicc-agent-message', { hasText: 'compacting history' });
-    await expect(noticeBubble).toHaveCount(1);
-    await expect(noticeBubble).not.toContainText('COMPACTION-DONE-ANSWER');
+    // The clean path never shows the degraded state.
+    await expect(thread.locator('slicc-compaction-marker[state="fallback"]')).toHaveCount(0);
+    // The marker is NOT an assistant bubble: the model's voice does not carry
+    // bookkeeping, and the reply must not bleed into the row.
+    await expect(
+      page.locator('slicc-agent-message', { hasText: 'compacting history' })
+    ).toHaveCount(0);
   });
 
   test('summary-call failure degrades to naive drop; the turn still completes (#1985)', async ({
@@ -110,17 +115,15 @@ test.describe('compaction robustness', () => {
 
     const thread = page.locator('slicc-chat-thread');
     // The degradation is visible instead of a silent turn death…
-    await expect(thread).toContainText(
-      'Compaction summarization failed — continuing with older messages truncated.'
-    );
+    const marker = thread.locator('slicc-compaction-marker');
+    await expect(marker).toHaveCount(1);
+    await expect(marker).toHaveAttribute('state', 'fallback');
     // …and the user's actual question still got its answer.
     await expect(thread).toContainText('FALLBACK-DONE-ANSWER');
-    // The degradation notice is its own bubble; the reply must not bleed in.
-    const fallbackBubble = page.locator('slicc-agent-message', {
-      hasText: 'Compaction summarization failed',
-    });
-    await expect(fallbackBubble).toHaveCount(1);
-    await expect(fallbackBubble).not.toContainText('FALLBACK-DONE-ANSWER');
+    // The degradation is a marker row, not an assistant bubble.
+    await expect(
+      page.locator('slicc-agent-message', { hasText: 'older messages truncated' })
+    ).toHaveCount(0);
   });
 
   test('an errored turn keeps its completed messages across a reload (#1987)', async ({ page }) => {
