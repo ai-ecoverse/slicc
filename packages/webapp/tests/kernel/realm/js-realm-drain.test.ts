@@ -97,6 +97,27 @@ async function handleFakeHostMessage(
     });
     return;
   }
+  if (req.channel === 'fetch' && req.op === 'request') {
+    const url = String(req.args[0] ?? '');
+    if (opts.delayMs && opts.delayMs > 0) {
+      await new Promise((r) => setTimeout(r, opts.delayMs));
+    }
+    const payload = url.includes('/headers')
+      ? JSON.stringify({ headers: { Host: 'example.test' } })
+      : JSON.stringify({ ok: true });
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+        body: new TextEncoder().encode(payload),
+        url,
+      },
+    });
+    return;
+  }
   // Unknown ops — just echo an error so the realm doesn't hang.
   host.postMessage({
     type: 'realm-rpc-res',
@@ -258,5 +279,90 @@ describe('realm event-loop drain before teardown', () => {
       return b.created ?? [];
     });
     expect(created.some((e) => e.path === '/workspace/delayed.txt')).toBe(true);
+  });
+});
+
+/**
+ * #2862 — reading a fetch response body must not kill the rest of the
+ * async continuation. The issue's three cases are all unawaited IIFEs
+ * (the common `node -e '(async()=>{...})()'` shape): a timer, a fetch
+ * that only reads `status`, and a fetch that then `await r.json()`.
+ * PR #2817 kept the realm alive for unawaited timers / RPC; it did not
+ * cover the native `Response` body read after fetch RPC has settled.
+ */
+describe('realm fetch body continuation (#2862)', () => {
+  it('lets an unawaited IIFE print after awaiting a timer', async () => {
+    const code = '(async()=>{await new Promise(r=>setTimeout(r,10));console.log("A ok")})()';
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('A ok');
+  });
+
+  it('lets an unawaited IIFE print after await fetch without reading the body', async () => {
+    const code =
+      '(async()=>{const r=await fetch("https://example.test/status/200");console.log("B ok",r.status)})()';
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('B ok');
+    expect(done.stdout).toContain('200');
+  });
+
+  it('lets an unawaited IIFE print after await fetch then await r.json()', async () => {
+    const code =
+      '(async()=>{const r=await fetch("https://example.test/headers");const j=await r.json();console.log("C ok",Object.keys(j).length)})()';
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).toBe('');
+    expect(done.stdout).toContain('C ok');
+  });
+
+  it('waits for r.json() after a delayed fetch the way Node waits for I/O', async () => {
+    const code =
+      '(async()=>{const r=await fetch("https://example.test/headers");const j=await r.json();console.log("C delayed",Object.keys(j).length)})()';
+    const done = await runRealm(code, { delayMs: 40 });
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('C delayed');
+  });
+
+  it('lets an unawaited IIFE print after await fetch then await r.text()', async () => {
+    const code =
+      '(async()=>{const r=await fetch("https://example.test/headers");const t=await r.text();console.log("T ok",t.length)})()';
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('T ok');
+  });
+
+  it('lets top-level await of fetch().json() print before teardown', async () => {
+    const code =
+      'const r=await fetch("https://example.test/headers");const j=await r.json();console.log("top ok",j.headers.Host);';
+    const done = await runRealm(code);
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('top ok');
+    expect(done.stdout).toContain('example.test');
+  });
+
+  it('persists a file write after await r.json() in an unawaited IIFE', async () => {
+    const flushWrites: unknown[] = [];
+    const code = [
+      '(async()=>{',
+      '  const r=await fetch("https://example.test/headers");',
+      '  const j=await r.json();',
+      '  require("fs").writeFileSync("/workspace/j.out","keys="+Object.keys(j).length);',
+      '})()',
+    ].join('\n');
+    const done = await runRealm(code, { flushWrites });
+    expect(done.exitCode).toBe(0);
+    const created = flushWrites.flatMap((batch) => {
+      const b = batch as { created?: { path: string }[] };
+      return b.created ?? [];
+    });
+    const modified = flushWrites.flatMap((batch) => {
+      const b = batch as { modified?: { path: string }[] };
+      return b.modified ?? [];
+    });
+    expect(
+      created.some((e) => e.path === '/workspace/j.out') ||
+        modified.some((e) => e.path === '/workspace/j.out')
+    ).toBe(true);
   });
 });

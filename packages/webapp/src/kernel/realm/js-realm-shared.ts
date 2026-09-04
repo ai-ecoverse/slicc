@@ -31,6 +31,7 @@ import {
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
+import { reconstructFetchResponse } from './realm-fetch-response.js';
 import {
   createFsBridge,
   createSyncFsBridge,
@@ -329,20 +330,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
       url,
       await serializeRequestInit(opts, input),
     ]);
-    const body =
-      serialized.body.byteLength === 0
-        ? null
-        : (serialized.body.buffer.slice(
-            serialized.body.byteOffset,
-            serialized.body.byteOffset + serialized.body.byteLength
-          ) as ArrayBuffer);
-    const response = new Response(body, {
-      status: serialized.status,
-      statusText: serialized.statusText,
-      headers: serialized.headers,
-    });
-    Object.defineProperty(response, 'url', { value: serialized.url || url });
-    return response;
+    return reconstructFetchResponse(serialized, url);
   }
 
   const sliccyModules = buildSliccyModules({
@@ -562,6 +550,12 @@ async function flushSyncFsCache(
  * never-settling RPC or uncleared `setInterval` hangs until the host
  * SIGKILLs the realm worker, the same way hung I/O hangs real Node.
  * `process.exit()` from a delayed callback stops the drain.
+ *
+ * After each handle settles, hop one macrotask so the user continuation
+ * (the `then` after `await fetch()`, including `await res.json()`) runs
+ * before we re-check handles. Without that hop, drain can post `realm-done`
+ * in the same turn the fetch RPC resolved and kill the rest of an
+ * unawaited IIFE (#2862).
  */
 async function drainEventLoop(
   rpc: RealmRpcClient,
@@ -577,5 +571,6 @@ async function drainEventLoop(
     if (timers.pendingCount > 0) waits.push(timers.waitForProgress());
     if (waits.length === 0) break;
     await Promise.race(waits);
+    if (!proc.getDidCallProcessExit()) await timers.tick();
   }
 }

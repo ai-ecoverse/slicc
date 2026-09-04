@@ -8,6 +8,7 @@
  *   - `node` with stdin piped — reads from stdin
  *   - `node - [ARGS…]` / `node /dev/stdin [ARGS…]` — explicit stdin script
  *     (the `node /dev/stdin << 'EOF'` heredoc idiom)
+ *   - `node --check SCRIPT` / `node --check -e CODE` — parse only
  *
  * The realm runtime owns: AsyncFunction construction, Node-like
  * shims (`console`, `process`, `fs` via VFS RPC, `exec` via shell
@@ -50,7 +51,8 @@ const STDIN_SCRIPT_TOKENS = new Set(['-', '/dev/stdin', '/dev/fd/0', '/proc/self
  *
  * Everything at or after that index belongs to the *script*, not to node — so
  * `node /dev/stdin --help` must reach `process.argv`, not print the shim's
- * usage. Only the leading slice is scanned for `--help` / `--version`.
+ * usage. Only the leading slice is scanned for `--help` / `--version` /
+ * `--check`.
  */
 function programSourceIndex(args: string[]): number {
   for (let i = 0; i < args.length; i++) {
@@ -62,9 +64,19 @@ function programSourceIndex(args: string[]): number {
   return args.length;
 }
 
+const NODE_LEADING_OPTIONS = new Set(['-h', '--help', '-v', '--version', '-c', '--check']);
+
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: 'usage: node -e <code> [args...]\n',
+    stdout:
+      'usage: node [options] [script.js] [args...]\n' +
+      '       node [options] -e <code> [args...]\n' +
+      '\n' +
+      'Options:\n' +
+      '  -e, --eval CODE     evaluate CODE\n' +
+      '  -c, --check         syntax-check without executing\n' +
+      '  -h, --help          print this help\n' +
+      '  -v, --version       print Node shim version\n',
     stderr: '',
     exitCode: 0,
   };
@@ -76,6 +88,25 @@ function nodeVersion(): { stdout: string; stderr: string; exitCode: number } {
     stderr: '',
     exitCode: 0,
   };
+}
+
+/**
+ * Parse-only check matching how the realm executes: the entry is an
+ * `AsyncFunction` body, so top-level `await` is valid (unlike `new Function`).
+ */
+function checkJsSyntax(code: string): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const AsyncFn = Object.getPrototypeOf(async function () {
+      /* noop */
+    }).constructor as new (
+      ...args: string[]
+    ) => unknown;
+    void new AsyncFn(code);
+    return { stdout: '', stderr: '', exitCode: 0 };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    return { stdout: '', stderr: `${message}\n`, exitCode: 1 };
+  }
 }
 
 /** A resolved `node` invocation, or the early-exit result to return as-is. */
@@ -188,23 +219,37 @@ export function createNodeCommand(options: NodeCommandOptions = {}): Command {
     async execute(args: string[], ctx: CommandContext) {
       // Scan only the options that PRECEDE the program source: Node treats
       // `--help` / `-v` after the script token as script arguments.
-      const nodeOptions = args.slice(0, programSourceIndex(args));
+      const sourceIndex = programSourceIndex(args);
+      const nodeOptions = args.slice(0, sourceIndex);
       if (nodeOptions.includes('--help') || nodeOptions.includes('-h')) return nodeHelp();
       if (nodeOptions.includes('--version') || nodeOptions.includes('-v')) return nodeVersion();
+      for (const opt of nodeOptions) {
+        if (!NODE_LEADING_OPTIONS.has(opt)) {
+          return { stdout: '', stderr: `node: unsupported option '${opt}'\n`, exitCode: 9 };
+        }
+      }
 
-      const resolved = await resolveInvocation(args, ctx);
-      if (resolved.kind === 'result') return resolved.result;
+      const check = nodeOptions.includes('--check') || nodeOptions.includes('-c');
+      const resolved = await resolveInvocation(args.slice(sourceIndex), ctx);
+      if (resolved.kind === 'result') {
+        if (check && resolved.result.exitCode === 9 && args.slice(sourceIndex).length === 0) {
+          return {
+            stdout: '',
+            stderr: 'node: -c/--check requires a filename or -e CODE\n',
+            exitCode: 9,
+          };
+        }
+        return resolved.result;
+      }
       const { code, filename, argv, innerCtx } = resolved;
+      const stripped = stripShebang(code);
+      if (check) return checkJsSyntax(stripped);
 
       // `ctx.signal` identifies the run this command belongs to, so the realm
       // child parents to the right shell job even when several runs overlap.
-      return executeJsCode(
-        stripShebang(code),
-        argv,
-        innerCtx,
-        options.buildProcessConfig?.(ctx.env),
-        { filename }
-      );
+      return executeJsCode(stripped, argv, innerCtx, options.buildProcessConfig?.(ctx.env), {
+        filename,
+      });
     },
   };
 }

@@ -420,4 +420,63 @@ describe('node command — --help / --version are node options, not script args'
     expect(result.stdout).not.toContain('usage: node');
     expect(JSON.parse(result.stdout.trim())).toEqual(['-h']);
   });
+
+  it('lists --check in `node --help`', async () => {
+    const result = await createNodeCommand().execute(['--help'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--check');
+    expect(result.stdout).toContain('-e, --eval');
+  });
+});
+
+describe('node command — --check syntax-checks without executing', () => {
+  it('accepts a valid script and does not run it', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/ok.js': 'console.log("should not run"); throw new Error("nope");\n',
+      },
+      '/workspace'
+    );
+    const result = await createNodeCommand().execute(['--check', './ok.js'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  it('accepts `-c` as the short form', async () => {
+    const ctx = createMockCtx({ '/workspace/ok.js': 'const x = 1;\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['-c', './ok.js'], ctx);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('rejects a syntax error with exit 1', async () => {
+    const ctx = createMockCtx({ '/workspace/bad.js': 'const {\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './bad.js'], ctx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/SyntaxError|Unexpected|Invalid/i);
+  });
+
+  it('accepts top-level await (the realm wraps the entry in AsyncFunction)', async () => {
+    const ctx = createMockCtx({ '/workspace/tla.js': 'await Promise.resolve(1);\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './tla.js'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('syntax-checks `-e` code without evaluating it', async () => {
+    const result = await createNodeCommand().execute(
+      ['--check', '-e', 'console.log("nope"); throw new Error("nope");'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+
+  it('errors when --check has no program source', async () => {
+    const result = await createNodeCommand().execute(['--check'], createMockCtx());
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('--check');
+  });
 });

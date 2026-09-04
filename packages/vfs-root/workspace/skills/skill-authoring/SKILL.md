@@ -94,7 +94,7 @@ Rules of thumb:
 
 - **Auto-discovery**: registered as callable commands by filename (without the extension), from the `$PATH` roots — `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin` by default. A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Earlier roots win basename collisions, so `/workspace/skills/` wins. For commands elsewhere, add their dir to the PATH: `echo 'export PATH="$PATH:/my/tools"' >> ~/.profile`.
 - **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
-- **Top-level `await`**: scripts are wrapped in `AsyncFunction`, so `await` at the top level works. Prefer it — errors surface instead of becoming unhandled rejections. Fire-and-forget `.then()`, unawaited `main()`, and `setTimeout` also keep the realm alive: like Node, the process stays up while I/O (fs/exec/fetch) or timers are outstanding, and `process.exit()` skips the rest. A Promise with no handle (`new Promise(() => {})`) does **not** keep it alive.
+- **Top-level `await`**: scripts are wrapped in `AsyncFunction`, so `await` at the top level works. Prefer it — errors surface instead of becoming unhandled rejections. Fire-and-forget `.then()`, unawaited `main()`, `setTimeout`, and `await fetch(…).json()` / `.text()` also keep the realm alive: like Node, the process stays up while I/O (fs/exec/fetch, including reading the response body) or timers are outstanding, and `process.exit()` skips the rest. A Promise with no handle (`new Promise(() => {})`) does **not** keep it alive. `node --check` / `-c` syntax-checks without executing (top-level `await` is valid).
 
 #### Runtime surface (use these — don't reinvent)
 
