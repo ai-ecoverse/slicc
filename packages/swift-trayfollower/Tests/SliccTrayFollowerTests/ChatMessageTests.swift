@@ -24,7 +24,9 @@ final class ChatMessageTests: XCTestCase {
             id: "m1", role: .assistant, content: "hi", timestamp: 1_700.5,
             attachments: [attachment], toolCalls: [tool], isStreaming: true, model: "claude-x",
             usage: usage, source: "cone", channel: "webhook", lickCount: 2, lickParts: ["a", "b"],
-            lickId: "lk1", lickState: .confirmed, queued: false, error: true)
+            lickId: "lk1", lickState: .confirmed, queued: false, error: true,
+            compaction: ChatCompactionMarker(
+                trigger: .idle, state: .summarized, transcriptPath: "/sessions/live-cone-a.md"))
 
         let decoded = try WireCodec.roundTrip(original)
         XCTAssertEqual(decoded.id, "m1")
@@ -45,6 +47,67 @@ final class ChatMessageTests: XCTestCase {
         XCTAssertEqual(decoded.lickState, .confirmed)
         XCTAssertEqual(decoded.queued, false)
         XCTAssertEqual(decoded.error, true)
+        XCTAssertEqual(
+            decoded.compaction,
+            ChatCompactionMarker(
+                trigger: .idle, state: .summarized, transcriptPath: "/sessions/live-cone-a.md"))
+    }
+
+    // MARK: - Compaction marker
+
+    func testCompactionMarkerTriggerKnownValues() throws {
+        for trigger in [CompactionMarkerTrigger.threshold, .overflow, .idle] {
+            XCTAssertEqual(try WireCodec.roundTrip(trigger), trigger)
+        }
+    }
+
+    /// A trigger the leader adds later must not empty the snapshot carrying it;
+    /// `threshold` is the fallback because its wording is the most neutral.
+    func testCompactionMarkerTriggerUnknownDegradesToThreshold() throws {
+        XCTAssertEqual(
+            try WireCodec.decode(CompactionMarkerTrigger.self, from: #""manual""#), .threshold)
+    }
+
+    func testCompactionMarkerStateKnownValues() throws {
+        for state in [
+            CompactionMarkerState.summarizing, .summarized, .fallback, .discarded,
+        ] {
+            XCTAssertEqual(try WireCodec.roundTrip(state), state)
+        }
+    }
+
+    /// Deliberately NOT `.discarded`: that state removes the row, so degrading
+    /// to it would silently drop a row the leader asked us to show.
+    func testCompactionMarkerStateUnknownDegradesToSummarized() throws {
+        XCTAssertEqual(
+            try WireCodec.decode(CompactionMarkerState.self, from: #""retracted""#), .summarized)
+    }
+
+    func testCompactionMarkerOmitsTranscriptPathWhenAbsent() throws {
+        let marker = ChatCompactionMarker(trigger: .overflow, state: .fallback)
+        XCTAssertFalse(try WireCodec.jsonString(marker).contains("transcriptPath"))
+        let decoded = try WireCodec.roundTrip(marker)
+        XCTAssertEqual(decoded.trigger, .overflow)
+        XCTAssertEqual(decoded.state, .fallback)
+        XCTAssertNil(decoded.transcriptPath)
+    }
+
+    func testCompactionMarkerDecodesFromLeaderJson() throws {
+        let json = #"""
+            {"trigger":"idle","state":"summarizing","transcriptPath":"/sessions/live-cone-x.md"}
+            """#
+        let decoded = try WireCodec.decode(ChatCompactionMarker.self, from: json)
+        XCTAssertEqual(decoded.trigger, .idle)
+        XCTAssertEqual(decoded.state, .summarizing)
+        XCTAssertEqual(decoded.transcriptPath, "/sessions/live-cone-x.md")
+    }
+
+    /// A leader older than #2843 sends no marker at all, and a message without
+    /// one must stay an ordinary message rather than fail to decode.
+    func testChatMessageWithoutCompactionDecodesAndOmitsTheKey() throws {
+        let original = ChatMessage(id: "m1", role: .assistant, content: "hi", timestamp: 1)
+        XCTAssertFalse(try WireCodec.jsonString(original).contains("compaction"))
+        XCTAssertNil(try WireCodec.roundTrip(original).compaction)
     }
 
     func testMinimalChatMessageOmitsOptionalKeys() throws {

@@ -43,9 +43,21 @@ struct MessageBubble: View, Equatable {
     }
 
     var body: some View {
-        // Precedence mirrors `messageEls` in wc-message-view.ts: a lick wins
-        // over everything, then delegation, then `error`, then role.
-        if isLick {
+        // Precedence mirrors `messageEls` in wc-message-view.ts: a compaction
+        // marker wins over everything, then a lick, then delegation, then
+        // `error`, then role.
+        //
+        // The marker goes FIRST for the same reason it does on the web: a
+        // compaction row is bookkeeping, and nothing about the message it rides
+        // on — role, source, an empty body — may reclassify it. A `discarded`
+        // marker renders nothing at all; `applyCompactionNotice` already
+        // removes the row, and this is the belt to its braces for a snapshot
+        // that somehow arrives carrying one.
+        if let compaction = message.compaction {
+            if compaction.state != .discarded {
+                CompactionMarkerRow(marker: compaction)
+            }
+        } else if isLick {
             LickRow(message: message)
                 .padding(.horizontal, 4)
         } else if message.error == true, message.role != .user {
