@@ -155,11 +155,30 @@ interface Win32CimProcessEntry {
 /** Send a CDP command over a target WebSocket; returns the message id. */
 type CdpSend = (method: string, params?: CDPPayload) => number;
 
+/**
+ * One element of a CDP `Network.Request.postDataEntries` array. `bytes` is the
+ * protocol `binary` type — base64 in the JSON wire form, so it survives bodies
+ * that are not valid UTF-8. Entries backed by a file or blob (a `<input
+ * type=file>` part) carry NO `bytes`: Chrome does not expose those bytes over
+ * CDP at all.
+ */
+export interface CdpPostDataEntry {
+  bytes?: string;
+}
+
 interface CdpFetchPausedHttpRequest {
   url?: string;
   method?: string;
   headers?: Record<string, string>;
+  /**
+   * Deprecated in CDP ("Use postDataEntries instead") and lossy: Chrome renders
+   * the body bytes into a JSON string, so a non-UTF-8 body arrives either
+   * latin1-mapped or with replacement characters. Only trusted when it is pure
+   * ASCII — see {@link decodeCdpRequestPostBody}.
+   */
   postData?: string;
+  hasPostData?: boolean;
+  postDataEntries?: CdpPostDataEntry[];
 }
 
 interface CdpFetchRequestPausedEvent {
@@ -636,6 +655,106 @@ export function resolveFetchProxyOrigin(targetUrl: string, servePort: number): s
     // Fall through to the localhost fallback below.
   }
   return `http://localhost:${servePort}`;
+}
+
+/** True when every code unit of `value` is ASCII (0x00-0x7F). */
+function isPureAscii(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0x7f) return false;
+  }
+  return true;
+}
+
+/**
+ * Outcome of reconstructing an intercepted request's POST body from the CDP
+ * `Fetch.requestPaused` payload.
+ *
+ * - `none` — the request has no body (a GET/HEAD navigation).
+ * - `bytes` — the exact body bytes, recovered losslessly.
+ * - `unrecoverable` — the request HAS a body but CDP did not hand us its bytes.
+ *   The caller must fail the request; forwarding a guess would silently corrupt
+ *   the origin's copy of the upload.
+ */
+export type CdpPostBody =
+  | { kind: 'none' }
+  | { kind: 'bytes'; bytes: Buffer }
+  | { kind: 'unrecoverable'; reason: string };
+
+/**
+ * Recover the byte-exact POST body of an intercepted `Fetch.requestPaused`
+ * request. A document POST is a byte pipe: multipart boundaries wrapping a JPEG
+ * are not UTF-8, so `Buffer.from(request.postData)` (Node's implicit UTF-8) or
+ * `String.data(using: .utf8)` expands every byte ≥0x80 (`80` → `C2 80`) and the
+ * origin receives a corrupt body behind a successful fulfill (#2886).
+ *
+ * Order of trust:
+ * 1. `postDataEntries[].bytes` — base64 over the wire, so byte-exact for any
+ *    body. This is the CDP-recommended source (`postData` is deprecated).
+ * 2. `postData` **only when it is pure ASCII** — then UTF-8, latin1 and the raw
+ *    bytes all coincide, so the string cannot be lossy. Covers the ordinary
+ *    `application/x-www-form-urlencoded` form post, which percent-encodes.
+ * 3. Anything else (a file/blob entry Chrome never exposes, `hasPostData` with
+ *    the body dropped for length, or a non-ASCII `postData` string with no
+ *    entries) is unrecoverable. We fail rather than substitute bytes.
+ */
+export function decodeCdpRequestPostBody(request: {
+  postData?: string;
+  hasPostData?: boolean;
+  postDataEntries?: CdpPostDataEntry[];
+}): CdpPostBody {
+  const entries = request.postDataEntries;
+  if (entries && entries.length > 0) {
+    const chunks: Buffer[] = [];
+    for (const entry of entries) {
+      if (typeof entry.bytes !== 'string') {
+        return {
+          kind: 'unrecoverable',
+          reason: 'postDataEntries contains a file/blob element with no bytes',
+        };
+      }
+      chunks.push(Buffer.from(entry.bytes, 'base64'));
+    }
+    return { kind: 'bytes', bytes: Buffer.concat(chunks) };
+  }
+
+  const postData = request.postData;
+  if (typeof postData === 'string' && postData.length > 0) {
+    if (isPureAscii(postData)) {
+      // ASCII: UTF-8, latin1 and the raw bytes all agree, so no codec can lose.
+      return { kind: 'bytes', bytes: Buffer.from(postData, 'latin1') };
+    }
+    return {
+      kind: 'unrecoverable',
+      reason: 'postData is not pure ASCII and no postDataEntries were provided',
+    };
+  }
+
+  if (request.hasPostData) {
+    return { kind: 'unrecoverable', reason: 'hasPostData is set but CDP provided no body' };
+  }
+  return { kind: 'none' };
+}
+
+/**
+ * Build the outgoing proxy request's headers from the intercepted ones: drop the
+ * browser's `content-length` and re-derive it from the body we are actually
+ * forwarding (`null` = no body). The intercepted value counts the ORIGINAL bytes,
+ * so any body-length drift — like the UTF-8 expansion this hop used to do —
+ * turned into a mismatched `Content-Length` the origin read the wrong way.
+ */
+function buildProxyRequestHeaders(
+  requestHeaders: Record<string, string>,
+  bodyLength: number | null
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(requestHeaders)) {
+    if (name.toLowerCase() === 'content-length') continue;
+    headers[name] = value;
+  }
+  if (bodyLength !== null) {
+    headers['Content-Length'] = String(bodyLength);
+  }
+  return headers;
 }
 
 /**
@@ -1436,12 +1555,22 @@ export class ElectronOverlayInjector {
     const url = request.url || '';
     const method = request.method || 'GET';
     const requestHeaders = request.headers || {};
-    const postData = request.postData;
 
     // Only proxy HTML document requests (Accept header contains text/html)
     const acceptHeader = requestHeaders['Accept'] || requestHeaders['accept'] || '';
     if (!acceptHeader.includes('text/html')) {
       send('Fetch.continueRequest', { requestId });
+      return;
+    }
+
+    // A document POST (a navigating <form>, including multipart with a file) is
+    // a byte pipe. Recover the exact bytes or fail — never forward a guess.
+    const postBody = decodeCdpRequestPostBody(request);
+    if (postBody.kind === 'unrecoverable') {
+      console.error(
+        `[electron-float] Cannot recover POST body byte-exactly (${postBody.reason}); failing instead of forwarding corrupt bytes: ${url.substring(0, 60)}`
+      );
+      send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
       return;
     }
 
@@ -1456,7 +1585,10 @@ export class ElectronOverlayInjector {
       port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
       method: method,
-      headers: requestHeaders,
+      headers: buildProxyRequestHeaders(
+        requestHeaders,
+        postBody.kind === 'bytes' ? postBody.bytes.length : null
+      ),
     };
 
     const proxyReq = transport.request(options, (proxyRes) => {
@@ -1494,9 +1626,10 @@ export class ElectronOverlayInjector {
       }
     });
 
-    // Forward request body if present (for POST/PUT requests)
-    if (postData) {
-      proxyReq.write(postData);
+    // Forward request body if present (for POST/PUT requests) as raw bytes —
+    // writing the CDP `postData` string here is what UTF-8-expanded it (#2886).
+    if (postBody.kind === 'bytes') {
+      proxyReq.write(postBody.bytes);
     }
     proxyReq.end();
   }

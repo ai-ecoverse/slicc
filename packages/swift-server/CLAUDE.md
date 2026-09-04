@@ -51,6 +51,8 @@ Two routes, chosen by whether the app allows renderer egress:
 
 Full route + follower internals: [`docs/swift-server-details.md`](../../docs/swift-server-details.md).
 
+`OverlayPostBody.swift` owns the POST-body recovery for the CSP-strip Fetch proxy in `OverlayTargetSession.fetchAndStripCSP`: `decodeCdpRequestPostBody` prefers `postDataEntries[].bytes` (base64, byte-exact), accepts an ASCII `postData` string, and returns `.unrecoverable` → `Fetch.failRequest` for everything else. The old `Data(base64Encoded: postData) ?? postData.data(using: .utf8)` either mis-read a latin1 body as base64 or UTF-8-expanded it behind a successful fulfill (#2886). Byte-for-byte twin of node-server's `decodeCdpRequestPostBody`; parity pinned by `Tests/OverlayPostBodyTests.swift`.
+
 ## Server Overview
 
 - `CLI/ServerCommand.swift` — entry; mirrors Node runtime flags; launches/attaches to a browser. Root mounts only `ThinBridgeCorsMiddleware` (`shouldMountThinBridgeCors`); `--serve-only` / `--electron` mount none. Gate: `isThinBridgeMode = !serveOnly && !electron`.
