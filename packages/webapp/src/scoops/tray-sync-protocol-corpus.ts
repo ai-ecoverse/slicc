@@ -23,6 +23,7 @@
 
 import type {
   AgentEvent,
+  ChatCompactionMarker,
   ChatMessage,
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
@@ -931,6 +932,24 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     fields: { type: 'mirrored', messageId: 'mirrored' },
     event: { type: 'turn_end', messageId: 'm2' },
   },
+  // A compaction round announcing itself. The follower needs the whole marker,
+  // not a rendered sentence: it derives its own copy from `trigger` + `state`
+  // so the two runtimes cannot drift into different wordings of one envelope
+  // (#2843). `messageId` is stable across the round, so a follower updates the
+  // row it already has — and removes it on `state: 'discarded'`.
+  compaction_notice: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored', marker: 'mirrored' },
+    event: {
+      type: 'compaction_notice',
+      messageId: 'compaction-cone-1',
+      marker: {
+        trigger: 'idle',
+        state: 'summarized',
+        transcriptPath: '/sessions/live-cone-mtlor6sy-8egf.md',
+      },
+    },
+  },
   error: {
     ios: 'decoded',
     fields: { type: 'mirrored', error: 'mirrored' },
@@ -972,6 +991,7 @@ const CHAT_MESSAGE: NestedPayloadEntry<ChatMessage> = {
     lickState: 'mirrored',
     queued: 'mirrored',
     error: 'mirrored',
+    compaction: 'mirrored',
   },
   sample: {
     id: 'm-full',
@@ -1013,6 +1033,29 @@ const CHAT_MESSAGE: NestedPayloadEntry<ChatMessage> = {
     lickState: 'pending',
     queued: false,
     error: false,
+    compaction: {
+      trigger: 'idle',
+      state: 'summarized',
+      transcriptPath: '/sessions/live-cone-mtlor6sy-8egf.md',
+    },
+  },
+};
+
+const CHAT_COMPACTION_MARKER: NestedPayloadEntry<ChatCompactionMarker> = {
+  ios: 'mirrored',
+  fields: {
+    trigger: 'mirrored',
+    state: 'mirrored',
+    transcriptPath: 'mirrored',
+  },
+  sample: {
+    // `overflow` + `fallback` on purpose: the sample must not be the same pair
+    // the `ChatMessage` sample and the agent-event fixture already carry, or a
+    // Swift decoder that hardcoded `idle`/`summarized` would round-trip all
+    // three.
+    trigger: 'overflow',
+    state: 'fallback',
+    transcriptPath: '/sessions/live-cone-mtlor6sy-8egf.md',
   },
 };
 
@@ -1222,6 +1265,7 @@ const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
  */
 export const NESTED_PAYLOAD_CORPUS = {
   ChatMessage: CHAT_MESSAGE,
+  ChatCompactionMarker: CHAT_COMPACTION_MARKER,
   ToolCall: TOOL_CALL,
   MessageAttachment: MESSAGE_ATTACHMENT,
   ScoopSummary: SCOOP_SUMMARY,
