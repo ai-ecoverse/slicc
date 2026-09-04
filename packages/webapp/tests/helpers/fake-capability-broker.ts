@@ -8,10 +8,22 @@
  * would turn that into a real 10s wait. Inject this instead so secret/network
  * capability reads are deterministic and never touch a transport.
  */
-import type { CapabilityBroker, CapabilityResult } from '../../src/work-unit/capability/index.js';
+import {
+  type CapabilityBroker,
+  type CapabilityDomain,
+  type CapabilityResult,
+  capabilityUnavailable,
+} from '../../src/work-unit/capability/index.js';
 
-const notUsed = (op: string) => async (): Promise<never> => {
-  throw new Error(`${op}: not used by this test`);
+/**
+ * A typed `CapabilityUnavailable`, not a throw (round-1 review finding 5):
+ * production adapters never let a call escape as an exception, so a fake
+ * that throws for an "unused" op would let a test pass against a code path
+ * that would crash a real broker's `attempt()`/`guardCapability()` wrapper.
+ */
+const notUsed = (op: `${CapabilityDomain}.${string}`) => {
+  const [capability, operation] = op.split('.') as [CapabilityDomain, string];
+  return async () => capabilityUnavailable(capability, operation, `${op}: not used by this test`);
 };
 
 export interface FakeCapabilityBrokerOptions {

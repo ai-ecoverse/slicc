@@ -20,6 +20,7 @@ import type { SignAndForwardReply } from '@slicc/shared-ts';
 import { isTextContentType, uint8ToBase64 } from '@slicc/shared-ts';
 import { SUDO_REQUEST_TYPE } from '../../sudo/types.js';
 import { normalizeApprovalDecision } from './approval-decision.js';
+import { withTimeout } from './boundary.js';
 import type { ExtensionCapabilityBrokerOptions } from './extension-adapter.js';
 import { capabilityRequestBytes } from './request-body.js';
 import {
@@ -257,12 +258,29 @@ async function defaultCallSecrets(direct: boolean, message: SecretsControlMessag
   return callSecretsBridge(type, payload);
 }
 
+/**
+ * Matches `mount-bridge-client.ts`'s own `CALL_TIMEOUT_MS`: the
+ * extension-delegate leg below already bounds this call at 120s, an OBJECT
+ * TRANSFER budget rather than a control-plane one (S3 caps a single object
+ * at 25 MiB). `sendToServiceWorker`'s bare `chrome.runtime.sendMessage`
+ * has no timeout of its own, so the same-extension (`extension-direct`) leg
+ * needs this wrapped around it explicitly — a wedged service worker must
+ * not hang the caller forever just because it happens to be reachable
+ * without a Port.
+ */
+const DIRECT_MOUNT_SIGN_TIMEOUT_MS = 120_000;
+
 async function defaultCallMount(
   direct: boolean,
   type: 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward',
   envelope: unknown
 ): Promise<SignAndForwardReply> {
-  if (direct) return (await sendToServiceWorker({ type, envelope })) as SignAndForwardReply;
+  if (direct) {
+    return (await withTimeout(
+      sendToServiceWorker({ type, envelope }),
+      DIRECT_MOUNT_SIGN_TIMEOUT_MS
+    )) as SignAndForwardReply;
+  }
   const { callMountBridge } = await import('../../fs/mount/mount-bridge-client.js');
   return callMountBridge(type, envelope);
 }

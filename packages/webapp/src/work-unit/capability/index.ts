@@ -64,7 +64,17 @@
  * next to `orchestrator.setCapabilityBroker`: `fs/` sits at the bottom of
  * the layer stack and mount construction happens far from any composition
  * root (`VirtualFS.mount()`, `mount-commands.ts`, `mount-recovery.ts`), so
- * constructor injection would fan out through all of them.
+ * constructor injection would fan out through all of them. An UNSET broker
+ * is a fail-closed `CapabilityUnavailable`, never a silent `node-rest`
+ * guess: a composition miss on an extension topology must not POST a
+ * signed envelope — IMS bearer included — to the hosted origin's REST
+ * routes. `mounts.signRequest` also carries its own 120s deadline on the
+ * `node-rest` adapter (`MOUNT_SIGN_TIMEOUT_MS` in `rest-ops.ts`) and the
+ * `extension-direct` leg (`DIRECT_MOUNT_SIGN_TIMEOUT_MS` in
+ * `extension-ops.ts`) — an OBJECT TRANSFER (S3 caps a single object at
+ * 25 MiB), not a control call, so it must not inherit the 10s
+ * `CONTROL_CALL_TIMEOUT_MS` every other REST op uses; `extension-delegate`
+ * already had this via `mount-bridge-client.ts`'s own `CALL_TIMEOUT_MS`.
  *
  * `fs/mount-commands.ts`'s extension-popup-vs-direct-picker branch and
  * `fs/picker-popup.ts`'s shared 4-kind popup launcher both KEEP

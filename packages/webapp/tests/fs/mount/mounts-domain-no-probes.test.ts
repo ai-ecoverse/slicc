@@ -48,6 +48,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const src = (...parts: string[]): string =>
   readFileSync(join(here, '..', '..', '..', 'src', ...parts), 'utf8');
 
+// One source token at a time: a string literal, a `//` line comment, or a
+// `/* */` block comment — mirrors `check-no-ui-imports-in-providers.mjs`'s
+// `stripComments`. Without this, a doc comment that merely NAMES the call
+// (as this file's own header does, a few lines up) would satisfy a raw
+// substring scan even if the real code regressed (round-1 review finding 5d).
+const COMMENT_OR_STRING_RE =
+  /'(?:\\[\s\S]|[^'\\\n])*'|"(?:\\[\s\S]|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+const stripComments = (source: string): string =>
+  source.replace(COMMENT_OR_STRING_RE, (m) =>
+    m.startsWith('//') || m.startsWith('/*') ? m.replace(/[^\n]/g, ' ') : m
+  );
+
 const FLOAT_PROBE_NAMES = [
   'isExtensionRealm',
   'isChromeExtensionRealm',
@@ -71,7 +83,9 @@ describe('#2276 slice C — fs/mount/signed-fetch.ts has no float/topology read'
 
   it('sends the sign-and-forward request through the injected broker', () => {
     const source = src('fs', 'mount', 'signed-fetch.ts');
-    expect(source).toContain('.mounts.signRequest(');
+    // Stripped of comments: a doc comment merely naming the call must not
+    // satisfy this — only the real call site does.
+    expect(stripComments(source)).toContain('.mounts.signRequest(');
     expect(source).toContain("from './capability-broker.js'");
   });
 

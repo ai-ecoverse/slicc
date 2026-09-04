@@ -20,14 +20,25 @@
  * those call sites. A lazily-set module-level fact, mirroring
  * `base/api-endpoint.ts`'s `chromeExtensionRealm` / `bridgeToken` idiom, is
  * the composition-time answer without that fan-out: resolved once at boot,
- * read many times. `undefined` (never set — a test, or a boot ordering bug)
- * falls back to the `node-rest` adapter, matching every other
- * broker-consuming module's test-time default.
+ * read many times.
+ *
+ * `undefined` (never set — a test, or a boot ordering bug) is NOT a
+ * fallback-to-`node-rest` case, on purpose (round-1 review finding 2). A
+ * silent REST default would let a composition miss on an EXTENSION topology
+ * POST a sign-and-forward envelope — the S3/DA credentials' IMS bearer
+ * included — to the hosted origin's `/api/*` routes, which is not a
+ * node-rest server at all on that float: exactly the "leaks into the
+ * tray-hub catch-all" bug (#EXT8-shaped) the old `isExtensionRealm()`
+ * branch existed to prevent. The caller (`signed-fetch.ts`) is responsible
+ * for turning "unset" into `CapabilityUnavailable`, not this module for
+ * guessing a transport.
+ *
+ * Only the TYPE is imported, not `createRestCapabilityBroker` — `fs/` (layer
+ * 0) stays free of any VALUE dependency on the capability package; the
+ * layer-back-edge ratchet does not see `work-unit/` at all (unranked), so
+ * this is enforced by convention here, not the lint gate.
  */
-import {
-  type CapabilityBroker,
-  createRestCapabilityBroker,
-} from '../../work-unit/capability/index.js';
+import type { CapabilityBroker } from '../../work-unit/capability/index.js';
 
 let mountCapabilityBroker: CapabilityBroker | undefined;
 
@@ -35,6 +46,7 @@ export function setMountCapabilityBroker(broker: CapabilityBroker | undefined): 
   mountCapabilityBroker = broker;
 }
 
-export function getMountCapabilityBroker(): CapabilityBroker {
-  return mountCapabilityBroker ?? createRestCapabilityBroker();
+/** `undefined` when no broker was ever set — the caller must fail closed, never guess a transport. */
+export function getMountCapabilityBroker(): CapabilityBroker | undefined {
+  return mountCapabilityBroker;
 }

@@ -16,16 +16,26 @@
  */
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMountCapabilityBroker } from '../../../src/fs/mount/capability-broker.js';
 import { makeSignedFetchDa, makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
 import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
+import { createRestCapabilityBroker } from '../../../src/work-unit/capability/index.js';
 
 // ----------------- helpers -----------------
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
+// An unset broker now fails closed (#2276 round-1 review finding 2) — this
+// file wants the `node-rest` transport specifically, so it injects one
+// explicitly rather than relying on a default that no longer exists.
+beforeEach(() => {
+  setMountCapabilityBroker(createRestCapabilityBroker());
+});
+
 afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
+  setMountCapabilityBroker(undefined);
   // Reset module-level base + token so thin-bridge cases don't leak into
   // later same-origin assertions.
   setLocalApiBaseUrl(null);
@@ -216,22 +226,24 @@ describe('signed-fetch CLI transport — envelope error mapping', () => {
 });
 
 describe('signed-fetch CLI transport — wire failures', () => {
-  // The exact hint text below now comes from the broker's transport-agnostic
-  // `CapabilityFailure.message` (#2276 slice C) rather than a topology-
-  // specific string this module used to craft itself — still an actionable
-  // EIO, just without a backend-specific hint baked into the call site.
-  it('fetch() rejects → EIO surfacing the transport error', async () => {
+  // The hints below are restored, byte-for-byte, from what this module used
+  // to craft itself — `sendSignRequest` now derives them from `broker.
+  // adapter` instead of a topology probe (round-1 review finding 4): no
+  // `status` on the failure means node-rest was reached, so the
+  // localhost hint applies; a status present means a server DID answer, so
+  // no hint is added (the detail is already in `message`).
+  it('fetch() rejects → EIO with localhost-backend hint', async () => {
     mockFetch(async () => {
       throw new TypeError('Failed to fetch');
     });
     const transport = makeSignedFetchS3('aws');
     await expect(transport({ method: 'GET', bucket: 'b', key: 'k' })).rejects.toMatchObject({
       code: 'EIO',
-      message: expect.stringContaining('Failed to fetch'),
+      message: expect.stringContaining('SLICC backend at localhost'),
     });
   });
 
-  it('non-JSON 502 (Express HTML error page) → EIO surfacing the parse failure', async () => {
+  it('non-JSON 502 (Express HTML error page) → EIO with parse-error hint', async () => {
     mockFetch(async () => htmlResponse('<html><body>Internal Server Error</body></html>', 502));
     const transport = makeSignedFetchS3('aws');
     await expect(transport({ method: 'GET', bucket: 'b', key: 'k' })).rejects.toMatchObject({

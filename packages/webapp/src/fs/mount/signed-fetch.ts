@@ -17,7 +17,7 @@
  */
 
 import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
-import type { MountSignRequest } from '../../work-unit/capability/index.js';
+import type { CapabilityAdapterId, MountSignRequest } from '../../work-unit/capability/index.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
@@ -106,6 +106,26 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
 }
 
 /**
+ * A hint appended to a transport-level failure — restores the actionable
+ * text this module used to craft itself when it built the HTTP/SW request
+ * directly, now derived from which adapter actually ran instead of a
+ * topology probe (round-1 review finding 4).
+ *
+ * Only added when `status` is ABSENT: a present `status` means a server was
+ * reached and answered (its detail is already folded into `message` by the
+ * REST adapter's own `errorText`), so a "backend not running" / "service
+ * worker not responding" hint would be actively wrong there.
+ */
+function transportHint(adapter: CapabilityAdapterId, status: number | undefined): string {
+  if (status !== undefined) return '';
+  if (adapter === 'node-rest') return ' (SLICC backend at localhost may not be running)';
+  if (adapter === 'extension-direct' || adapter === 'extension-delegate') {
+    return ' (extension service worker not responding)';
+  }
+  return '';
+}
+
+/**
  * Send one `MountSignRequest` through the injected broker and unwrap it.
  *
  * `CapabilityResult.ok: false` here means the TRANSPORT failed (no adapter,
@@ -114,11 +134,29 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
  * `SignAndForwardReply` with `ok: false` INSIDE a successful
  * `CapabilityResult`, exactly as it did when this module built the HTTP/SW
  * request itself; `envelopeToResponse` still does that error-code mapping.
+ *
+ * An unset broker is a FAIL-CLOSED `CapabilityUnavailable`, not a silent
+ * `node-rest` guess (round-1 review finding 2): a composition miss on an
+ * extension topology must never POST a signed envelope — IMS bearer
+ * included — to the hosted origin's REST routes.
  */
 async function sendSignRequest(request: MountSignRequest): Promise<SignAndForwardReply> {
-  const result = await getMountCapabilityBroker().mounts.signRequest(request);
+  const broker = getMountCapabilityBroker();
+  if (!broker) {
+    throw new FsError(
+      'EIO',
+      'mount transport unavailable: setMountCapabilityBroker was never called for this ' +
+        'float (composition bug — refusing to guess a transport for a privileged ' +
+        'sign-and-forward request)'
+    );
+  }
+  const result = await broker.mounts.signRequest(request);
   if (!result.ok) {
-    throw new FsError('EIO', `mount transport failed: ${result.message}`);
+    const status = 'status' in result ? result.status : undefined;
+    throw new FsError(
+      'EIO',
+      `mount transport failed: ${result.message}${transportHint(broker.adapter, status)}`
+    );
   }
   return result.value;
 }
