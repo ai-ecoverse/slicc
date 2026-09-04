@@ -13,8 +13,9 @@
  */
 
 import { uint8ToBase64 } from '@slicc/shared-ts';
+import { readVfsFileBytes } from '../binary.js';
 import { isElementRef, requireTab } from '../state.js';
-import type { PlaywrightHandler, PlaywrightHandlerCtx, TabSnapshot } from '../types.js';
+import type { PlaywrightHandler, TabSnapshot } from '../types.js';
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -38,31 +39,6 @@ const MIME_MAP: Record<string, string> = {
 function mimeForFilename(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   return MIME_MAP[ext] ?? 'application/octet-stream';
-}
-
-/**
- * Read a VFS file as raw bytes. Never UTF-8-decodes: a text round-trip
- * substitutes U+FFFD for every byte >= 0x80 (#2878, same family as #2818).
- *
- * If a backend still returns a string, refuse any payload that already
- * contains U+FFFD rather than uploading a silently mangled File.
- */
-export async function readUploadBytes(
-  fs: PlaywrightHandlerCtx['fs'],
-  path: string
-): Promise<Uint8Array> {
-  const content = await fs.readFile(path, { encoding: 'binary' });
-  if (content instanceof Uint8Array) return content;
-  if (typeof content !== 'string') {
-    throw new Error(`cannot represent '${path}' faithfully: unexpected file content type`);
-  }
-  if (content.includes('\uFFFD')) {
-    throw new Error(
-      `cannot represent '${path}' faithfully: file was read as text (contains U+FFFD). ` +
-        'Binary files must be read as bytes, not UTF-8.'
-    );
-  }
-  return new TextEncoder().encode(content);
 }
 
 function parseUploadArgs(
@@ -110,7 +86,7 @@ export const uploadHandler: PlaywrightHandler = async ({
 
   const files: Array<{ name: string; type: string; base64: string }> = [];
   for (const filePath of filePaths) {
-    const bytes = await readUploadBytes(fs, filePath);
+    const bytes = await readVfsFileBytes(fs, filePath);
     const name = filePath.split('/').pop() ?? filePath;
     files.push({ name, type: mimeForFilename(name), base64: uint8ToBase64(bytes) });
   }

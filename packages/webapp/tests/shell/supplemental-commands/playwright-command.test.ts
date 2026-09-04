@@ -4019,6 +4019,39 @@ const UPLOAD_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+/** Issue #2883 probe page: a drop target that reports file.size and scans for EF BF BD. */
+const DROP_HTML = `<!DOCTYPE html>
+<html>
+<head><title>Drop Probe</title></head>
+<body>
+  <div id="zone" role="button" tabindex="0" aria-label="Drop Zone" style="width:200px;height:200px">Drop here</div>
+  <pre id="out"></pre>
+  <script>
+    document.getElementById('zone').addEventListener('drop', async function (e) {
+      e.preventDefault();
+      var file = e.dataTransfer.files[0];
+      if (!file) return;
+      var buf = new Uint8Array(await file.arrayBuffer());
+      var replacementSeqs = 0;
+      for (var i = 0; i + 2 < buf.length; i++) {
+        if (buf[i] === 0xEF && buf[i + 1] === 0xBF && buf[i + 2] === 0xBD) {
+          replacementSeqs++;
+          i += 2;
+        }
+      }
+      window.__dropReport = {
+        name: file.name,
+        size: file.size,
+        byteLength: buf.length,
+        replacementSeqs: replacementSeqs,
+        bytes: Array.from(buf)
+      };
+      document.getElementById('out').textContent = JSON.stringify(window.__dropReport);
+    });
+  </script>
+</body>
+</html>`;
+
 // -- Conditional integration tests -------------------------------------------
 
 const chromePath = findChromeExecutable();
@@ -4059,6 +4092,9 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       } else if (req.url === '/upload.html') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(UPLOAD_HTML);
+      } else if (req.url === '/drop.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(DROP_HTML);
       } else {
         res.writeHead(404);
         res.end('Not found');
@@ -4407,6 +4443,69 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(parsed.byteLength).toBe(256);
     expect(parsed.replacementSeqs).toBe(0);
     expect(parsed.bytes).toEqual(Array.from(fixture));
+  });
+
+  it('drop --path of the 0x00..0xFF fixture is byte-exact on the page (#2883)', async () => {
+    const fixture = Uint8Array.from({ length: 256 }, (_, i) => i);
+    mockFs._files.set('/dropbytes.bin', fixture);
+
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/drop.html`);
+    const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
+    await browser.withTab(targetId, async () => {
+      while (Date.now() < deadline) {
+        try {
+          const ready = await browser.evaluate(
+            `document.readyState === 'complete' && Boolean(document.getElementById('zone'))`
+          );
+          if (ready === true || ready === 'true') return;
+        } catch {
+          /* about:blank teardown */
+        }
+        await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+      }
+      throw new Error('drop probe page did not finish loading');
+    });
+
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const snap = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
+    expect(snap.exitCode).toBe(0);
+    const ref = snap.stdout.match(/"Drop Zone"[^\n]*\[ref=(f?\d*e\d+)\]/)?.[1];
+    expect(ref, `no ref for the drop zone in:\n${snap.stdout}`).toBeTruthy();
+
+    const dropped = await cmd.execute(
+      ['drop', ref!, `--tab=${targetId}`, '--path=/dropbytes.bin'],
+      mockCtx
+    );
+    expect(dropped.exitCode).toBe(0);
+
+    const reportDeadline = Date.now() + 10_000;
+    let raw = 'null';
+    while (Date.now() < reportDeadline) {
+      const report = await cmd.execute(
+        ['eval', `--tab=${targetId}`, 'JSON.stringify(window.__dropReport ?? null)'],
+        mockCtx
+      );
+      raw = report.stdout.trim();
+      if (raw && raw !== 'null') break;
+      await new Promise((r) => setTimeout(r, FIXTURE_LOAD_POLL_MS));
+    }
+    expect(raw).not.toBe('null');
+    const report = JSON.parse(raw) as {
+      name: string;
+      size: number;
+      byteLength: number;
+      replacementSeqs: number;
+      bytes: number[];
+    };
+    expect(report.name).toBe('dropbytes.bin');
+    expect(report.size).toBe(256);
+    expect(report.byteLength).toBe(256);
+    expect(report.replacementSeqs).toBe(0);
+    expect(report.bytes).toEqual(Array.from(fixture));
   });
 });
 
@@ -5562,7 +5661,7 @@ describe('playwright-cli drop', () => {
       mockCtx
     );
     expect(result.exitCode).toBe(0);
-    expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt');
+    expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt', { encoding: 'binary' });
     expect(transport.send).toHaveBeenCalledWith(
       'DOM.resolveNode',
       expect.objectContaining({ backendNodeId: expect.any(Number) }),

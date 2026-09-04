@@ -1,34 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { VirtualFS } from '../../../../../src/fs/index.js';
-import {
-  readUploadBytes,
-  uploadHandler,
-} from '../../../../../src/shell/supplemental-commands/playwright/handlers/upload.js';
+import { describe, expect, it } from 'vitest';
+import { uploadHandler } from '../../../../../src/shell/supplemental-commands/playwright/handlers/upload.js';
 import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import {
+  allBytesFixture,
+  countReplacementSeqs,
   createHandlerCtx,
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  vfsLikeReadFile,
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
-
-/** Issue #2878 fixture: every byte 0x00..0xFF exactly once. */
-function allBytesFixture(): Uint8Array {
-  return Uint8Array.from({ length: 256 }, (_, i) => i);
-}
-
-function countReplacementSeqs(bytes: Uint8Array): number {
-  let n = 0;
-  for (let i = 0; i + 2 < bytes.length; i++) {
-    if (bytes[i] === 0xef && bytes[i + 1] === 0xbf && bytes[i + 2] === 0xbd) {
-      n++;
-      i += 2;
-    }
-  }
-  return n;
-}
 
 function decodeUploadedBase64(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -45,29 +28,6 @@ function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
     refToFrameId: new Map(),
     ...over,
   };
-}
-
-type StoredFile = string | Uint8Array;
-
-/**
- * VirtualFS-shaped reader: default encoding is UTF-8 with replacement, matching
- * production `VirtualFS.readFile`. `{ encoding: 'binary' }` returns the stored
- * bytes. A test that forgets `encoding: 'binary'` sees U+FFFD for high bytes.
- */
-function vfsLikeReadFile(files: Map<string, StoredFile>): VirtualFS['readFile'] {
-  return (async (path: string, options?: { encoding?: string }) => {
-    const stored = files.get(path);
-    if (stored === undefined) {
-      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
-    }
-    const encoding = options?.encoding ?? 'utf-8';
-    if (stored instanceof Uint8Array) {
-      if (encoding === 'binary') return stored;
-      return new TextDecoder('utf-8').decode(stored);
-    }
-    if (encoding === 'binary') return new TextEncoder().encode(stored);
-    return stored;
-  }) as VirtualFS['readFile'];
 }
 
 type TransportCall = { method: string; params: Record<string, unknown> };
@@ -106,39 +66,10 @@ function filesFromTransport(calls: TransportCall[]): Array<{
   return JSON.parse(match[1]) as Array<{ name: string; type: string; base64: string }>;
 }
 
-describe('readUploadBytes', () => {
-  it('returns stored bytes when encoding:binary is honoured', async () => {
-    const fixture = allBytesFixture();
-    const files = new Map<string, StoredFile>([['/allbytes.bin', fixture]]);
-    const bytes = await readUploadBytes(
-      { readFile: vfsLikeReadFile(files) } as VirtualFS,
-      '/allbytes.bin'
-    );
-    expect(bytes.length).toBe(256);
-    expect(Array.from(bytes)).toEqual(Array.from(fixture));
-    expect(countReplacementSeqs(bytes)).toBe(0);
-  });
-
-  it('fails loudly when a text decode already substituted U+FFFD', async () => {
-    const readFile = vi.fn(async () => 'ASCII\uFFFDMORE');
-    await expect(
-      readUploadBytes({ readFile } as unknown as VirtualFS, '/corrupt.bin')
-    ).rejects.toThrow(/faithfully/);
-    expect(readFile).toHaveBeenCalledWith('/corrupt.bin', { encoding: 'binary' });
-  });
-
-  it('encodes a valid UTF-8 string without substitution', async () => {
-    const readFile = vi.fn(async () => 'café');
-    const bytes = await readUploadBytes({ readFile } as unknown as VirtualFS, '/note.txt');
-    expect(new TextDecoder().decode(bytes)).toBe('café');
-    expect(countReplacementSeqs(bytes)).toBe(0);
-  });
-});
-
 describe('uploadHandler binary fidelity (#2878)', () => {
   it('uploads the 0x00..0xFF fixture through the focused-input path without U+FFFD', async () => {
     const fixture = allBytesFixture();
-    const files = new Map<string, StoredFile>([['/allbytes.bin', fixture]]);
+    const files = new Map<string, string | Uint8Array>([['/allbytes.bin', fixture]]);
     const { transport, calls } = captureTransport();
     const { browser } = createMockBrowser({ transport });
 
@@ -166,7 +97,7 @@ describe('uploadHandler binary fidelity (#2878)', () => {
 
   it('uploads the 0x00..0xFF fixture through a snapshot ref without U+FFFD', async () => {
     const fixture = allBytesFixture();
-    const files = new Map<string, StoredFile>([['/allbytes.bin', fixture]]);
+    const files = new Map<string, string | Uint8Array>([['/allbytes.bin', fixture]]);
     const { transport, calls } = captureTransport();
     const { browser } = createMockBrowser({ transport });
     const state = createPlaywrightState();
@@ -196,7 +127,7 @@ describe('uploadHandler binary fidelity (#2878)', () => {
 
   it('still uploads valid UTF-8 text files byte-exactly', async () => {
     const text = 'hello café — ASCII plus valid UTF-8';
-    const files = new Map<string, StoredFile>([['/note.txt', text]]);
+    const files = new Map<string, string | Uint8Array>([['/note.txt', text]]);
     const { transport, calls } = captureTransport();
     const { browser } = createMockBrowser({ transport });
 
