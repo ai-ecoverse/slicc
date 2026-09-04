@@ -143,6 +143,20 @@ export class Bridge implements KernelFacade {
   private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
   private messageBuffers = new Map<string, BufferedChatMessage[]>();
+  /**
+   * Cone creates that have registered their unit but have not buffered its
+   * first prompt yet, keyed by jid (#2840).
+   *
+   * `registerScoop` lists the new unit to the page BEFORE
+   * {@link handleConeCreate} gets to the brief, and the page selects a cone
+   * the instant its real record lands — so its `request-scoop-messages`
+   * routinely arrives inside that window. Answering it there is not a dropped
+   * request but a WRONG one: every source is legitimately empty, the panel
+   * wholesale-replaces the thread with nothing, and the prompt the user just
+   * typed does not reappear until the client's 5 s replay recovery re-asks.
+   * A replay for a unit still being created waits for the create instead.
+   */
+  private readonly conesBeingCreated = new Map<string, Promise<void>>();
   /** Current assistant message ID per scoop */
   private currentMessageId = new Map<string, string>();
   /** Panel-facing scoop state and projection. */
@@ -1013,6 +1027,9 @@ export class Bridge implements KernelFacade {
   }
 
   private async handleRequestScoopMessages(scoopJid: string): Promise<void> {
+    // A cone whose create is still in flight has no transcript yet through any
+    // source; answering now would replace the thread with an empty one (#2840).
+    await this.conesBeingCreated.get(scoopJid);
     if (!this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
     if (!scoop) return;
@@ -1168,21 +1185,46 @@ export class Bridge implements KernelFacade {
       // falls through to the global seed in `ScoopLifecycleManager`.
       ...(inheritedModel ? { model: inheritedModel } : {}),
     };
-    await this.orchestrator.registerScoop(scoop);
-    this.emit({
-      type: 'scoop-created',
-      scoop: this.toScoopSnapshot(scoop),
-    } satisfies ScoopCreatedMsg);
-    // The first message goes through the ordinary user-message path, so it
-    // is buffered, persisted and rendered exactly like a typed one.
-    const first = prompt?.trim();
-    if (first) {
-      await this.handleUserMessage({
+    // Held from before the registration — which is what lists the unit to the
+    // page — until the brief is in the buffer, so a replay request racing the
+    // create cannot be answered with an empty transcript (#2840).
+    let openReplayGate: () => void = () => {};
+    this.conesBeingCreated.set(
+      scoop.jid,
+      new Promise<void>((resolve) => {
+        openReplayGate = resolve;
+      })
+    );
+    const releaseReplayGate = (): void => {
+      this.conesBeingCreated.delete(scoop.jid);
+      openReplayGate();
+    };
+    try {
+      await this.orchestrator.registerScoop(scoop);
+      this.emit({
+        type: 'scoop-created',
+        scoop: this.toScoopSnapshot(scoop),
+      } satisfies ScoopCreatedMsg);
+      // The first message goes through the ordinary user-message path, so it
+      // is buffered, persisted and rendered exactly like a typed one.
+      const first = prompt?.trim();
+      if (!first) return;
+      const delivered = this.handleUserMessage({
         type: 'user-message',
         scoopJid: scoop.jid,
         text: first,
         messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       });
+      // `handleUserMessage` buffers the prompt SYNCHRONOUSLY before it awaits
+      // the turn, so the gate opens on the call, not on the answer: a replay
+      // must wait for the prompt to EXIST, never for the model to reply to it.
+      releaseReplayGate();
+      await delivered;
+    } finally {
+      // Idempotent — the happy path above already opened it. A registration
+      // that throws must not leave every later replay for this jid waiting on
+      // a promise nothing will resolve.
+      releaseReplayGate();
     }
   }
 
