@@ -52,8 +52,10 @@ export interface PanelTerminalHostOptions {
   /**
    * Runtime readers for webhook URL routing. `hasLocalNodeServer` is the
    * caller's already-resolved topology fact (#2276) — this file reads no
-   * float probe of its own; `getLeaderStatus` defaults to the real tray
-   * status reader when omitted.
+   * float probe of its own; its own default (used only if a caller ever
+   * fails to inject one, like `crontask`'s) fails CLOSED to the worker
+   * LickManager path, never the privileged REST one. `getLeaderStatus`
+   * defaults to the real tray status reader when omitted.
    */
   webhook?: HeadlessShellOptions['webhook'];
   /** Runtime topology reader for the crontask command. Same composition-time answer as `webhook`. */
@@ -118,7 +120,7 @@ export function createPanelTerminalHost(
         env: opts.env,
         browserAPI: browser,
         webhook: {
-          hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? (() => true),
+          hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? (() => false),
           getLeaderStatus: options.webhook?.getLeaderStatus ?? getLeaderStatusWithFallback,
         },
         crontask: options.crontask,

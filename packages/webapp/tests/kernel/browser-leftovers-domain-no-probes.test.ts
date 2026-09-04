@@ -216,6 +216,13 @@ describe('#2276 round-1 review on #2841 (P1) — kernel/panel-terminal-host.ts h
     expect(source).toContain('webhook: { hasLocalNodeServer },');
     expect(source).toContain('crontask: { hasLocalNodeServer },');
   });
+
+  it("the factory's own webhook default fails CLOSED, same as crontask's — production is unreachable (kernel-worker always injects) but an unwired caller must not assume node-rest", () => {
+    const source = src('kernel', 'panel-terminal-host.ts');
+    expect(source).toContain(
+      'hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? (() => false),'
+    );
+  });
 });
 
 describe('#2276 slice C — webhook-command.ts was already compliant, no code change needed', () => {
