@@ -4,7 +4,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
-} from '../../src/cdp/extension-bridge-protocol.js';
+} from '../src/extension-bridge-protocol.js';
 
 describe('extension-bridge-protocol', () => {
   it('exposes a stable port name and protocol version', () => {

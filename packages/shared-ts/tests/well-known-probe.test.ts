@@ -4,7 +4,7 @@ import {
   type ProbeFetch,
   type ProbeResponse,
   probeWellKnown,
-} from '../../src/net/well-known-probe.js';
+} from '../src/well-known-probe.js';
 
 function res(status: number, contentType: string | null): ProbeResponse {
   return {
@@ -118,6 +118,25 @@ describe('probeWellKnown', () => {
     expect(
       await probeWellKnown('https://example.com', stubFetch({ '/llms.txt': res(0, null) }))
     ).toEqual([]);
+  });
+
+  it('aborts a probe that outlives the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl: ProbeFetch = vi.fn(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new Error('aborted'));
+            });
+          })
+      );
+      const promise = probeWellKnown('https://example.com', fetchImpl, { timeoutMs: 50 });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await promise).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('passes an abort signal to fetch', async () => {

@@ -4,6 +4,10 @@
 
 import type { CDPPayload } from '@slicc/shared-ts';
 
+// TargetInfo moved to @slicc/shared-ts (#2276 slice E) — the chrome extension
+// needs it too. Re-exported here so no webapp-internal import path changes.
+export type { TargetInfo } from '@slicc/shared-ts';
+
 /** Outgoing CDP command message. */
 export interface CDPCommand {
   id: number;
@@ -42,18 +46,6 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
 /** Listener callback for CDP events. */
 export type CDPEventListener = (params: CDPPayload) => void;
-
-/** Target info returned by Target.getTargets. */
-export interface TargetInfo {
-  targetId: string;
-  type: string;
-  title: string;
-  url: string;
-  attached: boolean;
-  browserContextId?: string;
-  /** True if this is the user's active tab (extension mode only). */
-  active?: boolean;
-}
 
 /** Page info exposed by the high-level API. */
 export interface PageInfo {

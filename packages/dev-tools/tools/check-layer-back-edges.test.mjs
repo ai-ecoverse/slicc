@@ -7,11 +7,13 @@ import {
   BASELINE_PATH,
   baselineFiles,
   compareToBaseline,
+  findChromeExtensionWebappEscapes,
   findCrossPackageEscapes,
   findLayerBackEdges,
   isWebappSource,
   layerOf,
   scanBackEdges,
+  scanChromeExtensionWebappEscapes,
   scanCrossPackageEscapes,
 } from './check-layer-back-edges.mjs';
 
@@ -190,6 +192,78 @@ describe('check-layer-back-edges: findCrossPackageEscapes', () => {
   });
 });
 
+describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
+  it('allows the one permitted exception: a top-level type-only clause from kernel/messages.ts', () => {
+    const source = "import type { ExtensionMessage } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toEqual([]);
+  });
+
+  it('flags a VALUE import from kernel/messages.ts (no runtime coupling exemption)', () => {
+    const source =
+      "import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/kernel/messages.js',
+        to: 'packages/webapp/src/kernel/messages.js',
+      },
+    ]);
+  });
+
+  it('flags a MIXED clause ({ type X, Y }) from kernel/messages.ts', () => {
+    // A mixed clause carries a real value import alongside the type — the
+    // top-level `import type` exemption is deliberately narrower than this.
+    const source =
+      "import { type ExtensionMessage, LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toHaveLength(1);
+  });
+
+  it('flags a type-only import of any OTHER webapp module (exemption is path-specific)', () => {
+    const source = "import type { TargetInfo } from '../../webapp/src/cdp/types.js';";
+    expect(findChromeExtensionWebappEscapes('bridge-sw.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/cdp/types.js',
+        to: 'packages/webapp/src/cdp/types.js',
+      },
+    ]);
+  });
+
+  it('flags a dynamic import() targeting webapp/src', () => {
+    const source = "async function f() { await import('../../webapp/src/net/handoff-link.js'); }";
+    expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../webapp/src/net/handoff-link.js',
+        to: 'packages/webapp/src/net/handoff-link.js',
+      },
+    ]);
+  });
+
+  it('flags a namespace import targeting webapp/src', () => {
+    const source = "import * as messages from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toHaveLength(1);
+  });
+
+  it('allows imports that stay inside packages/chrome-extension/src', () => {
+    const source = [
+      "import { CHERRY_PANEL_PORT_NAME } from './cherry-panel-protocol.js';",
+      "import { nudgeIframeRepaint } from './iframe-repaint.js';",
+    ].join('\n');
+    expect(findChromeExtensionWebappEscapes('sidepanel-entry.ts', source)).toEqual([]);
+  });
+
+  it('allows bare package specifiers (the real path for shared code)', () => {
+    const source = "import { probeWellKnown } from '@slicc/shared-ts';";
+    expect(findChromeExtensionWebappEscapes('discovery-observer.ts', source)).toEqual([]);
+  });
+
+  it('ignores escapes inside comments', () => {
+    const source = "// import { x } from '../../webapp/src/kernel/messages.js';";
+    expect(findChromeExtensionWebappEscapes('service-worker.ts', source)).toEqual([]);
+  });
+});
+
 describe('check-layer-back-edges: isWebappSource', () => {
   it('accepts .ts and .tsx source', () => {
     expect(isWebappSource('export-service.ts')).toBe(true);
@@ -256,9 +330,13 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
     expect(scanCrossPackageEscapes()).toEqual({});
   });
 
+  it('no chrome-extension source escapes into packages/webapp/src beyond the one exemption (zero tolerance)', () => {
+    expect(scanChromeExtensionWebappEscapes()).toEqual({});
+  });
+
   it('guard entry script passes and reports the grandfathered count', () => {
     const { code, out } = runGuard();
     expect(code).toBe(0);
-    expect(out).toMatch(/ok: no new layer back-edges and no cross-package escapes/);
+    expect(out).toMatch(/ok: no new layer back-edges/);
   });
 });

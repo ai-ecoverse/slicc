@@ -6,8 +6,8 @@ import {
   extractCatalogFromCdpHeaders,
   extractCatalogFromFetchHeaders,
   extractCatalogFromWebRequest,
-} from '../../src/net/discovery-link.js';
-import { parseLinkHeader } from '../../src/net/link-header.js';
+} from '../src/discovery-link.js';
+import { parseLinkHeader } from '../src/link-header.js';
 
 describe('extractCatalog', () => {
   it('matches the ai-catalog rel and returns the manifest URL', () => {
@@ -84,12 +84,24 @@ describe('extractCatalogFrom* adapters', () => {
     expect(result.match?.url).toBe('https://x.example/c.json');
   });
 
+  it('extractCatalogFromWebRequest returns nulls when no Link header', () => {
+    const result = extractCatalogFromWebRequest([{ name: 'Content-Type', value: 'text/html' }]);
+    expect(result.match).toBeNull();
+    expect(result.links).toEqual([]);
+  });
+
   it('extractCatalogFromFetchHeaders parses a Headers object', () => {
     const headers = new Headers();
     headers.set('Link', `<https://x.example/c.json>; rel="ai-catalog"`);
     const result = extractCatalogFromFetchHeaders(headers);
     expect(result.match?.kind).toBe('ai-catalog');
     expect(result.match?.url).toBe('https://x.example/c.json');
+  });
+
+  it('extractCatalogFromFetchHeaders returns nulls when no Link header', () => {
+    const result = extractCatalogFromFetchHeaders(new Headers());
+    expect(result.match).toBeNull();
+    expect(result.links).toEqual([]);
   });
 });
 

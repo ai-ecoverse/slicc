@@ -30,6 +30,22 @@
  * above cannot see it — yet it is the worse violation, since the browser-first
  * webapp then roots its bundle in a Node CLI package (#2798). That check is
  * zero-tolerance rather than baselined: the tree is clean today.
+ *
+ * A third pass closes the reciprocal gap (#2276 slice E, category 10):
+ * packages/chrome-extension/src importing FROM packages/webapp/src. Nothing
+ * above catches that direction — the cross-package-escape check only scans
+ * webapp/src as the importer. The thin extension must not depend on webapp's
+ * runtime; the shared protocol modules it needs (extension-bridge-protocol,
+ * proxy-headers, discovery-link, well-known-probe, handoff-link, link-header,
+ * the cdp/types TargetInfo subset) moved to @slicc/shared-ts, with webapp
+ * re-exports so no webapp-internal caller moves. The ONE exception is
+ * `import type { ... } from '.../kernel/messages.js'`: that 1500-line
+ * message-envelope union is core webapp-internal kernel infrastructure used
+ * by 11+ webapp files, not extension-specific, so moving it would invert the
+ * dependency for no bundle-coupling benefit — `import type` compiles away
+ * entirely. Zero-tolerance, no baseline: every other form (value imports,
+ * dynamic import(), mixed `{ type X, Y }` clauses, namespace/default
+ * imports, or a type-only import of any OTHER webapp module) is banned.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -191,6 +207,80 @@ export function scanCrossPackageEscapes() {
   return escapes;
 }
 
+const CHROME_EXT_SCAN_ROOT = resolve(repoRoot, 'packages/chrome-extension/src');
+
+/**
+ * The only packages/webapp/src target a chrome-extension/src file may import,
+ * and only via a top-level `import type { ... } from '<spec>'` clause (see
+ * the module docstring, #2276 slice E / category 10).
+ */
+// `resolve()` preserves the specifier's `.js` extension (the ESM/NodeNext
+// convention for a `.ts` source file) rather than resolving it to the
+// on-disk `.ts` filename — match that, not the disk extension.
+const ALLOWED_TYPE_ONLY_WEBAPP_TARGET = 'packages/webapp/src/kernel/messages.js';
+
+// A full `import type { ... } from '<spec>'` clause. Deliberately does NOT
+// match a mixed `import { type X, Y }` clause (that carries a real value
+// import too) or a type-only namespace/default import — the one exemption
+// this repo grants is narrow on purpose.
+const TYPE_ONLY_NAMED_CLAUSE_RE = /import\s+type\s*\{[^}]*\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g;
+
+/**
+ * Find every relative import in a packages/chrome-extension/src file that
+ * targets packages/webapp/src. Returns `[{ line, specifier, to }]`; the one
+ * allowed occurrence (a type-only named clause targeting
+ * `kernel/messages.ts`) is excluded.
+ */
+export function findChromeExtensionWebappEscapes(importerRel, source) {
+  const importerDir = dirname(importerRel);
+  const stripped = stripComments(source);
+
+  // RELATIVE_IMPORT_RE anchors its match on the `from '<spec>'` /
+  // `import '<spec>'` fragment (see its definition above), so a type-only
+  // named clause's match-start lines up with the `from` keyword too — index
+  // by that shared anchor to know whether a given RELATIVE_IMPORT_RE hit was
+  // produced by a `import type { ... } from` clause.
+  const typeOnlyFromIndices = new Map();
+  for (const m of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
+    const fromOffset = m[0].lastIndexOf('from');
+    const fromIndex = m.index + fromOffset;
+    const list = typeOnlyFromIndices.get(m[1]) ?? [];
+    list.push(fromIndex);
+    typeOnlyFromIndices.set(m[1], list);
+  }
+
+  const hits = [];
+  for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
+    const specifier = m[1];
+    const queryAt = specifier.indexOf('?');
+    const abs = resolve(
+      CHROME_EXT_SCAN_ROOT,
+      importerDir,
+      queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
+    );
+    const targetRel = relative(repoRoot, abs).split('\\').join('/');
+    if (!targetRel.startsWith('packages/webapp/src/')) continue;
+
+    const isTypeOnlyOccurrence = (typeOnlyFromIndices.get(specifier) ?? []).includes(m.index);
+    if (isTypeOnlyOccurrence && targetRel === ALLOWED_TYPE_ONLY_WEBAPP_TARGET) continue;
+
+    const line = stripped.slice(0, m.index).split('\n').length;
+    hits.push({ line, specifier, to: targetRel });
+  }
+  return hits;
+}
+
+/** Scan the tree; returns `{ 'packages/chrome-extension/src/...': [hit] }` for files that escape. */
+export function scanChromeExtensionWebappEscapes() {
+  const escapes = {};
+  for (const abs of collect(CHROME_EXT_SCAN_ROOT)) {
+    const srcRel = relative(CHROME_EXT_SCAN_ROOT, abs).split('\\').join('/');
+    const hits = findChromeExtensionWebappEscapes(srcRel, readFileSync(abs, 'utf8'));
+    if (hits.length > 0) escapes[relative(repoRoot, abs).split('\\').join('/')] = hits;
+  }
+  return escapes;
+}
+
 /**
  * Compare `current` counts against `baseline`. Returns a list of failure
  * messages — empty when the tree matches the ratchet.
@@ -229,6 +319,7 @@ function sortedCounts(counts) {
 function main() {
   const current = scanBackEdges();
   const escapes = scanCrossPackageEscapes();
+  const chromeExtEscapes = scanChromeExtensionWebappEscapes();
 
   if (argv.includes('--update')) {
     writeFileSync(BASELINE_PATH, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
@@ -246,6 +337,21 @@ function main() {
           `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ` +
             `a relative import out of packages/webapp/src into ${h.to}. Move the shared code ` +
             'into @slicc/shared-ts and import it by package name instead.\n'
+        );
+      }
+    }
+    process.exit(1);
+  }
+
+  if (Object.keys(chromeExtEscapes).length > 0) {
+    for (const [file, hits] of Object.entries(chromeExtEscapes)) {
+      for (const h of hits) {
+        process.stderr.write(
+          `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ` +
+            'packages/chrome-extension/src must not depend on packages/webapp/src. The only ' +
+            'permitted exception is a top-level `import type { ... }` clause from ' +
+            'kernel/messages.ts (compiles away — no runtime coupling). Move shared protocol ' +
+            'code into @slicc/shared-ts instead.\n'
         );
       }
     }
@@ -279,7 +385,8 @@ function main() {
 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   process.stdout.write(
-    `ok: no new layer back-edges and no cross-package escapes in packages/webapp/src ` +
+    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, and no ` +
+      `packages/chrome-extension/src → packages/webapp/src escapes ` +
       `(${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
   );
 }
