@@ -133,7 +133,7 @@ describe('wireWcSprinkles boot resilience', () => {
     // Discovery reads every directory under its roots; a `readDir` that
     // never settles makes manager.refresh() — and the initial resync() —
     // hang. wireWcSprinkles MUST still resolve so downstream boot (the tray
-    // leader, sequenced after it in attachWcClient) runs. The initial resync
+    // leader, sequenced after it in attachWcWorkbench) runs. The initial resync
     // is best-effort and re-run on kernel-ready, so dropping the await is safe.
     const fs = {
       exists: async () => true, // enter scanDir so discovery reaches the walk

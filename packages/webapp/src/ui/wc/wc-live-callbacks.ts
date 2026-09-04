@@ -87,7 +87,7 @@ export function toSwitcherScoops(
  * Idempotent because three places need it and none of them can be the sole
  * owner: `prepareWcShell` builds the bag, `createWcLiveCallbacks` DECORATES
  * the callback bag the adapter must observe (so it has to exist before
- * `OffscreenClient` does), and `attachWcClient` mounts the composer on it. A
+ * `OffscreenClient` does), and `attachWcWorkbench` mounts the composer on it. A
  * second instance would mean a second last-snapshot cache and a strip that
  * repaints from a different roster than the composer sends to.
  */

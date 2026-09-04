@@ -213,7 +213,7 @@ export function pickFreeMountPath(seg: string, existing: Set<string>): string {
  * second call (re-render / HMR) is a no-op until the first teardown runs.
  *
  * Cross-runtime: the standalone / electron-overlay / hosted-leader floats all
- * boot through `attachWcClient`, so this consumer is live there. The extension
+ * boot through `attachWcWorkbench`, so this consumer is live there. The extension
  * rides the same path structurally (shared-origin IDB + `OffscreenClient`
  * shell exec), but the side-panel→offscreen drop capture is NOT verified here
  * — see the Spike A spec note; treat extension as a follow-up.

@@ -14,7 +14,7 @@
  *   welcome-time and an unintercepted lick would fatal there.
  *
  * Float-agnostic by construction: standalone and the extension panel both
- * wire it from `attachWcClient`.
+ * wire it from `attachWcWorkbench`.
  */
 
 import type { VirtualFS } from '../../fs/index.js';

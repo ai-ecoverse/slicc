@@ -543,7 +543,7 @@ describe('mountWcUiPreview', () => {
 });
 
 /**
- * Base64 previews are wired at the MOUNT, not in `attachWcClient`.
+ * Base64 previews are wired at the MOUNT, not in `attachWcWorkbench`.
  *
  * That is what puts them on the surfaces which deliberately never attach a
  * client — Cherry, the tray follower, the extension side panel all call

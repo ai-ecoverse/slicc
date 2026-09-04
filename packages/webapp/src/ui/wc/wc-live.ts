@@ -139,12 +139,6 @@ export interface WcShellBoot {
 }
 
 /**
- * Phase A of the live boot, float-agnostic: mount the shell and build the
- * mutable wiring the kernel callbacks close over. The client arrives in
- * {@link attachWcClient} (phase B) — standalone spawns a kernel worker,
- * the extension popout connects to the offscreen engine.
- */
-/**
  * Decide what happens to the queued pile when the selection moves (#2354).
  *
  * A read-only detour that stays inside the queue owner's own cone HOLDS the
@@ -421,6 +415,15 @@ function createSelection(deps: {
   };
 }
 
+/**
+ * Build the shell frame and the mutable wiring the kernel callbacks close
+ * over — float-agnostic, and with no transport yet.
+ *
+ * Called by `mountWcShell` (#2382 D2b), which then asks the float for its
+ * transport and wires the chat surface. A leader's `OffscreenClient` is
+ * constructed FROM the wiring this returns, which is why the frame comes
+ * first and the client second on every float.
+ */
 export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
   const refs = buildWcShellFrame(app, {
     messages: [],
@@ -579,7 +582,7 @@ function wireWcWelcome(
   });
 }
 
-export interface AttachWcClientOptions {
+export interface AttachWcWorkbenchOptions {
   /** Standalone kernel-worker id; enables the sprinkle ops channel. */
   instanceId?: string;
   /** Standalone-only runtime bits enabling tray sync + panel RPC. */
@@ -636,7 +639,7 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
  */
 function wireWcBrowserOverlay(
   boot: WcShellBoot,
-  options: AttachWcClientOptions,
+  options: AttachWcWorkbenchOptions,
   log: BootStageLogger
 ): void {
   const standalone = options.standalone;
@@ -861,7 +864,7 @@ function wireWcUrlContext(
 function wireWcPermissionsSurface(
   boot: WcShellBoot,
   client: OffscreenClient,
-  options: AttachWcClientOptions,
+  options: AttachWcWorkbenchOptions,
   log: BootStageLogger
 ): void {
   void import('./wc-permissions.js')
@@ -965,7 +968,7 @@ export const DEFAULT_DOCK_TREE_ON_BOOT = {
  * whatever was last persisted, or fall back to `DEFAULT_DOCK_TREE_ON_BOOT`.
  * `setTree` does not itself emit a change event, so this restore can never
  * loop back into a persist write. Runs for BOTH floats (standalone and
- * extension) via `attachWcClient` — dual-mode by construction.
+ * extension) via `attachWcWorkbench` — dual-mode by construction.
  */
 export function wireDockTreePersistence(refs: WcShellRefs, log: BootStageLogger): void {
   const dockTreeEl = refs.dockTree as unknown as HTMLElement;
@@ -1039,7 +1042,7 @@ export function attachWcWorkbench(
   chat: WcChatAttachment,
   host: LeaderChatHost,
   log: BootStageLogger,
-  options: AttachWcClientOptions = {}
+  options: AttachWcWorkbenchOptions = {}
 ): (() => void) | undefined {
   // Apply persisted timestamp visibility preference (both standalone + extension).
   void import('../timestamp-preference.js')
@@ -1313,7 +1316,7 @@ export function attachWcWorkbench(
       // `layout` command (via the `layout-apply` panel-RPC op) can reach
       // `applyLayout`. This shared boot path covers BOTH floats — standalone
       // (wc-live's own boot) and extension (`wc-extension.ts` reuses
-      // `attachWcClient`).
+      // `attachWcWorkbench`).
       const { getPanelizedShell } = await import('./panelize-shell.js');
       const panelized = getPanelizedShell();
       if (panelized) {

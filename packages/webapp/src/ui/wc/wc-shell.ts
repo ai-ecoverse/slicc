@@ -517,7 +517,7 @@ export function buildWcShellFrame(root: HTMLElement, options: WcShellOptions): W
   // Base64 payload previews: a pasted blob — a screenshot as a `data:` URL,
   // the output of `base64 < report.pdf` — collapses to a chip that opens it in
   // Quick Look. Wired HERE, at the mount, rather than in `wc-live`'s
-  // `attachWcClient`, because it needs no VFS and this is the one seam every
+  // `attachWcWorkbench`, because it needs no VFS and this is the one seam every
   // surface that renders a transcript passes through: the live float, the
   // extension popout, and the three that deliberately never attach a client
   // (Cherry, the tray follower, the extension side panel — see

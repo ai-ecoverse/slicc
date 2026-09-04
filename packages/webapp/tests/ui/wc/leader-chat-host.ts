@@ -13,7 +13,7 @@ import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import { attachWcChat } from '../../../src/ui/wc/wc-chat.js';
 import type { WcChatHost } from '../../../src/ui/wc/wc-chat-host.js';
 import { createLeaderChatHost } from '../../../src/ui/wc/wc-chat-host.js';
-import type { AttachWcClientOptions, WcShellBoot } from '../../../src/ui/wc/wc-live.js';
+import type { AttachWcWorkbenchOptions, WcShellBoot } from '../../../src/ui/wc/wc-live.js';
 import { attachWcWorkbench } from '../../../src/ui/wc/wc-live.js';
 import { ensureWorkUnitClient } from '../../../src/ui/wc/wc-live-callbacks.js';
 
@@ -46,7 +46,7 @@ export function attachLeaderShell(
   boot: WcShellBoot,
   client: unknown,
   log: BootStageLogger,
-  options?: AttachWcClientOptions
+  options?: AttachWcWorkbenchOptions
 ): (() => void) | undefined {
   const host = createLeaderChatHost(client as never);
   const chat = attachWcChat(boot, ensureWorkUnitClient(boot.wiring), host);

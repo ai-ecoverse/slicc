@@ -6,7 +6,7 @@
  * pill. All of it reads {@link WorkUnitClient} and nothing about a transport
  * — the four things that DO need one arrive through {@link WcChatHost}.
  *
- * Before this, a leader ran `attachWcClient` and a follower ran its own
+ * Before this, a leader ran `attachWcWorkbench` and a follower ran its own
  * ~300 lines inside `mountWcUiFollower`: two controllers, two strip
  * publishers, two selection paths, two composer wirings. They drifted, which
  * is the whole reason #2274 built the protocol — the follower's Stop button

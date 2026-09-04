@@ -22,7 +22,6 @@ import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import { wireWcAttach } from './wc-attach.js';
 import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
-import { installFloatbarStatus } from './wc-floatbar-online.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
@@ -691,9 +690,6 @@ export async function bootFollowerFloat(
   };
   setComposerState(false, CONNECTING);
 
-  // Drive the floatbar status beacon from tray runtime statuses.
-  installFloatbarStatus(boot.refs.floatbar, { floatKind });
-
   // Mirror the follower tray status into `localStorage`, matching what
   // `wc-tray.ts` does for the kernel-backed floats. Without this the
   // `/join/<token>` mount — the float most people actually run — keeps its
@@ -717,7 +713,7 @@ export async function bootFollowerFloat(
   }
 
   // Push-to-talk: arm the composer's hold-to-dictate gesture. The follower
-  // reuses the WC shell WITHOUT attachWcClient (which is where the live/leader
+  // reuses the WC shell WITHOUT attachWcWorkbench (which is where the live/leader
   // mount injects speech + sets `ptt`), so without this the mic gesture is
   // never enabled. `<slicc-composer>` gates the entire PTT press on this
   // attribute and lazily creates its built-in Web Speech engine via
@@ -776,11 +772,25 @@ export async function bootFollowerFloat(
     shownUnit = jid;
     if (!jid) return;
     const unit = workUnits.currentUnits().find((candidate) => candidate.id === jid);
-    if (unit) boot.selectScoop(unit);
-    else {
+    if (!unit) {
       boot.watchUnit(jid);
       setComposerState(composerEnabled, composerPlaceholder);
+      return;
     }
+    // ONLY when the shown unit actually moves. A leader re-asserts its roster
+    // every 5s and each frame names the unit we are already on; selecting it
+    // again would ask for a snapshot, which the leader answers by replaying
+    // the whole transcript (`handleScoopSelection` has no same-jid
+    // short-circuit) — a wholesale re-render every five seconds, dips
+    // disposed and rehydrated with it. The tab-click path in `attachWcChat`
+    // guards the same way.
+    if (boot.getSelected()?.id !== unit.id) {
+      boot.selectScoop(unit);
+      return;
+    }
+    // Same unit, but the CONNECTION may have moved: a fresh session has to
+    // re-open the composer it kept shut while there was nothing addressable.
+    setComposerState(composerEnabled, composerPlaceholder);
   };
 
   /**

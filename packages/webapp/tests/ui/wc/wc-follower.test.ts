@@ -246,7 +246,7 @@ describe('bootFollowerFloat', () => {
     // Non-cherry follower → not ui-only → a real tab where getUserMedia works.
     await bootFollowerFloat(app, bootLog(), 'follower');
 
-    // The follower reuses the WC shell WITHOUT attachWcClient — which is where
+    // The follower reuses the WC shell WITHOUT attachWcWorkbench — which is where
     // the live/leader mount sets `ptt`. `<slicc-composer>` gates the entire
     // hold-to-dictate gesture on this attribute, so without it the mic never
     // activates. A real-tab follower CAN capture, so it gets PTT + camera.
@@ -563,27 +563,46 @@ describe('bootFollowerFloat', () => {
     loadMessages.mockRestore();
   });
 
-  it('does not re-render the transcript on every roster push (#2382 D2b)', async () => {
-    // A leader broadcasts `scoops.list` on a 5s interval, and each frame
-    // re-asserts the unit this follower is showing. Re-pointing the
-    // subscription there would tear down a live one and take a fresh SEED in
-    // its place — a wholesale re-render every five seconds, dips disposed and
-    // rehydrated with it.
+  it('does not re-select the shown unit on every roster push (#2382 D2b)', async () => {
+    // A leader broadcasts `scoops.list` on a 5s interval and every frame
+    // re-asserts the unit this follower is on. Selecting it again would ask
+    // for a snapshot — and the leader's `handleScoopSelection` has no
+    // same-jid short-circuit, so it replays the whole transcript and the
+    // watcher re-renders it: dips disposed and rehydrated, in-thread form
+    // state wiped, every five seconds.
     const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
     const loadMessages = vi.spyOn(WcChatController.prototype, 'loadMessages');
     const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
+    // A real channel: without it `snapshot()` rejects into the adapter's
+    // `.catch` and this test would pass no matter what the shell did.
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop,
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+    };
     const roster = [
       { assistantLabel: 'sliccy', folder: 'cone', jid: 'cone_a', name: 'a', parentId: null },
     ];
+
+    // First roster of the session: nothing is selected yet, so this one DOES
+    // select — that is how a snapshot-only join gets its unit.
     opts.onScoopsList?.(roster as never, 'cone_a');
+    expect(selectScoop).toHaveBeenCalledTimes(1);
+    expect(selectScoop).toHaveBeenCalledWith('cone_a');
     opts.onSnapshot?.([{ id: 'a1', role: 'user', content: 'first' }] as never, 'cone_a');
     loadMessages.mockClear();
+    selectScoop.mockClear();
 
+    // …and every re-assert after it is silent on the wire and on screen. (A
+    // snapshot the leader PUSHES is a different thing and still renders; what
+    // must not happen is this follower asking for one it already has.)
     opts.onScoopsList?.(roster as never, 'cone_a');
     opts.onScoopsList?.(roster as never, 'cone_a');
+    expect(selectScoop).not.toHaveBeenCalled();
     expect(loadMessages).not.toHaveBeenCalled();
     loadMessages.mockRestore();
   });
@@ -599,14 +618,46 @@ describe('bootFollowerFloat', () => {
     const app = document.getElementById('app')!;
     await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
+    const selectScoop = vi.fn();
+    const stop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop,
+      sendMessage: vi.fn(),
+      stop,
+    };
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & { scoops: unknown[] };
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement & { model?: string };
+
+    // Nothing is addressable before the leader has named a unit, so Stop is a
+    // no-op: aborting on a guess would kill a turn this seat cannot see.
+    inputCard.dispatchEvent(new CustomEvent('stop'));
+    expect(stop).not.toHaveBeenCalled();
+
     opts.onConnectionChange?.(true);
     opts.onSnapshot?.([{ id: 'g1', role: 'assistant', content: 'hello guest' }] as never, 'seat_1');
 
     expect(loadMessages.mock.calls.at(-1)?.[0]).toEqual([
       { id: 'g1', role: 'assistant', content: 'hello guest' },
     ]);
-    const inputCard = app.querySelector('slicc-input-card')!;
+    // Writable: the control on a guest's message is the leader-side review
+    // gate, not this chrome.
     expect(inputCard.hasAttribute('disabled')).toBe(false);
+    // No roster was ever sent, so there are no tabs to draw…
+    expect(switcher.scoops).toEqual([]);
+    // …no `scoops.select` on the wire (the leader denies it for a guest, and
+    // asking would be a guest widening its own read access)…
+    expect(selectScoop).not.toHaveBeenCalled();
+    // …no model pill written from THIS page's catalog: the follower's pill is
+    // the leader's `models.list`, which a guest never receives, so what is on
+    // screen is still the frame's own seed (`buildWcShellFrame`), untouched.
+    expect(meta.getAttribute('model')).toBe('Preview');
+    // …and no per-unit chrome: `applyThreadContext` is what would stamp
+    // `cone:<folder>` / `scoop:<name>` and a unit accent, and it never ran for
+    // a unit with no summary — the thread keeps the frame's seeded defaults.
+    const thread = app.querySelector('slicc-chat-thread')!;
+    expect(thread.getAttribute('context')).toBe('cone');
+    expect(thread.getAttribute('accent')).toBe('var(--waffle)');
     loadMessages.mockRestore();
   });
 
