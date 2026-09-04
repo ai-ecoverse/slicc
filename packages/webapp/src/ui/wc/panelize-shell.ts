@@ -2,14 +2,14 @@
  * `panelize-shell.ts` — turn the mounted shell into panels arranged by
  * `<slicc-layout>` (Phase 3).
  *
- * ## Why this is a separate pass rather than a rewrite of `mountWcShell`
+ * ## Why this is a separate pass rather than a rewrite of `buildWcShellFrame`
  *
- * `mountWcShell` is the single boot path for every float (standalone, extension
+ * `buildWcShellFrame` is the single boot path for every float (standalone, extension
  * side panel, follower, cherry, electron) and its `WcShellRefs` are consumed by
  * five other modules. Rewriting it to build panels directly would change all of
  * that at once, with no intermediate state that works.
  *
- * So instead: `mountWcShell` builds exactly what it always did — every ref valid,
+ * So instead: `buildWcShellFrame` builds exactly what it always did — every ref valid,
  * every consumer untouched — and this function then RE-PARENTS those same
  * elements into panel wrappers inside a `<slicc-layout>`. Nothing is recreated,
  * so `refs.freezer`, `refs.dock`, `refs.switcher` and friends keep pointing at the
@@ -428,7 +428,7 @@ export function panelizeShell(
     activateSurface(surface);
     add(id, surface);
   }
-  // Chat lives in a surface too (composed by `mountWcShell`), but `add` took the
+  // Chat lives in a surface too (composed by `buildWcShellFrame`), but `add` took the
   // chatpane directly — so its surface wrapper is left behind and dropped with
   // the dock-tree, which is fine: the panel wrapper replaces it.
 

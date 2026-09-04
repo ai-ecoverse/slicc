@@ -68,9 +68,9 @@ describe('ui/main.ts storage-persistence wiring', () => {
     // Anchored on the invocations, not the bare names — every one of these is
     // also mentioned in main.ts's leading docblock, above the call site.
     for (const dispatch of [
-      'mountWcUiFollower(app',
+      'bootFollowerFloat(app',
       'mountConnectSurface(app',
-      'mountWcUiExtension(app',
+      'bootExtensionFloat(app',
     ]) {
       const idx = source.indexOf(dispatch);
       expect(idx, `${dispatch} not found in main.ts`).toBeGreaterThan(-1);

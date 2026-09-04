@@ -11,6 +11,7 @@ installWcDomStubs();
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
+import { installStripPublisher } from '../../../src/ui/wc/wc-chat.js';
 import {
   DEFAULT_DOCK_TREE_ON_BOOT,
   DOCK_TREE_STORAGE_KEY,
@@ -21,6 +22,7 @@ import {
 } from '../../../src/ui/wc/wc-live.js';
 import {
   createWcLiveCallbacks,
+  ensureWorkUnitClient,
   toSwitcherScoops,
   type WcLiveWiring,
 } from '../../../src/ui/wc/wc-live-callbacks.js';
@@ -34,6 +36,7 @@ import { scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
+import { installLeaderChatHost, leaderChatHostFakes } from './leader-chat-host.js';
 
 function fakeLog(): BootStageLogger {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as BootStageLogger;
@@ -162,7 +165,7 @@ function makeWiring(options: {
   const thread = document.createElement('slicc-chat-thread');
   const refs = { switcher, thread } as unknown as WcShellRefs;
   let selected: WorkUnitSummary | null = options.selected ? asUnit(options.selected) : null;
-  return {
+  const wiring: FakeWiring = {
     refs,
     controller,
     statuses: new Map(),
@@ -182,6 +185,11 @@ function makeWiring(options: {
       selected = unit;
     }),
   };
+  // The strip publisher belongs to `attachWcChat` now (#2382 D2b) — the
+  // callback bag only asks for a repaint. Install it here so these tests
+  // still assert what the kernel events actually put on screen.
+  installStripPublisher(wiring, ensureWorkUnitClient(wiring));
+  return wiring;
 }
 
 describe('toSwitcherScoops context fill', () => {
@@ -498,13 +506,17 @@ describe('prepareWcShell scoop selection', () => {
       parentJid: null,
       thinking: { level: 'high' },
     });
-    boot.setClient({
+    const client = {
       selectedScoopJid: null,
       setSelectedScoopJid: vi.fn(),
       getScoops: vi.fn(() => [record]),
+      getScoop: vi.fn((jid: string) => (jid === record.jid ? record : undefined)),
       requestScoopMessages: vi.fn(),
       isProcessing: vi.fn(() => false),
-    } as never);
+      ...leaderChatHostFakes(),
+    };
+    boot.setClient(client as never);
+    installLeaderChatHost(boot, client);
 
     boot.selectScoop(asUnit(record));
     await vi.waitFor(() => expect(boot.refs.composerMeta.getAttribute('thinking')).toBe('high'));

@@ -1224,7 +1224,7 @@ describe('carrying the mode across a unit switch', () => {
 
 describe('one installation per document', () => {
   /**
-   * Codex P2: `mountWcShell` is idempotent, but these listeners are on the
+   * Codex P2: `buildWcShellFrame` is idempotent, but these listeners are on the
    * DOCUMENT — a remount used to leave the first wiring installed, running
    * first, and driving the detached shell.
    */

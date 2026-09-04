@@ -79,7 +79,20 @@ export async function applyThreadContext(
    * selection back to a record, so this stays callable with a follower's
    * summary — which simply has no record and no thinking pill.
    */
-  getRecord?: (id: string) => Pick<RegisteredScoop, 'thinking' | 'config'> | undefined
+  getRecord?: (id: string) => Pick<RegisteredScoop, 'thinking' | 'config'> | undefined,
+  options?: {
+    /**
+     * The float writes the model pill itself and this must not touch it.
+     *
+     * A follower's pill is driven by `wc-follower-model-surface.ts`, which
+     * exists because the CATALOG differs: names and reasoning capability come
+     * from the leader's `models.list`, not from this page's provider
+     * settings. Resolving here would put a name from the wrong catalog on
+     * screen for a frame, and hide the pill's own empty-catalog handling
+     * (#2329).
+     */
+    skipModelPill?: boolean;
+  }
 ): Promise<void> {
   const role = unitRoleFor(unit);
   const readOnly = isReadOnlyRole(role);
@@ -110,6 +123,7 @@ export async function applyThreadContext(
       )
     );
   }
+  if (options?.skipModelPill) return;
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     // The pill follows the model of the cone the picker writes to (#2310) —

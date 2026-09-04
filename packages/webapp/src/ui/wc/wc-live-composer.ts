@@ -1,6 +1,5 @@
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
-import type { AgentHandle } from '../types.js';
 import type { WcPageVfs, WcShellBoot } from './wc-live.js';
 import {
   applyLeaderLocalThinkingChange,
@@ -8,20 +7,27 @@ import {
   hydratePersistedConeSession,
   thinkingLevelForAgent,
 } from './wc-live-thinking-hydration.js';
-import { submittedSteer, submittedText } from './wc-shell.js';
 
-/** Composer wiring: hydration, attachments, submit/stop, history, and thinking. */
+/**
+ * The leader's composer EXTRAS: the suggested placeholder, persisted-session
+ * hydration, the VFS-backed add-menu, history navigation and the thinking
+ * picker.
+ *
+ * Submit, stop and the avatar's local gaze channels are NOT here — they are
+ * the same on every float and live in `attachWcChat` (#2382 D2b). What is
+ * left is everything that needs a kernel: a VFS to stage a file from, a
+ * persisted session to hydrate, a record to write a reasoning level onto.
+ */
 export function wireWcComposer(deps: {
   boot: WcShellBoot;
   client: OffscreenClient;
-  agentHandle: AgentHandle;
   setRefreshPlaceholder(fn: () => void): void;
   triggerPlaceholder(): void;
   openReader(): Promise<WcPageVfs['reader']>;
   openWriter(): Promise<WcPageVfs['writer']>;
   log: BootStageLogger;
 }): { getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null } {
-  const { boot, client, agentHandle, openReader, log } = deps;
+  const { boot, client, openReader, log } = deps;
   const { refs } = boot;
   void import('./wc-placeholder.js').then(({ createPlaceholderRefresher }) => {
     deps.setRefreshPlaceholder(
@@ -64,47 +70,6 @@ export function wireWcComposer(deps: {
       });
     })
     .catch((err) => log.error('WC add-menu wiring failed', err));
-
-  refs.switcher.setAttribute('gaze-target', 'slicc-input-card');
-  refs.inputCard.addEventListener('input', () => {
-    refs.switcher.scrutinize();
-    refs.switcher.wake();
-  });
-
-  refs.inputCard.addEventListener('submit', (event) => {
-    const text = submittedText(event);
-    if (!text) return;
-    boot.wiring.awaitingInput = null;
-    boot.wiring.refreshScoops?.();
-    boot.wiring.notifyScoopStateChanged?.();
-    const dictation =
-      (event as unknown as CustomEvent<{ source?: string }>).detail?.source === 'dictation';
-    if (dictation) {
-      void import('../../speech/voice-reply.js')
-        .then(({ markVoiceSubmission }) => markVoiceSubmission())
-        .catch(() => undefined);
-      void import('../../speech/soundscape.js')
-        .then(({ beginVoiceTurn, playCue }) => {
-          beginVoiceTurn();
-          playCue('sent');
-        })
-        .catch(() => undefined);
-    }
-    boot.getController()?.sendUserMessage(text, attachStage?.take(), {
-      dictation,
-      steer: submittedSteer(event),
-    });
-    (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
-    const jid = boot.getSelected()?.id;
-    if (jid) {
-      refs.switcher.setAttribute('attention', jid);
-      boot.wiring.lastActivity.set(jid, text.slice(0, 600));
-    }
-  });
-
-  refs.inputCard.addEventListener('stop', () => {
-    if (boot.getController()?.processing) agentHandle.stop();
-  });
 
   void import('./wc-history-nav.js')
     .then(({ wireWcHistoryNav }) =>

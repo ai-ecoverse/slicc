@@ -62,6 +62,21 @@ function rosterCases(make: () => ClientHarness): void {
     expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBe('cone_2');
   });
 
+  it('answers the roster synchronously, with the same units `list` resolves', async () => {
+    // The strip repaints on paths that cannot await — a tab click re-orders
+    // the same units around the new selection — so `currentUnits()` is on the
+    // protocol (#2382 D2b) and both transports have to answer it with what
+    // they would answer `list()` with.
+    const harness = make();
+    harness.setRoster(ROSTER);
+    expect(harness.client.currentUnits().map((unit) => unit.id)).toEqual(
+      (await harness.client.list()).map((unit) => unit.id)
+    );
+    // …and before anything has arrived it is empty, never undefined: a strip
+    // with no roster yet renders no tabs, it does not fail to render.
+    expect(make().client.currentUnits()).toEqual([]);
+  });
+
   it('orders the strip cones-first, with the selected cone’s scoops next', async () => {
     const harness = make();
     harness.setRoster(ROSTER, 'cone_2');

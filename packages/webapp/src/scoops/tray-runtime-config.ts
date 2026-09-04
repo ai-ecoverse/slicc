@@ -82,7 +82,7 @@ export function hasStoredTrayJoinUrl(storage: RuntimeConfigStorage | null | unde
  * (deployed sliccy.ai follower tab), or a stored join URL. Returns the join URL
  * only when a parseable `joinUrl` exists — a `…/tray/<trayId>` leader/session
  * shape (trayId set, joinUrl null) yields null. Used by `resolveUiRuntimeMode`
- * for follower detection and by `mountWcUiFollower` to obtain the join URL.
+ * for follower detection and by `bootFollowerFloat` to obtain the join URL.
  */
 export function resolveFollowerJoinUrl(
   locationHref: string,

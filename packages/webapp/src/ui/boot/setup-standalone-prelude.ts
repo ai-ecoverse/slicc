@@ -297,7 +297,7 @@ export async function setupStandalonePrelude(
   const { runtimeMode, envBaseUrl, window: win, log, sleep } = deps;
   const isElectronOverlay = runtimeMode === 'electron-overlay';
   // This prelude only builds the page-side runtime (BrowserAPI + CDP). The
-  // kernel worker, if any, is spawned later by mountWcUiLive — the follower /
+  // kernel worker, if any, is spawned later by bootLeaderFloat — the follower /
   // cherry paths call this prelude too and never spawn it. (Don't reword this
   // to imply a kernel worker boots here; it doesn't.)
   log.info('setting up standalone page runtime (BrowserAPI + CDP)', { runtimeMode });

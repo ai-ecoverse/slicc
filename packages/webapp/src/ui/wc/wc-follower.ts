@@ -11,30 +11,25 @@ import {
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
-import { isReadOnlyUnit, toTabDescriptors } from '../../work-unit/client/presentation.js';
-import type { Unsubscribe } from '../../work-unit/client/types.js';
+import { isReadOnlyUnit } from '../../work-unit/client/presentation.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
-import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
-import type { AgentHandle, ChatMessage } from '../types.js';
-import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
+import type { AgentEvent } from '../types.js';
 import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import { wireWcAttach } from './wc-attach.js';
-import { WcChatController } from './wc-chat-controller.js';
-import { floatLabelForKind } from './wc-float-label.js';
+import { createFollowerChatHost, type WcChatHost } from './wc-chat-host.js';
 import { installFloatbarStatus } from './wc-floatbar-online.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
-import { prepareWcShell } from './wc-live.js';
+import type { WcShellBoot } from './wc-live.js';
+import { mountWcShell } from './wc-mount.js';
 import { installLeaderPermissionsSurface } from './wc-permissions.js';
-import { scoopColor } from './wc-scoop-color.js';
-import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
-import { applyComposerAvailability, submittedSteer, submittedText } from './wc-shell.js';
+import type { WcShellRefs } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
   isLoginDipAction,
@@ -48,18 +43,6 @@ const log = createLogger('wc-follower');
  *  `connect-llm.shtml`) posted by the onboarding orchestrator as
  *  `![…](/shared/sprinkles/welcome/…)` image references. */
 const WELCOME_DIP_SRC_PREFIX = '/shared/sprinkles/welcome/';
-
-/**
- * A placeholder agent until the WebRTC channel connects. It stays even though
- * send and stop moved onto the client protocol (#2382): the third method,
- * `onEvent`, has no source at all before there is a sync manager, and the
- * composer is disabled until then for the same reason.
- */
-const NOOP_AGENT: AgentHandle = {
-  sendMessage: () => {},
-  onEvent: () => () => {},
-  stop: () => {},
-};
 
 /**
  * Resolve a host-supplied sessionId string to a TranscriptExportSelector.
@@ -297,9 +280,67 @@ async function applyPushedLayoutDocument(
   });
 }
 
+/**
+ * Apply what a Cherry host pushed over the handshake: its feature-flag
+ * overrides and its layout.
+ *
+ * Flags go FIRST — a host's own pushed layout is allowed to turn the
+ * `panel-layouts` flag on for itself rather than depending on this
+ * deployment's worker-level `FEATURE_FLAGS`.
+ */
+async function applyCherryHostChrome(
+  boot: WcShellBoot,
+  prelude: Awaited<ReturnType<typeof setupStandalonePrelude>>,
+  isCherry: boolean
+): Promise<void> {
+  // Apply host-pushed feature-flag overrides BEFORE the panel-layouts gate
+  // check below — this is what lets a host's own pushed layout turn the flag
+  // on for itself, rather than depending on this deployment's worker-level
+  // FEATURE_FLAGS. Session-only (see applyHostFlagOverrides): never persisted.
+  if (isCherry && prelude.cherryTransport?.flags) {
+    try {
+      const pushedFlags = JSON.parse(prelude.cherryTransport.flags);
+      if (pushedFlags && typeof pushedFlags === 'object' && !Array.isArray(pushedFlags)) {
+        applyHostFlagOverrides(pushedFlags);
+      }
+    } catch (err) {
+      log.warn('follower: host-pushed flags were not valid JSON — ignoring', err);
+    }
+  }
+  // Resolve once at boot, matching the live path: feature flags have no live
+  // refresh, and changing layout engines after mount would strand live panels.
+  const panelsRequested = isFeatureEnabled('panel-layouts');
+  boot.refs.dockTree.tilesMovable = panelsRequested;
+  // A host-pushed layout replaces `buildWcShellFrame`'s chat-only default
+  // wholesale. Applied directly, like theme — never through
+  // `wireDockTreePersistence` (never wired for followers at all), so a
+  // locked Cherry layout is never persisted or drifted client-side.
+  // Panel LayoutDocuments are gated by `panel-layouts` like every other float.
+  // Legacy DockTreeSpec pushes remain supported in either flag state; their
+  // independent `locked` semantics still win over the movement gate.
+  if (isCherry && prelude.cherryTransport?.layout) {
+    try {
+      const pushed = JSON.parse(prelude.cherryTransport.layout);
+      // A host may push EITHER shape: the panel-system `LayoutDocument` (has
+      // `base`) or the older `DockTreeSpec` (has `zones`). Embedders vendor the
+      // SDK and upgrade on their own schedule, so both have to keep working —
+      // sniffing the shape is cheaper and less brittle than a version field the
+      // older hosts never sent.
+      if (pushed && typeof pushed === 'object' && 'base' in pushed) {
+        if (panelsRequested) await applyPushedLayoutDocument(boot, pushed, log);
+        else log.warn('follower: ignoring host-pushed layout — the panel-layouts flag is off');
+      } else {
+        (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(pushed);
+      }
+    } catch (err) {
+      log.warn('follower: host-pushed layout was not valid JSON — keeping the default', err);
+    }
+  }
+}
+
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: follower boot has sequential setup steps
-export async function mountWcUiFollower(
+export async function bootFollowerFloat(
   app: HTMLElement,
   bootLog: BootStageLogger,
   runtimeMode: UiRuntimeMode
@@ -343,115 +384,38 @@ export async function mountWcUiFollower(
     : resolveFollowerJoinUrl(window.location.href, window.localStorage);
   if (!joinUrl) {
     log.error('follower mount with no join URL - falling back to live boot');
-    const { mountWcUiLive } = await import('./wc-live.js');
-    return mountWcUiLive(app, bootLog, 'standalone');
+    const { bootLeaderFloat } = await import('./wc-live.js');
+    return bootLeaderFloat(app, bootLog, 'standalone');
   }
 
-  // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
-  // attachWcClient - those require an OffscreenClient + spawn the worker).
   const floatKind = isCherry ? 'cherry' : isExtensionSidePanel ? 'extension' : 'standalone';
-  const boot = prepareWcShell(app, floatLabelForKind(floatKind));
-
-  // Apply host-supplied theme AFTER the shell mounts — mountWcShell's
-  // ensureSystemTheme() sets body data-theme from OS preference, so we must
-  // override it afterward. The static import (not dynamic await) keeps this
-  // synchronous with no flash.
-  if (isCherry && prelude.cherryTransport?.theme) {
-    applyCherryTheme(prelude.cherryTransport.theme);
-  }
-  // Apply host-pushed feature-flag overrides BEFORE the panel-layouts gate
-  // check below — this is what lets a host's own pushed layout turn the flag
-  // on for itself, rather than depending on this deployment's worker-level
-  // FEATURE_FLAGS. Session-only (see applyHostFlagOverrides): never persisted.
-  if (isCherry && prelude.cherryTransport?.flags) {
-    try {
-      const pushedFlags = JSON.parse(prelude.cherryTransport.flags);
-      if (pushedFlags && typeof pushedFlags === 'object' && !Array.isArray(pushedFlags)) {
-        applyHostFlagOverrides(pushedFlags);
-      }
-    } catch (err) {
-      log.warn('follower: host-pushed flags were not valid JSON — ignoring', err);
-    }
-  }
-  // Resolve once at boot, matching the live path: feature flags have no live
-  // refresh, and changing layout engines after mount would strand live panels.
-  const panelsRequested = isFeatureEnabled('panel-layouts');
-  boot.refs.dockTree.tilesMovable = panelsRequested;
-  // A host-pushed layout replaces `mountWcShell`'s chat-only default
-  // wholesale. Applied directly, like theme — never through
-  // `wireDockTreePersistence` (never wired for followers at all), so a
-  // locked Cherry layout is never persisted or drifted client-side.
-  // Panel LayoutDocuments are gated by `panel-layouts` like every other float.
-  // Legacy DockTreeSpec pushes remain supported in either flag state; their
-  // independent `locked` semantics still win over the movement gate.
-  if (isCherry && prelude.cherryTransport?.layout) {
-    try {
-      const pushed = JSON.parse(prelude.cherryTransport.layout);
-      // A host may push EITHER shape: the panel-system `LayoutDocument` (has
-      // `base`) or the older `DockTreeSpec` (has `zones`). Embedders vendor the
-      // SDK and upgrade on their own schedule, so both have to keep working —
-      // sniffing the shape is cheaper and less brittle than a version field the
-      // older hosts never sent.
-      if (pushed && typeof pushed === 'object' && 'base' in pushed) {
-        if (panelsRequested) await applyPushedLayoutDocument(boot, pushed, log);
-        else log.warn('follower: ignoring host-pushed layout — the panel-layouts flag is off');
-      } else {
-        (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(pushed);
-      }
-    } catch (err) {
-      log.warn('follower: host-pushed layout was not valid JSON — keeping the default', err);
-    }
-  }
-  // No kernel worker in follower mode → the Files/Terminal/Memory panels are
-  // inert. Swap them for an explanatory placeholder instead of an empty panel.
-  // For cherry followers, respect the host's feature toggles; for regular followers,
-  // show all panels by default.
-  const cherryEffortLevel = isCherry && prelude.cherryTransport?.effortLevel;
-  if (cherryEffortLevel) localStorage.setItem('slicc_locked_effort_level', cherryEffortLevel);
-  else localStorage.removeItem('slicc_locked_effort_level');
-  const features: CherryFeatureSet =
-    isCherry && prelude.cherryTransport
-      ? { ...ALL_FEATURES_ENABLED, ...prelude.cherryTransport.features }
-      : ALL_FEATURES_ENABLED;
-  const composerMeta = boot.refs.composerMeta;
-  renderFollowerInertPanels(
-    boot.refs.fileTree,
-    boot.refs.termSurface,
-    boot.refs.memoryHost,
-    boot.refs.monitor,
-    features
-  );
-  applyFeatureVisibility(features);
-
-  // Apply timestamp visibility: cherry embedders can force it off via features.
-  // Use applyTimestampVisibility (transient class toggle) rather than
-  // setShowTimestamps (persists to localStorage) so the cherry flag doesn't
-  // leak into the user's standalone preference on the shared origin.
-  void import('../timestamp-preference.js').then(
-    ({ applyTimestampVisibility, initTimestampPreference }) => {
-      if (!features.showTimestamps) applyTimestampVisibility(false);
-      else initTimestampPreference();
-    }
-  );
-
-  // Dip + sprinkle "chrome" styles (card backgrounds/borders, panel chrome) are
-  // lazy legacy stylesheets — the leader loads `loadDipStyles` in `wc-live` and
-  // `loadSprinkleStyles` in `wireWcSprinkles`, both leader-only paths the
-  // follower never runs. Without them, follower-rendered dips (the welcome /
-  // onboarding nudge) and leader-synced sprinkles lose their card background and
-  // chrome (they render as bare, unstyled text). Load both here.
-  void import('../legacy-styles.js')
-    .then(({ loadDipStyles, loadSprinkleStyles }) =>
-      Promise.all([loadDipStyles(), loadSprinkleStyles()])
-    )
-    .catch(() => undefined);
+  /**
+   * The shell, once mounted. Held so the rest of this boot — the tray, the
+   * menus, the browser rail — can wire onto it; the frame and the chat
+   * surface themselves are `mountWcShell`'s (#2382 D2b).
+   */
+  let boot!: WcShellBoot;
+  let features!: CherryFeatureSet;
+  let workUnits!: RemoteWorkUnitClient;
+  /**
+   * The agent EVENT stream, across reconnects. `setChatAgent` hands a NEW
+   * handle on every (re)connect, so listeners are held here and re-attached —
+   * one bound to the first handle would go quiet after the first reconnect.
+   */
+  const agentEventListeners = new Set<(event: AgentEvent) => void>();
+  let detachAgentEvents: (() => void) | null = null;
+  /**
+   * The model pill's own surface, installed once the catalog wiring below
+   * runs. Declared here because a selection repaints it, and a selection can
+   * land the moment the channel connects.
+   */
+  let modelSurface: ReturnType<typeof createFollowerModelSurface> | null = null;
 
   // Inline sprinkles ("dips") — the ` ```shtml ` blocks the agent posts inside
-  // chat messages (welcome/onboarding nudge, generic dips). The leader hydrates
-  // these via attachWcClient, which the follower never runs, so without this
-  // the welcome login nudge and other dips render as nothing in the panel.
-  // Hydrate them here and forward their licks to the leader over the tray.
-  const dipInstances = new Map<string, DipInstance[]>();
+  // chat messages (welcome/onboarding nudge, generic dips) — are hydrated by
+  // the SHARED chat wiring now (#2382 D2b), which both floats run. What is
+  // still this float's is where a dip's lick goes (over the tray) and the two
+  // side-panel hand-offs below.
   const focusLeaderTab = (): void =>
     prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab');
   // Provider login / settings / model changes can't run in the cross-origin
@@ -484,43 +448,134 @@ export async function mountWcUiFollower(
     });
     return true;
   };
-  const forwardDipLick = (action: string, data: unknown): void => {
-    // The cone handles inline-dip licks on the leader.
-    follower.currentSync?.sendSprinkleLick('inline', { action, data });
-    // A provider-login dip action (welcome dip's connect / device-code) → hand
-    // off to the leader tab.
-    if (isLoginDipAction(action)) requestLeaderSignIn();
-  };
 
-  const controller = new WcChatController({
-    thread: boot.refs.thread,
-    agent: NOOP_AGENT,
-    onQueuedChange: (items) => {
-      boot.refs.queuedStack.setMessages(items);
-    },
-    onMessageRendered: (message, els) => {
-      const host = els[0];
-      if (!host) return;
-      // In the extension side panel, swap onboarding welcome dips for a leader
-      // hand-off card BEFORE hydration (removing them so hydrateDips skips them);
-      // other dips still hydrate normally.
-      if (isExtensionSidePanel) replaceWelcomeDipsWithHandoff(host);
-      dipInstances.set(message.id, hydrateDips(host, forwardDipLick));
-    },
-    onMessageDisposed: (messageId) => {
-      const instances = dipInstances.get(messageId);
-      if (instances) {
-        disposeDips(instances);
-        dipInstances.delete(messageId);
+  // ONE mount path (#2382 D2b). This float's transport is the tray: a
+  // `RemoteWorkUnitClient` over the sync manager, and a host that forwards the
+  // two verbs a follower can and refuses the two it cannot. No workbench —
+  // there is no kernel behind it.
+  const mounted = await mountWcShell(app, bootLog, {
+    floatKind,
+    connect: async (shell) => {
+      boot = shell;
+      // Apply host-supplied theme AFTER the shell mounts — buildWcShellFrame's
+      // ensureSystemTheme() sets body data-theme from OS preference, so we must
+      // override it afterward. The static import (not dynamic await) keeps this
+      // synchronous with no flash.
+      if (isCherry && prelude.cherryTransport?.theme) {
+        applyCherryTheme(prelude.cherryTransport.theme);
       }
+      await applyCherryHostChrome(boot, prelude, isCherry);
+      // No kernel worker in follower mode → the Files/Terminal/Memory panels are
+      // inert. Swap them for an explanatory placeholder instead of an empty panel.
+      // For cherry followers, respect the host's feature toggles; for regular followers,
+      // show all panels by default.
+      const cherryEffortLevel = isCherry && prelude.cherryTransport?.effortLevel;
+      if (cherryEffortLevel) localStorage.setItem('slicc_locked_effort_level', cherryEffortLevel);
+      else localStorage.removeItem('slicc_locked_effort_level');
+      features =
+        isCherry && prelude.cherryTransport
+          ? { ...ALL_FEATURES_ENABLED, ...prelude.cherryTransport.features }
+          : ALL_FEATURES_ENABLED;
+      renderFollowerInertPanels(
+        boot.refs.fileTree,
+        boot.refs.termSurface,
+        boot.refs.memoryHost,
+        boot.refs.monitor,
+        features
+      );
+      applyFeatureVisibility(features);
+
+      // Apply timestamp visibility: cherry embedders can force it off via features.
+      // Use applyTimestampVisibility (transient class toggle) rather than
+      // setShowTimestamps (persists to localStorage) so the cherry flag doesn't
+      // leak into the user's standalone preference on the shared origin.
+      void import('../timestamp-preference.js').then(
+        ({ applyTimestampVisibility, initTimestampPreference }) => {
+          if (!features.showTimestamps) applyTimestampVisibility(false);
+          else initTimestampPreference();
+        }
+      );
+
+      // Dip + sprinkle "chrome" styles (card backgrounds/borders, panel chrome) are
+      // lazy legacy stylesheets — the leader loads `loadDipStyles` in `wc-live` and
+      // `loadSprinkleStyles` in `wireWcSprinkles`, both leader-only paths the
+      // follower never runs. Without them, follower-rendered dips (the welcome /
+      // onboarding nudge) and leader-synced sprinkles lose their card background and
+      // chrome (they render as bare, unstyled text). Load both here.
+      void import('../legacy-styles.js')
+        .then(({ loadDipStyles, loadSprinkleStyles }) =>
+          Promise.all([loadDipStyles(), loadSprinkleStyles()])
+        )
+        .catch(() => undefined);
+
+      /**
+       * The follower's half of the client protocol (#2274). `getSync` is lazy, so
+       * the channel can arrive whenever it does.
+       */
+      workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
+
+      // The chat surface is the SHARED one (#2382 D2b): controller, dips, queued
+      // pile, tab strip, composer submit/stop and selection all come from
+      // `attachWcChat`, exactly as on the leader. What is follower-specific is the
+      // host it runs on — two verbs forwarded over the tray, two refused, and the
+      // handful of facts a panel answers differently.
+      const followerHost = createFollowerChatHost({
+        getSync: () => follower?.currentSync ?? null,
+        onAgentEvent: (listener) => {
+          agentEventListeners.add(listener);
+          return () => agentEventListeners.delete(listener);
+        },
+        onAgentError: (error) => {
+          log.warn('follower send failed', { error });
+          // The controller has already appended the bubble and cleared the input
+          // by the time this fires, so a log line would leave a message on screen
+          // that never left the device. Say so where the user is looking, as the
+          // leader does with its error card.
+          chat.controller.addAssistantMessage(
+            `_That message was not sent to the leader — ${error}_`
+          );
+        },
+      });
+      const followerChatHost: WcChatHost = {
+        ...followerHost,
+        sendSprinkleLick: (name, body, targetScoop) => {
+          followerHost.sendSprinkleLick(name, body, targetScoop);
+          // A provider-login dip action (the welcome dip's connect / device-code)
+          // → hand off to the leader tab, which is where OAuth can run.
+          const action = (body as { action?: unknown } | undefined)?.action;
+          if (typeof action === 'string' && isLoginDipAction(action)) requestLeaderSignIn();
+        },
+        addressableUnitId: () => addressableUnitId(),
+        onMessageRendered: (messageHost) => {
+          // In the extension side panel, swap onboarding welcome dips for a leader
+          // hand-off card before hydration (removing them so `hydrateDips` skips
+          // them); other dips still hydrate normally.
+          if (isExtensionSidePanel) replaceWelcomeDipsWithHandoff(messageHost);
+        },
+        // The leader answers a selection with a snapshot, not a `model.state`, so
+        // nothing else would repaint the pill for the newly shown unit.
+        onSelectionApplied: () => {
+          // The connection gate outranks the selection's own chrome: reconnecting,
+          // or a leader that has not named a unit, keeps the composer shut.
+          setComposerState(composerEnabled, composerPlaceholder);
+          modelSurface?.onShownUnitChanged();
+        },
+        // The leader's `onStatus` frame is separate and a fresh join may not have
+        // it yet, so a replay still carrying a streaming message is how this
+        // follower learns the turn is live.
+        onSnapshotRendered: (messages) => {
+          chat.controller.setProcessing(messages.some((message) => message.isStreaming));
+        },
+        // The pill is `wc-follower-model-surface.ts`'s — its catalog is the
+        // leader's `models.list`, not this page's provider settings.
+        ownsModelPill: true,
+        takeAttachments: () => attachStage.take(),
+      };
+      return { client: workUnits, host: followerChatHost };
     },
-    // A follower has no onToolUiAction wiring and no mounted permissions
-    // surface (installLeaderPermissionsSurface never runs here) — a
-    // leader-broadcast tool_ui card's buttons would silently no-op. Render
-    // the static "waiting on the leader" placeholder instead.
-    readOnlyToolUi: true,
   });
-  boot.setController(controller);
+  const chat = mounted.chat;
+  const controller = chat.controller;
 
   // Cone-error card CTAs. `errorCardEl` (wc-message-view) bubbles these on the
   // thread; they're wired ONLY in `wireWcNav` on the leader (they open the
@@ -555,14 +610,24 @@ export async function mountWcUiFollower(
   // the whole reason a stall must not read as a disconnect — the connection is
   // fine and recovers by itself, so the placeholder says "busy", not "lost".
   const LEADER_BUSY = 'The leader is busy — hang on…';
-  let followerSelectedScoop: string | null = null;
   /**
-   * The follower's half of the client protocol (#2274). It holds the roster
-   * the leader sent — kept so a local selection can re-publish the descriptors,
-   * since the strip orders the SELECTED cone's scoops ahead of the rest — and
-   * projects it onto the same `toTabDescriptors` the leader renders from.
+   * The unit this follower is READING.
+   *
+   * The shell's own selection answers for a unit the roster describes; this
+   * survives a disconnect, which the shell's does not need to — it is what we
+   * ask the NEXT leader for (`getSelectedScoopJid` feeds `requestSnapshot`),
+   * not what we are allowed to send to.
    */
-  const workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
+  let shownUnit: string | null = null;
+  /**
+   * The unit on screen right now: the shell's own selection when the roster
+   * describes it, else the guest thread this follower was pinned to.
+   *
+   * The shell is asked FIRST because a tab click lands there before it lands
+   * here — `attachWcChat` selects the summary, and the listener below only
+   * records what to ask the next leader for.
+   */
+  const shownUnitId = (): string | null => boot.getSelected()?.id ?? shownUnit;
 
   /**
    * A jid we can actually address, or `null`. An empty or missing
@@ -577,11 +642,10 @@ export async function mountWcUiFollower(
    * the leader may have dropped the unit we were viewing, so the composer must
    * not reopen on the previous session's answer.
    *
-   * `followerSelectedScoop` deliberately SURVIVES a disconnect: it is what we
-   * ask the new leader for (`getSelectedScoopJid` feeds `requestSnapshot`), not
-   * what we are allowed to send to. The two are different questions, and
-   * conflating them either loses the viewed unit across a reconnect or reopens
-   * the composer on a unit that is gone.
+   * {@link shownUnit} deliberately SURVIVES a disconnect: it is what we ask
+   * the new leader for, not what we are allowed to send to. The two are
+   * different questions, and conflating them either loses the viewed unit
+   * across a reconnect or reopens the composer on a unit that is gone.
    */
   let unitConfirmedThisSession = false;
   /**
@@ -590,16 +654,21 @@ export async function mountWcUiFollower(
    * mirrored), which is what lands first on a fresh join.
    */
   const addressableUnitId = (): string | null =>
-    unitConfirmedThisSession
-      ? usableUnitId(followerSelectedScoop ?? workUnits.selectedUnitId)
-      : null;
+    unitConfirmedThisSession ? usableUnitId(shownUnitId() ?? workUnits.selectedUnitId) : null;
 
   /**
-   * The selected unit is a scoop, so the composer band is unmounted (#2312).
-   * The follower reaches that decision through the SAME descriptor role the
-   * leader uses (`summaryRole` → `isReadOnlyRole`) — there is no second rule.
+   * The shown unit is a scoop, so the composer band is unmounted (#2312).
+   *
+   * Read off the shell's own selection, which `attachWcChat` applies through
+   * the SAME `isReadOnlyUnit` rule the leader uses. A unit the roster does not
+   * describe — a biscotto seat, never sent `scoops.list` — is not selected at
+   * all and stays WRITABLE: the control on a guest's message is the
+   * leader-side review gate, not this chrome.
    */
-  let composerReadOnly = false;
+  const composerReadOnly = (): boolean => {
+    const unit = boot.getSelected();
+    return unit ? isReadOnlyUnit(unit) : false;
+  };
   /** Last connection-driven composer state, replayed after a selection change. */
   let composerEnabled = false;
   let composerPlaceholder = CONNECTING;
@@ -617,7 +686,7 @@ export async function mountWcUiFollower(
     boot.refs.inputCard.setAttribute('placeholder', enabled && !live ? CONNECTING : placeholder);
     // A read-only selection outranks the connection state: reconnecting while
     // a scoop is selected must not hand back a composer for it.
-    if (live && !composerReadOnly) boot.refs.inputCard.removeAttribute('disabled');
+    if (live && !composerReadOnly()) boot.refs.inputCard.removeAttribute('disabled');
     else boot.refs.inputCard.setAttribute('disabled', '');
   };
   setComposerState(false, CONNECTING);
@@ -681,99 +750,37 @@ export async function mountWcUiFollower(
     log,
   });
 
-  // The avatar's two LOCAL expression channels. Neither belongs on the wire:
-  // scrutiny answers whoever is typing on THIS device, and the glower rides an
-  // agent event the follower already receives.
-  boot.refs.switcher.setAttribute('gaze-target', 'slicc-input-card');
-  boot.refs.inputCard.addEventListener('input', () => {
-    boot.refs.switcher.scrutinize();
-    boot.refs.switcher.wake();
-  });
-
-  /**
-   * The composer's handle, once the channel connects. Held so the `stop`
-   * listener below can reach it: the controller exposes `processing` but not a
-   * stop, and the handle is what names the unit.
-   */
-  let chatAgent: AgentHandle | null = null;
-
-  // Composer submit → forward text + any staged attachments to the
-  // (follower-sync) agent the controller holds.
-  boot.refs.inputCard.addEventListener('submit', (event) => {
-    const text = submittedText(event) ?? '';
-    const attachments = attachStage.take();
-    if (text.trim() || attachments.length) {
-      controller.sendUserMessage(text, attachments, { steer: submittedSteer(event) });
-      (boot.refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
-    }
-  });
-
-  // Composer stop → abort the leader's turn for the unit THIS follower is
-  // reading. Only the leader mount installed this listener, so on a browser
-  // follower, Cherry and the extension side panel the button (and the
-  // keyboard-mode `s` action, which dispatches the same event) emitted into
-  // nothing and the turn kept running. Same guard as the leader's: a stop is
-  // only meaningful while a turn is actually processing.
-  boot.refs.inputCard.addEventListener('stop', () => {
-    if (boot.getController()?.processing) chatAgent?.stop();
-  });
+  // Submit, stop and the avatar's local gaze channels are `attachWcChat`'s —
+  // the same listeners the leader installs (#2382 D2b). The follower's stop
+  // button had no listener at all until PR A precisely because this file
+  // owned its own composer.
 
   const sprinkleZone = new WcSprinkleZone(boot.refs);
   const sprinkleCallbacks = sprinkleZone.callbacks();
 
-  const publishFollowerScoops = (): void => {
-    boot.refs.switcher.scoops = toTabDescriptors(
-      workUnits.currentUnits(),
-      followerSelectedScoop,
-      scoopColor
-    ) as SwitcherScoop[];
-  };
   /**
-   * Mount or unmount the interactive chrome for the current selection —
-   * the follower's mirror of the leader's `selectScoop` (#2312). A selection
-   * the roster does not describe yet keeps the composer: that is the
-   * pre-multiple-cones default, and the next `scoop-list` re-asserts it.
+   * Show the unit the leader named, or one the user clicked.
+   *
+   * A unit the ROSTER DESCRIBES goes through the shell's own `selectScoop` —
+   * the same call the leader's tab click makes (#2382 D2b), which applies the
+   * chrome, asks for the snapshot and re-points the transcript.
+   *
+   * A unit it does NOT describe is a biscotto seat: pinned to one thread and
+   * deliberately never sent `scoops.list`, so there is no summary to select
+   * and no chrome to apply (the protocol says as much —
+   * `WorkUnitSnapshot.summary` is optional). Its transcript is rendered
+   * directly and the composer stays writable, because the control on a
+   * guest's message is the leader-side review gate, not this chrome.
    */
-  const applyFollowerSelectionChrome = (): void => {
-    const selected = workUnits.currentUnits().find((unit) => unit.id === followerSelectedScoop);
-    // A unit the roster does not describe stays WRITABLE. That is deliberate:
-    // a biscotto seat is shared one thread and never receives `scoops.list`,
-    // so treating "not in the roster" as read-only would silence every guest.
-    // The control on a guest's message is the leader-side review gate, not
-    // this chrome.
-    composerReadOnly = selected ? isReadOnlyUnit(selected) : false;
-    applyComposerAvailability(boot.refs, composerReadOnly);
-    boot.getController()?.setReadOnly(composerReadOnly);
-    setComposerState(composerEnabled, composerPlaceholder);
-  };
-  /** The live per-unit subscription; re-pointed whenever the shown unit moves. */
-  let unitWatch: Unsubscribe | null = null;
-  /** The unit `unitWatch` is currently pointed at, so a re-point is a no-op. */
-  let watchedUnit: string | null = null;
-  /**
-   * Render one unit's transcript from the client protocol. Unlike the leader's
-   * twin this DOES take the seeded snapshot: a leader sends the initial
-   * transcript ahead of `scoops.list`, so on a fresh join the held early
-   * snapshot is the only one this follower will get for that unit — and there
-   * is no backend queue on this transport for a stale seed to mis-reconcile
-   * (`queuedIds` is always absent here).
-   */
-  const watchUnit = (jid: string): void => {
-    if (watchedUnit === jid && unitWatch) return;
-    unitWatch?.();
-    watchedUnit = jid;
-    // Whether the cached snapshot paints is the ADAPTER's call, not this one's:
-    // it seeds a new listener unless a `snapshot(jid)` is already in flight.
-    // A tab click asks first and so gets only the fresh transcript; a session
-    // bootstrap (`onSnapshot` / `onScoopsList`) has nothing in flight and takes
-    // the cache, which for a guest seat is often the only snapshot that unit
-    // will ever have.
-    unitWatch = workUnits.subscribe(jid, (event) => {
-      if (event.type !== 'snapshot' || watchedUnit !== jid) return;
-      const messages = event.snapshot.messages as unknown as ChatMessage[];
-      controller.loadMessages(messages, event.snapshot.queuedIds);
-      controller.setProcessing(messages.some((message) => message.isStreaming));
-    });
+  const showUnit = (jid: string | null): void => {
+    shownUnit = jid;
+    if (!jid) return;
+    const unit = workUnits.currentUnits().find((candidate) => candidate.id === jid);
+    if (unit) boot.selectScoop(unit);
+    else {
+      boot.watchUnit(jid);
+      setComposerState(composerEnabled, composerPlaceholder);
+    }
   };
 
   /**
@@ -785,11 +792,6 @@ export async function mountWcUiFollower(
   const forgetSessionSelection = (): void => {
     unitConfirmedThisSession = false;
     workUnits.resetSelection();
-    // The next session re-points the subscription from its own first frame; a
-    // remembered unit here would make that re-point a no-op.
-    unitWatch?.();
-    unitWatch = null;
-    watchedUnit = null;
   };
   boot.refs.switcher.connection = 'disconnected';
 
@@ -818,8 +820,8 @@ export async function mountWcUiFollower(
     log,
   });
 
-  const modelSurface = createFollowerModelSurface({
-    composerMeta,
+  modelSurface = createFollowerModelSurface({
+    composerMeta: boot.refs.composerMeta,
     // The shown unit's own model, from the roster the leader sends (#2382 PR
     // C). The catalog stays with the surface; only the identity comes from here.
     getUnits: () => workUnits.currentUnits(),
@@ -827,7 +829,7 @@ export async function mountWcUiFollower(
       void workUnits.setModel(unitId, model).catch(() => undefined);
     },
     getSync: () => follower.currentSync,
-    getSelectedScoopJid: () => followerSelectedScoop,
+    getSelectedScoopJid: () => shownUnitId(),
     modelPickerEnabled: features.modelPicker,
     getLockedEffortLevel: () => localStorage.getItem('slicc_locked_effort_level'),
   });
@@ -835,7 +837,7 @@ export async function mountWcUiFollower(
   // A roster push can carry a model this follower has no `model.state` for
   // (the leader broadcasts `scoops.list` on an interval, and per-unit models
   // ride it), so the pill re-reads whenever the roster moves.
-  workUnits.subscribeList(() => modelSurface.onShownUnitChanged());
+  workUnits.subscribeList(() => modelSurface?.onShownUnitChanged());
 
   follower = startPageFollowerTray(
     workUnits.wrapOptions({
@@ -867,13 +869,10 @@ export async function mountWcUiFollower(
       // also carries: the leader names the unit it is mirroring, and on a
       // fresh join that is how this follower first learns which one it has.
       onSnapshot: (_messages, scoopJid) => {
-        const unit = usableUnitId(scoopJid);
-        followerSelectedScoop = unit;
         unitConfirmedThisSession = true;
-        if (unit) watchUnit(unit);
-        // First unit of the session: re-evaluate the composer, which stayed
-        // shut while there was nothing to address.
-        applyFollowerSelectionChrome();
+        // First unit of the session: `showUnit` re-evaluates the composer,
+        // which stayed shut while there was nothing to address.
+        showUnit(usableUnitId(scoopJid));
       },
       // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
       // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
@@ -906,34 +905,21 @@ export async function mountWcUiFollower(
         }
       },
       onStatus: (status, scoopJid) => {
-        if (shouldApplyFollowerStatus(scoopJid, followerSelectedScoop)) {
+        if (shouldApplyFollowerStatus(scoopJid, shownUnitId())) {
           controller.setProcessing(status === 'processing');
         }
       },
       setChatAgent: (agent) => {
-        // Send and stop go through the client protocol, which NAMES the unit
-        // instead of relying on whatever the leader last mirrored to us — the
-        // same handle the leader's composer holds (#2382). The agent EVENT
-        // stream stays on the sync manager: it is the transport that owns it.
-        chatAgent = createWorkUnitAgentHandle(workUnits, {
-          getSelectedId: addressableUnitId,
-          onError: (error) => {
-            log.warn('follower send failed', { error });
-            // The controller has already appended the bubble and cleared the
-            // input by the time this fires, so a log line would leave a
-            // message on screen that never left the device. Say so where the
-            // user is looking, as the leader does with its error card.
-            controller.addAssistantMessage(`_That message was not sent to the leader — ${error}_`);
-          },
-          onEvent: (listener) => agent.onEvent(listener),
-        });
-        controller.setAgent(chatAgent);
-        // A failed tool call on the mirrored stream earns the same 2.6s glower
-        // the leader shows. The envelope drops `scoopJid` on the way in, so this
-        // is the selected scoop's stream — which is exactly whose face is on
-        // screen. Per-scoop attribution would need the envelope to keep it.
-        agent.onEvent((event) => {
-          if (event.type === 'tool_result' && event.isError) boot.refs.switcher.glower();
+        // Send and stop are the shared handle's, over the client protocol,
+        // which NAMES the unit instead of relying on whatever the leader last
+        // mirrored to us (#2382). What arrives here is the transport's EVENT
+        // stream — a NEW handle on every reconnect — so the listeners the
+        // chat wiring registered are re-attached to it. Binding them to the
+        // first handle would leave the face and the streaming text frozen
+        // after the first reconnect.
+        detachAgentEvents?.();
+        detachAgentEvents = agent.onEvent((event) => {
+          for (const listener of agentEventListeners) listener(event);
         });
       },
       // The leader decided this follower's human should answer a sudo prompt —
@@ -968,13 +954,13 @@ export async function mountWcUiFollower(
         boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
         if (!connected) forgetSessionSelection();
         setComposerState(connected, connected ? CONNECTED : CONNECTING);
-        if (!connected) modelSurface.reset();
+        if (!connected) modelSurface?.reset();
         if (isCherry)
           prelude.cherryTransport?.emitSliccEventToHost(
             connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
           );
       },
-      getSelectedScoopJid: () => followerSelectedScoop,
+      getSelectedScoopJid: () => shownUnitId(),
       // A stall keeps the composer usable-looking but disabled, so a message
       // typed while the leader is catching up can't be silently dropped. No
       // cherry host event: the host contract is connected/disconnected, and a
@@ -987,7 +973,7 @@ export async function mountWcUiFollower(
         boot.refs.switcher.connection = 'disconnected';
         forgetSessionSelection();
         setComposerState(false, GAVE_UP);
-        modelSurface.reset();
+        modelSurface?.reset();
         // detachSync suppresses onConnectionChange(false) here - emit terminal.
         if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
       },
@@ -1009,25 +995,24 @@ export async function mountWcUiFollower(
         else log.warn('follower sprinkle open() of a local path is unavailable', { path });
       },
       onScoopsList: (scoops, activeScoopJid) => {
-        if (
-          !followerSelectedScoop ||
-          !scoops.some((scoop) => scoop.jid === followerSelectedScoop)
-        ) {
-          followerSelectedScoop = usableUnitId(activeScoopJid);
-        }
         // Either frame can be the first of a session, so neither may be the
         // only door out of the un-addressable window.
         unitConfirmedThisSession = true;
-        // A leader sends the initial transcript AHEAD of this roster, so the
-        // adapter has already published it — subscribing here attaches to that
-        // cached snapshot, which is why this re-point takes the seed.
-        if (followerSelectedScoop) watchUnit(followerSelectedScoop);
-        publishFollowerScoops();
-        applyFollowerSelectionChrome();
-        boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
+        // The roster lands AFTER the adapter has folded it in, so `showUnit`
+        // can find the summary for the unit the leader named. A leader sends
+        // the initial transcript ahead of this frame, so the re-point takes
+        // the adapter's cached snapshot — for a fresh join that is the only
+        // one that unit will get.
+        const shown = shownUnitId();
+        if (!shown || !scoops.some((scoop) => scoop.jid === shown)) {
+          showUnit(usableUnitId(activeScoopJid));
+        } else {
+          showUnit(shown);
+        }
+        boot.wiring.refreshScoops?.();
       },
-      onModelsList: modelSurface.onModelsList,
-      onModelState: modelSurface.onModelState,
+      onModelsList: (models) => modelSurface?.onModelsList(models),
+      onModelState: (state) => modelSurface?.onModelState(state),
       ...(isCherry
         ? {
             onCherrySliccEvent: (name, detail) =>
@@ -1055,27 +1040,13 @@ export async function mountWcUiFollower(
     boot.refs.freezer.querySelector('slicc-freezer-new')?.setAttribute('no-skip', '');
   }
 
+  // The tab click itself is `attachWcChat`'s (#2382 D2b) — it selects the
+  // summary, which asks for the snapshot and re-points the transcript. What is
+  // left here is the follower's own bookkeeping: the unit it will ask the NEXT
+  // leader for.
   boot.refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
-    if (scoopJid) {
-      followerSelectedScoop = scoopJid;
-      publishFollowerScoops(); // re-order for the new selection, as the leader does
-      // Before `selectScoop`, so the leader's replay for the new unit is the
-      // first thing rendered under the new mode.
-      applyFollowerSelectionChrome();
-      boot.refs.switcher.setAttribute('active', scoopJid);
-      // Through the protocol, not `sync.selectScoop` directly: the client has
-      // to move its own selection with the strip, or its staleness rule would
-      // still judge arriving snapshots against the PREVIOUS unit — and accept
-      // the very one this click just superseded.
-      // Ask BEFORE subscribing: the in-flight fetch is what tells the adapter
-      // not to seed this listener with the unit's previous transcript.
-      void workUnits.snapshot(scoopJid).catch(() => undefined);
-      watchUnit(scoopJid);
-      // The leader answers a selection with a snapshot, not a `model.state`,
-      // so nothing else would repaint the pill for the newly shown unit.
-      modelSurface.onShownUnitChanged();
-    }
+    if (scoopJid) shownUnit = scoopJid;
   });
 
   if (isCherry && prelude.cherryTransport) {

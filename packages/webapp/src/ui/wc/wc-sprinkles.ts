@@ -128,7 +128,7 @@ export const CHAT_SURFACE_ID = 'chat';
 /**
  * Dock-rail ids of the fixed tool panels — each an independent, permanently
  * mounted `<slicc-surface>` composed directly into the dock-tree (see
- * `wc-shell.ts`'s `mountWcShell`), opened/closed via `placeSurface`/
+ * `wc-shell.ts`'s `buildWcShellFrame`), opened/closed via `placeSurface`/
  * `removeSurface` exactly like a sprinkle.
  */
 const TOOL_PANEL_IDS: ReadonlySet<string> = new Set(['files', 'term', 'memory', 'monitor']);
@@ -631,7 +631,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   // Clicking a dock launcher routes through `activate` so an
   // attention-surfaced sprinkle is promoted to user-opened (and persists)
   // and a closed one reopens. Tool panels are independent, always-mounted
-  // tree leaves (see `mountWcShell`) opened/closed via `zone.placeSurface`/
+  // tree leaves (see `buildWcShellFrame`) opened/closed via `zone.placeSurface`/
   // `zone.removeSurface` directly, exactly like a sprinkle — the zone itself
   // fires `onToolPanelActivate`/`onToolPanelDeactivate`, so this path and an
   // agent-driven `layout open`/`layout close` get identical lifecycle.

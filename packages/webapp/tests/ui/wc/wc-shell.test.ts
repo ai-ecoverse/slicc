@@ -12,7 +12,7 @@ installWcDomStubs();
 
 import { uint8ToBase64 } from '@slicc/shared-ts';
 import { BLOB_CHIP_TAG } from '../../../src/ui/base64-preview-linker.js';
-import { mountWcShell, mountWcUiPreview } from '../../../src/ui/wc/wc-shell.js';
+import { buildWcShellFrame, mountWcUiPreview } from '../../../src/ui/wc/wc-shell.js';
 
 function mount(): HTMLElement {
   const root = document.createElement('div');
@@ -113,10 +113,10 @@ describe('mountWcUiPreview', () => {
 
   it('opens a tool panel into the dock-tree on dock select, closes it on collapse (real end-to-end wiring via wireWcSprinkles)', async () => {
     const { wireWcSprinkles } = await import('../../../src/ui/wc/wc-sprinkles.js');
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'live',
@@ -154,10 +154,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('live floats also mount the bare nav', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'live',
@@ -206,10 +206,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('urlState option opts the thread into URL state sync (off by default)', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const live = mountWcShell(host, {
+    const live = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'live',
@@ -219,7 +219,7 @@ describe('mountWcUiPreview', () => {
     expect(live.thread.hasAttribute('url-state')).toBe(true);
 
     // The fixture/preview mount stays URL-clean.
-    const fixture = mountWcShell(host, {
+    const fixture = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'fixture',
@@ -235,10 +235,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('an UNCLAIMED browser dock item opens its surface in the dock-tree (follower fallback)', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'follower',
@@ -255,10 +255,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('a claimed browser id is ignored by the overlay listener (no dock-tree interaction)', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'leader',
@@ -276,10 +276,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('a pointerdown on a sprinkle dock launcher arms beginExternalDrag when tiles are movable', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 't',
@@ -301,10 +301,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('does not arm an external sprinkle drag when tiles are not movable', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 't',
@@ -327,10 +327,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('does not arm a drag for a non-sprinkle (tool) dock item', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 't',
@@ -394,12 +394,12 @@ describe('mountWcUiPreview', () => {
   });
 
   it('applyShellContext swaps the shader program and the --ctx accent per mood', async () => {
-    const { applyShellContext, FREEZER_TINT, mountWcShell } = await import(
+    const { applyShellContext, FREEZER_TINT, buildWcShellFrame } = await import(
       '../../../src/ui/wc/wc-shell.js'
     );
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 't',
@@ -430,10 +430,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('writes the cone and scoop tint before swapping the shader mode', async () => {
-    const { applyShellContext, mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { applyShellContext, buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 't',
@@ -482,10 +482,10 @@ describe('mountWcUiPreview', () => {
   });
 
   it('mounts a queued stack above the input card inside the composer (refs.queuedStack)', async () => {
-    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const { buildWcShellFrame } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
-    const refs = mountWcShell(host, {
+    const refs = buildWcShellFrame(host, {
       messages: [],
       scoops: [],
       floatLabel: 'live',
@@ -552,7 +552,7 @@ describe('mountWcUiPreview', () => {
  * text. File mentions genuinely belong there; they need a VFS reader a
  * follower has no worker for, and a decode needs nothing.
  */
-describe('mountWcShell — base64 previews', () => {
+describe('buildWcShellFrame — base64 previews', () => {
   beforeEach(() => {
     document.body.replaceChildren();
     document.getElementById('slicc-tokens')?.remove();
@@ -561,7 +561,7 @@ describe('mountWcShell — base64 previews', () => {
   function mountWith(content: string): HTMLElement {
     const root = document.createElement('div');
     document.body.appendChild(root);
-    mountWcShell(root, {
+    buildWcShellFrame(root, {
       messages: [{ id: 'm1', role: 'user', content, timestamp: 0 }],
       scoops: [],
       floatLabel: 'test',

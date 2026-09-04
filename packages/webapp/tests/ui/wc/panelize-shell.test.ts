@@ -3,7 +3,7 @@
  * Phase 3 — panelizing the shell.
  *
  * The load-bearing property is that panelization RE-PARENTS the elements
- * `mountWcShell` built rather than recreating them, so `WcShellRefs` stays valid
+ * `buildWcShellFrame` built rather than recreating them, so `WcShellRefs` stays valid
  * for its five consumer modules (`wc-live`, `wc-nav`, `wc-sprinkles`, `wc-tray`,
  * `wc-browser`). These tests assert element IDENTITY across the move, plus the
  * structural invariants (avatar in the trusted layer, rail switched to in-flow).
@@ -29,8 +29,8 @@ import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
 /**
  * A minimal stand-in for a mounted shell: the elements panelization moves, in
- * the same nesting `mountWcShell` produces. Built by hand rather than by calling
- * `mountWcShell` so the test isolates the panelization step (and doesn't need the
+ * the same nesting `buildWcShellFrame` produces. Built by hand rather than by calling
+ * `buildWcShellFrame` so the test isolates the panelization step (and doesn't need the
  * whole component barrel to upgrade in jsdom).
  */
 function makeShellRefs(): WcShellRefs {

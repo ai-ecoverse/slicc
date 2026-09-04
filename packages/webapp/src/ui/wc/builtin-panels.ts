@@ -107,7 +107,7 @@ export function wrapInPanel(panelId: string, inner: HTMLElement): SliccPanel {
  *
  * `source.kind` is `element` with the generic `slicc-panel` tag because the
  * built-ins are wrapped rather than subclassed (see the module doc): the registry
- * entry describes the panel's identity, and `mountWcShell` supplies the actual
+ * entry describes the panel's identity, and `buildWcShellFrame` supplies the actual
  * instance.
  */
 export function registerBuiltinPanels(): void {

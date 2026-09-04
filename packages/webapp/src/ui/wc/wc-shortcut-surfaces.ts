@@ -305,7 +305,7 @@ export interface ShellKeyboardDeps extends ShortcutSurfaceDeps {
 /**
  * Install keyboard mode over a mounted shell.
  *
- * The seam exists so `mountWcShell` states WHAT the mode drives in one line
+ * The seam exists so `buildWcShellFrame` states WHAT the mode drives in one line
  * rather than carrying the closures for it, and so this file — which already
  * owns every DOM-reached command — owns the wiring that binds them too.
  */

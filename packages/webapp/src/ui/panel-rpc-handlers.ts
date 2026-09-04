@@ -1936,7 +1936,7 @@ function buildThemeHandler() {
 // `setupStandalonePanelRpc` ← `wireWcTray` ← `wc-live.ts` (gated on
 // `options.standalone && options.instanceId`). The extension's kernel
 // worker + orchestrator run in the hosted-leader tab, which boots through
-// `mountWcUiLive` (runtimeMode `hosted-leader`, standalone opts + instanceId
+// `bootLeaderFloat` (runtimeMode `hosted-leader`, standalone opts + instanceId
 // set) — so the `layout` command reaches this handler by the SAME path as
 // standalone. Extension parity is therefore automatic (no separate install).
 function buildLayoutHandler() {

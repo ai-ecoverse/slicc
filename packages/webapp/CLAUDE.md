@@ -108,7 +108,7 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
   and non-mount `/tmp`, not scoops; root resolves via `ui/wc/wc-unit-context.ts`
   (`chatSessionIdFor`), never the literal `session-cone`.
 - **Layouts** (`docs/layouts.md`, behind `panel-layouts` flag): `panelize-shell.ts`
-  RE-PARENTS what `mountWcShell` built, so keep `WcShellRefs` valid; `setPanelVisible` adds
+  RE-PARENTS what `buildWcShellFrame` built, so keep `WcShellRefs` valid; `setPanelVisible` adds
   an unplaced panel but never duplicates a placed one.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` removes only
   `localStorage['slicc_cloud_managed']` providers, never user-added; `?connect=1` is
