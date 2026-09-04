@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { SAMPLE_VIDEO, sampleImage } from './media-fixtures.js';
+import { SAMPLE_AUDIO, SAMPLE_VIDEO, sampleImage } from './media-fixtures.js';
 import type { SliccAgentMessage } from './slicc-agent-message.js';
 import './slicc-agent-message.js';
 
@@ -26,6 +26,8 @@ const img = (src: string, alt: string) =>
   `<img class="msg__media msg__media--image" src="${src}" alt="${alt}">`;
 const video = (src: string, label: string) =>
   `<video class="msg__media msg__media--video" src="${src}" aria-label="${label}" controls preload="metadata" playsinline></video>`;
+const audio = (src: string, label: string) =>
+  `<audio class="msg__media msg__media--audio" src="${src}" aria-label="${label}" controls preload="metadata"></audio>`;
 /**
  * Mirrors `groupMediaGalleries()` in the webapp renderer: two and four items
  * get an explicit two-column modifier, everything else rides `auto-fit`.
@@ -68,8 +70,9 @@ const meta: Meta<MediaArgs> = {
       description: {
         component:
           'Images and video written as plain markdown `![alt](path)` in an assistant ' +
-          'message. One syntax carries both: the file extension decides whether the ' +
-          'renderer emits an `<img>` or a `<video controls>`. Two or more adjacent ' +
+          'message. One syntax carries all three: the file extension decides whether ' +
+          'the renderer emits an `<img>`, a `<video controls>` or an `<audio controls>`. ' +
+          'Two or more adjacent ' +
           'items become a gallery grid so a batch of frames stays glanceable.',
       },
     },
@@ -107,6 +110,19 @@ export const SingleVideo: Story = {
   render: ({ maxWidth }) =>
     mediaMessage(
       `<p>Here is the assembled cut:</p>${video(SAMPLE_VIDEO, 'interview cut')}<p>Runtime is 2s; audio track is stripped.</p>`,
+      maxWidth
+    ),
+};
+
+/**
+ * A clip written as `![vo](/shared/vo.mp3)`. Audio is control chrome rather
+ * than a picture, so it spans the column and drops the media border the
+ * visual elements carry.
+ */
+export const SingleAudio: Story = {
+  render: ({ maxWidth }) =>
+    mediaMessage(
+      `<p>Voiceover take 3:</p>${audio(SAMPLE_AUDIO, 'voiceover take 3')}<p>Levels peak at -3 dB.</p>`,
       maxWidth
     ),
 };

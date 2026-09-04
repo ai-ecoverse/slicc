@@ -128,8 +128,8 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
 - **Tool-output images**: `<img:data:…>` markers are parsed in exactly one place
   (`base/image-markers.ts`) so every consumer agrees what is an image; marker-shaped prose
   and markers sliced mid-payload stay inert.
-- **Markdown media in messages**: `![alt](path)` carries images AND video — `base/message-media.ts`
-  decides which element, and rewrites rooted VFS paths through `base/preview-url.ts`. A bare
+- **Markdown media in messages**: `![alt](path)` carries images, video AND audio —
+  `base/message-media.ts` decides which element, and rewrites rooted VFS paths through `base/preview-url.ts`. A bare
   `/shared/x.png` in an `<img src>` hits the SPA fallback, which answers **200 + `text/html`**,
   so the element fails to decode with nothing logged; always route media through `/preview/*`.
   Video needs `video` in the DOMPurify allowlist (`ui/message-renderer.ts`) or it is deleted

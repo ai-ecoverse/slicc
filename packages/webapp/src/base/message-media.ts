@@ -2,9 +2,10 @@
  * What a markdown `![alt](href)` in a chat message should actually become.
  *
  * One markdown syntax carries every medium: the *file* decides whether the
- * renderer emits an `<img>` or a `<video>`, so an agent never has to remember
- * a second spelling. `![clip](/shared/demo.mp4)` is a video player;
- * `![shot](/shared/demo.png)` is an image.
+ * renderer emits an `<img>`, a `<video>` or an `<audio>`, so an agent never
+ * has to remember a second spelling. `![clip](/shared/demo.mp4)` is a video
+ * player, `![vo](/shared/demo.mp3)` an audio player, and
+ * `![shot](/shared/demo.png)` an image.
  *
  * Lives in `base/` next to `mime-types.ts` and `preview-url.ts` — the two
  * things it composes — so the decision is pure, unit-testable, and identical
@@ -17,7 +18,7 @@
  * reading bytes; this is for choosing an element.
  */
 
-import { getMimeType, isVideoMimeType } from './mime-types.js';
+import { getMimeType, isAudioMimeType, isVideoMimeType } from './mime-types.js';
 import { toPreviewUrl } from './preview-url.js';
 
 /** How a message-body media reference should be rendered. */
@@ -25,7 +26,9 @@ export type MessageMedia =
   /** An `<img>`. */
   | { kind: 'image'; src: string }
   /** A `<video controls>`. */
-  | { kind: 'video'; src: string; mimeType: string };
+  | { kind: 'video'; src: string; mimeType: string }
+  /** An `<audio controls>`. */
+  | { kind: 'audio'; src: string; mimeType: string };
 
 /** Schemes that must never reach an element attribute. */
 const DANGEROUS_SCHEME_RE = /^(?:javascript|vbscript|file):/i;
@@ -71,6 +74,9 @@ export function resolveMessageMedia(href: string): MessageMedia | null {
     : getMimeType(stripUrlSuffix(trimmed));
 
   if (isVideoMimeType(mimeType)) return { kind: 'video', src, mimeType };
+  // Audio too: an `<img>` pointed at an .mp3 cannot decode and fails with
+  // nothing logged — the same silent failure this module exists to remove.
+  if (isAudioMimeType(mimeType)) return { kind: 'audio', src, mimeType };
 
   // Everything else is an image. That deliberately includes types we cannot
   // name — an extensionless path, a CDN URL with no suffix — because `<img>`

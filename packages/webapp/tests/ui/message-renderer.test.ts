@@ -322,6 +322,35 @@ describe('markdown media', () => {
     });
   });
 
+  // The gap the review caught: `audio` was in the sanitizer allowlist but no
+  // branch emitted it, so `![](x.mp3)` rendered as an <img> that cannot decode
+  // — the same silent failure this change removes for images.
+  describe('audio', () => {
+    it('renders an .mp3 as an audio player, not an image', () => {
+      const html = renderMessageContent('![voiceover](/shared/vo.mp3)');
+      expect(html).toContain('<audio');
+      expect(html).not.toContain('<img');
+    });
+
+    it('keeps controls and points at the /preview URL', () => {
+      const html = renderMessageContent('![vo](/shared/vo.mp3)');
+      expect(html).toContain('controls');
+      expect(html).toContain('/preview/shared/vo.mp3');
+    });
+
+    it('carries the alt text over as an aria-label', () => {
+      expect(renderMessageContent('![voiceover](/shared/vo.wav)')).toContain(
+        'aria-label="voiceover"'
+      );
+    });
+
+    it('groups audio into a gallery alongside images', () => {
+      const html = renderMessageContent('![a](/shared/a.png) ![b](/shared/b.mp3)');
+      expect(html).toContain('msg__media-gallery');
+      expect(html).toContain('<audio');
+    });
+  });
+
   describe('dip references', () => {
     // hydrateDips() looks for img[src$=".shtml"]; a rewritten src or a
     // <video> would both break the handshake.

@@ -55,6 +55,22 @@ describe('resolveMessageMedia', () => {
       expect(resolveMessageMedia(href)).toMatchObject({ kind: 'video', mimeType });
     });
 
+    it.each([
+      ['/shared/a.mp3', 'audio/mpeg'],
+      ['/shared/a.wav', 'audio/wav'],
+      ['/shared/a.ogg', 'audio/ogg'],
+      ['/shared/a.m4a', 'audio/mp4'],
+      ['/shared/a.flac', 'audio/flac'],
+    ])('%s is audio', (href, mimeType) => {
+      expect(resolveMessageMedia(href)).toMatchObject({ kind: 'audio', mimeType });
+    });
+
+    // `.ogg` is audio and `.ogv` is video — the one pair the table splits.
+    it('separates .ogg from .ogv', () => {
+      expect(resolveMessageMedia('/shared/a.ogg')?.kind).toBe('audio');
+      expect(resolveMessageMedia('/shared/a.ogv')?.kind).toBe('video');
+    });
+
     it.each(['/shared/a.png', '/shared/a.jpg', '/shared/a.gif', '/shared/a.webp', '/shared/a.svg'])(
       '%s is an image',
       (href) => {
@@ -92,6 +108,7 @@ describe('resolveMessageMedia', () => {
     it('reads the type out of a data URL rather than the extension', () => {
       expect(resolveMessageMedia('data:image/png;base64,AAAA')?.kind).toBe('image');
       expect(resolveMessageMedia('data:video/mp4;base64,AAAA')?.kind).toBe('video');
+      expect(resolveMessageMedia('data:audio/mpeg;base64,AAAA')?.kind).toBe('audio');
     });
   });
 

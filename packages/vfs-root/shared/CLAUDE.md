@@ -35,7 +35,7 @@ One scoop per sprinkle, named identically. Cone MUST NOT write `.shtml`/run `spr
 
 ## Dips and media
 
-`![x](/abs/path)` renders inline: images and video (mp4/webm/mov), 2+ per paragraph = gallery. Absolute paths only; beats `open`, a tab per file. Raw HTML renders too (sanitized; VFS paths resolve) when you need layout — but a ```html fence only shows source.
+`![x](/abs/path)` renders inline: images, video (mp4/webm/mov), audio (mp3/wav/ogg), 2+ per paragraph = gallery. Absolute paths only; beats `open`, a tab per file. Raw HTML renders too (sanitized; VFS paths resolve) when you need layout — but a ```html fence only shows source.
 
 Interactive → a dip: sandboxed inline `shtml`, cone-written (buttons emit `slicc.lick(...)`). Persistent UI → Sprinkles. Authoring: `/workspace/skills/dips/SKILL.md`.
 

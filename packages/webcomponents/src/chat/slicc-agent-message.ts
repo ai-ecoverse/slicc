@@ -70,12 +70,20 @@ slicc-agent-message .body th { background: var(--ghost); font-weight: 600; }
    width and keep their aspect ratio, so a 4K frame cannot widen the transcript.
    The dark checkerboard-free neutral backdrop keeps a transparent PNG legible
    in both themes while the poster/first frame decodes. */
-slicc-agent-message .body .msg__media { display: block; max-width: 100%; height: auto; margin: 8px 0; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ctx) 6%, var(--canvas)); }
+slicc-agent-message .body .msg__media { display: block; max-width: 100%; margin: 8px 0; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ctx) 6%, var(--canvas)); }
+/* height:auto belongs to the elements that HAVE an intrinsic aspect ratio.
+   An <audio> has none, so auto resolves to 0 and the control bar disappears
+   entirely — it must keep the UA height. */
+slicc-agent-message .body .msg__media--image, slicc-agent-message .body .msg__media--video { height: auto; }
 /* A clip needs a floor: preload="metadata" means the element has no
    intrinsic height until metadata lands, and a 0px-tall video with controls is
    unclickable. */
 slicc-agent-message .body .msg__media--video { width: 100%; min-height: 120px; background: #000; }
 slicc-agent-message .body .msg__media--image { cursor: zoom-in; }
+/* An audio player is control chrome, not a picture: it has a fixed intrinsic
+   height and no aspect ratio to preserve, so it spans the column and opts out
+   of the media border/background the visual elements carry. */
+slicc-agent-message .body .msg__media--audio { width: 100%; border: 0; border-radius: 0; background: none; }
 /* Two or more adjacent media items lay out as a grid instead of a tall stack,
    so a batch of frames stays glanceable and the prose after it remains on
    screen. auto-fit + minmax collapses to one column in a narrow chat pane. */
@@ -86,6 +94,7 @@ slicc-agent-message .body .msg__media-gallery--pair,
 slicc-agent-message .body .msg__media-gallery--quad { grid-template-columns: repeat(2, 1fr); }
 slicc-agent-message .body .msg__media-gallery .msg__media { margin: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
 slicc-agent-message .body .msg__media-gallery .msg__media--video { min-height: 0; object-fit: contain; }
+slicc-agent-message .body .msg__media-gallery .msg__media--audio { aspect-ratio: auto; align-self: center; }
 slicc-agent-message .plan { list-style: none; margin: 4px 0 0; padding: 0; }
 slicc-agent-message .plan li { position: relative; padding-left: 20px; margin: 5px 0; font-size: 14px; }
 slicc-agent-message .plan li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px; border-radius: 50%; }

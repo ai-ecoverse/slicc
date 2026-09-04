@@ -192,16 +192,17 @@ const marked = new Marked({
       // SPA fallback and silently decode HTML as an image) and decides whether
       // the file is a picture or a clip.
       const media = resolveMessageMedia(url);
-      if (media?.kind === 'video') {
-        // The alt text becomes an `aria-label`: `alt` is inert on <video>, so
-        // carrying it over would silently drop the only description the author
-        // wrote. `preload="metadata"` so a gallery of clips costs first frames
-        // rather than whole files; `playsinline` keeps iOS from hijacking into
-        // fullscreen.
+      if (media?.kind === 'video' || media?.kind === 'audio') {
+        // The alt text becomes an `aria-label`: `alt` is inert on <video> and
+        // <audio>, so carrying it over would silently drop the only
+        // description the author wrote. `preload="metadata"` so a gallery of
+        // clips costs first frames rather than whole files; `playsinline`
+        // keeps iOS from hijacking video into fullscreen (inert on audio).
         const labelAttr = text ? ` aria-label="${escapeHtml(text)}"` : '';
+        const tag = media.kind === 'video' ? 'video' : 'audio';
         return (
-          `<video class="msg__media msg__media--video" src="${escapeHtml(media.src)}"` +
-          `${labelAttr}${titleAttr} controls preload="metadata" playsinline></video>`
+          `<${tag} class="msg__media msg__media--${tag}" src="${escapeHtml(media.src)}"` +
+          `${labelAttr}${titleAttr} controls preload="metadata" playsinline></${tag}>`
         );
       }
       // .shtml image references render as dip iframes during hydration, so they
@@ -249,10 +250,10 @@ export function resolveRawMediaSrc(html: string): string {
  * and a `.shtml` dip reference (which never gets the class) are both ignored.
  */
 const MEDIA_ONLY_PARAGRAPH_RE =
-  /<p>((?:\s|<br\s*\/?>|<img class="msg__media[^>]*>|<video class="msg__media[^>]*><\/video>)+)<\/p>/g;
+  /<p>((?:\s|<br\s*\/?>|<img class="msg__media[^>]*>|<video class="msg__media[^>]*><\/video>|<audio class="msg__media[^>]*><\/audio>)+)<\/p>/g;
 
 /** Individual media elements inside such a paragraph. */
-const MEDIA_ELEMENT_RE = /<(?:img|video) class="msg__media[^>]*>(?:<\/video>)?/g;
+const MEDIA_ELEMENT_RE = /<(?:img|video|audio) class="msg__media[^>]*>(?:<\/(?:video|audio)>)?/g;
 
 /**
  * Lay a run of two or more adjacent images/videos out as a gallery grid.
