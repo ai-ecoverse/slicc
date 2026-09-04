@@ -121,7 +121,7 @@ playwright-cli check --tab=<id> <ref>                            # Check checkbo
 playwright-cli uncheck --tab=<id> <ref>                          # Uncheck checkbox/radio
 playwright-cli drag --tab=<id> <startRef> <endRef>               # Drag and drop
 playwright-cli upload --tab=<id> [ref] <file> [file...]          # Upload VFS files to file input as raw bytes (optional snapshot ref targets hidden inputs)
-playwright-cli drop --tab=<id> <ref> [--path=<vfs-path>] [--data=<mime/type=value>]  # Drop files/data onto element
+playwright-cli drop --tab=<id> <ref> [--path=<vfs-path>] [--data=<mime/type=value>]  # Drop files/data onto element (--path drops raw bytes)
 playwright-cli dialog-accept --tab=<id> [text]                   # Accept JS dialog
 playwright-cli dialog-dismiss --tab=<id>                         # Dismiss JS dialog
 ```
@@ -339,6 +339,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after. If the text or an `eval` expression starts with `-`, put `--` before it so it is not parsed as a flag.
 - Negative numbers for `mousewheel` / `mousemove` are positionals (no `--` needed): `mousewheel --tab=<id> 0 -300`.
+- `drop --path=<vfs-path>` injects the file as **raw bytes**; a UTF-8 text round-trip would replace every byte >= 0x80 with `EF BF BD`, so mp4/zip/jpg drops stay byte-exact.
 - Screenshots default to `$TMPDIR/screenshot-<timestamp>.png` — your own scratch directory, not the shared root. Use `--filename=path` to save elsewhere —
   `screenshot <path>` is an error, because that slot is the element ref.
 - Unsupported flags and extra positionals are rejected per subcommand, so a probe that exits 0 means

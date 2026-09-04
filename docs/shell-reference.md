@@ -2100,7 +2100,7 @@ await fs.writeFile('/output.jpg', newBytes);
 
 ### Tools Supporting Binary
 
-- **playwright-cli**: `screenshot --filename=<path>` saves PNGs directly to the VFS; `upload` injects VFS files into a page file input as raw bytes (no UTF-8 round-trip)
+- **playwright-cli**: `screenshot --filename=<path>` saves PNGs directly to the VFS; `upload` injects VFS files into a page file input and `drop --path` into the page's `DataTransfer`, both as raw bytes (no UTF-8 round-trip)
 - **node** / **.jsh**: `fs.readFileBinary()`, `fs.writeFileBinary()` available
 - **bash**: Limited binary support (command output truncated at 100KB)
 

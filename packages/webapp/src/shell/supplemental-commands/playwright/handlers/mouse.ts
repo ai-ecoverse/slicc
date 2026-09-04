@@ -1,7 +1,13 @@
 /**
  * Mouse subcommands: mousemove, mousedown, mouseup, mousewheel, drop.
+ *
+ * `drop --path` reads the VFS file as raw bytes — a UTF-8 text round-trip
+ * substitutes U+FFFD (`EF BF BD`) for every byte >= 0x80 (#2883), so the page
+ * would receive a corrupt `File` from a command that still exited 0.
  */
 
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import { readVfsFileBytes } from '../binary.js';
 import { parseRef, requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
@@ -12,15 +18,6 @@ function parseButton(raw: string | undefined): MouseButton | { error: string } {
   if (raw === undefined) return 'left';
   if (raw === 'left' || raw === 'right' || raw === 'middle') return raw;
   return { error: `Invalid button "${raw}". Must be left, right, or middle.\n` };
-}
-
-/** Convert a Uint8Array to a base64 string without relying on spread (avoids stack overflow). */
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
 }
 
 const MIME_MAP: Record<string, string> = {
@@ -157,11 +154,11 @@ export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   // Build the files array from --path
   const files: Array<{ name: string; type: string; base64: string }> = [];
   if (vfsPath) {
-    const content = await fs.readFile(vfsPath);
+    // Raw bytes only: a UTF-8 round-trip would turn every byte >= 0x80 into
+    // U+FFFD and hand the page a corrupt File (#2883).
+    const bytes = await readVfsFileBytes(fs, vfsPath);
     const name = vfsPath.split('/').pop() ?? vfsPath;
-    const type = mimeForFilename(name);
-    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-    files.push({ name, type, base64: uint8ToBase64(bytes) });
+    files.push({ name, type: mimeForFilename(name), base64: uint8ToBase64(bytes) });
   }
 
   // Build the data items array from --data (format: "mime/type=value")

@@ -9,13 +9,56 @@ import {
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/mouse.js';
 import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import {
+  allBytesFixture,
+  countReplacementSeqs,
   createHandlerCtx,
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  vfsLikeReadFile,
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
+
+type DroppedFile = { name: string; type: string; base64: string };
+type TransportCall = { method: string; params: Record<string, unknown> };
+
+function decodeBase64(base64: string): Uint8Array {
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
+/**
+ * Recover the `files` array the handler sent to the page, from either drop
+ * path: `Runtime.callFunctionOn` arguments (backendNodeId) or the inlined
+ * `filesData` literal in the `Runtime.evaluate` expression (CSS fallback).
+ */
+function droppedFiles(calls: TransportCall[]): DroppedFile[] {
+  const callFn = calls.find((c) => c.method === 'Runtime.callFunctionOn');
+  if (callFn) {
+    const args = callFn.params['arguments'] as Array<{ value: unknown }> | undefined;
+    return (args?.[0]?.value ?? []) as DroppedFile[];
+  }
+  const expression = calls.find((c) => c.method === 'Runtime.evaluate')?.params['expression'] as
+    | string
+    | undefined;
+  const match = expression?.match(/var filesData = (\[[\s\S]*?\]);/);
+  return match ? (JSON.parse(match[1]) as DroppedFile[]) : [];
+}
+
+/** Mock transport that records every call and satisfies both drop paths. */
+function captureTransport(): {
+  transport: ReturnType<typeof createMockTransport>;
+  calls: TransportCall[];
+} {
+  const calls: TransportCall[] = [];
+  const transport = createMockTransport((method, params) => {
+    calls.push({ method, params: (params ?? {}) as Record<string, unknown> });
+    if (method === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
+    if (method === 'Runtime.callFunctionOn') return { result: { value: 'DIV' } };
+    return {};
+  });
+  return { transport, calls };
+}
 
 function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
   return {
@@ -164,7 +207,7 @@ describe('drop handler', () => {
       })
     );
     expect(r.stdout).toBe('Dropped onto e5\n');
-    expect(readFile).toHaveBeenCalledWith('/upload.txt');
+    expect(readFile).toHaveBeenCalledWith('/upload.txt', { encoding: 'binary' });
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
@@ -221,5 +264,109 @@ describe('drop handler', () => {
     await expect(
       dropHandler(createHandlerCtx({ browser, state, positional: ['e9'], flags: { tab: TAB } }))
     ).rejects.toThrow('Unknown ref');
+  });
+});
+
+describe('drop --path binary fidelity (#2883)', () => {
+  it('drops the 0x00..0xFF fixture byte-exactly via backendNodeId', async () => {
+    const fixture = allBytesFixture();
+    const files = new Map<string, string | Uint8Array>([['/allbytes.bin', fixture]]);
+    const { transport, calls } = captureTransport();
+    const { browser } = createMockBrowser({ transport });
+    const state = createPlaywrightState();
+    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+
+    const r = await dropHandler(
+      createHandlerCtx({
+        browser,
+        state,
+        positional: ['e5'],
+        flags: { tab: TAB, path: '/allbytes.bin' },
+        fs: { readFile: vfsLikeReadFile(files) },
+      })
+    );
+
+    expect(r.exitCode).toBe(0);
+    expect(calls.some((c) => c.method === 'DOM.resolveNode')).toBe(true);
+    const dropped = droppedFiles(calls);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0].type).toBe('application/octet-stream');
+    const decoded = decodeBase64(dropped[0].base64);
+    expect(decoded.length).toBe(256);
+    expect(countReplacementSeqs(decoded)).toBe(0);
+    expect(Array.from(decoded)).toEqual(Array.from(fixture));
+  });
+
+  it('drops the 0x00..0xFF fixture byte-exactly via the CSS selector fallback', async () => {
+    const fixture = allBytesFixture();
+    const files = new Map<string, string | Uint8Array>([['/clip.mp4', fixture]]);
+    const { transport, calls } = captureTransport();
+    const { browser } = createMockBrowser({ transport });
+    const state = createPlaywrightState();
+    state.snapshots.set(TAB, makeSnapshot({ refToSelector: new Map([['e5', '#zone']]) }));
+
+    const r = await dropHandler(
+      createHandlerCtx({
+        browser,
+        state,
+        positional: ['e5'],
+        flags: { tab: TAB, path: '/clip.mp4' },
+        fs: { readFile: vfsLikeReadFile(files) },
+      })
+    );
+
+    expect(r.exitCode).toBe(0);
+    expect(calls.some((c) => c.method === 'Runtime.evaluate')).toBe(true);
+    const dropped = droppedFiles(calls);
+    expect(dropped[0].type).toBe('video/mp4');
+    const decoded = decodeBase64(dropped[0].base64);
+    expect(decoded.length).toBe(256);
+    expect(countReplacementSeqs(decoded)).toBe(0);
+    expect(Array.from(decoded)).toEqual(Array.from(fixture));
+  });
+
+  it('still drops ASCII and valid UTF-8 text unchanged', async () => {
+    const text = 'hello café — plain ASCII plus valid UTF-8';
+    const files = new Map<string, string | Uint8Array>([['/note.txt', text]]);
+    const { transport, calls } = captureTransport();
+    const { browser } = createMockBrowser({ transport });
+    const state = createPlaywrightState();
+    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+
+    const r = await dropHandler(
+      createHandlerCtx({
+        browser,
+        state,
+        positional: ['e5'],
+        flags: { tab: TAB, path: '/note.txt' },
+        fs: { readFile: vfsLikeReadFile(files) },
+      })
+    );
+
+    expect(r.exitCode).toBe(0);
+    const dropped = droppedFiles(calls);
+    expect(dropped[0].type).toBe('text/plain');
+    const decoded = decodeBase64(dropped[0].base64);
+    expect(new TextDecoder().decode(decoded)).toBe(text);
+    expect(countReplacementSeqs(decoded)).toBe(0);
+  });
+
+  it('fails instead of dropping a payload a text decode already mangled', async () => {
+    const { transport } = captureTransport();
+    const { browser } = createMockBrowser({ transport });
+    const state = createPlaywrightState();
+    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+
+    await expect(
+      dropHandler(
+        createHandlerCtx({
+          browser,
+          state,
+          positional: ['e5'],
+          flags: { tab: TAB, path: '/corrupt.bin' },
+          fs: { readFile: (async () => 'JFIF\uFFFD\uFFFD') as unknown as VirtualFS['readFile'] },
+        })
+      )
+    ).rejects.toThrow(/faithfully/);
   });
 });

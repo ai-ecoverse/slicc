@@ -158,7 +158,8 @@ Commands:
   mouseup [button] --tab=<id>  Release mouse button (left/right/middle, default: left)
   mousewheel <dx> <dy> --tab=<id> Scroll mouse wheel
   drop --tab=<id> <ref> [--path=vfs-path] [--data=mime/type=value]
-                         Drop files or data onto element by ref
+                         Drop files or data onto element by ref. --path reads the VFS
+                         file as raw bytes, so binary drops stay byte-exact.
   route --tab=<id> <pattern> [--status=n] [--body=text] [--content-type=type]
         [--header=<name: value>] ...
                          Mock requests matching a URL pattern (** = any, * = segment)
