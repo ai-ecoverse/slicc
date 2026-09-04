@@ -8,6 +8,44 @@ import { threeWayMerge } from '../merge-file-core.js';
 import { diffCommits } from './diff.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
+const EMPTY_BYTES = new Uint8Array(0);
+
+/** Read a working-tree file as raw bytes. Throws (ENOENT/EISDIR) like `readFile`. */
+async function readWorkdirBytes(ctx: GitCommandContext, path: string): Promise<Uint8Array> {
+  return (await ctx.fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a === b) return true;
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Decode `bytes` only if they survive a `TextDecoder` → `TextEncoder` round
+ * trip unchanged — i.e. only if it is safe to merge them as text and write the
+ * result back. `undefined` means "these are bytes, treat them as bytes".
+ *
+ * Deliberately stricter than `core/file-type.ts`'s `looksLikeText`, which
+ * answers a different question ("can a human read this?") off a 4 KB sample: a
+ * 10 MB tarball whose first 4 KB happen to be ASCII would pass that and then
+ * lose every high byte past the window. Here the whole file must decode as
+ * strict UTF-8 — a single invalid sequence anywhere comes back out as U+FFFD,
+ * and silently substituting bytes is the bug (#2885). NUL is rejected up front
+ * for the same reason git treats it as the binary tell.
+ */
+function decodeMergeableText(bytes: Uint8Array): string | undefined {
+  if (bytes.includes(0x00)) return undefined;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function stash(
   ctx: GitCommandContext,
   cwd: string,
@@ -134,9 +172,9 @@ async function stashCollectDirty(
   for (const filepath of allTracked) {
     const inHead = headFiles.includes(filepath);
 
-    let workdirContent: string | undefined;
+    let workdirBytes: Uint8Array | undefined;
     try {
-      workdirContent = await ctx.fs.readTextFile(`${cwd}/${filepath}`);
+      workdirBytes = await readWorkdirBytes(ctx, `${cwd}/${filepath}`);
     } catch {
       /* file doesn't exist in workdir */
     }
@@ -149,29 +187,20 @@ async function stashCollectDirty(
         oid: headOid,
         filepath,
       });
-      const headContent = new TextDecoder().decode(blob);
 
-      if (workdirContent === undefined) {
+      if (workdirBytes === undefined) {
         dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: false });
-      } else if (workdirContent !== headContent) {
+      } else if (!bytesEqual(workdirBytes, blob)) {
         dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: true });
-        const oid = await git.writeBlob({
-          fs: ctx.lfs,
-          dir: cwd,
-          blob: new TextEncoder().encode(workdirContent),
-        });
+        const oid = await git.writeBlob({ fs: ctx.lfs, dir: cwd, blob: workdirBytes });
         indexEntries.push({ filepath, oid });
       } else {
         const blobOid = await git.writeBlob({ fs: ctx.lfs, dir: cwd, blob });
         indexEntries.push({ filepath, oid: blobOid });
       }
-    } else if (workdirContent !== undefined) {
+    } else if (workdirBytes !== undefined) {
       dirtyFiles.push({ file: filepath, inHead: false, existsInWorkdir: true });
-      const oid = await git.writeBlob({
-        fs: ctx.lfs,
-        dir: cwd,
-        blob: new TextEncoder().encode(workdirContent),
-      });
+      const oid = await git.writeBlob({ fs: ctx.lfs, dir: cwd, blob: workdirBytes });
       indexEntries.push({ filepath, oid });
     }
   }
@@ -297,18 +326,15 @@ async function stashRestore(
   // HEAD may have advanced since the stash was created.
   const baseOid = stashCommit.parent[0] ?? headOid;
 
-  const conflicts = await mergeStashTree(ctx, cwd, stashCommit.tree, baseOid);
+  const { conflicts, warnings } = await mergeStashTree(ctx, cwd, stashCommit.tree, baseOid);
 
   if (conflicts.length > 0) {
     // Real git keeps the stash entry on conflict for both pop and apply.
     const stdout = conflicts
       .map((filepath) => `CONFLICT (content): Merge conflict in ${filepath}\n`)
       .join('');
-    return {
-      stdout,
-      stderr: drop ? 'The stash entry is kept in case you need it again.\n' : '',
-      exitCode: 1,
-    };
+    const kept = drop ? 'The stash entry is kept in case you need it again.\n' : '';
+    return { stdout, stderr: warnings.join('') + kept, exitCode: 1 };
   }
 
   if (!drop) {
@@ -336,15 +362,21 @@ async function stashRestore(
 
 /**
  * Restore a stash tree onto the working tree via a per-file three-way merge and
- * return the list of files that conflicted. Cleanly merged files are staged;
- * conflicted files keep their markers in the working tree and are left unstaged.
+ * return the files that conflicted (plus any git-style warnings to print).
+ * Cleanly merged files are staged; conflicted files keep their working-tree
+ * content and are left unstaged.
+ *
+ * Everything below the text merge is byte work (#2885). Only a file whose
+ * three sides are all lossless UTF-8 goes through {@link threeWayMerge}; a
+ * JPEG or a packfile is compared and written as bytes, because decoding it to
+ * merge it is what turned `FF D8` into `EF BF BD`.
  */
 async function mergeStashTree(
   ctx: GitCommandContext,
   cwd: string,
   treeOid: string,
   baseOid: string
-): Promise<string[]> {
+): Promise<{ conflicts: string[]; warnings: string[] }> {
   const stashFiles = new Map<string, Uint8Array>();
 
   const walkTree = async (oid: string, prefix: string): Promise<void> => {
@@ -379,42 +411,37 @@ async function mergeStashTree(
     /* no base */
   }
 
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
   const conflicts: string[] = [];
+  const warnings: string[] = [];
 
-  for (const [filepath, blob] of stashFiles) {
-    const theirs = decoder.decode(blob);
-    const base = baseFileSet.has(filepath) ? await readBaseText(ctx, cwd, baseOid, filepath) : '';
+  for (const [filepath, theirs] of stashFiles) {
+    const base = baseFileSet.has(filepath)
+      ? await readBaseBytes(ctx, cwd, baseOid, filepath)
+      : EMPTY_BYTES;
 
-    let ours: string | undefined;
+    let ours: Uint8Array | undefined;
     try {
-      ours = await ctx.fs.readTextFile(`${cwd}/${filepath}`);
+      ours = await readWorkdirBytes(ctx, `${cwd}/${filepath}`);
     } catch {
       /* no local copy in the working tree */
     }
 
-    let mergedText: string;
-    let conflicted = false;
-    if (ours === undefined || ours === theirs) {
-      mergedText = theirs;
-    } else {
-      const merge = threeWayMerge(ours, base, theirs, {
-        labels: { current: 'Updated upstream', base: 'stash base', other: 'Stashed changes' },
-      });
-      mergedText = merge.content;
-      conflicted = merge.conflicts > 0;
-    }
+    const { merged, conflicted, binary } = resolveStashedFile(ours, base, theirs);
 
     const slashIdx = filepath.lastIndexOf('/');
     if (slashIdx !== -1) {
       await ctx.fs.mkdir(`${cwd}/${filepath.slice(0, slashIdx)}`, { recursive: true });
     }
-    await ctx.fs.writeFile(`${cwd}/${filepath}`, encoder.encode(mergedText));
+    await ctx.fs.writeFile(`${cwd}/${filepath}`, merged);
 
+    if (binary) {
+      warnings.push(
+        `warning: Cannot merge binary files: ${filepath} (Updated upstream vs Stashed changes)\n`
+      );
+    }
     if (conflicted) {
       conflicts.push(filepath);
-    } else if (mergedText !== base) {
+    } else if (!bytesEqual(merged, base)) {
       await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
     }
   }
@@ -432,16 +459,62 @@ async function mergeStashTree(
     }
   }
 
-  return conflicts;
+  return { conflicts, warnings };
 }
 
-/** Read a file's base-commit blob as text, returning '' when it is not present. */
-async function readBaseText(
+/**
+ * Decide the bytes a single stashed path should end up with, given the working
+ * tree (`ours`, absent when the file is gone), the stash base (`base`) and the
+ * stashed blob (`theirs`).
+ *
+ * Byte comparisons decide first, so a binary that only one side touched is
+ * restored or preserved without ever being decoded. Only a path both sides
+ * moved AND whose three versions are all lossless UTF-8 reaches the text merge;
+ * anything else is a binary conflict, which is what git does rather than
+ * inventing bytes (#2885).
+ */
+function resolveStashedFile(
+  ours: Uint8Array | undefined,
+  base: Uint8Array,
+  theirs: Uint8Array
+): { merged: Uint8Array; conflicted: boolean; binary: boolean } {
+  // No local copy, already the stashed bytes, or untouched since the stash
+  // base — the stashed bytes are the answer either way.
+  if (ours === undefined || bytesEqual(ours, theirs) || bytesEqual(ours, base)) {
+    return { merged: theirs, conflicted: false, binary: false };
+  }
+  // The stash never changed this file (push records every tracked path, not
+  // just the dirty ones), so the local edit stands.
+  if (bytesEqual(theirs, base)) {
+    return { merged: ours, conflicted: false, binary: false };
+  }
+
+  const oursText = decodeMergeableText(ours);
+  const baseText = decodeMergeableText(base);
+  const theirsText = decodeMergeableText(theirs);
+  if (oursText === undefined || baseText === undefined || theirsText === undefined) {
+    // Both sides moved and at least one is binary: keep the working-tree copy
+    // and report the conflict instead of merging bytes as prose.
+    return { merged: ours, conflicted: true, binary: true };
+  }
+
+  const merge = threeWayMerge(oursText, baseText, theirsText, {
+    labels: { current: 'Updated upstream', base: 'stash base', other: 'Stashed changes' },
+  });
+  return {
+    merged: new TextEncoder().encode(merge.content),
+    conflicted: merge.conflicts > 0,
+    binary: false,
+  };
+}
+
+/** Read a file's base-commit blob, returning no bytes when it is not present. */
+async function readBaseBytes(
   ctx: GitCommandContext,
   cwd: string,
   baseOid: string,
   filepath: string
-): Promise<string> {
+): Promise<Uint8Array> {
   try {
     const { blob } = await git.readBlob({
       fs: ctx.lfs,
@@ -450,9 +523,9 @@ async function readBaseText(
       oid: baseOid,
       filepath,
     });
-    return new TextDecoder().decode(blob);
+    return blob;
   } catch {
-    return '';
+    return EMPTY_BYTES;
   }
 }
 
