@@ -506,8 +506,54 @@ is the same in all three rows: **absent is "not known", never a value.**
 | `addedAt`                      | The transport does not carry registration time                                         | `orderRoots` is all-or-nothing: with any root missing it, roots keep transport order, and `defaultRootOf` reads that same order — so the default selection and the strip cannot disagree.                                                                                                                       |
 | the record behind `getRecord?` | The caller has no records at all (a follower)                                          | The thinking pill keeps the value it had. `metaThinkingForScoop` answers `off` for an unknown level, and writing that would report reasoning as DISABLED on every selection — the #2329 latch bug in a second place.                                                                                            |
 
-The mount collapse itself (`attachWcChat` / `attachWcWorkbench` /
-`mountWcShell`) is PR D2b.
+### One mount path (PR D2b)
+
+There is now ONE mount. `mountWcShell(app, log, { floatKind, connect })`
+builds the frame, installs the floatbar, asks the float for its transport and
+wires the chat surface onto it — for every float there is.
+
+```text
+mountWcShell
+├── buildWcShellFrame        the DOM, unchanged (was `mountWcShell`, renamed)
+├── connect(boot) ─────────► { client, host, workbench? }   ← the float's half
+├── attachWcChat             strip · transcript · queue · composer · stop ·
+│                            selection · model pill    (every float)
+└── workbench?(boot, chat)   VFS · terminal · monitor · sprinkles ·
+                             permissions · export · sudo · stats  (leader only)
+```
+
+- **`connect` is a callback, not a value.** A leader's `OffscreenClient` is
+  constructed FROM this shell's callback bag (`createWcLiveCallbacks(boot.wiring)`),
+  so the frame has to exist before the client does. A follower could pass its
+  client straight in; making both go through the same door is what keeps one
+  mount path honest rather than one-and-a-half.
+- **`WcChatHost` is the seam.** Four verbs a client protocol cannot carry —
+  `sendSprinkleLick`, `sendToolUiAction`, `deleteQueuedMessage`,
+  `emitAgentError` — plus the transport facts a float answers differently:
+  the agent event stream, whether it has records (`getRecord`), whether it
+  narrows what a send may address (`addressableUnitId`), whether it speaks
+  replies, owns the model pill, or renders tool-UI cards read-only. A
+  follower's host says all of that out loud in one object
+  (`createFollowerChatHost`) instead of scattering null checks through code
+  both floats run. Its `deleteQueuedMessage` REJECTS rather than resolving: a
+  follower's queue is the leader's, the tray has no verb for it, and a silent
+  success would leave the pile out of step with the backend.
+- **What is left of the three mounts are three CONNECTORS.**
+  `bootLeaderFloat` (prelude → kernel spawn → transport → workbench),
+  `bootExtensionFloat` (offscreen client → transport → workbench) and
+  `bootFollowerFloat` (prelude → tray → transport, no workbench). Each is a
+  prelude and a `mountWcShell` call; none of them wires a controller, a strip,
+  a composer or a selection any more.
+- **The one carve-out is a unit with no summary.** A biscotto seat is pinned
+  to one thread and never sent `scoops.list`, so `boot.selectScoop` — which
+  takes a summary — cannot be used for it. `boot.watchUnit(id)` renders that
+  transcript with no chrome change, and the composer stays writable, because
+  the control on a guest's message is the leader-side review gate.
+- **`currentUnits()` joined the protocol.** The strip repaints on paths that
+  cannot await — a tab click re-orders the same units around the new
+  selection, and a leader's `awaitingInput` moves with no transport event at
+  all — so the synchronous roster read is written down rather than duck-typed.
+  Both adapters already answered it.
 
 ## Sequencing and scope
 
@@ -520,20 +566,15 @@ This lands in two steps:
    `rootForSelection` / `isReadOnlyRole` survive as thin delegations, so no
    caller moves and no export disappears. `orderByOwner` and `rootOfSummary`
    are gone — they were private, and the shared implementation IS them.
-2. **A follow-up (#2382)** — the mount cutover, landing as four PRs. **PR A
-   (this one)** puts the composer, stop and the model write on the protocol:
-   `setModel` joins it, and one `createWorkUnitAgentHandle` replaces the two
-   `AgentHandle`s. **PR B** moves the transcript and selection onto
-   `snapshot`/`subscribe`. **PR C** makes `summary.model` the only per-unit
-   model read. **PR D** collapses the three mounts. In full: the transcript, the queued pile, the
-   composer, selection (`selectScoop` → `client.snapshot`) and the model pill
-   move onto the client too, and `mountWcUiLive` / `mountWcUiFollower` /
-   `mountWcUiExtension` collapse onto one mount path that takes a
-   `WorkUnitClient`, which is where the transcript, queued pile, composer
-   availability and model pill stop having two wirings. That is a large,
-   behaviour-visible change to `attachWcClient` (VFS, terminal, monitor,
-   sprinkles and permissions are all bound to `OffscreenClient` inside it) and
-   does not belong in the same PR as the protocol it consumes.
+2. **The mount cutover (#2382)**, landed as five PRs. **PR A** put the
+   composer, stop and the model write on the protocol: `setModel` joined it,
+   and one `createWorkUnitAgentHandle` replaced the two `AgentHandle`s.
+   **PR B** moved the transcript and selection onto `snapshot`/`subscribe`.
+   **PR C** made `summary.model` the only per-unit model read. **PR D1** put
+   the leader-capable float's own follower role on the client. **PR D2a**
+   re-typed the shell's selection surface onto `WorkUnitSummary`, and
+   **PR D2b** collapsed the three mounts onto `mountWcShell` +
+   `attachWcChat` + `attachWcWorkbench`.
 
 The RFC exit criteria are therefore met across the pair: step 1 gives leader
 and follower one protocol and one renderer for the strip and the snapshot;

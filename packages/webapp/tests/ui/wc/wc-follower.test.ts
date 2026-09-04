@@ -93,7 +93,15 @@ function setCherryLocation(ancestorOrigin: string): void {
   });
 }
 
-describe('mountWcUiFollower', () => {
+/**
+ * A boot logger the shell actually calls. The shared mount logs one line when
+ * a float is up (#2382 D2b), so a stub with only `stage` no longer stands in.
+ */
+function bootLog(): never {
+  return { debug: () => {}, error: () => {}, info: () => {}, warn: () => {} } as never;
+}
+
+describe('bootFollowerFloat', () => {
   // Warm the module graph ONCE, outside any test's budget. Every case here
   // re-imports `wc-follower.js` after `vi.resetModules()` (deliberate — each
   // needs a fresh instance), but `resetModules` only drops evaluated modules,
@@ -113,9 +121,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('starts the follower tray and NEVER spawns the kernel worker', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     expect(startFollowerSpy).toHaveBeenCalledTimes(1);
     expect(spawnSpy).not.toHaveBeenCalled();
     // The follower tray was handed the page BrowserAPI + a non-cherry runtime tag.
@@ -143,9 +151,9 @@ describe('mountWcUiFollower', () => {
       lastError: null,
     };
     setFollowerTrayRuntimeStatus(inactive);
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     const floatbar = app.querySelector('slicc-floatbar') as HTMLElement;
     expect(floatbar).toBeTruthy();
@@ -160,11 +168,11 @@ describe('mountWcUiFollower', () => {
 
   // Must run BEFORE the "Disconnect from leader" test below: that test's
   // switch-out mutates window location/localStorage so a later non-cherry
-  // mount can't resolve its join URL (it falls back to mountWcUiLive).
+  // mount can't resolve its join URL (it falls back to bootLeaderFloat).
   it('wires the composer add-menu so a staged attachment forwards to the leader on submit', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     // Simulate the WebRTC channel connecting. The composer's handle rides the
     // client protocol now (#2382), so the observable is the SYNC MANAGER's
@@ -233,12 +241,12 @@ describe('mountWcUiFollower', () => {
   });
 
   it('arms push-to-talk on a real-tab follower (non-ui-only) so voice can activate', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     // Non-cherry follower → not ui-only → a real tab where getUserMedia works.
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
-    // The follower reuses the WC shell WITHOUT attachWcClient — which is where
+    // The follower reuses the WC shell WITHOUT attachWcWorkbench — which is where
     // the live/leader mount sets `ptt`. `<slicc-composer>` gates the entire
     // hold-to-dictate gesture on this attribute, so without it the mic never
     // activates. A real-tab follower CAN capture, so it gets PTT + camera.
@@ -250,9 +258,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('loads the dip + sprinkle chrome stylesheets (leader-only paths the follower skips)', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     // Without these the follower's dips render with no card background and its
     // synced sprinkles lose their chrome — both are lazy legacy stylesheets the
     // leader loads in `wc-live` / `wireWcSprinkles`, which the follower doesn't run.
@@ -263,9 +271,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('hydrates inline dips (shtml) in the follower so the welcome/onboarding nudge renders', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
     // The leader's snapshot carries an assistant message with an inline dip
@@ -289,9 +297,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('glowers at a failed tool result and scrutinizes what the user types', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
       glower(): void;
@@ -331,9 +339,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('renders a leader-broadcast tool_ui approval card as a static "waiting on the leader" placeholder, not live buttons', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     // Simulate the WebRTC channel connecting: the tray installs the real
     // follower-sync agent, which relays the leader's `agent_event` (including
@@ -386,9 +394,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('replaces the inert Files/Terminal/Memory/Monitor panels with a placeholder (no local VFS/shell/kernel)', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     // The file tree is never wired in follower mode — it's hidden…
     const fileTree = app.querySelector('slicc-file-tree') as HTMLElement | null;
@@ -413,9 +421,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('disables the composer with a connecting placeholder until the leader connects', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
       connection: string;
@@ -450,9 +458,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('aborts the leader’s turn from the follower’s own Stop button (#2382)', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const opts = startFollowerSpy.mock.calls[0]![0];
     const stop = vi.fn(() => true);
@@ -485,9 +493,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('does not treat an empty activeScoopJid as an addressable unit', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const opts = startFollowerSpy.mock.calls[0]![0];
 
@@ -519,9 +527,9 @@ describe('mountWcUiFollower', () => {
   it('renders a re-selected unit ONCE, from the fresh snapshot (#2382 PR B)', async () => {
     const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
     const loadMessages = vi.spyOn(WcChatController.prototype, 'loadMessages');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
       selectScoop: vi.fn(),
@@ -555,14 +563,112 @@ describe('mountWcUiFollower', () => {
     loadMessages.mockRestore();
   });
 
+  it('does not re-select the shown unit on every roster push (#2382 D2b)', async () => {
+    // A leader broadcasts `scoops.list` on a 5s interval and every frame
+    // re-asserts the unit this follower is on. Selecting it again would ask
+    // for a snapshot — and the leader's `handleScoopSelection` has no
+    // same-jid short-circuit, so it replays the whole transcript and the
+    // watcher re-renders it: dips disposed and rehydrated, in-thread form
+    // state wiped, every five seconds.
+    const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
+    const loadMessages = vi.spyOn(WcChatController.prototype, 'loadMessages');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    // A real channel: without it `snapshot()` rejects into the adapter's
+    // `.catch` and this test would pass no matter what the shell did.
+    const selectScoop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop,
+      sendMessage: vi.fn(),
+      stop: vi.fn(),
+    };
+    const roster = [
+      { assistantLabel: 'sliccy', folder: 'cone', jid: 'cone_a', name: 'a', parentId: null },
+    ];
+
+    // First roster of the session: nothing is selected yet, so this one DOES
+    // select — that is how a snapshot-only join gets its unit.
+    opts.onScoopsList?.(roster as never, 'cone_a');
+    expect(selectScoop).toHaveBeenCalledTimes(1);
+    expect(selectScoop).toHaveBeenCalledWith('cone_a');
+    opts.onSnapshot?.([{ id: 'a1', role: 'user', content: 'first' }] as never, 'cone_a');
+    loadMessages.mockClear();
+    selectScoop.mockClear();
+
+    // …and every re-assert after it is silent on the wire and on screen. (A
+    // snapshot the leader PUSHES is a different thing and still renders; what
+    // must not happen is this follower asking for one it already has.)
+    opts.onScoopsList?.(roster as never, 'cone_a');
+    opts.onScoopsList?.(roster as never, 'cone_a');
+    expect(selectScoop).not.toHaveBeenCalled();
+    expect(loadMessages).not.toHaveBeenCalled();
+    loadMessages.mockRestore();
+  });
+
+  it('keeps showing a guest thread the roster never describes (#2382 D2b)', async () => {
+    // A biscotto seat is pinned to one thread and deliberately never sent
+    // `scoops.list`, so there is no summary to select. Its transcript still
+    // renders, and the composer stays writable — the control on a guest's
+    // message is the leader-side review gate, not this chrome.
+    const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
+    const loadMessages = vi.spyOn(WcChatController.prototype, 'loadMessages');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const selectScoop = vi.fn();
+    const stop = vi.fn();
+    (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
+      selectScoop,
+      sendMessage: vi.fn(),
+      stop,
+    };
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & { scoops: unknown[] };
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement & { model?: string };
+
+    // Nothing is addressable before the leader has named a unit, so Stop is a
+    // no-op: aborting on a guess would kill a turn this seat cannot see.
+    inputCard.dispatchEvent(new CustomEvent('stop'));
+    expect(stop).not.toHaveBeenCalled();
+
+    opts.onConnectionChange?.(true);
+    opts.onSnapshot?.([{ id: 'g1', role: 'assistant', content: 'hello guest' }] as never, 'seat_1');
+
+    expect(loadMessages.mock.calls.at(-1)?.[0]).toEqual([
+      { id: 'g1', role: 'assistant', content: 'hello guest' },
+    ]);
+    // Writable: the control on a guest's message is the leader-side review
+    // gate, not this chrome.
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+    // No roster was ever sent, so there are no tabs to draw…
+    expect(switcher.scoops).toEqual([]);
+    // …no `scoops.select` on the wire (the leader denies it for a guest, and
+    // asking would be a guest widening its own read access)…
+    expect(selectScoop).not.toHaveBeenCalled();
+    // …no model pill written from THIS page's catalog: the follower's pill is
+    // the leader's `models.list`, which a guest never receives, so what is on
+    // screen is still the frame's own seed (`buildWcShellFrame`), untouched.
+    expect(meta.getAttribute('model')).toBe('Preview');
+    // …and no per-unit chrome: `applyThreadContext` is what would stamp
+    // `cone:<folder>` / `scoop:<name>` and a unit accent, and it never ran for
+    // a unit with no summary — the thread keeps the frame's seeded defaults.
+    const thread = app.querySelector('slicc-chat-thread')!;
+    expect(thread.getAttribute('context')).toBe('cone');
+    expect(thread.getAttribute('accent')).toBe('var(--waffle)');
+    loadMessages.mockRestore();
+  });
+
   it('repaints the model pill for the unit a tab click shows (#2382 PR C)', async () => {
     // The e2e "drives one cone's model" spec never reads the FOLLOWER pill, so
     // this is the mounted-follower guard for it: the leader answers a
     // selection with a SNAPSHOT and no `model.state`, so the click is the only
     // signal the pill gets.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     (startFollowerSpy.mock.results[0]!.value as { currentSync: unknown }).currentSync = {
       selectScoop: vi.fn(),
@@ -623,9 +729,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('keeps the composer shut after a reconnect until the NEW session names a unit', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const opts = startFollowerSpy.mock.calls[0]![0];
 
@@ -649,9 +755,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('opens the composer off the first scoops.list when no snapshot arrived yet', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const opts = startFollowerSpy.mock.calls[0]![0];
 
@@ -678,9 +784,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('keeps model controls hidden before the catalog and for a legacy leader connection', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const meta = app.querySelector('slicc-composer-meta') as HTMLElement;
     const opts = startFollowerSpy.mock.calls[0]![0];
 
@@ -699,9 +805,9 @@ describe('mountWcUiFollower', () => {
       (_opts: StartPageFollowerTrayOptions) =>
         ({ stop: vi.fn(), currentSync: { selectModel, setThinkingLevel } }) as never
     );
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const meta = app.querySelector('slicc-composer-meta') as HTMLElement & {
       model: string;
       models: Array<{ id: string; name: string; provider: string }>;
@@ -765,9 +871,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('populates the nav switcher when the leader broadcasts a scoops.list', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
     const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
@@ -812,9 +918,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('preserves its viewed scoop across reconnect and falls back if it disappears', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     const switcher = app.querySelector('slicc-agent-tabs')!;
     opts.onScoopsList?.(
@@ -842,9 +948,9 @@ describe('mountWcUiFollower', () => {
     // rest, and the local click handler previously only moved `active` — so the
     // strip kept showing the previously selected cone's scoops first until the
     // leader happened to push a fresh roster.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     const switcher = app.querySelector('slicc-agent-tabs')! as HTMLElement & {
       scoops: Array<{ key: string }>;
@@ -870,9 +976,9 @@ describe('mountWcUiFollower', () => {
   it('unmounts the composer when the follower views a scoop, and restores it on the cone (#2312)', async () => {
     // Same rule, same descriptor role as the leader: users never talk to a
     // scoop, on either side of the tray.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     const switcher = app.querySelector('slicc-agent-tabs')!;
     const composer = app.querySelector('slicc-composer')!;
@@ -909,9 +1015,9 @@ describe('mountWcUiFollower', () => {
     const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
     initFeatureFlags('follower', { 'multiple-cones': 'off' });
     try {
-      const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+      const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
       const app = document.getElementById('app')!;
-      await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+      await bootFollowerFloat(app, bootLog(), 'follower');
       const opts = startFollowerSpy.mock.calls[0]![0];
       const switcher = app.querySelector('slicc-agent-tabs')!;
       const composer = app.querySelector('slicc-composer')!;
@@ -937,9 +1043,9 @@ describe('mountWcUiFollower', () => {
     // The connection state must never outrank the read-only rule: a
     // reconnect while a scoop is viewed used to be the one place that would
     // re-enable the input.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
     const switcher = app.querySelector('slicc-agent-tabs')!;
     const composer = app.querySelector('slicc-composer')!;
@@ -964,9 +1070,9 @@ describe('mountWcUiFollower', () => {
     const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
     const setProcessing = vi.spyOn(WcChatController.prototype, 'setProcessing');
     try {
-      const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+      const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
       const app = document.getElementById('app')!;
-      await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+      await bootFollowerFloat(app, bootLog(), 'follower');
       const opts = startFollowerSpy.mock.calls[0]![0];
 
       opts.onSnapshot([], 'cone-jid');
@@ -987,9 +1093,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('shows a terminal "reload to retry" state when the tray gives up', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
     const opts = startFollowerSpy.mock.calls[0]![0];
     opts.onGaveUp?.(new Error('bad join url'));
@@ -1000,9 +1106,9 @@ describe('mountWcUiFollower', () => {
   });
 
   it('the avatar-menu "Disconnect from leader" action dispatches slicc:tray-leave', async () => {
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     const leaveSpy = vi.fn();
     window.addEventListener('slicc:tray-leave', leaveSpy);
@@ -1043,9 +1149,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     expect(startFollowerSpy).toHaveBeenCalled();
     expect(spawnSpy).not.toHaveBeenCalled();
     // runtime tag is the cherry tag
@@ -1070,9 +1176,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     const opts = startFollowerSpy.mock.calls[0]![0];
     const meta = app.querySelector('slicc-composer-meta') as HTMLElement;
 
@@ -1123,9 +1229,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
     // Connect → 'slicc.follower.ready'.
@@ -1150,9 +1256,9 @@ describe('mountWcUiFollower', () => {
     vi.resetModules();
     // The extension side panel's ancestor is the extension origin.
     setCherryLocation('chrome-extension://abcdef');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     // The cone-error card's "Open settings" CTA bubbles this on the thread. In
     // the leader `wireWcNav` opens the settings dialog; the follower can't, so
@@ -1171,9 +1277,9 @@ describe('mountWcUiFollower', () => {
     mockCherryPrelude(emit);
     vi.resetModules();
     setCherryLocation('chrome-extension://abcdef');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const avatarMenu = app.querySelector('slicc-avatar-menu') as HTMLElement & {
       items?: Array<{ id?: string; label?: string }>;
@@ -1192,9 +1298,9 @@ describe('mountWcUiFollower', () => {
     mockCherryPrelude(emit);
     vi.resetModules();
     setCherryLocation('https://third-party.example');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const avatarMenu = app.querySelector('slicc-avatar-menu') as HTMLElement & {
       items?: Array<{ id?: string }>;
@@ -1209,9 +1315,9 @@ describe('mountWcUiFollower', () => {
     vi.resetModules();
     // A third-party host page (not the extension origin) — no leader tab to open.
     setCherryLocation('https://third-party.example');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const thread = app.querySelector('slicc-chat-thread')!;
     thread.dispatchEvent(
@@ -1228,9 +1334,9 @@ describe('mountWcUiFollower', () => {
     mockCherryPrelude(emit);
     vi.resetModules();
     setCherryLocation('chrome-extension://abcdef');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
     // The leader's snapshot carries the onboarding connect-llm welcome dip (an
@@ -1268,9 +1374,9 @@ describe('mountWcUiFollower', () => {
     mockCherryPrelude(emit);
     vi.resetModules();
     setCherryLocation('https://third-party.example');
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
     opts.onSnapshot?.(
@@ -1303,9 +1409,9 @@ describe('mountWcUiFollower', () => {
       writable: true,
     });
 
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     expect(startFollowerSpy).toHaveBeenCalledTimes(1);
     const opts = startFollowerSpy.mock.calls[0]![0];
@@ -1360,9 +1466,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
     expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
@@ -1399,9 +1505,9 @@ describe('mountWcUiFollower', () => {
     // across floats, so an embed is not an exception.
     const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
     initFeatureFlags('cherry', { 'panel-layouts': 'on' });
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
       getSurfaceIds(): string[];
@@ -1453,9 +1559,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
       getSurfaceIds(): string[];
@@ -1503,9 +1609,9 @@ describe('mountWcUiFollower', () => {
     // across floats, so an embed is not an exception.
     const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
     initFeatureFlags('cherry', { 'panel-layouts': 'on' });
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     // Panelized: a `<slicc-layout>` replaced the dock-tree shell.
     const layout = app.querySelector('slicc-layout') as HTMLElement & {
@@ -1544,9 +1650,9 @@ describe('mountWcUiFollower', () => {
     }));
     vi.resetModules();
     // No `initFeatureFlags` call: the flag falls back to its bundled `off`.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     expect(app.querySelector('slicc-layout')).toBeNull();
     expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
@@ -1577,9 +1683,9 @@ describe('mountWcUiFollower', () => {
     vi.resetModules();
     // Deliberately NO initFeatureFlags('cherry', { 'panel-layouts': 'on' }) call —
     // the flag must come from the host-pushed `flags`, not the test harness.
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     const layout = app.querySelector('slicc-layout') as HTMLElement & {
       getLayout(): { id: string };
@@ -1609,9 +1715,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     expect(app.querySelector('slicc-layout')).toBeNull();
     expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
@@ -1641,9 +1747,9 @@ describe('mountWcUiFollower', () => {
     // across floats, so an embed is not an exception.
     const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
     initFeatureFlags('cherry', { 'panel-layouts': 'on' });
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    await bootFollowerFloat(app, bootLog(), 'cherry');
 
     // Not panelized — the classic shell stands.
     expect(app.querySelector('slicc-layout')).toBeNull();
@@ -1666,11 +1772,9 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await expect(
-      mountWcUiFollower(app, { stage: () => {} } as never, 'cherry')
-    ).resolves.not.toThrow();
+    await expect(bootFollowerFloat(app, bootLog(), 'cherry')).resolves.not.toThrow();
     const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
       getSurfaceIds(): string[];
     };
@@ -1710,9 +1814,9 @@ describe('mountWcUiFollower', () => {
       writable: true,
     });
 
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    await bootFollowerFloat(app, bootLog(), 'follower');
 
     const opts = startFollowerSpy.mock.calls[0]![0];
     // No `?bridge=`/`?bridgeToken=` on this URL — no local Chrome to enumerate.
@@ -1821,9 +1925,9 @@ async function mountCherryWithExportCapture(): Promise<{
   );
 
   vi.resetModules();
-  const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+  const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
   const app = document.getElementById('app')!;
-  await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+  await bootFollowerFloat(app, bootLog(), 'cherry');
 
   if (!exportCapture.fn) throw new Error('onExportRequest was not wired');
   return { onExportRequest: exportCapture.fn, requestTranscriptExport };

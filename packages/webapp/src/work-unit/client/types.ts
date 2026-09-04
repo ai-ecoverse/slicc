@@ -210,6 +210,22 @@ export interface WorkUnitClient {
   /** Every unit this client can present, in protocol order. */
   list(): Promise<readonly WorkUnitSummary[]>;
   /**
+   * The roster as it stands, synchronously (#2382 D2b).
+   *
+   * {@link list} is the same question in the asynchronous form every caller
+   * that can await should use. This one exists because the tab strip repaints
+   * on paths that CANNOT await and that no push precedes: a tab click
+   * re-orders the same units around the new selection, and the leader's
+   * `awaitingInput` moves with no transport event at all. Replaying the last
+   * push there would render the previous instant.
+   *
+   * Both adapters already answered it before it was on the protocol — the
+   * leader projects its records on demand, a follower returns the last roster
+   * its leader sent — so this is a promise the transports were keeping
+   * informally, written down.
+   */
+  currentUnits(): readonly WorkUnitSummary[];
+  /**
    * Roster pushes: registration, drop, status, phase, fill and model changes.
    * Fires ONCE immediately with the roster as it stands, so a subscriber never
    * has to render an empty strip while waiting for the first change — the

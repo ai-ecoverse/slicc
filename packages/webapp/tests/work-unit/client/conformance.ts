@@ -62,6 +62,48 @@ function rosterCases(make: () => ClientHarness): void {
     expect(units.find((unit) => unit.id === 'scoop_1')?.parentId).toBe('cone_2');
   });
 
+  it('answers the roster synchronously, with the same units `list` resolves', async () => {
+    // The strip repaints on paths that cannot await — a tab click re-orders
+    // the same units around the new selection — so `currentUnits()` is on the
+    // protocol (#2382 D2b) and both transports have to answer it with what
+    // they would answer `list()` with. WHOLE summaries, not ids: an adapter
+    // that answered `{ id }` stubs, or a remembered id list, would pass an
+    // id-only comparison and render a strip with no roles, models or states.
+    const harness = make();
+    harness.setRoster(ROSTER);
+    expect(harness.client.currentUnits()).toEqual(await harness.client.list());
+    const cone = harness.client.currentUnits().find((unit) => unit.id === 'cone_1');
+    expect(cone).toMatchObject({
+      assistantLabel: 'sliccy',
+      folder: 'cone',
+      model: { id: 'claude-opus-4-6', provider: 'anthropic' },
+      name: 'sliccy',
+      parentId: null,
+      role: 'primary',
+      state: 'idle',
+    });
+    expect(harness.client.currentUnits().find((unit) => unit.id === 'scoop_1')).toMatchObject({
+      parentId: 'cone_2',
+      role: 'child',
+      state: 'working',
+    });
+
+    // A change with NO await in between: the strip reads this on a click and
+    // on an `awaitingInput` move, neither of which has a transport event
+    // behind it, so a snapshot taken at `list()` time would render the
+    // previous instant.
+    harness.emitStatus('cone_1', 'processing' as never);
+    expect(harness.client.currentUnits().find((unit) => unit.id === 'cone_1')?.state).toBe(
+      'working'
+    );
+    harness.setRoster([ROSTER[0] as FakeUnit]);
+    expect(harness.client.currentUnits().map((unit) => unit.id)).toEqual(['cone_1']);
+
+    // …and before anything has arrived it is empty, never undefined: a strip
+    // with no roster yet renders no tabs, it does not fail to render.
+    expect(make().client.currentUnits()).toEqual([]);
+  });
+
   it('orders the strip cones-first, with the selected cone’s scoops next', async () => {
     const harness = make();
     harness.setRoster(ROSTER, 'cone_2');

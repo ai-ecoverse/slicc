@@ -53,7 +53,8 @@ vi.mock('../../../src/kernel/writable-vfs-client.js', () => ({
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
-import { attachWcClient, prepareWcShell } from '../../../src/ui/wc/wc-live.js';
+import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
+import { attachLeaderShell } from './leader-chat-host.js';
 
 function cone(): RegisteredScoop {
   return {
@@ -117,7 +118,7 @@ describe('freezer boot deep link vs corrupt index', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
-    attachWcClient(boot, makeFakeClient(), log);
+    attachLeaderShell(boot, makeFakeClient(), log);
     boot.wiring.notifyReady?.();
 
     await vi.waitFor(() => {
@@ -139,7 +140,7 @@ describe('freezer boot deep link vs corrupt index', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
-    attachWcClient(boot, makeFakeClient(), log);
+    attachLeaderShell(boot, makeFakeClient(), log);
     boot.wiring.notifyReady?.();
 
     // The dead-end guard lands the user on the cone instead of leaving the

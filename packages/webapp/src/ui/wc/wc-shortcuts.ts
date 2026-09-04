@@ -1740,7 +1740,7 @@ function createChord(doc: Document): {
 }
 
 /**
- * The live installation per document. `mountWcShell` is idempotent — a
+ * The live installation per document. `buildWcShellFrame` is idempotent — a
  * remount replaces the shell in place — and the listeners here live on the
  * DOCUMENT, not on anything `root.replaceChildren()` tears down. Without this,
  * a second mount would leave the first wiring installed and running FIRST,

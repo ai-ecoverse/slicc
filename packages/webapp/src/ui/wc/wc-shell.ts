@@ -6,7 +6,7 @@
  * full-width nav above the dock-tree (permanently full-span — chat and every
  * tool panel are independent tree leaves) with the dock rail.
  *
- * `mountWcShell` builds the frame and hands back element refs; the two boot
+ * `buildWcShellFrame` builds the frame and hands back element refs; the two boot
  * modes wire them differently — `mountWcUiPreview` (here) renders the
  * design-time chat fixture with a local composer echo, `wc-live.ts` binds
  * the kernel worker for real conversations.
@@ -369,7 +369,7 @@ function wireDockToWorkbench(dock: HTMLElement, overlaySurfaces: ReadonlySet<str
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     // Nothing to do here for a non-overlay id — `wireWcSprinkles` handles
     // it. Read `overlaySurfaces` at click time, not mount time — the overlay
-    // wiring runs after `mountWcShell`. An overlay id never reaches the
+    // wiring runs after `buildWcShellFrame`. An overlay id never reaches the
     // dock-tree, so there's nothing to suppress beyond not acting on it.
     if (!id || !overlaySurfaces.has(id)) return;
   });
@@ -402,7 +402,7 @@ function wireDockExternalDragToTree(dock: HTMLElement, dockTree: WcShellRefs['do
 }
 
 /** Build the full WC app frame into `root` and return the wiring refs. */
-export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShellRefs {
+export function buildWcShellFrame(root: HTMLElement, options: WcShellOptions): WcShellRefs {
   ensureGlobalTokens(document);
   ensureShellStyles(document);
   ensureSystemTheme();
@@ -517,7 +517,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   // Base64 payload previews: a pasted blob — a screenshot as a `data:` URL,
   // the output of `base64 < report.pdf` — collapses to a chip that opens it in
   // Quick Look. Wired HERE, at the mount, rather than in `wc-live`'s
-  // `attachWcClient`, because it needs no VFS and this is the one seam every
+  // `attachWcWorkbench`, because it needs no VFS and this is the one seam every
   // surface that renders a transcript passes through: the live float, the
   // extension popout, and the three that deliberately never attach a client
   // (Cherry, the tray follower, the extension side panel — see
@@ -624,7 +624,7 @@ export function submittedSteer(event: Event): boolean {
 
 /** Mount the design-time preview: the WC shell over the chat fixture. */
 export function mountWcUiPreview(root: HTMLElement): void {
-  const refs = mountWcShell(root, {
+  const refs = buildWcShellFrame(root, {
     messages: createChatFixture(),
     scoops: [
       {

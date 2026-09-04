@@ -2,11 +2,11 @@
  * Main entry point for the SLICC UI — the `@slicc/webcomponents` shell.
  *
  * Boot paths by float:
- * - standalone / electron-overlay / hosted-leader → `mountWcUiLive`
+ * - standalone / electron-overlay / hosted-leader → `bootLeaderFloat`
  *   (kernel worker on the page, tray sync, panel RPC)
- * - follower / cherry → `mountWcUiFollower`
+ * - follower / cherry → `bootFollowerFloat`
  *   (no kernel, tray follower sync, no OAuth bootstrap)
- * - extension side panel / detached popout → `mountWcUiExtension`
+ * - extension side panel / detached popout → `bootExtensionFloat`
  *   (OffscreenClient to the offscreen agent engine)
  * - `?connect=1` → the slim provider-login surface for the cloud dashboard
  * - `?ui-fixture` → the design-time chat fixture (no kernel)
@@ -147,8 +147,8 @@ async function main(): Promise<void> {
   // channel) nor the kernel worker. Dispatch here, before the OAuth wait, so
   // the follower paints + connects without that dead time.
   if (!isExtension && (runtimeMode === 'follower' || runtimeMode === 'cherry')) {
-    const { mountWcUiFollower } = await import('./wc/wc-follower.js');
-    return mountWcUiFollower(app, log, runtimeMode);
+    const { bootFollowerFloat } = await import('./wc/wc-follower.js');
+    return bootFollowerFloat(app, log, runtimeMode);
   }
 
   // Provider auto-discovery + defaults before any OAuth probe. Both must
@@ -177,18 +177,18 @@ async function main(): Promise<void> {
   }
 
   if (isExtension) {
-    const { mountWcUiExtension } = await import('./wc/wc-extension.js');
-    return mountWcUiExtension(app, log, runtimeMode === 'extension-detached');
+    const { bootExtensionFloat } = await import('./wc/wc-extension.js');
+    return bootExtensionFloat(app, log, runtimeMode === 'extension-detached');
   }
 
   // Wire the page-side delegated-fetch relay BEFORE the kernel worker boots
-  // (inside mountWcUiLive) so the first LLM fetch can be served.
+  // (inside bootLeaderFloat) so the first LLM fetch can be served.
   if (extensionDelegate && extLeader) {
     installExtensionFetchDelegate(extLeader.extensionId);
   }
 
-  const { mountWcUiLive } = await import('./wc/wc-live.js');
-  return mountWcUiLive(app, log, runtimeMode);
+  const { bootLeaderFloat } = await import('./wc/wc-live.js');
+  return bootLeaderFloat(app, log, runtimeMode);
 }
 
 /**

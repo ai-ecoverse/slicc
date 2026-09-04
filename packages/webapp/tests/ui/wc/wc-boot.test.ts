@@ -59,8 +59,9 @@ import { FEATURE_FLAG_STORAGE_KEY, initFeatureFlags } from '../../../src/core/fe
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient, SessionStats } from '../../../src/ui/offscreen-client.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
-import { attachWcClient, prepareWcShell } from '../../../src/ui/wc/wc-live.js';
+import { prepareWcShell } from '../../../src/ui/wc/wc-live.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
+import { attachLeaderShell } from './leader-chat-host.js';
 
 function cone(): RegisteredScoop {
   return {
@@ -138,7 +139,7 @@ function makeFakeClient() {
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-describe('prepareWcShell + attachWcClient', () => {
+describe('prepareWcShell + attachLeaderShell', () => {
   it.each([
     ['off', false],
     ['on', true],
@@ -150,7 +151,7 @@ describe('prepareWcShell + attachWcClient', () => {
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
 
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     expect(boot.refs.dockTree.tilesMovable).toBe(expected);
     initFeatureFlags('standalone');
@@ -161,7 +162,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     expect(root.querySelector('slicc-shell')).toBeTruthy();
@@ -188,7 +189,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     boot.refs.inputCard.setAttribute('disabled', '');
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
@@ -206,7 +207,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
     boot.refs.switcher.setAttribute('attention', 'scoop-elsewhere');
 
@@ -221,7 +222,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     boot.refs.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true }));
@@ -239,7 +240,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     boot.refs.composerMeta.dispatchEvent(
@@ -253,7 +254,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     fake.emit({ type: 'message_start', messageId: 'm1' });
     fake.emit({ type: 'content_delta', messageId: 'm1', text: 'streaming works' });
@@ -268,7 +269,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     boot.wiring.notifyReady?.();
     await vi.waitFor(() => {
@@ -300,7 +301,7 @@ describe('prepareWcShell + attachWcClient', () => {
       scoops: [],
     } as unknown as SessionStats);
     boot.refs.floatbar.setAttribute('rate', '9.99');
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     boot.wiring.notifyReady?.();
     await vi.waitFor(() => {
@@ -336,7 +337,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     // Seed a visible conversation: the clear must empty it WITHOUT relying
     // on a history replay (the worker no-ops the reply for empty histories).
@@ -378,7 +379,7 @@ describe('prepareWcShell + attachWcClient', () => {
     fake.raw.clearAllMessages.mockImplementation(async () => {
       newSessionMocks.order.push('clear');
     });
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
 
     boot.refs.freezer.dispatchEvent(new CustomEvent(`new-chat-${action}`, { bubbles: true }));
 
@@ -401,7 +402,7 @@ describe('prepareWcShell + attachWcClient', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     const freezerNew = boot.refs.freezer.querySelector('slicc-freezer-new') as HTMLElement;
 
     boot.refs.freezer.dispatchEvent(new CustomEvent('new-chat-erase', { bubbles: true }));
@@ -494,7 +495,7 @@ describe('URL state sync (live boot)', () => {
       type: 'scoop',
     } as RegisteredScoop;
     fake.raw.getScoops.mockReturnValue([cone(), researcher]);
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     boot.selectScoop(recordToWorkUnitSummary(cone(), {}));
 
     // Back/forward: the URL now names the scoop context; the thread asks the
@@ -518,7 +519,7 @@ describe('URL state sync (live boot)', () => {
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
     const fake = makeFakeClient();
-    attachWcClient(boot, fake.client, log);
+    attachLeaderShell(boot, fake.client, log);
     expect(boot.wiring.pendingUrlContext).toBe('freezer:2026-06-11-old.md');
 
     // Kernel ready → the thaw routing consumes the pending context (the VFS

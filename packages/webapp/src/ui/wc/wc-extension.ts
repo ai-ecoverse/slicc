@@ -8,23 +8,36 @@
 
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
+import { createLeaderChatHost } from './wc-chat-host.js';
 import { wireWcDetached } from './wc-detached.js';
-import { floatLabelForKind } from './wc-float-label.js';
-import { installFloatbarStatus } from './wc-floatbar-online.js';
-import { attachWcClient, prepareWcShell } from './wc-live.js';
-import { createWcLiveCallbacks } from './wc-live-callbacks.js';
+import { attachWcWorkbench } from './wc-live.js';
+import { createWcLiveCallbacks, ensureWorkUnitClient } from './wc-live-callbacks.js';
+import { mountWcShell } from './wc-mount.js';
 
-export async function mountWcUiExtension(
+export async function bootExtensionFloat(
   app: HTMLElement,
   log: BootStageLogger,
   isDetached = false
 ): Promise<void> {
-  const floatKind = 'extension';
-  const boot = prepareWcShell(app, floatLabelForKind(floatKind));
-  installFloatbarStatus(boot.refs.floatbar, { floatKind });
-  const client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
-  // Shared attach wiring applies session stats (rate + scoped costs) in this float too.
-  attachWcClient(boot, client, log);
+  let client!: OffscreenClient;
+  // The same mount every float uses (#2382 D2b): this one's transport is an
+  // `OffscreenClient` over the default `chrome.runtime` port — the agent, the
+  // shell and the VFS all live in the offscreen document — and it opens the
+  // same workbench a spawned-kernel leader does.
+  await mountWcShell(app, log, {
+    floatKind: 'extension',
+    connect: (boot) => {
+      client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
+      const host = createLeaderChatHost(client);
+      return {
+        client: ensureWorkUnitClient(boot.wiring),
+        host,
+        workbench: (mounted, chat) => {
+          attachWcWorkbench(mounted, client, chat, host, log);
+        },
+      };
+    },
+  });
   // Detached-popout mutual exclusion: a detached tab claims the SW lock,
   // every other surface yields on the `detached-active` broadcast.
   wireWcDetached({ client, isDetachedSelf: isDetached });

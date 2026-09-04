@@ -3,10 +3,10 @@ import type { LickEvent } from '../../scoops/lick-manager.js';
 import { modelForUnit } from '../../work-unit/client/presentation.js';
 import type { WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
-import type { OffscreenClient } from '../offscreen-client.js';
 import type { AgentHandle } from '../types.js';
 import { createWorkUnitAgentHandle } from '../work-unit-client/agent-handle.js';
 import { WcChatController } from './wc-chat-controller.js';
+import type { WcChatHost } from './wc-chat-host.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { unitSlugFor } from './wc-unit-context.js';
 
@@ -15,31 +15,35 @@ export interface WelcomeInterceptHolder {
   intercept: ((event: LickEvent) => boolean) | null;
 }
 
-/** Controller + dip lifecycle over the live agent handle. */
+/**
+ * Controller + dip lifecycle over the client protocol (#2382 PR D2b).
+ *
+ * Transport-agnostic: everything it renders comes from `WorkUnitClient`, and
+ * the four things a client cannot do come from {@link WcChatHost}. Both
+ * floats build their controller here, so the queued pile, the dips, the
+ * tool-UI cards and the busy chrome cannot drift apart again.
+ */
 export function createWcController(
   refs: WcShellRefs,
-  client: OffscreenClient,
+  host: WcChatHost,
   workUnits: WorkUnitClient,
   getSelected: () => WorkUnitSummary | null,
   onIdle?: () => void,
   welcome?: WelcomeInterceptHolder
 ): { controller: WcChatController; agentHandle: AgentHandle } {
   const dipInstances = new Map<string, DipInstance[]>();
+  // Dips render as cards; their chrome is a lazy legacy stylesheet. Loaded
+  // here because any float that renders a transcript can receive one.
+  // PAGE THEMING is deliberately NOT here: the custom-theme overrides and the
+  // sprinkle theme broadcast belong to a float that owns its page, and
+  // applying them under a Cherry host would fight the theme that host pushed.
   void import('../legacy-styles.js')
     .then(({ loadDipStyles }) => loadDipStyles())
     .catch(() => undefined);
-  void import('../theme.js')
-    .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
-    .catch(() => undefined);
-  void import('../theme-engine.js')
-    .then(({ applyThemeOverrides }) => applyThemeOverrides())
-    .catch(() => undefined);
 
   // Send and stop ride the client protocol; the agent EVENT stream stays on
-  // the kernel handle, which is the transport that owns it (see
-  // `createWorkUnitAgentHandle`). One selection rule for both: the unit the
-  // panel says it is showing.
-  const kernelEvents = client.createAgentHandle();
+  // the transport that owns it — the kernel handle on a leader, the sync
+  // manager on a follower (see `createWorkUnitAgentHandle`).
   /**
    * The roster, kept fresh from the protocol's push. Held rather than fetched
    * because the telemetry context below is read synchronously, on a path that
@@ -54,9 +58,14 @@ export function createWcController(
   });
 
   const agentHandle = createWorkUnitAgentHandle(workUnits, {
-    getSelectedId: () => client.selectedScoopJid,
-    onError: (error) => client.emitAgentError(error),
-    onEvent: (listener) => kernelEvents.onEvent(listener),
+    // The unit the SHELL says it is showing. A follower narrows this: until
+    // its leader has named a unit for this session there is nothing to
+    // address, and a send would be dropped after the bubble was already
+    // rendered (see `WcChatHost.addressableUnitId`).
+    getSelectedId: () =>
+      host.addressableUnitId ? host.addressableUnitId() : (getSelected()?.id ?? null),
+    onError: (error) => host.emitAgentError(error),
+    onEvent: (listener) => host.onAgentEvent(listener),
   });
   agentHandle.onEvent((event) => {
     if (event.type !== 'tool_use_start' && event.type !== 'tool_result') return;
@@ -86,6 +95,7 @@ export function createWcController(
       }
     },
     onTurnComplete: (message) => {
+      if (!host.speaksReplies) return;
       void import('../../speech/voice-reply.js')
         .then(async ({ consumeVoiceSubmission, speakReplyMarkdown }) => {
           if (!consumeVoiceSubmission()) return;
@@ -127,11 +137,14 @@ export function createWcController(
       }
     },
     onMessageRendered: (message, els) => {
-      const host = els[0];
-      if (!host) return;
+      const messageHost = els[0];
+      if (!messageHost) return;
+      // Before hydration on purpose: a float that replaces a dip wants the
+      // replacement instead of the live one, not on top of it.
+      host.onMessageRendered?.(messageHost);
       dipInstances.set(
         message.id,
-        hydrateDips(host, (action, data) => {
+        hydrateDips(messageHost, (action, data) => {
           const event: LickEvent = {
             type: 'sprinkle',
             sprinkleName: 'inline',
@@ -139,7 +152,7 @@ export function createWcController(
             body: { action, data },
           };
           if (welcome?.intercept?.(event)) return;
-          client.sendSprinkleLick('inline', { action, data });
+          host.sendSprinkleLick('inline', { action, data });
         })
       );
     },
@@ -149,21 +162,22 @@ export function createWcController(
       refs.lickBackpressureNotice.toggleAttribute('hidden', notice === null);
     },
     onToolUiAction: (requestId, action, data) => {
-      client.sendToolUiAction(requestId, action, data);
+      host.sendToolUiAction(requestId, action, data);
     },
     onQueuedCancel: (messageId) => {
-      const jid = client.selectedScoopJid;
+      const jid = getSelected()?.id;
       if (!jid) return;
-      void client.deleteQueuedMessage(jid, messageId).catch(() => undefined);
+      void host.deleteQueuedMessage(jid, messageId).catch(() => undefined);
     },
+    ...(host.readOnlyToolUi ? { readOnlyToolUi: true as const } : {}),
   });
 
   refs.queuedStack.addEventListener('slicc-queued-remove', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (!id) return;
     controller.removeQueuedMessage(id);
-    const jid = client.selectedScoopJid;
-    if (jid) void client.deleteQueuedMessage(jid, id).catch(() => undefined);
+    const jid = getSelected()?.id;
+    if (jid) void host.deleteQueuedMessage(jid, id).catch(() => undefined);
   });
   return { controller, agentHandle };
 }

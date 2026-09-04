@@ -12,7 +12,7 @@ import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import type { RemoteTerminalView } from '../../kernel/remote-terminal-view.js';
-import { spawnKernelWorker } from '../../kernel/spawn.js';
+import { type SpawnedKernelHost, spawnKernelWorker } from '../../kernel/spawn.js';
 import { SessionStore as UiSessionStore } from '../../scoops/chat-session-store.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
@@ -32,7 +32,14 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import type { WcChatAttachment } from './wc-chat.js';
 import type { WcChatController } from './wc-chat-controller.js';
+import {
+  createLeaderChatHost,
+  DETACHED_CHAT_HOST,
+  type LeaderChatHost,
+  type WcChatHost,
+} from './wc-chat-host.js';
 import { wireConeActions } from './wc-cone-actions.js';
 import {
   createWcLiveCallbacks,
@@ -42,12 +49,13 @@ import {
   type WcLiveWiring,
 } from './wc-live-callbacks.js';
 import { wireWcComposer } from './wc-live-composer.js';
-import { createWcController, type WelcomeInterceptHolder } from './wc-live-controller.js';
+import type { WelcomeInterceptHolder } from './wc-live-controller.js';
 import { wireFreezerRail } from './wc-live-freezer.js';
 import { createWcMonitorDeps } from './wc-live-monitor-deps.js';
 import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
-import { mountWcShell, type WcShellRefs } from './wc-shell.js';
+import { mountWcShell } from './wc-mount.js';
+import { buildWcShellFrame, type WcShellRefs } from './wc-shell.js';
 import {
   defaultRootOf,
   isReadOnlyRole,
@@ -89,9 +97,28 @@ export interface WcShellBoot {
   refs: WcShellRefs;
   wiring: WcLiveWiring;
   setClient(client: OffscreenClient): void;
+  /**
+   * Install the transport the chat wiring routes through (#2382 D2b): the
+   * client it renders from, and the seam for what a client cannot do.
+   *
+   * Until then the shell holds {@link DETACHED_CHAT_HOST} and its own
+   * kernel-backed adapter — a selection still renders its chrome, and the
+   * four verbs that need a transport are dropped.
+   */
+  setChatTransport(client: WorkUnitClient, host: WcChatHost): void;
+  getChatHost(): WcChatHost;
   selectScoop(unit: WorkUnitSummary): void;
   getSelected(): WorkUnitSummary | null;
   clearSelection(): void;
+  /**
+   * Render `id`'s transcript WITHOUT claiming the roster describes it.
+   *
+   * `selectScoop` is the normal path and takes a summary. A biscotto seat has
+   * none — it is pinned to one thread and never sent `scoops.list`, which the
+   * protocol calls out (`WorkUnitSnapshot.summary` is optional) — so this is
+   * the transcript half of a selection with no chrome half.
+   */
+  watchUnit(id: string): void;
   getController(): WcChatController | null;
   setController(controller: WcChatController): void;
   /**
@@ -111,12 +138,6 @@ export interface WcShellBoot {
   onClientReady(fn: () => void): void;
 }
 
-/**
- * Phase A of the live boot, float-agnostic: mount the shell and build the
- * mutable wiring the kernel callbacks close over. The client arrives in
- * {@link attachWcClient} (phase B) — standalone spawns a kernel worker,
- * the extension popout connects to the offscreen engine.
- */
 /**
  * Decide what happens to the queued pile when the selection moves (#2354).
  *
@@ -202,22 +223,36 @@ function reconcileQueueForSwitch(args: {
  */
 function createUnitWatcher(
   getClient: () => WorkUnitClient,
-  getSelectedJid: () => string | null,
   load: (messages: readonly ChatMessage[], queuedIds?: readonly string[]) => void
-): (jid: string) => void {
+): { watch(jid: string): void; shownUnitId(): string | null } {
   let watch: Unsubscribe | null = null;
-  return (jid) => {
-    watch?.();
-    // No seed suppression here: a selection asks for its snapshot BEFORE
-    // re-pointing, and `subscribe` does not seed a listener that joins an
-    // in-flight fetch — so what arrives is the fresh replay, once.
-    watch = getClient().subscribe(jid, (event) => {
-      if (event.type !== 'snapshot') return;
-      // A replay that lands after the selection moved on describes the unit we
-      // left; the mount's old handler made the same check against `getSelected`.
-      if (getSelectedJid() !== jid) return;
-      load(event.snapshot.messages as unknown as ChatMessage[], event.snapshot.queuedIds);
-    });
+  /**
+   * The unit on screen. Not the same question as "what is selected": a
+   * biscotto seat has a transcript and no summary to select (#2382 D2b), and
+   * a replay that lands after the shown unit moved on describes the one we
+   * left.
+   */
+  let shown: string | null = null;
+  return {
+    shownUnitId: () => shown,
+    watch: (jid) => {
+      // Re-pointing at the unit we are already watching would tear down a live
+      // subscription and take a fresh SEED in its place — a second wholesale
+      // render of the same transcript. A follower re-asserts its shown unit on
+      // every roster push (every 5s), so this is load-bearing, not an
+      // optimisation.
+      if (shown === jid && watch) return;
+      watch?.();
+      shown = jid;
+      // No seed suppression here: a selection asks for its snapshot BEFORE
+      // re-pointing, and `subscribe` does not seed a listener that joins an
+      // in-flight fetch — so what arrives is the fresh replay, once.
+      watch = getClient().subscribe(jid, (event) => {
+        if (event.type !== 'snapshot') return;
+        if (shown !== jid) return;
+        load(event.snapshot.messages as unknown as ChatMessage[], event.snapshot.queuedIds);
+      });
+    },
   };
 }
 
@@ -246,25 +281,32 @@ export function workspaceForSelection(deps: {
   return ownerWorkspaceFor(client.getScoops(), record);
 }
 
-export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
-  const refs = mountWcShell(app, {
-    messages: [],
-    scoops: [],
-    floatLabel,
-    placeholder: 'Ask sliccy, or describe a change…',
-    // Live floats sync UI state with the URL: the thread owns `ctx`/`at`,
-    // the shell owns `ws` — each component manages its own params.
-    urlState: true,
-  });
-
-  let controller: WcChatController | null = null;
-  let client: OffscreenClient | null = null;
+/**
+ * The shell's SELECTION: what a click, a deep link or a transport frame does
+ * when a unit becomes the one on screen (#2382 D2b).
+ *
+ * Transport-agnostic on purpose — it reads the client protocol and routes the
+ * two things a protocol cannot do (cancelling a backend queue entry, reading
+ * a record's reasoning level) through {@link WcChatHost}. Both floats call it:
+ * a leader from its tab strip and its kernel callbacks, a follower from the
+ * same strip and from the frames its leader sends.
+ */
+function createSelection(deps: {
+  refs: WcShellRefs;
+  client(): WorkUnitClient;
+  host(): WcChatHost;
+  controller(): WcChatController | null;
+  workbench(): WorkbenchActivator | null;
+  wiring(): WcLiveWiring;
+  lickBackpressure: Map<string, LickBackpressureState>;
+  watchUnit(id: string): void;
+}): {
+  selectScoop(unit: WorkUnitSummary): void;
+  getSelected(): WorkUnitSummary | null;
+  clear(): void;
+} {
+  const { refs } = deps;
   let selected: WorkUnitSummary | null = null;
-  const lickBackpressure = new Map<string, LickBackpressureState>();
-  let clientReady = false;
-  let workbench: WorkbenchActivator | null = null;
-  const readyListeners = new Set<() => void>();
-
   /**
    * A cone's queued pile held while the user reads one of its scoops (#2312).
    * Selecting a read-only unit is not "dropping a prompt by navigating away"
@@ -278,44 +320,44 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
    */
   let stashedQueue: { jid: string; items: ChatMessage[] } | null = null;
 
-  /** Re-points the transcript subscription; see {@link createUnitWatcher}. */
-  const watchUnit = createUnitWatcher(
-    () => ensureWorkUnitClient(wiring),
-    () => selected?.id ?? null,
-    (messages, queuedIds) => controller?.loadMessages(messages, queuedIds)
-  );
-
   const selectScoop = (unit: WorkUnitSummary): void => {
+    // The unit we are LEAVING, read before the assignment. It used to be the
+    // panel's `selectedScoopJid`, which only a leader has; the shell's own
+    // previous selection is the same answer on both transports (#2382 D2b).
+    const previousJid = selected?.id ?? null;
     selected = unit;
-    if (!client) return;
     const readOnly = isReadOnlyRole(unitRoleFor(unit));
+    const host = deps.host();
     stashedQueue = reconcileQueueForSwitch({
-      controller,
-      deleteQueued: (jid, id) => void client?.deleteQueuedMessage(jid, id).catch(() => undefined),
+      controller: deps.controller(),
+      deleteQueued: (jid, id) => void host.deleteQueuedMessage(jid, id).catch(() => undefined),
       destination: unit.id,
-      previousJid: client.selectedScoopJid,
+      previousJid,
       readOnly,
-      roster: ensureWorkUnitClient(wiring).currentUnits(),
+      roster: deps.client().currentUnits(),
       stashed: stashedQueue,
     });
-    const cachedBackpressure = lickBackpressure.get(unit.id);
-    controller?.setLickBackpressure(
-      cachedBackpressure?.count ?? 0,
-      cachedBackpressure?.waitingMs ?? 0,
-      unitSlugFor(unit)
-    );
+    const cachedBackpressure = deps.lickBackpressure.get(unit.id);
+    deps
+      .controller()
+      ?.setLickBackpressure(
+        cachedBackpressure?.count ?? 0,
+        cachedBackpressure?.waitingMs ?? 0,
+        unitSlugFor(unit)
+      );
     // A cone gets its composer back (text and queue intact — the band is
     // hidden, never rebuilt); `applyThreadContext` re-locks it for a scoop.
     // Set BEFORE the snapshot is asked for, so the replay for the new
     // selection is the first thing rendered under the new mode.
-    controller?.setReadOnly(readOnly);
+    deps.controller()?.setReadOnly(readOnly);
     if (!readOnly) refs.inputCard.removeAttribute('disabled');
     // The thinking level is the one field the summary does not carry, so it is
-    // read from the record at the leaf — off the same roster the rest of this
-    // file reads, never by widening the selection back to a record.
-    void applyThreadContext(refs, unit, ensureWorkUnitClient(wiring).currentUnits(), (id) =>
-      client?.getScoops().find((scoop) => scoop.jid === id)
-    );
+    // read from the record at the leaf (#2382 D2a) — through the host, which
+    // is where the float's records live if it has any. A follower has none
+    // and the pill keeps its previous value.
+    void applyThreadContext(refs, unit, deps.client().currentUnits(), host.getRecord?.bind(host), {
+      skipModelPill: host.ownsModelPill === true,
+    });
     // Selection IS the snapshot call on this protocol (#2382): it sets the
     // panel's selected jid and asks the kernel for the replay, which used to
     // be `setSelectedScoopJid` + `requestScoopMessages` here. The transcript
@@ -328,13 +370,22 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // Swallowed, as `requestScoopMessages` was: a selection that cannot reach
     // the kernel leaves the previous transcript up, and the next roster or
     // status event re-drives it. There is no logger in this factory.
-    void ensureWorkUnitClient(wiring)
+    void deps
+      .client()
       .snapshot(unit.id)
       .catch(() => undefined);
-    watchUnit(unit.id);
+    deps.watchUnit(unit.id);
     // Ahead of the replay on purpose: the held-queue reconcile that runs when
     // it lands reads the turn state (see `#applyPendingQueueRestore`, #2354).
-    controller?.setProcessing(client.isProcessing(unit.id));
+    // The roster answers it (`state === 'working'`) rather than the panel's
+    // `isProcessing`, which is the same map projected — and the only one of
+    // the two a follower has.
+    deps.controller()?.setProcessing(
+      deps
+        .client()
+        .currentUnits()
+        .find((candidate) => candidate.id === unit.id)?.state === 'working'
+    );
     // Boot default for the navbar eyes: until any message/input lands, the
     // first-selected scoop wears them (selection itself is not "activity").
     if (!refs.switcher.hasAttribute('attention')) {
@@ -345,12 +396,82 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // moves. Nothing else republishes them on a selection change — the next
     // roster/status event or the 15s stats poll would, which is long enough to
     // read as the strip ignoring the click.
-    wiring.refreshScoops?.();
+    deps.wiring().refreshScoops?.();
     // Both panels show the cone that owns the selection (#2271) and neither
     // polls (#2409) — a selection change is not a change to their content.
-    workbench?.refreshMemory();
-    workbench?.refreshFiles();
+    deps.workbench()?.refreshMemory();
+    deps.workbench()?.refreshFiles();
+    // Last: the float's own say over the chrome this just applied (a
+    // follower's connection gate outranks a writable unit).
+    host.onSelectionApplied?.();
   };
+
+  return {
+    clear: () => {
+      selected = null;
+    },
+    getSelected: () => selected,
+    selectScoop,
+  };
+}
+
+/**
+ * Build the shell frame and the mutable wiring the kernel callbacks close
+ * over — float-agnostic, and with no transport yet.
+ *
+ * Called by `mountWcShell` (#2382 D2b), which then asks the float for its
+ * transport and wires the chat surface. A leader's `OffscreenClient` is
+ * constructed FROM the wiring this returns, which is why the frame comes
+ * first and the client second on every float.
+ */
+export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
+  const refs = buildWcShellFrame(app, {
+    messages: [],
+    scoops: [],
+    floatLabel,
+    placeholder: 'Ask sliccy, or describe a change…',
+    // Live floats sync UI state with the URL: the thread owns `ctx`/`at`,
+    // the shell owns `ws` — each component manages its own params.
+    urlState: true,
+  });
+
+  let controller: WcChatController | null = null;
+  let client: OffscreenClient | null = null;
+  /** The transport under the chat wiring; installed by `attachWcChat`. */
+  let chatHost: WcChatHost = DETACHED_CHAT_HOST;
+  /**
+   * The client the shell renders from. Defaults to this page's own
+   * kernel-backed adapter so a leader boot (and a test) needs no ceremony; a
+   * follower installs its remote one through {@link WcShellBoot.setChatTransport}.
+   */
+  let chatClient: WorkUnitClient | null = null;
+  const clientOf = (): WorkUnitClient => chatClient ?? ensureWorkUnitClient(wiring);
+  const lickBackpressure = new Map<string, LickBackpressureState>();
+  let clientReady = false;
+  let workbench: WorkbenchActivator | null = null;
+  const readyListeners = new Set<() => void>();
+
+  /** Re-points the transcript subscription; see {@link createUnitWatcher}. */
+  const unitWatcher = createUnitWatcher(
+    () => clientOf(),
+    (messages, queuedIds) => {
+      controller?.loadMessages(messages, queuedIds);
+      chatHost.onSnapshotRendered?.(messages);
+    }
+  );
+  const watchUnit = unitWatcher.watch;
+
+  const selection = createSelection({
+    client: clientOf,
+    controller: () => controller,
+    host: () => chatHost,
+    lickBackpressure,
+    refs,
+    watchUnit,
+    wiring: () => wiring,
+    workbench: () => workbench,
+  });
+  const selectScoop = selection.selectScoop;
 
   const wiring: WcLiveWiring = {
     refs,
@@ -364,7 +485,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       (refs.thread as HTMLElement & { urlContext?: string | null }).urlContext ?? null,
     getController: () => controller,
     getClient: () => client,
-    getSelected: () => selected,
+    getSelected: () => selection.getSelected(),
     selectScoop,
     notifyReady: () => {
       clientReady = true;
@@ -378,11 +499,15 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     setClient: (next) => {
       client = next;
     },
-    selectScoop,
-    getSelected: () => selected,
-    clearSelection: () => {
-      selected = null;
+    setChatTransport: (nextClient, nextHost) => {
+      chatClient = nextClient;
+      chatHost = nextHost;
     },
+    getChatHost: () => chatHost,
+    selectScoop,
+    getSelected: () => selection.getSelected(),
+    clearSelection: () => selection.clear(),
+    watchUnit,
     getController: () => controller,
     setController: (next) => {
       controller = next;
@@ -457,7 +582,7 @@ function wireWcWelcome(
   });
 }
 
-export interface AttachWcClientOptions {
+export interface AttachWcWorkbenchOptions {
   /** Standalone kernel-worker id; enables the sprinkle ops channel. */
   instanceId?: string;
   /** Standalone-only runtime bits enabling tray sync + panel RPC. */
@@ -514,7 +639,7 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
  */
 function wireWcBrowserOverlay(
   boot: WcShellBoot,
-  options: AttachWcClientOptions,
+  options: AttachWcWorkbenchOptions,
   log: BootStageLogger
 ): void {
   const standalone = options.standalone;
@@ -542,24 +667,6 @@ function labelSourceOf(scoop: Pick<RegisteredScoop, 'parentJid' | 'name' | 'assi
     name: scoop.name,
     role: isRootUnit(scoop) ? 'primary' : 'child',
   };
-}
-
-/** Switcher wiring: tab clicks select scoops; hovered segments get LLM tooltips. */
-function wireWcSwitcher(boot: WcShellBoot, client: OffscreenClient): void {
-  const { refs } = boot;
-  refs.switcher.addEventListener('slicc-scoop-select', (event) => {
-    const key = (event as CustomEvent<{ key?: string }>).detail?.key;
-    // The client's roster: a tab click selects a SUMMARY (#2382 D2a).
-    const unit = ensureWorkUnitClient(boot.wiring)
-      .currentUnits()
-      .find((candidate) => candidate.id === key);
-    if (unit && unit.id !== boot.getSelected()?.id) boot.selectScoop(unit);
-  });
-  wireWcChipTips({
-    switcher: refs.switcher,
-    getScoops: () => client.getScoops(),
-    lastActivity: boot.wiring.lastActivity,
-  });
 }
 
 /**
@@ -757,7 +864,7 @@ function wireWcUrlContext(
 function wireWcPermissionsSurface(
   boot: WcShellBoot,
   client: OffscreenClient,
-  options: AttachWcClientOptions,
+  options: AttachWcWorkbenchOptions,
   log: BootStageLogger
 ): void {
   void import('./wc-permissions.js')
@@ -861,7 +968,7 @@ export const DEFAULT_DOCK_TREE_ON_BOOT = {
  * whatever was last persisted, or fall back to `DEFAULT_DOCK_TREE_ON_BOOT`.
  * `setTree` does not itself emit a change event, so this restore can never
  * loop back into a persist write. Runs for BOTH floats (standalone and
- * extension) via `attachWcClient` — dual-mode by construction.
+ * extension) via `attachWcWorkbench` — dual-mode by construction.
  */
 export function wireDockTreePersistence(refs: WcShellRefs, log: BootStageLogger): void {
   const dockTreeEl = refs.dockTree as unknown as HTMLElement;
@@ -916,13 +1023,26 @@ export function makeSprinkleAttachImage(
   };
 }
 
-/** Sequence the focused live-shell factories over a connected client. */
+/**
+ * The LEADER-ONLY half of the shell (#2382 PR D2b): everything that needs a
+ * kernel behind it.
+ *
+ * VFS and the workbench panels (files, terminal, memory, monitor), sprinkles
+ * and the tray, permissions, the freezer rail and cone actions, transcript
+ * export, session stats, the nav menu, speech. A follower runs none of it —
+ * it has no kernel — which is why the split is here and not at a flag.
+ *
+ * The chat surface it sits under (`attachWcChat`) is already wired by
+ * `mountWcShell` and reaches this side through the `chat` handle.
+ */
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: boot wiring is sequential; focused concerns live in neighboring factories
-export function attachWcClient(
+export function attachWcWorkbench(
   boot: WcShellBoot,
   client: OffscreenClient,
+  chat: WcChatAttachment,
+  host: LeaderChatHost,
   log: BootStageLogger,
-  options: AttachWcClientOptions = {}
+  options: AttachWcWorkbenchOptions = {}
 ): (() => void) | undefined {
   // Apply persisted timestamp visibility preference (both standalone + extension).
   void import('../timestamp-preference.js')
@@ -930,6 +1050,16 @@ export function attachWcClient(
     .catch(() => undefined);
   const { refs } = boot;
   boot.setClient(client);
+  // Page theming: the user's custom theme and the sprinkle theme broadcast.
+  // A leader owns its page, so it applies both; a follower's page belongs to
+  // its host (Cherry pushes a theme of its own), which is why this is here
+  // and not in the chat wiring both of them run.
+  void import('../theme.js')
+    .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
+    .catch(() => undefined);
+  void import('../theme-engine.js')
+    .then(({ applyThemeOverrides }) => applyThemeOverrides())
+    .catch(() => undefined);
   // Panel system: re-parents the shell's chrome into `<slicc-layout>` panels.
   // Gated by the `panel-layouts` feature flag (off by default) rather than a URL
   // param, so there is ONE source of truth — a query flag would let a bookmarked
@@ -953,19 +1083,14 @@ export function attachWcClient(
   let refreshPlaceholder: (() => void) | null = null;
   const refreshStats = wireWcStats(boot.wiring, client);
   const triggerPlaceholder = (): void => refreshPlaceholder?.();
-  const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
+  // The welcome flow's interceptor holder lives on the host, so the shared
+  // dip wiring can consult it without knowing this float exists.
+  const welcomeHolder = host.welcome ?? { intercept: null };
   // The kernel-backed client protocol the shell owns (built in
-  // `prepareWcShell`, decorated by `createWcLiveCallbacks`).
+  // `prepareWcShell`, decorated by `createWcLiveCallbacks`), and the leader's
+  // half of the seam under the shared chat wiring (#2382 D2b).
   const workUnits = ensureWorkUnitClient(boot.wiring);
-  const { controller, agentHandle } = createWcController(
-    refs,
-    client,
-    workUnits,
-    () => boot.getSelected(),
-    makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats }),
-    welcomeHolder
-  );
-  boot.setController(controller);
+  const { agentHandle } = chat;
   boot.onClientReady(refreshStats);
 
   const openVfs = makeOpenVfs(client);
@@ -981,7 +1106,6 @@ export function attachWcClient(
   const composer = wireWcComposer({
     boot,
     client,
-    agentHandle,
     setRefreshPlaceholder: (fn) => {
       refreshPlaceholder = fn;
     },
@@ -990,8 +1114,17 @@ export function attachWcClient(
     openWriter: async () => (await openVfs()).writer,
     log,
   });
+  // The add-menu's stage lands a beat later (its module is lazy); the shared
+  // submit reads it through the host, so a send before then simply carries no
+  // attachments — exactly as it did when the composer owned the listener.
+  host.setAttachmentSource(() => composer.getAttachStage()?.take());
+  host.setTurnIdleHook(makeTurnFinishedHook({ boot, triggerPlaceholder, refreshStats }));
 
-  wireWcSwitcher(boot, client);
+  wireWcChipTips({
+    switcher: refs.switcher,
+    getScoops: () => client.getScoops(),
+    lastActivity: boot.wiring.lastActivity,
+  });
   wireWcBrowserOverlay(boot, options, log);
   wireWcPermissionsSurface(boot, client, options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
@@ -1183,7 +1316,7 @@ export function attachWcClient(
       // `layout` command (via the `layout-apply` panel-RPC op) can reach
       // `applyLayout`. This shared boot path covers BOTH floats — standalone
       // (wc-live's own boot) and extension (`wc-extension.ts` reuses
-      // `attachWcClient`).
+      // `attachWcWorkbench`).
       const { getPanelizedShell } = await import('./panelize-shell.js');
       const panelized = getPanelizedShell();
       if (panelized) {
@@ -1370,7 +1503,7 @@ export function attachWcClient(
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
-export async function mountWcUiLive(
+export async function bootLeaderFloat(
   app: HTMLElement,
   log: BootStageLogger,
   runtimeMode: UiRuntimeMode = 'standalone'
@@ -1395,67 +1528,78 @@ export async function mountWcUiLive(
   const { floatKindForRuntimeMode, floatLabelForKind, resolveStandaloneFloatKind } = await import(
     './wc-float-label.js'
   );
-  const { installFloatbarStatus } = await import('./wc-floatbar-online.js');
   const floatKind =
     runtimeMode === 'standalone'
       ? await resolveStandaloneFloatKind()
       : floatKindForRuntimeMode(runtimeMode);
   const floatLabel = floatLabelForKind(floatKind);
 
-  const boot = prepareWcShell(app, floatLabel);
-  installFloatbarStatus(boot.refs.floatbar, { floatKind, label: floatLabel });
   // #1330: install the reload listener BEFORE spawning — BroadcastChannel doesn't
   // buffer and the worker posts init synchronously, so a late listener would miss
   // a fast boot-time failure.
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
   const { syncFsBridgeEnabled, syncFsChannelNonce } = setupSyncFsBootNonce();
   let stallOverlayShown = false;
-  const host = spawnKernelWorker({
-    realCdpTransport,
-    instanceId,
-    makeClient: (transport) => new OffscreenClient(createWcLiveCallbacks(boot.wiring), transport),
-    localApiBaseUrl,
-    bridgeToken,
-    syncFsBridgeEnabled,
-    syncFsChannelNonce,
-    localLickWsUrl,
-    extensionDelegateId,
-    // The worker adopts this float's cached remote flags at boot (#2003).
-    flagFloat: runtimeMode,
-    onWorkerScriptError: () => {
-      guardedReload();
-    },
-    // Slow-boot tolerance (#2007 follow-up, 2026-08-24 field wedge): each
-    // zero-progress watchdog window short of the stall limit surfaces a
-    // non-destructive overlay instead of bricking to the recovery screen.
-    // The shell above is fully wired before `host.ready`, so a late
-    // `kernel-worker-ready` resumes the normal boot path with no reload.
-    onReadyStall: (info) => {
-      stallOverlayShown = true;
-      void import('../boot/boot-stall-overlay.js').then((m) =>
-        m.showBootStallOverlay(document, info)
-      );
-    },
-    // The worker finished booting AFTER the stall budget ran out and the
-    // recovery screen rendered. One guarded reload enters the now-warm
-    // session; the guard (shared with the stale-asset path) caps it so a
-    // pathological boot can't reload-loop.
-    onLateReady: () => {
-      guardedReload();
-    },
-  });
-  installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
-  // Extension-leader path only: late-bind the now-minted kernel client into the
-  // extension-bridge `onLick` handler so forwarded handoff/upskill licks reach
-  // the worker `LickManager`. No-op on every other CDP path.
-  attachLickForwardingClient?.(host.client);
-  const schedulePendingCatchup = attachWcClient(boot, host.client, log, {
-    instanceId,
-    standalone: {
-      browser,
-      realCdpTransport,
-      runtimeMode,
-      floatKind,
+  let kernel!: SpawnedKernelHost<OffscreenClient>;
+  let schedulePendingCatchup: (() => void) | undefined;
+  // ONE mount path (#2382 D2b): the frame and the chat surface are the shell's,
+  // and this float supplies the transport — a spawned kernel worker — plus the
+  // workbench that only a kernel can back.
+  const { boot } = await mountWcShell(app, log, {
+    floatKind,
+    floatLabel,
+    connect: (boot) => {
+      kernel = spawnKernelWorker({
+        realCdpTransport,
+        instanceId,
+        makeClient: (transport) =>
+          new OffscreenClient(createWcLiveCallbacks(boot.wiring), transport),
+        localApiBaseUrl,
+        bridgeToken,
+        syncFsBridgeEnabled,
+        syncFsChannelNonce,
+        localLickWsUrl,
+        extensionDelegateId,
+        // The worker adopts this float's cached remote flags at boot (#2003).
+        flagFloat: runtimeMode,
+        onWorkerScriptError: () => {
+          guardedReload();
+        },
+        // Slow-boot tolerance (#2007 follow-up, 2026-08-24 field wedge): each
+        // zero-progress watchdog window short of the stall limit surfaces a
+        // non-destructive overlay instead of bricking to the recovery screen.
+        // The shell above is fully wired before `host.ready`, so a late
+        // `kernel-worker-ready` resumes the normal boot path with no reload.
+        onReadyStall: (info) => {
+          stallOverlayShown = true;
+          void import('../boot/boot-stall-overlay.js').then((m) =>
+            m.showBootStallOverlay(document, info)
+          );
+        },
+        // The worker finished booting AFTER the stall budget ran out and the
+        // recovery screen rendered. One guarded reload enters the now-warm
+        // session; the guard (shared with the stale-asset path) caps it so a
+        // pathological boot can't reload-loop.
+        onLateReady: () => {
+          guardedReload();
+        },
+      });
+      installPageStorageSync({ send: (m) => kernel.client.sendRaw(m) });
+      // Extension-leader path only: late-bind the now-minted kernel client into
+      // the extension-bridge `onLick` handler so forwarded handoff/upskill licks
+      // reach the worker `LickManager`. No-op on every other CDP path.
+      attachLickForwardingClient?.(kernel.client);
+      const chatHost = createLeaderChatHost(kernel.client);
+      return {
+        client: ensureWorkUnitClient(boot.wiring),
+        host: chatHost,
+        workbench: (mounted, chat) => {
+          schedulePendingCatchup = attachWcWorkbench(mounted, kernel.client, chat, chatHost, log, {
+            instanceId,
+            standalone: { browser, floatKind, realCdpTransport, runtimeMode },
+          });
+        },
+      };
     },
   });
 
@@ -1463,7 +1607,7 @@ export async function mountWcUiLive(
   await setupSudoStandalone({ log });
 
   try {
-    await host.ready;
+    await kernel.ready;
   } finally {
     // The overlay hangs off document.body, not #app — on a rejection the
     // recovery screen replaces only #app, so a success-path-only removal
@@ -1477,7 +1621,7 @@ export async function mountWcUiLive(
   // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out
   // into nobody. Re-notify so boot reads (freezer rail) finally land.
   boot.wiring.notifyReady?.();
-  log.info('WC live shell ready', { scoops: host.client.getScoops().length });
+  log.info('WC live shell ready', { scoops: kernel.client.getScoops().length });
   schedulePendingCatchup?.();
 
   // Auto-submit: `node-server --prompt "..."` appends `?prompt=<text>` to

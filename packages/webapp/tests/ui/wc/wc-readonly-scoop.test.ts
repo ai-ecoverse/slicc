@@ -21,6 +21,7 @@ import { createWcLiveCallbacks } from '../../../src/ui/wc/wc-live-callbacks.js';
 import { messageEls } from '../../../src/ui/wc/wc-message-view.js';
 import { recordToWorkUnitSummary } from '../../../src/work-unit/client/from-record.js';
 import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
+import { installLeaderChatHost, leaderChatHostFakes } from './leader-chat-host.js';
 
 function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -75,6 +76,8 @@ function fakeClient(): Record<string, unknown> {
     isProcessing: vi.fn(() => false),
     deleteQueuedMessage: vi.fn(async () => undefined),
     getScoops: vi.fn(() => [cone, worker]),
+    getScoop: vi.fn((jid: string) => [cone, worker].find((record) => record.jid === jid)),
+    ...leaderChatHostFakes(),
   };
 }
 
@@ -82,7 +85,12 @@ function bootShell() {
   const app = document.createElement('div');
   document.body.append(app);
   const boot = prepareWcShell(app, 'test');
-  boot.setClient(fakeClient() as never);
+  const client = fakeClient();
+  boot.setClient(client as never);
+  // Selection routes the queue-cancel through the chat seam (#2382 D2b), so a
+  // test that asserts on the client has to install the same host the leader
+  // mount does.
+  installLeaderChatHost(boot, client);
   return boot;
 }
 

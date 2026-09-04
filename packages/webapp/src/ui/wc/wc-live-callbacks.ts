@@ -87,7 +87,7 @@ export function toSwitcherScoops(
  * Idempotent because three places need it and none of them can be the sole
  * owner: `prepareWcShell` builds the bag, `createWcLiveCallbacks` DECORATES
  * the callback bag the adapter must observe (so it has to exist before
- * `OffscreenClient` does), and `attachWcClient` mounts the composer on it. A
+ * `OffscreenClient` does), and `attachWcWorkbench` mounts the composer on it. A
  * second instance would mean a second last-snapshot cache and a strip that
  * repaints from a different roster than the composer sends to.
  */
@@ -106,28 +106,12 @@ export function ensureWorkUnitClient(wiring: WcLiveWiring): LocalWorkUnitClient 
 export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCallbacks {
   const workUnits = ensureWorkUnitClient(wiring);
 
-  // The strip renders from the protocol's roster, not from `getScoops()` plus
-  // three page-side maps — the same `toTabDescriptors` the follower calls.
-  // The roster is held rather than re-fetched because a selection change
-  // re-orders the SAME units and must repaint synchronously.
-  // The roster is read at repaint time rather than held: `awaitingInput` and
-  // the selection change with no kernel event behind them, so a cached copy
-  // would render the previous instant.
-  const publish = (): void => {
-    if (wiring.getClient()) {
-      wiring.refs.switcher.scoops = toTabDescriptors(
-        workUnits.currentUnits(),
-        wiring.getSelected()?.id,
-        scoopColor
-      ) as SwitcherScoop[];
-    }
-    wiring.refreshConeActions?.();
-  };
-  // Never unsubscribed: the live shell owns this client for the lifetime of
-  // the page, and the callback bag it decorates dies with it.
-  workUnits.subscribeList(() => publish());
-  const refreshScoops = publish;
-  wiring.refreshScoops = refreshScoops;
+  // The strip is published by `attachWcChat` — one publisher for both floats
+  // (#2382 D2b), installed on the wiring as `refreshScoops`. This bag only
+  // ASKS for a repaint, because the events it translates (status, phase,
+  // roster) are half of what the strip draws; the other half is the
+  // selection, which no kernel event carries.
+  const refreshScoops = (): void => wiring.refreshScoops?.();
 
   const viewingFrozen = (): boolean =>
     (wiring.refs.thread.getAttribute('context') ?? '').startsWith('freezer:');
