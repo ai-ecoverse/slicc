@@ -73,7 +73,7 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   (`PACKAGE_CLAUDE_MAX_CHARS`, via `lint:docs`); the compactor's policy is
   10,000 → 9,500 across _every_ tracked `CLAUDE.md`. A 12,000-char guide passes
   `lint:docs` and is still compaction work. `packages/vfs-root/shared/CLAUDE.md`
-  (3,000 **bytes**, bundled into the VFS) is excluded by construction. Sizes are
+  (2,048 **bytes**, bundled into the VFS) is excluded by construction. Sizes are
   measured with `String.length`, never bytes. Every oversized guide fans out
   as its own Claude job (largest first; `max_guides` caps N, default all); a
   `--check` miss still publishes a **partial** shard when that guide actually

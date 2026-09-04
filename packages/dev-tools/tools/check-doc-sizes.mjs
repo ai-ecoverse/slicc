@@ -33,11 +33,12 @@ const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
 const ROOT_CLAUDE_MAX_CHARS = 15000;
-// Raised from 3000 in the markdown-media change: the file had 5 bytes of
-// headroom, and inline image/video syntax has no other discovery path (there
-// is no `--help` for markdown). Everything still in the file is a deliberate
-// instruction, so the budget moved rather than the guidance being thinned.
-const AGENT_CLAUDE_MAX_BYTES = 3300;
+// Lowered from 3300: the file is injected verbatim into every work unit's
+// system prompt, so anything the prompt assembler, the injected skill index, or
+// `man` already states is paid for on every turn. It now holds only what those
+// do not say. Headroom is deliberate — the previous cap ran at 5 bytes and had
+// to be raised to document one new capability.
+const AGENT_CLAUDE_MAX_BYTES = 2048;
 const COPILOT_INSTRUCTIONS_MAX_CHARS = 4000;
 
 const measureChars = (text) => text.length;

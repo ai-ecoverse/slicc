@@ -23,7 +23,7 @@ This file covers the documentation surface in `docs/`.
 | ------------------------------------------------------- | ------ | ----- | ------------------------ |
 | `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                 |
 | `packages/*/CLAUDE.md`                                  | 20,000 | chars | enforced                 |
-| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS     |
+| `packages/vfs-root/shared/CLAUDE.md`                    | 2,048  | bytes | bundled into the VFS     |
 | `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit |
 
 All package `CLAUDE.md` files are now within the 20,000-char cap. The grandfathered

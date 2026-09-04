@@ -63,7 +63,7 @@ ${policy.canWriteSharedMemory ? '- **update_global_memory**: Update the global C
 }
 ## Delegating to Scoops
 
-Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
+Use the **feed_scoop** tool to send work to scoops. IMPORTANT:
 - The scoop has NO access to your conversation history
 - You MUST write a **complete, self-contained prompt** with ALL context, instructions, file paths, URLs, etc.
 - If the user says "do the same" or references earlier work, YOU must expand that into explicit instructions

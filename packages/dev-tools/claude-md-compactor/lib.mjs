@@ -89,7 +89,7 @@ export function computeMaxTurns(worklist, { targetChars = COMPACTOR_TARGET_CHARS
  * Guides the compactor must never select, whatever their length.
  *
  * `packages/vfs-root/shared/CLAUDE.md` is the agent-facing runtime guide. It is
- * bundled into the VFS and budgeted at AGENT_CLAUDE_MAX_BYTES = 3,000 BYTES by
+ * bundled into the VFS and budgeted at AGENT_CLAUDE_MAX_BYTES = 2,048 BYTES by
  * `packages/dev-tools/tools/check-doc-sizes.mjs` — an order of magnitude
  * stricter than this policy, measured in bytes rather than characters, and it
  * already sits close to its cap. It can therefore never be oversized at a
