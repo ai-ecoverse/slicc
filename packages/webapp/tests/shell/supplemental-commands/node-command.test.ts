@@ -420,4 +420,145 @@ describe('node command — --help / --version are node options, not script args'
     expect(result.stdout).not.toContain('usage: node');
     expect(JSON.parse(result.stdout.trim())).toEqual(['-h']);
   });
+
+  it('lists --check and --input-type in `node --help`', async () => {
+    const result = await createNodeCommand().execute(['--help'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--check');
+    expect(result.stdout).toContain('--input-type');
+    expect(result.stdout).toContain('-e, --eval');
+  });
+});
+
+describe('node command — --check syntax-checks without executing', () => {
+  it('accepts a valid script and does not run it', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/ok.js': 'console.log("should not run"); throw new Error("nope");\n',
+      },
+      '/workspace'
+    );
+    const result = await createNodeCommand().execute(['--check', './ok.js'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  it('accepts `-c` as the short form', async () => {
+    const ctx = createMockCtx({ '/workspace/ok.js': 'const x = 1;\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['-c', './ok.js'], ctx);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('rejects a syntax error with exit 1', async () => {
+    const ctx = createMockCtx({ '/workspace/bad.js': 'const {\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './bad.js'], ctx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/SyntaxError|Unexpected|Invalid/i);
+  });
+
+  it('accepts top-level await (the realm wraps the entry in AsyncFunction)', async () => {
+    const ctx = createMockCtx({ '/workspace/tla.js': 'await Promise.resolve(1);\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './tla.js'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('syntax-checks `-e` code without evaluating it', async () => {
+    const result = await createNodeCommand().execute(
+      ['--check', '-e', 'console.log("nope"); throw new Error("nope");'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+
+  it('errors when --check has no program source', async () => {
+    const result = await createNodeCommand().execute(['--check'], createMockCtx());
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('--check');
+  });
+
+  it('syntax-checks an ESM .mjs file that `node file.mjs` would run', async () => {
+    const ctx = createMockCtx({ '/workspace/ok.mjs': 'export const n = 1;\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './ok.mjs'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('syntax-checks `import` in `-e` with --input-type=module', async () => {
+    const result = await createNodeCommand().execute(
+      ['--input-type=module', '--check', '-e', 'import { dirname } from "path";\n'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('still reports a syntax error in an ESM entry', async () => {
+    const ctx = createMockCtx({ '/workspace/bad.mjs': 'export default (\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--check', './bad.mjs'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe('node command — --input-type', () => {
+  it('runs `-e` with --input-type=module', async () => {
+    const result = await createNodeCommand().execute(
+      ['--input-type=module', '-e', 'console.log("mod")'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('mod');
+  });
+
+  it('accepts the space-separated `--input-type module` form', async () => {
+    const result = await createNodeCommand().execute(
+      ['--input-type', 'module', '-e', 'console.log("spaced")'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('spaced');
+  });
+
+  it('runs ESM `export` in `-e` when --input-type=module', async () => {
+    const result = await createNodeCommand().execute(
+      ['--input-type=module', '-e', 'export const n = 2; console.log(n)'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('2');
+  });
+
+  it('rejects an invalid --input-type value', async () => {
+    const result = await createNodeCommand().execute(
+      ['--input-type=esm', '-e', '1'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('--input-type');
+  });
+
+  it('rejects --input-type without a value', async () => {
+    const result = await createNodeCommand().execute(['--input-type'], createMockCtx());
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('--input-type');
+  });
+
+  it('rejects --input-type=module on a .cjs file', async () => {
+    const ctx = createMockCtx({ '/workspace/a.cjs': 'console.log(1);\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--input-type=module', './a.cjs'], ctx);
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('.cjs');
+  });
+
+  it('rejects --input-type=commonjs on a .mjs file', async () => {
+    const ctx = createMockCtx({ '/workspace/a.mjs': 'export const n = 1;\n' }, '/workspace');
+    const result = await createNodeCommand().execute(['--input-type=commonjs', './a.mjs'], ctx);
+    expect(result.exitCode).toBe(9);
+    expect(result.stderr).toContain('.mjs');
+  });
 });
