@@ -279,7 +279,7 @@ playwright-cli request --tab=<id> <index> [--filename=path]                   # 
 playwright-cli request-headers --tab=<id> <index>                             # Request headers only
 playwright-cli request-body --tab=<id> <index>                                # Request body only
 playwright-cli response-headers --tab=<id> <index>                            # Response headers only
-playwright-cli response-body --tab=<id> <index> [--filename=path]             # Response body (saves binary to file)
+playwright-cli response-body --tab=<id> <index> [--filename=path]             # Response body (--filename saves the exact bytes)
 playwright-cli network-state-set --tab=<id> <online|offline>                  # Toggle network state
 playwright-cli route --tab=<id> <pattern> [--status=N] [--body=text] [--content-type=type] [--header=name:value]
 playwright-cli route-list --tab=<id>                                          # List active routes

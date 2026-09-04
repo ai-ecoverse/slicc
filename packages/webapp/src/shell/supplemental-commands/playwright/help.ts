@@ -152,7 +152,8 @@ Commands:
   response-headers <index> --tab=<id> [--filename=<path>]
                          Show response headers only.
   response-body <index> --tab=<id> [--filename=<path>]
-                         Show response body only. Binary bodies shown as [binary body, N bytes].
+                         Show response body only. Binary bodies shown as [binary body, N bytes];
+                         --filename writes the response bytes exactly as Chrome sent them.
   mousemove <x> <y> --tab=<id> Move mouse to coordinates
   mousedown [button] --tab=<id> Press mouse button (left/right/middle, default: left)
   mouseup [button] --tab=<id>  Release mouse button (left/right/middle, default: left)

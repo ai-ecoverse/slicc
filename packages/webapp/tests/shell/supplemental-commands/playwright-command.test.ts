@@ -5320,7 +5320,13 @@ describe('playwright-cli requests', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Saved to /tmp/body.txt');
-    expect(fs.writeFile).toHaveBeenCalledWith('/tmp/body.txt', expect.any(String));
+    // Bodies are written as bytes — the CDP `base64Encoded` flag decides how
+    // they are decoded, never the MIME type.
+    expect(fs.writeFile).toHaveBeenCalledWith('/tmp/body.txt', expect.any(Uint8Array));
+    const bodyWrite = (fs.writeFile as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] === '/tmp/body.txt'
+    );
+    expect(new TextDecoder().decode(bodyWrite?.[1] as Uint8Array)).toBe('hello world');
   });
 
   it('tab-close removes network subscription', async () => {

@@ -32,11 +32,17 @@ function makeEntry(over: Partial<NetworkEntry> = {}): NetworkEntry {
     status: 200,
     responseHeaders: { 'content-type': 'application/json' },
     responseBody: null,
+    responseBodyBase64: false,
     mimeType: 'application/json',
     isStatic: false,
     timestamp: 0,
     ...over,
   };
+}
+
+/** A `writeFile` spy whose recorded arguments stay typed for byte assertions. */
+function mockWriteFile() {
+  return vi.fn(async (_path: string, _data: string | Uint8Array) => undefined);
 }
 
 /** Seed a state that already has captured entries (capture branch skipped). */
@@ -58,7 +64,7 @@ describe('network-requests handlers', () => {
 
   it('captures requests, responses, and bodies through the CDP event pipeline', async () => {
     const transport = createMockTransport((method) =>
-      method === 'Network.getResponseBody' ? { body: 'PAYLOAD' } : {}
+      method === 'Network.getResponseBody' ? { body: 'PAYLOAD', base64Encoded: false } : {}
     );
     const { browser } = createMockBrowser({ transport, sessionId: 'session-1' });
     const state = createPlaywrightState();
@@ -87,6 +93,7 @@ describe('network-requests handlers', () => {
     expect(listed.stdout).toContain('1 POST https://example.com/data → 201');
     const entry = state.networkRequests.get(TAB)![0];
     expect(entry.responseBody).toBe('PAYLOAD');
+    expect(entry.responseBodyBase64).toBe(false);
   });
 
   it('ignores events from a different session', async () => {
@@ -159,7 +166,7 @@ describe('network-requests handlers', () => {
   });
 
   it('request saves to a file when --filename is given', async () => {
-    const writeFile = vi.fn(async () => undefined);
+    const writeFile = mockWriteFile();
     const state = seeded([makeEntry()]);
     const result = await requestHandler(
       createHandlerCtx({
@@ -239,7 +246,13 @@ describe('network-requests handlers', () => {
 
     const binary = await responseBodyHandler(
       createHandlerCtx({
-        state: seeded([makeEntry({ responseBody: btoa('abc'), mimeType: 'image/png' })]),
+        state: seeded([
+          makeEntry({
+            responseBody: btoa('abc'),
+            responseBodyBase64: true,
+            mimeType: 'image/png',
+          }),
+        ]),
         positional: ['1'],
         flags: { tab: TAB },
       })
@@ -248,8 +261,10 @@ describe('network-requests handlers', () => {
   });
 
   it('response-body decodes binary bytes when saving to a file', async () => {
-    const writeFile = vi.fn(async () => undefined);
-    const state = seeded([makeEntry({ responseBody: btoa('abc'), mimeType: 'image/png' })]);
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({ responseBody: btoa('abc'), responseBodyBase64: true, mimeType: 'image/png' }),
+    ]);
     const result = await responseBodyHandler(
       createHandlerCtx({
         state,
@@ -262,6 +277,182 @@ describe('network-requests handlers', () => {
     expect(writeFile).toHaveBeenCalledWith('/img.png', expect.any(Uint8Array));
   });
 
+  it('keeps the CDP base64Encoded flag on capture', async () => {
+    const transport = createMockTransport((method) =>
+      method === 'Network.getResponseBody' ? { body: btoa('abc'), base64Encoded: true } : {}
+    );
+    const { browser } = createMockBrowser({ transport, sessionId: 'session-1' });
+    const state = createPlaywrightState();
+    const ctx = createHandlerCtx({ browser, state, flags: { tab: TAB } });
+    await requestsHandler(ctx);
+
+    await transport.emit('Network.requestWillBeSent', {
+      sessionId: 'session-1',
+      requestId: 'r1',
+      request: { url: 'https://example.com/blob', method: 'GET', headers: {} },
+    });
+    await transport.emit('Network.responseReceived', {
+      sessionId: 'session-1',
+      requestId: 'r1',
+      response: { status: 200, headers: {}, mimeType: 'application/octet-stream' },
+    });
+    await transport.emit('Network.loadingFinished', { sessionId: 'session-1', requestId: 'r1' });
+
+    const entry = state.networkRequests.get(TAB)![0];
+    expect(entry.responseBodyBase64).toBe(true);
+  });
+
+  it('response-body --filename writes base64 bodies byte-for-byte', async () => {
+    // Every byte value, the fixture a UTF-8 hop expands and `atob` cannot fake.
+    const original = new Uint8Array(256).map((_, i) => i);
+    const latin1 = String.fromCharCode(...original);
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({
+        responseBody: btoa(latin1),
+        responseBodyBase64: true,
+        mimeType: 'image/jpeg',
+      }),
+    ]);
+    const result = await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.bin' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    expect(result.exitCode).toBe(0);
+    const written = writeFile.mock.calls[0][1] as unknown as Uint8Array;
+    expect(written).toBeInstanceOf(Uint8Array);
+    expect(written.length).toBe(256);
+    expect(Array.from(written)).toEqual(Array.from(original));
+  });
+
+  it('response-body --filename trusts the flag over the MIME type', async () => {
+    // Chrome base64s bodies it cannot decode as text whatever the label says;
+    // the old MIME heuristic wrote the base64 alphabet to the file instead.
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({
+        responseBody: btoa('\x00\x01\x02binary'),
+        responseBodyBase64: true,
+        mimeType: 'text/plain',
+      }),
+    ]);
+    await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.bin' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    const written = writeFile.mock.calls[0][1] as unknown as Uint8Array;
+    expect(Array.from(written)).toEqual([
+      0,
+      1,
+      2,
+      ...Array.from(new TextEncoder().encode('binary')),
+    ]);
+  });
+
+  it('response-body --filename writes text bodies as UTF-8 text', async () => {
+    const writeFile = mockWriteFile();
+    const body = '{"hé":"ok 😀"}';
+    const state = seeded([
+      makeEntry({ responseBody: body, responseBodyBase64: false, mimeType: 'application/json' }),
+    ]);
+    await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.json' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    const written = writeFile.mock.calls[0][1] as unknown as Uint8Array;
+    expect(new TextDecoder().decode(written)).toBe(body);
+  });
+
+  it('response-body --filename does not base64-decode an unflagged binary-looking body', async () => {
+    // `base64Encoded: false` means Chrome handed us text — the label is not a
+    // licence to run `atob` over it (the old path wrote garbage or the string).
+    const latin1 = String.fromCharCode(...new Uint8Array(256).map((_, i) => i));
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({ responseBody: latin1, responseBodyBase64: false, mimeType: 'image/jpeg' }),
+    ]);
+    const result = await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.bin' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    expect(result.exitCode).toBe(0);
+    const written = writeFile.mock.calls[0][1] as unknown as Uint8Array;
+    expect(Array.from(written)).toEqual(Array.from(new TextEncoder().encode(latin1)));
+  });
+
+  it('response-body fails instead of writing U+FFFD for an unpaired surrogate', async () => {
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({
+        responseBody: `head\uD800tail`,
+        responseBodyBase64: false,
+        mimeType: 'text/plain',
+      }),
+    ]);
+    const result = await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.txt' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unpaired surrogate');
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('response-body fails when a base64-flagged body is not valid base64', async () => {
+    const writeFile = mockWriteFile();
+    const state = seeded([
+      makeEntry({ responseBody: 'not base64!!', responseBodyBase64: true, mimeType: 'image/png' }),
+    ]);
+    const result = await responseBodyHandler(
+      createHandlerCtx({
+        state,
+        positional: ['1'],
+        flags: { tab: TAB, filename: '/out.png' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+      })
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not valid base64');
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('response-body prints a base64 text body as text, not the base64 alphabet', async () => {
+    const result = await responseBodyHandler(
+      createHandlerCtx({
+        state: seeded([
+          makeEntry({
+            responseBody: btoa('hello'),
+            responseBodyBase64: true,
+            mimeType: 'text/plain',
+          }),
+        ]),
+        positional: ['1'],
+        flags: { tab: TAB },
+      })
+    );
+    expect(result.stdout).toBe('hello\n');
+  });
+
   it('the header/body detail handlers all honor --filename', async () => {
     const cases: Array<[typeof requestHeadersHandler, NetworkEntry]> = [
       [requestHeadersHandler, makeEntry()],
@@ -270,7 +461,7 @@ describe('network-requests handlers', () => {
       [responseBodyHandler, makeEntry({ responseBody: 'text', mimeType: 'text/plain' })],
     ];
     for (const [handler, entry] of cases) {
-      const writeFile = vi.fn(async () => undefined);
+      const writeFile = mockWriteFile();
       const result = await handler(
         createHandlerCtx({
           state: seeded([entry]),

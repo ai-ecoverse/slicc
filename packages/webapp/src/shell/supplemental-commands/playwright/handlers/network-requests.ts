@@ -104,6 +104,7 @@ function ensureCapturing(
       status: null,
       responseHeaders: null,
       responseBody: null,
+      responseBodyBase64: false,
       mimeType: null,
       isStatic: isStaticResource(null, url),
       timestamp: Date.now(),
@@ -148,6 +149,9 @@ function ensureCapturing(
         const r = result as NetworkGetResponseBodyResult | undefined;
         if (!r) return;
         entry.responseBody = r.body ?? null;
+        // Chrome tells us how the body is encoded; keep the flag instead of
+        // guessing from MIME later (matches `cdp/har-recorder.ts`).
+        entry.responseBodyBase64 = r.base64Encoded === true;
       })
       .catch(() => {
         // Body may not be available for all resource types — ignore
@@ -163,6 +167,56 @@ function ensureCapturing(
     transport.off('Network.responseReceived', onResponse);
     transport.off('Network.loadingFinished', onLoadingFinished);
   });
+}
+
+/** Decoded response-body bytes, or the reason the body cannot be decoded. */
+type DecodedBody = { bytes: Uint8Array } | { error: string };
+
+/**
+ * Index of the first unpaired surrogate in `s`, or -1 when the string is
+ * well-formed. `TextEncoder` silently turns those into U+FFFD, which is the
+ * one substitution a saved file must never get.
+ */
+function findLoneSurrogate(s: string): number {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0xd800 || code > 0xdfff) continue;
+    if (code >= 0xdc00) return i; // trailing surrogate with no lead
+    const next = s.charCodeAt(i + 1);
+    if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return i;
+    i++; // well-formed pair — skip its low half
+  }
+  return -1;
+}
+
+/**
+ * Turn a captured CDP body into the exact bytes Chrome received.
+ *
+ * `Network.getResponseBody` reports its own encoding via `base64Encoded`, so
+ * that flag — never the MIME type — decides how the body is read. A base64
+ * JPEG labelled `text/plain` is still base64; a UTF-8 JSON document labelled
+ * `application/octet-stream` is still text. Anything that cannot be decoded
+ * faithfully is an error, not a best-effort write.
+ */
+function decodeResponseBody(body: string, base64Encoded: boolean): DecodedBody {
+  if (base64Encoded) {
+    let binary: string;
+    try {
+      binary = atob(body);
+    } catch {
+      return { error: 'response body is flagged base64 but is not valid base64' };
+    }
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i) & 0xff;
+    return { bytes };
+  }
+  const lone = findLoneSurrogate(body);
+  if (lone >= 0) {
+    return {
+      error: `response body has an unpaired surrogate at index ${lone} and cannot be saved without substituting U+FFFD`,
+    };
+  }
+  return { bytes: new TextEncoder().encode(body) };
 }
 
 /** Look up an entry by 1-based display index. */
@@ -272,7 +326,10 @@ export const requestHandler: PlaywrightHandler = async ({
   if (entry.responseBody !== null) {
     const body = entry.responseBody;
     const preview = body.length > 4096 ? body.slice(0, 4096) + '\n... (truncated)' : body;
-    parts.push('', `Response Body:\n${preview}`);
+    // Say so when the preview is base64 — `response-body --filename` is what
+    // turns it back into bytes.
+    const label = entry.responseBodyBase64 ? 'Response Body (base64)' : 'Response Body';
+    parts.push('', `${label}:\n${preview}`);
   }
 
   const output = parts.join('\n') + '\n';
@@ -445,6 +502,17 @@ export const responseBodyHandler: PlaywrightHandler = async ({
 
   const filename = flags['filename'];
 
+  const decoded = decodeResponseBody(entry.responseBody, entry.responseBodyBase64);
+  if ('error' in decoded) {
+    return { stdout: '', stderr: `Request ${indexStr}: ${decoded.error}\n`, exitCode: 1 };
+  }
+
+  if (filename) {
+    await fs.writeFile(filename, decoded.bytes);
+    return { stdout: `Saved to ${filename}\n`, stderr: '', exitCode: 0 };
+  }
+
+  // MIME only picks the rendering on stdout — it never touched the bytes above.
   const isBinary =
     entry.mimeType !== null &&
     !entry.mimeType.startsWith('text/') &&
@@ -452,34 +520,13 @@ export const responseBodyHandler: PlaywrightHandler = async ({
     !entry.mimeType.includes('javascript') &&
     !entry.mimeType.includes('xml');
 
-  if (filename) {
-    if (isBinary) {
-      try {
-        const binary = atob(entry.responseBody);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        await fs.writeFile(filename, bytes);
-      } catch {
-        await fs.writeFile(filename, entry.responseBody);
-      }
-    } else {
-      await fs.writeFile(filename, entry.responseBody);
-    }
-    return { stdout: `Saved to ${filename}\n`, stderr: '', exitCode: 0 };
-  }
-
   if (isBinary) {
-    try {
-      const byteLength = atob(entry.responseBody).length;
-      return { stdout: `[binary body, ${byteLength} bytes]\n`, stderr: '', exitCode: 0 };
-    } catch {
-      // Fall through and show raw
-    }
+    return { stdout: `[binary body, ${decoded.bytes.length} bytes]\n`, stderr: '', exitCode: 0 };
   }
 
-  const body = entry.responseBody;
+  const body = entry.responseBodyBase64
+    ? new TextDecoder().decode(decoded.bytes)
+    : entry.responseBody;
   const preview = body.length > 4096 ? body.slice(0, 4096) + '\n... (truncated)' : body;
   return { stdout: preview + '\n', stderr: '', exitCode: 0 };
 };
