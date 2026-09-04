@@ -1,7 +1,9 @@
 /**
  * Server-side sudo approval types for the node-server float.
  *
- * The browser broker (`packages/webapp/src/sudo/http-broker.ts`) POSTs a
+ * The browser's `node-rest` `CapabilityBroker` adapter
+ * (`packages/webapp/src/work-unit/capability/rest-ops.ts`'s
+ * `restRequestApproval`) POSTs a
  * {@link SudoApproveRequest} to `/api/sudo-approve`; this process selects a
  * native backend, raises a real OS dialog / TTY prompt, and returns a
  * {@link SudoDecision}. The decision can only come from a genuine human

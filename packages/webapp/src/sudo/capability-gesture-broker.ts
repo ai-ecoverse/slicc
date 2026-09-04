@@ -11,13 +11,13 @@
  * implements that exact transport step under `approvals.request`
  * (`ApprovalCapability`'s doc comment: "the native-gesture hop, and only
  * that"), including its OWN fail-closed decision normalization
- * (`normalizeApprovalDecision`, shared by the REST and extension adapters
- * specifically so this rule has one copy, not three chances to fail open) —
- * so `result.value` on success is already a clean `{decision, pattern?}`,
- * structurally a `SudoDecision` with no `reason`/`attestation` set, exactly
- * what the old raw brokers returned. This module adds nothing on top of
- * that; it only builds the request and fails closed on `!result.ok` or a
- * missing broker.
+ * (`normalizeApprovalDecision`) before returning — so `result.value` on
+ * success is normally already clean. This module runs `normalizeApprovalDecision`
+ * on it AGAIN anyway: `SudoFS` / `enforceCommandSudo` only ever check
+ * `decision === 'deny'`, so a non-canonical shape a future (or buggy)
+ * adapter lets through would otherwise fail OPEN at the enforcement layer,
+ * not just look wrong here. Cheap and idempotent when the adapter already
+ * did it right, load-bearing when one doesn't (round-1 review finding 1).
  *
  * `signal` is the ONLY deadline on this hop (`ApprovalCapability`'s own doc
  * comment) — this module adds none of its own. The 5-minute human-decision
@@ -27,7 +27,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
-import type { CapabilityBroker } from '../work-unit/capability/index.js';
+import { type CapabilityBroker, normalizeApprovalDecision } from '../work-unit/capability/index.js';
 import { suggestPattern } from './suggest-pattern.js';
 import type { SudoBroker, SudoDecision, SudoRequest, SudoRequestOptions } from './types.js';
 
@@ -89,12 +89,26 @@ export function createCapabilityGestureSudoBroker(
         ...(signal ? { signal } : {}),
       });
       if (!result.ok) {
+        // A `CapabilityFailure` here is distinguishable from a human's
+        // refusal at the `CapabilityBroker` level (`docs/work-unit.md`
+        // phase 6 detail), but `SudoDecision` has no shape for that: a
+        // broken relay reads as a plain `deny` here, not `reason:
+        // 'user-timeout'` (that would misreport it as an unanswered
+        // prompt rather than a dead transport).
         log.warn('capability broker approvals.request failed — denying', {
           message: result.message,
         });
         return { decision: 'deny' };
       }
-      return result.value;
+      // Defence in depth: `SudoFS` / `enforceCommandSudo` only ever check
+      // `decision === 'deny'`, so any non-canonical shape a future (or
+      // buggy) adapter lets through — 'ALLOW', 'ok', an `always` with no
+      // pattern — would otherwise be treated as allow-once, and `always`
+      // would persist `pattern ?? subject` verbatim. Every adapter already
+      // runs this same rule before returning, so this re-run is normally a
+      // no-op; it exists so the enforcement layer's safety never DEPENDS on
+      // that (round-1 review finding 1).
+      return normalizeApprovalDecision(result.value, suggestedPattern);
     },
   };
 }

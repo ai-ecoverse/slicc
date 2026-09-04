@@ -2,8 +2,9 @@
  * Side-panel responder for extension-mode sudo requests.
  *
  * Runs in the panel realm (which has a user-scriptable `window`). Listens for
- * the offscreen broker's `sudo-request` envelope (see `extension-broker.ts`),
- * raises genuine native modals, and returns the decision:
+ * the offscreen relay's `sudo-request` envelope (see
+ * `work-unit/capability/extension-ops.ts`'s approval relay, #2276), raises
+ * genuine native modals, and returns the decision:
  *
  *   1. `confirm` — allow vs deny (Cancel = deny, fail closed).
  *   2. on allow, a second `confirm` — "Always" vs just-this-once.

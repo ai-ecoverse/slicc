@@ -83,7 +83,7 @@ describe('createCapabilityGestureSudoBroker', () => {
     expect(request.mock.calls[0]?.[0]?.suggestedPattern).toBe('already-suggested*');
   });
 
-  it('calls the broker with the suggested pattern and returns the decision as-is', async () => {
+  it('calls the broker with the suggested pattern and returns a canonical allow unchanged', async () => {
     const request = vi.fn(
       (_req: ApprovalRequest) => ({ ok: true, value: { decision: 'allow' } }) as const
     );
@@ -98,10 +98,34 @@ describe('createCapabilityGestureSudoBroker', () => {
     );
   });
 
-  it('passes through an always decision with its pattern — the adapter already normalized it', async () => {
+  it('passes through a canonical always decision with its pattern unchanged', async () => {
     const request = vi.fn(
       (_req: ApprovalRequest) =>
         ({ ok: true, value: { decision: 'always', pattern: 'git push*' } }) as const
+    );
+    const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'always', pattern: 'git push*' });
+  });
+
+  it('re-normalizes a non-canonical decision to deny — defence in depth, round-1 review finding 1', async () => {
+    // SudoFS / enforceCommandSudo only ever check `decision === 'deny'`, so
+    // ANY other shape is treated as allow-once. If a future (or buggy)
+    // adapter ever let 'ALLOW' (wrong case) through unnormalized, this
+    // broker must not forward it as-is.
+    const request = vi.fn(
+      (_req: ApprovalRequest) =>
+        ({
+          ok: true,
+          value: { decision: 'ALLOW' },
+        }) as unknown as CapabilityResult<ApprovalDecision>
+    );
+    const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
+    expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
+  });
+
+  it('fills an always decision missing a pattern with the suggested default — defence in depth', async () => {
+    const request = vi.fn(
+      (_req: ApprovalRequest) => ({ ok: true, value: { decision: 'always' } }) as const
     );
     const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'always', pattern: 'git push*' });

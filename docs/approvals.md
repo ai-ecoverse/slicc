@@ -300,8 +300,8 @@ and nothing else changes.
 
 ```text
 Orchestrator.init()
-  └─ new SudoManager({ fs: sharedFs, watcher })  // seed + load + watch
-       ├─ getBroker()         → createSudoBroker()         // user broker (cone)
+  └─ new SudoManager({ fs: sharedFs, watcher, capabilityBroker })  // seed + load + watch
+       ├─ getBroker()         → createSudoBroker(capabilityBroker) // user broker (cone), #2276
        ├─ getPolicy()         → live merged global SudoersPolicy
        ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ config grants ∪ /scoops/<folder>/etc/sudoers
        └─ getShellConfig()    → { getPolicy, broker, persistCommandGrant }
@@ -334,12 +334,15 @@ Brokers (`packages/webapp/src/sudo/`):
   The kernel worker raises the prompt directly in the leader tab (the page realm
   hosts `window.confirm` / `window.prompt`); there is no longer an offscreen-to-
   side-panel relay because the extension does not ship either surface.
-- **CLI / Electron** — `createHttpSudoBroker` POSTs `POST /api/sudo-approve`
-  (`packages/node-server/src/sudo/`), which selects an OS-native backend
-  (Electron / osascript / PowerShell / zenity / TTY).
+- **CLI / Electron** — the `node-rest` `CapabilityBroker` adapter's
+  `restRequestApproval` (`work-unit/capability/rest-ops.ts`, #2276) POSTs
+  `POST /api/sudo-approve` (`packages/node-server/src/sudo/`), which selects
+  an OS-native backend (Electron / osascript / PowerShell / zenity / TTY).
+  `sudo/capability-gesture-broker.ts` wraps this as `createSudoBroker`'s raw
+  gesture leg.
 - **Native macOS (swift-server)** — when Sliccstart launches the bundled
-  `slicc-server`, `createHttpSudoBroker` POSTs the same `POST /api/sudo-approve` to
-  `packages/swift-server/Sources/Server/SudoApprove.swift`, which raises the
+  `slicc-server`, the same `restRequestApproval` POSTs `POST /api/sudo-approve`
+  to `packages/swift-server/Sources/Server/SudoApprove.swift`, which raises the
   identical `osascript` dialog as node-server. Loopback-only (the server binds
   `127.0.0.1`) and fail-closed (`deny`) on any error, non-zero exit, dismissed
   dialog, or unparsable output.

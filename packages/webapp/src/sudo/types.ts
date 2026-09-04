@@ -130,8 +130,9 @@ export interface SudoBroker {
 
 /**
  * Wire `type` tag for the offscreen → side-panel sudo request envelope in
- * extension mode. Both ends agree on this literal — see `extension-broker.ts`
- * and `panel-responder.ts`.
+ * extension mode. Both ends agree on this literal — see
+ * `work-unit/capability/extension-ops.ts`'s approval relay (#2276) and
+ * `panel-responder.ts`.
  */
 export const SUDO_REQUEST_TYPE = 'sudo-request';
 

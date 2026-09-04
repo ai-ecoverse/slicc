@@ -15,9 +15,12 @@
  * mitigates by capturing the native modals at module init — see the
  * `NATIVE_CONFIRM` note in `panel-responder.ts`.
  *
- * Enforcement (SudoFS, command guard, secret gates) is intentionally NOT wired
- * here yet — see the sibling tasks in the spec. This module ships the broker
- * plumbing and a manual test hook only.
+ * Enforcement consumes the SAME `createSudoBroker` output: `SudoManager`
+ * (`sudo-manager.ts`) is the one composed broker per float, gating `SudoFS`
+ * writes and the transparent command guard; `secret-command.ts`'s own
+ * `persist` / `scope` / value-change gates reuse that same instance rather
+ * than constructing an independent one (#2276). `installSudoTestHook`
+ * remains a manual, ungated console surface — no separate wiring of its own.
  */
 
 import { createLogger } from '../base/logger.js';

@@ -323,9 +323,11 @@ reference, never the live global. Module init happens during boot, before any
 dynamically registered component can run, so a later override is inert. A realm
 with no native modal denies rather than allowing, and a missing `prompt` keeps
 the narrow suggested pattern instead of widening. The misleading doc comments in
-`sudo/index.ts`, `sudo/extension-broker.ts`, and `ui/boot/setup-sudo.ts` were
-corrected to scope the guarantee accurately, and `docs/approvals.md` gained a
-"Scope of the unforgeable-gesture guarantee" section.
+`sudo/index.ts`, `sudo/extension-broker.ts` (deleted in #2276 slice C; its
+capture-native-modals concern now lives in `panel-responder.ts` itself), and
+`ui/boot/setup-sudo.ts` were corrected to scope the guarantee accurately, and
+`docs/approvals.md` gained a "Scope of the unforgeable-gesture guarantee"
+section.
 
 Where a stronger channel exists it is still preferred: standalone / Electron /
 swift-server raise the dialog from a separate process via `/api/sudo-approve`,

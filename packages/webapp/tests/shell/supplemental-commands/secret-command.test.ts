@@ -191,6 +191,42 @@ describe('secret command — gated ops', () => {
     expect(res.exitCode).toBe(1);
     expect(backend.setSession).not.toHaveBeenCalled();
   });
+});
+
+// #2276 round-1 review finding 4: `deps.broker` omitted entirely (no
+// SudoManager was wired for this shell — an ungated ad-hoc shell, not the
+// panel terminal or a normal cone/scoop, both of which DO wire a real
+// broker) falls back to `createSudoBroker(null)`, which fails closed. Every
+// gated op must deny with the SAME "approval denied" message a real broker's
+// `deny` produces — not throw, not silently proceed.
+describe('secret command — no broker injected (unwired shell) fails every gate closed', () => {
+  it('persisted set denies with "approval denied" and never persists', async () => {
+    const backend = makeBackend();
+    const res = await run(['set', 'TOKEN', 'v', '--domain', 'api.x.com', '--persist'], {
+      backend,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('approval denied');
+    expect(backend.setPersisted).not.toHaveBeenCalled();
+  });
+
+  it('scope edit denies with "approval denied" and never rescopes', async () => {
+    const backend = makeBackend();
+    const res = await run(['scope', 'TOKEN', '--domain', 'api.x.com'], { backend });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('approval denied');
+    expect(backend.setScope).not.toHaveBeenCalled();
+  });
+
+  it('value change of an existing secret denies with "approval denied" and never overwrites', async () => {
+    const backend = makeBackend({
+      getInfo: vi.fn(async () => ({ name: 'TOKEN', domains: ['x'], persisted: false })),
+    });
+    const res = await run(['set', 'TOKEN', 'newval', '--domain', 'api.x.com'], { backend });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('approval denied');
+    expect(backend.setSession).not.toHaveBeenCalled();
+  });
 
   it('"Always" grant skips the prompt on the next identical op', async () => {
     const backend = makeBackend();

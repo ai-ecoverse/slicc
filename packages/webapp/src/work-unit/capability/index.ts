@@ -137,6 +137,7 @@
  * `ui/` sites stay as they are: UI composition may know its float.
  */
 
+export { normalizeApprovalDecision } from './approval-decision.js';
 export type {
   CapabilityImplementations,
   ComposeCapabilityBrokerOptions,

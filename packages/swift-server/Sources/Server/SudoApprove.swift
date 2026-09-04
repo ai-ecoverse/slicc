@@ -7,8 +7,10 @@ import NIOCore
 /// Sliccstart-bundled `slicc-server`.
 ///
 /// **Mirrors `packages/node-server/src/sudo/endpoint.ts` +
-/// `dialog-backends.ts` (`createOsascriptBackend`).** The in-browser broker
-/// (`packages/webapp/src/sudo/http-broker.ts`) POSTs the gated action here;
+/// `dialog-backends.ts` (`createOsascriptBackend`).** The browser's
+/// `node-rest` `CapabilityBroker` adapter
+/// (`packages/webapp/src/work-unit/capability/rest-ops.ts`'s
+/// `restRequestApproval`) POSTs the gated action here;
 /// this process is the only one that can raise a genuine native dialog (the
 /// agent's browser `node` shim cannot reach it). The Hummingbird server runs
 /// headless, so the dialog is raised by shelling out to `/usr/bin/osascript`
