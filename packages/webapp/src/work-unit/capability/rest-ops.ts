@@ -60,7 +60,7 @@ import {
  *     dialog has been ANSWERED, so this deadline would deny every approval a
  *     person took more than ten seconds to think about. Its budget is the
  *     caller's `signal` (the 5-minute `withApprovalTimeout` in `sudo/`),
- *     exactly as `sudo/http-broker.ts` does it today.
+ *     exactly as `sudo/capability-gesture-broker.ts` does it today.
  */
 const CONTROL_CALL_TIMEOUT_MS = REST_CONTROL_CALL_TIMEOUT_MS;
 

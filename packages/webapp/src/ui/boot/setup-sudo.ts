@@ -24,10 +24,16 @@ import type { SudoSetupDeps } from './types.js';
  * mode this resolves via `POST /api/sudo-approve` (native OS dialog
  * from the node-server process); no enforcement is wired yet — it's
  * a test surface.
+ *
+ * This is `node-rest` by definition — "standalone" IS that topology, not a
+ * fact this module probes for — so it constructs that one adapter directly
+ * rather than asking the kernel worker's composed broker (a different JS
+ * realm; the object cannot cross that boundary) (#2276).
  */
 export async function setupSudoStandalone(_deps: SudoSetupDeps): Promise<void> {
-  const { installSudoTestHook } = await import('../../sudo/index.js');
-  installSudoTestHook();
+  const { createSudoBroker, installSudoTestHook } = await import('../../sudo/index.js');
+  const { createRestCapabilityBroker } = await import('../../work-unit/capability/index.js');
+  installSudoTestHook(createSudoBroker(createRestCapabilityBroker()));
 }
 
 /**

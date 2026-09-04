@@ -1,16 +1,18 @@
 /**
- * Tests for `createSudoBroker` float selection. The three broker factories and
- * the proxied-fetch delegate-id accessor are mocked so the branch chosen for
- * each float — extension runtime, thin-bridge kernel worker (`ext=` delegate),
- * and the HTTP fallback — is asserted without a real `chrome` / panel-RPC.
+ * Tests for `createSudoBroker`'s composition (#2276 slice C): it wraps the
+ * INJECTED `CapabilityBroker`'s `approvals.request` as the raw gesture leg
+ * instead of probing `chrome` / an extension-delegate id itself, and applies
+ * tray-first delegation (#2062) to every adapter except the two extension
+ * ones (which already relay to the panel, where the native modal lives).
  *
- * `createSudoBroker` wraps whichever factory it picks in `withApprovalTimeout`,
- * so the returned object is NOT the factory's sentinel. Selection is asserted
- * on which factory ran; the last case pins the wrap itself (an unanswered
- * prompt must settle as a timeout instead of blocking the agent forever).
+ * `createCapabilityGestureSudoBroker` and `createTrayFirstSudoBroker` are
+ * mocked so this file asserts SELECTION (which policy wrapper ran, and with
+ * what) without a real transport; the last case pins the outer
+ * `withApprovalTimeout` wrap itself.
  */
 
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import type { CapabilityBroker } from '../../src/work-unit/capability/index.js';
 
 /** Never-settling approval: stands in for a prompt nobody answers. */
 const sentinel = (id: string) => ({
@@ -18,23 +20,15 @@ const sentinel = (id: string) => ({
   __id: id,
 });
 
-vi.mock('../../src/sudo/extension-broker.js', () => ({
-  createExtensionSudoBroker: vi.fn(() => sentinel('extension')),
+vi.mock('../../src/sudo/capability-gesture-broker.js', () => ({
+  createCapabilityGestureSudoBroker: vi.fn(() => sentinel('capability-gesture')),
 }));
-vi.mock('../../src/sudo/panel-rpc-broker.js', () => ({
-  createPanelRpcSudoBroker: vi.fn(() => sentinel('panel-rpc')),
-}));
-vi.mock('../../src/sudo/http-broker.js', () => ({
-  createHttpSudoBroker: vi.fn(() => sentinel('http')),
-}));
-// The HTTP broker is wrapped tray-first (#2062) so the page can hand the
-// prompt to a tray follower before the OS dialog fires; the wrapper tags the
-// inner id so the selection assertions below stay about the inner broker.
+// Forwards like the real wrapper so the timeout wrap above still sees a
+// hanging inner prompt; tags the inner id so selection assertions stay
+// about the RAW broker, not this wrapper.
 vi.mock('../../src/sudo/tray-first-broker.js', () => ({
   createTrayFirstSudoBroker: vi.fn(
     (inner: { __id: string; requestApproval: (...args: unknown[]) => unknown }) => ({
-      // Forward like the real wrapper so the timeout wrap above still sees a
-      // hanging inner prompt.
       requestApproval: (...args: unknown[]) => inner.requestApproval(...args),
       __id: inner.__id,
       __trayFirst: true,
@@ -42,81 +36,71 @@ vi.mock('../../src/sudo/tray-first-broker.js', () => ({
   ),
 }));
 
-let delegateId: string | null = null;
-vi.mock('../../src/shell/proxied-fetch.js', () => ({
-  getExtensionDelegateId: () => delegateId,
-}));
-
 import { USER_SUDO_TIMEOUT_MS } from '../../src/sudo/approval-timeout.js';
-import { createExtensionSudoBroker } from '../../src/sudo/extension-broker.js';
-import { createHttpSudoBroker } from '../../src/sudo/http-broker.js';
+import { createCapabilityGestureSudoBroker } from '../../src/sudo/capability-gesture-broker.js';
 import { createSudoBroker } from '../../src/sudo/index.js';
-import { createPanelRpcSudoBroker } from '../../src/sudo/panel-rpc-broker.js';
 import { createTrayFirstSudoBroker } from '../../src/sudo/tray-first-broker.js';
 
-const ORIGINAL_CHROME = (globalThis as { chrome?: unknown }).chrome;
-
-function setChrome(value: unknown): void {
-  (globalThis as { chrome?: unknown }).chrome = value;
+function fakeBroker(adapter: CapabilityBroker['adapter']): CapabilityBroker {
+  return { adapter } as CapabilityBroker;
 }
 
 beforeEach(() => {
-  delegateId = null;
-  setChrome(undefined);
-});
-
-afterEach(() => {
-  setChrome(ORIGINAL_CHROME);
   vi.clearAllMocks();
 });
 
-describe('createSudoBroker selection', () => {
-  it('picks the extension broker inside the extension runtime', () => {
-    setChrome({ runtime: { id: 'abc' } });
-    createSudoBroker();
-    expect(createExtensionSudoBroker).toHaveBeenCalledTimes(1);
-    expect(createPanelRpcSudoBroker).not.toHaveBeenCalled();
-    expect(createHttpSudoBroker).not.toHaveBeenCalled();
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('createSudoBroker composition', () => {
+  it('wraps the injected broker as the raw gesture leg, never constructing its own transport', () => {
+    const broker = fakeBroker('node-rest');
+    createSudoBroker(broker);
+    expect(createCapabilityGestureSudoBroker).toHaveBeenCalledTimes(1);
+    expect((createCapabilityGestureSudoBroker as Mock).mock.calls[0]?.[0]).toBe(broker);
   });
 
-  it('picks the panel-RPC broker in the thin-bridge worker (ext= delegate, no chrome)', () => {
-    setChrome(undefined);
-    delegateId = 'ext-delegate-id';
-    createSudoBroker();
-    expect(createPanelRpcSudoBroker).toHaveBeenCalledTimes(1);
-    expect(createExtensionSudoBroker).not.toHaveBeenCalled();
-    expect(createHttpSudoBroker).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the tray-first-wrapped HTTP broker when no chrome and no delegate id', () => {
-    setChrome(undefined);
-    delegateId = null;
-    createSudoBroker();
-    expect(createHttpSudoBroker).toHaveBeenCalledTimes(1);
-    expect(createExtensionSudoBroker).not.toHaveBeenCalled();
-    expect(createPanelRpcSudoBroker).not.toHaveBeenCalled();
-    // The HTTP broker is the one handed to the tray-first wrapper (#2062).
+  it('tray-first-wraps node-rest (#2062 — the OS dialog can still be preempted)', () => {
+    createSudoBroker(fakeBroker('node-rest'));
     expect(createTrayFirstSudoBroker).toHaveBeenCalledTimes(1);
-    expect((createTrayFirstSudoBroker as Mock).mock.calls[0]?.[0]).toMatchObject({ __id: 'http' });
+    expect((createTrayFirstSudoBroker as Mock).mock.calls[0]?.[0]).toMatchObject({
+      __id: 'capability-gesture',
+    });
   });
 
-  it('keeps the HTTP broker for a non-extension page realm even with a delegate id', () => {
-    // A real `chrome` object without `runtime.id` is the thin-bridge PAGE
-    // realm — it routes fetch itself, and the panel responder lives here, so
-    // it must NOT pick the worker panel-RPC broker.
-    setChrome({ runtime: { connect: () => {} } });
-    delegateId = 'ext-delegate-id';
-    createSudoBroker();
-    expect(createHttpSudoBroker).toHaveBeenCalledTimes(1);
-    expect(createPanelRpcSudoBroker).not.toHaveBeenCalled();
+  it('tray-first-wraps connect too — it has no privileged surface, so the raw leg always denies, but tray-first can still preempt it', () => {
+    createSudoBroker(fakeBroker('connect'));
+    expect(createTrayFirstSudoBroker).toHaveBeenCalledTimes(1);
   });
 
-  it('wraps the selected broker so an unanswered prompt times out', async () => {
+  it('does NOT tray-first-wrap extension-direct — it already relays to the panel where the modal lives', () => {
+    const broker = fakeBroker('extension-direct');
+    const result = createSudoBroker(broker);
+    expect(createTrayFirstSudoBroker).not.toHaveBeenCalled();
+    // The raw gesture broker's own requestApproval is reachable directly
+    // (through the timeout wrap), not double-relayed through tray-first.
+    void result;
+  });
+
+  it('does NOT tray-first-wrap extension-delegate either', () => {
+    createSudoBroker(fakeBroker('extension-delegate'));
+    expect(createTrayFirstSudoBroker).not.toHaveBeenCalled();
+  });
+
+  it('tray-first-wraps when no broker was ever injected (defensive: a tray follower may still be reachable)', () => {
+    createSudoBroker(null);
+    expect(createCapabilityGestureSudoBroker).toHaveBeenCalledWith(null);
+    expect(createTrayFirstSudoBroker).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps the composed broker so an unanswered prompt times out', async () => {
     vi.useFakeTimers();
     try {
-      setChrome(undefined);
-      delegateId = null;
-      const pending = createSudoBroker().requestApproval({ kind: 'command', detail: 'git push' });
+      const pending = createSudoBroker(fakeBroker('node-rest')).requestApproval({
+        kind: 'command',
+        detail: 'git push',
+      });
       await vi.advanceTimersByTimeAsync(USER_SUDO_TIMEOUT_MS);
       await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'user-timeout' });
     } finally {

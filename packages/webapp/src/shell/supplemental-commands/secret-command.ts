@@ -161,7 +161,13 @@ function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
   const grants = deps.grants ?? moduleGrants;
   let broker = deps.broker;
   const getBroker = (): SudoBroker => {
-    broker ??= createSudoBroker();
+    // No `deps.broker` means this shell has no sudo config at all (e.g. the
+    // bare panel terminal, `sudo-wiring.ts`'s `null` case) — fail closed
+    // rather than constructing an independent, guessed-transport broker
+    // (#2276). Every gated shell wires `broker` via
+    // `createSupplementalCommands`'s `options.sudoCommand?.broker`, the SAME
+    // instance SudoFS and `sudo <cmd>` use.
+    broker ??= createSudoBroker(null);
     return broker;
   };
 

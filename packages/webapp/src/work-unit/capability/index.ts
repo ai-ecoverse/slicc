@@ -5,8 +5,8 @@
  * with real adapters keyed by float topology (`node-rest`, `extension-direct`,
  * `extension-delegate`, `connect`), composed once in `kernel/host.ts`. Slice C
  * removes float probes from `scoops/` / `tools/` / `kernel/` business logic
- * (review-patterns category 10), one domain per PR — network, secrets and
- * mounts are done.
+ * (review-patterns category 10), one domain per PR — network, secrets,
+ * mounts and approvals are done.
  *
  * `network` (#2276 slice C, done, #2829): none of `scoops/tray-leader.ts`
  * (`createTrayFetch`), `shell/proxied-fetch.ts` (`createProxiedFetch`) or
@@ -89,6 +89,26 @@
  * (bridging a page-realm gesture from the kernel worker) is separate,
  * larger follow-up work. See `docs/work-unit.md` phase 6e.
  *
+ * `approvals` (#2276 slice C, done): `sudo/index.ts`'s `createSudoBroker` now
+ * takes the float's ONE composed `CapabilityBroker` as a required parameter
+ * and wraps its `approvals.request` (`sudo/capability-gesture-broker.ts`,
+ * new) as the raw native-gesture leg — replacing three deleted,
+ * topology-probed brokers (`http-broker.ts` / `extension-broker.ts` /
+ * `panel-rpc-broker.ts`) that shared one shape (suggest a pattern, bail on
+ * an already-aborted signal, run a topology-specific transport, fail
+ * closed) and differed only in transport. Every slice-B adapter already
+ * implements that transport step, including the SAME fail-closed decision
+ * normalization those three duplicated (`normalizeApprovalDecision`, now
+ * genuinely one copy). `approvals.request` stays ONLY the gesture hop —
+ * tray-first delegation to a follower's human (#2062, wraps every adapter
+ * except the two extension ones, which already relay to the panel where the
+ * modal lives) and the 5-minute `withApprovalTimeout` budget are UNCHANGED
+ * policy in `sudo/`; `broker.adapter` (which floats skip tray-first) is a
+ * fact read off the already-injected object, not a new probe. `Orchestrator`
+ * threads its own composed broker into both `SudoManager` constructions;
+ * `secret-command.ts` now reuses that SAME broker instead of constructing an
+ * independent one. See `docs/work-unit.md` phase 6f.
+ *
  * TODO(#2276) slice C, remaining domains — privileged call sites in `scoops/`
  * / `tools/` / `kernel/` that still branch on float / topology
  * (`isChromeExtensionRealm` / `isExtensionRealm` / `hasLocalNodeServer` /
@@ -108,8 +128,6 @@
  * `canConnectToChromeRuntime` — both are true on the thin-bridge hosted page
  * and are float signals just like the other six.
  *
- * approvals
- *   - sudo/index.ts `createSudoBroker`
  * browser
  *   - shell/supplemental-commands/playwright/handlers/snapshot.ts
  * leftovers (take a composition-time answer, not a probe)

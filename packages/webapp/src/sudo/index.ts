@@ -21,12 +21,9 @@
  */
 
 import { createLogger } from '../base/logger.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
-import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
+import type { CapabilityBroker } from '../work-unit/capability/index.js';
 import { withApprovalTimeout } from './approval-timeout.js';
-import { createExtensionSudoBroker } from './extension-broker.js';
-import { createHttpSudoBroker } from './http-broker.js';
-import { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
+import { createCapabilityGestureSudoBroker } from './capability-gesture-broker.js';
 import { createTrayFirstSudoBroker } from './tray-first-broker.js';
 import type { SudoBroker, SudoRequest } from './types.js';
 
@@ -40,6 +37,10 @@ export {
   withApprovalTimeout,
 } from './approval-timeout.js';
 export {
+  type CapabilityGestureSudoBrokerDeps,
+  createCapabilityGestureSudoBroker,
+} from './capability-gesture-broker.js';
+export {
   CONE_SUDO_TIMEOUT_MS,
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -48,8 +49,6 @@ export {
   type PendingSudoRequest,
   type SudoSettleReason,
 } from './cone-broker.js';
-export { createExtensionSudoBroker } from './extension-broker.js';
-export { createHttpSudoBroker } from './http-broker.js';
 export {
   resetSudoPageServiceForTests,
   resolveSudoApprovalInPage,
@@ -63,7 +62,6 @@ export {
   type PanelResponderDeps,
   resolveSudoRequest,
 } from './panel-responder.js';
-export { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
 export { suggestPattern } from './suggest-pattern.js';
 export { createTrayFirstSudoBroker } from './tray-first-broker.js';
 export type {
@@ -81,50 +79,35 @@ const log = createLogger('sudo');
 /** Global hook name used by {@link installSudoTestHook}. */
 export const SUDO_BRIDGE_GLOBAL_KEY = '__slicc_sudo';
 
-/** True when running inside the Chrome extension runtime. */
-function isExtensionRuntime(): boolean {
-  return isExtensionRealm();
-}
-
 /**
- * True in the thin-bridge extension leader's kernel-worker realm: no `chrome`
- * at all, but an `ext=` extension delegate id was forwarded at boot (the same
- * signal `createProxiedFetch` keys its worker→page bridge on). Standalone /
- * Electron / hosted-leader workers reach a local node-server `/api/sudo-approve`
- * directly, so they keep the HTTP broker.
- */
-function isThinBridgeWorker(): boolean {
-  return typeof chrome === 'undefined' && getExtensionDelegateId() !== null;
-}
-
-/**
- * Construct the {@link SudoBroker} for the current float. Extension mode relays
- * offscreen → side-panel; the thin-bridge extension leader's kernel worker
- * relays to its page realm over panel-RPC (where the native modal lives); every
- * other float (standalone CLI, Electron, hosted leader) talks to the
- * node-server `/api/sudo-approve` endpoint — wrapped tray-first (issue #2062)
- * so the page realm can hand the prompt to a tray follower's human (or its own
- * in-page dialog when there is no node-server) before the OS dialog fires.
- * The panel-RPC broker already settles in the page, so it needs no wrapper.
+ * Construct the {@link SudoBroker} for the current float, given the ONE
+ * `CapabilityBroker` the caller already composed (#2276) — never re-resolved
+ * here. `null` means no broker was ever injected (a composition bug, or a
+ * caller with no float to speak of); the gesture leg then fails closed to
+ * `deny` rather than guessing a transport (see
+ * `capability-gesture-broker.ts`).
  *
- * Every float is wrapped in {@link withApprovalTimeout} so a prompt nobody
- * answers releases the blocked agent turn fail-closed instead of hanging on it
- * forever. The wrap lives here rather than in each broker so all three floats
- * share one budget and one `reason: 'timeout'` contract.
+ * `approvals.request` is ONLY the native-gesture hop (`ApprovalCapability`'s
+ * own doc comment) — everything routing-shaped stays POLICY here:
+ * tray-first delegation to a follower's human (issue #2062, wraps every
+ * adapter except the two extension ones, which already relay to the panel
+ * where the modal lives — wrapping them again would double-relay for no
+ * benefit) and the 5-minute {@link withApprovalTimeout} budget so an
+ * unanswered prompt releases the blocked agent turn instead of hanging on it
+ * forever. `broker.adapter` is a fact already resolved once at composition
+ * time in `kernel/host.ts`, not a probe read here.
  */
-export function createSudoBroker(): SudoBroker {
-  return withApprovalTimeout(createFloatSudoBroker());
+export function createSudoBroker(broker: CapabilityBroker | null): SudoBroker {
+  return withApprovalTimeout(createFloatSudoBroker(broker));
 }
 
-/** The raw, float-appropriate broker before the timeout wrap. */
-function createFloatSudoBroker(): SudoBroker {
-  if (isExtensionRuntime()) {
-    return createExtensionSudoBroker();
+/** The raw-gesture broker, tray-first-wrapped where that policy applies, before the timeout wrap. */
+function createFloatSudoBroker(broker: CapabilityBroker | null): SudoBroker {
+  const raw = createCapabilityGestureSudoBroker(broker);
+  if (broker?.adapter === 'extension-direct' || broker?.adapter === 'extension-delegate') {
+    return raw;
   }
-  if (isThinBridgeWorker()) {
-    return createPanelRpcSudoBroker();
-  }
-  return createTrayFirstSudoBroker(createHttpSudoBroker());
+  return createTrayFirstSudoBroker(raw);
 }
 
 /** The single property {@link installSudoTestHook} grafts onto `globalThis`. */
@@ -148,7 +131,7 @@ export interface SudoBridge {
  * This is the ONLY wiring of the broker into the running app for now; no FS,
  * shell, or secret enforcement consumes it yet.
  */
-export function installSudoTestHook(broker: SudoBroker = createSudoBroker()): SudoBridge {
+export function installSudoTestHook(broker: SudoBroker): SudoBridge {
   const bridge: SudoBridge = {
     requestApproval: (req: SudoRequest) => broker.requestApproval(req),
   };

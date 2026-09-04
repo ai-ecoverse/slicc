@@ -1,11 +1,11 @@
 /**
  * One fail-closed reading of an approval answer (#2276 slice B).
  *
- * Shared by both ops modules, and deliberately the same rule as
- * `sudo/http-broker.ts`: anything that is not a recognized `allow` / `always`
- * shape is a `deny`, and an `always` with no pattern falls back to the
- * suggestion. Three copies of this rule would be three chances for one of
- * them to fail OPEN.
+ * Shared by both ops modules: anything that is not a recognized `allow` /
+ * `always` shape is a `deny`, and an `always` with no pattern falls back to
+ * the suggestion. `sudo/capability-gesture-broker.ts` (slice C) reuses this
+ * result as-is — it never re-normalizes — so this is now the ONE copy of
+ * the rule, not three chances for one of them to fail OPEN.
  *
  * This reads a DECISION. It does not read a transport error — a relay that
  * broke is a `CapabilityFailure`, not a human saying no, and the adapters
