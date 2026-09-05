@@ -256,6 +256,71 @@ a targeted run cannot be used to aim a fixer at a human's PR.
 one-hour settling wait, leaving the decided-label dedup, the denylist, the
 in-flight-PR check, and the dispatch budget in force.
 
+## regression-cluster-hunter
+
+`packages/dev-tools/regression-cluster-hunter/` + `.github/workflows/regression-cluster-hunter.yml`.
+Full notes: [its README](../packages/dev-tools/regression-cluster-hunter/README.md).
+
+**"Misery loves company."** When a release lands, sweep for the surviving
+siblings of one bug fix that shipped in it. This is the complement to
+`agentic-debt-triage.yml`, which rotates seven _static_ debt taxonomies and
+files ONE issue per night: fixing one instance and leaving the rest is the
+repo's most repeated failure mode, and a one-per-night rotation drip-feeds a
+cluster instead of sweeping it.
+
+Four recorded clusters motivate it. #2818 (binary bodies UTF-8-corrupted) →
+#2878, #2883, #2884, #2885, #2886, #2887, all found by hand the next day.
+#2071 → #2154 → #2400 → #2703, four copies of one `readFile`-swallow-then-
+clobber bug, surfaced one _per week_ by the nightly rotation. #1996 → #2821,
+#2822, one predicate across three runtimes. #2166 → #2255 → seven more
+"unknown flag accepted, exit 0" issues.
+
+Same two-part shape as the scheduled family: a deterministic Node selector
+(unit-tested in the `dev-tools` project) writes a composed prompt to
+`$GITHUB_OUTPUT`, then Claude does the judgement work. It is read-only on code —
+`Edit`/`Write`/`gh pr create` are in `--disallowedTools`; the only writes are
+`gh issue create`.
+
+Four things here are easy to get wrong and are therefore pinned by tests:
+
+- **`on: release` would never fire.** semantic-release publishes the GitHub
+  Release with `secrets.GITHUB_TOKEN` (`release.yml`), and GitHub does not start
+  workflow runs from events created by `GITHUB_TOKEN`. The trigger is
+  `workflow_run` on **Release** completing. But `Release` runs on every push to
+  main and usually publishes nothing, so the selector confirms a
+  `chore(release):` commit in the window before spending anything —
+  `releasedVersion()`.
+- **The evidence bar is a surviving construct**, never "this file looks
+  similar": the fix deleted some code, and code of the same kind is still
+  present in files the fix did not touch. No survivors, no dispatch.
+- **Signature tokens come from REMOVED lines, in product-source hunks, skipping
+  comments.** Grepping the _remedy_ finds the sites that are already correct.
+  Harvesting the diff's `docs/` and test hunks turns English into signatures —
+  replaying #2888 without those filters produced `avoids`, `clicking` and
+  `targeting` as top signatures. Tokens that also appear on added lines survived
+  the fix and are ranked _down_, not dropped: dropping them left #2888 with no
+  signature at all.
+- **A lexical signature cannot find every sibling, and the brief says so.**
+  #2818's tokens were all `latin1` — the convention it _removed_ — while its
+  five real siblings were `TextEncoder` / `base64Encoded` sites sharing no
+  vocabulary with it. `shapes.mjs` is the second search: a catalog of shapes
+  that have provably clustered here, each with its own `detect(diff)` and
+  `probe(text)`. `probe` is a function because the strongest signal is often an
+  _absence_ (#2887 reads `base64Encoded` and never decodes it). Every shape
+  carries an `evidence` field naming its real cluster, enforced by a test — a
+  speculative probe turns the sweep into a grep dump.
+
+Cost: releases land ~8×/day (~27 `fix` commits/day), so three gates keep the
+model spend bounded — a `MIN_INTERVAL_HOURS` cooldown (default 12), the
+release-actually-landed check, and the surviving-construct bar. Cross-run state
+is GitHub-native like the rest of the family: previous successful runs are the
+cooldown clock, and `<!-- swept-fix:N -->` on the filed issues is the dedup key.
+
+Measured recall is documented in the README and deliberately not chased: over
+#2818 the selector recovers two of five known siblings within a 25-file cap
+(ranking #2887's `har-recorder.ts` first); over #2888 it ranks #2883's
+`mouse.ts` first. Raising the caps trades a reviewable shortlist for a grep dump.
+
 ## review-responder
 
 `review-responder/` is the family's one **event-driven** member: where the five

@@ -1,0 +1,204 @@
+name: Regression Cluster Hunter
+
+# "Misery loves company." When a bug fix ships, go find out whether the SAME
+# DEFECT SHAPE is still live somewhere else, and file an issue for each place it
+# is.
+#
+# This repo has a documented history of exactly that failure mode:
+#   - #2818 fixed a UTF-8 hop corrupting binary request bodies. #2878, #2883,
+#     #2884, #2885, #2886 and #2887 were the same hop elsewhere — six siblings,
+#     all found by hand the following day.
+#   - #2071 → #2154 → #2400 → #2703 were four copies of one
+#     readFile-swallow-then-clobber bug, surfaced one per week because the
+#     nightly agentic-debt rotation only files ONE issue per run.
+#   - #1996 → #2821, #2822: one predicate, three runtimes, fixed in one.
+#   - #2166 → #2255 → #2404, #2405, #2816, #2819, #2863, #2864, #2865, #2880:
+#     ten instances of "unknown flag accepted and ignored".
+#
+# How this differs from the workflows next to it. `agentic-debt-triage.yml`
+# rotates through seven STATIC debt taxonomies and files one issue a night;
+# `rum-error-triage.yml` chases errors that already happened in production.
+# Neither starts from a fix that just shipped, and neither sweeps. This one is
+# evidence-driven: it only runs when a real bug fix landed, and its bar is a
+# SURVIVING CONSTRUCT — the fix deleted some code, and code of the same kind is
+# still present in files the fix did not touch. No survivors, no dispatch.
+#
+# Shape (the house pattern: a deterministic Node selector, then Claude):
+#   1. `packages/dev-tools/regression-cluster-hunter/scan-fixes.mjs` reads git
+#      history and the REST API READ-ONLY, confirms a release actually landed,
+#      picks at most ONE shipped fix, and proves its construct survives
+#      elsewhere. Unit-tested in the `dev-tools` vitest project.
+#   2. claude-code-action reads that fix's diff, states the defect as a rule,
+#      tests each candidate against it, and files an issue per confirmed sibling.
+#
+# TRIGGER — why `workflow_run` and not `on: release`. semantic-release publishes
+# the GitHub Release with `secrets.GITHUB_TOKEN` (see release.yml), and GitHub
+# does not start workflow runs from events created by GITHUB_TOKEN. An
+# `on: release: [published]` trigger here would never fire even once. Listening
+# for the Release WORKFLOW completing is the escape hatch — but `Release` runs
+# on every push to main and usually publishes nothing, so the selector confirms
+# a `chore(release):` commit before spending anything.
+#
+# COST — releases land roughly 8× a day on this repo (~27 fix commits/day), so
+# an ungated hunt-per-release would be a dozen Claude runs a day. Three gates,
+# all in the selector: a MIN_INTERVAL_HOURS cooldown (default 12), the
+# release-actually-landed check, and the surviving-construct bar.
+#
+# The cooldown clock is the `regression-cluster-dispatch` artifact, uploaded
+# ONLY by a run that dispatched. Keying it on "the last successful run" is the
+# trap: this workflow runs on every push to main and a quiet run succeeds too,
+# so the clock would reset several times a day and the hunter would never
+# dispatch again after its first run.
+#
+# Required repository secrets (already present — same as agentic-debt-triage.yml):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action.
+# Optional repo vars: RUM_AWS_REGION, CLUSTER_BEDROCK_MODEL, RUM_BEDROCK_MODEL,
+# CLUSTER_MIN_INTERVAL_HOURS, CLUSTER_MAX_ISSUES. No new secrets are required.
+#
+# Third-party actions are pinned to immutable commit SHAs (matching
+# .github/workflows/agentic-debt-triage.yml).
+
+on:
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Sweep this PR number, skipping selection (blank = pick from the release)'
+        required: false
+      min_interval_hours:
+        description: 'Override the cooldown in hours (0 = ignore it entirely)'
+        required: false
+      dry_run:
+        description: 'Scan + digest only; do not dispatch Claude'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: regression-cluster-hunter
+  cancel-in-progress: false
+
+permissions:
+  contents: read # read-only investigation; this workflow never pushes
+  issues: write # file the sibling issues
+  pull-requests: read # read the fix's diff/metadata and skip covered areas
+  actions: read # previous runs of this workflow are the cooldown clock
+  id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
+
+jobs:
+  hunt:
+    # A Release run that failed published nothing to sweep. Manual dispatch
+    # always proceeds.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history: the selector diffs merge commits and reads git log
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # The selector is zero-dependency (node: builtins + fetch) — no `npm ci`,
+      # so a quiet release costs a checkout and a few API calls.
+      - name: Select a shipped fix whose construct survives elsewhere
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          # Read-only: commits, pulls, issue search, workflow runs. The scanner
+          # issues no write verb at all. Only the Claude step below writes.
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_ARTIFACT: regression-cluster-dispatch
+          MIN_INTERVAL_HOURS: ${{ github.event.inputs.min_interval_hours || vars.CLUSTER_MIN_INTERVAL_HOURS || '12' }}
+          MAX_ISSUES: ${{ vars.CLUSTER_MAX_ISSUES || '5' }}
+          PR_OVERRIDE: ${{ github.event.inputs.pr }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DIGEST_PATH: ${{ runner.temp }}/regression-cluster-digest.md
+        run: node packages/dev-tools/regression-cluster-hunter/scan-fixes.mjs
+
+      # Always upload: a release where nothing clustered is the common case, and
+      # its digest (with the not-swept reasons) is the human-facing output.
+      - name: Upload the digest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regression-cluster-digest
+          path: ${{ runner.temp }}/regression-cluster-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      # THE COOLDOWN CLOCK. Uploaded only when a hunt actually dispatched, and
+      # read back by the next run's selector. It must not be `if: always()` like
+      # the digest above: workflow_run fires on every push to main and a quiet
+      # run succeeds too, so marking those would reset the clock several times a
+      # day and the hunter would never dispatch again after its first run.
+      - name: Mark this run as a dispatch
+        if: steps.scan.outputs.has_candidate == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regression-cluster-dispatch
+          path: ${{ runner.temp }}/regression-cluster-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Ensure the regression-cluster label exists
+        if: steps.scan.outputs.has_candidate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create regression-cluster --color D93F0B \
+            --description "A sibling of an already-fixed bug, found by sweeping for its shape" --force
+
+      - name: Sweep for siblings and file them
+        if: steps.scan.outputs.has_candidate == 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
+          # and, if needed, the RUM_AWS_REGION / CLUSTER_BEDROCK_MODEL repo
+          # variables to match the region + inference profile your CAMP key can
+          # reach. (Bearer-token auth for Bedrock is newer in Claude Code — if a
+          # run fails on auth, fall back to `anthropic_api_key`.)
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh issue create` / `gh issue list` fail.
+          # The job's top-level permissions (issues: write) scope this token.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo). Job permissions above
+          # (issues: write) scope this token appropriately.
+          github_token: ${{ github.token }}
+          # `workflow_run` sets the actor to whoever last acted on the default
+          # branch, which in this merge-queue repo is `github-merge-queue[bot]`
+          # — and for a Release-triggered run it is usually
+          # `github-actions[bot]`, the identity that pushed the release commit.
+          # claude-code-action's human-actor gate otherwise rejects every run.
+          #
+          # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
+          # docs warn that `'*'` lets external Apps invoke it with prompts they
+          # control. Both names below are GitHub's first-party bots, which no third
+          # party can act as, so every installed App (Renovate, Codex, Copilot)
+          # stays out. If a run is ever rejected by the actor gate, the log names
+          # the actor — add it here deliberately rather than widening to `'*'`.
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+          # Print Claude's full turn-by-turn output on manual dispatch (to
+          # inspect its reasoning); kept off for release-triggered runs so
+          # routine sweeps don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.CLUSTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh search:*),Bash(git:*)"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr merge:*),Bash(gh issue close:*),Edit,Write"
+            --max-turns 200
+          prompt: ${{ steps.scan.outputs.prompt }}
