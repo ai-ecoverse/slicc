@@ -15,47 +15,51 @@ import { describe, expect, it } from 'vitest';
 // directory's) and sibling-size truncation (a 26,623-byte file recorded at
 // its sibling's 5,752).
 //
-// Two patches close it: @zenfs/dom allocates unique ino/data pairs at both
-// minting sites, and @zenfs/core's VCache refuses to coalesce DIFFERENT
-// paths onto one vnode unless they are a genuine hardlink (nonzero ino,
-// matching format bits, nlink > 1 on both sides — #2034 added the nlink
-// rule after a duplicated real ino made concurrent reads of two paths
-// return the same bytes). These tests fail if either patch is missing or
-// stops applying.
+// Two layers close it: @zenfs/dom 1.2.12 (zen-fs/dom#43) allocates unique
+// ino/data pairs at both minting sites, and @zenfs/core's VCache refuses to
+// coalesce DIFFERENT paths onto one vnode unless they are a genuine hardlink
+// (nonzero ino, matching format bits, nlink > 1 on both sides — #2034 added
+// the nlink rule after a duplicated real ino made concurrent reads of two
+// paths return the same bytes). 1.2.12 still omits nlink on those allocations,
+// so the remaining @zenfs/dom hunk sets nlink: 1. These tests fail if the
+// upstream minting regresses or the remaining patch stops applying.
 //
 // Both halves are filed upstream. zen-fs/core#314 covers the VCache side, with
 // a repro that needs neither patch to explain: ZenFS's own `make-index` copies
 // host `st_ino` values and drops `st_dev`, so an index over a tree spanning two
 // volumes carries duplicate inos, and the Fetch backend then serves one file's
-// bytes for another. zen-fs/dom#43 covers the minting side, with a failing test
-// against zen-fs/dom's own ponyfill suite: mounting a directory that already
-// holds files gives every one of them ino 0.
+// bytes for another. zen-fs/dom#43 covered the minting side and shipped in
+// 1.2.12; the nlink-0 warn flood is still ours.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
-describe('@zenfs/dom ino allocation patch (#2146)', () => {
+describe('@zenfs/dom ino allocation (zen-fs/dom#43, shipped in 1.2.12)', () => {
   it('stat ENOENT recovery and the reality branch mint unique inos', () => {
     const src = readFileSync(resolve(repoRoot, 'node_modules/@zenfs/dom/dist/access.js'), 'utf8');
     expect(
       src.includes('const inode = new Inode();'),
       'Installed @zenfs/dom still mints zeroed (ino: 0) inodes in stat()’s ' +
-        'ENOENT recovery; patches/@zenfs+dom+*.patch is missing or failed to ' +
-        'apply. Every recovered path then collides in the vnode cache and ' +
-        'cross-stamps size/mode with unrelated files. See patches/README.md.'
+        'ENOENT recovery; 1.2.12 (zen-fs/dom#43) allocates real ino/data at ' +
+        'both minting sites, so this means a downgrade or an upstream ' +
+        'regression. Every recovered path then collides in the vnode cache ' +
+        'and cross-stamps size/mode with unrelated files. See patches/README.md.'
     ).toBe(false);
-    expect(src).toContain('const recoveredId = this.index._alloc();');
-    expect(src).toContain('nextRealityId');
+    expect(src).toContain('const ino = this.index._alloc();');
+    expect(src).toContain('data: ino + 1');
   });
 
-  it('the #2146 allocations set nlink: 1 (nlink-0 warn flood, 2026-08-18 outage)', () => {
+  it('the remaining #2146 allocations set nlink: 1 (nlink-0 warn flood, 2026-08-18 outage)', () => {
     // Every minted inode must carry a link count: ZenFS's Inode constructor
     // warns on `ino != 0 && nlink == 0`, kerium retains every log entry, and
     // a tree indexed through these sites re-warned on every inode
     // materialization until the log Set hit V8's 2^24 cap and every FS op
-    // threw "Set maximum size exceeded" — the VFS-offline outage.
+    // threw "Set maximum size exceeded" — the VFS-offline outage. 1.2.12
+    // allocates ino/data but still omits nlink.
     const src = readFileSync(resolve(repoRoot, 'node_modules/@zenfs/dom/dist/access.js'), 'utf8');
-    expect(src).toContain('nlink: 1, mode: 0o644 | constants.S_IFREG');
-    expect(src).toContain('nlink: 1, mode: 0o777 | constants.S_IFDIR');
-    expect(src).toContain('data: recoveredId + 1, nlink: 1');
+    expect(src).toContain(
+      'mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified, ino, data: ino + 1, nlink: 1'
+    );
+    expect(src).toContain('mode: 0o777 | constants.S_IFDIR, size: 0, ino, data: ino + 1, nlink: 1');
+    expect(src).toContain('new Inode({ ino, data: ino + 1, nlink: 1 })');
   });
 });
 

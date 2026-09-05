@@ -1,51 +1,39 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index 4ddf4b6..d4fff5d 100644
+index f4a0680..acf7a1b 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
-@@ -52,15 +52,25 @@ export class WebAccessFS extends Async(IndexFS) {
-             this.index.fromJSON(data);
-             return;
-         }
-+        // PATCH(#2146): allocate unique ino/data pairs — the upstream code
-+        // left every inode at ino 0, collapsing the whole tree onto one
-+        // vnode-cache slot. Local counter: _alloc() is O(index) per call.
-+        // nlink MUST be 1: the Inode constructor warns on every inode with a
-+        // real ino and nlink 0, and kerium retains every log entry — leaving
-+        // nlink unset here flooded a long-lived kernel worker until the log
-+        // Set hit V8's 2^24 cap and every FS op threw (2026-08-18 incident).
-+        let nextRealityId = 1;
-         for (const [path, handle] of this._handles) {
+@@ -57,12 +57,18 @@ export class WebAccessFS extends Async(IndexFS) {
+             const ino = this.index._alloc();
              if (isKind(handle, 'file')) {
                  const { lastModified, size } = await handle.getFile();
--                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
-+                this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, nlink: 1, mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
-+                nextRealityId += 2;
+-                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified, ino, data: ino + 1 }));
++                // PATCH(#2146): nlink MUST be 1. The Inode constructor warns on
++                // every inode with a real ino and nlink 0, and kerium retains
++                // every log entry — leaving nlink unset here flooded a
++                // long-lived kernel worker until the log Set hit V8's 2^24 cap
++                // and every FS op threw (2026-08-18 incident). 1.2.12 allocates
++                // ino/data (zen-fs/dom#43) but still omits nlink.
++                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified, ino, data: ino + 1, nlink: 1 }));
                  continue;
              }
              if (!isKind(handle, 'directory'))
                  throw withErrno('EIO', 'Invalid handle');
--            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0 }));
-+            this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, nlink: 1, mode: 0o777 | constants.S_IFDIR, size: 0 }));
-+            nextRealityId += 2;
+-            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0, ino, data: ino + 1 }));
++            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0, ino, data: ino + 1, nlink: 1 }));
          }
      }
      constructor(root, disableHandleCache = false) {
-@@ -91,7 +101,13 @@ export class WebAccessFS extends Async(IndexFS) {
-             // This handle must have been created after initialization
+@@ -94,7 +100,8 @@ export class WebAccessFS extends Async(IndexFS) {
              // Try to add a new inode for the handle to the index
              const handle = await this.get(null, path);
--            const inode = new Inode();
-+            // PATCH(#2146): a zeroed Inode carries ino 0 (and data 0). Every
-+            // path recovered through this branch then collides in the VFS
-+            // vnode cache (keyed by ino), and a shared vnode stamps one
-+            // file's size/mode onto another path on sync — the phantom-
-+            // directory / sibling-size corruption class. Allocate real ids.
-+            const recoveredId = this.index._alloc();
-+            const inode = new Inode({ ino: recoveredId, data: recoveredId + 1, nlink: 1 });
+             const ino = this.index._alloc();
+-            const inode = new Inode({ ino, data: ino + 1 });
++            // PATCH(#2146): nlink MUST be 1 — same warn-flood as _loadMetadata.
++            const inode = new Inode({ ino, data: ino + 1, nlink: 1 });
              if (isKind(handle, 'file')) {
                  const file = await handle.getFile();
                  inode.update({
-@@ -140,13 +156,62 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -143,13 +150,62 @@ export class WebAccessFS extends Async(IndexFS) {
          const dirHandle = await this.get('directory', path);
          return await Array.fromAsync(dirHandle.keys());
      }
@@ -66,7 +54,7 @@ index 4ddf4b6..d4fff5d 100644
 +    // store-does-not divergence this patch exists to remove — `stat` would
 +    // report a file that was never created, the next create would hit EEXIST,
 +    // and the caller has already marked the path dirty, so a later flush could
-+    // persist the phantom into the metadata sidecar.
++    // persist the phantom into the sidecar.
 +    async createFile(path, options) {
 +        const inode = await super.createFile(path, options);
 +        try {
