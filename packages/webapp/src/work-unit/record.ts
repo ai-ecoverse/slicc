@@ -11,6 +11,7 @@
  * {@link normalizeScoopRecord} tolerates and strips them on restore.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import type { RegisteredScoop, WorkUnitModel, WorkUnitThinking } from '../scoops/types.js';
 import { isRootUnit } from './policy.js';
 
@@ -101,15 +102,7 @@ export function isPrimaryRoot(scoop: Pick<RegisteredScoop, 'parentJid' | 'folder
 
 /** Lower-case, dash-separated, ASCII-only slug of a user-typed name. */
 export function slugifyUnitName(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .normalize('NFKD')
-      .replace(/\p{M}+/gu, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'cone'
-  );
+  return slugify(name, { maxLen: 40, fallback: 'cone' });
 }
 
 /**

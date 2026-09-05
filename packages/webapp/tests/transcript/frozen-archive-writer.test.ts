@@ -118,6 +118,8 @@ describe('naming helpers', () => {
 
   it('slugifies and titles from the first user message', () => {
     expect(slugify('Fix the Build!!')).toBe('fix-the-build');
+    expect(slugify('Café Ölçü')).toBe('cafe-olcu');
+    expect(slugify('--foo--')).toBe('foo');
     expect(slugify('')).toBe('session');
     expect(heuristicTitle([assistant, user])).toBe('fix "the" build');
     expect(heuristicTitle([assistant])).toBe('untitled-session');

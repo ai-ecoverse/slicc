@@ -7,6 +7,7 @@
  * (tray-join, auto-join) stay on the legacy dialog via the connect surface.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
 import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
@@ -813,12 +814,7 @@ function buildThemeBuilder(
   nameInput.value = existing?.name ?? '';
 
   function generateId(): string {
-    return (
-      nameInput.value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '') || `custom-${Date.now()}`
-    );
+    return slugify(nameInput.value) || `custom-${Date.now()}`;
   }
 
   function fillDerivedSlots(): void {

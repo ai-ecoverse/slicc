@@ -28,6 +28,7 @@
  * and keeps the standalone/extension paths in `main.ts` symmetric.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { type ValidationResult, validateApiKey } from './api-key-validator.js';
@@ -557,12 +558,7 @@ export class OnboardingOrchestrator {
 
   /** Internal — write the user's profile to /home/<name>/.welcome.json. */
   private async persistProfile(profile: OnboardingProfile): Promise<void> {
-    const slug =
-      (profile.name || 'user')
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-+|-+$)/g, '') || 'user';
+    const slug = slugify(profile.name || 'user', { fallback: 'user' });
     // writeFile auto-creates parent directories so we don't need a
     // separate mkdir call.
     await this.deps.fs.writeFile(`/home/${slug}/.welcome.json`, JSON.stringify(profile, null, 2));

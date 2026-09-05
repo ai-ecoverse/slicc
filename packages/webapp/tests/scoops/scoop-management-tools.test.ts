@@ -136,6 +136,14 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
   });
 
+  it('slugs scoop folders through the shared helper (NFKD + -scoop suffix)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'Café Ölçü' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.folder).toBe('cafe-olcu-scoop');
+    expect(created.name).toBe('Café Ölçü');
+  });
+
   it("stamps workspaceMode shared-readonly by default so today's sandbox is named", async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();
     await tool.execute({ name: 'hero-block' });

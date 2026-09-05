@@ -6,6 +6,7 @@
  * skill discovery; the catalog HTTP fetchers live in `catalog-fetch.ts`.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import type { VirtualFS } from '../../../../fs/index.js';
 import type {
   CatalogSkill,
@@ -169,12 +170,7 @@ export function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
  */
 export function slugifyCompany(company: unknown): string | null {
   if (typeof company !== 'string' || !company) return null;
-  const slug = company
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-+|-+$)/g, '');
-  return slug || null;
+  return slugify(company) || null;
 }
 
 /**

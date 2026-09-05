@@ -30,6 +30,8 @@ describe('work-unit record helpers', () => {
   it('slugifies user-typed names', () => {
     expect(slugifyUnitName('Research Cone')).toBe('research-cone');
     expect(slugifyUnitName('  Ünïcode!! ')).toBe('unicode');
+    expect(slugifyUnitName('Café Ölçü')).toBe('cafe-olcu');
+    expect(slugifyUnitName('--foo--')).toBe('foo');
     expect(slugifyUnitName('***')).toBe('cone');
     expect(slugifyUnitName('x'.repeat(80))).toHaveLength(40);
   });
