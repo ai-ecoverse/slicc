@@ -108,6 +108,17 @@ This is exactly why the brief tells Claude the table is a lead rather than a
 finding, and instructs it to grep for the _concept_. Do not raise the caps to
 chase the last siblings — that trades a reviewable shortlist for a grep dump.
 
+## The sweep runs in one session
+
+`Task` is in `--disallowedTools`, and the brief says so twice. On the first
+live run (`33960038570`) Claude fanned the sweep out to one sub-agent per
+package, then ended its turn with _"I'll wait for their final reports"_. Nothing
+waits — the session terminated, the run went green, and it filed **zero issues**
+after spending $7.27, almost all of it fan-out cache reads. The brief now also
+requires filing each sibling the moment it is confirmed rather than batching
+verdicts for the end, so a session that runs out of room still leaves its
+findings behind.
+
 ## Cost gates
 
 Releases land ~8×/day here (~27 `fix` commits/day), so an ungated hunt-per-

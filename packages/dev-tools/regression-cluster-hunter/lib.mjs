@@ -528,6 +528,24 @@ ${c.shapeSection}
 4. **Do not report the fix itself, and do not report anything the fix already
    repaired.** Those files are listed above; they are the cure.
 
+## How to work — read this before you start
+
+**One session, no delegation.** Do not spawn sub-agents or fan the sweep out by
+package. The first live run of this workflow did exactly that, then ended its
+turn with *"I'll wait for their final reports"* — but nothing waits. The session
+terminated, the run went green, and it filed **zero issues** after spending
+$7.27. There is no background to wait for: if you did not do it in this
+session, it did not happen.
+
+**File as you confirm, never at the end.** The moment a candidate passes the
+rule, run \`gh issue create\` for it and move on. Do not accumulate verdicts to
+batch later — a session that ends mid-batch loses everything it found.
+
+**Budget your turns.** Work the candidates in the order given, best-first. If
+you sense you are running low, stop investigating, file what you have already
+confirmed, and print a one-line summary of what you did not get to. A partial
+sweep that files two real issues beats a thorough one that files none.
+
 ## Filing
 
 Work **read-only** on the code: Read, Grep, Glob and \`git\` for evidence, no
