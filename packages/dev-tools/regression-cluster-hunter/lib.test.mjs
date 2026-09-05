@@ -395,6 +395,15 @@ describe('buildPrompt', () => {
     expect(buildPrompt(candidate)).toContain('a lead, not a finding');
   });
 
+  it('forbids delegation and demands filing as it goes', () => {
+    // The first live run fanned out to one sub-agent per package, ended its
+    // turn waiting for reports that never arrive, and filed nothing after
+    // spending $7.27. Both halves of the fix live in the brief.
+    const p = buildPrompt(candidate);
+    expect(p).toContain('One session, no delegation');
+    expect(p).toContain('File as you confirm, never at the end');
+  });
+
   it('makes filing nothing an explicitly good outcome', () => {
     expect(buildPrompt(candidate)).toContain('Filing nothing is a good outcome');
   });

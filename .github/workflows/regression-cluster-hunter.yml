@@ -31,6 +31,12 @@ name: Regression Cluster Hunter
 #   2. claude-code-action reads that fix's diff, states the defect as a rule,
 #      tests each candidate against it, and files an issue per confirmed sibling.
 #
+# `Task` is in --disallowedTools deliberately. On the first live run Claude fanned
+# the sweep out to one sub-agent per package, then ended its turn with "I'll wait
+# for their final reports" — but nothing waits, the session simply terminates.
+# The run went green, filed zero issues, and cost $7.27 in fan-out cache reads.
+# One session, working sequentially and filing as it confirms, is the contract.
+#
 # TRIGGER — why `workflow_run` and not `on: release`. semantic-release publishes
 # the GitHub Release with `secrets.GITHUB_TOKEN` (see release.yml), and GitHub
 # does not start workflow runs from events created by GITHUB_TOKEN. An
@@ -199,6 +205,6 @@ jobs:
           claude_args: |
             --model ${{ vars.CLUSTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh search:*),Bash(git:*)"
-            --disallowedTools "Bash(gh pr create:*),Bash(gh pr merge:*),Bash(gh issue close:*),Edit,Write"
+            --disallowedTools "Task,Bash(gh pr create:*),Bash(gh pr merge:*),Bash(gh issue close:*),Edit,Write"
             --max-turns 200
           prompt: ${{ steps.scan.outputs.prompt }}
