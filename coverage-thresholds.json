@@ -20,10 +20,10 @@
       ]
     },
     "node-server": {
-      "lines": 84,
-      "statements": 81,
+      "lines": 85,
+      "statements": 83,
       "functions": 86,
-      "branches": 73,
+      "branches": 74,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -81,7 +81,7 @@
     "webapp": {
       "lines": 84,
       "statements": 82,
-      "functions": 82,
+      "functions": 83,
       "branches": 74,
       "coverageExclude": [
         "**/node_modules/**",
@@ -122,9 +122,9 @@
     },
     "shared": {
       "lines": 97,
-      "statements": 94,
-      "functions": 94,
-      "branches": 88
+      "statements": 95,
+      "functions": 95,
+      "branches": 90
     },
     "webcomponents": {
       "lines": 95,
@@ -141,7 +141,7 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 66,
+      "lines": 67,
       "functions": 65,
       "regions": 64
     },
@@ -162,7 +162,7 @@
     },
     "swift-trayfollower": {
       "lines": 70,
-      "functions": 55,
+      "functions": 56,
       "regions": 78
     },
     "swift-traykit": {
