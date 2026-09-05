@@ -12,8 +12,11 @@
  * downstream claude-code-action step writes anything (its issues).
  *
  * Cross-run state is GitHub-native — there is no state file, branch, or cache:
- *   - the sweep window + cooldown ← previous successful runs of this workflow
- *     (the Actions API is the clock);
+ *   - the sweep window + cooldown ← the `regression-cluster-dispatch` artifact,
+ *     uploaded only by runs that actually dispatched, so the artifacts API is
+ *     the clock. NOT every successful run: `workflow_run` fires on every push
+ *     to main and a quiet run succeeds too, so keying on that reset the clock
+ *     several times a day and starved the hunter permanently;
  *   - "this fix was already swept" ← the `<!-- swept-fix:N -->` marker on the
  *     issues a previous hunt filed, the same durable-dedup technique as
  *     `<!-- agentic-debt:… -->` in agentic-debt-triage.yml.
@@ -21,10 +24,12 @@
  * Env:
  *   REPO                owner/repo                                    (required)
  *   GH_TOKEN            token with actions:read + pulls:read + issues:read
- *   WORKFLOW_FILE       this workflow's filename, for the cooldown lookup
- *                       (default regression-cluster-hunter.yml)
- *   MIN_INTERVAL_HOURS  minimum hours between dispatched hunts     (default 12)
- *   WINDOW_HOURS        fallback window when no prior run is found (default 24)
+ *   DISPATCH_ARTIFACT   artifact name marking a run that dispatched
+ *                       (default regression-cluster-dispatch)
+ *   MIN_INTERVAL_HOURS  minimum hours between dispatched hunts; 0 disables the
+ *                       cooldown, as the workflow input advertises (default 12)
+ *   WINDOW_HOURS        fallback window when nothing has dispatched (default 24)
+ *   MAX_WINDOW_HOURS    hard cap on how far back to sweep           (default 72)
  *   PR_OVERRIDE         sweep this PR number, skipping selection      (optional)
  *   DRY_RUN             'true' → scan + digest, never emit a candidate
  *   DIGEST_PATH         where to write the digest for artifact upload
@@ -70,9 +75,19 @@ function requireEnv(name) {
   return value;
 }
 
-function envInt(name, fallback) {
+/**
+ * Read a positive integer from env, else `fallback`.
+ *
+ * `min` exists for MIN_INTERVAL_HOURS, whose workflow input documents
+ * `0 = ignore it`. A blanket `n > 0` guard silently turned that 0 back into 12,
+ * so the advertised "force a run now" escape hatch did nothing. Blank still
+ * falls back either way — `parseInt('')` is NaN, which is not finite. The other
+ * knobs keep `min = 1`: MAX_ISSUES=0 or WINDOW_HOURS=0 are meaningless, not
+ * useful overrides.
+ */
+function envInt(name, fallback, min = 1) {
   const n = Number.parseInt((process.env[name] ?? '').trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
 /** Append `key=value` to $GITHUB_OUTPUT, heredoc form for multi-line values. */
@@ -108,20 +123,33 @@ async function api(token, path) {
 /* ───────────────────────────────── the scan ──────────────────────────────── */
 
 /**
- * When did this workflow last DISPATCH a hunt? Successful runs that went quiet
- * are not dispatches, so the cooldown keys on the runs that actually spent a
- * model call — recorded as the run's `display_title` suffix is unavailable, so
- * we approximate with successful completed runs and let the marker dedup catch
- * the rest.
+ * When did this workflow last DISPATCH a hunt?
+ *
+ * NOT "when did it last run successfully". `workflow_run` fires this on every
+ * push to main (~8×/day here) and a quiet run — no release, or no cluster —
+ * also succeeds. Keying the clock on any successful run therefore reset it
+ * several times a day, and with a 12h cooldown the hunter would never dispatch
+ * again after its first run. The recommended `dry_run: true` smoke test would
+ * have blocked the next real release too.
+ *
+ * The dispatching run uploads a `regression-cluster-dispatch` artifact, so the
+ * artifacts API is the ledger — GitHub-native, like the rest of the family, and
+ * it cannot drift from what actually happened. Expired artifacts are ignored:
+ * a 90-day retention comfortably outlives a 12h cooldown, and an expired one
+ * failing open only costs one extra hunt.
  */
-async function lastRunAt(token, repo, workflowFile) {
-  const runs = await api(
+async function lastDispatchAt(token, repo, artifactName) {
+  const res = await api(
     token,
-    `/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/runs?status=success&per_page=5`
+    `/repos/${repo}/actions/artifacts?name=${encodeURIComponent(artifactName)}&per_page=100`
   );
-  const list = runs?.workflow_runs ?? [];
-  // Skip the in-progress run itself (it is not `success` yet), take the newest.
-  return list[0]?.created_at ?? null;
+  const live = (res?.artifacts ?? []).filter((a) => a.expired !== true);
+  if (live.length === 0) return null;
+  return live
+    .map((a) => a.created_at)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
 }
 
 /**
@@ -155,6 +183,26 @@ function makeTokenSearch(sources) {
   };
 }
 
+/**
+ * Every file a pull request changed, following pagination.
+ *
+ * The first page is not enough: a fix touching more than 100 files would have
+ * its later-page repairs missing from `fixedFiles`, so the sweep could offer a
+ * file this very fix already repaired as a live sibling. Capped so one
+ * enormous PR cannot stall the scan — a fix that large is not a crisp defect
+ * shape anyway, and `isCandidateFix` will usually have rejected it.
+ */
+async function listPullFiles(token, repo, pr, maxPages = 10) {
+  const files = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const res = await api(token, `/repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
+    const batch = res ?? [];
+    files.push(...batch.map((f) => f.filename));
+    if (batch.length < 100) break;
+  }
+  return files;
+}
+
 /** Fixes already swept, from the marker on previously filed issues. */
 async function sweptFixes(token, repo) {
   const swept = new Set();
@@ -176,8 +224,7 @@ async function sweptFixes(token, repo) {
 async function scoreFix({ pr, token, repo, commits, sources, searchToken, version }) {
   const meta = await api(token, `/repos/${repo}/pulls/${pr}`);
   if (!meta) return null;
-  const filesRes = await api(token, `/repos/${repo}/pulls/${pr}/files?per_page=100`);
-  const files = (filesRes ?? []).map((f) => f.filename);
+  const files = await listPullFiles(token, repo, pr);
   if (!isCandidateFix({ title: meta.title, files })) return null;
 
   const fixedFiles = productSources(files);
@@ -281,9 +328,17 @@ function makeFinish(notes, digestPath) {
   };
 }
 
-/** The window of first-parent commits to sweep, and when it starts. */
-function loadWindow(since, now, windowHours) {
-  const windowStart = since ?? new Date(now.getTime() - windowHours * 3_600_000).toISOString();
+/**
+ * The window of first-parent commits to sweep, and when it starts.
+ *
+ * Clamped: now that the clock keys on DISPATCHES rather than on every run, a
+ * long quiet spell (no release, or no cluster worth chasing) would otherwise
+ * widen the window without bound and make the scan slower the less it finds.
+ */
+function loadWindow(since, now, windowHours, maxWindowHours) {
+  const floor = new Date(now.getTime() - maxWindowHours * 3_600_000).toISOString();
+  const start = since ?? new Date(now.getTime() - windowHours * 3_600_000).toISOString();
+  const windowStart = start < floor ? floor : start;
   const log = git(
     'log',
     '--first-parent',
@@ -297,8 +352,8 @@ function loadWindow(since, now, windowHours) {
 async function main() {
   const repo = requireEnv('REPO');
   const token = requireEnv('GH_TOKEN');
-  const workflowFile = (process.env.WORKFLOW_FILE ?? 'regression-cluster-hunter.yml').trim();
-  const minIntervalHours = envInt('MIN_INTERVAL_HOURS', CONFIG.minIntervalHours);
+  const dispatchArtifact = (process.env.DISPATCH_ARTIFACT ?? 'regression-cluster-dispatch').trim();
+  const minIntervalHours = envInt('MIN_INTERVAL_HOURS', CONFIG.minIntervalHours, 0);
   const prOverride = Number.parseInt((process.env.PR_OVERRIDE ?? '').trim(), 10);
   const forced = Number.isFinite(prOverride);
   const dryRun = (process.env.DRY_RUN ?? '').trim() === 'true';
@@ -307,15 +362,20 @@ async function main() {
   const finish = makeFinish(notes, (process.env.DIGEST_PATH ?? '').trim() || DEFAULT_DIGEST_FILE);
 
   const now = new Date();
-  const since = await lastRunAt(token, repo, workflowFile);
+  const since = await lastDispatchAt(token, repo, dispatchArtifact);
   if (!cooldownElapsed(since, now, minIntervalHours)) {
     notes.push(
-      `Cooldown: last hunt was ${since}, under the ${minIntervalHours}h minimum. Releases land ~8×/day here; this is the gate that keeps the hunt from running with every one of them.`
+      `Cooldown: the last hunt that actually dispatched was ${since}, under the ${minIntervalHours}h minimum. Releases land ~8×/day here; this is the gate that keeps the hunt from running with every one of them. Dispatch \`min_interval_hours: 0\` to override.`
     );
     return finish(false);
   }
 
-  const { windowStart, commits } = loadWindow(since, now, envInt('WINDOW_HOURS', 24));
+  const { windowStart, commits } = loadWindow(
+    since,
+    now,
+    envInt('WINDOW_HOURS', 24),
+    envInt('MAX_WINDOW_HOURS', 72)
+  );
   notes.push(`Window: ${windowStart} → now (${commits.length} first-parent commits).`);
 
   const version = releasedVersion(commits);

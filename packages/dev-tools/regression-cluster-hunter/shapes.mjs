@@ -98,7 +98,7 @@ const PERSISTS_BACK = [/writeFile|writeTextFile|\.set\(|persist|save\b/i];
 
 /**
  * @typedef {{
- *   id: string, name: string, rule: string, evidence: string,
+ *   id: string, name: string, rule: string, evidence: string, minHits?: number,
  *   detect: (diff: string) => boolean,
  *   probe: (text: string) => {hits: number, why: string[]},
  * }} Shape
@@ -184,6 +184,7 @@ export const SHAPES = [
   },
   {
     id: 'cross-runtime-predicate',
+    minHits: 2,
     name: 'One contract, re-implemented per runtime',
     rule: 'The same decision is coded independently in TypeScript, Swift and Go. One copy is corrected and the others keep the old behaviour, so the bug survives the fix on every other float.',
     evidence: '#1996 → #2821, #2822 (Node vs Swift fetch-proxy); same shape as #2305 and #2633',
@@ -229,7 +230,12 @@ export function matchShapes(diff) {
  * @returns {Array<{file: string, hits: number, why: string[]}>}
  */
 export function probeShape(shape, sources, exclude = [], opts = {}) {
-  const minHits = opts.minHits ?? 3;
+  // A shape may declare its own floor. `cross-runtime-predicate`'s probe awards
+  // at most 2, so under the default 3 it rendered an empty list on every run —
+  // silently disabling the repo's cross-runtime parity check, the very shape
+  // that produced #2821 and #2822. `everyShapeCanClearItsOwnFloor` in the tests
+  // now makes that class of bug impossible to reintroduce.
+  const minHits = shape.minHits ?? opts.minHits ?? 3;
   const max = opts.max ?? 15;
   const skip = exclude instanceof Set ? exclude : new Set(exclude);
   const out = [];
@@ -249,12 +255,22 @@ export function probeShape(shape, sources, exclude = [], opts = {}) {
   // Rank by confidence, not by volume: a precise signal (an absence, or a full
   // read-default-write triad) beats bulk vocabulary, and incidental
   // byte-handling beats a dedicated codec whose job that is.
+  //
+  // `incidental` is compared BEFORE `hits` on purpose. Both orders were
+  // measured against #2818's four known siblings and both recover 2 of 4 within
+  // the 25-file cap — they simply swap which two (hits-first surfaces
+  // `mouse.ts`, incidental-first surfaces `stash.ts`); three weighted blends
+  // were also tried and none beat 2/4. Given the tie, this follows the recorded
+  // evidence: every real sibling was a file whose job was something else that
+  // happened to touch bytes. 2 of 4 is the static-probe ceiling, which is why
+  // the brief tells the model to grep for the concept rather than trust this
+  // list.
   return out
     .sort(
       (a, b) =>
         Number(b.precise) - Number(a.precise) ||
-        b.hits - a.hits ||
         Number(b.incidental) - Number(a.incidental) ||
+        b.hits - a.hits ||
         a.file.localeCompare(b.file)
     )
     .slice(0, max);

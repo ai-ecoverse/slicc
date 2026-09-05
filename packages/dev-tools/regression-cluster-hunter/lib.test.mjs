@@ -468,3 +468,18 @@ describe('isProductSource', () => {
     }
   });
 });
+
+describe('cooldown semantics (review findings on #2901)', () => {
+  const now = new Date('2026-09-05T12:00:00Z');
+
+  it('treats 0 as "no cooldown", which is what the workflow input advertises', () => {
+    // `min_interval_hours: 0` is the documented escape hatch for forcing a
+    // within-window run. It only works if `cooldownElapsed` short-circuits AND
+    // the env reader lets 0 through (see envInt's `min` argument).
+    expect(cooldownElapsed('2026-09-05T11:59:00Z', now, 0)).toBe(true);
+  });
+
+  it('still gates a hunt one minute inside the window', () => {
+    expect(cooldownElapsed('2026-09-05T00:01:00Z', now, 12)).toBe(false);
+  });
+});

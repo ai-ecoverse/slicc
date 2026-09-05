@@ -94,19 +94,27 @@ the sweep into a grep dump.
 
 Replaying the selector over #2818 against the tree it shipped into recovers
 **two of its five** known siblings inside a 25-file cap, and ranks
-`har-recorder.ts` (#2887) first via the absence signal. Over #2888 it ranks
-`mouse.ts` (the real #2883 sibling) first. The remaining misses share neither
-vocabulary nor probe, which is exactly why the brief tells Claude the table is a
-lead rather than a finding and instructs it to grep for the _concept_. Do not
-raise the caps to chase the last siblings — that trades a reviewable shortlist
-for a grep dump.
+`har-recorder.ts` (#2887) first via the absence signal.
+
+**2 of 4 is the ceiling, and it is not a tuning problem.** Both candidate sort
+orders were measured against #2818's four known siblings, plus three weighted
+blends; every one recovers exactly 2 of 4 within the cap. They only swap _which_
+two — hits-before-incidental surfaces `mouse.ts`, incidental-before-hits
+surfaces `stash.ts`. Given that tie the comparator follows the recorded
+evidence and puts `incidental` first, because every real sibling was a file
+whose job was something else that happened to touch bytes.
+
+This is exactly why the brief tells Claude the table is a lead rather than a
+finding, and instructs it to grep for the _concept_. Do not raise the caps to
+chase the last siblings — that trades a reviewable shortlist for a grep dump.
 
 ## Cost gates
 
 Releases land ~8×/day here (~27 `fix` commits/day), so an ungated hunt-per-
 release would be a dozen Claude runs a day. Three gates, all in the selector:
 
-1. **Cooldown** — `MIN_INTERVAL_HOURS` (default 12) since the last run.
+1. **Cooldown** — `MIN_INTERVAL_HOURS` (default 12) since the last hunt that
+   actually **dispatched**. `0` disables it, for a forced manual run.
 2. **A release actually landed** — a `chore(release):` commit in the window.
    The `Release` workflow runs on every push to main and usually publishes
    nothing, so `workflow_run` completing is not proof.
@@ -124,8 +132,14 @@ the selector confirms the release separately.
 
 GitHub-native — no state file, branch, or Actions cache:
 
-- _"when did we last hunt"_ → previous successful runs of this workflow (the
-  Actions API is the clock).
+- _"when did we last dispatch"_ → the `regression-cluster-dispatch` artifact,
+  uploaded only by a run that actually dispatched, so the artifacts API is the
+  clock. Keying this on "the last **successful** run" is the trap, and it was
+  the shipped bug reviewers caught on #2901: `workflow_run` fires on every push
+  to main and a quiet run succeeds too, so the clock reset several times a day
+  and the hunter would never have dispatched again after its first run. The
+  recommended `dry_run: true` smoke test would have blocked the next release
+  too.
 - _"this fix was already swept"_ → the `<!-- swept-fix:N -->` marker on the
   issues a previous hunt filed, the same durable-dedup technique as
   `<!-- agentic-debt:… -->` and `<!-- rum-fp:… -->`.
@@ -142,6 +156,11 @@ REPO=ai-ecoverse/slicc GH_TOKEN=$(gh auth token) PR_OVERRIDE=2818 DRY_RUN=true \
   node packages/dev-tools/regression-cluster-hunter/scan-fixes.mjs
 ```
 
-`workflow_dispatch` exposes `pr`, `min_interval_hours` and `dry_run`.
+`workflow_dispatch` exposes `pr`, `min_interval_hours` (`0` ignores the
+cooldown) and `dry_run`.
+
+Knobs: `MIN_INTERVAL_HOURS` (12), `WINDOW_HOURS` (24, used when nothing has
+dispatched yet), `MAX_WINDOW_HOURS` (72, caps how far back a long quiet spell
+can widen the sweep), `MAX_ISSUES` (5).
 
 Unit tests: `npx vitest run --project dev-tools packages/dev-tools/regression-cluster-hunter/`

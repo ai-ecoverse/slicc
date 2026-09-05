@@ -18,6 +18,27 @@ describe('the catalog', () => {
   it('has unique ids', () => {
     expect(new Set(SHAPES.map((s) => s.id)).size).toBe(SHAPES.length);
   });
+
+  it('every shape can clear its own hit floor', () => {
+    // `cross-runtime-predicate` shipped awarding at most 2 hits under a default
+    // floor of 3, so it rendered an empty list on every single run — silently
+    // disabling the cross-runtime parity check, which is the shape that
+    // produced #2821 and #2822. A shape whose ceiling is below its floor is
+    // dead code that still looks alive in the brief.
+    for (const s of SHAPES) {
+      const floor = s.minHits ?? 3;
+      // Synthetic text that trips as much of the probe as we can construct.
+      const maximal = [
+        'const b = new Uint8Array(x); const ab = new ArrayBuffer(1); const bl = new Blob([]);',
+        'res.base64Encoded; new TextDecoder(); new TextEncoder(); String.fromCharCode(1); btoa(z);',
+        "const prior = await readFile(P, 'utf8').catch(() => []); await writeFile(P, prior);",
+        "for (const a of argv) if (a.startsWith('--x')) {}",
+        'if (isTextContentType(ct) || ct.hasPrefix("text/")) {}',
+      ].join('\n');
+      const { hits } = s.probe(maximal, 'packages/webapp/src/incidental-thing.ts');
+      expect(hits, `${s.id} can never reach its floor of ${floor}`).toBeGreaterThanOrEqual(floor);
+    }
+  });
 });
 
 describe('matchShapes', () => {
@@ -146,6 +167,26 @@ describe('probeShape', () => {
     ['packages/shared-ts/src/base64.ts', 'new Uint8Array(x); atob(y); btoa(z); "utf-8";'],
     ['packages/webapp/src/ui/label.ts', 'const t = "hello";'],
   ]);
+
+  it('ranks incidental byte-handling above a dedicated codec with more hits', () => {
+    // The documented invariant, and previously contradicted by the comparator.
+    // `base64.ts` is a dedicated codec carrying more byte vocabulary than the
+    // incidental `stash.ts`, and must still rank below it.
+    const ranked = probeShape(shape, sources, ['packages/webapp/src/cdp/har-recorder.ts']);
+    const files = ranked.map((r) => r.file);
+    expect(files.indexOf('packages/webapp/src/git/stash.ts')).toBeLessThan(
+      files.indexOf('packages/shared-ts/src/base64.ts')
+    );
+  });
+
+  it('honours a shape-declared floor below the default', () => {
+    const weak = { ...byId('cross-runtime-predicate') };
+    expect(weak.minHits).toBe(2);
+    const src = new Map([['packages/node-server/src/fetch-proxy.ts', 'isTextContentType(ct)']]);
+    expect(probeShape(weak, src, []).map((r) => r.file)).toContain(
+      'packages/node-server/src/fetch-proxy.ts'
+    );
+  });
 
   it('ranks a precise signal above bulk vocabulary', () => {
     const ranked = probeShape(shape, sources, []);

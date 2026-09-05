@@ -44,6 +44,12 @@ name: Regression Cluster Hunter
 # all in the selector: a MIN_INTERVAL_HOURS cooldown (default 12), the
 # release-actually-landed check, and the surviving-construct bar.
 #
+# The cooldown clock is the `regression-cluster-dispatch` artifact, uploaded
+# ONLY by a run that dispatched. Keying it on "the last successful run" is the
+# trap: this workflow runs on every push to main and a quiet run succeeds too,
+# so the clock would reset several times a day and the hunter would never
+# dispatch again after its first run.
+#
 # Required repository secrets (already present — same as agentic-debt-triage.yml):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
 #                             bearer token) for claude-code-action.
@@ -63,7 +69,7 @@ on:
         description: 'Sweep this PR number, skipping selection (blank = pick from the release)'
         required: false
       min_interval_hours:
-        description: 'Override the cooldown in hours (0 = ignore it)'
+        description: 'Override the cooldown in hours (0 = ignore it entirely)'
         required: false
       dry_run:
         description: 'Scan + digest only; do not dispatch Claude'
@@ -108,7 +114,7 @@ jobs:
           # Read-only: commits, pulls, issue search, workflow runs. The scanner
           # issues no write verb at all. Only the Claude step below writes.
           GH_TOKEN: ${{ github.token }}
-          WORKFLOW_FILE: regression-cluster-hunter.yml
+          DISPATCH_ARTIFACT: regression-cluster-dispatch
           MIN_INTERVAL_HOURS: ${{ github.event.inputs.min_interval_hours || vars.CLUSTER_MIN_INTERVAL_HOURS || '12' }}
           MAX_ISSUES: ${{ vars.CLUSTER_MAX_ISSUES || '5' }}
           PR_OVERRIDE: ${{ github.event.inputs.pr }}
@@ -123,6 +129,20 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: regression-cluster-digest
+          path: ${{ runner.temp }}/regression-cluster-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      # THE COOLDOWN CLOCK. Uploaded only when a hunt actually dispatched, and
+      # read back by the next run's selector. It must not be `if: always()` like
+      # the digest above: workflow_run fires on every push to main and a quiet
+      # run succeeds too, so marking those would reset the clock several times a
+      # day and the hunter would never dispatch again after its first run.
+      - name: Mark this run as a dispatch
+        if: steps.scan.outputs.has_candidate == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regression-cluster-dispatch
           path: ${{ runner.temp }}/regression-cluster-digest.md
           if-no-files-found: warn
           retention-days: 90
