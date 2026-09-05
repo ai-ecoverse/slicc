@@ -29,10 +29,11 @@
  * whose version differs between the base lockfile and HEAD's is replaced in
  * the baseline worktree with the BASE version, fetched via `npm pack`. The
  * delta then measures the dependency change instead of hiding it. When the
- * drift cannot be realigned — an un-hoisted nested path, a registry failure,
- * or a lockfile refresh too large to be one change — the baseline is
- * reported as unmeasurable rather than quietly wrong, which a CI
- * `pull_request` run treats as a failure (see `check-first-load-size.mjs`).
+ * drift cannot be realigned — an un-hoisted nested path whose ancestor did
+ * not also change, a registry failure, or a lockfile refresh too large to
+ * be one change — the baseline is reported as unmeasurable rather than
+ * quietly wrong, which a CI `pull_request` run treats as a failure (see
+ * `check-first-load-size.mjs`).
  *
  * WORKSPACE packages are a different matter and must NOT be borrowed from
  * HEAD. npm links them into `node_modules/@scope/name` as RELATIVE symlinks
@@ -166,6 +167,30 @@ function readLockPackages(tree) {
 }
 
 /**
+ * True when some ancestor package of a nested `node_modules` path also
+ * changed version. `linkNodeModules` borrows the parent as one symlink, and
+ * `realignDriftedDependencies` replaces that parent wholesale, so the nested
+ * copy is not an independent hole.
+ *
+ * @param {string} path lockfile path starting with `node_modules/`
+ * @param {Record<string, {version?: string}>} base
+ * @param {Record<string, {version?: string}>} head
+ */
+function ancestorPackageChanged(path, base, head) {
+  let rest = path;
+  while (rest.includes('/node_modules/')) {
+    const idx = rest.lastIndexOf('/node_modules/');
+    rest = rest.slice(0, idx);
+    if (!rest.startsWith('node_modules/')) return false;
+    const from = base[rest]?.version;
+    if (!from) continue;
+    const to = head[rest]?.version ?? null;
+    if (to !== from) return true;
+  }
+  return false;
+}
+
+/**
  * Dependencies the baseline worktree would otherwise get wrong, split by how
  * badly a failure to fix them matters.
  *
@@ -189,7 +214,13 @@ function readLockPackages(tree) {
  * `unrealignable` collects drift with nowhere to put it — un-hoisted nested
  * copies like `node_modules/a/node_modules/b`, which `linkNodeModules`
  * borrows as part of their parent — so the caller can refuse to report a
- * delta it cannot trust instead of silently measuring the wrong tree.
+ * delta it cannot trust instead of silently measuring the wrong tree. A
+ * nested copy whose ancestor package also changed is NOT that hole: the
+ * parent is already in `changed`/`missing` and gets replaced wholesale, so
+ * the nested tree travels with it (the same "transitives stay borrowed from
+ * HEAD" approximation as `realignDriftedDependencies`). Knip 6.33.0 is the
+ * specimen: `oxc-parser` 0.143 -> 0.147 nests a matching `@oxc-project/types`,
+ * which is not an independent realignment.
  *
  * @param {string} repoRoot
  * @param {string} tree base checkout
@@ -215,6 +246,7 @@ export function dependencyDrift(repoRoot, tree) {
     if (to === from) continue;
     const installName = path.slice('node_modules/'.length);
     if (installName.includes('/node_modules/')) {
+      if (ancestorPackageChanged(path, base, head)) continue;
       unrealignable.push(`${path} (${from} -> ${to ?? 'removed'}, un-hoisted)`);
       continue;
     }

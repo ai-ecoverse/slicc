@@ -277,6 +277,61 @@ describe('dependencyDrift', () => {
     ]);
   });
 
+  /**
+   * Nested copies under a parent that is itself being swapped are covered by
+   * that parent realignment — there is no independent hole. Knip 6.33.0
+   * nests `@oxc-project/types` under `oxc-parser` for exactly this reason.
+   */
+  it('does not flag a nested copy whose parent package also changed', () => {
+    lock(repo, {
+      'node_modules/oxc-parser': { version: '0.147.0' },
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.147.0' },
+    });
+    lock(tree, {
+      'node_modules/oxc-parser': { version: '0.143.0' },
+      'node_modules/oxc-parser/node_modules/@oxc-project/types': { version: '0.143.0' },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      {
+        path: 'node_modules/oxc-parser',
+        name: 'oxc-parser',
+        from: '0.143.0',
+        to: '0.147.0',
+      },
+    ]);
+  });
+
+  it('does not flag a nested copy under a parent the change removes', () => {
+    lock(repo, {});
+    lock(tree, {
+      'node_modules/a': { version: '1.0.0' },
+      'node_modules/a/node_modules/b': { version: '1.0.0' },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.missing).toEqual([{ path: 'node_modules/a', name: 'a', from: '1.0.0', to: null }]);
+  });
+
+  it('does not flag a deeply nested copy whose grandparent changed', () => {
+    lock(repo, {
+      'node_modules/a': { version: '2.0.0' },
+      'node_modules/a/node_modules/b': { version: '1.0.0' },
+      'node_modules/a/node_modules/b/node_modules/c': { version: '2.0.0' },
+    });
+    lock(tree, {
+      'node_modules/a': { version: '1.0.0' },
+      'node_modules/a/node_modules/b': { version: '1.0.0' },
+      'node_modules/a/node_modules/b/node_modules/c': { version: '1.0.0' },
+    });
+    const drift = dependencyDrift(repo, tree);
+    expect(drift.unrealignable).toEqual([]);
+    expect(drift.changed).toEqual([
+      { path: 'node_modules/a', name: 'a', from: '1.0.0', to: '2.0.0' },
+    ]);
+  });
+
   it('returns null when a lockfile cannot be read', () => {
     lock(repo, {});
     expect(dependencyDrift(repo, tree)).toBeNull();
