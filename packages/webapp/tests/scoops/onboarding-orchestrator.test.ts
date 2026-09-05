@@ -143,6 +143,20 @@ describe('OnboardingOrchestrator', () => {
       expect(json.tasks).toEqual(['research']);
     });
 
+    it('slugs an accented profile name via NFKD', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({
+        name: 'Café Ölçü',
+        purpose: 'school',
+        tasks: ['research'],
+      });
+      const deadline = Date.now() + 500;
+      while (Date.now() < deadline && !(await h.fs.exists('/home/cafe-olcu/.welcome.json'))) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(await h.fs.exists('/home/cafe-olcu/.welcome.json')).toBe(true);
+    });
+
     it('falls back to /home/user when the user skipped the name', async () => {
       const h = makeHarness();
       await h.orchestrator.handleOnboardingComplete({});

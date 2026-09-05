@@ -21,7 +21,7 @@
  * exit path.
  */
 
-import { type TranscriptDocumentV1, TranscriptExportError } from '@slicc/shared-ts';
+import { slugify, type TranscriptDocumentV1, TranscriptExportError } from '@slicc/shared-ts';
 import { sha256 } from 'js-sha256';
 
 // ---------------------------------------------------------------------------
@@ -179,12 +179,8 @@ function isSafeBundlePath(path: string): boolean {
 function makeFilename(document: TranscriptDocumentV1): string {
   const date = document.export.generatedAt.slice(0, 10);
   const exportIdSlice = document.export.id.slice(0, 8);
-  const slug = document.session.title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 40);
-  return `slicc-${date}-${slug || 'transcript'}-${exportIdSlice}.zip`;
+  const slug = slugify(document.session.title, { maxLen: 40, fallback: 'transcript' });
+  return `slicc-${date}-${slug}-${exportIdSlice}.zip`;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@
  * `WritableVfsClient` and the worker-side `VirtualFS` satisfy.
  */
 
+import { slugify as slugifyText } from '@slicc/shared-ts';
 import { FsError } from '../fs/types.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import { formatChatForClipboard } from './chat-markdown.js';
@@ -80,12 +81,7 @@ export function shortId(): string {
 }
 
 export function slugify(text: string): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return slug || 'session';
+  return slugifyText(text, { maxLen: 48, fallback: 'session' });
 }
 
 /** Title from the first user message, when no LLM title is available. */

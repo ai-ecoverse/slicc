@@ -5,6 +5,7 @@
  * but implemented as direct agent tools.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
@@ -138,13 +139,7 @@ const SUDO_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret'];
 
 /** Build a folder slug from a display name. Matches the legacy inline impl. */
 function folderFromDisplayName(name: string): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50) + '-scoop'
-  );
+  return `${slugify(name, { maxLen: 50 })}-scoop`;
 }
 
 /** Validate a thinking level input or return an error result. */

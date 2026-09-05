@@ -309,6 +309,31 @@ describe('createTranscriptZip — filename collision-safety', () => {
     expect(r2.filename).toContain('bbbbbbbb');
   });
 
+  it('slugs the session title with NFKD and trims every leading/trailing hyphen', () => {
+    const base = makeTranscriptDocument();
+    const accented = {
+      ...base,
+      session: { ...base.session, title: 'Café Ölçü' },
+    };
+    expect(createTranscriptZip(accented, new Map()).filename).toContain('cafe-olcu');
+
+    const hyphenated = {
+      ...base,
+      session: { ...base.session, title: '--foo--' },
+    };
+    expect(createTranscriptZip(hyphenated, new Map()).filename).toBe(
+      'slicc-2024-01-01-foo-exp-fixt.zip'
+    );
+
+    const empty = {
+      ...base,
+      session: { ...base.session, title: '!!!' },
+    };
+    expect(createTranscriptZip(empty, new Map()).filename).toBe(
+      'slicc-2024-01-01-transcript-exp-fixt.zip'
+    );
+  });
+
   it('filename contains the first 8 chars of the export ID', () => {
     const base = makeTranscriptDocument();
     const exportId = 'cafecafe-1234-5678-abcd-ef0123456789';

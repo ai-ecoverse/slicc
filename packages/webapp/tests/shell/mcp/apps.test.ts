@@ -20,6 +20,8 @@ describe('slugifyAppName', () => {
     expect(slugifyAppName('  Hello  World  ')).toBe('hello-world');
     expect(slugifyAppName('CamelCase')).toBe('camelcase');
     expect(slugifyAppName('a/b/c.d')).toBe('a-b-c-d');
+    expect(slugifyAppName('Café Ölçü')).toBe('cafe-olcu');
+    expect(slugifyAppName('--foo--')).toBe('foo');
   });
 
   it('falls back to "app" when nothing usable remains', () => {

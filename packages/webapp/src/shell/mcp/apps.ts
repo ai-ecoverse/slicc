@@ -17,6 +17,7 @@
  * so renames/removals on the server take effect.
  */
 
+import { slugify } from '@slicc/shared-ts';
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { createLogger } from '../../base/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
@@ -44,12 +45,7 @@ async function openFs(injected?: MinimalFs | null): Promise<MinimalFs> {
 
 /** Lowercase a string and replace non `[a-z0-9]+` runs with `-`; trim hyphens. */
 export function slugifyAppName(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64);
-  return slug || 'app';
+  return slugify(name, { maxLen: 64, fallback: 'app' });
 }
 
 /**
