@@ -961,6 +961,11 @@ function buildUsbHandlers() {
       return { done: true };
     },
 
+    'usb-clear-halt': async ({ handle, direction, endpointNumber }) => {
+      await usbOps.usbClearHalt(usbRegistry(), handle, direction, endpointNumber);
+      return { done: true };
+    },
+
     // ── WebHID ────────────────────────────────────────────────────────
     // Mirrors the WebUSB handlers above, keyed by opaque handles backed
     // by the page-side `HidDeviceHandleRegistry`. `hid-request` calls

@@ -142,3 +142,17 @@ export async function usbTransferOut(
 export async function usbReset(registry: DeviceHandleRegistry, handle: string): Promise<void> {
   await resolve(registry, handle).reset();
 }
+
+/**
+ * Recover a stalled bulk/interrupt endpoint. The targeted alternative to
+ * {@link usbReset}, which re-enumerates the whole device and drops any claim
+ * another client holds on it.
+ */
+export async function usbClearHalt(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  direction: 'in' | 'out',
+  endpointNumber: number
+): Promise<void> {
+  await resolve(registry, handle).clearHalt(direction, endpointNumber);
+}

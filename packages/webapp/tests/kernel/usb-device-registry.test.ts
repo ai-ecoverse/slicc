@@ -24,6 +24,7 @@ function fakeDevice(over: Partial<UsbDevice> = {}): UsbDevice {
     transferIn: vi.fn(),
     transferOut: vi.fn(),
     reset: vi.fn().mockResolvedValue(undefined),
+    clearHalt: vi.fn().mockResolvedValue(undefined),
     ...over,
   };
 }
@@ -204,6 +205,14 @@ describe('usb-operations', () => {
     await usbOps.usbClaimInterface(reg, handle, 0);
     expect(device.open).toHaveBeenCalled();
     expect(device.claimInterface).toHaveBeenCalledWith(0);
+  });
+
+  it('forwards clearHalt to the device with direction and endpoint', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClearHalt(reg, handle, 'out', 2);
+    expect(device.clearHalt).toHaveBeenCalledWith('out', 2);
   });
 
   it('returns transfer-in bytes as an ArrayBuffer', async () => {

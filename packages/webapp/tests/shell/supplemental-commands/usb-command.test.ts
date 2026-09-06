@@ -157,6 +157,28 @@ describe('usb command — bridged panel-rpc envelopes', () => {
     expect(calls[0].payload).toEqual({ handle: 'usb1' });
   });
 
+  it('clear-halt carries the direction and endpoint', async () => {
+    const r = await createUsbCommand().execute(['clear-halt', 'usb1', 'in', '3'], ctx());
+    expect(r.exitCode).toBe(0);
+    expect(calls[0]).toMatchObject({
+      op: 'usb-clear-halt',
+      payload: { handle: 'usb1', direction: 'in', endpointNumber: 3 },
+    });
+  });
+
+  it('clear-halt rejects a direction that is not in/out', async () => {
+    const r = await createUsbCommand().execute(['clear-halt', 'usb1', 'sideways', '3'], ctx());
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("direction must be 'in' or 'out'");
+    expect(calls).toHaveLength(0);
+  });
+
+  it('clear-halt requires handle, direction and endpoint', async () => {
+    const r = await createUsbCommand().execute(['clear-halt', 'usb1'], ctx());
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('handle, direction and endpoint required');
+  });
+
   it('claim and select-config carry numeric args', async () => {
     await createUsbCommand().execute(['claim', 'usb1', '0'], ctx());
     await createUsbCommand().execute(['select-config', 'usb1', '1'], ctx());

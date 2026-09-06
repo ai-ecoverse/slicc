@@ -45,6 +45,7 @@ export interface UsbBackend {
   controlOut(handle: string, setup: UsbControlSetup, bytes: Uint8Array): Promise<TransferOutResult>;
   transferIn(handle: string, ep: number, length: number): Promise<TransferInResult>;
   transferOut(handle: string, ep: number, bytes: Uint8Array): Promise<TransferOutResult>;
+  clearHalt(handle: string, direction: 'in' | 'out', ep: number): Promise<void>;
   reset(handle: string): Promise<void>;
 }
 
@@ -123,6 +124,9 @@ class LocalUsbBackend implements UsbBackend {
   transferOut(handle: string, ep: number, bytes: Uint8Array) {
     return usbOps.usbTransferOut(this.registry, handle, ep, toArrayBuffer(bytes));
   }
+  clearHalt(handle: string, direction: 'in' | 'out', ep: number) {
+    return usbOps.usbClearHalt(this.registry, handle, direction, ep);
+  }
   reset(handle: string) {
     return usbOps.usbReset(this.registry, handle);
   }
@@ -185,6 +189,9 @@ class BridgedUsbBackend implements UsbBackend {
       endpointNumber: ep,
       bytes: toArrayBuffer(bytes),
     });
+  }
+  async clearHalt(handle: string, direction: 'in' | 'out', ep: number) {
+    await this.rpc.call('usb-clear-halt', { handle, direction, endpointNumber: ep });
   }
   async reset(handle: string) {
     await this.rpc.call('usb-reset', { handle });
