@@ -392,7 +392,24 @@ const bytes = await reply;
 console.log([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' '));
 ```
 
-`serial.*` and `usb.*` mirror the shell surface (`open` / `close` / `read` / `write` / `getSignals` / `setSignals` on serial ports; `open` / `close` / `claim` / `release` / `controlIn` / `controlOut` / `transferIn` / `transferOut` on usb devices). They don't carry the `EventTarget` shape — those transports are explicit-poll.
+`serial.*` mirrors the shell surface (`open` / `close` / `read` / `write` / `getSignals` / `setSignals` on serial ports). **`usb.*` does not** — USB device methods carry their **WebUSB** names, not the `usb` shell command's verbs:
+
+```typescript
+device.open(): Promise<void>
+device.close(): Promise<void>
+device.reset(): Promise<void>
+device.selectConfiguration(configurationValue: number): Promise<void>
+device.claimInterface(interfaceNumber: number): Promise<void>
+device.releaseInterface(interfaceNumber: number): Promise<void>
+device.controlTransferIn(setup, length): Promise<{ status: string; data: DataView }>
+device.controlTransferOut(setup, data): Promise<{ status: string; bytesWritten: number }>
+device.transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>
+device.transferOut(endpointNumber: number, data): Promise<{ status: string; bytesWritten: number }>
+```
+
+So it is `claimInterface(1)`, not `claim(1)`; `controlTransferIn(...)`, not `controlIn(...)`. Note the read results resolve `{ status, data }` where `data` is a **`DataView`** — wrap it (`new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)`) before treating it as bytes.
+
+Neither `serial.*` nor `usb.*` carries the `EventTarget` shape — those transports are explicit-poll.
 
 For ESP32 / ESP8266 work, drive `esptool` through `require('sliccy:exec')` (there is no bare `exec` global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
 
