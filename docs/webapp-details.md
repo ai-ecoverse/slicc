@@ -173,6 +173,14 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - **Cherry `?cherry=1&ui-only=1`** (extension side panel): suppresses CDP target advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel). Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles accounts from `/api/hosted-bootstrap`, removing only providers tracked in `localStorage['slicc_cloud_managed']` — never user-added ones. `?connect=1` is a login-only surface (`ui/connect-surface.ts`) with no kernel.
 
+## Markdown media in messages
+
+`![alt](path)` in an assistant/user message carries images, video AND audio. `base/message-media.ts` decides which element to emit and rewrites rooted VFS paths through `base/preview-url.ts`.
+
+- **Always route media through `/preview/*`.** A bare `/shared/x.png` in an `<img src>` hits the SPA fallback, which answers **200 + `text/html`** — the element then fails to decode with nothing logged. `preview-url.ts` is the one rewrite that avoids this.
+- **Video needs `video` in the DOMPurify allowlist** (`ui/message-renderer.ts`) or the element is deleted silently during sanitization.
+- **`.shtml` refs are dips** — leave them untouched so `hydrateDips()` can process them.
+
 ## File mentions + preview
 
 Clicking a file name the agent wrote in chat. Five modules, deliberately split so the guessing and the verifying stay separate:
