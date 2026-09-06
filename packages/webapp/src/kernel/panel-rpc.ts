@@ -439,6 +439,10 @@ export type PanelRpcRequest =
       payload: { handle: string; endpointNumber: number; bytes: ArrayBuffer };
     }
   | { op: 'usb-reset'; payload: { handle: string } }
+  | {
+      op: 'usb-clear-halt';
+      payload: { handle: string; direction: 'in' | 'out'; endpointNumber: number };
+    }
   // ── WebHID bridge ─────────────────────────────────────────────────
   // Same handle-keyed pattern as the WebUSB bridge above. `HIDDevice`
   // objects are non-serializable, so every op exchanges only plain data
@@ -831,6 +835,7 @@ export interface PanelRpcResults {
   'usb-transfer-in': { status: string; bytes: ArrayBuffer };
   'usb-transfer-out': { status: string; bytesWritten: number };
   'usb-reset': { done: true };
+  'usb-clear-halt': { done: true };
   'hid-list': { devices: HidDeviceInfo[] };
   'hid-request': { devices: HidDeviceInfo[] };
   'hid-device-info': { device: HidDeviceInfo };

@@ -64,6 +64,9 @@ function makeMockBackend(recorded: Recorded[], throwOn?: string): UsbBackend {
       rec('transferOut', [h, ep, bytes]);
       return { status: 'ok', bytesWritten: bytes.byteLength };
     },
+    clearHalt: async (h, direction, ep) => {
+      rec('clearHalt', [h, direction, ep]);
+    },
   };
 }
 
@@ -99,6 +102,15 @@ describe('realm usb bridge', () => {
     const device = await usb.request({ vendorId: 0x2e8a });
     expect(device.handle).toBe('usb1');
     expect(rec[0]).toEqual({ op: 'request', args: [[{ vendorId: 0x2e8a }]] });
+    dispose();
+  });
+
+  it('forwards clearHalt with direction and endpoint', async () => {
+    const rec: Recorded[] = [];
+    const { usb, dispose } = setup(rec);
+    const device = await usb.request([]);
+    await device.clearHalt('in', 3);
+    expect(rec).toContainEqual({ op: 'clearHalt', args: ['usb1', 'in', 3] });
     dispose();
   });
 

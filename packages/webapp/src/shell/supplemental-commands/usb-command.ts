@@ -140,6 +140,9 @@ Subcommands:
   open <handle>                     Open a device
   close <handle>                    Close a device
   reset <handle>                    Reset a device
+  clear-halt <handle> <in|out> <endpoint>
+                                    Clear a stalled endpoint (targeted; unlike
+                                    reset it does not re-enumerate the device)
   select-config <handle> <value>    Select a configuration
   claim <handle> <interface>        Claim an interface
   release <handle> <interface>      Release an interface
@@ -222,6 +225,18 @@ async function cmdOpenCloseReset(
   if (sub === 'open') await backend.open(handle);
   else if (sub === 'close') await backend.close(handle);
   else await backend.reset(handle);
+  return ok('');
+}
+
+async function cmdClearHalt(positionals: string[], backend: UsbBackend): Promise<CmdResult> {
+  const [, handle, direction, endpoint] = positionals;
+  if (!handle || direction === undefined || endpoint === undefined) {
+    return fail('clear-halt: handle, direction and endpoint required');
+  }
+  if (direction !== 'in' && direction !== 'out') {
+    return fail(`clear-halt: direction must be 'in' or 'out', got '${direction}'`);
+  }
+  await backend.clearHalt(handle, direction, parseIntArg(endpoint, 'endpoint'));
   return ok('');
 }
 
@@ -317,6 +332,8 @@ async function dispatch(args: string[], ctx: UsbCtx, backend: UsbBackend): Promi
     case 'close':
     case 'reset':
       return cmdOpenCloseReset(sub, positionals, backend);
+    case 'clear-halt':
+      return cmdClearHalt(positionals, backend);
     case 'select-config':
       return cmdSelectConfig(positionals, backend);
     case 'claim':

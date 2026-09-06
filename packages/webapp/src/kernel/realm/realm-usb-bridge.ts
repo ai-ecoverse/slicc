@@ -30,6 +30,7 @@ export interface RealmUsbDevice extends UsbDeviceInfo {
   ): Promise<WireOutResult>;
   transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>;
   transferOut(endpointNumber: number, data: ArrayBuffer | ArrayBufferView): Promise<WireOutResult>;
+  clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>;
 }
 
 export interface RealmUsbApi {
@@ -45,6 +46,8 @@ function makeUsbDevice(rpc: DeviceRpc, info: UsbDeviceInfo): RealmUsbDevice {
     open: () => rpc.call<void>('usb', 'open', [h]),
     close: () => rpc.call<void>('usb', 'close', [h]),
     reset: () => rpc.call<void>('usb', 'reset', [h]),
+    clearHalt: (direction, endpointNumber) =>
+      rpc.call<void>('usb', 'clearHalt', [h, direction, endpointNumber]),
     selectConfiguration: (value) => rpc.call<void>('usb', 'selectConfig', [h, value]),
     claimInterface: (n) => rpc.call<void>('usb', 'claim', [h, n]),
     releaseInterface: (n) => rpc.call<void>('usb', 'release', [h, n]),

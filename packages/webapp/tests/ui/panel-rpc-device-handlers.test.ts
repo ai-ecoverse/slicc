@@ -112,6 +112,7 @@ function fakeUsbDevice(over: Record<string, unknown> = {}) {
       data: { buffer: new Uint8Array([9]).buffer, byteOffset: 0, byteLength: 1 },
     })),
     transferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 2 })),
+    clearHalt: vi.fn(async () => undefined),
     reset: vi.fn(async () => undefined),
     ...over,
   };

@@ -1503,6 +1503,8 @@ async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Pr
       return backend.close(args[0] as string);
     case 'reset':
       return backend.reset(args[0] as string);
+    case 'clearHalt':
+      return backend.clearHalt(args[0] as string, args[1] as 'in' | 'out', args[2] as number);
     case 'selectConfig':
       return backend.selectConfig(args[0] as string, args[1] as number);
     case 'claim':

@@ -125,6 +125,7 @@ export interface UsbDevice {
   controlTransferOut(setup: UsbControlSetup, data?: BufferSource): Promise<UsbOutTransferResult>;
   transferIn(endpointNumber: number, length: number): Promise<UsbInTransferResult>;
   transferOut(endpointNumber: number, data: BufferSource): Promise<UsbOutTransferResult>;
+  clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>;
   reset(): Promise<void>;
 }
 
