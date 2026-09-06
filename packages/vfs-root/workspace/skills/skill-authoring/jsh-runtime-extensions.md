@@ -405,9 +405,14 @@ device.controlTransferIn(setup, length): Promise<{ status: string; data: DataVie
 device.controlTransferOut(setup, data): Promise<{ status: string; bytesWritten: number }>
 device.transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>
 device.transferOut(endpointNumber: number, data): Promise<{ status: string; bytesWritten: number }>
+device.clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>
 ```
 
 So it is `claimInterface(1)`, not `claim(1)`; `controlTransferIn(...)`, not `controlIn(...)`. Note the read results resolve `{ status, data }` where `data` is a **`DataView`** — wrap it (`new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)`) before treating it as bytes.
+
+`clearHalt` recovers a single stalled bulk/interrupt endpoint. Prefer it to
+`reset()`, which re-enumerates the whole device and drops any claim another
+client (a host `adb` server, say) holds on it.
 
 Each device also carries its **configuration descriptors** as plain data, so an
 interface can be located by class/subclass/protocol without opening the device
