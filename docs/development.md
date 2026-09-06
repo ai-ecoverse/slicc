@@ -227,10 +227,16 @@ profile collisions.
 
 **Shared behavior across all harnesses:**
 
-- **Wrangler reuse-or-start**: an already-listening `:8787` is reused as-is;
-  otherwise the harness starts one and gates cleanup behind
-  `STARTED_WRANGLER`. A `kill -0 "$WRANGLER_PID"` liveness guard in the
-  readiness loop fails fast if wrangler exits before binding.
+- **Wrangler reuse-or-start**: a listener on `:8787` is reused only when
+  `GET /status` identifies it as the SLICC worker
+  (`"service": "slicc-tray-hub"`); anything else on that port is left alone
+  and the harness starts its own wrangler, which then fails to bind and says
+  so. `/status` is a worker route rather than a static asset, so it answers
+  before `dist/ui` is built. Otherwise the harness starts one and gates
+  cleanup behind `STARTED_WRANGLER`. A `kill -0 "$WRANGLER_PID"` liveness
+  guard in the readiness loop fails fast if wrangler exits before binding.
+  If the port is held by an unrelated server, stop it or pick another port
+  with `WRANGLER_PORT=…`.
 - **Labeled Chrome clones**: `clone-labeled-chrome.sh` APFS-COW-clones a
   Chrome for Testing `.app` under a distinct `CFBundleName` /
   `CFBundleIdentifier`, re-signs ad-hoc (top-level only), and registers with

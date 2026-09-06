@@ -101,6 +101,20 @@ print_bridge_port_suggestions() {
 	fi
 }
 
+# Identify the SLICC worker, not merely "something is listening". Any stray
+# server on this port (another dev server, a local model API) answers with a
+# status line, and the old any-status probe adopted it as the leader origin —
+# the harness printed "Reusing existing wrangler" and every later failure
+# pointed somewhere else. `/status` is a worker route, not a static asset
+# (see packages/cloudflare-worker/src/index.ts — it is deliberately kept
+# reachable ahead of the SPA intercept, and the Playwright suite already gates
+# on it), so it still answers before dist/ui is built. That was the reason the
+# probe tolerated a 4xx, and it is preserved.
+wrangler_up() {
+	curl -s --max-time 2 "http://127.0.0.1:${WRANGLER_PORT}/status" 2>/dev/null |
+		grep -q '"service"[[:space:]]*:[[:space:]]*"slicc-tray-hub"'
+}
+
 # Allow Vitest to source and exercise the guard and protected-port refusal
 # without running browser discovery, builds, port checks, or harness processes.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -232,19 +246,6 @@ else
 	echo "✔  Leader UI built (dist/ui/index.html)"
 fi
 
-# Identify the SLICC worker, not merely "something is listening". Any stray
-# server on this port (another dev server, a local model API) answers with a
-# status line, and the old any-status probe adopted it as the leader origin —
-# the harness printed "Reusing existing wrangler" and every later failure
-# pointed somewhere else. `/status` is a worker route, not a static asset
-# (see packages/cloudflare-worker/src/index.ts — it is deliberately kept
-# reachable ahead of the SPA intercept, and the Playwright suite already gates
-# on it), so it still answers before dist/ui is built. That was the reason the
-# probe tolerated a 4xx, and it is preserved.
-wrangler_up() {
-	curl -s --max-time 2 "http://127.0.0.1:${WRANGLER_PORT}/status" 2>/dev/null |
-		grep -q '"service"[[:space:]]*:[[:space:]]*"slicc-tray-hub"'
-}
 
 # ── 4b. Reuse-or-start wrangler (UI / leader origin on :8787) ────────
 STARTED_WRANGLER=0

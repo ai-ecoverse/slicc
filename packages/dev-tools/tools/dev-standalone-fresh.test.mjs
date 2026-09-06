@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -55,6 +56,32 @@ function bridgeSuggestions(port) {
     ],
     { encoding: 'utf8' }
   );
+}
+
+/**
+ * Run `wrangler_up` against a stubbed `curl` that returns `body`. Sourcing the
+ * script stops at the BASH_SOURCE guard, so only the helpers above it are
+ * defined — which is why `wrangler_up` lives there.
+ */
+function wranglerUp(body) {
+  const r = spawnSync(
+    'bash',
+    [
+      '-c',
+      'curl() { printf "%s" "$FAKE_BODY"; }; source "$1"; wrangler_up && echo UP || echo DOWN',
+      'bash',
+      scriptPath,
+    ],
+    { encoding: 'utf8', env: { ...process.env, FAKE_BODY: body, WRANGLER_PORT: '8787' } }
+  );
+  return r.stdout.trim();
+}
+
+/** The `wrangler_up` body, normalised, as it appears in each harness script. */
+function wranglerUpBody(scriptName) {
+  const text = readFileSync(resolve(dirname(scriptPath), scriptName), 'utf8');
+  const match = text.match(/^wrangler_up\(\) \{\n([\s\S]*?)^\}$/m);
+  return match ? match[1].replace(/\s+/g, ' ').trim() : null;
 }
 
 describe('dev-standalone-fresh bridge port guard', () => {
@@ -140,5 +167,48 @@ describe('dev-standalone-fresh bridge port guard', () => {
     const result = reapPort(port);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Refusing to reap invalid port:');
+  });
+});
+
+describe('dev-standalone-fresh wrangler identity probe', () => {
+  const SLICC_STATUS =
+    '{"status":"ok","service":"slicc-tray-hub","timestamp":"2026-01-01T00:00:00.000Z"}';
+
+  it('reuses a listener whose /status identifies the SLICC worker', () => {
+    expect(wranglerUp(SLICC_STATUS)).toBe('UP');
+  });
+
+  it('tolerates the compact JSON form', () => {
+    expect(wranglerUp('{"service":"slicc-tray-hub"}')).toBe('UP');
+  });
+
+  it('does not reuse an unrelated server that merely answers', () => {
+    // A local model API held :8787 for days and answered 200; the previous
+    // any-status probe adopted it as the leader origin.
+    expect(wranglerUp('<!DOCTYPE html><title>H3 Ref2VA API</title>')).toBe('DOWN');
+  });
+
+  it('does not reuse a listener that serves a different worker', () => {
+    expect(wranglerUp('{"status":"ok","service":"some-other-worker"}')).toBe('DOWN');
+  });
+
+  it('treats an unavailable listener as not up', () => {
+    expect(wranglerUp('')).toBe('DOWN');
+  });
+
+  it('keeps the predicate identical across all five harnesses', () => {
+    // The scripts are deliberately standalone, so the probe is duplicated.
+    // Only the standalone copy is behaviourally tested above; this pins the
+    // other four to it so one cannot silently drift back to any-status reuse.
+    const baseline = wranglerUpBody('dev-standalone-fresh.sh');
+    expect(baseline).toContain('slicc-tray-hub');
+    for (const name of [
+      'dev-swift-fresh.sh',
+      'dev-extension-fresh.sh',
+      'dev-electron-node-fresh.sh',
+      'dev-electron-swift-fresh.sh',
+    ]) {
+      expect(wranglerUpBody(name), `${name} drifted from the standalone probe`).toBe(baseline);
+    }
   });
 });
