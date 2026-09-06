@@ -455,6 +455,12 @@ Extended reference for two related Conventions bullets in the package guide.
   way and proves nothing. The webapp collapses recognized payloads into
   `<slicc-blob-chip>` on top of this, but the wrap rule is what has to hold for
   everything else.
+- **Markdown media caps at the column.** The same body chrome caps rendered
+  media: `.msg__media` (img/video) maxes at the column width and
+  `.msg__media-gallery` grids runs of two or more, so a 4K frame or a batch of
+  clips cannot widen the transcript. The webapp renderer stamps those classes
+  (`packages/webapp/src/ui/message-renderer.ts`); the class names are the
+  contract, since `webcomponents` must not import from `webapp`.
 
 ## Animation loops: no forced reflow, and a frame budget
 

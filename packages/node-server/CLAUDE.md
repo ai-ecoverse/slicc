@@ -1,10 +1,6 @@
 # CLAUDE.md
 
-This file covers the Node.js CLI/Electron float in `packages/node-server/`.
-
-## Scope
-
-`packages/node-server/src/` launches Chrome or Electron, runs the thin /cdp bridge + `/api` surface, and provides the standalone runtime used by `npm run dev` and packaged releases. node-server serves no UI in any mode — the webapp is always loaded from the hosted origin.
+Covers the Node.js CLI/Electron float in `packages/node-server/`. `src/` launches Chrome or Electron, runs the thin `/cdp` bridge + `/api` surface, and is the standalone runtime for `npm run dev` and packaged releases. It serves no UI — the webapp always loads from the hosted origin.
 
 ## Main Commands
 
@@ -17,94 +13,61 @@ npm run package:release
 
 ## Runtime Modes
 
-- **Standalone CLI**: thin-bridge only — the webapp is loaded from the hosted origin (`https://www.sliccy.ai`, or `--lead`/`WORKER_BASE_URL` for a local `:8787` wrangler) and the launched Chrome opens that URL with `?bridge=ws://localhost:<servePort>/cdp&bridgeToken=<token>`; node-server only owns CDP, fetch-proxy, sign-and-forward, and OAuth callback. There is no `--dev`/Vite-HMR mode; for local UI work run `npm run dev:standalone:fresh` (wrangler UI + node-server bridge) — **both `@slicc/webapp` and `@slicc/node-server` must be rebuilt first** or Chrome may fail to launch with a stale build. See [`docs/development.md` — Running a local instance with your UI changes](../../docs/development.md).
-- **Serve-only**: reuses an already-running CDP target.
-- **Electron mode**: launches or attaches to an Electron app. With the thin-bridge release the launched pages get `/electron?bridge=ws://localhost:<cdpPort>/cdp&bridgeToken=<token>&role=leader|follower` so the same hosted webapp drives every Electron page over the local bridge; the bundled electron-overlay shell is gone. On a `--join` launch the LEADER-role URL additionally carries `tray=<join url>` (the Chrome join path's contract) so an egress-allowed app attaches to the running leader as ONE tray follower — without it the overlay mints its own tray as a second leader. Auto-follow tabs (and a no-join leader) carry an explicitly EMPTY `tray=` to block the webapp's stored-join-URL fallback at the shared sliccy.ai origin. Egress-blocked apps (Signal) join via the headless WebRTC follower instead.
-- **Hosted mode (`--hosted`)**: bundled with the e2b template at `packages/dev-tools/e2b-template/`. node-server boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` and `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
-- **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox. The lifecycle logic lives in `@slicc/cloud-core` (`packages/cloud-core/`); the files in `src/cloud/` are thin adapters that wire the file-backed registry (`~/.slicc/cloud-sessions.json`) and the e2b substrate to the matching cloud-core operation. `src/cloud/dispatch.ts` owns argv parsing; each `src/cloud/<op>.ts` is a 1:1 adapter over the corresponding `cloud-core/src/operations/<op>.ts`. Mutually exclusive with `--hosted`. `start` accepts `--name`, `--env-file`, and `--template <alias>` (substrate template, default `slicc`) — use `--template slicc-test` to boot an isolated test template built via `SLICC_E2B_TEMPLATE_NAME` without touching the production `slicc` template. See [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md).
+- **Standalone CLI**: thin-bridge only — the webapp loads from the hosted origin (`https://www.sliccy.ai`, or `--lead`/`WORKER_BASE_URL` for a local `:8787` wrangler) and the launched Chrome opens it with `?bridge=ws://localhost:<servePort>/cdp&bridgeToken=<token>`; node-server owns only CDP, fetch-proxy, sign-and-forward, and the OAuth callback. No Vite-HMR; for local UI work run `npm run dev:standalone:fresh` — **rebuild `@slicc/webapp` and `@slicc/node-server` first** or Chrome launches stale ([`docs/development.md`](../../docs/development.md)).
+- **Serve-only**: reuses an already-running CDP target. Honors `--cdp-port` (the fake-LLM E2E harness needs the proxy, the helper's `readCdpPageState` probe, and Playwright's `--remote-debugging-port` on one agreed port).
+- **Electron mode**: launches or attaches to an Electron app. Launched pages get `/electron?bridge=ws://localhost:<cdpPort>/cdp&bridgeToken=<token>&role=leader|follower` so the hosted webapp drives every page over the local bridge; no bundled overlay shell. On a `--join` launch the LEADER URL also carries `tray=<join url>` so an egress-allowed app attaches as ONE tray follower — without it the overlay mints its own tray as a second leader; auto-follow tabs and no-join leaders carry an explicitly EMPTY `tray=` to block the stored-join-URL fallback. Egress-blocked apps (Signal) join via the headless WebRTC follower. See `docs/electron.md`.
+- **Hosted mode (`--hosted`)**: bundled with the e2b template (`packages/dev-tools/e2b-template/`). Boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` + `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
+- **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox, mutually exclusive with `--hosted`. Lifecycle logic lives in `@slicc/cloud-core`; `src/cloud/` files are thin adapters wiring the file-backed registry (`~/.slicc/cloud-sessions.json`) + e2b substrate to the matching cloud-core op — `dispatch.ts` parses argv, each `<op>.ts` is a 1:1 adapter over `cloud-core/src/operations/<op>.ts`. `start` takes `--name`, `--env-file`, `--template <alias>` (default `slicc`; `slicc-test` for an isolated test template via `SLICC_E2B_TEMPLATE_NAME`). See [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md).
+- **CLI installer (`--install-cli`)**: downloads the released Go `slicc` follower binary (`packages/slicc-cli`) for the platform and exits — no server boots. `src/install-cli.ts` scans GitHub releases newest→oldest for the first with a `slicc-<os>-<arch>` asset (sparse: binaries attach only when `packages/slicc-cli` changed), installing to an OS-idiomatic dir (POSIX `~/.local/bin` / `/usr/local/bin`, Windows `%LOCALAPPDATA%\Programs\slicc`, or `--install-dir`).
 
-`packages/node-server/src/runtime-flags.ts` is the source of truth for supported flags such as `--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, and `--prompt`.
+`src/runtime-flags.ts` is the source of truth for flags (`--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, `--prompt`, …).
 
-- **CLI installer (`--install-cli`)**: downloads the released Go `slicc` follower binary (`packages/slicc-cli`) for the current platform and exits — no server boots. `src/install-cli.ts` scans GitHub releases newest→oldest for the first one carrying a `slicc-<os>-<arch>` asset (releases are sparse: binaries only attach when `packages/slicc-cli` changed), installs to an OS-idiomatic dir — `~/.local/bin` when on `$PATH`, else `/usr/local/bin` when writable, else `~/.local/bin` with a PATH hint; `%LOCALAPPDATA%\Programs\slicc` on Windows (or `--install-dir <dir>`).
+## `--prompt`
 
-`--serve-only` now honors `--cdp-port` (previously parsed but silently dropped, so the CDP proxy always pointed at 9222); the fake-LLM E2E harness depends on this to keep the proxy, the helper's `readCdpPageState` probe, and Playwright Chrome's `--remote-debugging-port` agreed on the same port.
-
-## `--prompt` for Automated Testing
-
-The `--prompt` flag auto-submits a prompt when the UI loads and is the quickest way to smoke-test common flows.
-
-```bash
-npm run dev -- --prompt "mount /tmp"
-npm run dev -- --prompt "ls /workspace"
-```
-
-Use it for repeatable dev and QA flows without manual typing.
+Auto-submits a prompt when the UI loads — quickest smoke-test: `npm run dev -- --prompt "ls /workspace"`.
 
 ## Mount table (`--mount`)
 
-Repeatable `--mount=<os-path>:<slicc-path>` / `--mount <v>` (`runtime-flags.ts` → `mounts`, parsed by `parseMountTableMapping`: last-colon split, `~` expansion, dedup by target). `src/hostfs.ts` serves the mapped folders over `/api/hostfs` (list/stat/read/write/mkdir/rename/remove; `{ code, message }` errno JSON; `resolveWithinRoot` blocks traversal + symlink escapes; roots resolved once at startup, missing folders skipped with a warning). `stat` and each file row of `list` also carry `ctime`/`ino`/`uid`/`gid`/full `mode` — isomorphic-git's `compareStats` needs all of them, or every read-only git command over the mount re-hashes the tree (#2708). Two request shapes, same handlers: the per-op routes plus a stable `POST /api/hostfs` with a JSON `{ op, mount, path, … }` body for list/stat/mkdir/rename/remove — the CORS preflight cache is keyed by URL, so the per-op `?mount=&path=` URLs made `Access-Control-Max-Age` useless (#2715); `read`/`write` keep per-file URLs so the browser HTTP cache can still 304 them. `read` speaks `Range` (single `bytes=` window → 206 + `Content-Range`; outside the file → 416 + `Content-Range: bytes */<size>`; unparseable → ignored per RFC 9110 §14.2) and streams bodies with `createReadStream` instead of buffering them. Streaming drops the ETag express derived from a buffered body, so `cacheValidator` derives a strong `ETag: "<size>-<mtime>-<ino>"` + `Last-Modified` from the stat and the route honors `If-None-Match`/`If-Modified-Since` (→ 304, no body) and `If-Range` (mismatch → full 200, never a 416) — without it the browser re-transfers a 92 MB pack per object lookup (#2707: 220,310 of 385,033 GETs were 304s). `HOSTFS_MAX_BODY_BYTES` guards only the UNRANGED read — a ranged one is bounded by its window, which is what makes a packfile over the cap reachable at all (#2711). `preflightMaxAge()` (`bridge-security.ts`) serves `/api/hostfs*` preflights with Chrome's 7200 s cap, everything else 600 s. Every error from the stable route MUST carry an errno `code` — including body-parser failures: the dispatcher is excluded from the global 50 MiB `express.json()` via `shouldParseGlobalJson` (`fetch-proxy-headers.ts`, which lives outside `index.ts` so tests can import it without booting the server) so its bounded 1 MiB parser applies, and `hostFsBodyErrorHandler` maps `entity.parse.failed` → 400 `EINVAL` / `entity.too.large` → 413 `EFBIG`. A code-less 404 is how the webapp detects a bridge without the route and falls back. Advertised as `autoMounts` (`{ path, hostPath }[]`) on `GET /api/runtime-config`; the webapp auto-mounts them at kernel boot via `HostFsMountBackend` — no picker, no Chrome permission. Picker mounts are unaffected. Parity: swift-server `HostFSRoutes.swift`. Docs: [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
+Repeatable `--mount=<os-path>:<slicc-path>` (`runtime-flags.ts` → `mounts`, `parseMountTableMapping`: last-colon split, `~` expansion, dedup by target). `src/hostfs.ts` serves the mapped folders over `/api/hostfs`; the webapp auto-mounts them at kernel boot via `HostFsMountBackend` (advertised as `autoMounts` on `GET /api/runtime-config`) — no picker, no Chrome permission. Picker mounts are unaffected. Swift parity: `HostFSRoutes.swift` / `HostFSWatch.swift`. The **full wire contract** (request shapes, per-entry stats, ranged/streamed reads, conditional requests, errno codes, preflight + cache coherence) lives in [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table) — read it before touching `hostfs.ts`.
 
-The webapp bypasses the opaque browser body cache for hostfs and owns a stable
-`RemoteMountCache` namespace derived from target + host paths. Bodies above 4 MiB are not
-memoized. `src/hostfs-watch.ts` recursively watches each mount, debounces per mount, and broadcasts
-batched `hostfs_invalidate` events over `/licks-ws`; unattributable events clear that mount.
-Swift parity: `HostFSWatch.swift`.
+node-server wiring behind that contract:
+
+- Every `/api/hostfs` error MUST carry an errno `code` — a code-less 404 is how the webapp detects an old bridge and downgrades. Non-obvious: the stable `POST /api/hostfs` dispatcher is excluded from the global 50 MiB `express.json()` via `shouldParseGlobalJson` in **`fetch-proxy-headers.ts`** (outside `index.ts` so tests import it without booting the server), so its bounded 1 MiB parser and `hostFsBodyErrorHandler` (parse → 400 `EINVAL`, oversized → 413 `EFBIG`) apply. `HOSTFS_MAX_BODY_BYTES` guards only the UNRANGED read (a ranged read is bounded by its window). `preflightMaxAge()` (`bridge-security.ts`) caps `/api/hostfs*` preflights at 7200 s, else 600 s.
+- `src/hostfs-watch.ts` recursively watches each mount, debounces per mount, broadcasts batched `hostfs_invalidate` over `/licks-ws`; unattributable events clear it.
 
 ## Bridge keep-alive
 
-`src/http-keepalive.ts` → `applyBridgeKeepAlive(server)` (called on the HTTP server in `index.ts` before `listen()`) raises `keepAliveTimeout` to 120 s and `headersTimeout` to 130 s. Node's 5 s default is advertised as `Keep-Alive: timeout=5` and loses a request whenever the browser reuses a socket the server is closing — which a `/api/hostfs` fan-out hits regularly (#2720). Parity: Hummingbird's `idleTimeout` defaults to `nil` (never closes idle connections), so swift-server has nothing to raise.
+`src/http-keepalive.ts` → `applyBridgeKeepAlive(server)` (in `index.ts` before `listen()`) raises `keepAliveTimeout` to 120 s and `headersTimeout` to 130 s. Node's 5 s default loses a request whenever the browser reuses a socket the server is closing — a `/api/hostfs` fan-out hits this regularly. Swift is a no-op: Hummingbird's `idleTimeout` defaults to `nil`.
 
-## Ports
+## Ports & Parallel Instances
 
-- `5710` — default bridge + `/api` port (`PORT` overrides it)
-- `9222` — default Chrome CDP port
-- `9223` — default Electron attach CDP port
-
-The runtime auto-resolves port conflicts when needed.
-
-## Parallel Instances
-
-Multiple standalone instances can run at once. Override the bridge port and let the runtime resolve the rest:
-
-```bash
-PORT=5720 npm run dev
-PORT=5730 npm run dev
-```
-
-Each instance gets its own browser profile and CDP port.
+Defaults: `5710` bridge + `/api` (`PORT` overrides), `9222` Chrome CDP, `9223` Electron attach CDP. The runtime auto-resolves conflicts; multiple standalone instances can run at once — set `PORT=5720 npm run dev` and each gets its own browser profile and CDP port.
 
 ## Electron Notes
 
-- `dev:electron` runs the Node server in Electron attach mode.
-- `electron-controller.ts`, `electron-runtime.ts`, and `electron-main.ts` own Electron-specific launch and per-target leader/follower URL minting (`/electron?bridge=…&bridgeToken=…&role=…`). The first attached target is `role=leader`; the controller re-elects the leader if it disappears. **Thin-bridge is the only overlay path** — the legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` (Path A) was retired, so `ElectronOverlayInjector.create` requires a `thinBridge` config. `resolveOverlayThinBridge` defaults the hosted origin to production (`https://www.sliccy.ai`), so the only unresolvable case is a missing per-process bridge token, in which case `startOverlayInjector` fails fast instead of serving a bundled overlay.
-- `index.ts` ensures the bridge is reachable once CDP is available so each Electron page can connect back over the same `/cdp` WebSocket the standalone Chrome uses.
-- The overlay bootstrap injected into Electron pages (`window.__SLICC_ELECTRON_OVERLAY__`) is read from disk at `dist/ui/electron-overlay-entry.js` (`getElectronOverlayEntryDistPath` in `electron-runtime.ts`). That artifact is produced by the self-contained **`@ai-ecoverse/spoon`** package (`packages/spoon`), which owns the `<slicc-launcher>` overlay + IIFE entry; the webapp build mirrors it to the same path. The path is stable, so node-server needs no code change when the overlay source moves.
-- The CSP-strip escalation (`Fetch.enable` → `handleFetchRequestPaused`) re-issues intercepted **document** requests through Node http/https. POST bodies go over the wire as raw bytes via `decodeCdpRequestPostBody` — `postDataEntries[].bytes` (base64, byte-exact) first, an ASCII `postData` string second, and `Fetch.failRequest` for anything it cannot reconstruct (a `<input type=file>` entry with no bytes, a non-ASCII `postData`, `hasPostData` with the body dropped). Writing the `postData` string UTF-8-expanded every byte ≥0x80 behind a successful fulfill (#2886); a corrupt upload is worse than a visible failure. `Content-Length` is re-derived from the forwarded bytes. Swift twin: `OverlayPostBody.swift`. Background: [`docs/pitfalls.md` — The overlay CSP-strip proxy is a DIFFERENT hop](../../docs/pitfalls.md).
-- If an app blocks remote debugging, the runtime fails early rather than pretending attach succeeded.
+- `dev:electron` runs the Node server in Electron attach mode. If an app blocks remote debugging, the runtime fails early rather than pretend attach succeeded.
+- `electron-controller.ts`, `electron-runtime.ts`, `electron-main.ts` own launch and per-target leader/follower URL minting. The first attached target is `role=leader`; the controller re-elects on disappearance. `index.ts` makes the bridge reachable once CDP is up so each page connects back over the same `/cdp` WebSocket. **Thin-bridge is the only overlay path** — the legacy bundled-UI overlay was retired, so `ElectronOverlayInjector.create` requires a `thinBridge` config; `resolveOverlayThinBridge` defaults the origin to production, so only a missing bridge token is unresolvable, on which `startOverlayInjector` fails fast.
+- The overlay bootstrap (`window.__SLICC_ELECTRON_OVERLAY__`) is read from the stable path `dist/ui/electron-overlay-entry.js` (`getElectronOverlayEntryDistPath`), produced by the self-contained **`@ai-ecoverse/spoon`** package (owns the `<slicc-launcher>` overlay + IIFE entry) and mirrored there by the webapp build — node-server needs no change when it moves.
+- The CSP-strip escalation (`Fetch.enable` → `handleFetchRequestPaused`) re-issues intercepted **document** requests through Node http/https, forwarding POST bodies byte-exact via `decodeCdpRequestPostBody` (`Fetch.failRequest` rather than corrupt an unreconstructable body). Swift twin `OverlayPostBody.swift`; background in [`docs/pitfalls.md`](../../docs/pitfalls.md).
 
 ## Main Files
 
 - `src/index.ts` — entry point, server boot, Chrome/Electron launch, CDP WebSocket proxy
-- `src/browser-shutdown.ts` — graceful close of the launched browser on server shutdown; confirms via CDP polling rather than the launcher process's exit event, since on macOS Chrome is launched through `/usr/bin/open` (see `planChromeSpawn`), so the process handle is `open`, not Chrome itself
-- `src/chrome-launch.ts` — Chrome executable/profile/launch argument handling. `buildChromeLaunchArgs` disables Local Network Access checks (`--disable-features=LocalNetworkAccessChecks,…`) on **every** launch — not just hosted — because the hosted UI (sliccy.ai) → local bridge hop is public→local and Chromium 142+ gates it behind a permission prompt. Kept in sync with swift-server; see [`docs/pitfalls.md` — Local Network Access](../../docs/pitfalls.md).
-- `src/electron-controller.ts` — Electron app attach and overlay management
-- `src/qa-setup.ts` — isolated QA profile scaffolding
-- `src/release-package.ts` — release packaging
+- `src/browser-shutdown.ts` — graceful close on shutdown; confirms via CDP polling not the launcher's exit event, since on macOS Chrome launches through `/usr/bin/open` (`planChromeSpawn`) so the process handle is `open`, not Chrome
+- `src/chrome-launch.ts` — Chrome executable/profile/launch args. `buildChromeLaunchArgs` disables Local Network Access checks (`--disable-features=LocalNetworkAccessChecks,…`) on **every** launch, because the hosted UI → local bridge hop is public→local and Chromium 142+ gates it behind a prompt. Synced with swift-server; [`docs/pitfalls.md`](../../docs/pitfalls.md).
+- `src/qa-setup.ts` — QA profile scaffolding · `src/release-package.ts` — release packaging
 
 ## API Routes
 
-- `GET /api/agent-activity` — returns `{ activeInLastMinute: boolean }` for non-OPTIONS `/api/fetch-proxy` traffic in the fixed 60-second window
-- `ALL /api/fetch-proxy` — forwards browser requests across origins, injects masked secrets, and records agent activity before forwarding
+- `ALL /api/fetch-proxy` — forwards browser requests across origins, injects masked secrets, records agent activity before forwarding
+- `GET /api/agent-activity` — `{ activeInLastMinute: boolean }` over non-OPTIONS `/api/fetch-proxy` traffic in a fixed 60 s window
 
 ## Secrets Architecture
 
-Node-server includes `OauthSecretStore` (in-memory writable store for OAuth token replicas), `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints. The sessionId is persisted to `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is specified). The secret masking primitives (`masking.ts`, `domain-match.ts`) were moved to `@slicc/shared-ts`; node-server now imports from the shared package.
+`OauthSecretStore` (in-memory writable store for OAuth token replicas) backs `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. The sessionId persists to `~/.slicc/session-id` (or `<env-file-dir>/session-id` under `--env-file`). Masking primitives (`masking.ts`, `domain-match.ts`) live in `@slicc/shared-ts`.
 
 ## Related Guides
 
-- `packages/webapp/CLAUDE.md` for the browser code being served
-- `packages/chrome-extension/CLAUDE.md` for the extension float
-- `packages/cloud-core/CLAUDE.md` for the sandbox lifecycle logic used by `--cloud`
-- `packages/shared-ts/CLAUDE.md` for secret masking primitives
-- `docs/development.md` and `docs/electron.md` for longer-form workflows
-- `docs/transcript-export.md` — transcript export bundle layout (the export runs in the webapp; the node-server's `/cdp` bridge is transparent)
+- `packages/webapp/CLAUDE.md` — served browser code · `packages/chrome-extension/CLAUDE.md` — extension float · `packages/cloud-core/CLAUDE.md` — `--cloud` lifecycle · `packages/shared-ts/CLAUDE.md` — masking primitives
+- `docs/development.md`, `docs/electron.md` — workflows · `docs/mounts.md` — `/api/hostfs` wire contract · `docs/pitfalls.md` — CSP-strip hop, Local Network Access
+- `docs/transcript-export.md` — export bundle layout (runs in the webapp; the `/cdp` bridge is transparent)
