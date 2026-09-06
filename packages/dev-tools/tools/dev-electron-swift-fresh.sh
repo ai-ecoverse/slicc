@@ -111,16 +111,18 @@ else
   echo "✔  Leader UI built (dist/ui/index.html)"
 fi
 
-# Treat ANY HTTP response from the wrangler port as "up". `curl -sf` exits
-# non-zero on a 4xx (e.g. the SPA's 404 before dist/ui is built), which would
-# false-negative the reuse/readiness check and try to bind a SECOND wrangler to
-# the already-occupied port. Checking only that curl got a status line (non-000,
-# non-empty) avoids that.
+# Identify the SLICC worker, not merely "something is listening". Any stray
+# server on this port (another dev server, a local model API) answers with a
+# status line, and the old any-status probe adopted it as the leader origin —
+# the harness printed "Reusing existing wrangler" and every later failure
+# pointed somewhere else. `/status` is a worker route, not a static asset
+# (see packages/cloudflare-worker/src/index.ts — it is deliberately kept
+# reachable ahead of the SPA intercept, and the Playwright suite already gates
+# on it), so it still answers before dist/ui is built. That was the reason the
+# probe tolerated a 4xx, and it is preserved.
 wrangler_up() {
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
-    "http://127.0.0.1:${WRANGLER_PORT}/?slicc=leader" 2>/dev/null || true)"
-  [ -n "$code" ] && [ "$code" != "000" ]
+  curl -s --max-time 2 "http://127.0.0.1:${WRANGLER_PORT}/status" 2>/dev/null |
+    grep -q '"service"[[:space:]]*:[[:space:]]*"slicc-tray-hub"'
 }
 
 # ── 3b. Reuse-or-start wrangler (UI / leader origin on :8787) ────────
@@ -144,6 +146,8 @@ else
     fi
     if ! kill -0 "$WRANGLER_PID" 2>/dev/null; then
       echo "❌  Wrangler exited before binding :${WRANGLER_PORT}"
+      echo "    If something else already holds that port, it is not the SLICC"
+      echo "    worker (/status did not identify it) — stop it or set WRANGLER_PORT."
       exit 1
     fi
     [ "$i" -eq 30 ] && { echo "❌  Wrangler failed to start"; kill "$WRANGLER_PID" 2>/dev/null || true; exit 1; }
