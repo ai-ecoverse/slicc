@@ -447,14 +447,34 @@ describe('aliasContent', () => {
   it('writes a valid shim that forwards to mcp invoke', () => {
     const content = aliasContent('weather');
     expect(content).toContain("'mcp', 'invoke', \"weather\"");
-    expect(content).toContain('await exec(cmd)');
-    expect(content).toContain('process.exit(r.exitCode');
+    expect(content).toContain("require('child_process')");
+    expect(content).toContain('await promisify(exec)(cmd)');
+    expect(content).toContain('process.exit(exitCode)');
     // Args must be pulled from `process.argv.slice(2)` — the JS realm exposes
     // script argv via `processShim.argv`, not via a bare `args` global.
     expect(content).toContain('process.argv.slice(2)');
     // Regression guard: a future revert to the old `typeof args` reference
     // would silently break every alias by feeding `mcp invoke` no arguments.
     expect(content).not.toMatch(/typeof\s+args\b/);
+  });
+
+  it('does not call a bare `exec(` global (only the child_process shim is in scope)', () => {
+    const content = aliasContent('weather');
+    // The realm has no top-level `exec` — `await exec(cmd)` threw
+    // `ReferenceError: exec is not defined` and broke every generated alias.
+    // `exec` must only ever appear as a `require('child_process')` binding,
+    // so match `exec(` unless it is preceded by `promisify(` or a dot.
+    expect(content).not.toMatch(/(^|[^A-Za-z0-9_.(])exec\(/m);
+  });
+
+  it('forwards output and exit status when the inner command fails', () => {
+    const content = aliasContent('weather');
+    // promisify(exec) rejects on non-zero exit, so the shim must catch and
+    // still forward stdout/stderr rather than dying with a stack trace.
+    expect(content).toContain('catch (err)');
+    expect(content).toContain('err?.stdout');
+    expect(content).toContain('err?.stderr');
+    expect(content).toContain("typeof err?.code === 'number' ? err.code : 1");
   });
 
   it('does not call a bare top-level `exit(` (only process.exit is in scope)', () => {
