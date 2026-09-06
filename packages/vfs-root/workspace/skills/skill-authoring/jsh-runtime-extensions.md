@@ -409,6 +409,39 @@ device.transferOut(endpointNumber: number, data): Promise<{ status: string; byte
 
 So it is `claimInterface(1)`, not `claim(1)`; `controlTransferIn(...)`, not `controlIn(...)`. Note the read results resolve `{ status, data }` where `data` is a **`DataView`** — wrap it (`new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)`) before treating it as bytes.
 
+Each device also carries its **configuration descriptors** as plain data, so an
+interface can be located by class/subclass/protocol without opening the device
+and re-reading the descriptor over a control transfer:
+
+```typescript
+device.configurations?: Array<{
+  configurationValue: number;
+  configurationName?: string;
+  interfaces: Array<{
+    interfaceNumber: number;
+    claimed: boolean;
+    alternates: Array<{
+      alternateSetting: number;
+      interfaceClass: number;
+      interfaceSubclass: number;
+      interfaceProtocol: number;
+      interfaceName?: string;
+      endpoints: Array<{
+        endpointNumber: number;
+        direction: 'in' | 'out';
+        type: 'bulk' | 'interrupt' | 'isochronous';
+        packetSize: number;
+      }>;
+    }>;
+  }>;
+}>
+```
+
+It is **optional** — absent when the platform does not expose the tree — so
+branch on it. Endpoints reported with a direction or type outside the vocabulary
+above are omitted rather than passed through, so matching on those fields is
+safe.
+
 Neither `serial.*` nor `usb.*` carries the `EventTarget` shape — those transports are explicit-poll.
 
 For ESP32 / ESP8266 work, drive `esptool` through `require('sliccy:exec')` (there is no bare `exec` global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
