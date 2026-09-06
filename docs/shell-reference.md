@@ -2084,17 +2084,67 @@ slicc.hid.on('inputreport', ({ handle, reportId, data }) => {
 await slicc.hid.sendReport(info.handle, 0, new Uint8Array([0x01, 0x02]));
 ```
 
-| Method                                                   | Returns                       | Notes                                                                                            |
-| -------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------ |
-| `slicc.hid.list()`                                       | `Promise<HidDeviceInfo[]>`    | Already-granted devices; no picker.                                                              |
-| `slicc.hid.request(filters?)`                            | `Promise<HidDeviceInfo[]>`    | Shows the WebHID picker; every granted interface of a multi-interface device is registered.      |
-| `slicc.hid.open(handle)` / `slicc.hid.close(handle)`     | `Promise<void>`               | `open` auto-attaches the host's input-report listener; `close` (or sprinkle close) detaches it.  |
-| `slicc.hid.sendReport(handle, reportId, data)`           | `Promise<void>`               | `data` is `Uint8Array`.                                                                          |
-| `slicc.hid.on('inputreport', cb)` / `slicc.hid.off(...)` | `void`                        | `cb({handle, reportId, data})` — `data` is a `Uint8Array`. Subscriptions are torn down on close. |
-| `slicc.serial.list()` / `slicc.serial.request(filters?)` | `Promise<SerialDeviceInfo[]>` | Already-granted vs. picker; parity with `hid`.                                                   |
-| `slicc.serial.open(handle, options)` / `serial.close(h)` | `Promise<void>`               | `options` mirrors the Web Serial open shape (`baudRate`, `dataBits`, …).                         |
-| `slicc.usb.list()` / `slicc.usb.request(filters?)`       | `Promise<UsbDeviceInfo[]>`    | Already-granted vs. picker; parity with `hid`.                                                   |
-| `slicc.usb.open(handle)` / `slicc.usb.close(handle)`     | `Promise<void>`               | Control / bulk transfers stay on the realm-side `usb` global for v1.                             |
+| Method                                                   | Returns                       | Notes                                                                                                     |
+| -------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `slicc.hid.list()`                                       | `Promise<HidDeviceInfo[]>`    | Already-granted devices; no picker.                                                                       |
+| `slicc.hid.request(filters?)`                            | `Promise<HidDeviceInfo[]>`    | Shows the WebHID picker; every granted interface of a multi-interface device is registered.               |
+| `slicc.hid.open(handle)` / `slicc.hid.close(handle)`     | `Promise<void>`               | `open` auto-attaches the host's input-report listener; `close` (or sprinkle close) detaches it.           |
+| `slicc.hid.sendReport(handle, reportId, data)`           | `Promise<void>`               | `data` is `Uint8Array`.                                                                                   |
+| `slicc.hid.on('inputreport', cb)` / `slicc.hid.off(...)` | `void`                        | `cb({handle, reportId, data})` — `data` is a `Uint8Array`. Subscriptions are torn down on close.          |
+| `slicc.serial.list()` / `slicc.serial.request(filters?)` | `Promise<SerialDeviceInfo[]>` | Already-granted vs. picker; parity with `hid`.                                                            |
+| `slicc.serial.open(handle, options)` / `serial.close(h)` | `Promise<void>`               | `options` mirrors the Web Serial open shape (`baudRate`, `dataBits`, …).                                  |
+| `slicc.usb.list()` / `slicc.usb.request(filters?)`       | `Promise<UsbDeviceInfo[]>`    | Already-granted vs. picker; parity with `hid`. Each `UsbDeviceInfo` carries `configurations` — see below. |
+| `slicc.usb.open(handle)` / `slicc.usb.close(handle)`     | `Promise<void>`               | Control / bulk transfers stay on the realm-side `usb` global for v1.                                      |
+
+#### `UsbDeviceInfo.configurations`
+
+Alongside identity (`handle`, `vendorId`, `productId`, `productName`,
+`manufacturerName`, `serialNumber`, `opened`), a device carries its
+configuration descriptors as plain data — so a script can locate an interface
+by class/subclass/protocol without opening the device and re-reading the
+descriptor over a control transfer:
+
+```typescript
+configurations?: Array<{
+  configurationValue: number;
+  configurationName?: string;
+  interfaces: Array<{
+    interfaceNumber: number;
+    claimed: boolean;
+    alternates: Array<{
+      alternateSetting: number;
+      interfaceClass: number;
+      interfaceSubclass: number;
+      interfaceProtocol: number;
+      interfaceName?: string;
+      endpoints: Array<{
+        endpointNumber: number;
+        direction: 'in' | 'out';
+        type: 'bulk' | 'interrupt' | 'isochronous';
+        packetSize: number;
+      }>;
+    }>;
+  }>;
+}>;
+```
+
+The field is **optional** — absent when the platform does not expose the
+descriptor tree — so branch on it rather than assuming it. Endpoints whose
+`direction` or `type` falls outside the vocabulary above are omitted rather
+than passed through, so a match on those fields is safe.
+
+Finding ADB's interface (class `0xff`, subclass `0x42`, protocol `0x01`):
+
+```javascript
+const usb = require('sliccy:usb');
+const [device] = await usb.list();
+const adb = (device.configurations ?? [])
+  .flatMap((c) => c.interfaces)
+  .flatMap((i) => i.alternates.map((a) => ({ interfaceNumber: i.interfaceNumber, ...a })))
+  .find(
+    (a) => a.interfaceClass === 0xff && a.interfaceSubclass === 0x42 && a.interfaceProtocol === 0x01
+  );
+```
 
 Untrusted inline-chat dips (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `slicc.hid` / `serial` / `usb`. Any spoofed request from such an iframe is rejected with `device access not allowed for this dip` before it reaches the registry.
 
