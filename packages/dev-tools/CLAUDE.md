@@ -7,9 +7,9 @@ Developer tooling in `packages/dev-tools/`. Per-gate rationale and edge cases: [
 Bare script names live under `tools/`, bare dir names under `packages/dev-tools/`, unless a fuller path is given.
 
 - **playwright-cli gap sync**: `tools/playwright-cli-sync.mjs` — diffs Slicc's vs `@playwright/cli`. [ref](../../docs/playwright-cli-sync.md).
-- **Dev-only VFS skills** (`vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `webapp/src/scoops/skills.ts`, remapped to `/workspace/skills/`.
-- **Build configs**: `webapp/vite.config.ts`, `chrome-extension/vite.config.ts`, `biome.json`.
-- **QA setup**: `packages/node-server/src/qa-setup.ts` + `npm run qa:*`; visual `webapp/tests/test-dips.mjs`.
+- **Dev-only VFS skills** (`vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts`, remapped to `/workspace/skills/`.
+- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`.
+- **QA setup**: `packages/node-server/src/qa-setup.ts` + `npm run qa:*`; visual `packages/webapp/tests/test-dips.mjs`.
 - **RUM error triage**: `rum-error-triage/triage-rum-errors.mjs`, nightly.
 - **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`; event-driven **review responder** (`review-responder/`) handles `automation/*` feedback. [details](../../docs/dev-tools-details.md#scheduled-agentic-workflows), [responder](../../docs/dev-tools-details.md#review-responder).
 - **Regression cluster hunter** (release-triggered, `regression-cluster-hunter/` + `.yml`): sweeps for surviving siblings of a shipped fix. [details](../../docs/dev-tools-details.md#regression-cluster-hunter).
@@ -29,7 +29,7 @@ Bare script names live under `tools/`, bare dir names under `packages/dev-tools/
 - **SwiftPM lockfile drift gate** (`ios-app` CI): `tools/check-swift-resolved-drift.mjs` — catches floated transitive pins. [details](../../docs/dev-tools-details.md#swiftpm-lockfile-drift-gate).
 - **Source-shape guards** (`tools/`, each own lint script): `check-no-innerhtml.mjs`, `check-no-ui-imports-in-providers.mjs`, `check-hosted-origin-literal.mjs`, `check-no-raw-chrome-runtime-id.mjs`, `check-agents-symlinks.mjs`. [details](../../docs/dev-tools-details.md#source-guards).
 - **Baseline ratchets** (each `tools/check-*.mjs` + a `*-baseline.json`, `--update`):
-  - **Layer back-edges** (`npm run lint:layer-back-edges`): `check-layer-back-edges.mjs`, `layer-back-edge-baseline.json`. Zero-tolerance: no relative import may escape `webapp/src` into a sibling package. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
+  - **Layer back-edges** (`npm run lint:layer-back-edges`): `check-layer-back-edges.mjs`, `layer-back-edge-baseline.json`. Zero-tolerance: no relative import may escape `packages/webapp/src` into a sibling package. [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
   - **Float probes** (`npm run lint:no-float-probes`): `check-no-float-probes.mjs`, `float-probe-baseline.json` (`--allow-growth`) — bans the ten `FLOAT_PROBE_NAMES` + raw `__slicc_connect_mode` under `scoops/`/`tools/`/`kernel/`. [details](../../docs/dev-tools-details.md#float-probe-ratchet).
   - **`Record<string, unknown>`** (`npm run lint:record-string-unknown`): `check-record-string-unknown.mjs` + `.biome-plugins/no-record-string-unknown.grit` (`biome.record-gate.json`), baseline. [details](../../docs/dev-tools-details.md#record-string-unknown-ratchet).
 - **Swift unused-dependency gate** (`npm run lint:swift-deps`): `tools/check-swift-unused-deps.mjs` (+ `-lib.mjs`) — SPM parity with knip / `make tidy-check`; waiver `// unused-dep-ok`. [details](../../docs/dev-tools-details.md#swift-unused-dependency-gate).
@@ -38,7 +38,7 @@ Bare script names live under `tools/`, bare dir names under `packages/dev-tools/
 - **Dead code (prod files)** (`npm run deadcode:production-files`): `knip --production --include files`; `knip.json`. [details](../../docs/dev-tools-details.md#knip-production-suffix-discipline).
 - **Debt boy-scout gate**: `node tools/check-touched-exemptions.mjs [base-ref]` (+ `size-exemption-lib.mjs`) — enforces `biome.json` overrides + the three baseline ratchets. [verify](../../.agents/skills/verifying-before-push/SKILL.md).
 - **Coverage gate + ratchet** (`tools/`): `coverage-gate.mjs` + `coverage-ratchet.mjs` (`coverage-thresholds.json`); Swift `swift-coverage-check.sh` + `-runner-retry.sh`. [retry](../../docs/dev-tools-details.md#swift-coverage-retry).
-- **First-load size gate** (part of `npm run size -w @slicc/webapp`): `tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`) — cold-boot payload guard vs `origin/main`; ceilings `webapp/first-load-budget.json`. [details](../../docs/dev-tools-details.md#first-load-size-gate).
+- **First-load size gate** (part of `npm run size -w @slicc/webapp`): `tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`) — cold-boot payload guard vs `origin/main`; ceilings `packages/webapp/first-load-budget.json`. [details](../../docs/dev-tools-details.md#first-load-size-gate).
 - **Cross-impl vectors**: `tools/gen-mask-vectors.mjs` (mask parity), `gen-theme-vectors.mjs` (`npx tsx`; regen after `theme-engine.ts`, asserted by `theme-vectors.test.ts`/`ThemeEngineTests.swift`).
 - **Preflight deps check**: `tools/preflight-deps.mjs` — via `pretypecheck`/`pretest`.
 - **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs` — gate macOS/iOS packaging, the `slicc` Go CLI (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store / worker publish, `@ai-ecoverse/biome-jsh`.
