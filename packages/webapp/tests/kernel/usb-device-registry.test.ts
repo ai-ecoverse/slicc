@@ -67,6 +67,119 @@ describe('deviceToInfo', () => {
       opened: false,
     });
   });
+
+  it('omits `configurations` when the platform does not expose it', () => {
+    expect(deviceToInfo('usb1', fakeDevice())).not.toHaveProperty('configurations');
+  });
+
+  it('flattens the descriptor tree into plain, serializable data', () => {
+    // Shaped after a real Android device: interface 0 is vendor-specific,
+    // interface 1 is ADB (class 0xff / subclass 0x42 / protocol 0x01).
+    const info = deviceToInfo(
+      'usb1',
+      fakeDevice({
+        configurations: [
+          {
+            configurationValue: 1,
+            configurationName: 'default',
+            interfaces: [
+              {
+                interfaceNumber: 1,
+                claimed: false,
+                alternates: [
+                  {
+                    alternateSetting: 0,
+                    interfaceClass: 0xff,
+                    interfaceSubclass: 0x42,
+                    interfaceProtocol: 0x01,
+                    endpoints: [
+                      { endpointNumber: 3, direction: 'in', type: 'bulk', packetSize: 512 },
+                      { endpointNumber: 2, direction: 'out', type: 'bulk', packetSize: 512 },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(info.configurations).toEqual([
+      {
+        configurationValue: 1,
+        configurationName: 'default',
+        interfaces: [
+          {
+            interfaceNumber: 1,
+            claimed: false,
+            alternates: [
+              {
+                alternateSetting: 0,
+                interfaceClass: 0xff,
+                interfaceSubclass: 0x42,
+                interfaceProtocol: 0x01,
+                endpoints: [
+                  { endpointNumber: 3, direction: 'in', type: 'bulk', packetSize: 512 },
+                  { endpointNumber: 2, direction: 'out', type: 'bulk', packetSize: 512 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    // Must survive the postMessage boundary it exists to cross.
+    expect(() => structuredClone(info)).not.toThrow();
+  });
+
+  it('drops endpoints whose direction or type is outside the WebUSB vocabulary', () => {
+    const info = deviceToInfo(
+      'usb1',
+      fakeDevice({
+        configurations: [
+          {
+            configurationValue: 1,
+            interfaces: [
+              {
+                interfaceNumber: 0,
+                claimed: false,
+                alternates: [
+                  {
+                    alternateSetting: 0,
+                    interfaceClass: 0xff,
+                    interfaceSubclass: 0xff,
+                    interfaceProtocol: 0,
+                    endpoints: [
+                      { endpointNumber: 1, direction: 'in', type: 'bulk', packetSize: 64 },
+                      { endpointNumber: 2, direction: 'sideways', type: 'bulk', packetSize: 64 },
+                      { endpointNumber: 3, direction: 'out', type: 'quantum', packetSize: 64 },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(info.configurations?.[0]?.interfaces[0]?.alternates[0]?.endpoints).toEqual([
+      { endpointNumber: 1, direction: 'in', type: 'bulk', packetSize: 64 },
+    ]);
+  });
+
+  it('tolerates a descriptor tree with missing nested arrays', () => {
+    const info = deviceToInfo(
+      'usb1',
+      fakeDevice({
+        configurations: [
+          { configurationValue: 1, interfaces: undefined },
+        ] as unknown as UsbDevice['configurations'],
+      })
+    );
+    expect(info.configurations).toEqual([{ configurationValue: 1, interfaces: [] }]);
+  });
 });
 
 describe('usb-operations', () => {

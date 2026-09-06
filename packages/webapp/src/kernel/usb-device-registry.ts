@@ -42,6 +42,70 @@ export interface UsbOutTransferResult {
   status?: string;
 }
 
+/** The live WebUSB descriptor objects, as read off a `USBDevice`. */
+interface UsbLiveEndpoint {
+  readonly endpointNumber: number;
+  readonly direction: string;
+  readonly type: string;
+  readonly packetSize: number;
+}
+
+interface UsbLiveAlternate {
+  readonly alternateSetting: number;
+  readonly interfaceClass: number;
+  readonly interfaceSubclass: number;
+  readonly interfaceProtocol: number;
+  readonly interfaceName?: string;
+  readonly endpoints: readonly UsbLiveEndpoint[];
+}
+
+interface UsbLiveInterface {
+  readonly interfaceNumber: number;
+  readonly claimed: boolean;
+  readonly alternates: readonly UsbLiveAlternate[];
+}
+
+interface UsbLiveConfiguration {
+  readonly configurationValue: number;
+  readonly configurationName?: string;
+  readonly interfaces: readonly UsbLiveInterface[];
+}
+
+/**
+ * Configuration descriptors, flattened to plain data.
+ *
+ * WebUSB's `USBConfiguration` / `USBInterface` / `USBEndpoint` are live class
+ * instances and cannot cross `postMessage`, so they are mapped to these
+ * structural equivalents before being sent over the bridge.
+ */
+export interface UsbEndpointDescriptor {
+  endpointNumber: number;
+  direction: 'in' | 'out';
+  type: 'bulk' | 'interrupt' | 'isochronous';
+  packetSize: number;
+}
+
+export interface UsbAlternateDescriptor {
+  alternateSetting: number;
+  interfaceClass: number;
+  interfaceSubclass: number;
+  interfaceProtocol: number;
+  interfaceName?: string;
+  endpoints: UsbEndpointDescriptor[];
+}
+
+export interface UsbInterfaceDescriptor {
+  interfaceNumber: number;
+  claimed: boolean;
+  alternates: UsbAlternateDescriptor[];
+}
+
+export interface UsbConfigurationDescriptor {
+  configurationValue: number;
+  configurationName?: string;
+  interfaces: UsbInterfaceDescriptor[];
+}
+
 /** The subset of `USBDevice` the registry and handlers touch. */
 export interface UsbDevice {
   readonly vendorId: number;
@@ -50,6 +114,8 @@ export interface UsbDevice {
   readonly manufacturerName?: string;
   readonly serialNumber?: string;
   readonly opened: boolean;
+  /** Absent on stubs and on some non-Chromium implementations. */
+  readonly configurations?: readonly UsbLiveConfiguration[];
   open(): Promise<void>;
   close(): Promise<void>;
   selectConfiguration(configurationValue: number): Promise<void>;
@@ -77,6 +143,12 @@ export interface UsbDeviceInfo {
   manufacturerName?: string;
   serialNumber?: string;
   opened: boolean;
+  /**
+   * Interface/endpoint layout, when the platform exposes it. Realm callers
+   * would otherwise have to re-read the configuration descriptor over a
+   * control transfer just to find an interface by class/subclass/protocol.
+   */
+  configurations?: UsbConfigurationDescriptor[];
 }
 
 /** Read `navigator.usb` from the current realm, or null when absent. */
@@ -138,6 +210,48 @@ export function getSharedUsbRegistry(): DeviceHandleRegistry {
 /** Maximum bytes for a single control/bulk transfer (v1 cap). */
 export const MAX_USB_TRANSFER_BYTES = 4 * 1024 * 1024;
 
+const ENDPOINT_DIRECTIONS = new Set(['in', 'out']);
+const ENDPOINT_TYPES = new Set(['bulk', 'interrupt', 'isochronous']);
+
+/**
+ * Copy the live descriptor tree into plain objects. Endpoints whose
+ * direction/type the platform reports as something outside the WebUSB
+ * vocabulary are dropped rather than widened — callers match on these, and a
+ * surprise value should not silently look like a usable endpoint.
+ */
+function configurationsToDescriptors(
+  configurations: readonly UsbLiveConfiguration[]
+): UsbConfigurationDescriptor[] {
+  return configurations.map((configuration) => ({
+    configurationValue: configuration.configurationValue,
+    ...(configuration.configurationName
+      ? { configurationName: configuration.configurationName }
+      : {}),
+    interfaces: (configuration.interfaces ?? []).map((iface) => ({
+      interfaceNumber: iface.interfaceNumber,
+      claimed: !!iface.claimed,
+      alternates: (iface.alternates ?? []).map((alternate) => ({
+        alternateSetting: alternate.alternateSetting,
+        interfaceClass: alternate.interfaceClass,
+        interfaceSubclass: alternate.interfaceSubclass,
+        interfaceProtocol: alternate.interfaceProtocol,
+        ...(alternate.interfaceName ? { interfaceName: alternate.interfaceName } : {}),
+        endpoints: (alternate.endpoints ?? [])
+          .filter(
+            (endpoint) =>
+              ENDPOINT_DIRECTIONS.has(endpoint.direction) && ENDPOINT_TYPES.has(endpoint.type)
+          )
+          .map((endpoint) => ({
+            endpointNumber: endpoint.endpointNumber,
+            direction: endpoint.direction as 'in' | 'out',
+            type: endpoint.type as 'bulk' | 'interrupt' | 'isochronous',
+            packetSize: endpoint.packetSize,
+          })),
+      })),
+    })),
+  }));
+}
+
 /** Build the serializable descriptor for a registered device. */
 export function deviceToInfo(handle: string, device: UsbDevice): UsbDeviceInfo {
   return {
@@ -148,5 +262,8 @@ export function deviceToInfo(handle: string, device: UsbDevice): UsbDeviceInfo {
     ...(device.manufacturerName ? { manufacturerName: device.manufacturerName } : {}),
     ...(device.serialNumber ? { serialNumber: device.serialNumber } : {}),
     opened: device.opened,
+    ...(device.configurations
+      ? { configurations: configurationsToDescriptors(device.configurations) }
+      : {}),
   };
 }
