@@ -64,6 +64,8 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
     expect(help.stdout).toMatch(/install/);
     expect(help.stdout).toMatch(/\bi\b/);
     expect(help.stdout).toContain('Usage:');
+    expect(help.stdout).toMatch(/--save-dev/);
+    expect(help.stdout).toMatch(/-D/);
     await fs.dispose();
   });
 
@@ -75,6 +77,8 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
     expect(help.stdout).toContain('npm');
     expect(help.stdout).toMatch(/install/);
     expect(help.stdout).toContain('Usage:');
+    expect(help.stdout).toMatch(/--save-dev/);
+    expect(help.stdout).toMatch(/-D/);
     await fs.dispose();
   });
 

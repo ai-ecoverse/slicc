@@ -25,10 +25,12 @@ Already-installed packages, locally resolved bins, and unmapped package names ke
 
 ## Installing and removing packages
 
-`ipk install <pkg>` (also `npm install`, `npm i`, `ipk add`) installs into `<cwd>/node_modules` and records the package in the nearest `package.json`. `ipk install -g <pkg>` installs into the shared global prefix at `/shared/lib/node_modules`, records direct dependencies in `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under `/shared/bin` for package bins.
+`ipk install <pkg>` (also `npm install`, `npm i`, `ipk add`) installs into `<cwd>/node_modules` and records the package in the nearest `package.json` — in the section it already occupies, or in `dependencies` if it is new. `ipk install -D <pkg>` / `npm install --save-dev <pkg>` records new packages in `devDependencies`. A bare name that is already declared is resolved against that existing range, not latest. Unknown install flags fail instead of being ignored. `ipk install` with no package names installs declared `dependencies` and `devDependencies` without rewriting `package.json`. `ipk install -g <pkg>` installs into the shared global prefix at `/shared/lib/node_modules`, records direct dependencies in `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under `/shared/bin` for package bins.
 
 ```bash
 ipk install lodash              # local project install
+ipk install -D eslint           # record in devDependencies
+npm install --save-dev eslint@8.57.1
 ipk install -g typescript       # global install (shared prefix + PATH bin)
 npm uninstall -g typescript     # remove from global manifest and reconcile tree
 npm list -g                     # list direct global dependencies
