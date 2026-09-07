@@ -418,9 +418,15 @@ export class VirtualFS {
     // `resolveMountConfig()` so the file exists. The shape mirrors
     // `Index.toJSON()` in `@zenfs/core/internal/file_index.js`
     // (`{ version, maxSize, entries }`) so ZenFS can overwrite it
-    // byte-compatibly. Only seed when absent — an existing sidecar (the
-    // reload case) is left untouched so persisted metadata survives.
-    await VirtualFS.seedOpfsMetadataSidecarIfMissing(handle);
+    // byte-compatibly. Only seed when absent or unreadable by ZenFS — an
+    // existing valid sidecar (the reload case) is left untouched so persisted
+    // metadata survives.
+    //
+    // Under the write lock, because this both READS the sidecar and may
+    // replace it: another context's `writeOpfsMetadataSidecar` flush holds the
+    // same lock, so validation cannot race a half-written document and mistake
+    // it for a torn one.
+    await vfs.withWriteLock(() => VirtualFS.seedOpfsMetadataSidecarIfMissing(handle));
     const [zenfs, { WebAccess }] = await Promise.all([import('@zenfs/core'), import('@zenfs/dom')]);
     await VirtualFS.ensureRootMount(zenfs);
     const mountPoint = `/__opfs__/${vfs.dbName}`;
@@ -737,8 +743,9 @@ export class VirtualFS {
 
   /**
    * Seed `/.metadata.json` in the OPFS subdir handle with an empty-but-valid
-   * ZenFS `Index.toJSON()` payload if the file is missing. No-op when the
-   * sidecar already exists (reload case — persisted metadata must survive).
+   * ZenFS `Index.toJSON()` payload if the file is missing OR UNUSABLE. A
+   * readable, parseable sidecar (the reload case) is left untouched so
+   * persisted metadata survives.
    *
    * The shape `{ version: 1, maxSize: 0xffffffff, entries: {} }` matches
    * `Index.toJSON()` in `@zenfs/core/internal/file_index.js`; `maxSize`
@@ -748,14 +755,37 @@ export class VirtualFS {
    * created on-demand by `WebAccessFS.stat`'s ENOENT recovery path
    * (lines ~84-110 of `@zenfs/dom/access.js`), same as the no-metadata
    * boot path.
+   *
+   * Reseeding an unparseable sidecar is what makes a TORN WRITE survivable.
+   * `createWritable()` truncates before it writes, so a reload landing inside
+   * a sidecar flush leaves a short file — an unterminated JSON document. That
+   * file is not absent, so an existence check alone kept it, `_loadMetadata`
+   * threw `SyntaxError` on every subsequent mount, and the kernel worker
+   * failed to boot FOREVER with no user-reachable recovery
+   * (`Kernel worker boot failed: Unterminated string in JSON`).
+   * `repairOpfsMetadataSidecar` cannot help here either: it needs a parseable
+   * document to repair and returns `null` for this class. Dropping the
+   * sidecar costs only recorded mode/mtime, never file CONTENT — the files
+   * are separate OPFS entries and ZenFS rebuilds inodes from the real tree.
+   *
+   * Only PARSE and SCHEMA failures reseed. A read that fails propagates, so an
+   * invalidated snapshot or a transient I/O error can never be mistaken for
+   * corruption and cost a user their recorded modes; the caller holds the
+   * write lock so a concurrent flush cannot be observed mid-write either.
    */
   private static async seedOpfsMetadataSidecarIfMissing(
     handle: FileSystemDirectoryHandle
   ): Promise<void> {
     const SIDECAR_NAME = '.metadata.json';
     try {
-      await handle.getFileHandle(SIDECAR_NAME);
-      return;
+      const existing = await handle.getFileHandle(SIDECAR_NAME);
+      // A read failure propagates: it means the bytes are unknown, and
+      // reseeding on unknown bytes would discard metadata that is very likely
+      // intact. Only a document ZenFS demonstrably cannot consume is replaced.
+      if (VirtualFS.isUsableMetadataDocument(await VirtualFS.readSidecarText(existing))) return;
+      console.warn(
+        '[virtual-fs] metadata sidecar is unparseable (torn write?); reseeding an empty index'
+      );
     } catch (err) {
       const name = (err as { name?: string } | null)?.name;
       if (name !== 'NotFoundError') throw err;
@@ -769,6 +799,54 @@ export class VirtualFS {
     });
     await writable.write(initial);
     await writable.close();
+  }
+
+  /**
+   * Read the sidecar's bytes, reacquiring the `File` snapshot on a native
+   * `NotReadableError`. `getFile()` returns a SNAPSHOT, and a concurrent
+   * native overwrite invalidates it even though a fresh snapshot reads fine —
+   * the same race the `@zenfs/dom` read patch retries (#2924), matched here at
+   * three attempts. Retrying the same `File` is futile; only a fresh one can
+   * succeed.
+   *
+   * Anything other than `NotReadableError`, and a snapshot still unreadable
+   * after three tries, is thrown. That distinction is load-bearing: this
+   * function's answer decides whether the sidecar gets REPLACED, so "I could
+   * not read it" must never be reported as "it is corrupt".
+   */
+  private static async readSidecarText(fileHandle: FileSystemFileHandle): Promise<string> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await (await fileHandle.getFile()).text();
+      } catch (err) {
+        if ((err as { name?: string } | null)?.name !== 'NotReadableError') throw err;
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  }
+
+  /**
+   * True when the given bytes are a document `WebAccessFS._loadMetadata` can
+   * consume: parseable JSON carrying an `entries` object. An empty string, a
+   * truncated one, or a document without `entries` is unusable and must be
+   * reseeded rather than kept.
+   *
+   * Deliberately a pure function of the bytes, with no I/O and no catch around
+   * a read: only a PARSE or SCHEMA failure may answer `false`, because `false`
+   * means "throw this sidecar away".
+   */
+  private static isUsableMetadataDocument(text: string): boolean {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return false;
+    }
+    if (!parsed || typeof parsed !== 'object') return false;
+    const entries = (parsed as { entries?: unknown }).entries;
+    return !!entries && typeof entries === 'object';
   }
 
   /**
