@@ -633,6 +633,27 @@ at the bare minimum ZenFS Viewer needs and
 copy; the patch is gone. A presence check is `typeof globalThis.__zenfs__ !==
 'undefined'`, and the version lives in the `_version` export, not on the global.
 
+## OPFS Reads: Reacquire Invalidated File Snapshots
+
+`FileSystemFileHandle.getFile()` returns a snapshot. A native OPFS overwrite
+committed before that File's `arrayBuffer()` read can invalidate it, causing
+Chromium's `NotReadableError` even though a fresh snapshot is readable.
+One six-byte file is enough; limiting concurrency to one does not prevent the
+interleaving. See [zen-fs/dom#46](https://github.com/zen-fs/dom/issues/46), reproduced
+on upstream dom 1.2.13 / core 2.7.2 as well as our pinned versions.
+
+The `@zenfs/dom` read patch obtains a fresh File for each byte-read attempt and
+retries native `NotReadableError` at most twice (three total attempts). Retrying
+the same File keeps the stale snapshot. Handle lookup and snapshot acquisition
+errors are outside this retry, and other byte-read errors propagate immediately.
+Persistent failures still reject with the final error. This does not make a
+multi-file mount an atomic snapshot or repair concurrent file-size changes.
+
+The [browser reproduction](../packages/webapp/tests/e2e/zenfs-opfs-read-race/README.md)
+uses real native Files and writes; its hooks only control timing. A once-overwrite
+run recovers to `after!`; overwriting every snapshot still fails after three
+attempts. Unit guards live in `tests/fs/zenfs-opfs-read-retry.test.ts` in the webapp.
+
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 
 **Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,

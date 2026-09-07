@@ -1,5 +1,5 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index f4a0680..acf7a1b 100644
+index f4a0680..52d7263 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
 @@ -57,12 +57,18 @@ export class WebAccessFS extends Async(IndexFS) {
@@ -97,3 +97,28 @@ index f4a0680..acf7a1b 100644
      }
      removeSync() {
          throw log.crit(withErrno('ENOSYS'));
+@@ -158,8 +214,22 @@ export class WebAccessFS extends Async(IndexFS) {
+         if (end <= offset)
+             return;
+         const handle = await this.get('file', path);
+-        const file = await handle.getFile();
+-        const data = await file.arrayBuffer();
++        // PATCH: a concurrent OPFS write invalidates an acquired File snapshot.
++        // Retry the byte read with a fresh snapshot, not the same stale File.
++        // Persistent failures remain fatal after three attempts; other errors
++        // (including permission failures) are never retried.
++        let data;
++        for (let attempt = 0; ; attempt++) {
++            const file = await handle.getFile();
++            try {
++                data = await file.arrayBuffer();
++                break;
++            }
++            catch (error) {
++                if (!(error instanceof DOMException) || error.name !== 'NotReadableError' || attempt >= 2)
++                    throw error;
++            }
++        }
+         if (data.byteLength < end - offset)
+             throw alert(withErrno('EIO', [
+                 'Unexpected mismatch in file data size. This should not happen.',

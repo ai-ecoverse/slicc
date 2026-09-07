@@ -36,6 +36,9 @@ Per-subsystem file paths + invariants live in
   recovery — `setup-preload-error-reload.ts` + `stale-asset-channel.ts`
 - Storage persistence — `boot/setup-storage-persistence.ts` (OPFS is _evictable_;
   `navigator.storage.persist()` is the only opt-out, page-realm only — `docs/pitfalls.md`)
+- OPFS snapshot reads — the ZenFS patch reacquires a File for at most three byte-read
+  attempts on native `NotReadableError`; preserve other errors (`docs/pitfalls.md`).
+  Real-browser fixture: `tests/e2e/zenfs-opfs-read-race/`.
 - File mentions / preview + base64 payload chips —
   [`docs/webapp-details.md`](../../docs/webapp-details.md) (confirm-then-linkify only, never a
   streaming bubble; `getMimeType()` SERVES vs `sniffFileType()` READS)
