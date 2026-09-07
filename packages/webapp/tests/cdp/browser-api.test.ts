@@ -280,6 +280,39 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('reconnectIfNeeded (kernel-worker forwarder re-dial)', () => {
+    it('re-dials with the captured options when the client is disconnected', async () => {
+      api.primeConnectOptions({ url: 'ws://localhost:7777/cdp', protocols: 'slicc.bridge.v1' });
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+
+      await api.reconnectIfNeeded();
+
+      expect(mockClient.connect).toHaveBeenCalledTimes(1);
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:7777/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1',
+      });
+    });
+
+    it('is a no-op while connected', async () => {
+      await api.reconnectIfNeeded();
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+
+    it('never re-dials a superseded client', async () => {
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient as unknown as { superseded: boolean }).superseded = true;
+      const onSuperseded = vi.fn();
+      api.setCdpSupersededHandler(onSuperseded);
+
+      await api.reconnectIfNeeded();
+
+      expect(mockClient.connect).not.toHaveBeenCalled();
+      expect(onSuperseded).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('listPages', () => {
     it('returns page targets', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -605,12 +638,17 @@ describe('BrowserAPI', () => {
       await api.attachToPage('target-1');
     });
 
-    it('navigates and waits for load event', async () => {
-      // Page.enable, navigate, and once for loadEventFired
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Page.enable
-        .mockResolvedValueOnce({ frameId: 'f1' }); // Page.navigate
-      (mockClient.once as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
+    it('navigates and waits for its own session load event', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Page.navigate') {
+          // Chrome delivers the load event after the navigate returns.
+          queueMicrotask(() =>
+            mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' })
+          );
+          return { frameId: 'f1' };
+        }
+        return {};
+      });
 
       await api.navigate('https://example.com');
 
@@ -620,6 +658,53 @@ describe('BrowserAPI', () => {
         { url: 'https://example.com' },
         'sess-1'
       );
+      // The wait is session-scoped now, not transport-wide `once()`.
+      expect(mockClient.once).not.toHaveBeenCalled();
+    });
+
+    it('ignores a sibling tab session load event and resolves on its own', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      let settled = false;
+      const navigation = api.navigate('https://example.com').then(() => {
+        settled = true;
+      });
+
+      // A sibling driver's tab finishing loading must NOT end this goto —
+      // that is what returned an `interactive` page and a stale snapshot.
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-other' });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(settled).toBe(false);
+
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' });
+      await navigation;
+      expect(settled).toBe(true);
+    });
+
+    it('does not leave an unhandled rejection when Page.navigate fails', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      vi.useFakeTimers();
+      try {
+        (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+          if (method === 'Page.navigate') throw new Error('net::ERR_ABORTED');
+          return {};
+        });
+
+        await expect(api.navigate('https://example.com')).rejects.toThrow('net::ERR_ABORTED');
+        // Let the abandoned load wait hit its 30 s bound: without the no-op
+        // catch, THIS is where the unhandled rejection used to surface —
+        // minutes after the caller had already moved on.
+        await vi.advanceTimersByTimeAsync(31_000);
+      } finally {
+        vi.useRealTimers();
+        // Give Node a real turn to report any unhandled rejection.
+        await new Promise((r) => setTimeout(r, 10));
+        process.off('unhandledRejection', onUnhandled);
+      }
+      expect(unhandled).toEqual([]);
     });
 
     it('throws if not attached', async () => {
@@ -731,11 +816,20 @@ describe('BrowserAPI', () => {
       // A capture-every-tab loop used to leave the LAST captured tab in
       // front, backgrounding SLICC — which Chrome may then freeze.
       vi.spyOn(
-        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        api as unknown as {
+          findFocusedLocalPage: (x: string | null, owner?: symbol) => Promise<string | null>;
+        },
         'findFocusedLocalPage'
       ).mockResolvedValue('front-1');
+      // The wake path attaches through the owner-token form so the focus probe
+      // can walk other tabs under the hold it already took.
       const attachSpy = vi
-        .spyOn(api, 'attachToPage')
+        .spyOn(
+          api as unknown as {
+            attachToPageOwned: (id: string, owner?: symbol) => Promise<string>;
+          },
+          'attachToPageOwned'
+        )
         .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot'))
@@ -748,10 +842,8 @@ describe('BrowserAPI', () => {
       // The probe leaves the attachment on a candidate page, so the captured
       // tab must be re-attached BEFORE the first bringToFront — otherwise the
       // capture returns the wrong tab's pixels (review catch on #2100).
-      expect(attachSpy.mock.calls[0]).toEqual(['target-1']);
       // Restore leg: attach the old front, re-front it, re-attach the captured tab.
-      expect(attachSpy).toHaveBeenCalledWith('front-1');
-      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      expect(attachSpy.mock.calls.map((c) => c[0])).toEqual(['target-1', 'front-1', 'target-1']);
       const fronts = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
         (c) => c[0] === 'Page.bringToFront'
       );
@@ -762,11 +854,20 @@ describe('BrowserAPI', () => {
       // A failed screenshot must not leave the captured tab in front — the
       // restoration lives in a finally (review catch on #2100).
       vi.spyOn(
-        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        api as unknown as {
+          findFocusedLocalPage: (x: string | null, owner?: symbol) => Promise<string | null>;
+        },
         'findFocusedLocalPage'
       ).mockResolvedValue('front-1');
+      // The wake path attaches through the owner-token form so the focus probe
+      // can walk other tabs under the hold it already took.
       const attachSpy = vi
-        .spyOn(api, 'attachToPage')
+        .spyOn(
+          api as unknown as {
+            attachToPageOwned: (id: string, owner?: symbol) => Promise<string>;
+          },
+          'attachToPageOwned'
+        )
         .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt
@@ -775,8 +876,7 @@ describe('BrowserAPI', () => {
         .mockResolvedValueOnce({}); // Page.bringToFront (restore)
 
       await expect(api.screenshot()).rejects.toThrow('target crashed');
-      expect(attachSpy).toHaveBeenCalledWith('front-1');
-      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      expect(attachSpy.mock.calls.map((c) => c[0])).toEqual(['target-1', 'front-1', 'target-1']);
     });
 
     it('foregroundFallback:false fails fast instead of stealing window focus', async () => {
@@ -1208,20 +1308,33 @@ describe('BrowserAPI', () => {
       ]);
     });
 
-    it('re-applies the override when re-attaching to the tab after a sibling switched away', async () => {
+    it('keeps the override without re-applying it when a sibling switches tabs', async () => {
       attachCounting();
       await api.withTab('t1', async () => {
         await api.setViewportOverride('t1', 1440, 900);
       });
       await api.withTab('t2', async () => {});
       await api.withTab('t1', async () => {});
+      // The session survives the switch now, so the override cannot evaporate
+      // and there is nothing to re-apply (issue #2417).
+      expect(emulationCalls()).toHaveLength(1);
+    });
+
+    it('re-applies the override on a genuine re-attach after the session died', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 1440, 900);
+      });
+      // Chrome detached the session (proxy reset / debugger takeover).
+      mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-1' });
+      await api.withTab('t1', async () => {});
+
       const calls = emulationCalls();
-      // Initial set on sess-1, then re-applied on the fresh re-attach session
       expect(calls).toHaveLength(2);
       expect(calls[1]).toEqual([
         'Emulation.setDeviceMetricsOverride',
         { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false },
-        'sess-3',
+        'sess-2',
       ]);
     });
 
@@ -1496,6 +1609,829 @@ describe('BrowserAPI', () => {
 
       // All three must execute in strict FIFO order
       expect(order).toEqual(['1-start', '1-end', '2-start', '2-end', '3-start', '3-end']);
+    });
+  });
+
+  describe('per-tab session registry (issue #2417)', () => {
+    /** Mint a distinct session per attach; everything else resolves empty. */
+    function attachCounting() {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+    }
+
+    function callsTo(method: string) {
+      return (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(([m]) => m === method);
+    }
+
+    it('attaches a tab once and reuses its session across switches', async () => {
+      attachCounting();
+
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+
+      // One session per TAB, not one per switch — the leak that fanned every
+      // page event out once per abandoned session.
+      const attaches = callsTo('Target.attachToTarget');
+      expect(attaches).toHaveLength(2);
+      expect(attaches.map(([, params]) => (params as { targetId: string }).targetId)).toEqual([
+        't1',
+        't2',
+      ]);
+      expect(callsTo('Target.detachFromTarget')).toHaveLength(0);
+    });
+
+    it('reports the most recently used tab through getSessionId/getAttachedTargetId', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+
+      expect(api.getAttachedTargetId()).toBe('t2');
+      expect(api.getSessionId()).toBe('sess-2');
+
+      await api.withTab('t1', async () => {});
+      expect(api.getAttachedTargetId()).toBe('t1');
+      expect(api.getSessionId()).toBe('sess-1');
+    });
+
+    it('detaches the session when the tab is closed, and re-attaches later', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {});
+
+      await api.closePage('t1');
+
+      expect(mockClient.send).toHaveBeenCalledWith('Target.detachFromTarget', {
+        sessionId: 'sess-1',
+      });
+      expect(mockClient.send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 't1' });
+      expect(api.getAttachedTargetId()).toBeNull();
+
+      await api.withTab('t1', async () => {});
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+    });
+
+    it('evicts the least-recently-used session over the cap and detaches it', async () => {
+      attachCounting();
+      // 32 is the cap; the 33rd attach must retire the oldest entry.
+      for (let i = 0; i < 33; i++) await api.withTab(`t${i}`, async () => {});
+
+      expect(callsTo('Target.detachFromTarget')).toEqual([
+        ['Target.detachFromTarget', { sessionId: 'sess-1' }],
+      ]);
+
+      // The evicted tab still works — it just re-attaches on next use.
+      await api.withTab('t0', async () => {});
+      expect(callsTo('Target.attachToTarget')).toHaveLength(34);
+    });
+
+    it('never evicts the session a navigation is still waiting on', async () => {
+      attachCounting();
+      // t-nav parks on its load event, which releases the bridge lock — so 32
+      // other tabs can attach while it waits. Ageing it out would detach the
+      // session its session-scoped wait is bound to and strand it for the full
+      // 30 s timeout (review finding 7).
+      const navigating = api.withTab('t-nav', async () => {
+        await api.navigate('https://slow.example');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      for (let i = 0; i < 32; i++) await api.withTab(`t${i}`, async () => {});
+
+      const detached = callsTo('Target.detachFromTarget').map(
+        ([, params]) => (params as { sessionId: string }).sessionId
+      );
+      expect(detached).not.toContain('sess-1'); // t-nav's session
+      expect(detached).toEqual(['sess-2']); // the oldest UNPINNED tab instead
+
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' });
+      await navigating;
+      // Still the same session — no re-attach was needed.
+      expect(api.getSessionId()).toBe('sess-1');
+      expect(callsTo('Target.attachToTarget')).toHaveLength(33);
+    });
+
+    it('defers eviction while every candidate is busy', async () => {
+      attachCounting();
+      // Fill the registry with tabs parked on their load event: each holds a
+      // pin (its body is still running) but not the bridge.
+      const navigating: Array<Promise<void>> = [];
+      // 32 is the cap in browser-api.ts.
+      for (let i = 0; i < 32; i++) {
+        navigating.push(
+          api.withTab(`t${i}`, async () => {
+            await api.navigate('https://slow.example');
+          })
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      let detachesWhileBusy = -1;
+      await api.withTab('t-extra', async () => {
+        // The cap is exceeded here and every older entry is pinned, so the
+        // eviction has nothing it may take.
+        detachesWhileBusy = callsTo('Target.detachFromTarget').length;
+      });
+      expect(detachesWhileBusy).toBe(0);
+
+      // Releasing a pin re-runs the cap check. `t-extra` is now the only
+      // unpinned entry, so it is the one that goes — never a tab whose
+      // session a parked wait is still bound to.
+      expect(callsTo('Target.detachFromTarget')).toEqual([
+        ['Target.detachFromTarget', { sessionId: 'sess-33' }],
+      ]);
+
+      for (let i = 1; i <= 32; i++) {
+        mockClient._fireEvent('Page.loadEventFired', { sessionId: `sess-${i}` });
+      }
+      await Promise.all(navigating);
+    });
+
+    it('keeps the most-recently-used tabs when the cap is reached', async () => {
+      attachCounting();
+      for (let i = 0; i < 32; i++) await api.withTab(`t${i}`, async () => {});
+      // Touch the oldest so it is no longer the eviction candidate.
+      await api.withTab('t0', async () => {});
+      await api.withTab('overflow', async () => {});
+
+      expect(callsTo('Target.detachFromTarget')).toEqual([
+        ['Target.detachFromTarget', { sessionId: 'sess-2' }],
+      ]);
+    });
+
+    it('drops a session when Chrome reports Target.detachedFromTarget', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {});
+
+      mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-1' });
+      expect(api.getSessionId()).toBeNull();
+
+      await api.withTab('t1', async () => {});
+      // Re-attached rather than re-using a session Chrome already threw away.
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      // Nothing to detach — the session was already gone.
+      expect(callsTo('Target.detachFromTarget')).toHaveLength(0);
+    });
+
+    it('drops a session when the tab is destroyed', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {});
+
+      mockClient._fireEvent('Target.targetDestroyed', { targetId: 't1' });
+
+      await api.withTab('t1', async () => {});
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+    });
+
+    it('clears the whole registry when the transport reconnects', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+
+      // Chrome discards every session on the socket that dropped.
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      await api.withTab('t1', async () => {});
+      (mockClient as unknown as { state: string }).state = 'connected';
+      await api.withTab('t2', async () => {});
+
+      expect(mockClient.connect).toHaveBeenCalled();
+      expect(callsTo('Target.attachToTarget')).toHaveLength(4);
+    });
+
+    it('re-attaches and retries the callback exactly once on a stale session', async () => {
+      attachCounting();
+      let calls = 0;
+      const result = await api.withTab('t1', async (sessionId) => {
+        calls += 1;
+        if (calls === 1) throw new Error('Session with given id not found');
+        return sessionId;
+      });
+
+      expect(calls).toBe(2);
+      expect(result).toBe('sess-2');
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+    });
+
+    it('gives up after one heal instead of retrying forever', async () => {
+      attachCounting();
+      let calls = 0;
+      await expect(
+        api.withTab('t1', async () => {
+          calls += 1;
+          throw new Error('No tab attached for sessionId 42');
+        })
+      ).rejects.toThrow('No tab attached for sessionId 42');
+
+      expect(calls).toBe(2);
+    });
+
+    it('heals when the stale error was the callback\u2019s first round trip', async () => {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        async (method: string, _params: unknown, sessionId?: string) => {
+          if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+          // The dead session rejects the callback's very first command.
+          if (sessionId === 'sess-1' && method === 'Runtime.enable') {
+            throw new Error('Session with given id not found');
+          }
+          if (method === 'Runtime.evaluate') return { result: { type: 'string', value: 'ok' } };
+          return {};
+        }
+      );
+
+      let runs = 0;
+      const out = await api.withTab('t1', async () => {
+        runs += 1;
+        return api.evaluate('document.title');
+      });
+
+      // Nothing had been applied, so replaying is free of side effects.
+      expect(out).toBe('ok');
+      expect(runs).toBe(2);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+    });
+
+    it('does not replay a callback that had already changed the page', async () => {
+      let sessCount = 0;
+      let keys = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.dispatchKeyEvent') {
+          keys += 1;
+          // Two characters land, then the proxy's Chrome leg resets.
+          if (keys > 4) throw new Error('Session with given id not found');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async () => {
+          await api.type('abcdef');
+        })
+        // Replaying would have typed 'ab' twice; the agent is told the
+        // outcome is unknown instead.
+      ).rejects.toThrow(/reset mid-command.*outcome is unknown/s);
+
+      expect(keys).toBe(5);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('counts the callback\u2019s DIRECT transport sends as applied (press: keyDown then keyUp)', async () => {
+      let sessCount = 0;
+      let keys = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.dispatchKeyEvent') {
+          keys += 1;
+          // keyDown lands; the session dies before keyUp.
+          if (keys > 1) throw new Error('Session with given id not found');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async (sessionId) => {
+          const transport = api.getTransport();
+          await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a' }, sessionId);
+          await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a' }, sessionId);
+        })
+        // A replay would press the key twice; the direct send must count.
+      ).rejects.toThrow(/reset mid-command.*outcome is unknown/s);
+
+      expect(keys).toBe(2);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('hands out one stable transport facade per real transport', () => {
+      const a = api.getTransport();
+      expect(api.getTransport()).toBe(a);
+      // Session-change subscribers receive the same facade.
+      const seen: unknown[] = [];
+      api.setSessionChangeCallback((_sid, transport) => seen.push(transport));
+      return api
+        .withTab('t1', async () => undefined)
+        .then(() => {
+          expect(seen).toHaveLength(1);
+          expect(seen[0]).toBe(a);
+        });
+    });
+
+    it('does not replay a RETRY that had already changed the page', async () => {
+      let sessCount = 0;
+      let inserts = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        async (method: string, _params: unknown, sessionId?: string) => {
+          if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+          // The first session is dead on arrival: nothing lands, so the heal
+          // replays. On the fresh session the first insert lands and THEN the
+          // session dies — the replay gate has to hold on that pass too.
+          if (sessionId === 'sess-1') throw new Error('Session with given id not found');
+          if (method === 'Input.insertText') {
+            inserts += 1;
+            if (inserts > 1) throw new Error('Session with given id not found');
+            return {};
+          }
+          return {};
+        }
+      );
+
+      await expect(
+        api.withTab('t1', async () => {
+          await api.insertText('a');
+          await api.insertText('b');
+        })
+      ).rejects.toThrow(/outcome is unknown/);
+
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      expect(inserts).toBe(2);
+    });
+
+    it('re-arms the tab after an uncertain-outcome failure', async () => {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.insertText') throw new Error('Target closed');
+        if (method === 'Runtime.evaluate') return { result: { type: 'number', value: 1 } };
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async () => {
+          // One applied send (Runtime.enable via evaluate) before the drop.
+          await api.evaluate('1');
+          await api.insertText('hello');
+        })
+      ).rejects.toThrow(/outcome is unknown/);
+
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+      await api.withTab('t1', async () => {});
+
+      // The dead session was invalidated, so the next command re-attaches.
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      expect(api.getSessionId()).toBe('sess-2');
+    });
+
+    it('does not retry an ordinary command failure', async () => {
+      attachCounting();
+      let calls = 0;
+      await expect(
+        api.withTab('t1', async () => {
+          calls += 1;
+          throw new Error('Element not found: #missing');
+        })
+      ).rejects.toThrow('Element not found');
+
+      expect(calls).toBe(1);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('notifies session-change and per-target subscribers with the targetId', async () => {
+      attachCounting();
+      const onChange = vi.fn();
+      const onReplaced = vi.fn();
+      api.setSessionChangeCallback(onChange);
+      const unsubscribe = api.onSessionReplaced('t1', onReplaced);
+
+      await api.withTab('t1', async () => {});
+      // Subscribers get the same facade getTransport() hands out, not the raw client.
+      expect(onChange).toHaveBeenCalledWith('sess-1', api.getTransport(), 't1');
+      expect(onReplaced).toHaveBeenCalledTimes(1);
+
+      // Reusing the live session must not look like a replacement.
+      await api.withTab('t1', async () => {});
+      expect(onReplaced).toHaveBeenCalledTimes(1);
+
+      mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-1' });
+      await api.withTab('t1', async () => {});
+      expect(onReplaced).toHaveBeenLastCalledWith('sess-2', api.getTransport(), 't1');
+
+      unsubscribe();
+      mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-2' });
+      await api.withTab('t1', async () => {});
+      expect(onReplaced).toHaveBeenCalledTimes(2);
+    });
+
+    /** Local `/cdp` client + one tray runtime's transport, one tab on each. */
+    async function twoTransports() {
+      const remoteClient = createMockClient();
+      const removeRemoteTransport = vi.fn();
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+        removeRemoteTransport,
+      });
+      attachCounting();
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: 'remote-sess' } : {}
+      );
+      await api.withTab('local-1', async () => {});
+      await api.withTab('follower-1:tab-1', async () => {});
+      return { remoteClient, removeRemoteTransport };
+    }
+
+    function remoteAttaches(remoteClient: ReturnType<typeof createMockClient>) {
+      return (remoteClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Target.attachToTarget'
+      );
+    }
+
+    it('detaches a remote session BEFORE disposing its follower transport', async () => {
+      const { remoteClient, removeRemoteTransport } = await twoTransports();
+      const order: string[] = [];
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.detachFromTarget') order.push('detach');
+        return method === 'Target.attachToTarget' ? { sessionId: 'remote-sess-2' } : {};
+      });
+      removeRemoteTransport.mockImplementation(() => order.push('dispose'));
+
+      await api.closePage('follower-1:tab-1');
+
+      // Disposing first made the detach always fail (the transport was gone),
+      // leaking the follower-side session on every eviction (review finding).
+      // closePage's own remote-close path disposes once more afterwards, which
+      // the providers treat as idempotent; the ordering is what matters here.
+      expect(order[0]).toBe('detach');
+      expect(order.slice(1).every((step) => step === 'dispose')).toBe(true);
+    });
+
+    it('keeps local sessions when a follower transport drops', async () => {
+      const { remoteClient, removeRemoteTransport } = await twoTransports();
+
+      // The follower went away while its transport was the current one.
+      (remoteClient as unknown as { state: string }).state = 'disconnected';
+      await api.withTab('local-1', async () => {});
+
+      // The local session is untouched: forgetting it without detaching is
+      // what made the next local command mint a duplicate (review finding 6).
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+      expect(api.getSessionId()).toBe('sess-1');
+      expect(removeRemoteTransport).toHaveBeenCalledWith('follower-1', 'tab-1');
+      // ...and the dead transport stops being listened to.
+      expect(remoteClient.off).toHaveBeenCalledWith(
+        'Target.detachedFromTarget',
+        expect.any(Function)
+      );
+      expect(remoteClient.off).toHaveBeenCalledWith('Target.targetDestroyed', expect.any(Function));
+    });
+
+    it('keeps remote sessions when the local client drops', async () => {
+      const { remoteClient } = await twoTransports();
+      // Drive the local tab so the local client is the current transport.
+      await api.withTab('local-1', async () => {});
+
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      await api.withTab('local-1', async () => {});
+      (mockClient as unknown as { state: string }).state = 'connected';
+
+      // The local tab re-attached (its session died with the socket); the
+      // follower's did not, because its transport never dropped.
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      await api.withTab('follower-1:tab-1', async () => {});
+      expect(remoteAttaches(remoteClient)).toHaveLength(1);
+      expect(api.getSessionId()).toBe('remote-sess');
+    });
+
+    it('stops listening to a remote transport once its last session goes', async () => {
+      const { remoteClient } = await twoTransports();
+
+      await api.closePage('follower-1:tab-1');
+
+      expect(remoteClient.off).toHaveBeenCalledWith(
+        'Target.detachedFromTarget',
+        expect.any(Function)
+      );
+      // A late lifecycle event from the forgotten transport is nobody's
+      // business any more — the local session must survive it.
+      remoteClient._fireEvent('Target.targetDestroyed', { targetId: 'local-1' });
+      await api.withTab('local-1', async () => {});
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('keeps a remote tray session alive while another tab is driven locally', async () => {
+      const remoteClient = createMockClient();
+      const removeRemoteTransport = vi.fn();
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+        removeRemoteTransport,
+      });
+      attachCounting();
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: 'remote-sess' } : {}
+      );
+
+      await api.withTab('follower-1:tab-1', async () => {});
+      await api.withTab('local-1', async () => {});
+      await api.withTab('follower-1:tab-1', async () => {});
+
+      // One attach per tab on each transport, and the remote transport is not
+      // torn down while its session is still registered.
+      expect(
+        (remoteClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+          ([m]) => m === 'Target.attachToTarget'
+        )
+      ).toHaveLength(1);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+      expect(removeRemoteTransport).not.toHaveBeenCalled();
+      expect(api.getSessionId()).toBe('remote-sess');
+    });
+  });
+
+  describe('per-tab locking (issue #2417)', () => {
+    function attachCounting() {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+    }
+
+    it('serializes two calls on the SAME tab', async () => {
+      attachCounting();
+      const order: string[] = [];
+
+      const p1 = api.withTab('t1', async () => {
+        order.push('a-start');
+        await new Promise((r) => setTimeout(r, 20));
+        order.push('a-end');
+      });
+      await new Promise((r) => setTimeout(r, 2));
+      const p2 = api.withTab('t1', async () => {
+        order.push('b-start');
+        order.push('b-end');
+      });
+      await Promise.all([p1, p2]);
+
+      expect(order).toEqual(['a-start', 'a-end', 'b-start', 'b-end']);
+    });
+
+    it('lets another tab run while a navigation waits for its load event', async () => {
+      attachCounting();
+      const order: string[] = [];
+
+      const navigating = api.withTab('t1', async () => {
+        order.push('nav-start');
+        await api.navigate('https://slow.example');
+        order.push('nav-end');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+
+      // t1 is parked on its load event; a sibling tab must not be stuck
+      // behind it (the "one hung goto froze the bridge" symptom).
+      await api.withTab('t2', async () => {
+        order.push('sibling');
+      });
+      expect(order).toEqual(['nav-start', 'sibling']);
+
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' });
+      await navigating;
+      expect(order).toEqual(['nav-start', 'sibling', 'nav-end']);
+    });
+
+    it('lets another tab run while Page.navigate itself hangs', async () => {
+      // A URL that never responds hangs in the navigate command, not in the
+      // load wait — the `background_after` / exit 124 shape from issue #2417.
+      let sessCount = 0;
+      const order: string[] = [];
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Page.navigate') return new Promise(() => undefined); // never settles
+        return {};
+      });
+
+      const abandoned = api.withTab('t1', async () => {
+        await api.navigate('https://hangs.example');
+      });
+      void abandoned.catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 5));
+
+      await api.withTab('t2', async () => {
+        order.push('sibling-ran');
+      });
+      expect(order).toEqual(['sibling-ran']);
+    });
+
+    it('restores the waiting tab as current after a sibling ran on the bridge', async () => {
+      attachCounting();
+      const navigating = api.withTab('t1', async () => {
+        await api.navigate('https://slow.example');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      await api.withTab('t2', async () => {});
+      expect(api.getAttachedTargetId()).toBe('t2');
+
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' });
+      await navigating;
+
+      // The navigating tab took the bridge back and is current again, so the
+      // caller's next session-less command still addresses ITS tab.
+      expect(api.getAttachedTargetId()).toBe('t1');
+      expect(api.getSessionId()).toBe('sess-1');
+    });
+
+    it('holds the bridge across a foregrounding, so tab work queues behind it', async () => {
+      const order: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Page.bringToFront') {
+          order.push('front-start');
+          await gate;
+          order.push('front-end');
+        }
+        return {};
+      });
+
+      // Window focus is browser-global: the UI overlay's peek path takes the
+      // bridge-wide lock even though it never goes through withTab.
+      await api.attachToPage('t1');
+      const fronting = api.bringToFront();
+      await new Promise((r) => setTimeout(r, 5));
+
+      const tabWork = api.withTab('t2', async () => {
+        order.push('tab-work');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(order).toEqual(['front-start']);
+
+      release();
+      await Promise.all([fronting, tabWork]);
+      expect(order).toEqual(['front-start', 'front-end', 'tab-work']);
+    });
+
+    it('takes the bridge-wide lock from inside a tab hold without deadlocking', async () => {
+      attachCounting();
+      const done = await Promise.race([
+        api
+          .withTab('t1', async () => {
+            // realm-host's screenshotTab does exactly this: foreground the
+            // tab it already holds, then capture.
+            await api.bringToFront();
+            await api.screenshot({ foregroundFallback: false });
+            return 'ok';
+          })
+          .catch((err: unknown) => `error: ${String(err)}`),
+        new Promise((r) => setTimeout(() => r('deadlocked'), 300)),
+      ]);
+      expect(done).toBe('ok');
+    });
+
+    it('makes an outside attachToPage wait for the body that holds the bridge', async () => {
+      attachCounting();
+      const order: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+
+      const body = api.withTab('t1', async () => {
+        order.push('body-start');
+        await gate;
+        order.push('body-end');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+
+      // The WC peek timer's shape: a cursor move from outside any command.
+      // Re-entrancy used to hand it the running body's hold, so it re-pointed
+      // the bridge mid-command (issue #2417, review finding 3).
+      const peek = api.attachToPage('t2').then(() => order.push('peek-attached'));
+      await new Promise((r) => setTimeout(r, 5));
+      expect(order).toEqual(['body-start']);
+
+      release();
+      await Promise.all([body, peek]);
+      expect(order).toEqual(['body-start', 'body-end', 'peek-attached']);
+    });
+
+    it('keeps a body on its own tab when a sibling tried to move the cursor', async () => {
+      attachCounting();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let sawTarget: string | null = null;
+      let sawSession: string | null = null;
+
+      const body = api.withTab('t1', async () => {
+        await gate;
+        // A session-less call: it reads whatever the bridge cursor says.
+        sawTarget = api.getAttachedTargetId();
+        sawSession = api.getSessionId();
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const stray = api.attachToPage('t2');
+      await new Promise((r) => setTimeout(r, 5));
+
+      release();
+      await Promise.all([body, stray]);
+      expect(sawTarget).toBe('t1');
+      expect(sawSession).toBe('sess-1');
+    });
+
+    it('lets the peek path front a tab once the body it queued behind is done', async () => {
+      attachCounting();
+      const order: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+
+      const body = api.withTab('t1', async () => {
+        await gate;
+        order.push('body-end');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const front = api.bringTabToFront('t2').then(() => order.push('fronted'));
+      await new Promise((r) => setTimeout(r, 5));
+      expect(order).toEqual([]);
+
+      release();
+      await Promise.all([body, front]);
+      expect(order).toEqual(['body-end', 'fronted']);
+      expect(api.getAttachedTargetId()).toBe('t2');
+    });
+
+    it('selectTab moves the cursor under the locks and nothing else', async () => {
+      attachCounting();
+      await api.selectTab('t1');
+      expect(api.getAttachedTargetId()).toBe('t1');
+      expect(
+        (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.some(
+          ([m]) => m === 'Page.bringToFront'
+        )
+      ).toBe(false);
+    });
+
+    it('reports per-tab and bridge-wide contention separately', async () => {
+      attachCounting();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+
+      const p1 = api.withTab('t1', async () => {
+        await gate;
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const p2 = api.withTab('t1', async () => {});
+      const p3 = api.withTab('t2', async () => {});
+      await new Promise((r) => setTimeout(r, 20));
+      expect(api.getTabLockStats().queueDepth).toBe(3);
+
+      release();
+      await Promise.all([p1, p2, p3]);
+
+      const t1 = api.getTabLockStats('t1');
+      const t2 = api.getTabLockStats('t2');
+      expect(t1.acquisitions).toBe(2);
+      expect(t2.acquisitions).toBe(1);
+      // The second t1 caller queued behind its own tab; t2 only ever waited
+      // for the bridge. Exactly 0, not "about 0": with no predecessor on its
+      // own chain there is nothing to time, so this cannot read 1 ms because
+      // the machine was busy (review finding 11).
+      expect(t1.tabWaitMs).toBeGreaterThanOrEqual(10);
+      expect(t2.tabWaitMs).toBe(0);
+      expect(t2.bridgeWaitMs).toBeGreaterThanOrEqual(10);
+
+      const bridge = api.getTabLockStats();
+      expect(bridge.acquisitions).toBe(3);
+      expect(bridge.totalWaitMs).toBe(t1.totalWaitMs + t2.totalWaitMs);
+      expect(bridge.queueDepth).toBe(0);
+    });
+
+    it('records no wait at all when neither lock was contended', async () => {
+      attachCounting();
+      // Serial, uncontended commands on two tabs: an already-resolved lock
+      // chain is not contention, however slow the machine is.
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+
+      for (const targetId of ['t1', 't2']) {
+        const stats = api.getTabLockStats(targetId);
+        expect(stats.tabWaitMs).toBe(0);
+        expect(stats.bridgeWaitMs).toBe(0);
+        expect(stats.totalWaitMs).toBe(0);
+      }
+      expect(api.getTabLockStats().acquisitions).toBe(3);
+    });
+
+    it('reports zeroed stats for a tab that was never driven', () => {
+      expect(api.getTabLockStats('never-touched')).toEqual({
+        queueDepth: 0,
+        totalWaitMs: 0,
+        tabWaitMs: 0,
+        bridgeWaitMs: 0,
+        acquisitions: 0,
+      });
     });
   });
 

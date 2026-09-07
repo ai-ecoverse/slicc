@@ -36,7 +36,13 @@ function makeFakeBrowser() {
    * instead of the page the agent was driving.
    */
   let attached = 'agent-page';
-  return {
+  /** Depth of the locked entry points, so a bare cursor move is visible. */
+  let locked = 0;
+  /** Cursor moves that did NOT go through `withTab` and friends. */
+  const bare: string[] = [];
+  const api = {
+    /** Read by the regression test below; empty is the invariant. */
+    bareCursorMoves: bare,
     listAllTargets: vi.fn(async () => [
       { targetId: 'local-1', title: 'Docs', url: 'https://docs.example' },
       // A tray follower's tab: composite id — its CDP traffic (including the
@@ -44,14 +50,39 @@ function makeFakeBrowser() {
       { targetId: 'follower-9:tab-2', title: 'Dashboard', url: 'https://dash.example' },
     ]),
     attachToPage: vi.fn(async (id: string) => {
+      if (locked === 0) bare.push(`attachToPage:${id}`);
       attached = id;
       return 'session-1';
     }),
     getAttachedTargetId: vi.fn(() => attached),
     screenshot: vi.fn(async () => 'BASE64'),
-    bringToFront: vi.fn(async () => undefined),
+    bringToFront: vi.fn(async () => {
+      if (locked === 0) bare.push('bringToFront');
+    }),
     closePage: vi.fn(async () => undefined),
+    /**
+     * The locked entry points, modelled on top of the same moving attachment.
+     * Overlay code must reach the cursor ONLY through these — a bare attach
+     * from a UI timer can land inside a running agent command (issue #2417).
+     */
+    withTab: vi.fn(async (id: string, fn: (sessionId: string) => Promise<unknown>) => {
+      locked += 1;
+      try {
+        return await fn(await api.attachToPage(id));
+      } finally {
+        locked -= 1;
+      }
+    }),
+    selectTab: vi.fn(async (id: string) => {
+      await api.withTab(id, async () => undefined);
+    }),
+    bringTabToFront: vi.fn(async (id: string) => {
+      await api.withTab(id, async () => {
+        await api.bringToFront();
+      });
+    }),
   };
+  return api;
 }
 
 function makeRefs(): WcShellRefs {
@@ -260,6 +291,34 @@ describe('peek', () => {
       expect(browser.bringToFront).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2600);
       expect(browser.bringToFront).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Every cursor move the overlay makes — thumbnails, the switch, both halves
+   * of a peek — has to go through the bridge's locks. A bare `attachToPage`
+   * from this timer used to land in the middle of an agent command and leave
+   * that command's next session-less call addressing the peeked tab
+   * (issue #2417, Codex review finding 3).
+   */
+  it('never moves the session cursor outside the bridge locks', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      // Thumbnails have already walked every tab by here.
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(6000);
+      overlay.dispatchEvent(new CustomEvent('tab-activate', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(browser.bareCursorMoves).toEqual([]);
+      expect(browser.bringTabToFront).toHaveBeenCalledWith('local-1');
+      expect(browser.bringTabToFront).toHaveBeenCalledWith('slicc-self');
+      expect(browser.selectTab).toHaveBeenCalledWith('agent-page');
+      expect(browser.withTab).toHaveBeenCalledWith('local-1', expect.any(Function));
     } finally {
       vi.useRealTimers();
     }

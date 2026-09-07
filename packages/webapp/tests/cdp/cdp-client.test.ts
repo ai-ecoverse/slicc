@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CDP_SUPERSEDED_CLOSE_CODE, CDPClient } from '../../src/cdp/cdp-client.js';
+import {
+  CDP_SUPERSEDED_CLOSE_CODE,
+  CDP_UPSTREAM_RESET_CLOSE_CODE,
+  CDPClient,
+} from '../../src/cdp/cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket
@@ -380,6 +384,168 @@ describe('CDPClient', () => {
 
       client.disconnect();
       expect(client.superseded).toBe(false);
+    });
+  });
+
+  // The kernel worker can't see this client at all: it drives CDP through
+  // `WorkerCdpProxy` over a MessagePort. `onStateChange` is what
+  // `startPageCdpForwarder` relays across that hop as `cdp-reset` /
+  // `cdp-ready`, so a drop stops being silent worker-side (issue #2417).
+  describe('onStateChange', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('notifies on connect', async () => {
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      await connectOpen();
+
+      expect(seen).toEqual([['connected', undefined]]);
+    });
+
+    it('notifies on an unexpected close, carrying the close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose();
+
+      expect(seen.every(([state]) => state === 'disconnected')).toBe(true);
+      expect(seen.map(([, reason]) => reason)).toContain('CDP connection closed');
+    });
+
+    // A subscriber that relays across a process hop (`startPageCdpForwarder`)
+    // can only forward the FIRST notification of a transition — everything
+    // after it is a repeat of a state the far side already has. Announcing a
+    // generic reason first and the specific one second therefore threw the
+    // specific reason away at the worker boundary (issue #2417 review 10).
+    it('announces a close exactly once, with the specific close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        [
+          'disconnected',
+          'CDP connection reset by proxy (upstream Chrome connection was re-established)',
+        ],
+      ]);
+    });
+
+    it('announces a supersede close exactly once, with the supersede reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        ['disconnected', 'CDP connection superseded by another SLICC tab/window on this instance'],
+      ]);
+    });
+
+    it('rejects in-flight commands with the same reason it announces', async () => {
+      const ws = await connectOpen();
+      const seen: Array<string | undefined> = [];
+      client.onStateChange((_state, reason) => seen.push(reason));
+      const inFlight = client.send('Page.navigate');
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(inFlight).rejects.toThrow(seen[0]!);
+      expect(seen).toHaveLength(1);
+    });
+
+    it('notifies on an explicit disconnect()', async () => {
+      await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      client.disconnect();
+
+      expect(seen).toEqual(['disconnected']);
+    });
+
+    it('notifies again on a reconnect after a drop', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      ws.simulateClose();
+      await connectOpen();
+
+      expect(seen.at(-1)).toBe('connected');
+      expect(seen).toContain('disconnected');
+    });
+
+    it('stops notifying after unsubscribe', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      const off = client.onStateChange((state) => seen.push(state));
+
+      off();
+      ws.simulateClose();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('keeps notifying the other subscribers when one throws', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange(() => {
+        throw new Error('observer blew up');
+      });
+      client.onStateChange((state) => seen.push(state));
+
+      expect(() => ws.simulateClose()).not.toThrow();
+      expect(seen).toContain('disconnected');
+    });
+  });
+
+  describe('upstream reset (proxy rebuilt its Chrome leg)', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('uses close code 4002', () => {
+      expect(CDP_UPSTREAM_RESET_CLOSE_CODE).toBe(4002);
+    });
+
+    it('does NOT latch superseded — the slot is still ours', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.superseded).toBe(false);
+    });
+
+    it('leaves the client disconnected so the next command reconnects lazily', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.state).toBe('disconnected');
+      // A fresh connect must be possible (ensureConnected's lazy re-dial).
+      await connectOpen();
+      expect(client.state).toBe('connected');
+    });
+
+    it('rejects in-flight commands with the reset reason', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.navigate');
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(sendPromise).rejects.toThrow(/reset by proxy/i);
+      await expect(sendPromise).rejects.toThrow(/upstream Chrome connection was re-established/i);
+      await expect(sendPromise).rejects.not.toThrow(/superseded/i);
     });
   });
 });

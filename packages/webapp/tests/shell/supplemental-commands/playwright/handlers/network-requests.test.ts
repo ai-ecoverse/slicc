@@ -17,6 +17,7 @@ import {
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  withSessionReplaced,
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
@@ -94,6 +95,39 @@ describe('network-requests handlers', () => {
     const entry = state.networkRequests.get(TAB)![0];
     expect(entry.responseBody).toBe('PAYLOAD');
     expect(entry.responseBodyBase64).toBe(false);
+  });
+
+  // Same-transport, new-session replacement (a healed stale session, or the
+  // thin extension's in-place reconnect) — issue #2417 finding 4.
+  it('re-arms every listener and re-enables Network on a replacement session', async () => {
+    const transport = createMockTransport();
+    const { browser } = createMockBrowser({ transport, sessionId: 'session-1' });
+    const replaced = withSessionReplaced(browser);
+    const state = createPlaywrightState();
+    const ctx = createHandlerCtx({ browser, state, flags: { tab: TAB } });
+
+    await requestsHandler(ctx);
+    transport.clearListeners();
+    transport.send.mockClear();
+
+    replaced('session-2', transport.transport, TAB);
+
+    for (const event of [
+      'Network.requestWillBeSent',
+      'Network.responseReceived',
+      'Network.loadingFinished',
+    ]) {
+      expect(transport.listenerCount(event)).toBe(1);
+    }
+    expect(transport.send).toHaveBeenCalledWith('Network.enable', {}, 'session-2');
+
+    await transport.emit('Network.requestWillBeSent', {
+      sessionId: 'session-2',
+      requestId: 'r9',
+      request: { url: 'https://example.com/after', method: 'GET', headers: {} },
+    });
+    const listed = await requestsHandler(ctx);
+    expect(listed.stdout).toContain('https://example.com/after');
   });
 
   it('ignores events from a different session', async () => {

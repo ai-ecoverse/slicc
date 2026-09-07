@@ -9,6 +9,7 @@ import {
   createHandlerCtx,
   createMockBrowser,
   createPlaywrightState,
+  withSessionReplaced,
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
@@ -105,6 +106,60 @@ describe('routeHandler', () => {
       { requestId: 'q2' },
       'session-1'
     );
+  });
+
+  // A route pinned to a dead session lets every request sail through unmocked;
+  // the transport can also come back in place with an empty listener registry
+  // (thin extension) — issue #2417 finding 4.
+  it('re-arms interception and re-enables Fetch on a replacement session', async () => {
+    const { browser, transport } = createMockBrowser();
+    const replaced = withSessionReplaced(browser);
+    const state = createPlaywrightState();
+    await routeHandler(
+      createHandlerCtx({
+        browser,
+        state,
+        positional: ['https://x/**'],
+        flags: { tab: TAB, body: 'B' },
+      })
+    );
+
+    transport.clearListeners();
+    transport.send.mockClear();
+    replaced('session-2', transport.transport, TAB);
+
+    expect(transport.listenerCount('Fetch.requestPaused')).toBe(1);
+    expect(transport.send).toHaveBeenCalledWith('Fetch.enable', expect.anything(), 'session-2');
+
+    transport.send.mockClear();
+    await transport.emit('Fetch.requestPaused', {
+      sessionId: 'session-2',
+      requestId: 'q2',
+      request: { url: 'https://x/api', headers: {} },
+    });
+
+    // Fulfilled on the NEW session, not the dead one.
+    expect(transport.send).toHaveBeenCalledWith(
+      'Fetch.fulfillRequest',
+      expect.anything(),
+      'session-2'
+    );
+  });
+
+  it('tears the capture down on unroute, disabling Fetch on the current session', async () => {
+    const { browser, transport } = createMockBrowser();
+    const replaced = withSessionReplaced(browser);
+    const state = createPlaywrightState();
+    await routeHandler(
+      createHandlerCtx({ browser, state, positional: ['**'], flags: { tab: TAB } })
+    );
+    replaced('session-2', transport.transport, TAB);
+    transport.send.mockClear();
+
+    await unrouteHandler(createHandlerCtx({ browser, state, flags: { tab: TAB } }));
+
+    expect(transport.listenerCount('Fetch.requestPaused')).toBe(0);
+    expect(transport.send).toHaveBeenCalledWith('Fetch.disable', {}, 'session-2');
   });
 
   it('ignores intercepted requests from a different session', async () => {

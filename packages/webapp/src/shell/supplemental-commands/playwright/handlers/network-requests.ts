@@ -8,6 +8,7 @@
  *           response-headers, response-body
  */
 
+import { bindTabCapture } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   NetworkEntry,
@@ -71,6 +72,7 @@ function isStaticResource(mimeType: string | null, url: string): boolean {
 
 /** Start capturing network requests for a tab if not already subscribed. */
 function ensureCapturing(
+  browser: PlaywrightHandlerCtx['browser'],
   state: PlaywrightState,
   transport: CDPTransport,
   targetId: string,
@@ -82,9 +84,15 @@ function ensureCapturing(
   state.networkRequestIndex.set(targetId, new Map());
   let nextIndex = 1;
 
+  // A tab keeps ONE session, but the bridge replaces it after a stale-session
+  // heal (issue #2417). Filtering on the id captured at subscribe time would
+  // make the capture go deaf from that moment on, so every handler reads
+  // `binding.sessionId` per event; `bindTabCapture` re-arms the listeners and
+  // re-enables `Network` on the replacement session.
+
   const onRequest = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkRequestWillBeSentEvent;
-    if (params.sessionId !== sessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     const request = params.request;
     if (!requestId || !request) return;
@@ -120,7 +128,7 @@ function ensureCapturing(
 
   const onResponse = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkResponseReceivedEvent;
-    if (params.sessionId !== sessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     const response = params.response;
     if (!requestId || !response) return;
@@ -136,15 +144,15 @@ function ensureCapturing(
 
   const onLoadingFinished = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkLoadingFinishedEvent;
-    if (params.sessionId !== sessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     if (!requestId) return;
 
     const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
     if (!entry || entry.isStatic || entry.responseBody !== null) return;
 
-    transport
-      .send('Network.getResponseBody', { requestId }, sessionId)
+    binding.transport
+      .send('Network.getResponseBody', { requestId }, binding.sessionId)
       .then((result) => {
         const r = result as NetworkGetResponseBodyResult | undefined;
         if (!r) return;
@@ -158,15 +166,20 @@ function ensureCapturing(
       });
   };
 
-  transport.on('Network.requestWillBeSent', onRequest);
-  transport.on('Network.responseReceived', onResponse);
-  transport.on('Network.loadingFinished', onLoadingFinished);
-
-  state.networkCleanup.set(targetId, () => {
-    transport.off('Network.requestWillBeSent', onRequest);
-    transport.off('Network.responseReceived', onResponse);
-    transport.off('Network.loadingFinished', onLoadingFinished);
+  const binding = bindTabCapture({
+    browser,
+    targetId,
+    transport,
+    sessionId,
+    listeners: [
+      ['Network.requestWillBeSent', onRequest],
+      ['Network.responseReceived', onResponse],
+      ['Network.loadingFinished', onLoadingFinished],
+    ],
+    enable: (t, s) => t.send('Network.enable', {}, s),
   });
+
+  state.networkCleanup.set(targetId, () => binding.stop());
 }
 
 /** Decoded response-body bytes, or the reason the body cannot be decoded. */
@@ -243,7 +256,7 @@ export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 
@@ -295,7 +308,7 @@ export const requestHandler: PlaywrightHandler = async ({
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 
@@ -361,7 +374,7 @@ export const requestHeadersHandler: PlaywrightHandler = async ({
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 
@@ -401,7 +414,7 @@ export const requestBodyHandler: PlaywrightHandler = async ({
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 
@@ -442,7 +455,7 @@ export const responseHeadersHandler: PlaywrightHandler = async ({
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 
@@ -486,7 +499,7 @@ export const responseBodyHandler: PlaywrightHandler = async ({
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Network.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 

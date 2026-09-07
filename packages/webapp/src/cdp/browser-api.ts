@@ -12,11 +12,14 @@ import { CDPClient } from './cdp-client.js';
 import { HarRecorder } from './har-recorder.js';
 import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
+import { waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {
   AccessibilityNode,
   BoundingBox,
   CDPConnectOptions,
+  CDPEventListener,
+  ConnectionState,
   EvaluateOptions,
   FrameEvaluateOptions,
   FrameInfo,
@@ -62,6 +65,148 @@ export interface TrayTargetProvider {
 const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
+/**
+ * How many per-tab CDP sessions the registry keeps alive at once.
+ *
+ * Every live session costs Chrome one fan-out of every enabled domain's
+ * events over the single `/cdp` socket, so an unbounded registry recreates
+ * the leak it replaces (a long session drifts toward the Swift proxy's
+ * inbound-queue ceiling). Evicting the least-recently-used entry — and
+ * telling Chrome about it with `Target.detachFromTarget` — keeps the fan-out
+ * bounded; an evicted tab simply re-attaches on next use.
+ */
+const MAX_TAB_SESSIONS = 32;
+
+/** Bound for the session-scoped `Page.loadEventFired` wait in {@link BrowserAPI.navigate}. */
+const NAVIGATE_LOAD_TIMEOUT_MS = 30000;
+
+/**
+ * Error texts that mean "this CDP session is gone" rather than "the command
+ * failed". Chrome, the extension `chrome.debugger` bridge and the tray
+ * transports each phrase it differently. A stale session is recoverable — the
+ * tab is still there, only the session that addressed it died (a Chrome-leg
+ * reconnect in the proxy silently discards every session on it), so
+ * {@link BrowserAPI.withTab} re-attaches and retries ONCE. Any other error is
+ * the caller's to see.
+ */
+const STALE_SESSION_ERRORS = [
+  'Session with given id not found',
+  'Target closed',
+  'No session with given id',
+  'No tab attached for sessionId',
+] as const;
+
+/**
+ * A session died PART WAY through a command, so what reached the page is
+ * unknown. Distinct from a plain stale-session error, which means nothing
+ * landed and the command can simply be replayed — this one must not be.
+ */
+class SessionResetError extends Error {}
+
+function isStaleSessionError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return STALE_SESSION_ERRORS.some((needle) => message.includes(needle));
+}
+
+/**
+ * Wait for one CDP event **belonging to a given session**.
+ *
+ * `CDPTransport.once()` resolves on the first matching event from ANY session,
+ * which is only safe while a single session exists at a time. Layered on top
+ * of `on`/`off` here rather than changed in the transports so every other
+ * `once()` caller keeps its semantics.
+ *
+ * Events that carry no `sessionId` still match: transports that synthesize CDP
+ * (cherry, the extension bridge) do not always stamp one, and dropping those
+ * would hang the wait instead of fixing a bleed.
+ */
+function onceForSession(
+  transport: CDPTransport,
+  event: string,
+  sessionId: string,
+  timeoutMs: number
+): Promise<CdpPayload> {
+  return waitForEvent<CdpPayload>(
+    (deliver) => {
+      const listener = (params: CdpPayload): void => {
+        const eventSession = params['sessionId'];
+        if (typeof eventSession === 'string' && eventSession !== sessionId) return;
+        deliver(params);
+      };
+      transport.on(event, listener);
+      return () => transport.off(event, listener);
+    },
+    timeoutMs,
+    `Timed out waiting for event: ${event}`
+  );
+}
+
+/** Freeze a mutable counter set into the public {@link TabLockStats} shape. */
+function statsOf(counters: TabLockCounters | undefined): TabLockStats {
+  const c = counters ?? { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
+  return {
+    queueDepth: c.queueDepth,
+    totalWaitMs: c.tabWaitMs + c.bridgeWaitMs,
+    tabWaitMs: c.tabWaitMs,
+    bridgeWaitMs: c.bridgeWaitMs,
+    acquisitions: c.acquisitions,
+  };
+}
+
+/**
+ * One attached tab. `transport` is the channel the session lives on — the
+ * local `/cdp` client, or the per-runtime remote transport for a tray target
+ * ("{runtimeId}:{localTargetId}") — so a registry entry stays usable after the
+ * bridge's active client swapped to another tab's transport.
+ */
+interface TabSession {
+  sessionId: string;
+  transport: CDPTransport;
+  /** Set only for remote (tray) targets; drives remote-transport teardown. */
+  remote?: { runtimeId: string; localTargetId: string };
+}
+
+/**
+ * A live hold on the bridge-wide lock.
+ *
+ * `owner` is a private token minted when the hold is taken; presenting it is
+ * the ONLY way to re-enter the lock (see
+ * {@link BrowserAPI.acquireBridgeLock}). `targetId` is the tab the hold is
+ * driving, which is how same-tab helpers recover the token.
+ */
+interface BridgeHold {
+  release: () => void;
+  owner: symbol;
+  targetId: string | null;
+}
+
+/** Per-tab and bridge-wide contention counters — see {@link BrowserAPI.getTabLockStats}. */
+export interface TabLockStats {
+  queueDepth: number;
+  /** All time spent queued: `tabWaitMs + bridgeWaitMs`. */
+  totalWaitMs: number;
+  /** Time spent waiting for THIS tab's own lock (a sibling driving the same tab). */
+  tabWaitMs: number;
+  /** Time spent waiting for the bridge-wide lock (a sibling driving another tab). */
+  bridgeWaitMs: number;
+  acquisitions: number;
+}
+
+/** Mutable per-target accumulator behind {@link TabLockStats}. */
+interface TabLockCounters {
+  queueDepth: number;
+  tabWaitMs: number;
+  bridgeWaitMs: number;
+  acquisitions: number;
+}
+
+/** Notified when a target's CDP session is replaced by a fresh attach. */
+export type SessionChangeCallback = (
+  sessionId: string,
+  transport: CDPTransport,
+  targetId: string
+) => void;
+
 export function getDefaultCdpUrl(
   locationLike: Pick<Location, 'protocol' | 'host'> | null = typeof window !== 'undefined'
     ? window.location
@@ -92,6 +237,71 @@ interface ViewportOverride {
   userAgent?: string;
 }
 
+/**
+ * The transport handed out by {@link BrowserAPI.getTransport}: forwards every
+ * call to the real transport and credits each successful session-scoped
+ * `send` to the replay guard. Handlers that talk to the transport directly
+ * (`press` sends `keyDown` then `keyUp`, `console` enables `Runtime`, …) would
+ * otherwise be invisible to {@link BrowserAPI.withTab}'s "has this callback
+ * already changed the page?" test, and a stale session between two such
+ * sends would replay the first one. One wrapper per real transport, so
+ * identity is stable for `on`/`off` bookkeeping and for callers that compare
+ * transports.
+ */
+class AccountedTransport implements CDPTransport {
+  onStateChange?: CDPTransport['onStateChange'];
+
+  constructor(
+    private readonly inner: CDPTransport,
+    private readonly onApplied: (sessionId: string) => void
+  ) {
+    if (inner.onStateChange) this.onStateChange = (listener) => inner.onStateChange!(listener);
+  }
+
+  get state(): ConnectionState {
+    return this.inner.state;
+  }
+
+  get superseded(): boolean | undefined {
+    return this.inner.superseded;
+  }
+
+  get isExtensionBridge(): boolean | undefined {
+    return this.inner.isExtensionBridge;
+  }
+
+  connect(options?: CDPConnectOptions): Promise<void> {
+    return this.inner.connect(options);
+  }
+
+  disconnect(): void {
+    this.inner.disconnect();
+  }
+
+  async send(
+    method: string,
+    params?: CdpPayload,
+    sessionId?: string,
+    timeout?: number
+  ): Promise<CdpPayload> {
+    const result = await this.inner.send(method, params, sessionId, timeout);
+    if (sessionId) this.onApplied(sessionId);
+    return result;
+  }
+
+  on(event: string, listener: CDPEventListener): void {
+    this.inner.on(event, listener);
+  }
+
+  off(event: string, listener: CDPEventListener): void {
+    this.inner.off(event, listener);
+  }
+
+  once(event: string, timeout?: number): Promise<CdpPayload> {
+    return this.inner.once(event, timeout);
+  }
+}
+
 export class BrowserAPI {
   private client: CDPTransport;
   private localClient: CDPTransport; // preserved original when using remote transport
@@ -101,12 +311,42 @@ export class BrowserAPI {
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private _frameContextCache = new Map<string, number>();
   private _mainWorldContextCache = new Map<string, number>();
-  private _tabLock: Promise<void> = Promise.resolve();
+  /**
+   * One live CDP session per attached target, in least-recently-used order
+   * (`Map` iterates in insertion order and {@link activateSession} re-inserts
+   * on use). Replaces the single `sessionId` slot that made every tab switch
+   * mint — and leak — a session.
+   */
+  private _sessions = new Map<string, TabSession>();
+  /** Transports already subscribed to session-lifecycle events. */
+  private _sessionEventTransports = new Set<CDPTransport>();
+  /** Per-target session-replaced subscribers (console/network/routing capture). */
+  private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
+  /**
+   * Successful session-scoped CDP round trips, per session id — the
+   * "has this command already changed the page?" signal behind
+   * {@link runOnTab}'s replay gate. Keyed by session rather than kept as one
+   * bridge-wide counter so a sibling tab's traffic (which runs while a page
+   * wait has handed the bridge lock away) cannot be mistaken for our own.
+   */
+  private _appliedSends = new Map<string, number>();
+  /**
+   * Tabs with work in flight, by pin count — skipped by LRU eviction so a
+   * `withTab` body (or a page wait that released the bridge lock) cannot have
+   * the session it is using detached underneath it.
+   */
+  private _pinnedTargets = new Map<string, number>();
+  /** Per-target lock chains — commands on different tabs no longer queue behind each other. */
+  private _tabLocks = new Map<string, Promise<void>>();
+  /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
+  private _bridgeLock: Promise<void> = Promise.resolve();
+  /** Non-null while the bridge-wide lock is held. See {@link BridgeHold}. */
+  private _bridgeHold: BridgeHold | null = null;
+  /** Callers queued for the bridge lock; with no hold either, it is free. */
+  private _bridgeWaiters = 0;
   private _viewportOverrides = new Map<string, ViewportOverride>();
-  private _tabLockQueueDepth = 0;
-  private _tabLockTotalWaitMs = 0;
-  private _tabLockAcquisitions = 0;
-  private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
+  private _tabLockStats = new Map<string, TabLockCounters>();
+  private _onSessionChange?: SessionChangeCallback | undefined;
   /**
    * Last-used connect options (url + protocols) captured on the first
    * successful (or attempted) `connect()`. Lazy reconnects via
@@ -133,6 +373,9 @@ export class BrowserAPI {
     if (!sessionId) return;
 
     try {
+      // Deliberately NOT `sendOnSession`: an auto-dismissed dialog is the
+      // bridge's own housekeeping, not the running command's side effect, so
+      // it must not count against `runOnTab`'s replay gate.
       await this.client.send('Page.handleJavaScriptDialog', { accept: false }, sessionId, 5000);
       log.warn('Auto-dismissed unexpected JavaScript dialog', {
         sessionId,
@@ -172,12 +415,40 @@ export class BrowserAPI {
     if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
     this._mainWorldContextCache.clear();
   };
+  /**
+   * Chrome detached one of our sessions (tab closed, debugger taken over, the
+   * proxy's Chrome leg reset). The thin extension's service worker synthesizes
+   * the same event, and the tray transports relay it. Dropping the entry is
+   * what stops the bridge from re-using a dead session forever.
+   */
+  private readonly handleDetachedFromTarget = (params: CdpPayload): void => {
+    const sessionId = params['sessionId'];
+    if (typeof sessionId !== 'string') return;
+    for (const [targetId, entry] of this._sessions) {
+      if (entry.sessionId === sessionId) {
+        this.forgetSession(targetId, entry);
+        return;
+      }
+    }
+  };
+  /** The tab itself went away — its session cannot be revived, so drop it. */
+  private readonly handleTargetDestroyed = (params: CdpPayload): void => {
+    const targetId = params['targetId'];
+    if (typeof targetId !== 'string') return;
+    for (const [key, entry] of this._sessions) {
+      if (key === targetId || entry.remote?.localTargetId === targetId) {
+        this.forgetSession(key, entry);
+        return;
+      }
+    }
+  };
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
     this.localClient = this.client;
     this.addDialogListener(this.client);
     this.addExecutionContextListeners(this.client);
+    this.addSessionLifecycleListeners(this.client);
   }
 
   /**
@@ -185,7 +456,36 @@ export class BrowserAPI {
    * Used by HarRecorder to subscribe to network events.
    */
   getTransport(): CDPTransport {
+    return this.accountedTransportFor(this.client);
+  }
+
+  /**
+   * The real current transport, without the accounting facade. For wiring
+   * other machinery to the connection (the kernel-worker forwarder, tray
+   * federation) where the transport's concrete type matters; commands issued
+   * from inside a `withTab` body must go through {@link getTransport} so they
+   * count toward the replay guard.
+   */
+  getUnderlyingTransport(): CDPTransport {
     return this.client;
+  }
+
+  private readonly _accountedTransports = new WeakMap<CDPTransport, AccountedTransport>();
+
+  /** The stable {@link AccountedTransport} facade for a real transport. */
+  private accountedTransportFor(transport: CDPTransport): CDPTransport {
+    if (transport instanceof AccountedTransport) return transport;
+    let facade = this._accountedTransports.get(transport);
+    if (!facade) {
+      facade = new AccountedTransport(transport, (sessionId) => this.noteApplied(sessionId));
+      this._accountedTransports.set(transport, facade);
+    }
+    return facade;
+  }
+
+  /** Credit one successful session-scoped round trip to the replay guard. */
+  private noteApplied(sessionId: string): void {
+    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
   }
 
   /**
@@ -203,77 +503,383 @@ export class BrowserAPI {
 
   /**
    * Register a callback invoked when a new CDP session is established via
-   * `attachToPage()`.  The callback receives the CDP session ID and the
-   * active transport, allowing subscribers (e.g. BshWatchdog) to track
-   * transport swaps and know that `Page.enable` has already been sent.
+   * `attachToPage()`.  The callback receives the CDP session ID, the
+   * transport the session lives on, and the target it belongs to — allowing
+   * subscribers (e.g. BshWatchdog) to track transport swaps and know that
+   * `Page.enable` has already been sent.
    *
-   * The callback is **not** invoked when `attachToPage()` returns early
-   * because the requested target is already attached (no new session).
+   * The callback is **not** invoked when `attachToPage()` returns the tab's
+   * existing live session (no new session was minted).
    *
-   * Pass `undefined` to clear a previously registered callback.
+   * Pass `undefined` to clear a previously registered callback. This is a
+   * single global slot; per-tab subscribers use {@link onSessionReplaced}.
    */
-  setSessionChangeCallback(
-    cb: ((sessionId: string, transport: CDPTransport) => void) | undefined
-  ): void {
+  setSessionChangeCallback(cb: SessionChangeCallback | undefined): void {
     this._onSessionChange = cb;
   }
 
   /**
-   * Get the current session ID (if attached to a target).
+   * Subscribe to session replacement for ONE target. Returns an unsubscribe.
+   *
+   * Event-capture consumers (`console`, `requests`, `route`) bind their CDP
+   * listeners to the session id they saw first and filter incoming events by
+   * it. That was only safe while sessions were never detached; now that a
+   * stale session self-heals into a fresh one, a capture that does not
+   * re-subscribe goes silently deaf. Subscribers registered here are called
+   * with the replacement session so they can re-arm.
+   */
+  onSessionReplaced(targetId: string, cb: SessionChangeCallback): () => void {
+    let subs = this._sessionReplacedSubs.get(targetId);
+    if (!subs) {
+      subs = new Set();
+      this._sessionReplacedSubs.set(targetId, subs);
+    }
+    subs.add(cb);
+    return () => {
+      const current = this._sessionReplacedSubs.get(targetId);
+      if (!current) return;
+      current.delete(cb);
+      if (current.size === 0) this._sessionReplacedSubs.delete(targetId);
+    };
+  }
+
+  /**
+   * Session ID of the most recently used tab, or `null` when none is attached.
+   * With one session per tab this is a cursor into the registry, not the only
+   * session that exists.
    */
   getSessionId(): string | null {
     return this.sessionId;
   }
 
   /**
-   * Get the currently attached target ID.
+   * Target ID of the most recently used tab (see {@link getSessionId}).
    */
   getAttachedTargetId(): string | null {
     return this.attachedTargetId;
   }
 
   /**
-   * Execute an operation on a specific tab with exclusive access.
-   * Serializes all tab operations — only one tab can be attached at a time.
-   * Handles local and remote (tray) targets transparently.
+   * Execute an operation on a specific tab.
+   *
+   * Serialization is now per tab: two callers driving DIFFERENT tabs no longer
+   * queue behind each other, so one hung navigation can only stall its own
+   * tab. A bridge-wide lock is still taken around the body because the
+   * session-less convenience methods (`evaluate`, `click`, `screenshot`, …)
+   * read the most-recently-used session off the bridge — see
+   * {@link acquireBridgeLock}; page waits release it ({@link waitOffBridgeLock}).
+   *
+   * A stale session (the proxy's Chrome leg reset underneath us) is healed in
+   * place: the entry is invalidated, the tab re-attached, and `fn` retried
+   * exactly once.
    */
   async withTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
-    let release: () => void;
-    const next = new Promise<void>((r) => {
-      release = r;
-    });
-    const prev = this._tabLock;
-    this._tabLock = next;
-    this._tabLockQueueDepth += 1;
-    const waitStart = Date.now();
-    await prev;
-    this._tabLockTotalWaitMs += Date.now() - waitStart;
-    this._tabLockAcquisitions += 1;
+    const counters = this.tabCounters(targetId);
+    counters.queueDepth += 1;
+    const releaseTab = await this.acquireTabLock(targetId, counters);
+    // Pinned for the whole body: a body that hands the bridge lock to another
+    // tab (a navigate waiting for load) would otherwise age into the eviction
+    // candidate and lose the session its wait is bound to.
+    const unpin = this.pinTarget(targetId);
     try {
-      const sessionId = await this.attachToPage(targetId);
-      return await fn(sessionId);
+      const releaseBridge = await this.acquireBridgeLock({ counters, targetId });
+      try {
+        counters.acquisitions += 1;
+        return await this.runOnTab(targetId, fn);
+      } finally {
+        releaseBridge();
+      }
     } finally {
-      this._tabLockQueueDepth -= 1;
-      release!();
+      unpin();
+      counters.queueDepth -= 1;
+      releaseTab();
     }
   }
 
   /**
-   * Contention metrics for the tab lock that serializes all `withTab` work.
+   * Attach and run, healing a stale-session failure that changed nothing.
    *
-   * `queueDepth` counts callers currently holding or waiting for the lock,
-   * `totalWaitMs` accumulates time spent queued across all callers, and
-   * `acquisitions` counts completed lock grants. Callers snapshot the stats
-   * before and after an operation to attribute contention observed while it
-   * ran (e.g. `playwright-cli` surfaces it on stderr so concurrent agents can
-   * back off deliberately instead of guessing).
+   * `fn` is opaque: the bridge cannot tell `title` from `type("abcdef")`.
+   * Replaying it after a mid-command session death re-applied whatever it had
+   * already done — `abc` typed before the drop came back as `abcabcdef`, a
+   * click's `mousePressed` fired twice. So the retry is gated on the stale
+   * error having been the FIRST CDP round trip of this callback on this
+   * session (the attach itself, or the first send): nothing was applied, and
+   * re-running is safe. A {@link SessionResetError} is the other case and is
+   * never retried.
    */
-  getTabLockStats(): { queueDepth: number; totalWaitMs: number; acquisitions: number } {
-    return {
-      queueDepth: this._tabLockQueueDepth,
-      totalWaitMs: this._tabLockTotalWaitMs,
-      acquisitions: this._tabLockAcquisitions,
+  private async runOnTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+    try {
+      return await this.attemptOnTab(targetId, fn);
+    } catch (err) {
+      if (err instanceof SessionResetError || !isStaleSessionError(err)) throw err;
+      log.warn('Stale CDP session — re-attaching and retrying once', {
+        targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.invalidateSession(targetId);
+      return await this.attemptOnTab(targetId, fn);
+    }
+  }
+
+  /**
+   * One attempt: attach, run, and decide whether a stale-session failure left
+   * the page untouched.
+   *
+   * Once a send has landed the outcome is genuinely unknown — the command may
+   * have half-completed — so the session is invalidated and the caller gets a
+   * {@link SessionResetError} saying so. Re-checking page state is the agent's
+   * job then; guessing on its behalf is what corrupted input in the first
+   * place.
+   */
+  private async attemptOnTab<T>(
+    targetId: string,
+    fn: (sessionId: string) => Promise<T>
+  ): Promise<T> {
+    const sessionId = await this.attachToPage(targetId);
+    const before = this._appliedSends.get(sessionId) ?? 0;
+    try {
+      return await fn(sessionId);
+    } catch (err) {
+      if (!isStaleSessionError(err)) throw err;
+      const applied = (this._appliedSends.get(sessionId) ?? 0) - before;
+      if (applied === 0) throw err; // nothing landed — safe to replay
+      this.invalidateSession(targetId);
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn('CDP session reset mid-command — not replaying', { targetId, applied, reason });
+      throw new SessionResetError(
+        `The CDP session for tab ${targetId} was reset mid-command, after ${applied} ` +
+          'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
+          `re-armed: check the page state before repeating this command. (underlying error: ${reason})`
+      );
+    }
+  }
+
+  /**
+   * Send a session-scoped CDP command and record that it landed.
+   *
+   * Every command this class issues against a tab's session goes through here
+   * (or {@link sendOn} for a captured transport) so {@link runOnTab} can tell
+   * "the session was already dead" from "the session died after we changed the
+   * page". Sends that are not the running command's own work — the
+   * out-of-band dialog dismissal — deliberately bypass it.
+   */
+  private sendOnSession(
+    method: string,
+    params: CdpPayload,
+    sessionId: string
+  ): Promise<CdpPayload> {
+    return this.sendOn(this.client, method, params, sessionId);
+  }
+
+  /** {@link sendOnSession} against an explicitly captured transport. */
+  private async sendOn(
+    transport: CDPTransport,
+    method: string,
+    params: CdpPayload,
+    sessionId: string
+  ): Promise<CdpPayload> {
+    const result = await transport.send(method, params, sessionId);
+    this.noteApplied(sessionId);
+    return result;
+  }
+
+  /**
+   * Contention metrics for the locks that serialize `withTab` work.
+   *
+   * Called with a `targetId` it reports that tab alone; called without one it
+   * reports bridge-wide totals (the sum over tabs). `queueDepth` counts
+   * callers currently holding or waiting, `totalWaitMs` accumulates all time
+   * spent queued — split into `tabWaitMs` (a sibling driving the SAME tab) and
+   * `bridgeWaitMs` (a sibling driving another tab) — and `acquisitions` counts
+   * completed grants. `playwright-cli` snapshots this before and after a
+   * command so a fanned-out agent can tell "my own tab is busy" from "the
+   * bridge is busy" instead of guessing why calls are slow.
+   */
+  getTabLockStats(targetId?: string): TabLockStats {
+    if (targetId !== undefined) return statsOf(this._tabLockStats.get(targetId));
+    const total: TabLockCounters = {
+      queueDepth: 0,
+      tabWaitMs: 0,
+      bridgeWaitMs: 0,
+      acquisitions: 0,
     };
+    for (const c of this._tabLockStats.values()) {
+      total.queueDepth += c.queueDepth;
+      total.tabWaitMs += c.tabWaitMs;
+      total.bridgeWaitMs += c.bridgeWaitMs;
+      total.acquisitions += c.acquisitions;
+    }
+    return statsOf(total);
+  }
+
+  private tabCounters(targetId: string): TabLockCounters {
+    let counters = this._tabLockStats.get(targetId);
+    if (!counters) {
+      counters = { queueDepth: 0, tabWaitMs: 0, bridgeWaitMs: 0, acquisitions: 0 };
+      this._tabLockStats.set(targetId, counters);
+    }
+    return counters;
+  }
+
+  /**
+   * FIFO lock for one target; different targets never wait on each other.
+   *
+   * A tab with no chain entry has no predecessor, so it neither waits nor
+   * records a wait. Awaiting an already-resolved promise still costs a
+   * scheduler turn that `Date.now()` can round up to 1 ms, which turned an
+   * uncontended tab into a "1 ms of contention" reading — enough to make the
+   * accounting test flaky and enough to mislead the `playwright-cli`
+   * contention note it feeds.
+   */
+  private async acquireTabLock(targetId: string, counters: TabLockCounters): Promise<() => void> {
+    let release!: () => void;
+    const next = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this._tabLocks.get(targetId);
+    this._tabLocks.set(targetId, next);
+    if (prev) {
+      const waitStart = Date.now();
+      await prev;
+      counters.tabWaitMs += Date.now() - waitStart;
+    }
+    return () => {
+      // Drop the chain once nobody is queued behind us, so a long-lived
+      // bridge does not keep a resolved promise per tab it ever touched.
+      if (this._tabLocks.get(targetId) === next) this._tabLocks.delete(targetId);
+      release();
+    };
+  }
+
+  /**
+   * FIFO bridge-wide lock, held for operations that touch state shared by
+   * every tab: the most-recently-used session cursor that the session-less
+   * methods read, `Page.bringToFront` / focus probing, and local↔remote
+   * transport swaps.
+   *
+   * **Invariant: the bridge cursor (`sessionId` / `attachedTargetId`) may only
+   * be moved while holding this lock.** Every public entry point that moves it
+   * — {@link withTab}, {@link attachToPage}, {@link selectTab},
+   * {@link bringTabToFront}, {@link bringToFront} — takes it.
+   *
+   * Re-entry is by TOKEN, not by "a hold exists". `opts.owner` bypasses the
+   * queue only when it is the token of the live hold, and the only holders of
+   * a live token are code running underneath it: the internal wake/focus
+   * fallback, which is handed the token explicitly, and same-tab helpers,
+   * which recover it from {@link reentrantOwner}. The boolean this replaces
+   * treated ANY current hold as the caller's own, so a UI timer's
+   * `attachToPage` could move the cursor out from under a running command and
+   * that command's next session-less call ran against the peeked tab.
+   */
+  private async acquireBridgeLock(opts?: {
+    /** Token of the live hold this caller is already running under. */
+    owner?: symbol | undefined;
+    /** Token to install on the new hold (a page wait taking its lock back). */
+    token?: symbol;
+    /** The tab this hold drives; what {@link reentrantOwner} matches on. */
+    targetId?: string | null;
+    counters?: TabLockCounters;
+  }): Promise<() => void> {
+    if (opts?.owner !== undefined && this._bridgeHold?.owner === opts.owner) {
+      return () => undefined; // our own hold
+    }
+    let release!: () => void;
+    const next = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this._bridgeLock;
+    const contended = this._bridgeHold !== null || this._bridgeWaiters > 0;
+    this._bridgeLock = next;
+    if (contended) {
+      // Nobody may be scheduled between the decrement and the hold below, so
+      // "no hold and no waiter" is a reliable "the chain is already settled" —
+      // which lets the uncontended path skip the await entirely. That keeps
+      // taking this lock on the attach path free of an extra scheduler turn,
+      // and keeps `bridgeWaitMs` from reporting the turn as contention.
+      this._bridgeWaiters += 1;
+      const waitStart = Date.now();
+      try {
+        await prev;
+      } finally {
+        this._bridgeWaiters -= 1;
+      }
+      if (opts?.counters) opts.counters.bridgeWaitMs += Date.now() - waitStart;
+    }
+    this._bridgeHold = {
+      release,
+      owner: opts?.token ?? Symbol('bridge-hold'),
+      targetId: opts?.targetId ?? null,
+    };
+    let released = false;
+    return () => {
+      // Release whichever hold is current, not the one taken above: a page
+      // wait may have handed the lock away and taken a fresh one back
+      // (waitOffBridgeLock) while this owner was suspended.
+      if (released) return;
+      released = true;
+      const current = this._bridgeHold;
+      this._bridgeHold = null;
+      current?.release();
+    };
+  }
+
+  /**
+   * The live hold's token, but ONLY when that hold is driving `targetId` —
+   * i.e. the caller is running inside that tab's `withTab` body (or its
+   * `attachToPage`). Anything else, including a UI timer that happens to fire
+   * while a command holds the bridge, gets `undefined` and queues like any
+   * other caller.
+   */
+  private reentrantOwner(targetId: string | null): symbol | undefined {
+    const hold = this._bridgeHold;
+    if (!hold || targetId === null || hold.targetId !== targetId) return undefined;
+    return hold.owner;
+  }
+
+  /**
+   * Run a page-driven wait (a load event, a poll interval) WITHOUT holding the
+   * bridge-wide lock, then take it back and restore this tab as the current
+   * one before the caller continues.
+   *
+   * This is what keeps one hung `goto` from freezing every other tab: the
+   * 30 s load wait is dead time on one tab, not a bridge-wide stall. Callers
+   * must re-read nothing across the gap — the bridge cursor is restored here.
+   */
+  private async waitOffBridgeLock<T>(targetId: string | null, wait: () => Promise<T>): Promise<T> {
+    const hold = this._bridgeHold;
+    if (!hold) return wait();
+    // Also pinned here, not only in `withTab`: `navigate` and
+    // `waitForSelector` are session-less methods a caller may drive directly,
+    // and the tab whose session the wait is bound to is exactly the one the
+    // tabs running during the gap would otherwise evict.
+    const unpin = targetId === null ? () => undefined : this.pinTarget(targetId);
+    this._bridgeHold = null;
+    hold.release();
+    try {
+      return await wait();
+    } finally {
+      // The enclosing owner's release closure frees whatever hold is current,
+      // so the handle taken back here needs no separate bookkeeping. The hold
+      // is taken back under the SAME token, or a helper that recovered the
+      // token before the wait would stop being able to re-enter afterwards.
+      await this.acquireBridgeLock({ token: hold.owner, targetId: hold.targetId });
+      if (targetId) this.restoreCurrentTarget(targetId);
+      // Unpinned only once the bridge is ours again and the cursor is back on
+      // this tab — dropping the pin any earlier reopens the eviction window
+      // for the tabs that queued while we waited.
+      unpin();
+    }
+  }
+
+  /**
+   * Re-point the most-recently-used cursor (and, for tray targets, the active
+   * transport) at `targetId` after another tab ran on the bridge. No CDP
+   * round-trip: the session is still live in the registry.
+   */
+  private restoreCurrentTarget(targetId: string): void {
+    const entry = this._sessions.get(targetId);
+    if (entry) this.activateSession(targetId, entry);
   }
 
   /**
@@ -314,7 +920,7 @@ export class BrowserAPI {
 
   /** Send the recorded metrics (and UA + touch, for mobile emulation) to a session. */
   private async applyViewportOverride(vp: ViewportOverride, sessionId: string): Promise<void> {
-    await this.client.send(
+    await this.sendOnSession(
       'Emulation.setDeviceMetricsOverride',
       {
         width: vp.width,
@@ -327,14 +933,14 @@ export class BrowserAPI {
     if (vp.mobile) {
       // Sites that feature-detect touch (navigator.maxTouchPoints) rather
       // than sniffing width/UA won't switch layouts without this.
-      await this.client.send(
+      await this.sendOnSession(
         'Emulation.setTouchEmulationEnabled',
         { enabled: true, maxTouchPoints: 5 },
         sessionId
       );
     }
     if (vp.userAgent !== undefined) {
-      await this.client.send(
+      await this.sendOnSession(
         'Emulation.setUserAgentOverride',
         { userAgent: vp.userAgent },
         sessionId
@@ -427,6 +1033,24 @@ export class BrowserAPI {
    * the listing fails and nothing is advertised to the leader. Priming the
    * options here lets the on-demand connect reach the LOCAL bridge instead.
    */
+  /**
+   * Re-dial the local bridge if its client is disconnected (and not
+   * superseded), replaying the captured connect options.
+   *
+   * Standalone boot passes this to the kernel-worker forwarder
+   * (`spawnKernelWorker({ reconnectCdp })`): after the `/cdp` proxy rebuilds
+   * its Chrome leg it closes the page client with `upstream-reset`, and a
+   * worker command that arrives before the page's own lazy reconnect would
+   * otherwise fail with "not connected". Same reset semantics as the lazy
+   * path every page-side call takes — the session registry is cleared.
+   */
+  async reconnectIfNeeded(): Promise<void> {
+    await this.ensureConnected();
+    // A remote (tray) transport may be current; the forwarder rides the LOCAL
+    // client, so dial that too when it is a different transport.
+    if (this.client !== this.localClient) await this.ensureLocalConnected();
+  }
+
   primeConnectOptions(options?: Partial<CDPConnectOptions>): void {
     this._lastConnectOptions = options ? { ...options } : {};
   }
@@ -486,6 +1110,10 @@ export class BrowserAPI {
   async closePage(targetId: string): Promise<void> {
     await this.ensureConnected();
     this._viewportOverrides.delete(targetId);
+    // Detach before closing: the session dies with the tab either way, but
+    // telling Chrome first is what keeps a long-lived bridge's session count
+    // equal to its tab count instead of drifting upward (issue #2417).
+    await this.dropSession(targetId);
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
@@ -506,35 +1134,18 @@ export class BrowserAPI {
             this.trayTargetProvider.removeRemoteTransport(runtimeId, localTargetId);
           }
         }
-
-        // If we were attached to the target being closed, clean up
-        if (this.attachedTargetId === targetId) {
-          if (this.remoteTargetInfo) {
-            this.setClient(this.localClient);
-            this.remoteTargetInfo = null;
-          }
-          this.sessionId = null;
-          this.attachedTargetId = null;
-        }
         return;
       }
     }
 
     await this.localClient.send('Target.closeTarget', { targetId });
-
-    // Clean up if we were attached to this target
-    if (this.attachedTargetId === targetId) {
-      this.sessionId = null;
-      this.attachedTargetId = null;
-    }
   }
 
   /**
    * Disconnect and clean up.
    */
   disconnect(): void {
-    this.sessionId = null;
-    this.attachedTargetId = null;
+    this.clearSessions();
     this.client.disconnect();
   }
 
@@ -565,120 +1176,167 @@ export class BrowserAPI {
    * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
-    await this.ensureConnected();
-    // Skip if already attached to this target
-    if (this.sessionId && this.attachedTargetId === targetId) {
-      return this.sessionId;
-    }
-    // Don't detach from previous target — just attach to the new one.
-    // Detaching then re-attaching causes Chrome to steal window focus.
+    return this.attachToPageOwned(targetId, this.reentrantOwner(targetId));
+  }
 
-    // Invalidate cached execution context IDs from the previous target
-    this._frameContextCache.clear();
-    this._mainWorldContextCache.clear();
+  /**
+   * Move the bridge cursor to a tab under the bridge lock.
+   *
+   * `owner` is the token of a hold the caller is already running under — the
+   * `withTab` body for this same tab (recovered by {@link reentrantOwner}), or
+   * the wake/focus fallback, which is handed its own token so it can walk
+   * across tabs without queueing against itself. Everything else queues, which
+   * is what stops a UI timer from re-pointing the cursor mid-command.
+   */
+  private async attachToPageOwned(targetId: string, owner: symbol | undefined): Promise<string> {
+    const release = await this.acquireBridgeLock({ owner, targetId });
+    try {
+      await this.ensureConnected();
 
-    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
-    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
-      const colonIdx = targetId.indexOf(':');
-      const runtimeId = targetId.substring(0, colonIdx);
-      const localTargetId = targetId.substring(colonIdx + 1);
-
-      // The runtimeId:localTargetId format is a strong signal this is remote.
-      // Don't require registry confirmation — the target may have just been
-      // created via createRemotePage() and not yet advertised.
-      {
-        const remoteTransport = this.trayTargetProvider.createRemoteTransport(
-          runtimeId,
-          localTargetId
-        );
-        this.setClient(remoteTransport);
-        this.remoteTargetInfo = { runtimeId, localTargetId };
-
-        // Send attachToTarget via the remote transport
-        const result = await this.client.send('Target.attachToTarget', {
-          targetId: localTargetId,
-          flatten: true,
-        });
-        this.sessionId = result['sessionId'] as string;
-        this.attachedTargetId = targetId;
-        await this.client.send('Page.enable', {}, this.sessionId);
-        await this.reapplyViewportOverride(targetId, this.sessionId);
-        this._onSessionChange?.(this.sessionId, this.client);
-        return this.sessionId;
+      // One session per tab: reuse the live one. Re-attaching on every tab
+      // switch is what leaked a session (and its event fan-out) per switch.
+      const existing = this._sessions.get(targetId);
+      if (existing) {
+        this.activateSession(targetId, existing);
+        return existing.sessionId;
       }
-    }
 
-    // Restore local transport if we were previously attached to a remote target
-    if (this.remoteTargetInfo) {
-      if (this.trayTargetProvider?.removeRemoteTransport) {
-        this.trayTargetProvider.removeRemoteTransport(
-          this.remoteTargetInfo.runtimeId,
-          this.remoteTargetInfo.localTargetId
-        );
-      }
-      this.setClient(this.localClient);
-      this.remoteTargetInfo = null;
+      const isRemote = !!this.trayTargetProvider?.createRemoteTransport && targetId.includes(':');
+      return await (isRemote
+        ? this.attachRemoteTarget(targetId)
+        : this.attachLocalTarget(targetId));
+    } finally {
+      release();
     }
+  }
+
+  /**
+   * Point the bridge at a tab and leave it there — the cursor move a UI switch
+   * needs, taken under the same locks a command takes so it cannot land in the
+   * middle of one.
+   */
+  async selectTab(targetId: string): Promise<void> {
+    await this.withTab(targetId, async () => undefined);
+  }
+
+  /**
+   * Attach to a tab and raise its window, under the command locks.
+   *
+   * The public entry point for foregrounding from OUTSIDE a command (the tab
+   * switcher, the peek return). {@link bringToFront} is the in-command form:
+   * it acts on whatever tab the caller already holds.
+   */
+  async bringTabToFront(targetId: string): Promise<void> {
+    await this.withTab(targetId, async () => {
+      await this.bringToFront();
+    });
+  }
+
+  /** Attach to a tray target ("{runtimeId}:{localTargetId}") over its remote transport. */
+  private async attachRemoteTarget(targetId: string): Promise<string> {
+    const colonIdx = targetId.indexOf(':');
+    const runtimeId = targetId.substring(0, colonIdx);
+    const localTargetId = targetId.substring(colonIdx + 1);
+
+    // The runtimeId:localTargetId format is a strong signal this is remote.
+    // Don't require registry confirmation — the target may have just been
+    // created via createRemotePage() and not yet advertised.
+    const remoteTransport = this.trayTargetProvider?.createRemoteTransport?.(
+      runtimeId,
+      localTargetId
+    );
+    if (!remoteTransport) throw new Error(`No remote transport for target ${targetId}`);
+
+    const result = await remoteTransport.send('Target.attachToTarget', {
+      targetId: localTargetId,
+      flatten: true,
+    });
+    const entry: TabSession = {
+      sessionId: result['sessionId'] as string,
+      transport: remoteTransport,
+      remote: { runtimeId, localTargetId },
+    };
+    this.rememberSession(targetId, entry);
+    this.activateSession(targetId, entry);
+    await remoteTransport.send('Page.enable', {}, entry.sessionId);
+    await this.reapplyViewportOverride(targetId, entry.sessionId);
+    this.notifySessionChange(targetId, entry);
+    return entry.sessionId;
+  }
+
+  /** Attach to a local browser target over the `/cdp` client. */
+  private async attachLocalTarget(targetId: string): Promise<string> {
+    this.useLocalTransport();
     await this.ensureLocalConnected();
 
     const result = await this.localClient.send('Target.attachToTarget', {
       targetId,
       flatten: true,
     });
-    this.sessionId = result['sessionId'] as string;
-    this.attachedTargetId = targetId;
+    const entry: TabSession = {
+      sessionId: result['sessionId'] as string,
+      transport: this.localClient,
+    };
+    this.rememberSession(targetId, entry);
+    this.activateSession(targetId, entry);
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
-    await this.localClient.send('Page.enable', {}, this.sessionId);
-    await this.reapplyViewportOverride(targetId, this.sessionId);
-    this._onSessionChange?.(this.sessionId, this.localClient);
-    return this.sessionId;
+    await this.localClient.send('Page.enable', {}, entry.sessionId);
+    await this.reapplyViewportOverride(targetId, entry.sessionId);
+    this.notifySessionChange(targetId, entry);
+    return entry.sessionId;
   }
 
   /**
-   * Detach from the currently attached target.
+   * Detach from the most recently used target.
    * If attached to a remote target, restores the local transport.
    */
   async detach(): Promise<void> {
-    if (this.sessionId) {
-      try {
-        await this.client.send('Target.detachFromTarget', {
-          sessionId: this.sessionId,
-        });
-      } catch {
-        // Target may already be detached
-      }
-
-      // Restore local transport if we were using a remote one
-      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
-        this.trayTargetProvider.removeRemoteTransport(
-          this.remoteTargetInfo.runtimeId,
-          this.remoteTargetInfo.localTargetId
-        );
-        this.setClient(this.localClient);
-        this.remoteTargetInfo = null;
-      }
-
-      this.sessionId = null;
-      this.attachedTargetId = null;
-    }
+    const targetId = this.attachedTargetId;
+    if (!targetId) return;
+    await this.dropSession(targetId);
+    this.useLocalTransport();
   }
 
   /**
-   * Navigate the attached page to a URL. Waits for the load event.
+   * Navigate the attached page to a URL. Waits for THIS page's load event.
+   *
+   * The wait is session-scoped: with several tabs attached, an unfiltered
+   * `once('Page.loadEventFired')` resolved on whichever tab loaded first, so
+   * `goto` returned while its own page was still `interactive` and the next
+   * snapshot showed the previous document (issue #2417). The wait also runs
+   * off the bridge-wide lock, so a page that never fires `load` stalls only
+   * its own tab for the 30 s bound.
    */
   async navigate(url: string): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
+    const sessionId = this.sessionId!;
+    const targetId = this.attachedTargetId;
+    const transport = this.client;
+
     // Enable Page domain for lifecycle events
-    await this.client.send('Page.enable', {}, this.sessionId!);
+    await this.sendOn(transport, 'Page.enable', {}, sessionId);
 
-    const loadPromise = this.client.once('Page.loadEventFired');
+    const loadPromise = onceForSession(
+      transport,
+      'Page.loadEventFired',
+      sessionId,
+      NAVIGATE_LOAD_TIMEOUT_MS
+    );
+    // Observe it before `Page.navigate` can throw: an unobserved rejection
+    // from the timeout would surface as an unhandled promise rejection long
+    // after the caller gave up. Awaiting `loadPromise` below still sees it.
+    void loadPromise.catch(() => undefined);
 
-    await this.client.send('Page.navigate', { url }, this.sessionId!);
-
-    await loadPromise;
+    // `Page.navigate` itself does not return until the navigation commits, so
+    // a URL that never responds hangs HERE, not in the load wait — both go
+    // off the bridge lock or a single hung goto stalls every other tab again.
+    await this.waitOffBridgeLock(targetId, async () => {
+      await this.sendOn(transport, 'Page.navigate', { url }, sessionId);
+      await loadPromise;
+    });
   }
 
   /**
@@ -692,7 +1350,20 @@ export class BrowserAPI {
   async bringToFront(): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
-    await this.client.send('Page.bringToFront', {}, this.sessionId ?? undefined);
+    // Window focus is browser-global state, not tab state: two tabs raising
+    // themselves concurrently would fight. Re-enters only the hold that is
+    // driving THIS tab — realm-host's `screenshotTab` fronts the tab its own
+    // `withTab` body holds and must not deadlock; a caller from outside any
+    // body waits its turn (see bringTabToFront).
+    const release = await this.acquireBridgeLock({
+      owner: this.reentrantOwner(this.attachedTargetId),
+      targetId: this.attachedTargetId,
+    });
+    try {
+      await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -704,25 +1375,46 @@ export class BrowserAPI {
    * never fail the capture.
    */
   private async wakeCaptureAndRestoreFocus(params: CdpPayload): Promise<CdpPayload> {
+    // Foregrounding and the focus probe walk every tab and move the bridge's
+    // current-target cursor, so they run under the bridge-wide lock (a no-op
+    // re-entry when the caller is already inside `withTab` for this tab).
+    const release = await this.acquireBridgeLock({
+      owner: this.reentrantOwner(this.attachedTargetId),
+      targetId: this.attachedTargetId,
+    });
+    try {
+      // Whichever hold is live now is the one this walk runs under; its token
+      // is what lets the probe attach to OTHER tabs without queueing against
+      // itself (and without the blanket "any hold is mine" bypass).
+      return await this.wakeCaptureLocked(params, this._bridgeHold?.owner);
+    } finally {
+      release();
+    }
+  }
+
+  private async wakeCaptureLocked(
+    params: CdpPayload,
+    owner: symbol | undefined
+  ): Promise<CdpPayload> {
     const captured = this.getAttachedTargetId();
-    const previousFront = await this.findFocusedLocalPage(captured).catch(() => null);
+    const previousFront = await this.findFocusedLocalPage(captured, owner).catch(() => null);
     // The probe attaches to candidate pages; put the attachment back on the
     // tab being captured BEFORE fronting it, or the capture below runs on the
     // last-probed page's session and returns the wrong tab's pixels.
-    if (captured) await this.attachToPage(captured);
+    if (captured) await this.attachToPageOwned(captured, owner);
     try {
-      await this.client.send('Page.bringToFront', {}, this.sessionId!);
-      return await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
+      return await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
     } finally {
       // In a finally: a retry capture that THROWS must still give focus back,
       // or a failed screenshot leaves the captured tab in front and SLICC
       // backgrounded — the exact state this helper exists to prevent.
       if (previousFront && captured) {
         try {
-          await this.attachToPage(previousFront);
-          await this.client.send('Page.bringToFront', {}, this.sessionId!);
+          await this.attachToPageOwned(previousFront, owner);
+          await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
           // Leave the attachment where the caller expects it.
-          await this.attachToPage(captured);
+          await this.attachToPageOwned(captured, owner);
         } catch {
           // The focus donor may have closed mid-capture; the capture outcome
           // is unaffected, so swallow.
@@ -734,18 +1426,21 @@ export class BrowserAPI {
   /**
    * The local page that currently holds window focus, or `null`. Probed by
    * evaluating `document.hasFocus()` per candidate — CDP exposes no focus
-   * flag on targets. Uses raw `attachToPage` (never `withTab`) so a caller
-   * already holding the tab lock cannot deadlock; only the rare
-   * foreground-fallback path pays this cost. Remote (tray) targets are
-   * skipped: their focus lives on another machine.
+   * flag on targets. Attaches under the wake path's own bridge token (never
+   * `withTab`) so a caller already holding the tab lock cannot deadlock; only
+   * the rare foreground-fallback path pays this cost. Remote (tray) targets
+   * are skipped: their focus lives on another machine.
    */
-  private async findFocusedLocalPage(excludeTargetId: string | null): Promise<string | null> {
+  private async findFocusedLocalPage(
+    excludeTargetId: string | null,
+    owner: symbol | undefined
+  ): Promise<string | null> {
     const pages = await this.listPages();
     for (const page of pages) {
       if (!page.targetId || page.targetId === excludeTargetId) continue;
       if (page.targetId.includes(':')) continue; // composite = remote tray target
       try {
-        await this.attachToPage(page.targetId);
+        await this.attachToPageOwned(page.targetId, owner);
         const focused = await this.evaluate('document.hasFocus()');
         if (focused === true) return page.targetId;
       } catch {
@@ -785,8 +1480,8 @@ export class BrowserAPI {
         let cssWidth = 0;
         let cssScrollHeight = 0;
         try {
-          await this.client.send('Runtime.enable', {}, this.sessionId!);
-          const evalResult = await this.client.send(
+          await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
+          const evalResult = await this.sendOnSession(
             'Runtime.evaluate',
             {
               expression:
@@ -819,7 +1514,7 @@ export class BrowserAPI {
 
       let result: CdpPayload;
       try {
-        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+        result = await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
       } catch (err: unknown) {
         // Background/throttled tabs have a suspended renderer — wake it and
         // retry once. Foregrounding steals window focus, so callers that
@@ -865,8 +1560,8 @@ export class BrowserAPI {
       let vw = 1280;
       let vh = 800;
       try {
-        await this.client.send('Runtime.enable', {}, this.sessionId!);
-        const dim = await this.client.send(
+        await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
+        const dim = await this.sendOnSession(
           'Runtime.evaluate',
           {
             expression: 'JSON.stringify({w:window.innerWidth,h:window.innerHeight})',
@@ -885,7 +1580,7 @@ export class BrowserAPI {
     params['captureBeyondViewport'] = true;
 
     try {
-      const resized = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      const resized = await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
       return resized['data'] as string;
     } catch (err) {
       log.warn('maxWidth re-capture failed, returning original', err);
@@ -901,9 +1596,9 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
-    const result = await this.client.send(
+    const result = await this.sendOnSession(
       'Runtime.evaluate',
       {
         expression,
@@ -944,12 +1639,12 @@ export class BrowserAPI {
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
@@ -964,12 +1659,12 @@ export class BrowserAPI {
     this.ensureAttached();
 
     for (const char of text) {
-      await this.client.send(
+      await this.sendOnSession(
         'Input.dispatchKeyEvent',
         { type: 'keyDown', text: char },
         this.sessionId!
       );
-      await this.client.send(
+      await this.sendOnSession(
         'Input.dispatchKeyEvent',
         { type: 'keyUp', text: char },
         this.sessionId!
@@ -989,7 +1684,7 @@ export class BrowserAPI {
   async insertText(text: string): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
-    await this.client.send('Input.insertText', { text }, this.sessionId!);
+    await this.sendOnSession('Input.insertText', { text }, this.sessionId!);
   }
 
   /**
@@ -1002,11 +1697,17 @@ export class BrowserAPI {
     const timeout = options?.timeout ?? 30000;
     const interval = options?.interval ?? 100;
     const start = Date.now();
+    const targetId = this.attachedTargetId;
 
     while (Date.now() - start < timeout) {
       const found = await this.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`);
       if (found) return;
-      await new Promise((r) => setTimeout(r, interval));
+      // Poll intervals are this tab waiting on the page, not bridge work —
+      // hand the bridge to other tabs in between (see waitOffBridgeLock).
+      await this.waitOffBridgeLock(
+        targetId,
+        () => new Promise<void>((r) => setTimeout(r, interval))
+      );
     }
 
     throw new Error(`waitForSelector timed out after ${timeout}ms: ${selector}`);
@@ -1042,7 +1743,7 @@ export class BrowserAPI {
     // The injected script runs in page context and cannot access CDP backendNodeIds,
     // so we fetch them separately and match by role+name.
     try {
-      const axResult = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
+      const axResult = await this.sendOnSession('Accessibility.getFullAXTree', {}, this.sessionId!);
       const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
       if (Array.isArray(nodes)) {
         annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
@@ -1064,11 +1765,11 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('DOM.enable', {}, this.sessionId!);
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
     // Resolve backendNodeId to a remote object
-    const resolveResult = await this.client.send(
+    const resolveResult = await this.sendOnSession(
       'DOM.resolveNode',
       { backendNodeId },
       this.sessionId!
@@ -1079,7 +1780,7 @@ export class BrowserAPI {
     }
 
     // Scroll into view and get bounding box via JS
-    const boxResult = await this.client.send(
+    const boxResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId: object.objectId,
@@ -1096,7 +1797,7 @@ export class BrowserAPI {
     const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
     if (!boxValue || boxValue.width === 0 || boxValue.height === 0) {
       // Element has no dimensions — fall back to programmatic click
-      await this.client.send(
+      await this.sendOnSession(
         'Runtime.callFunctionOn',
         {
           objectId: object.objectId,
@@ -1111,12 +1812,12 @@ export class BrowserAPI {
     const x = boxValue.x + boxValue.width / 2;
     const y = boxValue.y + boxValue.height / 2;
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
@@ -1136,22 +1837,22 @@ export class BrowserAPI {
 
     const { x, y } = await this.resolveNodeCenter(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
@@ -1167,7 +1868,7 @@ export class BrowserAPI {
 
     const { x, y } = await this.resolveNodeCenter(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x, y },
       this.sessionId!
@@ -1183,7 +1884,7 @@ export class BrowserAPI {
 
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -1209,7 +1910,7 @@ export class BrowserAPI {
 
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    const stateResult = await this.client.send(
+    const stateResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -1239,17 +1940,17 @@ export class BrowserAPI {
     const start = await this.resolveNodeCenter(startBackendNodeId);
     const end = await this.resolveNodeCenter(endBackendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x: end.x, y: end.y },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 },
       this.sessionId!
@@ -1263,8 +1964,8 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('Page.enable', {}, this.sessionId!);
-    const result = await this.client.send('Page.getFrameTree', {}, this.sessionId!);
+    await this.sendOnSession('Page.enable', {}, this.sessionId!);
+    const result = await this.sendOnSession('Page.getFrameTree', {}, this.sessionId!);
     const frameTree = result['frameTree'] as {
       frame: { id: string; parentId?: string; url: string; name?: string; securityOrigin?: string };
       childFrames?: unknown[];
@@ -1330,7 +2031,7 @@ export class BrowserAPI {
     };
 
     const createIsolatedWorld = async (): Promise<number> => {
-      const worldResult = await this.client.send(
+      const worldResult = await this.sendOnSession(
         'Page.createIsolatedWorld',
         { frameId, worldName: '__slicc_iframe' },
         this.sessionId!
@@ -1344,11 +2045,11 @@ export class BrowserAPI {
       if (options?.world !== 'main') {
         return this._frameContextCache.get(frameId) ?? createIsolatedWorld();
       }
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
       let id = this._mainWorldContextCache.get(frameId);
       if (id === undefined) {
-        await this.client.send('Runtime.disable', {}, this.sessionId!);
-        await this.client.send('Runtime.enable', {}, this.sessionId!);
+        await this.sendOnSession('Runtime.disable', {}, this.sessionId!);
+        await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
         id = this._mainWorldContextCache.get(frameId);
       }
       if (id === undefined) {
@@ -1373,7 +2074,7 @@ export class BrowserAPI {
     }
 
     if (options?.world !== 'main') {
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
     }
 
     const evaluateParams = {
@@ -1385,12 +2086,12 @@ export class BrowserAPI {
 
     let result: CdpPayload;
     try {
-      result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
+      result = await this.sendOnSession('Runtime.evaluate', evaluateParams, this.sessionId!);
     } catch (err) {
       if (isDestroyedContextError(err)) {
         invalidateContext();
         contextId = await resolveContext();
-        result = await this.client.send(
+        result = await this.sendOnSession(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
           this.sessionId!
@@ -1409,7 +2110,7 @@ export class BrowserAPI {
       if (isDestroyedContextError(new Error(msg))) {
         invalidateContext();
         contextId = await resolveContext();
-        const retryResult = await this.client.send(
+        const retryResult = await this.sendOnSession(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
           this.sessionId!
@@ -1472,7 +2173,7 @@ export class BrowserAPI {
   async sendCDP(method: string, params: CdpPayload = {}): Promise<CdpPayload> {
     await this.ensureConnected();
     this.ensureAttached();
-    return await this.client.send(method, params, this.sessionId!);
+    return await this.sendOnSession(method, params, this.sessionId!);
   }
 
   // -------------------------------------------------------------------------
@@ -1483,10 +2184,10 @@ export class BrowserAPI {
    * Resolve a backend node ID to a remote object ID.
    */
   private async resolveNodeObjectId(backendNodeId: number): Promise<string> {
-    await this.client.send('DOM.enable', {}, this.sessionId!);
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
-    const resolveResult = await this.client.send(
+    const resolveResult = await this.sendOnSession(
       'DOM.resolveNode',
       { backendNodeId },
       this.sessionId!
@@ -1505,7 +2206,7 @@ export class BrowserAPI {
   private async resolveNodeCenter(backendNodeId: number): Promise<{ x: number; y: number }> {
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    const boxResult = await this.client.send(
+    const boxResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -1560,6 +2261,7 @@ export class BrowserAPI {
       return;
     }
     if (this.client.state === 'disconnected') {
+      const dropped = this.client;
       // If we were using a remote transport that got disconnected (follower went away),
       // restore the local transport and clear stale remote state.
       if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
@@ -1570,9 +2272,13 @@ export class BrowserAPI {
         this.setClient(this.localClient);
         this.remoteTargetInfo = null;
       }
-      // Previous session/target are no longer valid after reconnect
-      this.sessionId = null;
-      this.attachedTargetId = null;
+      // ONLY the sessions on the transport that dropped: the registry spans
+      // several (the local `/cdp` client and a transport per tray runtime), and
+      // Chrome discards sessions per connection. Wiping the whole map when one
+      // follower went away forgot healthy local sessions WITHOUT detaching
+      // them, so the next local command minted duplicates — the fan-out leak
+      // this registry exists to close.
+      this.clearSessionsForTransport(dropped);
       if (this.client.state === 'disconnected') {
         // Replay the last-used connect options so the bridge URL + subprotocol survive.
         await this.connect(this._lastConnectOptions ?? undefined);
@@ -1606,7 +2312,42 @@ export class BrowserAPI {
     client.off('Runtime.executionContextsCleared', this.handleExecutionContextsCleared);
   }
 
+  /**
+   * Session-lifecycle events are tracked per TRANSPORT, not per active client:
+   * a tray target's session lives on its remote transport and can die while
+   * the bridge is driving a local tab. Subscribing once per transport (and
+   * never unsubscribing on a swap) keeps every registry entry observable.
+   */
+  private addSessionLifecycleListeners(client: CDPTransport): void {
+    if (this._sessionEventTransports.has(client)) return;
+    this._sessionEventTransports.add(client);
+    client.on('Target.detachedFromTarget', this.handleDetachedFromTarget);
+    client.on('Target.targetDestroyed', this.handleTargetDestroyed);
+  }
+
+  /**
+   * Unsubscribe from a transport's session-lifecycle events once no registry
+   * entry lives on it any more.
+   *
+   * The local `/cdp` client keeps its subscription: it is the permanent
+   * channel and gets reconnected in place. Everything else is a per-runtime
+   * remote transport thrown away with its last session — without this, every
+   * follower this bridge ever talked to stayed in the set (and kept its
+   * listeners) for the life of the page. A transport that comes back gets its
+   * listeners again through {@link addSessionLifecycleListeners}, which both
+   * `setClient` and the attach path call.
+   */
+  private releaseLifecycleTransport(transport: CDPTransport): void {
+    if (transport === this.localClient) return;
+    if (!this._sessionEventTransports.has(transport)) return;
+    for (const entry of this._sessions.values()) if (entry.transport === transport) return;
+    this._sessionEventTransports.delete(transport);
+    transport.off('Target.detachedFromTarget', this.handleDetachedFromTarget);
+    transport.off('Target.targetDestroyed', this.handleTargetDestroyed);
+  }
+
   private setClient(client: CDPTransport): void {
+    this.addSessionLifecycleListeners(client);
     if (this.client === client) {
       return;
     }
@@ -1619,17 +2360,248 @@ export class BrowserAPI {
   }
 
   /**
+   * Point the bridge back at the local `/cdp` client, releasing the remote
+   * transport only when no registry entry still needs it.
+   */
+  private useLocalTransport(): void {
+    const remote = this.remoteTargetInfo;
+    this.remoteTargetInfo = null;
+    this.setClient(this.localClient);
+    if (!remote) return;
+    const stillUsed = [...this._sessions.values()].some(
+      (e) =>
+        e.remote?.runtimeId === remote.runtimeId && e.remote.localTargetId === remote.localTargetId
+    );
+    if (!stillUsed) {
+      this.trayTargetProvider?.removeRemoteTransport?.(remote.runtimeId, remote.localTargetId);
+    }
+  }
+
+  /**
+   * Forget applied-send counters for sessions that left the registry.
+   *
+   * Deliberately not done on detach: {@link runOnTab} reads the counter of a
+   * session that has just been dropped — that IS the stale case — so an entry
+   * has to outlive its session. Sweeping on a size cap keeps the map bounded
+   * without racing the reader.
+   */
+  private pruneAppliedSends(): void {
+    if (this._appliedSends.size <= MAX_TAB_SESSIONS * 4) return;
+    const live = new Set([...this._sessions.values()].map((e) => e.sessionId));
+    for (const sessionId of [...this._appliedSends.keys()]) {
+      if (!live.has(sessionId)) this._appliedSends.delete(sessionId);
+    }
+  }
+
+  /** Insert a fresh session and evict the least-recently-used one over the cap. */
+  private rememberSession(targetId: string, entry: TabSession): void {
+    this.addSessionLifecycleListeners(entry.transport);
+    this.pruneAppliedSends();
+    this._sessions.set(targetId, entry);
+    this.enforceSessionCap(targetId);
+  }
+
+  /**
+   * Detach least-recently-used sessions until the registry is back under the
+   * cap, skipping tabs with work in flight.
+   *
+   * `protect` is the entry just inserted. Pinned entries are skipped because
+   * detaching a tab whose `withTab` body is still running kills the session
+   * its session-scoped waits are subscribed to: a `navigate` releases the
+   * bridge lock while waiting for load, so touching 32 other tabs used to make
+   * the navigating tab the oldest and cost it the load event it was waiting
+   * for — a 30 s timeout with no explanation. When every candidate is pinned
+   * the cap is exceeded until the next release, which calls back in here.
+   */
+  private enforceSessionCap(protect?: string): void {
+    while (this._sessions.size > MAX_TAB_SESSIONS) {
+      let victim: string | undefined;
+      for (const targetId of this._sessions.keys()) {
+        if (targetId === protect || this._pinnedTargets.has(targetId)) continue;
+        victim = targetId;
+        break;
+      }
+      if (victim === undefined) return; // everything is busy; retry on release
+      const evicted = this._sessions.get(victim);
+      this._sessions.delete(victim);
+      if (evicted) {
+        log.debug('Evicting least-recently-used CDP session', { targetId: victim });
+        void this.detachSession(victim, evicted);
+      }
+    }
+  }
+
+  /**
+   * Pin a tab's registry entry for the length of an operation, so LRU eviction
+   * cannot detach a session that is still being used. Returns the release.
+   * Nested pins (a `withTab` body whose navigate also pins) just count.
+   */
+  private pinTarget(targetId: string): () => void {
+    this._pinnedTargets.set(targetId, (this._pinnedTargets.get(targetId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this._pinnedTargets.get(targetId) ?? 1) - 1;
+      if (left > 0) this._pinnedTargets.set(targetId, left);
+      else this._pinnedTargets.delete(targetId);
+      // An overflow that had nothing evictable is waiting for exactly this.
+      this.enforceSessionCap();
+    };
+  }
+
+  /**
+   * Make `targetId`'s live session the current one: point the bridge at its
+   * transport, update the most-recently-used cursor read by the session-less
+   * methods, and refresh its LRU position. No CDP traffic.
+   */
+  private activateSession(targetId: string, entry: TabSession): void {
+    if (this.attachedTargetId !== targetId) {
+      // Execution context IDs belong to the target we are leaving.
+      this._frameContextCache.clear();
+      this._mainWorldContextCache.clear();
+    }
+    if (entry.remote) {
+      this.setClient(entry.transport);
+      this.remoteTargetInfo = { ...entry.remote };
+    } else if (this.client !== entry.transport) {
+      this.useLocalTransport();
+    }
+    this.sessionId = entry.sessionId;
+    this.attachedTargetId = targetId;
+    // Re-insert so Map iteration order stays least-recently-used first.
+    this._sessions.delete(targetId);
+    this._sessions.set(targetId, entry);
+  }
+
+  private notifySessionChange(targetId: string, entry: TabSession): void {
+    // Hand out the same facade `getTransport()` returns, so subscribers that
+    // compare transports (BshWatchdog, session-rebind) see one identity.
+    const transport = this.accountedTransportFor(entry.transport);
+    this._onSessionChange?.(entry.sessionId, transport, targetId);
+    const subs = this._sessionReplacedSubs.get(targetId);
+    if (!subs) return;
+    for (const cb of [...subs]) {
+      try {
+        cb(entry.sessionId, transport, targetId);
+      } catch (err) {
+        log.warn('session-replaced subscriber threw', {
+          targetId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  /** Forget a session without touching the wire (it is already gone). */
+  private forgetSession(targetId: string, entry: TabSession): void {
+    this.unregisterSession(targetId);
+    this.disposeSessionTransport(entry);
+  }
+
+  /** Remove the registry entry and clear the cursor if it pointed here (synchronous). */
+  private unregisterSession(targetId: string): void {
+    this._sessions.delete(targetId);
+    if (this.attachedTargetId === targetId) {
+      this.sessionId = null;
+      this.attachedTargetId = null;
+    }
+  }
+
+  /**
+   * Release what the entry's transport was holding for it. For a tray target
+   * this disposes the follower-side transport, so it must run AFTER any
+   * `Target.detachFromTarget` that still needs that transport.
+   */
+  private disposeSessionTransport(entry: TabSession): void {
+    this.releaseLifecycleTransport(entry.transport);
+    if (entry.remote) {
+      const stillUsed = [...this._sessions.values()].some(
+        (e) =>
+          e.remote?.runtimeId === entry.remote?.runtimeId &&
+          e.remote?.localTargetId === entry.remote?.localTargetId
+      );
+      if (!stillUsed) {
+        this.trayTargetProvider?.removeRemoteTransport?.(
+          entry.remote.runtimeId,
+          entry.remote.localTargetId
+        );
+      }
+    }
+  }
+
+  /** Drop a session AND tell the browser about it (best effort). */
+  private async detachSession(targetId: string, entry: TabSession): Promise<void> {
+    // Unregister synchronously so a concurrent attach never sees the entry,
+    // but keep the transport alive until the browser has been told: for a
+    // tray target, disposing it first would make the detach always fail and
+    // leave the follower-side session leaked.
+    this.unregisterSession(targetId);
+    try {
+      await entry.transport.send('Target.detachFromTarget', { sessionId: entry.sessionId });
+    } catch {
+      // Already detached, tab closed, or the transport went away — either way
+      // the session is not ours any more.
+    } finally {
+      this.disposeSessionTransport(entry);
+    }
+  }
+
+  /** Public-path detach for one target; no-op when the tab was never attached. */
+  private async dropSession(targetId: string): Promise<void> {
+    const entry = this._sessions.get(targetId);
+    if (!entry) {
+      if (this.attachedTargetId === targetId) {
+        this.sessionId = null;
+        this.attachedTargetId = null;
+      }
+      return;
+    }
+    await this.detachSession(targetId, entry);
+  }
+
+  /**
+   * Invalidate one target's session without a wire round-trip — used when the
+   * browser has told us (by rejecting a command) that it is already gone.
+   */
+  private invalidateSession(targetId: string): void {
+    const entry = this._sessions.get(targetId);
+    if (entry) this.forgetSession(targetId, entry);
+  }
+
+  /**
+   * Drop the sessions bound to ONE transport — the connection that dropped
+   * discarded them, so they cannot be detached and must not be reused.
+   * Entries on other transports are healthy and stay.
+   */
+  private clearSessionsForTransport(transport: CDPTransport): void {
+    for (const [targetId, entry] of [...this._sessions]) {
+      if (entry.transport === transport) this.forgetSession(targetId, entry);
+    }
+    // The cursor may have pointed at a survivor's tab; `forgetSession` already
+    // cleared it if it pointed at one of ours.
+  }
+
+  /** Drop every session: the bridge itself is going away. */
+  private clearSessions(): void {
+    for (const [targetId, entry] of [...this._sessions]) this.forgetSession(targetId, entry);
+    this._sessions.clear();
+    this.sessionId = null;
+    this.attachedTargetId = null;
+  }
+
+  /**
    * Get the bounding box of an element by CSS selector.
    */
   private async boundingBox(selector: string): Promise<BoundingBox | null> {
-    await this.client.send('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
 
-    const docResult = await this.client.send('DOM.getDocument', { depth: 0 }, this.sessionId!);
+    const docResult = await this.sendOnSession('DOM.getDocument', { depth: 0 }, this.sessionId!);
     const rootNodeId = (docResult['root'] as { nodeId: number }).nodeId;
 
     let nodeId: number;
     try {
-      const queryResult = await this.client.send(
+      const queryResult = await this.sendOnSession(
         'DOM.querySelector',
         { nodeId: rootNodeId, selector },
         this.sessionId!
@@ -1641,7 +2613,7 @@ export class BrowserAPI {
 
     if (!nodeId) return null;
 
-    const boxModel = await this.client.send('DOM.getBoxModel', { nodeId }, this.sessionId!);
+    const boxModel = await this.sendOnSession('DOM.getBoxModel', { nodeId }, this.sessionId!);
     const model = boxModel['model'] as {
       content: number[];
       width: number;

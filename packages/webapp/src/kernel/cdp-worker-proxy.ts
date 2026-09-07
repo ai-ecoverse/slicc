@@ -21,6 +21,22 @@
  *   page → worker
  *     { type: 'cdp-response', id, result?, error? }
  *     { type: 'cdp-event',    method, params? }
+ *     { type: 'cdp-reset',    reason? }  — page CDP client dropped
+ *     { type: 'cdp-ready' }              — page CDP client reconnected
+ *
+ * `cdp-reset` / `cdp-ready` exist because the worker cannot see the page's
+ * connection. The page's `CDPClient` WebSocket closes several times a day
+ * (the standalone proxy's Chrome leg overflows and takes the client with it);
+ * Chrome discards every session minted on it. Without a signal across the hop
+ * `WorkerCdpProxy.state` stays `'connected'` forever, so the worker-side
+ * `BrowserAPI.ensureConnected()` never clears its cached `sessionId` and every
+ * later command fails against a session that no longer exists — the "the CDP
+ * connection has gone stale, I need to reload the tab" symptom of issue #2417.
+ * On `cdp-reset` the proxy rejects its pending commands and flips `state` to
+ * `'disconnected'`, which is exactly what `ensureConnected()` watches for; the
+ * next `connect()` (re-callable after a reset) flips it back. `cdp-ready` is
+ * logged only — see `CdpTransportBridge.handleControl` for why it must not
+ * flip the state by itself.
  *
  * The pre-subscribe protocol (cdp-subscribe / cdp-unsubscribe) is
  * needed because the page only forwards events the worker has actually
@@ -29,19 +45,20 @@
  * listener Map crosses 0→1 or 1→0 for a given method, the proxy
  * emits the corresponding subscribe/unsubscribe message; the page
  * forwarder mirrors that into `realTransport.on` / `realTransport.off`.
+ * Those 0→1 edges never repeat for listeners the worker keeps across a
+ * reset, so the forwarder re-registers its own listener map on `cdp-ready`
+ * instead of waiting for the worker to re-subscribe.
  */
 
 import type { CDPPayload } from '@slicc/shared-ts';
 
-import type { CDPTransport } from '../cdp/transport.js';
-import type { CDPEventListener } from '../cdp/types.js';
 import {
   type CdpBridgeOptions,
   CdpTransportBridge,
+  type ParsedCdpControl,
   type ParsedCdpEvent,
   type ParsedCdpResponse,
 } from './cdp-bridge.js';
-import type { KernelTransport } from './transport.js';
 import {
   createMessageChannelTransport,
   type MessagePortLike,
@@ -58,6 +75,15 @@ export interface CdpCmdMsg {
   /** Per-method CDP params; shape is known only to the caller that issued the method. */
   params?: CDPPayload;
   sessionId?: string;
+  /**
+   * The worker's reset generation when the command was sent: how many
+   * `cdp-reset` frames it had processed. The page compares it with the number
+   * of resets it has announced; a command from an older generation crossed a
+   * reset in flight — the worker has already rejected it — and must not be
+   * executed on the replacement connection (a `Target.createTarget` run after
+   * its caller saw an error is the duplicate-tab bug).
+   */
+  gen?: number;
 }
 
 export interface CdpResponseMsg {
@@ -85,17 +111,34 @@ export interface CdpUnsubscribeMsg {
   event: string;
 }
 
+/**
+ * The page's CDP connection dropped: every session minted on it is gone.
+ * `reason` is diagnostic (a WebSocket close reason, a supersede).
+ */
+export interface CdpResetMsg {
+  type: 'cdp-reset';
+  reason?: string;
+}
+
+/** The page's CDP connection is back and the worker's subscriptions are re-registered. */
+export interface CdpReadyMsg {
+  type: 'cdp-ready';
+}
+
 export type WorkerToPageCdpMsg = CdpCmdMsg | CdpSubscribeMsg | CdpUnsubscribeMsg;
-export type PageToWorkerCdpMsg = CdpResponseMsg | CdpEventMsg;
+export type PageToWorkerCdpMsg = CdpResponseMsg | CdpEventMsg | CdpResetMsg | CdpReadyMsg;
 export type WorkerCdpMessage = WorkerToPageCdpMsg | PageToWorkerCdpMsg;
 
 // ---------------------------------------------------------------------------
-// Worker-side proxy
+// Worker-side proxy — the page side lives in `cdp-page-forwarder.ts`.
 // ---------------------------------------------------------------------------
 
 export class WorkerCdpProxy extends CdpTransportBridge {
   constructor(port: MessagePortLike) {
     const transport = createMessageChannelTransport<WorkerCdpMessage, WorkerCdpMessage>(port);
+    // Bumped on every processed `cdp-reset`; stamped on every command so the
+    // page can tell a command that crossed a reset from one issued after it.
+    let generation = 0;
     const opts: CdpBridgeOptions = {
       label: 'WorkerCdpProxy',
       buildCommandEnvelope: (id, method, params, sessionId) =>
@@ -105,6 +148,7 @@ export class WorkerCdpProxy extends CdpTransportBridge {
           method,
           params,
           sessionId,
+          gen: generation,
         }) satisfies CdpCmdMsg,
       sendEnvelope: (envelope) => {
         transport.send(envelope as WorkerCdpMessage);
@@ -134,6 +178,23 @@ export class WorkerCdpProxy extends CdpTransportBridge {
         const e = env as CdpEventMsg;
         return { method: e.method, params: e.params };
       },
+      parseControl: (env): ParsedCdpControl | null => {
+        const msg = env as { type?: string; reason?: unknown };
+        if (msg?.type === 'cdp-reset') {
+          return typeof msg.reason === 'string'
+            ? { kind: 'reset', reason: msg.reason }
+            : { kind: 'reset' };
+        }
+        if (msg?.type === 'cdp-ready') return { kind: 'ready' };
+        return null;
+      },
+      onUpstreamReset: (reason) => {
+        generation += 1;
+        console.warn('[WorkerCdpProxy] page CDP connection reset; sessions are stale', reason);
+      },
+      onUpstreamReady: () => {
+        console.info('[WorkerCdpProxy] page CDP connection restored');
+      },
       onSubscribeEvent: (event) => {
         transport.send({ type: 'cdp-subscribe', event } satisfies CdpSubscribeMsg);
       },
@@ -143,95 +204,4 @@ export class WorkerCdpProxy extends CdpTransportBridge {
     };
     super(opts);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Page-side forwarder
-//
-// Lives on the page in standalone. Receives commands and subscribe /
-// unsubscribe messages from the worker; calls into the real
-// `CDPTransport` (WebSocket-backed `CDPClient`) for execution; pushes
-// responses and subscribed events back over the wire.
-//
-// Returns a stop function that tears down the forwarder.
-// ---------------------------------------------------------------------------
-
-/** Run a single inbound worker→page CDP wire message against the real transport. */
-async function handlePageCdpIncoming(
-  msg: WorkerCdpMessage,
-  realTransport: CDPTransport,
-  transport: KernelTransport<WorkerCdpMessage, WorkerCdpMessage>,
-  eventListeners: Map<string, CDPEventListener>
-): Promise<void> {
-  const env = msg as { type?: string };
-  if (!env?.type) return;
-
-  if (env.type === 'cdp-cmd') {
-    const cmd = msg as CdpCmdMsg;
-    try {
-      const result = await realTransport.send(cmd.method, cmd.params, cmd.sessionId);
-      transport.send({
-        type: 'cdp-response',
-        id: cmd.id,
-        result,
-      } satisfies CdpResponseMsg);
-    } catch (err) {
-      transport.send({
-        type: 'cdp-response',
-        id: cmd.id,
-        error: err instanceof Error ? err.message : String(err),
-      } satisfies CdpResponseMsg);
-    }
-    return;
-  }
-
-  if (env.type === 'cdp-subscribe') {
-    const sub = msg as CdpSubscribeMsg;
-    if (eventListeners.has(sub.event)) return; // idempotent
-    const listener: CDPEventListener = (params) => {
-      transport.send({
-        type: 'cdp-event',
-        method: sub.event,
-        params,
-      } satisfies CdpEventMsg);
-    };
-    eventListeners.set(sub.event, listener);
-    realTransport.on(sub.event, listener);
-    return;
-  }
-
-  if (env.type === 'cdp-unsubscribe') {
-    const unsub = msg as CdpUnsubscribeMsg;
-    const listener = eventListeners.get(unsub.event);
-    if (!listener) return;
-    eventListeners.delete(unsub.event);
-    realTransport.off(unsub.event, listener);
-  }
-}
-
-export function startPageCdpForwarder(
-  port: MessagePortLike,
-  realTransport: CDPTransport
-): () => void {
-  const transport = createMessageChannelTransport<WorkerCdpMessage, WorkerCdpMessage>(port);
-
-  // Track listeners we've registered on `realTransport` per event so we
-  // can off() them on unsubscribe. Also track the active subscription
-  // count — the worker may add listeners locally without the page knowing,
-  // but the bridge's onSubscribeEvent only fires on the FIRST add, so
-  // we expect 0/1 transitions per event method here.
-  const eventListeners = new Map<string, CDPEventListener>();
-
-  // Sync listener — async cmd handling is fire-and-forget via void (noMisusedPromises).
-  const unsubscribeIncoming = transport.onMessage((msg): void => {
-    void handlePageCdpIncoming(msg, realTransport, transport, eventListeners);
-  });
-
-  return () => {
-    unsubscribeIncoming();
-    for (const [event, listener] of eventListeners) {
-      realTransport.off(event, listener);
-    }
-    eventListeners.clear();
-  };
 }

@@ -11,7 +11,7 @@ import type { CDPPayload } from '@slicc/shared-ts';
 
 import { createLogger } from '../base/logger.js';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
-import type { CDPTransport } from './transport.js';
+import type { CDPStateListener, CDPTransport } from './transport.js';
 import type {
   CDPCommand,
   CDPConnectOptions,
@@ -33,6 +33,35 @@ const log = createLogger('cdp');
  */
 export const CDP_SUPERSEDED_CLOSE_CODE = 4001;
 
+/**
+ * WebSocket close code the CDP proxy uses when its own Chrome-leg WebSocket
+ * dropped and was re-established (or definitively failed). Chrome discards
+ * every CDP session when that socket closes, so the sessionIds this client
+ * cached are dead. Unlike {@link CDP_SUPERSEDED_CLOSE_CODE} the slot is still
+ * ours — we do NOT latch superseded, and the next command reconnects lazily
+ * via `BrowserAPI.ensureConnected()`, which resets the session state.
+ * Application-range (4000-4999) code; MUST stay in sync with
+ * `CDP_UPSTREAM_RESET_CLOSE_CODE` in
+ * `packages/node-server/src/cdp-proxy/close-codes.ts`.
+ */
+export const CDP_UPSTREAM_RESET_CLOSE_CODE = 4002;
+
+/**
+ * Reason pending commands are rejected with after a close. Distinct strings so
+ * callers and logs can tell a supersede ("another SLICC tab took our slot")
+ * from an upstream reset ("Chrome's socket was rebuilt under us") from Chrome
+ * simply going away.
+ */
+function closeRejectReason(code?: number): string {
+  if (code === CDP_SUPERSEDED_CLOSE_CODE) {
+    return 'CDP connection superseded by another SLICC tab/window on this instance';
+  }
+  if (code === CDP_UPSTREAM_RESET_CLOSE_CODE) {
+    return 'CDP connection reset by proxy (upstream Chrome connection was re-established)';
+  }
+  return 'CDP connection closed';
+}
+
 export class CDPClient implements CDPTransport {
   private ws: WebSocket | null = null;
   private nextId = 1;
@@ -40,9 +69,26 @@ export class CDPClient implements CDPTransport {
   private pending = new PendingRequestTable<number>();
   private listeners = new Map<string, Set<CDPEventListener>>();
   private _state: ConnectionState = 'disconnected';
+  private stateListeners = new Set<CDPStateListener>();
+  private lastNotifiedState: ConnectionState = 'disconnected';
+  private lastNotifiedReason: string | undefined;
 
   get state(): ConnectionState {
     return this._state;
+  }
+
+  /**
+   * Observe connection-state transitions (see {@link CDPTransport.onStateChange}).
+   *
+   * The kernel-worker hop needs this: `startPageCdpForwarder` relays a drop as
+   * a `cdp-reset` wire message so `WorkerCdpProxy` can flip its own state and
+   * the worker's `BrowserAPI` stops reusing a session Chrome has discarded.
+   */
+  onStateChange(listener: CDPStateListener): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
   }
 
   /**
@@ -91,6 +137,7 @@ export class CDPClient implements CDPTransport {
         this._state = 'connected';
         this._superseded = false; // a fresh connection clears any prior eviction latch
         log.info('Connected', { url });
+        this.notifyState('connected');
         resolve();
       };
 
@@ -246,29 +293,58 @@ export class CDPClient implements CDPTransport {
   }
 
   private handleClose(code?: number): void {
-    const superseded = code === CDP_SUPERSEDED_CLOSE_CODE;
-    if (superseded) {
+    if (code === CDP_SUPERSEDED_CLOSE_CODE) {
       // The proxy gave our single CDP slot to a newer client — another SLICC
       // tab/window on this instance. Latch it so the reconnect supervisor
       // stops re-dialing (which would evict the newcomer and restart the war).
       this._superseded = true;
       log.warn('CDP slot superseded by another SLICC tab/window on this instance', { code });
+    } else if (code === CDP_UPSTREAM_RESET_CLOSE_CODE) {
+      // The proxy rebuilt its Chrome leg; every CDP session behind it is gone.
+      // Deliberately NOT a supersede — the slot is still ours, so `cleanup()`
+      // leaving state 'disconnected' is enough for `ensureConnected()` to
+      // re-dial (and reset session state) on the next command.
+      log.warn('CDP proxy reset its upstream Chrome connection — sessions dropped', {
+        code,
+        pendingCommands: this.pending.size,
+      });
     } else {
       log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
     }
-    // Reject all pending commands with a reason that distinguishes a supersede
-    // ("another SLICC tab took our slot") from Chrome going away, so callers
-    // and logs can tell the two apart.
-    const reason = superseded
-      ? 'CDP connection superseded by another SLICC tab/window on this instance'
-      : 'CDP connection closed';
-    this.pending.rejectAll(reason);
-    this.cleanup();
+    // One tear-down, carrying the specific close reason. Announcing a generic
+    // reason first and the specific one second lost the 4002 upstream-reset
+    // attribution at the worker boundary: `startPageCdpForwarder` relays the
+    // FIRST notification of a transition and suppresses the rest, so the
+    // worker only ever saw "CDP client disconnected" (issue #2417).
+    this.cleanup(closeRejectReason(code));
   }
 
-  private cleanup(): void {
+  private cleanup(reason = 'CDP client disconnected'): void {
     this.ws = null;
     this._state = 'disconnected';
-    this.pending.rejectAll('CDP client disconnected');
+    this.pending.rejectAll(reason);
+    this.notifyState('disconnected', reason);
+  }
+
+  /**
+   * Fan a state transition out to `onStateChange` subscribers.
+   *
+   * Repeats of the same (state, reason) pair are dropped so a subscriber sees
+   * one notification per transition. A close notifies exactly once, with the
+   * reason `closeRejectReason` derived from the close code — subscribers such
+   * as `startPageCdpForwarder` relay that reason verbatim, so anything less
+   * specific here is diagnostic detail the worker never gets back.
+   */
+  private notifyState(state: ConnectionState, reason?: string): void {
+    if (state === this.lastNotifiedState && reason === this.lastNotifiedReason) return;
+    this.lastNotifiedState = state;
+    this.lastNotifiedReason = reason;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state, reason);
+      } catch {
+        // A state observer must not break the CDP path.
+      }
+    }
   }
 }

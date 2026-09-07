@@ -5,6 +5,7 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
+import { bindTabCapture } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   ConsoleMessage,
@@ -53,6 +54,7 @@ const CDP_TYPE_NORMALIZATION: Record<string, string> = {
 
 /** Start capturing console messages for a tab if not already subscribed. */
 function ensureCapturing(
+  browser: PlaywrightHandlerCtx['browser'],
   state: PlaywrightState,
   transport: CDPTransport,
   targetId: string,
@@ -62,9 +64,14 @@ function ensureCapturing(
 
   state.consoleMessages.set(targetId, []);
 
+  // The tab's session can be replaced under us (the bridge re-attaches when a
+  // proxy reset invalidates it), and events for the new session carry a new
+  // id. `binding.sessionId` is read per event so a long-lived capture does not
+  // go silently deaf; `bindTabCapture` also re-arms this listener and
+  // re-enables `Runtime` on the replacement session.
   const handler = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as ConsoleApiCalledEvent;
-    if (params.sessionId !== sessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const type = params.type ?? 'log';
     const level = CDP_TYPE_NORMALIZATION[type] ?? type;
     const args = params.args ?? [];
@@ -77,13 +84,18 @@ function ensureCapturing(
     }
   };
 
-  transport.on('Runtime.consoleAPICalled', handler);
   // ponytail: Runtime.exceptionThrown (uncaught errors, rejected promises) not surfaced
   // here — would need a separate subscription. Add when agents need JS exception capture.
-
-  state.consoleCleanup.set(targetId, () => {
-    transport.off('Runtime.consoleAPICalled', handler);
+  const binding = bindTabCapture({
+    browser,
+    targetId,
+    transport,
+    sessionId,
+    listeners: [['Runtime.consoleAPICalled', handler]],
+    enable: (t, s) => t.send('Runtime.enable', {}, s),
   });
+
+  state.consoleCleanup.set(targetId, () => binding.stop());
 }
 
 export const consoleHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
@@ -107,7 +119,7 @@ export const consoleHandler: PlaywrightHandler = async ({ browser, state, positi
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
       await transport.send('Runtime.enable', {}, sessionId);
-      ensureCapturing(state, transport, tab.targetId, sessionId);
+      ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
   }
 

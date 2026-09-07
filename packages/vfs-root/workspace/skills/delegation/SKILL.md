@@ -297,26 +297,29 @@ scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the n
 
 Browser-tab handling rules (track your IDs, never close tabs you didn't open, handle "tab not found" gracefully) live in `/workspace/skills/playwright-cli/SKILL.md` under "Multi-Agent Tab Behavior". Read that skill before delegating browser work.
 
-### Browser-driving scoops serialize on one bridge
+### Browser-driving scoops: one tab per scoop
 
-All scoops share ONE browser, and every `playwright-cli` command runs
-**serialized** on a single global tab lock. Parallel browser-driving scoops do
-not run in parallel at the browser — they queue. An 8-way browser fan-out
-roughly doubles wall-clock time versus a capped one and adds overhead as
-queued commands blow past `background_after` and get detached — their results
-arrive later as `bash` licks, so the scoop's turn moves on before the browser
-work lands.
+All scoops share ONE browser. `playwright-cli` orders commands on the same tab
+with a per-tab lock and serializes command bodies across tabs with a bridge-wide
+lock; page loads and waits release the bridge, so one scoop's slow or hung
+navigation no longer stalls the others, but short commands on different tabs
+still take turns. Fan-out is safe; it just does not multiply browser throughput.
 
-- **Cap concurrent browser-driving scoops at 3–4.** For larger workloads, feed
-  scoops in waves: feed 3–4, `scoop_wait` for them, feed the next wave.
+- **Give every browser-driving scoop its own tab; no fan-out cap is needed
+  for correctness.** Browser scoops fan out like any other work, but expect
+  their short commands to interleave on the bridge rather than speed up.
+- **Two scoops on the SAME tab still queue.** If a slice needs a shared tab,
+  hand it to one scoop rather than splitting it.
+- A hung navigation stalls only its own tab, so one stuck scoop no longer
+  detaches every sibling's commands past `background_after`.
 - When a command emits `note: browser bridge contended — ...` on stderr (total
-  lock wait + queue depth; ships with the bridge hardening in PR #2411 —
-  runtimes without it stay silent, but slowness under fan-out still means
-  contention), that is back-off guidance: instruct scoops to stagger or wait,
-  never to re-run the command — it already ran; it was just slow to get the
-  lock.
-- This cap applies only to scoops actively driving the browser. Scoops doing
-  CPU/VFS/network work (curl, file edits, analysis) fan out freely.
+  lock wait + queue depth, and whether the wait was on **this tab** or
+  **bridge-wide**), that is back-off guidance: instruct the scoop to stagger or
+  move to its own tab, never to re-run the command — it already ran; it was
+  just slow to get the lock. A bridge-wide wait points at the few genuinely
+  global operations (`tab-select`, `--foreground`), not at your tab.
+- Scoops doing CPU/VFS/network work (curl, file edits, analysis) fan out
+  freely, as before.
 
 ## Model access policy
 

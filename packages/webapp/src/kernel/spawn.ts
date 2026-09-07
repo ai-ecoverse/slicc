@@ -30,7 +30,7 @@
 
 import type { CDPTransport } from '../cdp/transport.js';
 import type { FeatureFlagFloat } from '../core/feature-flags.js';
-import { startPageCdpForwarder } from './cdp-worker-proxy.js';
+import { startPageCdpForwarder } from './cdp-page-forwarder.js';
 import type {
   KernelWorkerBootErrorMsg,
   KernelWorkerBootProgressMsg,
@@ -71,6 +71,14 @@ export interface KernelWorkerSpawnOptions<TClient> {
   workerUrl?: string | URL;
   /** Real CDP transport (WebSocket-backed `CDPClient` in standalone). */
   realCdpTransport: CDPTransport;
+  /**
+   * Re-dial `realCdpTransport` when a worker CDP command arrives while it is
+   * disconnected (the `/cdp` proxy closes it with `upstream-reset` after
+   * rebuilding its Chrome leg). Standalone passes the page `BrowserAPI`'s
+   * reconnect so the bridge URL + subprotocol token are replayed. Optional;
+   * without it the worker fails fast until the page's own lazy reconnect.
+   */
+  reconnectCdp?: () => Promise<void>;
   /**
    * Build the panel-side client over the kernel-port transport. The UI
    * shells pass `(t) => new OffscreenClient(callbacks, t)`; inverted so
@@ -169,6 +177,8 @@ export interface ReadyStallInfo {
 export interface KernelWorkerBootstrapOptions<TClient> {
   worker: WorkerLike;
   realCdpTransport: CDPTransport;
+  /** See {@link KernelWorkerSpawnOptions.reconnectCdp}. */
+  reconnectCdp?: () => Promise<void>;
   /** See {@link KernelWorkerSpawnOptions.makeClient}. */
   makeClient: (transport: PanelKernelTransport) => TClient;
   readyTimeoutMs?: number;
@@ -408,7 +418,9 @@ export function bootstrapKernelWorker<TClient>(
   }
 
   // Pump real CDP commands ⇄ wire on the cdp port.
-  const stopForwarder = startPageCdpForwarder(cdpChannel.port1, realCdpTransport);
+  const stopForwarder = startPageCdpForwarder(cdpChannel.port1, realCdpTransport, {
+    ...(options.reconnectCdp ? { reconnect: options.reconnectCdp } : {}),
+  });
 
   // Wait for `kernel-worker-ready` on the kernel port. The OffscreenClient
   // already started this port via its onMessage subscription; the watcher
@@ -507,6 +519,7 @@ export function spawnKernelWorker<TClient>(
   return bootstrapKernelWorker({
     worker,
     realCdpTransport: options.realCdpTransport,
+    reconnectCdp: options.reconnectCdp,
     makeClient: options.makeClient,
     readyTimeoutMs: options.readyTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
