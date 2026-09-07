@@ -353,10 +353,30 @@ slicc.hid.sendReport(handle, reportId, data: Uint8Array): Promise<void>
 slicc.hid.on('inputreport', cb): void                    // cb: ({ handle, reportId, data })
 slicc.hid.off('inputreport', cb): void
 
-// Serial / USB — parity list/request/open/close; streaming I/O stays on the realm API.
+// Serial — parity list/request/open/close; streaming I/O stays on the realm API.
 slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
-slicc.usb.list()    / request(filters?) / open(handle) / close(handle)
+
+// USB — full transfer surface, so a sprinkle can drive a device itself.
+slicc.usb.list(): Promise<UsbDeviceInfo[]>
+slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // needs button-click gesture
+slicc.usb.open(handle) / close(handle) / reset(handle): Promise<void>
+slicc.usb.selectConfiguration(handle, value): Promise<void>
+slicc.usb.claimInterface(handle, n) / releaseInterface(handle, n): Promise<void>
+slicc.usb.clearHalt(handle, 'in' | 'out', endpoint): Promise<void>
+slicc.usb.transferIn(handle, endpoint, length): Promise<{ status, bytes: Uint8Array }>
+slicc.usb.transferOut(handle, endpoint, bytes: Uint8Array): Promise<{ status, bytesWritten }>
+slicc.usb.controlTransferIn(handle, setup, length): Promise<{ status, bytes: Uint8Array }>
+slicc.usb.controlTransferOut(handle, setup, bytes): Promise<{ status, bytesWritten }>
 ```
+
+Transfers are on the sprinkle surface, not realm-only, because a `.jsh` cannot
+stream: realm stdout is buffered and delivered when the run completes. Anything
+that reads a device for as long as it stays interesting — a video stream, a
+sensor feed — has to drive the device from the sprinkle and render as it goes.
+
+You hand in and get back real `Uint8Array`s; the base64 the iframe boundary
+needs is handled for you. `UsbDeviceInfo` also carries `configurations`, so an
+interface can be located by class/subclass/protocol without a descriptor read.
 
 ```html
 <button
