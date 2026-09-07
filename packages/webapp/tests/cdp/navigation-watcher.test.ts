@@ -5,7 +5,7 @@ import {
   type NavigationEvent,
   NavigationWatcher,
 } from '../../src/cdp/navigation-watcher.js';
-import type { CDPTransport } from '../../src/cdp/transport.js';
+import type { CDPStateListener, CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
 import type { ProbeFetch, ProbeResponse } from '../../src/net/well-known-probe.js';
 
@@ -15,6 +15,7 @@ const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';
 class MockCDPTransport implements CDPTransport {
   state: ConnectionState = 'connected';
   private listeners = new Map<string, Set<CDPEventListener>>();
+  private stateListeners = new Set<CDPStateListener>();
   public sentCommands: Array<{
     method: string;
     params?: Record<string, unknown>;
@@ -71,6 +72,30 @@ class MockCDPTransport implements CDPTransport {
     this.listeners.get(event)?.forEach((l) => {
       l(params);
     });
+  }
+  onStateChange(listener: CDPStateListener): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
+  }
+  /** How many listeners are registered for `event` (double-registration probe). */
+  listenerCount(event: string): number {
+    return this.listeners.get(event)?.size ?? 0;
+  }
+  /**
+   * Model an upstream reset the way a real transport does: the connection
+   * goes away (a bridge-backed one also drops every CDP event listener), then
+   * a replacement connection comes up.
+   */
+  simulateDrop(reason = 'CDP connection closed', clearListeners = true): void {
+    this.state = 'disconnected';
+    if (clearListeners) this.listeners.clear();
+    for (const l of this.stateListeners) l('disconnected', reason);
+  }
+  simulateReconnect(): void {
+    this.state = 'connected';
+    for (const l of this.stateListeners) l('connected');
   }
 }
 
@@ -838,5 +863,175 @@ describe('NavigationWatcher ARD discovery', () => {
 
     expect(discoveries).toHaveLength(1);
     expect(discoveries[0].url).toBe(AI_CATALOG_URL);
+  });
+});
+
+/**
+ * `Target.setDiscoverTargets`, the sessions the watcher attached, and the
+ * `Page`/`Network` domains enabled on them are CONNECTION-scoped: the
+ * replacement Chrome socket a proxy reset produces has none of them. Before
+ * issue #2417's reset chain the watcher just stayed `started`, so handoff /
+ * ARD discovery stopped after the first reset (review finding 5).
+ */
+describe('NavigationWatcher across an upstream reset', () => {
+  let transport: MockCDPTransport;
+  let events: NavigationEvent[];
+  let watcher: NavigationWatcher;
+
+  beforeEach(() => {
+    transport = new MockCDPTransport();
+    events = [];
+    watcher = new NavigationWatcher(transport, (e) => events.push(e));
+  });
+
+  /** Emit a main-frame document response carrying a handoff Link header. */
+  function emitHandoffResponse(sessionId: string, url: string): void {
+    transport.emit('Network.responseReceived', {
+      sessionId,
+      type: 'Document',
+      frameId: `root-${sessionId}`,
+      response: { url, headers: { link: `<>; rel="${HANDOFF_REL}"; title="go"` } },
+    });
+  }
+
+  it('forgets the sessions the dead connection owned', async () => {
+    await watcher.start();
+    await attachOwnTab(transport, 'sess-1', { targetId: 'tab-1', url: 'https://ex.com/a' });
+    emitHandoffResponse('sess-1', 'https://ex.com/a');
+    expect(events).toHaveLength(1);
+
+    // Keep the JS listeners registered so this isolates the SESSION state:
+    // the connection went away, but the watcher is still wired up.
+    transport.simulateDrop('CDP connection closed', false);
+    await tick();
+
+    // Chrome discarded that session; an event still quoting it must not be
+    // matched against the watcher's stale bookkeeping.
+    emitHandoffResponse('sess-1', 'https://ex.com/b');
+    expect(events).toHaveLength(1);
+  });
+
+  it('re-enables target discovery and re-enumerates targets on the replacement connection', async () => {
+    await watcher.start();
+    transport.simulateDrop();
+    await tick();
+
+    transport.targetInfos = [{ targetId: 'tab-pre', type: 'page', attached: false }];
+    transport.sentCommands.length = 0;
+    transport.simulateReconnect();
+    await tick();
+
+    const sent = transport.sentCommands;
+    expect(sent).toContainEqual({
+      method: 'Target.setDiscoverTargets',
+      params: { discover: true },
+      sessionId: undefined,
+    });
+    expect(sent.map((c) => c.method)).toContain('Target.getTargets');
+    expect(sent.filter((c) => c.method === 'Target.attachToTarget')[0]?.params).toMatchObject({
+      targetId: 'tab-pre',
+    });
+  });
+
+  it('re-arms its event listeners when the transport cleared them, without double-registering', async () => {
+    await watcher.start();
+    expect(transport.listenerCount('Target.attachedToTarget')).toBe(1);
+
+    // A bridge-backed transport runs disconnect() on its reconnect path, which
+    // empties the listener registry.
+    transport.simulateDrop();
+    await tick();
+    expect(transport.listenerCount('Target.attachedToTarget')).toBe(0);
+
+    transport.simulateReconnect();
+    await tick();
+    expect(transport.listenerCount('Target.attachedToTarget')).toBe(1);
+    expect(transport.listenerCount('Network.responseReceived')).toBe(1);
+
+    // ...and discovery works end-to-end again on the new connection.
+    await attachOwnTab(transport, 'sess-2', { targetId: 'tab-2', url: 'https://ex.com/c' });
+    emitHandoffResponse('sess-2', 'https://ex.com/c');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ verb: 'handoff', targetId: 'tab-2' });
+  });
+
+  it('does not double-register when the transport kept its listeners', async () => {
+    await watcher.start();
+    transport.simulateDrop('CDP connection closed', false);
+    await tick();
+    transport.simulateReconnect();
+    await tick();
+
+    expect(transport.listenerCount('Target.attachedToTarget')).toBe(1);
+
+    await attachOwnTab(transport, 'sess-3', { targetId: 'tab-3', url: 'https://ex.com/d' });
+    emitHandoffResponse('sess-3', 'https://ex.com/d');
+    expect(events).toHaveLength(1); // not 2 — one listener, one emit
+  });
+
+  it('drops a pending attach across the reset so a later foreign session is not claimed', async () => {
+    await watcher.start();
+    // `attachSessionIdByTarget` is empty, so the attach response binds no
+    // session id and the target stays in `pendingAttachTargetIds`.
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-x', type: 'page', attached: false },
+    });
+    await tick();
+
+    // Listeners kept, so a watcher that ignored the reset would still see the
+    // attach event below and (wrongly) claim it via the stale pending id.
+    transport.simulateDrop('CDP connection closed', false);
+    await tick();
+    transport.simulateReconnect();
+    await tick();
+    transport.sentCommands.length = 0;
+
+    // A session BrowserAPI attached for its own per-tab work, on the same tab.
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'foreign-1',
+      targetInfo: { targetId: 'tab-x', type: 'page', url: 'https://ex.com/x' },
+    });
+    await tick();
+
+    // Enabling Page/Network on a session we do not own is the event
+    // amplification #2417 set out to remove.
+    expect(transport.sentCommands.filter((c) => c.sessionId === 'foreign-1')).toEqual([]);
+  });
+
+  it('stops following the transport after stop()', async () => {
+    await watcher.start();
+    await watcher.stop();
+    transport.sentCommands.length = 0;
+
+    transport.simulateDrop();
+    await tick();
+    transport.simulateReconnect();
+    await tick();
+
+    expect(transport.sentCommands.map((c) => c.method)).not.toContain('Target.setDiscoverTargets');
+  });
+
+  it('stays armed when re-enabling discovery fails, and recovers on the next reconnect', async () => {
+    await watcher.start();
+    transport.simulateDrop();
+    await tick();
+
+    const realSend = transport.send.bind(transport);
+    let failNext = true;
+    transport.send = async (method, params, sessionId) => {
+      if (failNext && method === 'Target.setDiscoverTargets') {
+        failNext = false;
+        throw new Error('transient CDP failure');
+      }
+      return realSend(method, params, sessionId);
+    };
+
+    transport.simulateReconnect();
+    await tick();
+    transport.sentCommands.length = 0;
+
+    transport.simulateReconnect();
+    await tick();
+    expect(transport.sentCommands.map((c) => c.method)).toContain('Target.setDiscoverTargets');
   });
 });

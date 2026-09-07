@@ -182,6 +182,10 @@ export class NavigationWatcher {
   private readonly onEvent: NavigationEventHandler;
   private readonly sessions = new Map<string, SessionState>();
   private started = false;
+  /** Unsubscribe for the transport state subscription, when the transport has one. */
+  private unsubscribeState: (() => void) | null = null;
+  /** Guards against overlapping re-arms if `connected` fires twice in a row. */
+  private rearming = false;
 
   private readonly onDiscovery?: DiscoveryEventHandler;
   private readonly probeFetch?: ProbeFetch;
@@ -282,6 +286,21 @@ export class NavigationWatcher {
     this.maybeRunDiscovery(url, links, state.targetId);
   };
 
+  /**
+   * The watcher's whole CDP event surface, as a table. Declared after the
+   * handlers so the field initializers above have run; arming and disarming
+   * are then one loop each instead of a wall of `on`/`off` calls repeated at
+   * three sites.
+   */
+  private readonly eventBindings: ReadonlyArray<readonly [string, CDPEventListener]> = [
+    ['Target.attachedToTarget', this.onAttachedToTarget],
+    ['Target.detachedFromTarget', this.onDetachedFromTarget],
+    ['Target.targetInfoChanged', this.onTargetInfoChanged],
+    ['Target.targetCreated', this.onTargetCreated],
+    ['Page.frameNavigated', this.onFrameNavigated],
+    ['Network.responseReceived', this.onResponseReceived],
+  ];
+
   constructor(
     transport: CDPTransport,
     onEvent: NavigationEventHandler,
@@ -352,40 +371,58 @@ export class NavigationWatcher {
 
     // Register listeners before enabling discovery so events fired as a
     // side effect are captured.
-    this.transport.on('Target.attachedToTarget', this.onAttachedToTarget);
-    this.transport.on('Target.detachedFromTarget', this.onDetachedFromTarget);
-    this.transport.on('Target.targetInfoChanged', this.onTargetInfoChanged);
-    this.transport.on('Target.targetCreated', this.onTargetCreated);
-    this.transport.on('Page.frameNavigated', this.onFrameNavigated);
-    this.transport.on('Network.responseReceived', this.onResponseReceived);
+    this.registerListeners();
 
-    try {
-      // Use target discovery + manual attach instead of setAutoAttach.
-      // Auto-attach with `waitForDebuggerOnStart` causes Chrome to pause
-      // both the new target's JS and surface a "debugger paused in
-      // another tab" banner on the opener, which freezes OAuth flows
-      // mid-redirect. Manual `Target.attachToTarget` (without enabling
-      // the `Debugger` domain — we only enable `Page` and `Network`)
-      // does NOT pause anything, so we can safely attach to every
-      // page target regardless of whether it has an `openerId`.
-      await this.transport.send('Target.setDiscoverTargets', { discover: true });
-    } catch (err) {
-      log.error('Failed to enable target discovery', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (!(await this.enableDiscovery())) {
       // Tear down listeners so a later start() can retry cleanly.
-      this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
-      this.transport.off('Target.detachedFromTarget', this.onDetachedFromTarget);
-      this.transport.off('Target.targetInfoChanged', this.onTargetInfoChanged);
-      this.transport.off('Target.targetCreated', this.onTargetCreated);
-      this.transport.off('Page.frameNavigated', this.onFrameNavigated);
-      this.transport.off('Network.responseReceived', this.onResponseReceived);
+      this.unregisterListeners();
       return;
     }
 
     this.started = true;
+    this.subscribeTransportState();
+    await this.enumeratePreexistingTargets();
+  }
 
-    // Pick up pages that were already open before we started.
+  /** `off` before `on` so re-arming after a reset cannot double-register. */
+  private registerListeners(): void {
+    for (const [event, listener] of this.eventBindings) {
+      this.transport.off(event, listener);
+      this.transport.on(event, listener);
+    }
+  }
+
+  private unregisterListeners(): void {
+    for (const [event, listener] of this.eventBindings) this.transport.off(event, listener);
+  }
+
+  /**
+   * Turn on target discovery for the current connection. Returns false when
+   * the command failed, so the caller can decide whether to unwind (initial
+   * start) or leave the watcher armed for the next reconnect.
+   *
+   * Use target discovery + manual attach instead of setAutoAttach. Auto-attach
+   * with `waitForDebuggerOnStart` causes Chrome to pause both the new target's
+   * JS and surface a "debugger paused in another tab" banner on the opener,
+   * which freezes OAuth flows mid-redirect. Manual `Target.attachToTarget`
+   * (without enabling the `Debugger` domain — we only enable `Page` and
+   * `Network`) does NOT pause anything, so we can safely attach to every page
+   * target regardless of whether it has an `openerId`.
+   */
+  private async enableDiscovery(): Promise<boolean> {
+    try {
+      await this.transport.send('Target.setDiscoverTargets', { discover: true });
+      return true;
+    } catch (err) {
+      log.error('Failed to enable target discovery', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /** Pick up pages that were already open before we (re)armed. */
+  private async enumeratePreexistingTargets(): Promise<void> {
     try {
       const result = (await this.transport.send('Target.getTargets')) as TargetGetTargetsResult;
       const infos = result.targetInfos ?? [];
@@ -404,6 +441,61 @@ export class NavigationWatcher {
   }
 
   /**
+   * Follow the transport across an upstream reset (issue #2417).
+   *
+   * `Target.setDiscoverTargets`, the sessions this watcher attached, and the
+   * `Page`/`Network` domains enabled on them are all CONNECTION-scoped: a
+   * replacement Chrome socket has none of them, and re-registering JS event
+   * listeners does not bring them back. Without this the watcher sits at
+   * `started = true` holding sessions Chrome has already discarded, handoff /
+   * ARD discovery stops after the first reset, and a leftover entry in
+   * `pendingAttachTargetIds` can make a later foreign `BrowserAPI` session look
+   * watcher-owned (which re-enables `Page`/`Network` on it and re-opens the
+   * event-amplification leak).
+   *
+   * A transport with no `onStateChange` (cherry, synthetic, panel-RPC) keeps
+   * today's behaviour: nothing tells the watcher, so nothing changes.
+   */
+  private subscribeTransportState(): void {
+    if (this.unsubscribeState) return;
+    this.unsubscribeState =
+      this.transport.onStateChange?.((state) => {
+        if (state === 'disconnected') {
+          this.clearConnectionScopedState();
+          return;
+        }
+        if (state === 'connected') void this.rearmAfterReconnect();
+      }) ?? null;
+  }
+
+  /** Drop everything that lived on the connection that just went away. */
+  private clearConnectionScopedState(): void {
+    this.sessions.clear();
+    this.pendingAttachTargetIds.clear();
+    this.ownSessionIds.clear();
+  }
+
+  /**
+   * Clean internal restart on the replacement connection: re-arm the JS
+   * listeners (a transport's `disconnect()` may have cleared them), re-enable
+   * discovery, and re-enumerate the targets that are open right now.
+   */
+  private async rearmAfterReconnect(): Promise<void> {
+    if (!this.started || this.rearming) return;
+    this.rearming = true;
+    try {
+      // Belt and braces: a reset that arrived without a 'disconnected'
+      // notification would otherwise leave stale ids behind.
+      this.clearConnectionScopedState();
+      this.registerListeners();
+      if (!(await this.enableDiscovery())) return; // stay armed; the next reconnect retries
+      await this.enumeratePreexistingTargets();
+    } finally {
+      this.rearming = false;
+    }
+  }
+
+  /**
    * Stop observing and release all listeners.
    *
    * Best-effort: also disables `Target.setAutoAttach` and
@@ -414,15 +506,10 @@ export class NavigationWatcher {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
-    this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
-    this.transport.off('Target.detachedFromTarget', this.onDetachedFromTarget);
-    this.transport.off('Target.targetInfoChanged', this.onTargetInfoChanged);
-    this.transport.off('Target.targetCreated', this.onTargetCreated);
-    this.transport.off('Page.frameNavigated', this.onFrameNavigated);
-    this.transport.off('Network.responseReceived', this.onResponseReceived);
-    this.sessions.clear();
-    this.pendingAttachTargetIds.clear();
-    this.ownSessionIds.clear();
+    this.unsubscribeState?.();
+    this.unsubscribeState = null;
+    this.unregisterListeners();
+    this.clearConnectionScopedState();
 
     try {
       await this.transport.send('Target.setDiscoverTargets', { discover: false });
