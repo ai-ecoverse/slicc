@@ -3,7 +3,7 @@
 Drives the unmodified SLICC client stack (`BrowserAPI` → `WorkerCdpProxy` →
 page `CDPClient` → `/cdp`) from Node against a real headless Chrome, with a
 local test site and a stand-in `/cdp` proxy that reproduces node-server and
-swift-server behaviour. Findings and fix plan: [ai-ecoverse/slicc#2417](https://github.com/ai-ecoverse/slicc/issues/2417).
+swift-server behaviour. Findings and fix plan: [ai-ecoverse/slicc#2417](https://github.com/ai-ecoverse/slicc/issues/2417#issuecomment-5567295502).
 
 Requires Chrome on this machine (`findChromeExecutable()` from the node-server
 launcher, override with `CHROME_BIN`) and `npm install` in the repo.

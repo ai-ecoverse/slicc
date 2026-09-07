@@ -93,7 +93,8 @@
         "**/index.html",
         "**/shims/**",
         "packages/*/src/**/*.test.ts",
-        "packages/webcomponents/**"
+        "packages/webcomponents/**",
+        "packages/dev-tools/**"
       ]
     },
     "cherry": {

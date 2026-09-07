@@ -48,6 +48,13 @@ const baseCoverageExclude = [
   '**/index.html',
   '**/shims/**',
   'packages/*/src/**/*.test.ts',
+  // Dev tooling is not product code. The live-browser stress gate
+  // (packages/webapp/tests/cdp/cdp-stress.gate.test.ts) imports
+  // packages/dev-tools/cdp-stress at module scope, so it loads — and would be
+  // reported — even while the gates are skipped. `coverage-gate.mjs` replaces
+  // this list wholesale from coverage-thresholds.json, so the webapp entry
+  // there carries the same exclusion.
+  'packages/dev-tools/**',
 ];
 
 export default defineConfig({

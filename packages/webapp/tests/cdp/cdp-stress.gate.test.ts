@@ -2,7 +2,8 @@
  * Live-browser gates for the CDP bridge stress harness
  * (`packages/dev-tools/cdp-stress/`).
  *
- * Each `it` turns one row of the harness's `DIAGNOSIS.md` § Validation table
+ * Each `it` turns one row of the Validation table in the #2417 diagnosis
+ * (https://github.com/ai-ecoverse/slicc/issues/2417#issuecomment-5567295502)
  * into an assertion, at the thresholds stated there. The scenarios stay
  * runnable standalone for exploration — this file only pins the pass criteria.
  *
@@ -11,9 +12,9 @@
  * real Chrome, so it is opt-in. Unlike that suite it deliberately does NOT
  * enable itself on `CI`: on today's `main` these gates FAIL by design — they
  * describe the bridge's behaviour AFTER the per-tab session registry and
- * per-tab locking land (DIAGNOSIS.md § Phase 1/2). Once the fixes are in, flip
- * this on by adding `Boolean(process.env['CI'])` to `stressEnabled` below, the
- * same shape the iframe suite uses.
+ * per-tab locking land (that diagnosis' Phase 1/2). Once the fixes are in,
+ * flip this on by adding `Boolean(process.env['CI'])` to `stressEnabled`
+ * below, the same shape the iframe suite uses.
  *
  * Locally:  SLICC_TEST_CDP_STRESS=1 npx vitest run packages/webapp/tests/cdp/cdp-stress.gate.test.ts
  */
@@ -36,7 +37,7 @@ const describeStress = chromeBinary() && stressEnabled ? describe : describe.ski
 const CDP_TIMEOUT_MS = 8000;
 const NO_TIMEOUT_MS = 5000;
 
-/** Sliding-window bounds for the "cumulative lock wait ~ 0" gate. */
+/** Bounds for the "cumulative lock wait ~ 0 across distinct tabs" gate. */
 const MAX_LOCK_WAIT_P95_MS = 250;
 const MAX_LOCK_WAIT_TOTAL_MS = 2000;
 
