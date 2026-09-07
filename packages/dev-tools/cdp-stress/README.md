@@ -51,9 +51,12 @@ Environment knobs:
 - `site.ts` — local HTTP site: `/page/<name>?delay=&subdelay=&items=`,
   `/reloader?every=`, `/hang`, `/console?n=`.
 - `proxy.ts` — single-client `/cdp` relay; `policy: 'node' | 'swift'` model the shipped
-  proxies (reconnect the Chrome leg, then close the client with 4002 `upstream-reset`),
-  `'legacy-swift'` reconnects silently, `'legacy-node'` never reconnects; `dropChromeLeg()`,
-  `killClient()`, `evictClient()`.
+  proxies, which now share ONE policy: reconnect the Chrome leg every 1 s indefinitely,
+  DISCARD frames buffered under a Chrome/client generation that no longer matches, close
+  the client with 4002 `upstream-reset` once the leg is back and after the 3rd consecutive
+  failed attempt, and never leave a clientless buffer around (frames buffered before Chrome
+  was ever up still flush). `'legacy-swift'` reconnects silently, `'legacy-node'` never
+  reconnects; `dropChromeLeg()`, `killClient()`, `evictClient()`.
 - `stack.ts` — builds the real client stack from `packages/webapp/src`, wraps
   the transport with counters (sends by method, inbound events by method, burst
   window), optional `NavigationWatcher`.
