@@ -3,7 +3,12 @@ import { gzipSync } from 'fflate';
 import type { SecureFetch } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { installPackage } from '../../../src/shell/ipk/installer.js';
+import { GLOBAL_NODE_MODULES, GLOBAL_PACKAGE_JSON } from '../../../src/shell/ipk/global-prefix.js';
+import {
+  installPackage,
+  installPackages,
+  uninstallPackages,
+} from '../../../src/shell/ipk/installer.js';
 
 /** just-bash does not re-export SecureFetchOptions from its root entry. */
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
@@ -278,6 +283,198 @@ describe('installPackage (single-package path)', () => {
     expect(merged.dependencies['pre-existing']).toBe('^1.0.0');
     expect(merged.dependencies['is-number']).toBeDefined();
     expect(merged.devDependencies['dev-pre']).toBe('^2.0.0');
+  });
+
+  it('updates an existing devDependencies entry in place and does not duplicate it under dependencies (#2925)', async () => {
+    const reg = makeRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile(
+      '/work/package.json',
+      JSON.stringify(
+        { name: 'ipk-repro', version: '1.0.0', devDependencies: { eslint: '8.57.1' } },
+        null,
+        2
+      )
+    );
+
+    const result = await installPackage('eslint', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    expect(result.ok).toBe(true);
+    expect(result.version).toBe('8.57.1');
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/eslint/package.json')) as string
+    );
+    expect(installed.version).toBe('8.57.1');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies).toEqual({ eslint: '8.57.1' });
+    expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  it('records --save-dev installs under devDependencies', async () => {
+    const reg = makeRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    const result = await installPackage('eslint', {
+      fs,
+      fetch: fakeFetch(reg),
+      cwd: '/work',
+      saveDev: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.version).toBe('10.10.0');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies.eslint).toMatch(/10\.10\.0/);
+    expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  it('moves a production dependency into devDependencies when saveDev is set', async () => {
+    const reg = makeRegistry([{ name: 'left-pad', version: '1.3.0' }]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile(
+      '/work/package.json',
+      JSON.stringify({ name: 'demo', dependencies: { 'left-pad': '^1.0.0' } }, null, 2)
+    );
+    const result = await installPackage('left-pad', {
+      fs,
+      fetch: fakeFetch(reg),
+      cwd: '/work',
+      saveDev: true,
+    });
+    expect(result.ok).toBe(true);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies['left-pad']).toMatch(/1\./);
+    expect(root.dependencies?.['left-pad']).toBeUndefined();
+  });
+
+  it('updates optionalDependencies and peerDependencies in place', async () => {
+    const reg = makeRegistry([
+      { name: 'opt-pkg', version: '1.0.0' },
+      { name: 'opt-pkg', version: '2.0.0' },
+      { name: 'peer-pkg', version: '1.0.0' },
+      { name: 'peer-pkg', version: '2.0.0' },
+    ]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile(
+      '/work/package.json',
+      JSON.stringify(
+        {
+          name: 'demo',
+          optionalDependencies: { 'opt-pkg': '1.0.0' },
+          peerDependencies: { 'peer-pkg': '1.0.0' },
+        },
+        null,
+        2
+      )
+    );
+    const out = await installPackages(['opt-pkg', 'peer-pkg'], {
+      fs,
+      fetch: fakeFetch(reg),
+      cwd: '/work',
+    });
+    expect(out.errors).toEqual([]);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.optionalDependencies['opt-pkg']).toBe('1.0.0');
+    expect(root.peerDependencies['peer-pkg']).toBe('1.0.0');
+    expect(root.dependencies?.['opt-pkg']).toBeUndefined();
+    expect(root.dependencies?.['peer-pkg']).toBeUndefined();
+    const opt = JSON.parse(
+      (await fs.readFile('/work/node_modules/opt-pkg/package.json')) as string
+    );
+    const peer = JSON.parse(
+      (await fs.readFile('/work/node_modules/peer-pkg/package.json')) as string
+    );
+    expect(opt.version).toBe('1.0.0');
+    expect(peer.version).toBe('1.0.0');
+  });
+
+  it('uninstall of an unrelated dependency keeps optional and peer packages on disk', async () => {
+    const reg = makeRegistry([
+      { name: 'keep-opt', version: '1.0.0' },
+      { name: 'keep-peer', version: '1.0.0' },
+      { name: 'drop-me', version: '1.0.0' },
+    ]);
+    const fetch = fakeFetch(reg);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile(
+      '/work/package.json',
+      JSON.stringify(
+        {
+          name: 'demo',
+          dependencies: { 'drop-me': '1.0.0' },
+          optionalDependencies: { 'keep-opt': '1.0.0' },
+          peerDependencies: { 'keep-peer': '1.0.0' },
+        },
+        null,
+        2
+      )
+    );
+    const installed = await installPackages(['keep-opt', 'keep-peer', 'drop-me'], {
+      fs,
+      fetch,
+      cwd: '/work',
+    });
+    expect(installed.errors).toEqual([]);
+    const removed = await uninstallPackages(['drop-me'], { fs, fetch, cwd: '/work' });
+    expect(removed.errors).toEqual([]);
+    expect(await fs.exists('/work/node_modules/keep-opt/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/keep-peer/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/drop-me')).toBe(false);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.optionalDependencies['keep-opt']).toBe('1.0.0');
+    expect(root.peerDependencies['keep-peer']).toBe('1.0.0');
+    expect(root.dependencies?.['drop-me']).toBeUndefined();
+  });
+
+  it('a later global install keeps a prior -g -D package instead of pruning it', async () => {
+    const reg = makeRegistry([
+      { name: 'dev-cli', version: '1.0.0' },
+      { name: 'prod-cli', version: '1.0.0' },
+    ]);
+    const fetch = fakeFetch(reg);
+    const first = await installPackage('dev-cli', {
+      fs,
+      fetch,
+      cwd: '/work',
+      global: true,
+      saveDev: true,
+    });
+    expect(first.ok).toBe(true);
+    const second = await installPackage('prod-cli', { fs, fetch, cwd: '/tmp/other', global: true });
+    expect(second.ok).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/dev-cli/package.json`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/prod-cli/package.json`)).toBe(true);
+    const globalManifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(globalManifest.devDependencies['dev-cli']).toBeDefined();
+    expect(globalManifest.dependencies['prod-cli']).toBeDefined();
+    expect(globalManifest.dependencies?.['dev-cli']).toBeUndefined();
+  });
+
+  it('heals a duplicate dependencies+devDependencies declaration by keeping devDependencies', async () => {
+    const reg = makeRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile(
+      '/work/package.json',
+      JSON.stringify(
+        {
+          name: 'ipk-repro',
+          devDependencies: { eslint: '8.57.1' },
+          dependencies: { eslint: '^10.10.0' },
+        },
+        null,
+        2
+      )
+    );
+    const result = await installPackage('eslint', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    expect(result.version).toBe('8.57.1');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies).toEqual({ eslint: '8.57.1' });
+    expect(root.dependencies?.eslint).toBeUndefined();
   });
 
   it('installs an exact version pin', async () => {

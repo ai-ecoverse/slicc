@@ -409,6 +409,13 @@ global prefix at `/shared/lib/node_modules`, records direct dependencies in
 global executable wins even when the invoking cwd has a same-named local package).
 Local project installs are unchanged: without `-g`,
 packages still land in `<cwd>/node_modules` and update the nearest project
+`package.json`. Named installs write to the section the package already occupies
+(`dependencies`, `devDependencies`, `optionalDependencies`, or `peerDependencies`)
+instead of always adding a `dependencies` entry. `-D` / `--save-dev` records new
+packages in `devDependencies`. A bare `ipk install <pkg>` that is already
+declared is resolved against that existing range, not latest. Unknown install
+flags are rejected (`ipk: unknown flag: --x`) rather than dropped. The no-arg
+form (`ipk install`) still installs declared ranges without rewriting
 `package.json`. Module resolution and `ipx`/`npx` also search the global tree after
 the cwd-relative `node_modules` walk.
 

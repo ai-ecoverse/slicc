@@ -8,7 +8,8 @@
  * dependent's own `node_modules`), creates `node_modules/.bin` shims for every
  * declared bin (direct AND transitive) without leaving phantom entries for
  * bin-less packages, and records only the directly-requested packages in the
- * project `package.json` (transitive dependencies are NOT promoted).
+ * package.json section they already occupy (or `devDependencies` with
+ * `--save-dev`). Transitive dependencies are NOT promoted.
  *
  * Pure and individually testable: takes an injected `SecureFetch` and
  * `VirtualFS`, so it works in the worker realm across all floats and
@@ -38,6 +39,8 @@ export interface InstallOptions {
   timeoutMs?: number;
   /** Install into `/shared/lib/node_modules` instead of `<cwd>/node_modules`. */
   global?: boolean;
+  /** Record named installs in `devDependencies` (npm `--save-dev` / `-D`). */
+  saveDev?: boolean;
 }
 
 export interface InstallResult {
@@ -164,7 +167,86 @@ interface ProjectManifest {
   version?: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
   [key: string]: unknown;
+}
+
+type DependencySection =
+  | 'dependencies'
+  | 'devDependencies'
+  | 'optionalDependencies'
+  | 'peerDependencies';
+
+const DEPENDENCY_SECTIONS: readonly DependencySection[] = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+];
+
+function bagHasName(
+  bag: Record<string, string> | undefined,
+  name: string
+): bag is Record<string, string> {
+  return bag !== undefined && Object.hasOwn(bag, name);
+}
+
+/**
+ * Section a named install should update. Prefer the more specific existing
+ * section so a package already in `devDependencies` is not duplicated under
+ * `dependencies` (#2925). `--save-dev` always targets `devDependencies`.
+ */
+function chooseSaveSection(
+  manifest: ProjectManifest,
+  name: string,
+  saveDev: boolean
+): DependencySection {
+  if (saveDev) return 'devDependencies';
+  if (bagHasName(manifest.devDependencies, name)) return 'devDependencies';
+  if (bagHasName(manifest.optionalDependencies, name)) return 'optionalDependencies';
+  if (bagHasName(manifest.peerDependencies, name)) return 'peerDependencies';
+  return 'dependencies';
+}
+
+function declaredRange(manifest: ProjectManifest, name: string): string | undefined {
+  const section = chooseSaveSection(manifest, name, false);
+  const range = manifest[section]?.[name];
+  return typeof range === 'string' && range.trim() !== '' ? range : undefined;
+}
+
+function applyDeclaredRange(parsed: ParsedSpec, manifest: ProjectManifest): ParsedSpec {
+  if (parsed.range.trim() !== '') return parsed;
+  const existing = declaredRange(manifest, parsed.name);
+  if (existing === undefined) return parsed;
+  return { name: parsed.name, range: existing };
+}
+
+function writeDirectDependencies(
+  existing: ProjectManifest,
+  entries: Array<{ name: string; range: string; section: DependencySection }>
+): ProjectManifest {
+  const bags: Record<DependencySection, Record<string, string>> = {
+    dependencies: { ...(existing.dependencies ?? {}) },
+    devDependencies: { ...(existing.devDependencies ?? {}) },
+    optionalDependencies: { ...(existing.optionalDependencies ?? {}) },
+    peerDependencies: { ...(existing.peerDependencies ?? {}) },
+  };
+  const written = new Set<DependencySection>();
+  for (const entry of entries) {
+    for (const section of DEPENDENCY_SECTIONS) {
+      delete bags[section][entry.name];
+    }
+    bags[entry.section][entry.name] = entry.range;
+    written.add(entry.section);
+  }
+  const next: ProjectManifest = { ...existing };
+  for (const section of DEPENDENCY_SECTIONS) {
+    if (existing[section] !== undefined || written.has(section)) {
+      next[section] = bags[section];
+    }
+  }
+  return next;
 }
 
 interface InstalledPackageManifest {
@@ -195,7 +277,8 @@ interface ResolvedDirect {
 
 async function stageResolveRoots(
   specs: string[],
-  supplier: PackumentSupplier
+  supplier: PackumentSupplier,
+  existingManifest?: ProjectManifest
 ): Promise<{ directs: ResolvedDirect[]; errors: InstallFailure[] }> {
   const directs: ResolvedDirect[] = [];
   const errors: InstallFailure[] = [];
@@ -208,6 +291,9 @@ async function stageResolveRoots(
     } catch (err) {
       errors.push({ spec, error: toError(err) });
       continue;
+    }
+    if (existingManifest) {
+      parsed = applyDeclaredRange(parsed, existingManifest);
     }
     if (seen.has(parsed.name)) {
       // Later specs for the same name override earlier ones.
@@ -483,16 +569,11 @@ async function reconcileRootBinShims(fs: VirtualFS, modulesDir: string): Promise
 async function recordDirectDependencies(
   fs: VirtualFS,
   cwd: string,
-  entries: Array<{ name: string; range: string }>
+  entries: Array<{ name: string; range: string; section: DependencySection }>
 ): Promise<string> {
   const manifestPath = joinPath(cwd, 'package.json');
   const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const next: ProjectManifest = { ...existing };
-  const deps = { ...(existing.dependencies ?? {}) };
-  for (const entry of entries) {
-    deps[entry.name] = entry.range;
-  }
-  next.dependencies = deps;
+  const next = writeDirectDependencies(existing, entries);
   await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
   return manifestPath;
 }
@@ -501,22 +582,32 @@ export async function installPackages(
   specs: string[],
   options: InstallOptions
 ): Promise<InstallPackagesResult> {
-  const { fs, fetch, cwd, timeoutMs, global: globalInstall = false } = options;
+  const { fs, fetch, cwd, timeoutMs, global: globalInstall = false, saveDev = false } = options;
   if (specs.length === 0) {
     return { results: [], errors: [] };
   }
 
+  const manifestRoot = globalInstall ? GLOBAL_NPM_PREFIX : cwd;
+  const existingManifest = await readJsonOr<ProjectManifest>(
+    fs,
+    joinPath(manifestRoot, 'package.json'),
+    {}
+  );
+
   const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
-  const { directs, errors: stageErrors } = await stageResolveRoots(specs, supplier);
+  const { directs, errors: stageErrors } = await stageResolveRoots(
+    specs,
+    supplier,
+    existingManifest
+  );
   if (directs.length === 0) {
     return { results: [], errors: stageErrors };
   }
 
   const rootDependencies: Record<string, string> = {};
   if (globalInstall) {
-    const existingGlobal = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
-    for (const [name, range] of Object.entries(existingGlobal.dependencies ?? {})) {
-      rootDependencies[name] = range;
+    for (const entry of collectManagedEntries(existingManifest)) {
+      rootDependencies[entry.name] = entry.range;
     }
   }
   for (const direct of directs) {
@@ -544,9 +635,12 @@ export async function installPackages(
   const records = directs.map((d) => {
     const node = plan.root[d.parsed.name];
     if (!node) throw new Error(`installer: resolved node missing for ${d.parsed.name}`);
-    return { name: d.parsed.name, range: chooseSavedRange(d.parsed, node.version) };
+    return {
+      name: d.parsed.name,
+      range: chooseSavedRange(d.parsed, node.version),
+      section: chooseSaveSection(existingManifest, d.parsed.name, saveDev),
+    };
   });
-  const manifestRoot = globalInstall ? GLOBAL_NPM_PREFIX : cwd;
   const manifestPath = await recordDirectDependencies(fs, manifestRoot, records);
 
   const results: InstallResult[] = directs.map((d) => {
@@ -597,24 +691,41 @@ interface ManifestEntry {
   range: string;
 }
 
+function addNamedRanges(
+  combined: Map<string, string>,
+  bag: Record<string, string> | undefined
+): void {
+  if (!bag || typeof bag !== 'object') return;
+  for (const [name, range] of Object.entries(bag)) {
+    if (typeof name === 'string' && typeof range === 'string') {
+      combined.set(name, range);
+    }
+  }
+}
+
+/**
+ * No-arg `ipk install` still reads only dependencies + devDependencies so that
+ * path stays non-destructive and does not start installing optional/peer.
+ * Later bags overwrite earlier ones (dependencies win over devDependencies).
+ */
 function collectManifestEntries(manifest: ProjectManifest): ManifestEntry[] {
   const combined = new Map<string, string>();
-  const devDeps = manifest.devDependencies;
-  if (devDeps && typeof devDeps === 'object') {
-    for (const [name, range] of Object.entries(devDeps)) {
-      if (typeof name === 'string' && typeof range === 'string') {
-        combined.set(name, range);
-      }
-    }
-  }
-  const deps = manifest.dependencies;
-  if (deps && typeof deps === 'object') {
-    for (const [name, range] of Object.entries(deps)) {
-      if (typeof name === 'string' && typeof range === 'string') {
-        combined.set(name, range);
-      }
-    }
-  }
+  addNamedRanges(combined, manifest.devDependencies);
+  addNamedRanges(combined, manifest.dependencies);
+  return Array.from(combined.entries()).map(([name, range]) => ({ name, range }));
+}
+
+/**
+ * Direct ranges for tree planning and listing: every section named installs
+ * may write to. Preference matches `chooseSaveSection` (dev > optional >
+ * peer > dependencies) so a later bag overwrites an earlier one.
+ */
+function collectManagedEntries(manifest: ProjectManifest): ManifestEntry[] {
+  const combined = new Map<string, string>();
+  addNamedRanges(combined, manifest.dependencies);
+  addNamedRanges(combined, manifest.peerDependencies);
+  addNamedRanges(combined, manifest.optionalDependencies);
+  addNamedRanges(combined, manifest.devDependencies);
   return Array.from(combined.entries()).map(([name, range]) => ({ name, range }));
 }
 
@@ -683,20 +794,24 @@ export async function installFromManifest(
 }
 
 function packageListedInManifest(manifest: ProjectManifest, name: string): boolean {
-  return name in (manifest.dependencies ?? {}) || name in (manifest.devDependencies ?? {});
+  return DEPENDENCY_SECTIONS.some((section) => bagHasName(manifest[section], name));
 }
 
 function manifestWithoutPackages(
   manifest: ProjectManifest,
   names: ReadonlySet<string>
 ): ProjectManifest {
-  const dependencies = { ...(manifest.dependencies ?? {}) };
-  const devDependencies = { ...(manifest.devDependencies ?? {}) };
-  for (const name of names) {
-    delete dependencies[name];
-    delete devDependencies[name];
+  const next: ProjectManifest = { ...manifest };
+  for (const section of DEPENDENCY_SECTIONS) {
+    const bag = { ...(manifest[section] ?? {}) };
+    for (const name of names) {
+      delete bag[name];
+    }
+    if (manifest[section] !== undefined) {
+      next[section] = bag;
+    }
   }
-  return { ...manifest, dependencies, devDependencies };
+  return next;
 }
 
 async function writeManifest(
@@ -758,7 +873,7 @@ export async function syncGlobalInstallTree(
 ): Promise<void> {
   const manifest =
     manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {}));
-  const entries = collectManifestEntries(manifest);
+  const entries = collectManagedEntries(manifest);
 
   if (entries.length === 0) {
     await removeIfExists(fs, GLOBAL_NODE_MODULES);
@@ -863,7 +978,7 @@ async function syncLocalInstallTree(
 ): Promise<void> {
   const manifestPath = joinPath(cwd, 'package.json');
   const manifest = manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, manifestPath, {}));
-  const entries = collectManifestEntries(manifest);
+  const entries = collectManagedEntries(manifest);
   const modulesDir = joinPath(cwd, 'node_modules');
 
   if (entries.length === 0) {
@@ -895,16 +1010,15 @@ export interface GlobalPackageListing {
 
 export async function listGlobalPackages(fs: VirtualFS): Promise<GlobalPackageListing[]> {
   const manifest = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
-  const deps = manifest.dependencies ?? {};
+  const entries = collectManagedEntries(manifest);
   const out: GlobalPackageListing[] = [];
-  for (const [name, range] of Object.entries(deps)) {
-    if (typeof name !== 'string' || typeof range !== 'string') continue;
-    const installedPath = joinPath(packageDirIn(GLOBAL_NODE_MODULES, name), 'package.json');
+  for (const entry of entries) {
+    const installedPath = joinPath(packageDirIn(GLOBAL_NODE_MODULES, entry.name), 'package.json');
     const installed = await readJsonOr<{ version?: string }>(fs, installedPath, {});
     out.push({
-      name,
+      name: entry.name,
       version: typeof installed.version === 'string' ? installed.version : '?',
-      range,
+      range: entry.range,
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -918,7 +1032,7 @@ export async function listLocalPackages(
   const manifestPath = joinPath(cwd, 'package.json');
   if (!(await fs.exists(manifestPath))) return [];
   const manifest = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const entries = collectManifestEntries(manifest);
+  const entries = collectManagedEntries(manifest);
   const modulesDir = joinPath(cwd, 'node_modules');
   const out: GlobalPackageListing[] = [];
   for (const entry of entries) {

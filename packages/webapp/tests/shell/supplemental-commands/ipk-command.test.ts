@@ -250,6 +250,114 @@ describe('createIpkCommand', () => {
     expect(root.dependencies['is-number']).toBeDefined();
   });
 
+  it('ipk install of a package already in devDependencies updates that section in place (#2925)', async () => {
+    const reg = buildRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    await fs.writeFile(
+      '/work/package.json',
+      `${JSON.stringify({ name: 'ipk-repro', version: '1.0.0', devDependencies: { eslint: '8.57.1' } }, null, 2)}\n`
+    );
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', 'eslint'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/eslint/package.json')) as string
+    );
+    expect(installed.version).toBe('8.57.1');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies).toEqual({ eslint: '8.57.1' });
+    expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  it('npm install --save-dev writes the package to devDependencies', async () => {
+    const reg = buildRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '--save-dev', 'eslint@8.57.1'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/eslint/package.json')) as string
+    );
+    expect(installed.version).toBe('8.57.1');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies.eslint).toBe('8.57.1');
+    expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  it('ipk install -D writes the package to devDependencies', async () => {
+    const reg = buildRegistry([{ name: 'eslint', version: '8.57.1' }]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-D', 'eslint'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.devDependencies.eslint).toBeDefined();
+    expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  it('unknown install flags error instead of being dropped', async () => {
+    const reg = buildRegistry([{ name: 'eslint', version: '8.57.1' }]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '--legacy-peer-deps', 'eslint'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/unknown flag: --legacy-peer-deps/);
+    expect(await fs.exists('/work/node_modules/eslint')).toBe(false);
+    expect(await fs.exists('/work/package.json')).toBe(false);
+  });
+
+  it('npm install rejects unknown flags the same way', async () => {
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['install', '--save-exact', 'eslint'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/unknown flag: --save-exact/);
+  });
+
+  it('bare ipk install (no args) installs declared ranges and does not rewrite package.json', async () => {
+    const manifest = {
+      name: 'demo',
+      dependencies: { 'is-number': '^7.0.0' },
+      devDependencies: { 'is-odd': '^3.0.0' },
+    };
+    await fs.writeFile('/work/package.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    const reg = buildRegistry([
+      { name: 'is-number', version: '7.0.0' },
+      { name: 'is-odd', version: '3.0.1' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
+    expect(await fs.exists('/work/node_modules/is-odd/package.json')).toBe(true);
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root.dependencies).toEqual({ 'is-number': '^7.0.0' });
+    expect(root.devDependencies).toEqual({ 'is-odd': '^3.0.0' });
+  });
+
+  it('bare npm install is the same non-destructive no-arg path', async () => {
+    const manifest = {
+      name: 'demo',
+      devDependencies: { eslint: '8.57.1' },
+    };
+    await fs.writeFile('/work/package.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    const reg = buildRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'eslint', version: '10.10.0' },
+    ]);
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/eslint/package.json')) as string
+    );
+    expect(installed.version).toBe('8.57.1');
+    const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(root).toEqual(manifest);
+    expect(root.dependencies).toBeUndefined();
+  });
+
   it('installs multiple packages in one invocation', async () => {
     const reg = buildRegistry([
       { name: 'is-number', version: '7.0.0' },
@@ -348,6 +456,17 @@ describe('createIpkCommand', () => {
     const r = await cmd.execute(['--help'], ctxOf(fs) as never);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/install/i);
+    expect(r.stdout).toMatch(/--save-dev/);
+    expect(r.stdout).toMatch(/-D/);
+  });
+
+  it('npm --help lists --save-dev / -D', async () => {
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['--help'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('npm');
+    expect(r.stdout).toMatch(/--save-dev/);
+    expect(r.stdout).toMatch(/-D/);
   });
 
   it('prints clear error and exits non-zero when no subcommand is given', async () => {
@@ -496,12 +615,62 @@ describe('createIpkCommand', () => {
   });
 
   it('parseInstallArgs recognizes -g / --global and collects specs', () => {
-    expect(parseInstallArgs(['-g', 'left-pad'])).toEqual({ global: true, specs: ['left-pad'] });
+    expect(parseInstallArgs(['-g', 'left-pad'])).toEqual({
+      global: true,
+      saveDev: false,
+      specs: ['left-pad'],
+    });
     expect(parseInstallArgs(['--global', '@acme/util'])).toEqual({
       global: true,
+      saveDev: false,
       specs: ['@acme/util'],
     });
-    expect(parseInstallArgs(['is-number'])).toEqual({ global: false, specs: ['is-number'] });
+    expect(parseInstallArgs(['is-number'])).toEqual({
+      global: false,
+      saveDev: false,
+      specs: ['is-number'],
+    });
+    expect(parseInstallArgs(['--location=global', 'left-pad'])).toEqual({
+      global: true,
+      saveDev: false,
+      specs: ['left-pad'],
+    });
+  });
+
+  it('parseInstallArgs recognizes --save-dev / -D', () => {
+    expect(parseInstallArgs(['--save-dev', 'eslint'])).toEqual({
+      global: false,
+      saveDev: true,
+      specs: ['eslint'],
+    });
+    expect(parseInstallArgs(['-D', 'eslint@8.57.1'])).toEqual({
+      global: false,
+      saveDev: true,
+      specs: ['eslint@8.57.1'],
+    });
+    expect(parseInstallArgs(['eslint', '-D'])).toEqual({
+      global: false,
+      saveDev: true,
+      specs: ['eslint'],
+    });
+    expect(parseInstallArgs(['-g', '-D', 'say'])).toEqual({
+      global: true,
+      saveDev: true,
+      specs: ['say'],
+    });
+  });
+
+  it('parseInstallArgs rejects unknown install flags instead of dropping them', () => {
+    expect(parseInstallArgs(['--legacy-peer-deps', 'eslint'])).toEqual({
+      error: 'unknown flag: --legacy-peer-deps',
+    });
+    expect(parseInstallArgs(['--save-exact', 'eslint'])).toEqual({
+      error: 'unknown flag: --save-exact',
+    });
+    expect(parseInstallArgs(['-E', 'eslint'])).toEqual({ error: 'unknown flag: -E' });
+    expect(parseInstallArgs(['--location=user', 'eslint'])).toEqual({
+      error: 'unknown flag: --location=user',
+    });
   });
 
   it('ipk install -g installs into /shared/lib/node_modules, not cwd', async () => {
@@ -613,6 +782,27 @@ describe('createIpkCommand', () => {
       (await fs.readFile(`${GLOBAL_NODE_MODULES}/cli-b/node_modules/dep/package.json`)) as string
     );
     expect(depNested.version).toBe('3.0.0');
+  });
+
+  it('incremental global install after -g -D keeps the earlier devDependency', async () => {
+    const reg = buildRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'left-pad', version: '1.3.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const first = await cmd.execute(['install', '-g', '-D', 'eslint'], ctxOf(fs) as never);
+    expect(first.exitCode).toBe(0);
+    const second = await cmd.execute(['install', '-g', 'left-pad'], ctxOf(fs) as never);
+    expect(second.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/eslint/package.json`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/left-pad/package.json`)).toBe(true);
+    const globalManifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(globalManifest.devDependencies.eslint).toBeDefined();
+    expect(globalManifest.dependencies['left-pad']).toBeDefined();
+    const listed = await cmd.execute(['list', '-g'], ctxOf(fs) as never);
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toMatch(/eslint@/);
+    expect(listed.stdout).toMatch(/left-pad@/);
   });
 
   it('global upgrade prunes orphaned transitive bins from PATH', async () => {

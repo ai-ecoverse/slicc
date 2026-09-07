@@ -6,7 +6,9 @@
  * Supports both named installs (`ipk install <pkg>...`) and the no-arg
  * install-from-manifest path (`ipk install` with no further arguments), which
  * reads `dependencies` + `devDependencies` from the cwd `package.json` and
- * installs them via the transitive installer.
+ * installs them via the transitive installer. Named installs that already
+ * live in `devDependencies` (or optional/peer) update that section in place;
+ * `-D` / `--save-dev` writes new entries there. Unknown install flags error.
  *
  * Script running (`npm run <script>`, `npm run-script`, and the `npm test` /
  * `start` / `stop` / `restart` lifecycle shortcuts) lives in `npm-run.ts`.
@@ -27,6 +29,7 @@ import {
 } from '../ipk/installer.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -41,15 +44,16 @@ const INSTALL_ALIASES = new Set(['install', 'i', 'add']);
 const UNINSTALL_ALIASES = new Set(['uninstall', 'remove', 'rm', 'un']);
 const LIST_ALIASES = new Set(['list', 'ls']);
 const GLOBAL_INSTALL_FLAGS = new Set(['-g', '--global', '--location=global']);
+const INSTALL_BOOL_FLAGS = ['-g', '--global', '-D', '--save-dev'] as const;
 
 function usage(name: string): string {
   return `${name} - install packages from the npm registry into node_modules
        and run package.json scripts
 
 Usage:
-  ${name} install [<pkg>[@<spec>] ...]
+  ${name} install [-D|--save-dev] [<pkg>[@<spec>] ...]
   ${name} install -g <pkg>[@<spec>] ...
-  ${name} i       [<pkg>[@<spec>] ...]
+  ${name} i       [-D|--save-dev] [<pkg>[@<spec>] ...]
   ${name} run     [<script> [-- <args>...]]
   ${name} test | start | stop | restart
 
@@ -97,28 +101,54 @@ Spec forms:
 
 Options:
   -g, --global     install packages into the shared global prefix (/shared/lib)
+  -D, --save-dev   record named installs in devDependencies
   -h, --help       Show this help message
 
-Installed packages are extracted into <cwd>/node_modules and named installs
-are recorded in <cwd>/package.json under dependencies. With -g, packages go
-to /shared/lib/node_modules and deps are recorded in /shared/lib/package.json.
-Existing fields are preserved. Idempotent: re-installing an already-satisfied
-package is a clean no-op.
+Installed packages are extracted into <cwd>/node_modules. Named installs are
+recorded in the package.json section they already occupy (dependencies,
+devDependencies, optionalDependencies, or peerDependencies). New packages go
+under dependencies, or under devDependencies with -D / --save-dev. A bare
+name that is already declared is resolved against that existing range, not
+latest. Unknown install flags are rejected. The no-arg form reads the
+manifest without rewriting it. With -g, packages go to /shared/lib/node_modules
+and deps are recorded in /shared/lib/package.json. Existing fields are
+preserved. Idempotent: re-installing an already-satisfied package is a clean
+no-op.
 `;
 }
 
-export interface ParsedInstallArgs {
+export interface ParsedGlobalFlagArgs {
   global: boolean;
   specs: string[];
 }
 
-/** Split install flags from package specs (supports `-g` anywhere before specs). */
-export function parseInstallArgs(args: string[]): ParsedInstallArgs {
-  return parseGlobalFlagArgs(args);
+export interface ParsedInstallArgs extends ParsedGlobalFlagArgs {
+  saveDev: boolean;
+}
+
+/**
+ * Split install flags from package specs. Unknown dash tokens fail loudly so a
+ * dropped `--save-dev` cannot look like it was honoured (#2925).
+ */
+export function parseInstallArgs(args: string[]): ParsedInstallArgs | { error: string } {
+  const parsed = parseKnownFlags(args, {
+    bool: INSTALL_BOOL_FLAGS,
+    value: ['--location'],
+  });
+  if ('error' in parsed) return parsed;
+  const location = parsed.values.get('--location');
+  if (location !== undefined && location !== 'global') {
+    return { error: `unknown flag: --location=${location}` };
+  }
+  return {
+    global: parsed.bools.has('-g') || parsed.bools.has('--global') || location === 'global',
+    saveDev: parsed.bools.has('-D') || parsed.bools.has('--save-dev'),
+    specs: parsed.positionals,
+  };
 }
 
 /** Split global flags from positional args (supports `-g` anywhere before names). */
-export function parseGlobalFlagArgs(args: string[]): ParsedInstallArgs {
+export function parseGlobalFlagArgs(args: string[]): ParsedGlobalFlagArgs {
   let global = false;
   const specs: string[] = [];
   for (const arg of args) {
@@ -207,7 +237,15 @@ async function runInstall(
   ctx: CommandContext,
   deps: IpkCommandDeps
 ): Promise<ExecResult> {
-  const { global, specs } = parseInstallArgs(args);
+  const parsed = parseInstallArgs(args);
+  if ('error' in parsed) {
+    return {
+      stdout: '',
+      stderr: `${name}: ${parsed.error}\n`,
+      exitCode: 1,
+    };
+  }
+  const { global, saveDev, specs } = parsed;
   if (global && specs.length === 0) {
     return {
       stdout: '',
@@ -226,6 +264,7 @@ async function runInstall(
       fetch: deps.fetch,
       cwd: ctx.cwd,
       global,
+      saveDev,
     });
   } catch (err) {
     return {
