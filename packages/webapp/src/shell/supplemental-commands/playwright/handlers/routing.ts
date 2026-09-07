@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../../../../base/logger.js';
+import { onSessionReplaced } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   PlaywrightHandler,
@@ -106,16 +107,43 @@ async function enableFetchInterception(
       sessionId
     );
 
+    // The interception is pinned to a session id; the bridge replaces that
+    // session when it heals a stale one (issue #2417), so routes have to be
+    // re-armed on the replacement or every request sails through unmocked.
+    let activeSessionId = sessionId;
+    let activeTransport = transport;
+
     // Sync listener — async work is fire-and-forget via void (noMisusedPromises).
     const handler = (params: unknown): void => {
-      void handleRequestPaused(transport, sessionId, state, targetId, params);
+      void handleRequestPaused(activeTransport, activeSessionId, state, targetId, params);
     };
+
+    const unsubscribeReplaced = onSessionReplaced(
+      browser,
+      targetId,
+      (newSessionId, newTransport) => {
+        if (newTransport !== activeTransport) {
+          activeTransport.off('Fetch.requestPaused', handler);
+          newTransport.on('Fetch.requestPaused', handler);
+          activeTransport = newTransport;
+        }
+        activeSessionId = newSessionId;
+        void newTransport
+          .send(
+            'Fetch.enable',
+            { patterns: [{ urlPattern: '*', requestStage: 'Request' }] },
+            newSessionId
+          )
+          .catch(() => undefined);
+      }
+    );
 
     // Set cleanup BEFORE registering the event handler to avoid a race where
     // transport.on throws and routeCleanup is never populated.
     const cleanup = () => {
-      transport.off('Fetch.requestPaused', handler);
-      transport.send('Fetch.disable', {}, sessionId).catch(() => undefined);
+      unsubscribeReplaced();
+      activeTransport.off('Fetch.requestPaused', handler);
+      activeTransport.send('Fetch.disable', {}, activeSessionId).catch(() => undefined);
     };
     state.routeCleanup.set(targetId, cleanup);
 
