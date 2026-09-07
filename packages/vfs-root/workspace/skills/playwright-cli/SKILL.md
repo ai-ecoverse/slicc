@@ -186,11 +186,18 @@ A `resize` sticks to its tab: the viewport override is re-applied automatically
 whenever the tab is re-attached, so another driver switching tabs cannot reset
 it.
 
-All playwright-cli commands share one browser and run **serialized**. When
-concurrent callers (e.g. parallel scoops) queue up, commands may emit a
-`note: browser bridge contended — ...` line on stderr with the total lock wait
-and queue depth — treat it as a signal to stagger callers or reduce fan-out
-rather than re-running commands.
+All playwright-cli commands share one browser, but the lock is **per tab**:
+commands on the same tab serialize, commands on different tabs run in parallel.
+A hung navigation only stalls its own tab. When callers queue up, commands may
+emit a `note: browser bridge contended — ...` line on stderr with the total
+lock wait and queue depth; the note now says whether the wait was on **this
+tab** or **bridge-wide**. Either way it is back-off guidance — stagger callers
+or give each one its own tab, never re-run the command; it already ran, it was
+just slow to get the lock.
+
+**Stale session.** The bridge re-attaches automatically after a Chrome reset.
+If a command fails once with `Session with given id not found`, simply re-run
+it — there is no need to reload the tab or open a new one.
 
 ### Save As
 
