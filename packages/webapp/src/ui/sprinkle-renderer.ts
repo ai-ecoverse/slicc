@@ -11,6 +11,7 @@
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
 import type { SprinkleAgentOptions, SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import { iframeScreenshotHelpersSource } from './sprinkle-screenshot.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 declare global {
@@ -451,6 +452,8 @@ export class SprinkleRenderer {
     return btoa(bin);
   }
 
+  ${iframeScreenshotHelpersSource()}
+
   var api = {
     lick: function(event) {
       var action, data;
@@ -481,29 +484,82 @@ export class SprinkleRenderer {
       return _vfsCall('sprinkle-rm', { path: path });
     },
     screenshot: function(selector) {
+      // Keep in lockstep with captureSprinkleScreenshot in sprinkle-screenshot.ts.
       return new Promise(function(resolve, reject) {
         try {
           var target = selector ? document.querySelector(selector) : document.body;
-          if (!target) { reject(new Error('Element not found: ' + selector)); return; }
+          var label = screenshotTargetLabel(selector, target);
+          if (!target) { reject(new Error('Element not found: ' + (selector || label))); return; }
           var rect = target.getBoundingClientRect();
           var w = Math.ceil(rect.width);
           var h = Math.ceil(rect.height);
-          if (w === 0 || h === 0) { reject(new Error('Element has zero dimensions')); return; }
+          if (w === 0 || h === 0) {
+            reject(new Error(screenshotZeroDimensionError(label, rect.width, rect.height)));
+            return;
+          }
           var canvas = document.createElement('canvas');
           var dpr = window.devicePixelRatio || 1;
           canvas.width = w * dpr;
           canvas.height = h * dpr;
           var ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error(screenshotRasteriseError('canvas context unavailable', label, w, h)));
+            return;
+          }
           ctx.scale(dpr, dpr);
           var clone = target.cloneNode(true);
-          var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
-            '<foreignObject width="100%" height="100%">' +
-            new XMLSerializer().serializeToString(clone) +
-            '</foreignObject></svg>';
+          if (clone.querySelectorAll) {
+            var junk = clone.querySelectorAll('script, link[rel="stylesheet"]');
+            for (var i = 0; i < junk.length; i++) {
+              if (junk[i].parentNode) junk[i].parentNode.removeChild(junk[i]);
+            }
+          }
+          var xhtml;
+          try {
+            xhtml = new XMLSerializer().serializeToString(clone);
+          } catch (serErr) {
+            var serMsg = serErr && serErr.message ? serErr.message : String(serErr);
+            reject(new Error(screenshotRasteriseError('XMLSerializer threw: ' + serMsg, label, w, h)));
+            return;
+          }
+          var svg = buildScreenshotSvg(xhtml, w, h);
+          var svgBytes = svg.length;
+          var dataUrl;
+          try {
+            dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+          } catch (encErr) {
+            reject(new Error(screenshotRasteriseError('data-URL too large', label, w, h, svgBytes)));
+            return;
+          }
+          var dataUrlBytes = dataUrl.length;
+          var src = dataUrl;
+          var blobUrl = null;
+          if (typeof URL !== 'undefined' && URL.createObjectURL) {
+            try {
+              blobUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+              src = blobUrl;
+            } catch (blobErr) {
+              if (dataUrlBytes > 2097152) {
+                reject(new Error(screenshotRasteriseError('data-URL too large', label, w, h, svgBytes, dataUrlBytes)));
+                return;
+              }
+            }
+          } else if (dataUrlBytes > 2097152) {
+            reject(new Error(screenshotRasteriseError('data-URL too large', label, w, h, svgBytes, dataUrlBytes)));
+            return;
+          }
           var img = new Image();
-          img.onload = function() { ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL('image/png')); };
-          img.onerror = function() { reject(new Error('Screenshot rendering failed')); };
-          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+          img.onload = function() {
+            if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          img.onerror = function() {
+            if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }
+            var reason = !blobUrl && dataUrlBytes > 2097152 ? 'data-URL too large' : 'image decode failed';
+            reject(new Error(screenshotRasteriseError(reason, label, w, h, svgBytes, dataUrlBytes)));
+          };
+          img.src = src;
         } catch(e) { reject(e); }
       });
     },
