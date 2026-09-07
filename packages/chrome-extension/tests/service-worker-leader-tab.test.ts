@@ -624,14 +624,14 @@ describe('leader tab — URL resolvers (dev vs prod)', () => {
   // project (see vitest.config.ts), so the resolver helpers are tested with
   // an explicit dev=true argument here instead of attempting to mutate the
   // module-level const (which is frozen by the time the module loads). The
-  // resolver helpers feed the SW's LEADER_TAB_URL / LEADER_TAB_URL_GLOB /
-  // isLeaderTabUrl origin check.
-  let sw: typeof import('../src/service-worker.js');
+  // resolver helpers feed leader-tab-sw's LEADER_TAB_URL /
+  // LEADER_TAB_URL_GLOB / isLeaderTabUrl origin check.
+  let sw: typeof import('../src/leader-tab-sw.js');
 
   beforeEach(async () => {
     resetMocks();
     vi.resetModules();
-    sw = await import('../src/service-worker.js');
+    sw = await import('../src/leader-tab-sw.js');
     await new Promise((r) => setTimeout(r, 0));
   });
 

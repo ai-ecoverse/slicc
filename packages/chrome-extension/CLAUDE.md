@@ -43,11 +43,11 @@ ownership, picker payloads, MV3 RHC debug); `docs/pitfalls.md`;
 
 ### Responsibilities
 
-- **Service worker** (`src/service-worker.ts`): pins the leader tab, opens
-  the side panel (`chrome.sidePanel.open`, `setPanelBehavior`), accepts the
-  leader's Port via `externally_connectable`, proxies `chrome.debugger`
-  through `bridge-sw.ts`, hosts the fetch proxy and S3/DA mount backends,
-  surfaces handoff notifications via `webRequest`.
+- **Service worker** (`src/service-worker.ts`): a thin MV3 entry that owns no
+  backend logic — it builds `bridgeSwDeps`, calls each backend's `install*()`
+  once, and routes Ports and messages. Every concern lives in a focused
+  `*-sw.ts` peer module (see Key Files). Adding a backend means adding a module
+  plus one wiring line here, never growing this file.
 - **Side-panel cockpit** (`sidepanel.html` + `src/sidepanel-entry.ts`): runs
   the tri-state (booting -> ready -> disconnected) controller over a
   `cherry-panel` Port; relays `slicc.focus-leader-tab` as `focus-leader`
@@ -80,8 +80,28 @@ to the leader over the tray.
 
 ## Key Files
 
-- `src/service-worker.ts` - MV3 background bridge + leader-tab lifecycle +
-  secret-aware fetch proxy + handoff notifications.
+- `src/service-worker.ts` - thin MV3 entry: listener registration + wiring only.
+- `src/leader-tab-sw.ts` - leader-tab lifecycle (adopt/create/reload/reconcile/
+  focus, discard-freeze exemption, update-reload guard) + its pure URL resolvers.
+- `src/cdp-proxy-sw.ts` - `chrome.debugger` translation for the legacy offscreen
+  path, shared per-tab attachment ownership (`'bridge'` vs `'legacy'`), outgoing
+  `maybeUnmaskCdpFrame`, and event/detach forwarding.
+- `src/secrets-sw.ts` - SW-owned `SecretsPipeline` + every `secrets.*` handler
+  and the `secrets.crud` Port.
+- `src/mount-backends-sw.ts` - S3 / DA sign-and-forward (message + Port).
+- `src/handoff-notifications-sw.ts` - handoff `Link` observer, OS toasts,
+  once-per-session dedup. Installed BEFORE `discovery-sw.ts` so it stays the
+  first `onHeadersReceived` listener.
+- `src/discovery-sw.ts` - discovery observer wiring + autodiscover setting mirror.
+- `src/relay-sw.ts` - panel/offscreen relay (OAuth, CDP commands, tray socket);
+  `src/oauth-sw.ts`, `src/tray-socket-sw.ts`, `src/tab-group-sw.ts`,
+  `src/capture-popup-sw.ts` are its single-purpose backends.
+- `src/sw-message-router.ts` - the SW's ONE `chrome.runtime.onMessage` listener.
+  Backends return `'not-handled' | 'handled' | 'handled-async'`; the router owns
+  the `return true` reply-channel contract. Do not add a second listener.
+- `src/sw-pinned-port.ts` - shared three-factor pin for every non-bridge
+  externally-connectable Port. The pin is started on connect and awaited INSIDE
+  `onMessage`, so the listener still attaches synchronously.
 - `src/bridge-sw.ts` - `externally_connectable` Port handler pass-through-
   proxying CDP to `chrome.debugger`. Synthetic sessions keep
   `sessionId === targetId` and ref-count duplicate tab attachments; disconnect
