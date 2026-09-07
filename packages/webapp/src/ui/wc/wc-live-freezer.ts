@@ -43,6 +43,13 @@ export interface FreezerRailDeps {
   /** The client protocol's roster — selection is expressed in summaries (#2382 D2a). */
   getUnits(): readonly WorkUnitSummary[];
   clearSelection(): void;
+  /**
+   * Park the selected cone's queued pile before the thaw replaces the thread.
+   * A frozen chat is a detour like a read-only scoop is: the prompts were
+   * committed to the cone's backend queue and the cone is still working
+   * through them, so `loadMessages` must not cancel them on the way past.
+   */
+  holdQueuedPile(): void;
   log: BootStageLogger;
 }
 
@@ -207,6 +214,21 @@ async function clearConeSession(deps: ClearConeSessionDeps): Promise<void> {
     .catch(() => undefined);
 }
 
+/**
+ * Dress the shell for a thawed archive: the provenance caption, the Freezer
+ * tint and mood, and the composer locked out. Attribution lives in the chat
+ * log, not on the rail card (#2272) — one Freezer for all cones, and the
+ * thawed view says whose chat it is.
+ */
+function paintFrozenChrome(refs: WcShellRefs, entry: FrozenSessionIndexEntry | undefined): void {
+  const column = (refs.thread as { inner?: HTMLElement }).inner ?? refs.thread;
+  column.prepend(frozenProvenanceEl(refs.thread.ownerDocument, entry));
+  refs.thread.setAttribute('accent', FREEZER_TINT);
+  applyShellContext(refs, { kind: 'freezer' });
+  refs.inputCard.setAttribute('disabled', '');
+  refs.switcher.removeAttribute('active');
+}
+
 /** Caption at the top of a thawed chat naming the cone it was frozen from. */
 export function frozenProvenanceEl(
   doc: Document,
@@ -361,15 +383,11 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       );
       refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
       currentFrozenSessionId = entry?.sessionId ?? entry?.filename ?? null;
+      // BEFORE the thaw takes the thread: `loadMessages` cancels any pile
+      // still live, and reading an archive is not a retraction.
+      deps.holdQueuedPile();
       getController()?.loadMessages(messages);
-      // Attribution lives in the chat log, not on the rail card (#2272):
-      // one Freezer for all cones, and the thawed view says whose chat it is.
-      const column = (refs.thread as { inner?: HTMLElement }).inner ?? refs.thread;
-      column.prepend(frozenProvenanceEl(refs.thread.ownerDocument, entry));
-      refs.thread.setAttribute('accent', FREEZER_TINT);
-      applyShellContext(refs, { kind: 'freezer' });
-      refs.inputCard.setAttribute('disabled', '');
-      refs.switcher.removeAttribute('active');
+      paintFrozenChrome(refs, entry);
       clearSelection();
     } catch (err) {
       log.error('WC thaw failed', err);

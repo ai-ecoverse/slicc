@@ -79,6 +79,7 @@ function harness() {
     getUnits: () => [recordToWorkUnitSummary(research, {})],
     selectScoop: vi.fn(),
     clearSelection: vi.fn(),
+    holdQueuedPile: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
   });
   return freezer;

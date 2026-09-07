@@ -301,7 +301,13 @@ export class WcChatController {
    */
   #readOnly = false;
 
-  /** Queue handed back by the host after a read-only detour; see {@link restoreQueued}. */
+  /**
+   * Queue handed back by the host after a detour, waiting for the returning
+   * unit's replay; see {@link restoreQueued}. Carries no unit id — the slot is
+   * only ever armed for the unit the host has just selected — so leaving that
+   * unit again must disarm it ({@link stashQueued}), or the NEXT unit's replay
+   * would consume it and render one cone's cards under another's thread.
+   */
   #pendingQueueRestore: ChatMessage[] | null = null;
 
   constructor(options: WcChatControllerOptions) {
@@ -435,11 +441,19 @@ export class WcChatController {
    * already gone by the time the scoop's replay lands.
    */
   stashQueued(): ChatMessage[] {
+    // An armed-but-unapplied restore belongs to the unit being left, not to
+    // the one being opened: the replay it was waiting for never arrived, so it
+    // rides back out with the live pile rather than staying armed for whatever
+    // replay lands next. The held items come FIRST — they were queued before
+    // anything typed since the selection — though the backend's order wins
+    // over both on the way home (`#applyPendingQueueRestore`).
+    const pending = this.#pendingQueueRestore ?? [];
+    this.#pendingQueueRestore = null;
     const items = this.#queued;
-    if (items.length === 0) return [];
+    if (items.length === 0) return pending;
     this.#queued = [];
     this.#fireQueuedChange();
-    return items;
+    return [...pending, ...items];
   }
 
   /**
@@ -448,6 +462,10 @@ export class WcChatController {
    * asynchronously and clears the pile, so restoring eagerly would lose it
    * again. A second `loadMessages` (a real session reload) finds no pending
    * restore and behaves exactly as before.
+   *
+   * The wait is what makes this racy on its own: if the user leaves before
+   * that replay lands, the host takes the pile back through
+   * {@link stashQueued} and re-holds it for the unit it belongs to.
    */
   restoreQueued(items: readonly ChatMessage[]): void {
     this.#pendingQueueRestore = items.length > 0 ? [...items] : null;

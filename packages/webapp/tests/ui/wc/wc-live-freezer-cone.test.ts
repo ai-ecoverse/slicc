@@ -87,6 +87,8 @@ interface Harness {
   loaded: unknown[][];
   log: { debug: Mock; info: Mock; warn: Mock; error: Mock };
   clearCalls: Array<string | undefined>;
+  /** Thread-replacing steps of a thaw, in the order they happened. */
+  order: string[];
   selected: WorkUnitSummary | null;
   selections: string[];
   files: Map<string, string>;
@@ -97,6 +99,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const files = new Map<string, string>();
   const clearCalls: Array<string | undefined> = [];
+  const order: string[] = [];
   const selections: string[] = [];
   const freezer = document.createElement('slicc-freezer');
   freezer.append(document.createElement('slicc-freezer-new'));
@@ -128,6 +131,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
     loaded,
     log,
     clearCalls,
+    order,
     selected,
     selections,
     files,
@@ -150,6 +154,7 @@ function harness(selected: WorkUnitSummary | null): Harness {
       ({
         loadMessages: (messages: unknown[]) => {
           loaded.push(messages);
+          order.push('load');
         },
       }) as never,
     getSelected: () => state.selected,
@@ -160,6 +165,9 @@ function harness(selected: WorkUnitSummary | null): Harness {
     },
     clearSelection: () => {
       state.selected = null;
+    },
+    holdQueuedPile: () => {
+      order.push('hold');
     },
     log: log as never,
   });
@@ -358,6 +366,10 @@ describe('thawed chats say which cone they came from (#2272)', () => {
     await state.handles.openFrozen('research.md');
 
     expect(state.loaded).toHaveLength(1);
+    // The cone's queued pile is parked BEFORE the archive takes the thread:
+    // `loadMessages` cancels whatever is still live, and reading an archive
+    // is not the user retracting a prompt the cone is committed to running.
+    expect(state.order).toEqual(['hold', 'load']);
     const caption = state.thread.querySelector('[data-frozen-provenance]');
     expect(caption?.getAttribute('label')).toBe('Frozen chat · from cone Research');
     expect(state.freezer.querySelector('[data-frozen-provenance]')).toBeNull();

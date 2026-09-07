@@ -168,11 +168,12 @@ describe('read-only scoop view (leader)', () => {
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
   });
 
-  it('cancels — never stashes — when leaving a cone for ANOTHER cone’s scoop (Codex P1)', () => {
-    // Preserving on "destination is read-only" alone was wrong: hopping from
-    // cone A straight to a scoop owned by cone B is the user going elsewhere
-    // to work, so A's queued prompt is abandoned and must not stay live on
-    // the backend just because the tab we landed on has no composer.
+  it('holds — never cancels — when leaving a cone for ANOTHER cone’s scoop', () => {
+    // Hopping from cone A straight to a scoop owned by cone B is the user
+    // going elsewhere to READ, not a retraction: A's prompt was handed to A's
+    // backend queue the moment it was typed and A is still working through it.
+    // Cancelling it here made the cards (and the work) vanish on a switch,
+    // which is the surprise this replaced.
     const boot = bootShell();
     const stashed = [{ id: 'q1' }];
     let live: unknown[] = stashed;
@@ -198,8 +199,12 @@ describe('read-only scoop view (leader)', () => {
     boot.selectScoop(summaryOf(cone));
     boot.selectScoop(summaryOf(otherScoop));
 
-    expect(controller.stashQueued).not.toHaveBeenCalled();
-    expect(client.deleteQueuedMessage.mock.calls).toEqual([['cone-1', 'q1']]);
+    expect(controller.stashQueued).toHaveBeenCalledOnce();
+    expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
+
+    // …and it is still there on the way back.
+    boot.selectScoop(summaryOf(cone));
+    expect(controller.restoreQueued).toHaveBeenCalledWith(stashed);
   });
 
   it('keeps holding across a SIBLING scoop of the same cone, then restores', () => {
@@ -235,22 +240,25 @@ describe('read-only scoop view (leader)', () => {
     expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
   });
 
-  it('cancels a held pile once the user lands on a DIFFERENT cone', () => {
+  it('keeps a held pile alive while the user works in a DIFFERENT cone', () => {
     const boot = bootShell();
     const stashed = [{ id: 'q1' }];
     let live: unknown[] = stashed;
-    boot.setController({
+    const controller = {
       getQueuedMessages: vi.fn(() => live),
       stashQueued: vi.fn(() => {
         const taken = live;
         live = [];
         return taken;
       }),
-      restoreQueued: vi.fn(),
+      restoreQueued: vi.fn((items: unknown[]) => {
+        live = [...items];
+      }),
       setLickBackpressure: vi.fn(),
       setProcessing: vi.fn(),
       setReadOnly: vi.fn(),
-    } as never);
+    };
+    boot.setController(controller as never);
     const client = boot.wiring.getClient() as unknown as {
       deleteQueuedMessage: { mock: { calls: unknown[][] } };
       getScoops: { mockReturnValue(v: unknown): void };
@@ -260,7 +268,9 @@ describe('read-only scoop view (leader)', () => {
     boot.selectScoop(summaryOf(worker));
     boot.selectScoop(summaryOf(otherCone));
 
-    expect(client.deleteQueuedMessage.mock.calls).toEqual([['cone-1', 'q1']]);
+    expect(client.deleteQueuedMessage.mock.calls).toHaveLength(0);
+    boot.selectScoop(summaryOf(cone));
+    expect(controller.restoreQueued).toHaveBeenLastCalledWith(stashed);
   });
 
   it('applies with the multiple-cones flag OFF — it is not part of that experiment', () => {

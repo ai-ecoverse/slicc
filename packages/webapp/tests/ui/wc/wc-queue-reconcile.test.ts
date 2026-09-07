@@ -231,6 +231,38 @@ describe('no authoritative answer', () => {
   });
 });
 
+describe('an armed restore is disarmed by the next stash', () => {
+  // `#pendingQueueRestore` carries no unit id and waits on an asynchronous
+  // replay. If the host leaves before that replay lands, the slot has to come
+  // back out with the pile — otherwise the NEXT unit's `loadMessages` consumes
+  // it and one cone's cards render under another's thread (Codex P1 on #2959).
+
+  it('hands the un-applied restore back to the stash', () => {
+    const { controller, queuedIds } = makeController();
+    controller.restoreQueued([prompt('q1')]);
+    expect(controller.stashQueued().map((m) => m.id)).toEqual(['q1']);
+    // The slot is empty now, so a replay for some OTHER unit takes nothing.
+    controller.loadMessages([], ['q1']);
+    expect(queuedIds()).toEqual([]);
+  });
+
+  it('carries the live pile out behind the held one', () => {
+    const { controller } = makeController();
+    controller.setProcessing(true);
+    controller.sendUserMessage('typed after the selection');
+    controller.restoreQueued([prompt('q1')]);
+    const stashed = controller.stashQueued();
+    expect(stashed).toHaveLength(2);
+    expect(stashed[0]?.id).toBe('q1');
+    expect(stashed[1]?.content).toBe('typed after the selection');
+  });
+
+  it('is a no-op when neither a pile nor a restore is waiting', () => {
+    const { controller } = makeController();
+    expect(controller.stashQueued()).toEqual([]);
+  });
+});
+
 describe('one-shot', () => {
   it('does not resurrect the pile on a later reload', () => {
     const { controller, queuedIds } = makeController();
