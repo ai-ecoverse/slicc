@@ -195,6 +195,15 @@ export class NavigationWatcher {
    * top for the header vector.
    */
   private readonly probedOrigins = new Set<string>();
+  /**
+   * Target ids with an in-flight `Target.attachToTarget` of ours whose
+   * `sessionId` is not known yet. Chrome emits `Target.attachedToTarget`
+   * before it answers the command, so a pending target id is what identifies
+   * that first event as ours.
+   */
+  private readonly pendingAttachTargetIds = new Set<string>();
+  /** Session ids Chrome bound to this watcher's own attach requests. */
+  private readonly ownSessionIds = new Set<string>();
 
   private readonly onAttachedToTarget: CDPEventListener = (raw) => {
     void this.handleAttachedToTarget(raw as TargetAttachedToTargetParams);
@@ -202,7 +211,13 @@ export class NavigationWatcher {
   private readonly onDetachedFromTarget: CDPEventListener = (raw) => {
     const params = raw as TargetDetachedFromTargetParams;
     const sessionId = params.sessionId;
-    if (sessionId) this.sessions.delete(sessionId);
+    if (!sessionId) return;
+    const state = this.sessions.get(sessionId);
+    this.sessions.delete(sessionId);
+    this.ownSessionIds.delete(sessionId);
+    // Release the target so a later `Target.targetCreated` for it can be
+    // attached again rather than being mistaken for a foreign session.
+    if (state) this.pendingAttachTargetIds.delete(state.targetId);
   };
   private readonly onTargetInfoChanged: CDPEventListener = (raw) => {
     const params = raw as TargetInfoChangedParams;
@@ -379,14 +394,7 @@ export class NavigationWatcher {
         const attached = info.attached === true;
         const targetId = info.targetId;
         if (attached || typeof targetId !== 'string') continue;
-        try {
-          await this.transport.send('Target.attachToTarget', { targetId, flatten: true });
-        } catch (err) {
-          log.debug('Failed to attach to preexisting target', {
-            targetId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await this.requestAttach(targetId, 'Failed to attach to preexisting target');
       }
     } catch (err) {
       log.debug('Failed to enumerate preexisting targets', {
@@ -413,6 +421,8 @@ export class NavigationWatcher {
     this.transport.off('Page.frameNavigated', this.onFrameNavigated);
     this.transport.off('Network.responseReceived', this.onResponseReceived);
     this.sessions.clear();
+    this.pendingAttachTargetIds.clear();
+    this.ownSessionIds.clear();
 
     try {
       await this.transport.send('Target.setDiscoverTargets', { discover: false });
@@ -441,17 +451,59 @@ export class NavigationWatcher {
     if (info?.type !== 'page' || typeof info.targetId !== 'string') return;
     if (info.attached) return; // already attached
 
+    await this.requestAttach(info.targetId, 'Failed to attach to discovered target');
+  }
+
+  /**
+   * Ask Chrome to attach this watcher to `targetId`, remembering that the
+   * resulting session is ours so {@link handleAttachedToTarget} enables
+   * `Page`/`Network` on it — and only on it.
+   *
+   * `Target.attachedToTarget` normally arrives before the command response, so
+   * ownership is claimed first by target id (`pendingAttachTargetIds`) and then,
+   * once the response lands, by session id (`ownSessionIds`).
+   *
+   * NOTE: SLICC's own leader tab is attached like any other page target. There
+   * is no cheap in-layer signal that identifies it: `resolveAppTabId`
+   * (`shell/supplemental-commands/playwright/snapshot.ts`) sits above `cdp/` in
+   * the layer stack and needs a `BrowserAPI` plus a panel-RPC round trip, and
+   * matching `globalThis.location.origin` would be actively wrong — the handoff
+   * pages this watcher exists to observe are served from the app origin itself
+   * (`https://www.sliccy.ai/handoff?...`), so an origin test would suppress
+   * exactly the licks we want. Deliberately left unfiltered.
+   */
+  private async requestAttach(targetId: string, failureMessage: string): Promise<void> {
+    this.pendingAttachTargetIds.add(targetId);
     try {
-      await this.transport.send('Target.attachToTarget', {
-        targetId: info.targetId,
+      const result = (await this.transport.send('Target.attachToTarget', {
+        targetId,
         flatten: true,
-      });
+      })) as { sessionId?: string } | undefined;
+      const sessionId = result?.sessionId;
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        this.ownSessionIds.add(sessionId);
+        this.pendingAttachTargetIds.delete(targetId);
+      }
     } catch (err) {
-      log.debug('Failed to attach to discovered target', {
-        targetId: info.targetId,
+      this.pendingAttachTargetIds.delete(targetId);
+      log.debug(failureMessage, {
+        targetId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Decide whether an attached session belongs to this watcher. A pending
+   * target id is consumed on the first matching session so a second, foreign
+   * attach to the same tab is not claimed as well.
+   */
+  private claimOwnSession(sessionId: string, targetId: string): boolean {
+    if (this.ownSessionIds.has(sessionId)) return true;
+    if (!this.pendingAttachTargetIds.has(targetId)) return false;
+    this.pendingAttachTargetIds.delete(targetId);
+    this.ownSessionIds.add(sessionId);
+    return true;
   }
 
   private async handleAttachedToTarget(params: TargetAttachedToTargetParams): Promise<void> {
@@ -465,6 +517,16 @@ export class NavigationWatcher {
       title: info.title,
       url: info.url,
     });
+
+    // Enable the domains only on sessions this watcher asked for. `BrowserAPI`
+    // mints a fresh session per tab switch for `playwright-cli` and never
+    // detaches it; enabling `Page`/`Network` on those too made Chrome fan every
+    // event out once more per leaked session (measured: +16 inbound events per
+    // navigation per leaked session with the watcher versus +9 without —
+    // issue #2417). Foreign sessions stay in `this.sessions`, so a navigate
+    // lick still rides on them when their owner has `Network` enabled; we just
+    // stop adding to the amplification ourselves.
+    if (!this.claimOwnSession(sessionId, info.targetId)) return;
 
     try {
       await this.transport.send('Page.enable', {}, sessionId);
