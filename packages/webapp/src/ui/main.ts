@@ -23,6 +23,7 @@ import { initTelemetry } from '../kernel/telemetry.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { setupFeatureFlagsForPage } from './boot/setup-feature-flags.js';
@@ -156,6 +157,20 @@ async function main(): Promise<void> {
   // resolved provider list. See `providers/index.ts:registerProviders`.
   await registerProviders();
   applyProviderDefaults();
+
+  // Wire the local /api base + bridge token for THIS realm before the OAuth
+  // bootstrap below, not just later in `setupStandalonePrelude`. The bootstrap
+  // pushes every stored token to the secrets replica, and with the base
+  // unset `resolveApiUrl` yields a bare relative path — which on a thin-bridge
+  // leader resolves against the hosted origin (sliccy.ai) instead of the local
+  // node-server. The tray hub answers 200 with its route catalog for any
+  // unmatched path, so the push looked like a success while no mask came back
+  // and the token was handed to an origin that never needed it (#2929).
+  // Mirrors the prelude's own condition; setting it twice is idempotent.
+  if (bridge?.apiBaseUrl && !extensionDelegate) {
+    setLocalApiBaseUrl(bridge.apiBaseUrl);
+    setBridgeToken(bridge.token);
+  }
 
   // Pre-warm OAuth replicas so the kernel-worker starts with fresh tokens;
   // bounded so a hung IMS popup doesn't deadlock the UI.

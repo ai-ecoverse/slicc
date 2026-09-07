@@ -1185,7 +1185,13 @@ async function persistCliMaskReplica(
   accessToken: string,
   domains: string[]
 ): Promise<OAuthMaskWriteResult> {
-  const r = await fetch(resolveApiUrl('/api/secrets/oauth-update'), {
+  // Logged on both failure paths below: a 2xx from the WRONG origin is
+  // indistinguishable here from a real replica that declined, because the tray
+  // hub answers 200 with a route catalog for any unmatched path. Without the
+  // resolved target in the breadcrumb, a misrouted push reads as a server-side
+  // fault on a node-server that never saw the request (#2929).
+  const url = resolveApiUrl('/api/secrets/oauth-update');
+  const r = await fetch(url, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ providerId, accessToken, domains }),
@@ -1195,14 +1201,14 @@ async function persistCliMaskReplica(
     // The local Account is saved either way (fail-open per spec), but
     // without surfacing this the user gets a confusing "no masked replica"
     // error from oauth-token / git-token-write later with no breadcrumb.
-    log.warn('OAuth replica POST non-ok', { providerId, status: r.status });
+    log.warn('OAuth replica POST non-ok', { providerId, status: r.status, url });
     return { error: `OAuth replica POST HTTP ${r.status}` };
   }
   const data = await r.json();
   if (typeof data.maskedValue !== 'string') {
     // 2xx with no string maskedValue is the EXT7-triage silent-pass
     // defect. Surface it; bootstrap retries on reload; oauth-token remasks.
-    log.warn('OAuth replica POST ok but missing maskedValue', { providerId });
+    log.warn('OAuth replica POST ok but missing maskedValue', { providerId, url });
     return { error: 'OAuth replica POST ok but missing maskedValue' };
   }
   if (!isUsableOAuthMaskReplica(data.maskedValue, accessToken)) {

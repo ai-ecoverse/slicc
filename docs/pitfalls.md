@@ -835,6 +835,51 @@ because its `prompt=none` page JS-redirects after load. Keep the
 `packages/chrome-extension/src/oauth-flow-options.ts`. See
 `docs/oauth-intercept.md` "Silent token renewal".
 
+## A 200 From the Hosted Origin Is Not a Successful `/api` Call
+
+An unconfigured `resolveApiUrl('/api/…')` returns a **bare relative path**. On a
+thin-bridge leader the page is served from `www.sliccy.ai`, so that path
+resolves against the tray hub instead of the local node-server — and the hub
+answers **200 with its route catalog** for any unmatched path. `r.ok` is true,
+the JSON parses, and only the missing field says anything went wrong.
+
+That combination cost days of a confusing bug (#2929). `bootstrapOAuthReplicas`
+runs on every page load and re-pushes each stored OAuth token to the secrets
+replica, but the bridge wiring (`setLocalApiBaseUrl` / `setBridgeToken`) only
+happened later, in `setupStandalonePrelude`. Every boot therefore POSTed real
+access tokens to the hosted origin, read a 200 back, found no `maskedValue`,
+and wiped the mask each account already had — after which `oauth-token <id>`
+reported no usable token and demanded a `--force-login` popup. Paired with a
+crash-reload loop it looked exactly like tokens expiring every few minutes.
+
+Two rules come out of it:
+
+- **Wire the API base before anything in the realm calls `/api`.** Setting it
+  twice is idempotent; setting it late is not. `ui/main.ts` now wires it ahead
+  of the OAuth bootstrap, guarded by
+  `packages/webapp/tests/ui/main-oauth-bridge-wiring.test.ts`.
+- **The launch query string is attacker input, not configuration.** Because the
+  page is served from the hosted origin, anything reached via a link can carry
+  `?bridge=…`, and `apiBaseUrl` is derived straight from that host —
+  so an unchecked bridge aims the whole local `/api` surface, OAuth replica push
+  included, at a remote server that need only permit the request via CORS.
+  `parseBridgeLaunchParams` enforces the loopback contract its own type already
+  documented, at the parser rather than at each consumer, so the SW
+  registration, `/api` base, lick socket, and CDP dial are covered by one check.
+- **A fail-open sync must leave the state recoverable.** Clearing a cached
+  value up front and restoring it only on success turns every transport hiccup
+  into data loss. Prefer re-deriving over carrying the old value forward:
+  `ensureOAuthMaskReplica` (#2921) remasks on the next `oauth-token` read, so a
+  lost mask costs one round-trip rather than a login. Carrying the previous
+  `maskedValue` forward would also work for the boot re-push, where the token
+  is unchanged, but it makes `saveOAuthAccount` a second writer of that field
+  and risks pinning a stale mask to a rotated token — the hazard
+  `attachMaskIfTokenUnchanged` exists to prevent.
+
+When a masked secret goes missing, log the resolved URL before suspecting the
+masking pipeline: a misrouted push and a replica that declined look identical
+at the call site.
+
 ## Local Bridge Keep-Alive: The 5 s Default Races Bursty Fan-Outs
 
 `TypeError: Failed to fetch` against `http://localhost:5710` does **not** mean

@@ -181,3 +181,39 @@ short-circuits to "session expired — please log in again" without re-hitting
 IMS, then re-probes once the cooldown elapses (recovering if the user re-authed
 elsewhere). That error is classified non-retryable in `scoop-context/error-classification.ts` so a
 dead-session turn fails fast with one clean error.
+
+## Upstream token validation (`onValidateToken`)
+
+Renewal answers "can I get a fresh token"; validation answers "is the one I
+hold still honoured". They fail independently, so a provider with
+`onSilentRenew` still wants `onValidateToken`: `--renew` returning `null`
+collapses a dead session and a network blip into the same answer, and the
+check is what tells them apart before `oauth-token` sends anyone to a consent
+window.
+
+Implement it as **one cheap, time-bounded call** returning
+`{ status: 'accepted' | 'rejected' | 'unknown', userName?, detail? }`, and be
+strict about the middle status: only a response that _proves_ refusal is
+`rejected`. Everything else — 5xx, transport failure, a throttling status a
+healthy token also produces — is `unknown`, which says nothing about the token
+and costs the caller nothing. Bound the call with `AbortSignal.timeout` so
+`--check` always answers.
+
+Read the verdict from wherever the provider actually puts it. Adobe IMS
+(`POST {imsHost}/ims/validate_token/v1`) answers **HTTP 200 for both
+verdicts** and reports `{"valid":false,"reason":"…"}` in the body, so status
+alone would call every revoked token valid; GitHub (`GET /user`) puts it in the
+status. The per-provider table is in
+[`shell-reference.md`](shell-reference.md#oauth-token-held-vs-working).
+
+When the verdict lives in the body, require it **explicitly**. A 200 whose body
+has no boolean `valid` — an error envelope, a truncated response — must be
+`unknown`; falling through to `rejected` claims a refusal the provider never
+issued. Resolve any per-account settings the call needs (IMS environment,
+client ID) from _that account's_ endpoint rather than a first-value read of a
+session cache, or a staging account gets asked about production. Bound those
+lookups too: everything `--check` awaits is on the path to it answering.
+
+`oauth-token --check [<id>]` is the only surface that calls this hook, and it
+falls back to any registered provider that implements it when the selected one
+does not.

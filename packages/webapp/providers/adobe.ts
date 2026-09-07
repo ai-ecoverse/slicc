@@ -52,7 +52,12 @@ import { findFamilyCost } from '../src/providers/family-cost.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
-import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import type {
+  OAuthLauncher,
+  OAuthLoginOptions,
+  OAuthTokenValidation,
+  ProviderConfig,
+} from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
   getAccounts,
@@ -195,6 +200,69 @@ function imsHost(env?: string): string {
   return IMS_HOSTS[env ?? adobeConfig.imsEnvironment ?? 'prod'] ?? IMS_HOSTS.prod;
 }
 
+/** Bound the validation call: `--check` must always answer, never hang. */
+const VALIDATE_TIMEOUT_MS = 10_000;
+
+/** Same promise for the `/v1/config` lookup `--check` needs first. */
+const VALIDATE_CONFIG_TIMEOUT_MS = 5_000;
+
+/**
+ * Resolve the proxy config for the endpoint THIS account uses.
+ *
+ * `proxyConfigCache` is keyed by proxy endpoint, so taking the first value out
+ * of it returns whichever endpoint happened to be fetched first this session —
+ * the stale one after a proxy switch, and nothing at all on a cold page, which
+ * then falls back to the PRODUCTION IMS host. For an account on `stg1` that
+ * sends the token to an IMS that never minted it and reports a verdict about
+ * the wrong environment. Ask for the account's own endpoint instead, fetching
+ * it when the cache is cold.
+ *
+ * Bounded, and `{}` on any failure: `fetchProxyConfig` carries no timeout of
+ * its own, and `--check` must always answer. Falling back to the build-time
+ * defaults is the same position this code was in before the fetch existed.
+ */
+async function resolveValidationConfig(): Promise<ProxyConfig> {
+  let endpoint: string;
+  try {
+    endpoint = getProxyEndpoint();
+  } catch {
+    // Nothing configured anywhere — build-time defaults are all there is.
+    return {};
+  }
+  const cached = proxyConfigCache.get(endpoint);
+  if (cached) return cached;
+  return new Promise<ProxyConfig>((resolve) => {
+    const timer = setTimeout(() => resolve({}), VALIDATE_CONFIG_TIMEOUT_MS);
+    const settle = (config: ProxyConfig) => {
+      clearTimeout(timer);
+      resolve(config);
+    };
+    fetchProxyConfig(endpoint).then(settle, () => settle({}));
+  });
+}
+
+/**
+ * IMS access tokens are JWTs carrying the `client_id` they were minted for.
+ * Reading it back is the first choice for {@link validateAdobeToken}, which
+ * must supply one — `/ims/validate_token/v1` answers 400 `bad_request`
+ * without it. The token's own claim is also the *right* client to ask about,
+ * and it needs no network call, so `--check` still works when the proxy's
+ * `/v1/config` is unreachable. Returns undefined for a token that is not a
+ * readable JWT; the caller falls back to the proxy / build-time config.
+ */
+function readTokenClientId(accessToken: string): string | undefined {
+  try {
+    const payload = accessToken.split('.')[1];
+    if (!payload) return undefined;
+    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+    const claims = JSON.parse(json) as { client_id?: unknown };
+    return typeof claims.client_id === 'string' ? claims.client_id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Runtime detection ───────────────────────────────────────────────
 
 const isExtension =
@@ -206,37 +274,116 @@ function getAdobeAccount() {
   return getAccounts().find((a) => a.providerId === 'adobe');
 }
 
-async function fetchUserProfile(
-  accessToken: string,
-  imsEnv?: string
-): Promise<{ name?: string; avatar?: string }> {
+interface AdobeUserProfile {
+  name?: string;
+  avatar?: string;
+}
+
+/**
+ * IMS profile endpoints, in the order worth asking.
+ *
+ * `/ims/userinfo/v2` is the OIDC endpoint, and it answers with nothing but
+ * `sub` unless the token carries the `profile` / `email` scopes — which the
+ * proxy's scope set does not, so it left every Adobe account with no display
+ * name at all (#2929). `/ims/profile/v1` returns `displayName` / `name` /
+ * `email` for that same token. Ask it first, and keep the OIDC endpoint as
+ * the fallback for a client whose scopes make it the richer of the two.
+ */
+const IMS_PROFILE_PATHS = ['/ims/profile/v1', '/ims/userinfo/v2'] as const;
+
+/** One profile call. Returns undefined when it fails or names nobody. */
+async function fetchImsProfile(
+  url: string,
+  accessToken: string
+): Promise<AdobeUserProfile | undefined> {
   try {
-    const res = await fetch(`${imsHost(imsEnv)}/ims/userinfo/v2`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (res.ok) {
-      const profile = (await res.json()) as {
-        name?: string;
-        email?: string;
-        displayName?: string;
-        picture?: string;
-        avatar_url?: string;
-      };
-      return {
-        name: profile.displayName || profile.name || profile.email,
-        avatar: profile.picture || profile.avatar_url,
-      };
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      console.warn(`[adobe] Profile fetch ${url} returned ${res.status}`);
+      return undefined;
     }
-    console.warn(
-      `[adobe] User profile fetch returned ${res.status}, account will have no display name`
-    );
+    const profile = (await res.json()) as {
+      name?: string;
+      email?: string;
+      displayName?: string;
+      picture?: string;
+      avatar_url?: string;
+    };
+    const name = profile.displayName || profile.name || profile.email;
+    return name ? { name, avatar: profile.picture || profile.avatar_url } : undefined;
   } catch (err) {
     console.warn(
-      '[adobe] Failed to fetch user profile:',
+      `[adobe] Profile fetch ${url} failed:`,
       err instanceof Error ? err.message : String(err)
     );
+    return undefined;
   }
+}
+
+async function fetchUserProfile(accessToken: string, imsEnv?: string): Promise<AdobeUserProfile> {
+  for (const path of IMS_PROFILE_PATHS) {
+    const profile = await fetchImsProfile(`${imsHost(imsEnv)}${path}`, accessToken);
+    if (profile) return profile;
+  }
+  console.warn('[adobe] No IMS profile endpoint named the user; account will have no display name');
   return {};
+}
+
+/**
+ * Ask IMS whether it still accepts the stored token.
+ *
+ * `POST /ims/validate_token/v1` is built for exactly this question, and it
+ * asks it about the token itself rather than about one API's authorization.
+ * Worth asking because local expiry is not proof of validity: a token well
+ * inside its recorded 24h window is routinely dead upstream after a revoked
+ * grant or an ended IMS session, and `--list` / `--renew` can only report
+ * what is stored.
+ *
+ * IMS answers **200 for both verdicts** and puts the verdict in the body
+ * (`{"valid":true}` vs `{"valid":false,"reason":"bad_signature"}`), so the
+ * status must never be read as the answer. Only an explicit verdict decides:
+ * a non-2xx, or a 200 whose body carries no boolean `valid`, means the check
+ * itself did not run — `unknown`, which says nothing about the token, rather
+ * than a rejection that would send the caller through a consent window it does
+ * not need.
+ */
+async function validateAdobeToken(): Promise<OAuthTokenValidation> {
+  const account = getAdobeAccount();
+  const accessToken = account?.accessToken;
+  if (!accessToken) return { status: 'unknown', detail: 'no stored token' };
+
+  const proxyConfig = await resolveValidationConfig();
+  const clientId =
+    readTokenClientId(accessToken) || proxyConfig.clientId || adobeConfig.clientId || '';
+  if (!clientId) return { status: 'unknown', detail: 'no IMS client ID available' };
+
+  const host = imsHost(resolveImsEnvironment(proxyConfig));
+  try {
+    const res = await fetch(`${host}/ims/validate_token/v1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, token: accessToken, type: 'access_token' }),
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const detail = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+      return { status: 'unknown', detail };
+    }
+    const body = (await res.json()) as { valid?: unknown; reason?: unknown };
+    // IMS's own answer names the identity only as an opaque user id, so the
+    // display name we stored at login is the readable form of the same one.
+    if (body.valid === true) return { status: 'accepted', userName: account?.userName };
+    if (body.valid === false) {
+      const reason = typeof body.reason === 'string' ? body.reason : 'no reason given';
+      return { status: 'rejected', detail: `IMS reported the token invalid (${reason})` };
+    }
+    // A 200 carrying no boolean verdict proves nothing was refused — an IMS
+    // error envelope or a truncated body would otherwise read as a refusal and
+    // push the caller into a consent window its token never needed.
+    return { status: 'unknown', detail: 'IMS answered 200 without a boolean `valid` verdict' };
+  } catch (err) {
+    return { status: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Extract token details exactly as reported in the OAuth URL fragment. */
@@ -471,6 +618,8 @@ export const config: ProviderConfig = {
     if (!account?.accessToken) return null;
     return silentRenewToken();
   },
+
+  onValidateToken: validateAdobeToken,
 
   // Fetch + cache the proxy model list, then persist the enriched list to
   // localStorage so a cold consumer (the cloud cone's kernel worker) reads the
