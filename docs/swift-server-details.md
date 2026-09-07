@@ -80,7 +80,14 @@ The durable fix is a stable code-signing identity (`packages/dev-tools/tools/set
 - The identity must be TRUSTED, not just imported. A self-signed cert imports as `CSSMERR_TP_NOT_TRUSTED`, so `security find-identity -v -p codesigning` (the valid-only form both `setup-dev-cert.sh` and `dev-swift-fresh.sh` use to detect it) lists nothing, and the harness silently falls back to ad-hoc signing — leaving `/api/secrets/masked` empty.
 - `setup-dev-cert.sh` therefore runs `security add-trusted-cert -p codeSign` in the user trust domain (no `sudo`/`-d`, applied non-interactively) after import, and de-duplicates any pre-existing copies by SHA-1 hash first (a CN is "ambiguous" once stacked) so exactly one valid identity remains.
 
-`SLICC_KEYCHAIN_NONINTERACTIVE=1` (set by the dev fresh-bridge harness) is only an anti-hang guard, not a fix for the prompt: it makes `readBlob` pass `kSecUseAuthenticationUIFail` so a headless launch that would otherwise block on the unanswerable dialog fails fast with `errSecInteractionNotAllowed` instead of hanging. An already-granted item still reads fine; otherwise the read path logs an actionable hint and the server continues without Keychain secrets. It never produces silent success.
+`SLICC_KEYCHAIN_NONINTERACTIVE=1` (set by the dev fresh-bridge harness) is only an anti-hang guard, not a fix for the prompt: a headless launch that would otherwise block on the unanswerable dialog fails fast with `errSecInteractionNotAllowed` instead of hanging. An already-granted item still reads fine; otherwise the read path logs an actionable hint and the server continues without Keychain secrets. It never produces silent success.
+
+Suppressing that dialog takes **two** switches, and only the second one actually works on this item:
+
+- `kSecUseAuthenticationUIFail` (`kSecUseAuthenticationUI`) governs the **data-protection** keychain. `ai.sliccy.slicc / __envfile__` is a **file-based** keychain item, so `SecItemCopyMatching` dispatches to `SecItemCopyMatching_osx` and the flag has no effect on the ACL dialog.
+- `SecKeychainSetUserInteractionAllowed(false)` is the process-wide switch that does gate it. `SecretStore.withInteractionSuppressed` wraps every `SecItem*` call in read **and** write paths with it, restoring the previous state afterwards; interactive runs never touch the switch, so the first-run "Always Allow" grant still works.
+
+Without the second switch the guard silently does nothing: a `nohup`-style launch hangs inside `SecItemCopyMatching` forever — **before** Hummingbird binds, so there is no port, no log line, and no Chrome — which reads as "the binary is broken" rather than "the Keychain is waiting". `KeychainSecretStoreTests` asserts the switch is flipped and restored; an assertion that only round-trips an already-granted item cannot catch this, because the test runner needs no dialog.
 
 ## API route contracts
 

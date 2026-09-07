@@ -82,6 +82,37 @@ enum SecretStore {
         ProcessInfo.processInfo.environment["SLICC_KEYCHAIN_NONINTERACTIVE"] == "1"
     }
 
+    /// Seam over the process-wide legacy-Keychain interaction switch. Tests
+    /// substitute a recorder; production flips the real switch.
+    ///
+    /// `SecKeychainSetUserInteractionAllowed` is deprecated (as is the
+    /// `kSecUseAuthenticationUI` key below) but remains the only switch that
+    /// governs the *file-based* keychain's ACL dialog — the keychain
+    /// `ai.sliccy.slicc / __envfile__` actually lives in. Its replacement,
+    /// `LAContext.interactionNotAllowed`, covers the data-protection keychain
+    /// only, so it cannot suppress this dialog.
+    static var setUserInteractionAllowed: (Bool) -> Void = { allowed in
+        SecKeychainSetUserInteractionAllowed(allowed)
+    }
+
+    /// Run `body` with the legacy Keychain's ACL dialog suppressed whenever
+    /// `SLICC_KEYCHAIN_NONINTERACTIVE=1`.
+    ///
+    /// `kSecUseAuthenticationUIFail` governs the data-protection keychain only.
+    /// The dialog that `SecItemCopyMatching` raises for a *file-based* keychain
+    /// item whose ACL does not yet trust this binary — the `SecItemCopyMatching_osx`
+    /// path, which is what `ai.sliccy.slicc / __envfile__` is — is gated by the
+    /// process-wide `SecKeychainSetUserInteractionAllowed` switch instead. With
+    /// the flag alone, a headless launch blocks inside `SecItemCopyMatching`
+    /// forever, before the HTTP server ever binds, which is precisely the hang
+    /// the env var exists to prevent.
+    private static func withInteractionSuppressed<T>(_ body: () throws -> T) rethrows -> T {
+        guard nonInteractive else { return try body() }
+        setUserInteractionAllowed(false)
+        defer { setUserInteractionAllowed(true) }
+        return try body()
+    }
+
     static func get(name: String) -> Secret? {
         readSecrets().first(where: { $0.name == name })
     }
@@ -153,7 +184,9 @@ enum SecretStore {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = withInteractionSuppressed {
+            SecItemCopyMatching(query as CFDictionary, &result)
+        }
         if status == errSecItemNotFound {
             return ""
         }
@@ -169,6 +202,10 @@ enum SecretStore {
     }
 
     /// Replace the env-file blob in Keychain (creates the item on first use).
+    ///
+    /// A write raises the same ACL dialog a read does, so it runs under the
+    /// same suppression — otherwise a headless `POST /api/secrets` would hang
+    /// the request instead of returning an error.
     static func writeBlob(_ content: String) throws {
         let valueData = Data(content.utf8)
         let searchQuery: [String: Any] = [
@@ -177,10 +214,12 @@ enum SecretStore {
             kSecAttrAccount as String: keychainAccount,
         ]
 
-        let updateStatus = SecItemUpdate(
-            searchQuery as CFDictionary,
-            [kSecValueData as String: valueData] as CFDictionary
-        )
+        let updateStatus = withInteractionSuppressed {
+            SecItemUpdate(
+                searchQuery as CFDictionary,
+                [kSecValueData as String: valueData] as CFDictionary
+            )
+        }
 
         if updateStatus == errSecSuccess {
             return
@@ -189,7 +228,7 @@ enum SecretStore {
         if updateStatus == errSecItemNotFound {
             var addQuery = searchQuery
             addQuery[kSecValueData as String] = valueData
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = withInteractionSuppressed { SecItemAdd(addQuery as CFDictionary, nil) }
             guard addStatus == errSecSuccess else {
                 throw SecretStoreError.keychainError(status: addStatus)
             }
