@@ -1836,6 +1836,29 @@ describe('BrowserAPI', () => {
       expect(order).toEqual(['nav-start', 'sibling', 'nav-end']);
     });
 
+    it('lets another tab run while Page.navigate itself hangs', async () => {
+      // A URL that never responds hangs in the navigate command, not in the
+      // load wait — the `background_after` / exit 124 shape from issue #2417.
+      let sessCount = 0;
+      const order: string[] = [];
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Page.navigate') return new Promise(() => undefined); // never settles
+        return {};
+      });
+
+      const abandoned = api.withTab('t1', async () => {
+        await api.navigate('https://hangs.example');
+      });
+      void abandoned.catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 5));
+
+      await api.withTab('t2', async () => {
+        order.push('sibling-ran');
+      });
+      expect(order).toEqual(['sibling-ran']);
+    });
+
     it('restores the waiting tab as current after a sibling ran on the bridge', async () => {
       attachCounting();
       const navigating = api.withTab('t1', async () => {
