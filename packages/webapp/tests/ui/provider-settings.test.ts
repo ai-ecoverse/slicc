@@ -2427,6 +2427,28 @@ describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.sto
       })
     );
   });
+
+  it('discards the replica when the access token rotates during the write', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok-old' }] as never[];
+    mockLog.warn.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok-old', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => {
+          (accounts[0] as { accessToken: string }).accessToken = 'tok-new';
+          return { maskedValue: 'MASK-old' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'access token rotated during mask write' });
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining('token rotation'),
+      expect.objectContaining({ providerId: 'github' })
+    );
+  });
 });
 
 describe('OAuth replica HTTP — thin-bridge URL + token', () => {

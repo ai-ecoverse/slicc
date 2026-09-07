@@ -1003,6 +1003,36 @@ export async function maskOAuthTokenWithRetry(
 /** Outcome of a mask-replica write. Never carries a replica equal to the raw token. */
 export type OAuthMaskWriteResult = { maskedValue?: string; error?: string };
 
+/** Returned when a concurrent login/renew replaced the token while the replica write was in flight. */
+const MASK_TOKEN_ROTATED = 'access token rotated during mask write';
+
+/**
+ * Persist `maskedValue` only on the account still holding `accessToken`.
+ * A silent renew or second login can replace the token while the replica
+ * write awaits the SW / CLI round-trip; attaching the old replica to the
+ * new row would print a stale mask and leave the replica store pointing at
+ * a revoked token (#2921 review).
+ */
+function attachMaskIfTokenUnchanged(
+  providerId: string,
+  accessToken: string,
+  maskedValue: string,
+  accounts: Account[]
+): OAuthMaskWriteResult {
+  const acct = accounts.find((a) => a.providerId === providerId);
+  if (!acct?.accessToken) {
+    return { error: 'account gone after mask write' };
+  }
+  if (acct.accessToken !== accessToken) {
+    log.warn('OAuth mask write raced with token rotation; discarding replica', {
+      providerId,
+    });
+    return { error: MASK_TOKEN_ROTATED };
+  }
+  acct.maskedValue = maskedValue;
+  return { maskedValue };
+}
+
 /**
  * A replica is only safe to print or persist when it is a distinct masked
  * stand-in. Format-preserving masks keep prefixes like `gho_`; equality with
@@ -1070,12 +1100,14 @@ export async function persistOAuthMaskViaServiceWorker(
     return { error: reason };
   }
   const accounts = deps.getAccounts();
-  const acct = accounts.find((a) => a.providerId === opts.providerId);
-  if (acct) {
-    acct.maskedValue = maskedValue;
-    await deps.saveAccounts(accounts);
-  }
-  return { maskedValue };
+  const attached = attachMaskIfTokenUnchanged(
+    opts.providerId,
+    opts.accessToken,
+    maskedValue,
+    accounts
+  );
+  if (attached.maskedValue) await deps.saveAccounts(accounts);
+  return attached;
 }
 
 function oauthMaskDomains(providerId: string): string[] {
@@ -1178,20 +1210,29 @@ async function persistCliMaskReplica(
     return { error: 'mask replica equals the access token' };
   }
   const accounts = getAccounts();
-  const acct = accounts.find((a) => a.providerId === providerId);
-  if (acct) {
-    acct.maskedValue = data.maskedValue;
-    await saveAccountsAsync(accounts);
-  }
-  return { maskedValue: data.maskedValue };
+  const attached = attachMaskIfTokenUnchanged(providerId, accessToken, data.maskedValue, accounts);
+  if (attached.maskedValue) await saveAccountsAsync(accounts);
+  return attached;
 }
 
 /**
  * Dual-mode mask replica write: CLI POST `/api/secrets/oauth-update`,
  * extension SW `persistOAuthMaskViaServiceWorker` (#847). Fail-open: errors
  * are logged and returned, never thrown, so a held access token is not lost.
+ * One retry if a concurrent renew/login rotated the token mid-write.
  */
 async function writeOAuthMaskReplica(
+  providerId: string,
+  accessToken: string
+): Promise<OAuthMaskWriteResult> {
+  const result = await writeOAuthMaskReplicaOnce(providerId, accessToken);
+  if (result.error !== MASK_TOKEN_ROTATED) return result;
+  const current = getAccounts().find((a) => a.providerId === providerId)?.accessToken;
+  if (!current || current === accessToken) return result;
+  return writeOAuthMaskReplicaOnce(providerId, current);
+}
+
+async function writeOAuthMaskReplicaOnce(
   providerId: string,
   accessToken: string
 ): Promise<OAuthMaskWriteResult> {

@@ -781,4 +781,41 @@ describe('ensureOAuthMaskReplica — remask a held token (#2921)', () => {
     expect(result.maskedValue).toBeUndefined();
     expect(result.error).toBe('mask replica equals the access token');
   });
+
+  it('retries remask when the access token rotates during the replica write', async () => {
+    const lsData = installLocalStorage();
+    delete (globalThis as any).chrome;
+    lsData['slicc_accounts'] = JSON.stringify([
+      { providerId: 'github', apiKey: '', accessToken: 'gho_OLD' },
+    ]);
+    let posts = 0;
+    const posted: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { accessToken?: string };
+      posted.push(body.accessToken ?? '');
+      posts++;
+      if (posts === 1) {
+        lsData['slicc_accounts'] = JSON.stringify([
+          { providerId: 'github', apiKey: '', accessToken: 'gho_NEW' },
+        ]);
+        return {
+          ok: true,
+          json: async () => ({ maskedValue: 'gho_masked_old' }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ maskedValue: 'gho_masked_new' }),
+      } as Response;
+    });
+
+    const { ensureOAuthMaskReplica, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    const result = await ensureOAuthMaskReplica('github');
+    expect(posted).toEqual(['gho_OLD', 'gho_NEW']);
+    expect(result).toEqual({ maskedValue: 'gho_masked_new' });
+    expect(getOAuthAccountInfo('github')?.token).toBe('gho_NEW');
+    expect(getOAuthAccountInfo('github')?.maskedValue).toBe('gho_masked_new');
+  });
 });
