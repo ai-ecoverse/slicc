@@ -1081,7 +1081,7 @@ This was hit by the `secret list` shell command and the secrets management UI: t
 
 **The Solution**
 
-For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`** (the `externally_connectable` matches in `packages/chrome-extension/manifest.json` allow the hosted origin to talk to the SW directly). The SW has full storage access. Add a handler in `service-worker.ts:onMessage` that performs the storage call and replies via `sendResponse`. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers there for the canonical pattern. Always `return true` from the listener for async work, and always include `chrome.runtime.lastError` handling on the caller side.
+For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`** (the `externally_connectable` matches in `packages/chrome-extension/manifest.json` allow the hosted origin to talk to the SW directly). The SW has full storage access. Add a handler to the relevant `*-sw.ts` backend and register it in the `SW_MESSAGE_HANDLERS` list in `service-worker.ts` — the SW has exactly ONE `chrome.runtime.onMessage` listener (`sw-message-router.ts`); do not add a second. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers in `secrets-sw.ts` for the canonical pattern. Return `'handled-async'` for async work (the router translates that into Chrome's `return true`), and always include `chrome.runtime.lastError` handling on the caller side.
 
 Historical note: prior to the thin-bridge release the same pattern existed because MV3 offscreen documents inherit only a subset of the manifest's `permissions` (notably, `chrome.storage` is not exposed in offscreen documents). The fix shape is identical; only the realm that lacks `chrome.storage` changed (offscreen → hosted leader tab).
 
@@ -1409,7 +1409,7 @@ Runtime-value imports from sibling modules are fine — esbuild bundles them in 
 | Runtime value | `import { bar } from './cherry-panel-sw.js'`       | Yes (esbuild inlines it into the IIFE)              |
 | Core modules  | `import { createLogger } from '../core/logger.js'` | Avoid — pulls a heavy dependency tree into the IIFE |
 
-**Current example**: `addToSliccGroup` (the "slicc" tab-grouping helper) lives inline in `service-worker.ts` because it is now the only copy (the former shared `tab-group.ts` module was deleted), not because an `import` would break the build.
+**Current example**: `service-worker.ts` is a thin entry that imports runtime values from a dozen peer `*-sw.ts` backends (`leader-tab-sw.ts`, `cdp-proxy-sw.ts`, `secrets-sw.ts`, `tab-group-sw.ts`, …). Splitting a concern out of the SW entry costs nothing at runtime — esbuild inlines each module into the same IIFE — so "keep it inline so the SW stays self-contained" was never a reason to grow the entry.
 
 ## Page / Worker Realm Split
 

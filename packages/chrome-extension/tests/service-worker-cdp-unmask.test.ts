@@ -46,6 +46,9 @@ describe('service-worker CDP outgoing unmask', () => {
   let tabsGet: ReturnType<typeof vi.fn>;
   let connectExternalListeners: Array<(port: FakePort) => void>;
   let debuggerDetachListeners: Array<(source: { tabId: number }, reason: string) => void>;
+  let debuggerEventListeners: Array<
+    (source: { tabId: number }, method: string, params?: Record<string, unknown>) => void
+  >;
   let debuggerAttached: boolean;
 
   const SESSION_ID = '11111111-2222-3333-4444-555555555555';
@@ -56,6 +59,7 @@ describe('service-worker CDP outgoing unmask', () => {
     runtimeSentMessages = [];
     connectExternalListeners = [];
     debuggerDetachListeners = [];
+    debuggerEventListeners = [];
     debuggerAttached = false;
     storageMap = {
       '_session.id': SESSION_ID,
@@ -141,7 +145,16 @@ describe('service-worker CDP outgoing unmask', () => {
           debuggerAttached = false;
         }),
         sendCommand: debuggerSendCommand,
-        onEvent: { addListener: vi.fn() },
+        onEvent: {
+          addListener: (
+            listener: (
+              source: { tabId: number },
+              method: string,
+              params?: Record<string, unknown>
+            ) => void
+          ) => debuggerEventListeners.push(listener),
+          removeListener: vi.fn(),
+        },
         onDetach: {
           addListener: (listener: (source: { tabId: number }, reason: string) => void) =>
             debuggerDetachListeners.push(listener),
@@ -416,5 +429,90 @@ describe('service-worker CDP outgoing unmask', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
     expect(debuggerAttached).toBe(false);
+  });
+
+  // chrome.debugger.onEvent forwarding to the legacy offscreen channel.
+  // The bridge forwards its OWN events per-Port inside bridge-sw.ts, so the
+  // legacy broadcast must be keyed on a legacy `sessionToTab` mapping — not on
+  // "some consumer is attached", which also republished every bridge event with
+  // `sessionId: undefined`.
+
+  const emitDebuggerEvent = (): void => {
+    for (const listener of debuggerEventListeners) {
+      listener({ tabId: TAB_ID }, 'Network.requestWillBeSent', { requestId: 'r1' });
+    }
+  };
+
+  const cdpEvents = (): any[] =>
+    runtimeSentMessages.filter((m) => m?.payload?.type === 'cdp-event');
+
+  it('forwards debugger events for a legacy offscreen session, stamped with its sessionId', async () => {
+    await import('../src/service-worker.js');
+    await attach();
+    runtimeSentMessages.length = 0;
+
+    emitDebuggerEvent();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cdpEvents()).toEqual([
+      {
+        source: 'service-worker',
+        payload: {
+          type: 'cdp-event',
+          method: 'Network.requestWillBeSent',
+          params: { requestId: 'r1', sessionId: String(TAB_ID) },
+        },
+      },
+    ]);
+  });
+
+  it('does not republish a bridge-owned session\u2019s debugger events onto the offscreen channel', async () => {
+    await import('../src/service-worker.js');
+    const port = makeBridgePort();
+    for (const listener of connectExternalListeners) listener(port);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'event-scoping-test',
+      kind: 'handshake.hello',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'event-scoping-test',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: String(TAB_ID) },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(debuggerAttached).toBe(true);
+    runtimeSentMessages.length = 0;
+
+    emitDebuggerEvent();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The bridge still gets its own copy over the Port…
+    expect(port.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'cdp.event', method: 'Network.requestWillBeSent' })
+    );
+    // …but the offscreen relay sees nothing: it never attached this tab.
+    expect(cdpEvents()).toEqual([]);
+  });
+
+  it('stops forwarding debugger events once the legacy session detaches', async () => {
+    await import('../src/service-worker.js');
+    await attach();
+    await dispatchOffscreen({
+      type: 'cdp-command',
+      id: 9,
+      method: 'Target.detachFromTarget',
+      params: { sessionId: String(TAB_ID) },
+    });
+    runtimeSentMessages.length = 0;
+
+    emitDebuggerEvent();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cdpEvents()).toEqual([]);
   });
 });

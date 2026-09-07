@@ -8,15 +8,31 @@ per-surface implementation rationale that doesn't fit either page.
 
 ## Responsibilities
 
-- **Service worker** (`src/service-worker.ts`): pins the leader tab,
-  opens/focuses the side panel on action-click (`chrome.sidePanel.open`,
-  `setPanelBehavior`), accepts the leader's bridge Port via
-  `externally_connectable`, pass-through proxies `chrome.debugger` through
-  `bridge-sw.ts`, hosts the secret-aware fetch proxy and the S3/DA mount
-  sign-and-forward backends, and surfaces SLICC handoff notifications observed
-  via `webRequest` — payload-naming toast with origin attribution,
-  control-character sanitization, and per-fingerprint session dedup (see
-  `extension-thin-bridge.md` "Handoff Toast").
+- **Service worker** (`src/service-worker.ts`): a thin MV3 entry that owns no
+  backend logic. It builds `bridgeSwDeps`, calls each backend's `install*()`
+  once, opens/focuses the side panel on action-click (`chrome.sidePanel.open`,
+  `setPanelBehavior`), and routes the four externally-connectable Ports. The
+  concerns themselves live in peer `*-sw.ts` modules: `leader-tab-sw.ts` (pinned
+  leader lifecycle), `cdp-proxy-sw.ts` (`chrome.debugger` translation +
+  attachment ownership shared with `bridge-sw.ts`), `secrets-sw.ts` (secret-aware
+  fetch proxy + `secrets.*`), `mount-backends-sw.ts` (S3/DA sign-and-forward),
+  `handoff-notifications-sw.ts` (SLICC handoff notifications observed via
+  `webRequest` — payload-naming toast with origin attribution, control-character
+  sanitization, and per-fingerprint session dedup; see
+  `extension-thin-bridge.md` "Handoff Toast"), `discovery-sw.ts`, `relay-sw.ts`
+  (+ `oauth-sw.ts`, `tray-socket-sw.ts`, `tab-group-sw.ts`,
+  `capture-popup-sw.ts`).
+
+  Two invariants the split encodes:
+
+  - **One `chrome.runtime.onMessage` listener.** `sw-message-router.ts` walks the
+    backends in order; each returns `'not-handled' | 'handled' | 'handled-async'`
+    and the router alone decides the `return true` that keeps `sendResponse`
+    alive. Three independent listeners used to race on this channel.
+  - **One pin implementation.** `sw-pinned-port.ts` performs the three-factor
+    pin for every non-bridge externally-connectable Port, started on connect and
+    awaited _inside_ `onMessage` so the listener still attaches synchronously.
+
 - **Side-panel cockpit** (`sidepanel.html` + `src/sidepanel-entry.ts`):
   on-demand `chrome.sidePanel` surface that iframes the hosted ui-only cherry
   follower (`?cherry=1&ui-only=1`) and runs the tri-state
