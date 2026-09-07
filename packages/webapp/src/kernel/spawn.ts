@@ -30,7 +30,7 @@
 
 import type { CDPTransport } from '../cdp/transport.js';
 import type { FeatureFlagFloat } from '../core/feature-flags.js';
-import { startPageCdpForwarder } from './cdp-worker-proxy.js';
+import { startPageCdpForwarder } from './cdp-page-forwarder.js';
 import type {
   KernelWorkerBootErrorMsg,
   KernelWorkerBootProgressMsg,

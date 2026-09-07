@@ -17,7 +17,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CDPStateListener, CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
-import { startPageCdpForwarder, WorkerCdpProxy } from '../../src/kernel/cdp-worker-proxy.js';
+import { startPageCdpForwarder } from '../../src/kernel/cdp-page-forwarder.js';
+import { WorkerCdpProxy } from '../../src/kernel/cdp-worker-proxy.js';
 
 function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

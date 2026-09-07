@@ -38,19 +38,21 @@ interface RawMessageSink {
 const CONNECT_TIMEOUT_MS = 10_000;
 
 export async function loadSlicc() {
-  const [browserApi, cdpClient, workerProxy, logger, navigationWatcher] = await Promise.all([
-    import('../../webapp/src/cdp/browser-api.js'),
-    import('../../webapp/src/cdp/cdp-client.js'),
-    import('../../webapp/src/kernel/cdp-worker-proxy.js'),
-    import('../../webapp/src/base/logger.js'),
-    import('../../webapp/src/cdp/navigation-watcher.js'),
-  ]);
+  const [browserApi, cdpClient, workerProxy, pageForwarder, logger, navigationWatcher] =
+    await Promise.all([
+      import('../../webapp/src/cdp/browser-api.js'),
+      import('../../webapp/src/cdp/cdp-client.js'),
+      import('../../webapp/src/kernel/cdp-worker-proxy.js'),
+      import('../../webapp/src/kernel/cdp-page-forwarder.js'),
+      import('../../webapp/src/base/logger.js'),
+      import('../../webapp/src/cdp/navigation-watcher.js'),
+    ]);
   logger.setLogLevel(logger.LogLevel.ERROR);
   return {
     BrowserAPI: browserApi.BrowserAPI,
     CDPClient: cdpClient.CDPClient,
     WorkerCdpProxy: workerProxy.WorkerCdpProxy,
-    startPageCdpForwarder: workerProxy.startPageCdpForwarder,
+    startPageCdpForwarder: pageForwarder.startPageCdpForwarder,
     NavigationWatcher: navigationWatcher.NavigationWatcher,
   };
 }
