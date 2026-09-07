@@ -48,9 +48,11 @@ export interface CDPTransport {
 
   /**
    * Optional: observe connection-state transitions. Returns an unsubscribe
-   * function. Only transports whose connection can drop underneath their
-   * owner implement it — today `CDPClient`, whose WebSocket the standalone
-   * `/cdp` proxy can close at any time.
+   * function. Implemented by transports whose connection can drop underneath
+   * their owner: `CDPClient` (the standalone `/cdp` proxy can close its
+   * WebSocket at any time) and the `CdpTransportBridge` family
+   * (`ExtensionBridgeTransport` on an MV3 Port loss, `WorkerCdpProxy` on a
+   * relayed `cdp-reset`).
    *
    * Polling `state` is not enough across a process hop: the kernel worker
    * drives CDP through `WorkerCdpProxy`, whose `state` says nothing about the
