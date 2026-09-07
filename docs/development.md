@@ -129,6 +129,21 @@ node -p "JSON.parse(require('fs').readFileSync('package-lock.json','utf8')).pack
 npm view <dep> version
 ```
 
+### Lockfile artifact updates
+
+`renovate.json` sets `skipInstalls: false`. Mend-hosted Renovate otherwise
+defaults to `npm install --package-lock-only`, and npm's arborist then fails
+with `EMISSINGTARGET` on this workspace: a `link: true` entry such as
+`node_modules/@slicc/webapp` → `packages/webapp` is rewritten without the
+matching `packages/webapp` key. The lockfile on `main` is valid; only the
+lockfile-only rewrite is broken. That left PRs #2848, #2882, #2903, #2831,
+and #2922 with a `package.json` bump and a stale lockfile (`npm ci` red
+everywhere). A full `npm install` (what `skipInstalls: false` runs; scripts
+still ignored) produces the lockfile that CI can consume.
+
+Do not re-enable skipInstalls without a reproduction that the lockfile-only
+path no longer throws `EMISSINGTARGET` on a workspace bump.
+
 ### Companion reconcile workflows
 
 The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Four workflows
