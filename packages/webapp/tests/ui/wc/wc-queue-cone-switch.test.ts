@@ -259,3 +259,62 @@ describe('queued pile across a Freezer detour', () => {
     expect(controller.restoreQueued).toHaveBeenCalledWith([{ id: 'q1' }]);
   });
 });
+
+describe('a restore that has not landed yet stays with its own cone', () => {
+  /**
+   * `restoreQueued` arms a SINGLE pending slot that carries no unit id, and
+   * the replay it waits for is asynchronous. Leaving the cone again inside
+   * that window used to leave the slot armed, so the next unit's replay —
+   * another cone, or a Freezer thaw — consumed the pile and rendered one
+   * cone's queued prompts under another's thread (Codex P1 on this PR).
+   */
+  it('re-holds an armed restore when the user leaves before the replay lands', () => {
+    const app = document.createElement('div');
+    document.body.append(app);
+    const boot = prepareWcShell(app, 'test');
+    const client = fakeClient();
+    boot.setClient(client as never);
+    installLeaderChatHost(boot, client);
+    const callbacks = createWcLiveCallbacks(boot.wiring);
+
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.append(thread);
+    const controller = new WcChatController({
+      thread,
+      agent: {
+        onEvent: () => () => undefined,
+        sendMessage: () => undefined,
+        stop: () => undefined,
+      },
+    } as never);
+    boot.setController(controller as never);
+    const ids = () =>
+      (controller.getQueuedMessages() as unknown as { id: string }[]).map((m) => m.id);
+
+    boot.selectScoop(summaryOf(coneA));
+    callbacks.onScoopMessagesReplaced?.('cone-1', [] as never, []);
+    controller.setProcessing(true);
+    controller.sendUserMessage('and then deploy it');
+    const id = ids()[0] as string;
+
+    boot.selectScoop(summaryOf(coneB));
+    callbacks.onScoopMessagesReplaced?.('cone-2', [] as never, []);
+
+    // Back to A — the restore is armed — and straight out again before A's
+    // snapshot has had a chance to arrive.
+    boot.selectScoop(summaryOf(coneA));
+    boot.selectScoop(summaryOf(coneB));
+
+    // B's replay must not inherit A's pile.
+    callbacks.onScoopMessagesReplaced?.('cone-2', [] as never, []);
+    expect(ids()).toEqual([]);
+    expect(controller.getMessages()).toEqual([]);
+
+    // A still owns it.
+    boot.selectScoop(summaryOf(coneA));
+    const buffered = { id, role: 'user', content: 'and then deploy it', timestamp: 1 };
+    callbacks.onScoopMessagesReplaced?.('cone-1', [buffered] as never, [id]);
+    expect(ids()).toEqual([id]);
+    controller.dispose();
+  });
+});
