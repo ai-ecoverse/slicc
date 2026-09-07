@@ -196,10 +196,13 @@ the two shipped hooks differ in where the verdict lives:
 Adobe's shape is the trap worth knowing: reading the status as the answer would
 call every revoked IMS token valid, and a non-2xx there means the check itself
 did not run (a 400 `bad_request` for a malformed call), so it is `UNKNOWN` and
-must never send a caller with a good token through a consent window. The
-`client_id` the call requires is read back from the access token's own JWT
-claims, so `--check adobe` works on a cold page, before anything has fetched the
-proxy's `/v1/config`.
+must never send a caller with a good token through a consent window. Only an
+explicit `valid: false` is a refusal — a 200 with no boolean verdict is
+`UNKNOWN` too. The `client_id` the call requires is read back from the access
+token's own JWT claims, so `--check adobe` works even when the proxy's
+`/v1/config` is unreachable, and the IMS environment comes from the config of
+the proxy endpoint **that account** uses, so a `stg1` account is not asked
+about production.
 
 `oauth-token <id>` (no flags) and `skill.token('<id>')` print the secrets-pipeline
 **replica** (`account.maskedValue`), never `accessToken`. `--check` is the

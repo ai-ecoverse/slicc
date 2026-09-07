@@ -206,6 +206,14 @@ alone would call every revoked token valid; GitHub (`GET /user`) puts it in the
 status. The per-provider table is in
 [`shell-reference.md`](shell-reference.md#oauth-token-held-vs-working).
 
+When the verdict lives in the body, require it **explicitly**. A 200 whose body
+has no boolean `valid` — an error envelope, a truncated response — must be
+`unknown`; falling through to `rejected` claims a refusal the provider never
+issued. Resolve any per-account settings the call needs (IMS environment,
+client ID) from _that account's_ endpoint rather than a first-value read of a
+session cache, or a staging account gets asked about production. Bound those
+lookups too: everything `--check` awaits is on the path to it answering.
+
 `oauth-token --check [<id>]` is the only surface that calls this hook, and it
 falls back to any registered provider that implements it when the selected one
 does not.

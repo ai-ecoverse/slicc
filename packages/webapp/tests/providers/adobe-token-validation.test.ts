@@ -45,17 +45,54 @@ function imsToken(clientId = 'ims-client'): string {
   return `header.${payload}.signature`;
 }
 
-function seedAdobeAccount(account: { accessToken?: string; userName?: string }): void {
+function seedAdobeAccount(account: {
+  accessToken?: string;
+  userName?: string;
+  /** Overrides the build-time proxy endpoint, and keys `proxyConfigCache`. */
+  baseUrl?: string;
+}): void {
   storage.set('slicc_accounts', JSON.stringify([{ providerId: 'adobe', apiKey: '', ...account }]));
 }
 
 /** A fetch stub whose recorded calls stay typed, so `init` is inspectable. */
 function stubFetch(
-  answer: () => Response
+  answer: (url: string) => Response
 ): ReturnType<typeof vi.fn<(url: unknown, init?: RequestInit) => Promise<Response>>> {
-  const spy = vi.fn(async (_url: unknown, _init?: RequestInit) => answer());
+  const spy = vi.fn(async (url: unknown, _init?: RequestInit) => answer(String(url)));
   globalThis.fetch = spy as unknown as typeof globalThis.fetch;
   return spy;
+}
+
+/**
+ * Route by URL rather than answering everything alike.
+ *
+ * `--check` asks the account's proxy for `/v1/config` before it asks IMS, so a
+ * stub that answers both with the same body makes the verdict call's position
+ * in the call list depend on whether `proxyConfigCache` was already warm — and
+ * therefore on test order. Naming the two endpoints separately keeps each
+ * assertion about the call it means.
+ */
+function stubImsFetch(answers: {
+  config?: Response | (() => Response);
+  validate: Response | (() => Response);
+}): ReturnType<typeof vi.fn<(url: unknown, init?: RequestInit) => Promise<Response>>> {
+  const pick = (a: Response | (() => Response)) => (typeof a === 'function' ? a() : a);
+  return stubFetch((url) => {
+    if (url.includes('/v1/config')) {
+      return answers.config
+        ? pick(answers.config)
+        : new Response(JSON.stringify({}), { status: 200 });
+    }
+    if (url.includes('/ims/validate_token/v1')) return pick(answers.validate);
+    return new Response('unexpected', { status: 500 });
+  });
+}
+
+/** The `validate_token` call, found by URL so config calls cannot shift it. */
+function validateCall(
+  spy: ReturnType<typeof vi.fn<(url: unknown, init?: RequestInit) => Promise<Response>>>
+): [url: unknown, init?: RequestInit] | undefined {
+  return spy.mock.calls.find((c) => String(c[0]).includes('/ims/validate_token/v1'));
 }
 
 /** The request `onValidateToken` sent, decoded from the form body. */
@@ -90,24 +127,86 @@ describe('adobe onValidateToken (does IMS still accept the token?)', () => {
   });
 
   it('asks the endpoint built for the question, with the token’s own client_id', async () => {
-    const fetchSpy = stubFetch(
-      () => new Response(JSON.stringify({ valid: true }), { status: 200 })
-    );
+    const fetchSpy = stubImsFetch({
+      validate: () => new Response(JSON.stringify({ valid: true }), { status: 200 }),
+    });
     const token = imsToken('experience-catalyst-prod');
     seedAdobeAccount({ accessToken: token });
 
     const { config } = await import('../../providers/adobe.js');
     await config.onValidateToken?.();
 
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe(IMS_VALIDATE_URL);
-    const form = sentForm(fetchSpy.mock.calls[0]?.[1]);
+    const call = validateCall(fetchSpy);
+    expect(call?.[0]).toBe(IMS_VALIDATE_URL);
+    const form = sentForm(call?.[1]);
     expect(form.get('token')).toBe(token);
     expect(form.get('type')).toBe('access_token');
-    // Read back from the JWT rather than `proxyConfigCache`, which is empty
-    // until something has fetched /v1/config this session. IMS answers 400
-    // when `client_id` is missing, which would make every cold-page check
-    // report UNKNOWN.
+    // Read back from the JWT rather than the proxy config: the token's own
+    // claim is the client the question is about, and it needs no network call,
+    // so the check still works when /v1/config is unreachable. IMS answers 400
+    // when `client_id` is missing, which would make that case report UNKNOWN.
     expect(form.get('client_id')).toBe('experience-catalyst-prod');
+  });
+
+  it('treats a 200 with no boolean verdict as unknown, not a refusal', async () => {
+    // An IMS error envelope or a truncated body can arrive with HTTP 200.
+    // Falling through to `rejected` there would claim IMS refused a credential
+    // it never ruled on, and push the caller into a consent window that cannot
+    // fix anything (#2939 review).
+    for (const body of [
+      { error: 'server_error' },
+      { valid: 'true' },
+      { valid: null },
+      {},
+    ] as const) {
+      stubImsFetch({ validate: () => new Response(JSON.stringify(body), { status: 200 }) });
+      seedAdobeAccount({ accessToken: imsToken() });
+
+      const { config } = await import('../../providers/adobe.js');
+      const result = await config.onValidateToken?.();
+      expect(result?.status, JSON.stringify(body)).toBe('unknown');
+    }
+  });
+
+  it('asks the IMS environment the account’s own proxy names, not the first cached one', async () => {
+    // `proxyConfigCache` is keyed by endpoint, so reading the first value out of
+    // it returns whichever proxy was fetched first this session, and on a cold
+    // page returns nothing — silently falling back to PRODUCTION IMS. For a
+    // stg1 account that asks an IMS which never minted the token (#2939
+    // review). A distinct `baseUrl` also gives this test its own cache key.
+    const fetchSpy = stubImsFetch({
+      config: () =>
+        new Response(JSON.stringify({ imsEnvironment: 'stg1', clientId: 'stg-client' }), {
+          status: 200,
+        }),
+      validate: () => new Response(JSON.stringify({ valid: true }), { status: 200 }),
+    });
+    seedAdobeAccount({ accessToken: imsToken(), baseUrl: 'https://adobe-proxy.stg1.test' });
+
+    const { config } = await import('../../providers/adobe.js');
+    await expect(config.onValidateToken?.()).resolves.toMatchObject({ status: 'accepted' });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://adobe-proxy.stg1.test/v1/config',
+      expect.anything()
+    );
+    expect(validateCall(fetchSpy)?.[0]).toBe(
+      'https://ims-na1-stg1.adobelogin.com/ims/validate_token/v1'
+    );
+  });
+
+  it('still answers when the proxy config lookup fails', async () => {
+    // The config call is best-effort: a dead proxy must degrade to the
+    // build-time defaults, not stop `--check` from reaching IMS at all.
+    const fetchSpy = stubFetch((url) => {
+      if (url.includes('/v1/config')) throw new Error('proxy down');
+      return new Response(JSON.stringify({ valid: true }), { status: 200 });
+    });
+    seedAdobeAccount({ accessToken: imsToken(), baseUrl: 'https://adobe-proxy.dead.test' });
+
+    const { config } = await import('../../providers/adobe.js');
+    await expect(config.onValidateToken?.()).resolves.toMatchObject({ status: 'accepted' });
+    expect(validateCall(fetchSpy)?.[0]).toBe(IMS_VALIDATE_URL);
   });
 
   it('reads the verdict from the body — IMS answers 200 for a dead token too', async () => {
@@ -184,9 +283,9 @@ describe('adobe onValidateToken (does IMS still accept the token?)', () => {
   });
 
   it('bounds the call so --check always answers', async () => {
-    const fetchSpy = stubFetch(
-      () => new Response(JSON.stringify({ valid: true }), { status: 200 })
-    );
+    const fetchSpy = stubImsFetch({
+      validate: () => new Response(JSON.stringify({ valid: true }), { status: 200 }),
+    });
     seedAdobeAccount({ accessToken: imsToken() });
 
     const { config } = await import('../../providers/adobe.js');
@@ -194,7 +293,7 @@ describe('adobe onValidateToken (does IMS still accept the token?)', () => {
 
     // Without a signal, a stalled IMS would hang the command forever and the
     // caller would get neither a verdict nor an exit code.
-    expect(fetchSpy.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(validateCall(fetchSpy)?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });
 
