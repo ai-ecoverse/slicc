@@ -87,7 +87,9 @@ export async function loadModuleGraph(
   cwd: string,
   filename: string
 ): Promise<RealmModuleGraph> {
-  if (!mightNeedModuleGraph(code)) return { files: [], entryMap: {}, edges: {}, errors: {} };
+  if (!mightNeedModuleGraph(code)) {
+    return { files: [], entryMap: {}, edges: {}, edgeErrors: {}, errors: {} };
+  }
   return rpc.call<RealmModuleGraph>('module', 'buildGraph', [
     code,
     entryFromDir(filename, cwd),
@@ -201,12 +203,24 @@ export function createModuleSystem(opts: {
     return { hit: false };
   };
 
-  const requireFromEdges = (edgeMap: Record<string, string> | undefined, id: string): unknown => {
+  /**
+   * Resolve one specifier for the module at `fromPath` (`null` for the entry).
+   * Deferred failures are consulted only after the edge lookup misses, so a
+   * specifier the host DID resolve is never shadowed by a stale error entry.
+   */
+  const requireFromEdges = (
+    edgeMap: Record<string, string> | undefined,
+    id: string,
+    fromPath: string | null
+  ): unknown => {
     const builtin = resolveBuiltin(id);
     if (builtin.hit) return builtin.value;
     const targetPath = edgeMap?.[id];
     if (targetPath) return requireFile(targetPath);
-    if (id in graph.errors) throw new Error(graph.errors[id]);
+    // The host deferred this specifier's resolution failure to require time
+    // (Node semantics), so surface its exact message now.
+    const deferred = fromPath === null ? graph.errors[id] : graph.edgeErrors?.[fromPath]?.[id];
+    if (deferred) throw new Error(deferred);
     throw cannotFindModuleError(id);
   };
 
@@ -218,7 +232,7 @@ export function createModuleSystem(opts: {
     const moduleObj = { exports: {} as ModuleExports };
     // Register before evaluation so a require cycle sees the partial exports.
     cache.set(path, moduleObj);
-    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
+    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id, path);
     const moduleDir = dirnameOf(path);
     const compiled = new Function(
       'module',
@@ -248,7 +262,7 @@ export function createModuleSystem(opts: {
   }
 
   return {
-    require: (id: string): unknown => requireFromEdges(graph.entryMap, id),
+    require: (id: string): unknown => requireFromEdges(graph.entryMap, id, null),
   };
 }
 

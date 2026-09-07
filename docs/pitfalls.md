@@ -425,6 +425,30 @@ the canonical `NODE_NATIVE_PACKAGES` and asserts the hand-mirror carries
 it. A package added to the canonical set without mirroring fails CI
 rather than silently re-enabling the 5-minute realm hang.
 
+**An unresolvable nested `require()` is a require-time error, never a
+graph-build error.** `buildModuleGraph` walks the whole dependency closure
+ahead of execution, so it sees specifiers Node would never resolve at all.
+`try { require('supports-color') } catch {}` is the standard optional-dependency
+idiom (`debug/src/node.js` is the one everybody hits), and Node only fails it
+when the line RUNS — inside the caller's `try`. A walker that throws on the
+first unresolvable edge instead sinks the entire graph, and the caller sees an
+error from a module it never asked for:
+
+```text
+While loading '/shared/lib/node_modules/debug/src/node.js': Cannot find module 'supports-color'
+```
+
+That error surfaces from `require('eslint/universal')`, three levels up, and no
+amount of `ipk add` fixes it because the missing package is genuinely optional.
+`ModuleGraph.edgeErrors` (keyed `fromPath → specifier → message`) now records
+the failure and `visit()` keeps walking; the realm's `requireFromEdges(edgeMap,
+id, fromPath)` throws the recorded message only when that specifier is actually
+required. Order matters there: consult `edgeErrors` **after** the edge lookup
+misses, or a specifier that failed from one file would shadow the resolved
+edge of another. Entry-point failures still throw — those are the ones the
+caller named. Regressions: `tests/shell/ipk/module-loader.test.ts`,
+`tests/shell/ipk/optional-dependency-require-e2e.test.ts`.
+
 ## RestrictedFS Path Behavior
 
 **File**: `packages/webapp/src/fs/restricted-fs.ts`

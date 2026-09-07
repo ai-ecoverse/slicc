@@ -182,12 +182,16 @@ export type RealmRpcChannel =
  * structured-clone-safe shape (raw `source` is dropped; only `cjsSource` and
  * `kind` cross the port). `errors` carries the per-entry resolution failure
  * message (e.g. `Cannot find module 'x' (run: ipk install x)`) so the realm
- * shim can throw it at `require()` time without a CDN round-trip.
+ * shim can throw it at `require()` time without a CDN round-trip;
+ * `edgeErrors` carries the same, per requiring file, for a NESTED specifier
+ * that did not resolve — deferring it is what lets the optional-dependency
+ * `try { require('x') } catch {}` idiom work as it does in Node.
  */
 export interface RealmModuleGraph {
   files: { path: string; cjsSource: string; kind: string }[];
   entryMap: Record<string, string>;
   edges: Record<string, Record<string, string>>;
+  edgeErrors: Record<string, Record<string, string>>;
   errors: Record<string, string>;
   /**
    * The host-transpiled entry source — present only when the realm's entry
