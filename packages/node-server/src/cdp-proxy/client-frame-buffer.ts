@@ -67,9 +67,16 @@ export interface DroppedClientFrames {
 }
 
 /** The slice of `ServerState` the buffer lifecycle reads and mutates. */
+/** ws `WebSocket.OPEN`; the only readyState under which frames can actually be delivered. */
+const SOCKET_OPEN = 1;
+
 export interface ClientFrameBufferHost {
-  /** The Chrome leg, or null while it is down. Only its presence matters here. */
-  chromeWs: unknown;
+  /**
+   * The Chrome leg, or null while it is down. A socket that is still
+   * CONNECTING (a reconnect attempt in flight) counts as "no live leg": a
+   * client joining then has lost nothing and its frames must stay flushable.
+   */
+  chromeWs: { readyState: number } | null;
   /** Monotonic id of `chromeWs`, assigned when the socket is created. */
   chromeConnectionId: number;
   /** Monotonic id of the client holding the single slot; null when empty. */
@@ -104,7 +111,8 @@ export function currentBufferGeneration(state: ClientFrameBufferHost): CdpBuffer
   return {
     // No live leg = nothing was lost, so the frames may flush onto whatever
     // connection comes up next (the original initial-connect buffering).
-    chromeConnectionId: state.chromeWs ? state.chromeConnectionId : null,
+    chromeConnectionId:
+      state.chromeWs?.readyState === SOCKET_OPEN ? state.chromeConnectionId : null,
     clientId: state.activeClientId,
   };
 }

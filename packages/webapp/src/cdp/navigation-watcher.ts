@@ -186,6 +186,8 @@ export class NavigationWatcher {
   private unsubscribeState: (() => void) | null = null;
   /** Guards against overlapping re-arms if `connected` fires twice in a row. */
   private rearming = false;
+  /** A 'connected' edge arrived while a re-arm was in flight; run once more after it settles. */
+  private rearmQueued = false;
 
   private readonly onDiscovery?: DiscoveryEventHandler;
   private readonly probeFetch?: ProbeFetch;
@@ -464,7 +466,13 @@ export class NavigationWatcher {
           this.clearConnectionScopedState();
           return;
         }
-        if (state === 'connected') void this.rearmAfterReconnect();
+        if (state === 'connected') {
+          // A second drop+reconnect while the previous re-arm is still awaiting
+          // its responses must not be discarded: that re-arm's commands were
+          // rejected by the intervening reset, so a fresh one has to follow.
+          if (this.rearming) this.rearmQueued = true;
+          else void this.rearmAfterReconnect();
+        }
       }) ?? null;
   }
 
@@ -492,6 +500,10 @@ export class NavigationWatcher {
       await this.enumeratePreexistingTargets();
     } finally {
       this.rearming = false;
+      if (this.rearmQueued) {
+        this.rearmQueued = false;
+        void this.rearmAfterReconnect();
+      }
     }
   }
 

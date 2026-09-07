@@ -24,7 +24,9 @@ import {
   takeClientFrameBuffer,
 } from '../../src/cdp-proxy/client-frame-buffer.js';
 
-const CHROME_SOCKET = { id: 'chrome' };
+const CHROME_SOCKET = { readyState: 1 };
+/** A reconnect attempt still in flight — no frames can be delivered on it yet. */
+const CONNECTING_SOCKET = { readyState: 0 };
 
 function makeHost(overrides: Partial<ClientFrameBufferHost> = {}): ClientFrameBufferHost {
   return {
@@ -86,6 +88,22 @@ describe('currentBufferGeneration', () => {
       chromeConnectionId: null,
       clientId: 1,
     });
+  });
+});
+
+describe('currentBufferGeneration on a connecting leg', () => {
+  it('leaves a client that joins during a reconnect attempt flushable (no concrete leg)', () => {
+    // Regression: tagging with the in-flight socket's id made the replacement
+    // socket's open handler drop every frame of the new client as
+    // chrome-leg-reset traffic — commands hung until their timeouts.
+    const state = makeHost({
+      chromeWs: CONNECTING_SOCKET,
+      chromeConnectionId: 7,
+      activeClientId: 2,
+    });
+    expect(currentBufferGeneration(state)).toEqual({ chromeConnectionId: null, clientId: 2 });
+    expect(adoptClientSlot(state, 2)).toBeNull();
+    expect(state.messageBuffer?.generation).toEqual({ chromeConnectionId: null, clientId: 2 });
   });
 });
 

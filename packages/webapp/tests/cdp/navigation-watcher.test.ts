@@ -1011,6 +1011,41 @@ describe('NavigationWatcher across an upstream reset', () => {
     expect(transport.sentCommands.map((c) => c.method)).not.toContain('Target.setDiscoverTargets');
   });
 
+  it('re-arms again when a second reconnect lands while the first re-arm is still in flight', async () => {
+    await watcher.start();
+    transport.simulateDrop();
+    await tick();
+
+    // Hold the first re-arm's Target.setDiscoverTargets open.
+    const realSend = transport.send.bind(transport);
+    let release: (() => void) | null = null;
+    let held = 0;
+    transport.send = async (method, params, sessionId) => {
+      if (method === 'Target.setDiscoverTargets' && held === 0) {
+        held += 1;
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        throw new Error('rejected by the intervening reset');
+      }
+      return realSend(method, params, sessionId);
+    };
+
+    transport.simulateReconnect();
+    await tick();
+    // Another drop + reconnect while the first re-arm is still awaiting.
+    transport.simulateDrop();
+    transport.simulateReconnect();
+    await tick();
+    transport.sentCommands.length = 0;
+
+    release!();
+    await tick();
+    await tick();
+    // The queued re-arm ran after the interrupted one settled.
+    expect(transport.sentCommands.map((c) => c.method)).toContain('Target.setDiscoverTargets');
+  });
+
   it('stays armed when re-enabling discovery fails, and recovers on the next reconnect', async () => {
     await watcher.start();
     transport.simulateDrop();
