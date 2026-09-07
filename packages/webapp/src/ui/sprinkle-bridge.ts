@@ -87,11 +87,12 @@ export interface SprinkleFetchInit {
  * Internal wire/transport shape carried by the bridge for `slicc.fetch`.
  * The body is base64-encoded so binary responses survive the
  * JSON/postMessage transport between the realm worker and the page.
- * This is NOT the public return of `slicc.fetch` — the page-side
- * `jshDispatch` rebuilds a native `Response` from these fields before
- * returning to the sprinkle. Unlike the iframe's CORS-bound native
- * `fetch`, this routes through the worker shell's proxied,
- * secret-injecting fetch.
+ * This is NOT the public return of `slicc.fetch`. Fragment-mode
+ * `createAPI.fetch` rebuilds a native `Response` in-page; full-document
+ * iframes post this wire shape across `postMessage` (a `Response` is not
+ * structured-cloneable) and rebuild inside the iframe. Unlike the
+ * iframe's CORS-bound native `fetch`, this routes through the worker
+ * shell's proxied, secret-injecting fetch.
  */
 export interface SprinkleFetchResult {
   ok: boolean;
@@ -312,14 +313,18 @@ export function buildJshNodeScript(op: string, args: unknown[]): string {
     'var bin="",C=0x8000;for(var i=0;i<u.length;i+=C){bin+=String.fromCharCode.apply(null,u.subarray(i,i+C));}' +
     'out={ok:r.ok,status:r.status,statusText:r.statusText,url:r.url,headers:h,bodyBase64:btoa(bin)};' +
     "}else if(op==='http'){" +
+    'var http=require("sliccy:http");' +
     'var c=http.client(a[0]||{});' +
     'var res=await c[a[1]](a[2],Object.assign({},a[3]||{},{raw:true}));' +
     'out={status:res.status,headers:res.headers,body:res.body};' +
     "}else if(op==='browser'){" +
+    'var browser=require("sliccy:browser");' +
     'var m=a[0];if(typeof browser[m]!=="function")throw new Error("browser."+m+" is not available over the sprinkle bridge");' +
     'out=await browser[m].apply(browser,a.slice(1));' +
-    "}else if(op==='spawn'){out=await exec.spawn(a[0]);" +
-    "}else if(op==='fetchToFile'){out=await fs.fetchToFile(a[0],a[1]);" +
+    "}else if(op==='spawn'){" +
+    'out=await require("sliccy:exec").spawn(a[0]);' +
+    "}else if(op==='fetchToFile'){" +
+    'out=await require("fs").fetchToFile(a[0],a[1]);' +
     '}else{throw new Error("unknown jsh op: "+op);}' +
     'emit({ok:true,value:out});' +
     '}catch(e){emit({ok:false,error:(e&&e.message)?e.message:String(e)});}'
@@ -398,30 +403,37 @@ function toUint8Array(value: unknown): Uint8Array {
   throw new Error('expected Uint8Array, ArrayBuffer, or number[]');
 }
 
-/** Statuses that the `Response` constructor forbids carrying a body. */
-const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
-
 /**
- * Build a native `Response` page-side from the bridge's wire shape.
- * Handles null-body statuses (101/103/204/205/304) by passing `null`
- * for the body, and statuses outside the `Response` constructor's
- * accepted `[200,599]` range by constructing a default-status Response
- * and shadowing `status`/`statusText`/`ok` (and `url`) via own data
- * props. `Response.url` is a read-only prototype getter; an own data
- * prop shadows it for property reads while native `.text()`/`.json()`/
- * `.arrayBuffer()`/`.blob()` still read the internal body.
+ * Build a native `Response` from the bridge's wire shape.
+ *
+ * Self-contained (no free variables) so full-document iframes can inject
+ * the same function via `Function#toString()`. Handles null-body statuses
+ * (101/103/204/205/304) by passing `null` for the body, and statuses
+ * outside the `Response` constructor's accepted `[200,599]` range by
+ * constructing a default-status Response and shadowing `status` /
+ * `statusText` / `ok` (and `url`) via own data props. `Response.url` is a
+ * read-only prototype getter; an own data prop shadows it for property
+ * reads while native `.text()`/`.json()`/`.arrayBuffer()`/`.blob()` still
+ * read the internal body.
  */
-function buildFetchResponse(v: SprinkleFetchResult): Response {
-  const bytes = base64ToU8(v.bodyBase64);
-  const body: BodyInit | null = NULL_BODY_STATUSES.has(v.status) ? null : (bytes as BodyInit);
+export function buildFetchResponse(v: SprinkleFetchResult): Response {
+  const bin = atob(v.bodyBase64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const nullBody =
+    v.status === 101 ||
+    v.status === 103 ||
+    v.status === 204 ||
+    v.status === 205 ||
+    v.status === 304;
+  const body: BodyInit | null = nullBody ? null : bytes;
   const headers = new Headers(v.headers);
-  let resp: Response;
   try {
-    resp = new Response(body, { status: v.status, statusText: v.statusText, headers });
+    const resp = new Response(body, { status: v.status, statusText: v.statusText, headers });
     Object.defineProperty(resp, 'url', { value: v.url, configurable: true });
     return resp;
   } catch {
-    resp = new Response(body, { headers });
+    const resp = new Response(body, { headers });
     const ok = v.status >= 200 && v.status < 300;
     Object.defineProperty(resp, 'status', { value: v.status, configurable: true });
     Object.defineProperty(resp, 'statusText', { value: v.statusText, configurable: true });
@@ -429,6 +441,11 @@ function buildFetchResponse(v: SprinkleFetchResult): Response {
     Object.defineProperty(resp, 'url', { value: v.url, configurable: true });
     return resp;
   }
+}
+
+/** `buildFetchResponse` source injected into full-document sprinkle iframes. */
+export function iframeFetchResponseSource(): string {
+  return 'var buildFetchResponse = ' + buildFetchResponse.toString() + ';\n';
 }
 
 /**
@@ -928,7 +945,9 @@ export class SprinkleBridge {
    * realm-backed op (`fetch`/`http`/`browser`/`spawn`/`fetchToFile`)
    * runs through a single `node -e` program over the shared exec
    * transport. Return values are structured-clone-safe so the renderer
-   * can post them straight back to an iframe in extension mode.
+   * can post them straight back to an iframe — `fetch` stays on the
+   * {@link SprinkleFetchResult} wire shape here; fragment `createAPI.fetch`
+   * and the iframe bridge rebuild a native `Response` on the caller side.
    */
   private async jshDispatch(op: string, args: unknown[]): Promise<unknown> {
     if (op === 'readFileBinary') {
@@ -941,12 +960,7 @@ export class SprinkleBridge {
       await this.fs.writeFile(args[0] as string, base64ToU8(args[1] as string));
       return true;
     }
-    const value = await runJshOp((cmd) => this.runExec(cmd), op, args);
-    if (op === 'fetch') {
-      const v = value as SprinkleFetchResult;
-      return buildFetchResponse(v);
-    }
-    return value;
+    return runJshOp((cmd) => this.runExec(cmd), op, args);
   }
 
   /**
@@ -1211,8 +1225,10 @@ export class SprinkleBridge {
       exec: Object.assign((cmd: string) => this.runExec(cmd), {
         spawn: (argv: string[]) => this.jshDispatch('spawn', [argv]) as Promise<SprinkleExecResult>,
       }) as SprinkleExecFn,
-      fetch: (url: string, init?: SprinkleFetchInit) =>
-        this.jshDispatch('fetch', [url, init ?? null]) as Promise<Response>,
+      fetch: async (url: string, init?: SprinkleFetchInit) =>
+        buildFetchResponse(
+          (await this.jshDispatch('fetch', [url, init ?? null])) as SprinkleFetchResult
+        ),
       http: {
         client: (config: SprinkleHttpClientConfig) => this.createHttpClient(config),
       },

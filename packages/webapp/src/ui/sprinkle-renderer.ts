@@ -10,7 +10,11 @@
 
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
-import type { SprinkleAgentOptions, SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import {
+  iframeFetchResponseSource,
+  type SprinkleAgentOptions,
+  type SprinkleBridgeAPI,
+} from './sprinkle-bridge.js';
 import { iframeScreenshotHelpersSource } from './sprinkle-screenshot.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
@@ -68,7 +72,23 @@ function postToIframe(
   id: unknown,
   extra: SprinkleIframeResponseBody = {}
 ): void {
-  iframe.contentWindow?.postMessage({ type, id, ...extra }, '*');
+  const win = iframe.contentWindow;
+  if (!win) return;
+  try {
+    win.postMessage({ type, id, ...extra }, '*');
+  } catch (err) {
+    // A non-cloneable success payload (e.g. a native Response) must still
+    // settle the iframe callback — otherwise slicc.fetch hangs until the
+    // caller's timeout (#2946). Skip the fallback if we were already
+    // posting `{ error }` so a second throw cannot recurse.
+    if (extra.error !== undefined) return;
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      win.postMessage({ type, id, error: message }, '*');
+    } catch {
+      /* iframe gone, or even the error payload was rejected */
+    }
+  }
 }
 
 /**
@@ -453,6 +473,7 @@ export class SprinkleRenderer {
   }
 
   ${iframeScreenshotHelpersSource()}
+  ${iframeFetchResponseSource()}
 
   var api = {
     lick: function(event) {
@@ -580,7 +601,9 @@ export class SprinkleRenderer {
     agent: function(prompt, opts) {
       return _vfsCall('sprinkle-agent', { prompt: prompt, opts: opts }, function(m) { return m.result; });
     },
-    fetch: function(url, init) { return _jshCall('fetch', [url, init || null]); },
+    fetch: function(url, init) {
+      return _jshCall('fetch', [url, init || null]).then(function(v) { return buildFetchResponse(v); });
+    },
     http: {
       client: function(cfg) {
         function mk(method) { return function(path, opts) { return _jshCall('http', [cfg, method, path, opts || null]); }; }
