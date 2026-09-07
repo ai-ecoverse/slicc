@@ -1,4 +1,5 @@
 import { icons } from 'lucide';
+import { escapeHtml } from './html.js';
 
 /**
  * Shared icon helper — every SLICC component renders icons from the `lucide`
@@ -30,9 +31,12 @@ function toPascal(name: string): string {
     .replace(/^(.)/, (_, c: string) => c.toUpperCase());
 }
 
+// Full escaping, not just the quote: escaping `"` alone leaves a literal `&`
+// in the value, so a `&` there either swallows the following characters as a
+// character reference or comes back out double-escaped by a later pass.
 function serializeAttrs(attrs: Record<string, string | number>): string {
   return Object.entries(attrs)
-    .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
+    .map(([k, v]) => `${k}="${escapeHtml(String(v))}"`)
     .join(' ');
 }
 
@@ -50,8 +54,8 @@ export function hasIcon(name: string): boolean {
 export function iconSvg(name: string, opts: IconOptions = {}): string {
   const size = opts.size ?? 16;
   const strokeWidth = opts.strokeWidth ?? 2;
-  const cls = opts.class ? ` class="${opts.class}"` : '';
-  const part = opts.part ? ` part="${opts.part}"` : '';
+  const cls = opts.class ? ` class="${escapeHtml(opts.class)}"` : '';
+  const part = opts.part ? ` part="${escapeHtml(opts.part)}"` : '';
   const node = REGISTRY[toPascal(name)];
   if (!node) {
     console.warn(`[slicc-webcomponents] unknown lucide icon: ${name}`);

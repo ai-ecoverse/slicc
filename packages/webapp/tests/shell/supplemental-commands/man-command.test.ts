@@ -150,4 +150,19 @@ describe('man command', () => {
     expect(result.stdout).not.toContain('&quot;');
     expect(result.stdout).not.toContain('&#39;');
   });
+
+  // `&amp;` must unescape LAST. Unescaping it first turned `&amp;lt;` — a page
+  // *showing* the text `&lt;` — into a real `<` for the next rule to decode.
+  it('does not double-unescape a page that shows an entity as text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(fetchResponse(200, '<p>Write &amp;lt; for a literal &amp;amp;</p>'))
+    );
+
+    const cmd = createManCommand();
+    const result = await cmd.execute(['escaping'], createMockCtx());
+
+    expect(result.stdout).toContain('Write &lt; for a literal &amp;');
+    expect(result.stdout).not.toContain('Write <');
+  });
 });

@@ -11,15 +11,20 @@ function manHelp(): { stdout: string; stderr: string; exitCode: number } {
 }
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .trimEnd();
+  return (
+    html
+      .replace(/<[^>]*>/g, '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+      // `&amp;` unescapes LAST. Going first turns `&amp;lt;` — the page's way
+      // of *showing* the text `&lt;` — into a real `<`, so the next rule
+      // decodes it again and prose about markup comes out as markup.
+      .replace(/&amp;/g, '&')
+      .trimEnd()
+  );
 }
 
 export function createManCommand(): Command {

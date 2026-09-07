@@ -2089,3 +2089,45 @@ Note the recovery paths are distinct and all are needed:
 
 - `packages/webcomponents/src/freezer/slicc-shader.ts` — `#initGl` / `#replaceCanvas` / `#dispose` / restore watchdog
 - `packages/webcomponents/tests/freezer/slicc-shader.test.ts` — remount + never-restored regression tests
+
+## Highlight the Source, Not the Escaped HTML
+
+**The bug.** `highlightCode()` used to `escapeHtml()` first and then run
+per-language regexes over the result. Escaping is not transparent to a
+tokenizer: `'` becomes `&#39;`, a five-character sequence that _ends in a real
+apostrophe_, `"` becomes `&quot;`, and `<` becomes `&lt;`. Three separate
+failures followed, all in one code block:
+
+- The string rules were written as `&#39;[^&]*?&#39;`, so any string whose body
+  contained an escaped character (`'<svg fill="#CB3837"/>'` — every inline icon
+  table) could not match from its own opening quote. The regex matched from the
+  tail of the CLOSING entity to the tail of the NEXT string's opening entity
+  instead, so the string bodies rendered plain while the delimiters, the comma,
+  the trailing `//` comment and the next key were painted as one string.
+- The bash comment rule `#[^\n]*` matched the `#` inside `&#39;`, turning the
+  rest of every line containing a quoted argument into a comment.
+- The number rule `\b\d+\b` matched the `39` inside `&#39;` and wrapped it,
+  producing `&#<span class="tok-number">39</span>;` — no longer a parsable
+  character reference, so the browser shows the literal text `&#39;`, and
+  reading `innerHTML` back re-escapes the orphaned `&` into `&amp;#39;`.
+
+Nothing downstream can repair any of this: once escaped, token text and markup
+are the same characters, and DOMPurify happily preserves the broken shape.
+
+**The Rule**
+
+Tokenize the ORIGINAL source; escape each token's text exactly once as it is
+emitted. `ui/code-highlight.ts` runs one combined regex per language and wraps
+matches on the way out, so there is no second pass over its own markup and no
+need for the placeholder-protection dance the old version needed to keep later
+rules out of the spans it had already inserted.
+
+The same ordering trap runs in reverse when unescaping: `&amp;` must be decoded
+**last**, or `&amp;lt;` (a page _showing_ the text `&lt;`) decodes twice into a
+real `<`.
+
+**Related Files**
+
+- `packages/webapp/src/ui/code-highlight.ts` — tokenize-then-escape highlighter
+- `packages/webapp/tests/ui/code-highlight.test.ts` — regressions for all three failures
+- `packages/webapp/src/shell/supplemental-commands/man-command.ts` — `stripHtml()` unescape order
