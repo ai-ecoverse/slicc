@@ -940,8 +940,10 @@ function ensureChromeConnection(
     const chromeWs = new WebSocket(url, { maxPayload: 0 });
     const connectionId = ++state.chromeConnectionId;
     state.chromeWs = chromeWs;
+    let opened = false;
 
     chromeWs.on('open', () => {
+      opened = true;
       console.log('[cdp-proxy] chromeWs open');
       flushBufferedClientFrames(state, chromeWs, connectionId, ctx);
       resolve();
@@ -952,6 +954,11 @@ function ensureChromeConnection(
     chromeWs.on('close', (code, reason) => {
       console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
       handleChromeLegDown(state, ctx, chromeWs, `close code=${code}`);
+      // A socket closed before it ever opened (a newer `/cdp` client's
+      // ensureChromeConnection replaced a reconnect attempt mid-handshake)
+      // must settle this promise too, or the reconnect controller waits on it
+      // forever and never schedules another attempt.
+      if (!opened) reject(new Error(`Chrome WS closed before open (code=${code})`));
     });
     chromeWs.on('error', (err) => {
       console.log(`[cdp-proxy] Chrome WS error: ${err}`);

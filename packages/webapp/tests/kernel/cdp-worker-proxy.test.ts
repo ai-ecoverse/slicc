@@ -622,6 +622,45 @@ describe('lazy page-client reconnect on worker command', () => {
     teardown();
   });
 
+  it('waits for an in-progress page-side reconnect (connecting) instead of dialing again', async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const { stub, worker, teardown } = setup(reconnect);
+    await worker.connect();
+    // The page BrowserAPI's own lazy reconnect is mid-handshake.
+    stub.setState('disconnected', 'reset');
+    await tick();
+    await worker.connect();
+    stub.setState('connecting');
+
+    const pending = worker.send('Runtime.evaluate');
+    await tick();
+    expect(stub.send).not.toHaveBeenCalled();
+    stub.setState('connected');
+
+    expect((await pending)['method']).toBe('Runtime.evaluate');
+    expect(reconnect).not.toHaveBeenCalled();
+    teardown();
+  });
+
+  it('fails the command when the in-progress reconnect lands disconnected', async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const { stub, worker, teardown } = setup(reconnect);
+    await worker.connect();
+    stub.setState('disconnected', 'reset');
+    await tick();
+    await worker.connect();
+    stub.setState('connecting');
+
+    const pending = worker.send('Runtime.evaluate');
+    await tick();
+    stub.setState('disconnected', 'handshake failed');
+
+    // Either the settle-wait rejects, or the relayed cdp-reset rejects the
+    // pending command first — both are a fast, explicit failure.
+    await expect(pending).rejects.toThrow(/failed to reconnect|upstream CDP connection was reset/);
+    teardown();
+  });
+
   it('does not re-dial a superseded page client — the slot belongs to another tab', async () => {
     const reconnect = vi.fn(async () => undefined);
     const { stub, worker, teardown } = setup(reconnect);

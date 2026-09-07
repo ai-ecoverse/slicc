@@ -18,6 +18,8 @@ import type {
   AccessibilityNode,
   BoundingBox,
   CDPConnectOptions,
+  CDPEventListener,
+  ConnectionState,
   EvaluateOptions,
   FrameEvaluateOptions,
   FrameInfo,
@@ -235,6 +237,71 @@ interface ViewportOverride {
   userAgent?: string;
 }
 
+/**
+ * The transport handed out by {@link BrowserAPI.getTransport}: forwards every
+ * call to the real transport and credits each successful session-scoped
+ * `send` to the replay guard. Handlers that talk to the transport directly
+ * (`press` sends `keyDown` then `keyUp`, `console` enables `Runtime`, …) would
+ * otherwise be invisible to {@link BrowserAPI.withTab}'s "has this callback
+ * already changed the page?" test, and a stale session between two such
+ * sends would replay the first one. One wrapper per real transport, so
+ * identity is stable for `on`/`off` bookkeeping and for callers that compare
+ * transports.
+ */
+class AccountedTransport implements CDPTransport {
+  onStateChange?: CDPTransport['onStateChange'];
+
+  constructor(
+    private readonly inner: CDPTransport,
+    private readonly onApplied: (sessionId: string) => void
+  ) {
+    if (inner.onStateChange) this.onStateChange = (listener) => inner.onStateChange!(listener);
+  }
+
+  get state(): ConnectionState {
+    return this.inner.state;
+  }
+
+  get superseded(): boolean | undefined {
+    return this.inner.superseded;
+  }
+
+  get isExtensionBridge(): boolean | undefined {
+    return this.inner.isExtensionBridge;
+  }
+
+  connect(options?: CDPConnectOptions): Promise<void> {
+    return this.inner.connect(options);
+  }
+
+  disconnect(): void {
+    this.inner.disconnect();
+  }
+
+  async send(
+    method: string,
+    params?: CdpPayload,
+    sessionId?: string,
+    timeout?: number
+  ): Promise<CdpPayload> {
+    const result = await this.inner.send(method, params, sessionId, timeout);
+    if (sessionId) this.onApplied(sessionId);
+    return result;
+  }
+
+  on(event: string, listener: CDPEventListener): void {
+    this.inner.on(event, listener);
+  }
+
+  off(event: string, listener: CDPEventListener): void {
+    this.inner.off(event, listener);
+  }
+
+  once(event: string, timeout?: number): Promise<CdpPayload> {
+    return this.inner.once(event, timeout);
+  }
+}
+
 export class BrowserAPI {
   private client: CDPTransport;
   private localClient: CDPTransport; // preserved original when using remote transport
@@ -389,7 +456,25 @@ export class BrowserAPI {
    * Used by HarRecorder to subscribe to network events.
    */
   getTransport(): CDPTransport {
-    return this.client;
+    return this.accountedTransportFor(this.client);
+  }
+
+  private readonly _accountedTransports = new WeakMap<CDPTransport, AccountedTransport>();
+
+  /** The stable {@link AccountedTransport} facade for a real transport. */
+  private accountedTransportFor(transport: CDPTransport): CDPTransport {
+    if (transport instanceof AccountedTransport) return transport;
+    let facade = this._accountedTransports.get(transport);
+    if (!facade) {
+      facade = new AccountedTransport(transport, (sessionId) => this.noteApplied(sessionId));
+      this._accountedTransports.set(transport, facade);
+    }
+    return facade;
+  }
+
+  /** Credit one successful session-scoped round trip to the replay guard. */
+  private noteApplied(sessionId: string): void {
+    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
   }
 
   /**
@@ -584,7 +669,7 @@ export class BrowserAPI {
     sessionId: string
   ): Promise<CdpPayload> {
     const result = await transport.send(method, params, sessionId);
-    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
+    this.noteApplied(sessionId);
     return result;
   }
 
@@ -2379,12 +2464,15 @@ export class BrowserAPI {
   }
 
   private notifySessionChange(targetId: string, entry: TabSession): void {
-    this._onSessionChange?.(entry.sessionId, entry.transport, targetId);
+    // Hand out the same facade `getTransport()` returns, so subscribers that
+    // compare transports (BshWatchdog, session-rebind) see one identity.
+    const transport = this.accountedTransportFor(entry.transport);
+    this._onSessionChange?.(entry.sessionId, transport, targetId);
     const subs = this._sessionReplacedSubs.get(targetId);
     if (!subs) return;
     for (const cb of [...subs]) {
       try {
-        cb(entry.sessionId, entry.transport, targetId);
+        cb(entry.sessionId, transport, targetId);
       } catch (err) {
         log.warn('session-replaced subscriber threw', {
           targetId,

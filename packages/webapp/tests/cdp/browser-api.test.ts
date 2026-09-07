@@ -1878,6 +1878,47 @@ describe('BrowserAPI', () => {
       expect(callsTo('Target.attachToTarget')).toHaveLength(1);
     });
 
+    it('counts the callback\u2019s DIRECT transport sends as applied (press: keyDown then keyUp)', async () => {
+      let sessCount = 0;
+      let keys = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.dispatchKeyEvent') {
+          keys += 1;
+          // keyDown lands; the session dies before keyUp.
+          if (keys > 1) throw new Error('Session with given id not found');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async (sessionId) => {
+          const transport = api.getTransport();
+          await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a' }, sessionId);
+          await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a' }, sessionId);
+        })
+        // A replay would press the key twice; the direct send must count.
+      ).rejects.toThrow(/reset mid-command.*outcome is unknown/s);
+
+      expect(keys).toBe(2);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('hands out one stable transport facade per real transport', () => {
+      const a = api.getTransport();
+      expect(api.getTransport()).toBe(a);
+      // Session-change subscribers receive the same facade.
+      const seen: unknown[] = [];
+      api.setSessionChangeCallback((_sid, transport) => seen.push(transport));
+      return api
+        .withTab('t1', async () => undefined)
+        .then(() => {
+          expect(seen).toHaveLength(1);
+          expect(seen[0]).toBe(a);
+        });
+    });
+
     it('does not replay a RETRY that had already changed the page', async () => {
       let sessCount = 0;
       let inserts = 0;
@@ -1957,7 +1998,8 @@ describe('BrowserAPI', () => {
       const unsubscribe = api.onSessionReplaced('t1', onReplaced);
 
       await api.withTab('t1', async () => {});
-      expect(onChange).toHaveBeenCalledWith('sess-1', mockClient, 't1');
+      // Subscribers get the same facade getTransport() hands out, not the raw client.
+      expect(onChange).toHaveBeenCalledWith('sess-1', api.getTransport(), 't1');
       expect(onReplaced).toHaveBeenCalledTimes(1);
 
       // Reusing the live session must not look like a replacement.
@@ -1966,7 +2008,7 @@ describe('BrowserAPI', () => {
 
       mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-1' });
       await api.withTab('t1', async () => {});
-      expect(onReplaced).toHaveBeenLastCalledWith('sess-2', mockClient, 't1');
+      expect(onReplaced).toHaveBeenLastCalledWith('sess-2', api.getTransport(), 't1');
 
       unsubscribe();
       mockClient._fireEvent('Target.detachedFromTarget', { sessionId: 'sess-2' });

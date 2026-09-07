@@ -59,11 +59,7 @@ async function handlePageCdpIncoming(
       // failing with "not connected" until the page's own periodic tab refresh
       // happens to call `ensureConnected()`. A superseded client stays down:
       // re-dialing would evict the newer SLICC tab that took the slot.
-      if (
-        reconnect &&
-        realTransport.state === 'disconnected' &&
-        realTransport.superseded !== true
-      ) {
+      if (reconnect && realTransport.state !== 'connected' && realTransport.superseded !== true) {
         await reconnect();
       }
       const result = await realTransport.send(cmd.method, cmd.params, cmd.sessionId);
@@ -126,6 +122,45 @@ function resubscribeRealTransport(
   }
 }
 
+/** How long a forwarded command waits for someone else's in-progress re-dial. */
+const CONNECTING_SETTLE_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve when a transport that is currently `'connecting'` reaches
+ * `'connected'`; reject if it lands on `'disconnected'` or takes too long.
+ * Transports without `onStateChange` are polled.
+ */
+function awaitConnecting(transport: CDPTransport): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    const finish = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (poll) clearInterval(poll);
+      unsubscribe?.();
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () => finish(new Error('page CDP client is still connecting')),
+      CONNECTING_SETTLE_TIMEOUT_MS
+    );
+    const check = (state: ConnectionState): void => {
+      if (state === 'connected') finish();
+      else if (state === 'disconnected') finish(new Error('page CDP client failed to reconnect'));
+    };
+    if (transport.onStateChange) {
+      unsubscribe = transport.onStateChange((state) => check(state));
+    } else {
+      poll = setInterval(() => check(transport.state), 50);
+    }
+    check(transport.state);
+  });
+}
+
 export interface PageCdpForwarderOptions {
   /**
    * Re-dial the page-side transport. Called (coalesced — one in-flight
@@ -151,7 +186,15 @@ export function startPageCdpForwarder(
   const reconnectOnce = options.reconnect
     ? (): Promise<void> => {
         if (!reconnectInFlight) {
-          reconnectInFlight = options.reconnect!().finally(() => {
+          // Somebody else (the page BrowserAPI's own lazy reconnect) may already
+          // be mid-handshake: `state === 'connecting'`. Dialing again would
+          // throw "Cannot connect: state is connecting", so wait for that
+          // attempt to settle instead.
+          const attempt =
+            realTransport.state === 'connecting'
+              ? awaitConnecting(realTransport)
+              : options.reconnect!();
+          reconnectInFlight = attempt.finally(() => {
             reconnectInFlight = null;
           });
         }
