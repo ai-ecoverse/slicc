@@ -73,3 +73,48 @@ describe('withSupportedTemperature', () => {
     expect(options.temperature).toBe(0.3);
   });
 });
+
+/**
+ * Non-Claude allowlisted models. Both answer
+ * `400 "This model doesn't support the temperature field."` on
+ * `bedrock-runtime.us-west-2`, so `quick-llm.ts`'s `temperature: 0.3` helper
+ * calls would fail without this. Paired with the picker allowlist in
+ * `built-in/bedrock-camp-compat.ts` — extend both together.
+ */
+describe('non-Claude Bedrock models that reject temperature', () => {
+  it.each([
+    ['global.openai.gpt-5.6-sol'],
+    ['global.openai.gpt-5.6-terra'],
+    ['global.openai.gpt-5.6-luna'],
+  ])('%s does not support temperature', (id) => {
+    expect(modelSupportsTemperature(id)).toBe(false);
+  });
+
+  it('matches on the display name for opaque application-inference-profile ARNs', () => {
+    const arn = 'arn:aws:bedrock:us-west-2:1:application-inference-profile/x';
+    expect(modelSupportsTemperature(arn, 'GPT-5.6 Sol (Global)')).toBe(false);
+  });
+
+  it('strips temperature from options for those models', () => {
+    expect(
+      withSupportedTemperature('global.openai.gpt-5.6-sol', undefined, {
+        temperature: 0.3,
+        maxTokens: 8,
+      })
+    ).toEqual({ maxTokens: 8 });
+  });
+
+  it('leaves other non-Claude Bedrock models alone', () => {
+    for (const id of [
+      'us.amazon.nova-pro-v1:0',
+      'us.openai.gpt-oss-120b-1:0',
+      'global.zai.glm-5',
+      'us.qwen.qwen3-32b-v1:0',
+      // Not allowlisted, so never reached — and must not be misdetected.
+      'global.xai.grok-4.6',
+      'global.xai.grok-4.3',
+    ]) {
+      expect(modelSupportsTemperature(id), id).toBe(true);
+    }
+  });
+});

@@ -15,7 +15,7 @@
  * the adaptive shape itself.
  */
 
-export type ClaudeFamily = 'opus' | 'sonnet' | 'haiku';
+export type ClaudeFamily = 'opus' | 'sonnet' | 'haiku' | 'fable';
 
 export interface ClaudeVersion {
   family: ClaudeFamily;
@@ -44,7 +44,7 @@ function matchCandidates(modelId: string, modelName?: string): string[] {
  * constraint + negative lookahead prevents false positives on legacy IDs like
  * `claude-3-5-sonnet-20241022` where the date suffix would otherwise match.
  */
-const CLAUDE_VERSION_RE = /(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/;
+const CLAUDE_VERSION_RE = /(opus|sonnet|haiku|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/;
 
 /**
  * Parse a Claude family/major/minor out of an id or display name. Returns
@@ -77,26 +77,33 @@ function compareVersion(
 }
 
 /**
- * Adaptive thinking — Claude Opus and Sonnet at version ≥ 4.6 ship with the
- * `thinking: { type: 'adaptive' }` + `output_config.effort` shape (vs. the
- * legacy `thinking: { type: 'enabled', budget_tokens }`).
+ * Adaptive thinking — Claude Opus, Sonnet, and Fable at version ≥ 4.6 ship
+ * with the `thinking: { type: 'adaptive' }` + `output_config.effort` shape
+ * (vs. the legacy `thinking: { type: 'enabled', budget_tokens }`).
+ *
+ * Haiku is the lone holdout: `us.anthropic.claude-haiku-4-5` 400s with
+ * "adaptive thinking is not supported on this model", so it stays on the
+ * legacy shape. Excluding by family (rather than listing the adaptive ones)
+ * keeps a future Fable/Opus generation correct without an edit.
  */
 export function claudeSupportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
   if (!v) return false;
-  if (v.family !== 'opus' && v.family !== 'sonnet') return false;
+  if (v.family === 'haiku') return false;
   return compareVersion(v, { major: 4, minor: 6 }) >= 0;
 }
 
 /**
- * Native `effort: "xhigh"` tier — Opus introduced this at 4.7, Sonnet at 5.0.
- * Opus 4.6 and Sonnet 4.6 clamp xhigh to `"max"` / `"high"` respectively.
+ * Native `effort: "xhigh"` tier — Opus introduced this at 4.7, Sonnet at 5.0,
+ * and Fable has it from its first release (5.0). Opus 4.6 and Sonnet 4.6 clamp
+ * xhigh to `"max"` / `"high"` respectively.
  */
 export function claudeSupportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
   if (!v) return false;
   if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
   if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+  if (v.family === 'fable') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
   return false;
 }
 
@@ -113,12 +120,39 @@ export function claudeSupportsMaxEffort(modelId: string, modelName?: string): bo
 }
 
 /**
- * Bedrock rejects `temperature` for Opus ≥ 4.7 with
- * `400 "temperature is deprecated for this model."`. Sonnet and Haiku still
- * accept it on every released version.
+ * Prompt caching (`cachePoint` blocks) — every Claude ≥ 4.x supports it, plus
+ * the two legacy 3.x models that were backported (3.7 Sonnet, 3.5 Haiku).
+ *
+ * This replaced a `candidates.includes('-4-')` substring test in
+ * `bedrock-camp.ts`, which silently returned false for `claude-opus-5` /
+ * `claude-sonnet-5` / `claude-fable-5` — those have no `-4-` in their id — and
+ * so dropped cache points on every Claude 5 request. Verified live on
+ * `bedrock-runtime.us-west-2`: all three report a non-zero
+ * `cacheWriteInputTokens`.
+ */
+export function claudeSupportsPromptCaching(modelId: string, modelName?: string): boolean {
+  const v = parseClaudeVersion(modelId, modelName);
+  if (v) return v.major >= 4;
+  return matchCandidates(modelId, modelName).some(
+    (s) => s.includes('claude-3-7-sonnet') || s.includes('claude-3-5-haiku')
+  );
+}
+
+/**
+ * Bedrock rejects `temperature` with
+ * `400 "\`temperature\` is deprecated for this model."` for Opus ≥ 4.7,
+ * Sonnet ≥ 5.0, and every Fable. Haiku still accepts it on every released
+ * version (verified against `bedrock-runtime.us-west-2` for opus-5,
+ * sonnet-5, fable-5, and haiku-4-5).
+ *
+ * The deprecation tracks generations, not families: assume a future family
+ * ships without `temperature` and add it here when it lands.
  */
 export function claudeRejectsTemperature(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
-  if (v?.family !== 'opus') return false;
-  return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (!v) return false;
+  if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+  if (v.family === 'fable') return true;
+  return false;
 }

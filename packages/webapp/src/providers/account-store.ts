@@ -386,10 +386,11 @@ function applyModelMetadata(
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     // Bedrock CAMP uses Amazon Bedrock models with a custom API. Filter to
-    // inference-profile-prefixed Claude 4.x whose region matches the
-    // configured endpoint (eu.* against us-* 400s "invalid model
-    // identifier"). pi-ai's amazon-bedrock registry now ships every Opus 4.7
-    // profile variant; no manual extras list is needed.
+    // inference-profile-prefixed Claude 4.x and newer (plus the narrow
+    // non-Claude allowlist) whose region matches the configured endpoint
+    // (eu.* against us-* 400s "invalid model identifier"). pi-ai's
+    // amazon-bedrock registry ships every profile variant we surface; no
+    // manual extras list is needed.
     if (providerId === 'bedrock-camp') {
       const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
       return getModelsDynamic('amazon-bedrock')

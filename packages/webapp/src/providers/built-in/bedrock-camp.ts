@@ -44,6 +44,7 @@ import {
   claudeSupportsAdaptiveThinking,
   claudeSupportsMaxEffort,
   claudeSupportsNativeXhighEffort,
+  claudeSupportsPromptCaching,
 } from '../claude-model-version.js';
 import { modelSupportsTemperature } from '../temperature-support.js';
 import type { ProviderConfig } from '../types.js';
@@ -58,23 +59,53 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
-  defaultModelId: 'claude-sonnet-4-6',
+  defaultModelId: 'claude-opus-5',
 };
 
-// Picker filter: keep only Claude 4.x on an inference-profile prefix that
-// is reachable from the configured endpoint region.
+// Picker filter: keep only Claude 4.x and newer on an inference-profile prefix
+// that is reachable from the configured endpoint region.
 //
-// 1. Inference profile (us./eu./global./apac.) — bare anthropic.* 400s with
+// 1. Inference profile (us./eu./global./apac./au./jp.) — bare anthropic.* 400s with
 //    "on-demand throughput isn't supported".
-// 2. Claude 4.x only — older Claude 3.x are weaker at resisting prompt
-//    injection; non-Claude Bedrock models (Nova, Llama, Writer, …) are
-//    similarly risky, and DeepSeek R1 specifically 400s on toolConfig
-//    ("This model doesn't support tool use") which breaks the agent loop.
+// 2. Claude 4.x and newer, plus a narrow allowlist — older Claude 3.x are
+//    weaker at resisting prompt injection; most non-Claude Bedrock models
+//    (Nova, Llama, Writer, …) are similarly risky, and DeepSeek R1
+//    specifically 400s on toolConfig ("This model doesn't support tool use")
+//    which breaks the agent loop. The version group is open-ended so a new
+//    Claude generation (5, 6, …) lands in the picker with no edit here; new
+//    *families* still have to be added to the alternation (as `fable` was).
+//    Non-Claude stays DEFAULT-DENY: an id earns its place in
+//    BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE only after being verified live.
 // 3. Region must match the endpoint — e.g. `eu.*` IDs 400 with "invalid
-//    model identifier" when sent to a `us-*` runtime, and vice versa.
+//    model identifier" when sent to a `us-*` runtime, and vice versa
+//    (confirmed: `jp.anthropic.claude-sonnet-4-6` 400s on the `us-west-2`
+//    runtime but only 403s on `ap-northeast-1`, i.e. the id resolves there).
 //    `global.*` works anywhere.
-const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac)\./;
-const BEDROCK_CAMP_CLAUDE_4_RE = /\.anthropic\.claude-(opus|sonnet|haiku)-4/;
+//
+//    The country prefixes are narrower than the continent ones and do NOT
+//    map to a `startsWith` — `jp` is Japan only, so it must not swallow
+//    `ap-northeast-2` (Seoul), and `au` is Australia only. Enumerated from
+//    `GET /inference-profiles` per region: ap-northeast-1 serves
+//    `apac|jp|global`, ap-southeast-2 serves `apac|au|global`, and
+//    ap-southeast-1 / ap-south-1 serve `apac|global` with no country tier.
+const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac|au|jp)\./;
+const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?:[4-9]|\d\d)/;
+// Verified live on `bedrock-runtime.us-west-2` (see `docs/pitfalls.md` §5):
+// openai.gpt-5.6-{sol,terra,luna} do implicit prompt caching — cacheWrite on
+// the first call, cacheRead on every repeat, including with a system prompt
+// and toolConfig attached — and emit tool calls reliably.
+//
+// The bar for this list is prompt caching, which is why xai.grok-4.6 is NOT
+// here: it is functional (200s, tool calls) but cached on only 2 of 15
+// attempts at ~18-20k tokens, so it would bill full input on nearly every
+// turn. Re-measure before adding it.
+//
+// gpt-5.6 rejects `temperature` and every `additionalModelRequestFields`
+// thinking shape; `temperature-support.ts` and
+// `buildAdditionalModelRequestFields` already handle both. It does not accept
+// an explicit `cachePoint` block either — caching is automatic and sending one
+// 403s.
+const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5[.-]6-/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -90,17 +121,28 @@ export function bedrockCampRegionFromBaseUrl(baseUrl: string | null | undefined)
   }
 }
 
+/** Japan-only and Australia-only inference profiles, listed exhaustively. */
+const JP_REGIONS = new Set(['ap-northeast-1', 'ap-northeast-3']);
+const AU_REGIONS = new Set(['ap-southeast-2', 'ap-southeast-4']);
+
 function profileMatchesRegion(prefix: string, region: string): boolean {
   if (prefix === 'global') return true;
   if (prefix === 'us') return region.startsWith('us-');
   if (prefix === 'eu') return region.startsWith('eu-');
   if (prefix === 'apac') return region.startsWith('ap-');
+  if (prefix === 'jp') return JP_REGIONS.has(region);
+  if (prefix === 'au') return AU_REGIONS.has(region);
   return false;
 }
 
 export function isBedrockCampCompatible(model: { id: string }, region?: string | null): boolean {
   if (!BEDROCK_CAMP_INFERENCE_PROFILE_RE.test(model.id)) return false;
-  if (!BEDROCK_CAMP_CLAUDE_4_RE.test(model.id)) return false;
+  if (
+    !BEDROCK_CAMP_CLAUDE_RE.test(model.id) &&
+    !BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE.test(model.id)
+  ) {
+    return false;
+  }
   if (!region) return true; // no endpoint configured yet — stay permissive
   const prefix = model.id.split('.', 1)[0];
   return profileMatchesRegion(prefix, region);
@@ -683,10 +725,7 @@ function isAnthropicClaudeModel(model: Model<Api>): boolean {
 function supportsPromptCaching(model: Model<Api>): boolean {
   const candidates = getModelMatchCandidates(model.id, model.name);
   if (!candidates.some((s) => s.includes('claude'))) return false;
-  if (candidates.some((s) => s.includes('-4-'))) return true;
-  if (candidates.some((s) => s.includes('claude-3-7-sonnet'))) return true;
-  if (candidates.some((s) => s.includes('claude-3-5-haiku'))) return true;
-  return false;
+  return claudeSupportsPromptCaching(model.id, model.name);
 }
 
 function buildCachePoint(cacheRetention: CacheRetention): BedrockCampCachePoint {
