@@ -44,6 +44,18 @@ Bare script names live under `tools/`, bare dir names under `packages/dev-tools/
 - **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs` — gate macOS/iOS packaging, the `slicc` Go CLI (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store / worker publish, `@ai-ecoverse/biome-jsh`.
 - **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args…]` — runs iff on `PATH`, else warns + exits 0; used by `lint-staged` Swift/Go globs.
 
+### CDP Bridge Stress Harness
+
+`cdp-stress/` — drives the real client stack (`BrowserAPI` → `WorkerCdpProxy` →
+`CDPClient` → `/cdp`) against a live headless Chrome with a local site and a
+stand-in `/cdp` proxy that reproduces node-server and swift-server policies.
+Scenarios (session leak, cross-tab load bleed, stale proxy, worker-hop reset,
+fan-out, abandoned command) run standalone via `npx tsx`; `run-all.ts` writes
+JSON to `dist/cdp-stress/`. The pass criteria are asserted by the opt-in
+live-browser suite `packages/webapp/tests/cdp/cdp-stress.gate.test.ts`
+(`SLICC_TEST_CDP_STRESS=1`, same shape as the `iframe integration` gate).
+[README](cdp-stress/README.md).
+
 ### SLICC CDP Debug + Screencast
 
 - `tools/slicc-debug.mjs` — CDP diagnostic CLI (`targets`, `logs`, `vfs ls/cat`, `eval`, `shell`; `--url`/`--url-pattern`/`--file`; `--help`).

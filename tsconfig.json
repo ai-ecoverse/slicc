@@ -28,7 +28,8 @@
     "packages/webapp/providers/**/*.ts",
     "packages/webapp/tests/**/*.ts",
     "packages/chrome-extension/src/**/*.ts",
-    "packages/chrome-extension/tests/**/*.ts"
+    "packages/chrome-extension/tests/**/*.ts",
+    "packages/dev-tools/cdp-stress/**/*.ts"
   ],
   "exclude": ["packages/node-server/src/**/*.ts"]
 }
