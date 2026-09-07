@@ -991,9 +991,13 @@ export class BrowserAPI {
     // after the caller gave up. Awaiting `loadPromise` below still sees it.
     void loadPromise.catch(() => undefined);
 
-    await transport.send('Page.navigate', { url }, sessionId);
-
-    await this.waitOffBridgeLock(targetId, () => loadPromise);
+    // `Page.navigate` itself does not return until the navigation commits, so
+    // a URL that never responds hangs HERE, not in the load wait — both go
+    // off the bridge lock or a single hung goto stalls every other tab again.
+    await this.waitOffBridgeLock(targetId, async () => {
+      await transport.send('Page.navigate', { url }, sessionId);
+      await loadPromise;
+    });
   }
 
   /**
