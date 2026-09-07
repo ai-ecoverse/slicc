@@ -5,7 +5,7 @@ spots. Flag only genuine risks. Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
-Bound external calls and surface errors. Cap filesystem preload leaf copies globally; drain them before rejection.
+Bound external calls and surface errors. Cap preload copies globally; cancel queued work on failure and drain active copies.
 
 ## 2. Cross-runtime parity (often Critical)
 
