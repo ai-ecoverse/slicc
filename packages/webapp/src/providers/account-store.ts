@@ -647,6 +647,24 @@ export function getAllAvailableModels(): GroupedModels[] {
   return [...seen.values()];
 }
 
+/**
+ * Provider ids OTHER than `excludeProviderId` that have a configured account
+ * offering at least one pickable model — i.e. the providers the user could
+ * switch to right now, without connecting anything new.
+ *
+ * Drives the exhausted-budget error card's CTA (`ui/wc/wc-message-view.ts`):
+ * "Switch provider and try again" is only honest when such a provider exists;
+ * otherwise the card offers "Add a provider" instead. Derived from
+ * {@link getAllAvailableModels} so hidden, build-excluded and policy-denied
+ * providers are filtered out exactly as they are in the model picker — a CTA
+ * that opens a dropdown must not promise an entry the dropdown lacks.
+ */
+export function getAlternativeModelProviders(excludeProviderId?: string | null): string[] {
+  return getAllAvailableModels()
+    .map((group) => group.providerId)
+    .filter((id) => id !== excludeProviderId);
+}
+
 // --- Account storage ---
 
 export function getAccounts(): Account[] {

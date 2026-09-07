@@ -8,6 +8,7 @@
 
 import type { ChatCompactionMarker, ToolProgressEvent } from '@slicc/shared-ts';
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
+import { isUserFixableError } from '../../core/error-families.js';
 import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
   applyDictationMarkers,
@@ -26,9 +27,6 @@ import {
   type ClusterCallState,
   collateLickMessages,
   daySeparatorEl,
-  isAuthExpiredError,
-  isInvalidModelError,
-  isNoApiKeyError,
   messageEls,
   reflowToolClusters,
   unwrapToolClusters,
@@ -1264,17 +1262,16 @@ export class WcChatController {
   /**
    * Best-effort RUM beacon for user-visible error cards that have NO dedicated
    * handler (the default "Try again" variant). The handled families — no-api-key,
-   * invalid-model, auth-expired — own remediation UX and are user-fixable known
-   * states, so beaconing them would only add triage noise; we skip them. A
+   * invalid-model, auth-expired, quota-exceeded — own remediation UX and are
+   * user-fixable known states, so beaconing them would only add triage noise;
+   * `isUserFixableError` is the single list all three skip sites share. A
    * distinct `'error-card'` source lets the nightly triage distinguish these
    * from the agent-loop `'llm'`/`'tool'` beacons. Mirrors `#emitChatSendBeacon`'s
    * fire-and-forget style — telemetry must never disrupt the error-render path.
    */
   #emitErrorCardBeacon(error: string): void {
     try {
-      if (isNoApiKeyError(error) || isInvalidModelError(error) || isAuthExpiredError(error)) {
-        return;
-      }
+      if (isUserFixableError(error)) return;
       trackError('error-card', error);
     } catch {
       // Telemetry must never block the error render.

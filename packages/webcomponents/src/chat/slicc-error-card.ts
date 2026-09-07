@@ -37,24 +37,38 @@ import { iconEl } from '../internal/icons.js';
  *   revoked token) so the host can re-run its login flow instead of
  *   re-running the same failed turn.
  *
+ * `secondary-action` adds a SECOND, quieter CTA to the left of the primary
+ * one, drawn from the same four variants and firing the same events. One
+ * failure can have two honest remediations — an exhausted provider budget is
+ * fixed either by switching to another connected provider (primary) or by
+ * connecting a new one (secondary) — and forcing that into a single button
+ * would hide whichever the user actually needs.
+ *
  * @attr label - the header label (default "Something went wrong")
  * @attr message - error body text (escaped); ignored when slotted content is present
  * @attr button-label - action button label (defaults vary by `action`:
  *   "Try again" / "Open Settings" / "Change model" / "Log in again")
  * @attr message-id - id of the failed chat message this card stands for; echoed
  *   back on the action event so the host can bind it to THIS turn
+ * @attr secondary-button-label - label for the secondary CTA (defaults to the
+ *   secondary action's own default label)
  * @attr no-action - render header + body only, with no action button at all
- *   (read-only transcripts — see `noAction`)
+ *   (read-only transcripts — see `noAction`); suppresses the secondary CTA too
  * @attr action - `retry` (default) | `settings` | `change-model` | `login`;
  *   switches the CTA event, default label, and glyph. Unknown values normalize
  *   back to `"retry"` so legacy hosts stay safe.
+ * @attr secondary-action - same four values; renders an additional outline
+ *   button before the primary one. Absent (or unknown) means no secondary CTA
+ *   at all — unlike `action`, it does NOT normalize to `"retry"`, because a
+ *   host that never asked for a second button must not grow one.
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.err` card
  * @csspart header - the `.eh` header row
  * @csspart icon - the `.ic` span wrapping the lucide `triangle-alert` `<svg>`
  * @csspart label - the header label span
  * @csspart body - the `.eb` body line
- * @csspart button - the action button
+ * @csspart button - the primary action button
+ * @csspart secondary-button - the secondary (outline) action button
  * @slot - rich body content (overrides the `message` attribute)
  * @fires slicc-error-retry - { messageId: string | null } dispatched on retry
  *   click (bubbles, composed) when `action="retry"` (the default)
@@ -144,7 +158,7 @@ const STYLE = `
 }
 .eb ::slotted(b),.eb b{font-weight:600;}
 
-.foot{display:flex;justify-content:flex-end;margin-top:8px;}
+.foot{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;}
 .retry{
   appearance:none;border:none;cursor:pointer;
   font-family:var(--ui);font-size:11.5px;font-weight:600;
@@ -153,7 +167,16 @@ const STYLE = `
   display:inline-flex;align-items:center;gap:5px;
   transition:filter .12s ease;
 }
+/* Secondary CTA: same geometry, outline weight — it must read as the
+   quieter of two real choices, not as a disabled primary. */
+.retry.ghost{
+  background:transparent;color:var(--err-head);
+  border:1px solid var(--err-border);
+  padding:4px 10px;
+}
 .retry:hover{filter:brightness(1.08);}
+.retry.ghost:hover{background:color-mix(in srgb,var(--err-btn-bg) 10%,transparent);filter:none;}
+.retry.ghost:focus-visible{outline-color:var(--err-head);}
 .retry:focus-visible{outline:2px solid color-mix(in srgb,var(--err-btn-bg) 60%,var(--ink));outline-offset:2px;}
 .retry svg{display:block;}
 `;
@@ -164,14 +187,17 @@ export class SliccErrorCard extends HTMLElement {
     'label',
     'message',
     'button-label',
+    'secondary-button-label',
     'message-id',
     'action',
+    'secondary-action',
     'no-action',
     'theme',
   ];
 
   readonly #root: ShadowRoot;
   #onActionClick: ((e: MouseEvent) => void) | null = null;
+  #onSecondaryClick: ((e: MouseEvent) => void) | null = null;
 
   constructor() {
     super();
@@ -221,6 +247,16 @@ export class SliccErrorCard extends HTMLElement {
     else this.setAttribute('button-label', value);
   }
 
+  /** Secondary action button label (defaults to the secondary action's own default). */
+  get secondaryButtonLabel(): string | null {
+    return this.getAttribute('secondary-button-label');
+  }
+
+  set secondaryButtonLabel(value: string | null) {
+    if (value == null) this.removeAttribute('secondary-button-label');
+    else this.setAttribute('secondary-button-label', value);
+  }
+
   /**
    * Id of the failed chat message this card stands for. Echoed back on the
    * action event so the host can bind it to the SPECIFIC turn that produced
@@ -250,6 +286,23 @@ export class SliccErrorCard extends HTMLElement {
   set action(value: ErrorAction | null) {
     if (value == null) this.removeAttribute('action');
     else this.setAttribute('action', value);
+  }
+
+  /**
+   * Optional second CTA rendered before the primary one, using the same four
+   * variants and the same events. `null` when absent or unrecognized — an
+   * unknown value must not conjure a button the host never asked for, which
+   * is why this does NOT normalize to `retry` the way {@link action} does.
+   */
+  get secondaryAction(): ErrorAction | null {
+    const a = this.getAttribute('secondary-action');
+    if (a === 'settings' || a === 'change-model' || a === 'login' || a === 'retry') return a;
+    return null;
+  }
+
+  set secondaryAction(value: ErrorAction | null) {
+    if (value == null) this.removeAttribute('secondary-action');
+    else this.setAttribute('secondary-action', value);
   }
 
   /**
@@ -321,6 +374,14 @@ export class SliccErrorCard extends HTMLElement {
     );
   }
 
+  /** Fire the CustomEvent that `action` stands for. Shared by both buttons. */
+  #emit(action: ErrorAction): void {
+    if (action === 'settings') this.openSettings();
+    else if (action === 'change-model') this.changeModel();
+    else if (action === 'login') this.login();
+    else this.retry();
+  }
+
   #render(): void {
     const action = this.action;
     const label = this.label ?? DEFAULT_LABEL;
@@ -356,8 +417,32 @@ export class SliccErrorCard extends HTMLElement {
       buttonLabel
     );
 
+    const secondary = this.secondaryAction;
+    const secondaryLabel = secondary
+      ? (this.secondaryButtonLabel ?? DEFAULT_BUTTON_LABEL[secondary])
+      : null;
+    const secondaryBtn =
+      secondary && secondaryLabel != null
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'retry ghost',
+              part: 'secondary-button',
+              'aria-label': secondaryLabel,
+            },
+            iconEl(BUTTON_ICON[secondary], { size: BUTTON_ICON_SIZE }),
+            secondaryLabel
+          )
+        : null;
+
     const children = [headerRow, bodyRow];
-    if (!this.noAction) children.push(h('div', { class: 'foot' }, actionBtn));
+    if (!this.noAction) {
+      const foot = h('div', { class: 'foot' });
+      if (secondaryBtn) foot.append(secondaryBtn);
+      foot.append(actionBtn);
+      children.push(foot);
+    }
 
     const cardEl = h('div', { class: 'err', part: 'card' }, ...children);
     this.#root.replaceChildren(cardEl);
@@ -367,24 +452,34 @@ export class SliccErrorCard extends HTMLElement {
 
   #bindAction(): void {
     this.#unbindAction();
-    const btn = this.#root.querySelector('.retry');
-    if (!btn) return;
-    const action = this.action;
-    this.#onActionClick = () => {
-      if (action === 'settings') this.openSettings();
-      else if (action === 'change-model') this.changeModel();
-      else if (action === 'login') this.login();
-      else this.retry();
-    };
-    btn.addEventListener('click', this.#onActionClick as EventListener);
+    // `.retry:not(.ghost)` is the primary: the shared class hook keeps legacy
+    // CSS and shadow-piercing tests matching both buttons, so the primary
+    // lookup has to exclude the outline one explicitly.
+    const btn = this.#root.querySelector('.retry:not(.ghost)');
+    if (btn) {
+      const action = this.action;
+      this.#onActionClick = () => this.#emit(action);
+      btn.addEventListener('click', this.#onActionClick as EventListener);
+    }
+    const ghost = this.#root.querySelector('.retry.ghost');
+    const secondary = this.secondaryAction;
+    if (ghost && secondary) {
+      this.#onSecondaryClick = () => this.#emit(secondary);
+      ghost.addEventListener('click', this.#onSecondaryClick as EventListener);
+    }
   }
 
   #unbindAction(): void {
-    const btn = this.#root.querySelector('.retry');
+    const btn = this.#root.querySelector('.retry:not(.ghost)');
     if (btn && this.#onActionClick) {
       btn.removeEventListener('click', this.#onActionClick as EventListener);
     }
     this.#onActionClick = null;
+    const ghost = this.#root.querySelector('.retry.ghost');
+    if (ghost && this.#onSecondaryClick) {
+      ghost.removeEventListener('click', this.#onSecondaryClick as EventListener);
+    }
+    this.#onSecondaryClick = null;
   }
 }
 

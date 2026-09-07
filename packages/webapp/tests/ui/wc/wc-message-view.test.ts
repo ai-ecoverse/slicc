@@ -5,7 +5,7 @@
  * legacy panel renders has a web-component mapping asserted here.
  */
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -13,6 +13,18 @@ installWcDomStubs();
 // Deterministic cluster labels: the real quick-llm needs a provider key.
 vi.mock('../../../src/providers/quick-llm.js', () => ({
   quickLabel: vi.fn(async () => 'Push the release to main'),
+}));
+
+// The quota error card asks the account store which OTHER providers the user
+// could switch to. Drive that answer from the test instead of seeding
+// localStorage with a whole provider catalog.
+const accountStore = vi.hoisted(() => ({
+  getAlternativeModelProviders: vi.fn<() => string[]>(() => []),
+  getSelectedProvider: vi.fn<() => string>(() => 'adobe'),
+}));
+vi.mock('../../../src/providers/account-store.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...accountStore,
 }));
 
 import { hasIcon } from '@slicc/webcomponents';
@@ -807,6 +819,98 @@ describe('isNoApiKeyError + errorCardEl', () => {
     });
     expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
     expect(card.hasAttribute('action')).toBe(false);
+  });
+});
+
+describe('quota-exceeded errorCardEl', () => {
+  const ADOBE_429 =
+    '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14. You can also connect your own LLM provider.","resets_at":"2026-09-14T00:00:00.000Z"}}';
+
+  function quotaCard(content = ADOBE_429): HTMLElement {
+    const [card] = messageEls({
+      id: 'err-q',
+      role: 'assistant',
+      content,
+      timestamp: 1,
+      error: true,
+    });
+    return card;
+  }
+
+  beforeEach(() => {
+    accountStore.getAlternativeModelProviders.mockReturnValue([]);
+    accountStore.getSelectedProvider.mockReturnValue('adobe');
+  });
+
+  it('replaces the raw JSON envelope and the generic header', () => {
+    const card = quotaCard();
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Weekly budget has been fully used. Resets on 2026-09-14.'
+    );
+    expect(card.getAttribute('message')).not.toContain('quota_exceeded');
+    expect(card.getAttribute('message-id')).toBe('err-q');
+  });
+
+  it('offers only "Add a provider" when no other provider is connected', () => {
+    const card = quotaCard();
+    // A model picker holding only the exhausted account is a dead end.
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('button-label')).toBe('Add a provider');
+    expect(card.hasAttribute('secondary-action')).toBe(false);
+  });
+
+  it('leads with "Switch provider and try again" when another provider is connected', () => {
+    accountStore.getAlternativeModelProviders.mockReturnValue(['openai']);
+    const card = quotaCard();
+    expect(card.getAttribute('action')).toBe('change-model');
+    expect(card.getAttribute('button-label')).toBe('Switch provider and try again');
+    expect(card.getAttribute('secondary-action')).toBe('settings');
+    expect(card.getAttribute('secondary-button-label')).toBe('Add a provider');
+  });
+
+  it('excludes the failing provider when asking for alternatives', () => {
+    accountStore.getSelectedProvider.mockReturnValue('adobe');
+    quotaCard();
+    expect(accountStore.getAlternativeModelProviders).toHaveBeenCalledWith('adobe');
+  });
+
+  it('degrades to the add-a-provider CTA when the account store throws', () => {
+    accountStore.getSelectedProvider.mockImplementation(() => {
+      throw new Error('localStorage unavailable');
+    });
+    const card = quotaCard();
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+  });
+
+  it('spells out a reset instant the provider prose omits', () => {
+    const card = quotaCard(
+      '429 {"error":{"type":"quota_exceeded","message":"Your budget is used up.","resets_at":"2026-09-14T00:00:00.000Z"}}'
+    );
+    expect(card.getAttribute('message')).toMatch(/^Your budget is used up\. Resets on .+\.$/);
+  });
+
+  it('never states the reset twice when the prose already names it', () => {
+    const card = quotaCard();
+    expect(card.getAttribute('message')?.match(/Resets on/g)).toHaveLength(1);
+  });
+
+  it('drops every CTA in a read-only transcript but keeps the readable body', () => {
+    accountStore.getAlternativeModelProviders.mockReturnValue(['openai']);
+    const [card] = messageEls(
+      { id: 'err-q', role: 'assistant', content: ADOBE_429, timestamp: 1, error: true },
+      { readOnly: true }
+    );
+    expect(card.hasAttribute('no-action')).toBe(true);
+    expect(card.hasAttribute('action')).toBe(false);
+    expect(card.hasAttribute('secondary-action')).toBe(false);
+    // A reader who cannot act is still owed prose, not a JSON envelope.
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Weekly budget has been fully used. Resets on 2026-09-14.'
+    );
   });
 });
 
