@@ -50,9 +50,14 @@ Defaults: `5710` bridge + `/api` (`PORT` overrides), `9222` Chrome CDP, `9223` E
 - The overlay bootstrap (`window.__SLICC_ELECTRON_OVERLAY__`) is read from the stable path `dist/ui/electron-overlay-entry.js` (`getElectronOverlayEntryDistPath`), produced by the self-contained **`@ai-ecoverse/spoon`** package (owns the `<slicc-launcher>` overlay + IIFE entry) and mirrored there by the webapp build — node-server needs no change when it moves.
 - The CSP-strip escalation (`Fetch.enable` → `handleFetchRequestPaused`) re-issues intercepted **document** requests through Node http/https, forwarding POST bodies byte-exact via `decodeCdpRequestPostBody` (`Fetch.failRequest` rather than corrupt an unreconstructable body). Swift twin `OverlayPostBody.swift`; background in [`docs/pitfalls.md`](../../docs/pitfalls.md).
 
+## CDP proxy: Chrome-leg drops
+
+Chrome's browser-level socket drops on its own (`messageTooLarge`, inbound-queue overflow) and Chrome discards EVERY CDP session behind it. `src/cdp-proxy/chrome-reconnect.ts` handles that at parity with swift-server's `CDPProxy`: `markChromeLegDown` clears the leg and starts buffering Client→Chrome frames (bounded at 1,000 with drop-oldest, `client-frame-buffer.ts`), `ChromeReconnectController` re-discovers the ws URL via `/json/version` and re-dials every 1 s (cancelled on shutdown), and once the leg is back — or after the attempt cap — the active client is closed with `CDP_UPSTREAM_RESET_CLOSE_CODE` (4002, `close-codes.ts`). The page-side `CDPClient` treats 4002 as "reset sessions and re-dial" — unlike 4001 (superseded) it does NOT latch. Both codes MUST stay in sync with `packages/webapp/src/cdp/cdp-client.ts`. Background: issue #2417.
+
 ## Main Files
 
 - `src/index.ts` — entry point, server boot, Chrome/Electron launch, CDP WebSocket proxy
+- `src/cdp-proxy/` — proxy internals: secret unmask gate, session→URL tracker, Chrome-leg reconnect + close codes
 - `src/browser-shutdown.ts` — graceful close on shutdown; confirms via CDP polling not the launcher's exit event, since on macOS Chrome launches through `/usr/bin/open` (`planChromeSpawn`) so the process handle is `open`, not Chrome
 - `src/chrome-launch.ts` — Chrome executable/profile/launch args. `buildChromeLaunchArgs` disables Local Network Access checks (`--disable-features=LocalNetworkAccessChecks,…`) on **every** launch, because the hosted UI → local bridge hop is public→local and Chromium 142+ gates it behind a prompt. Synced with swift-server; [`docs/pitfalls.md`](../../docs/pitfalls.md).
 - `src/qa-setup.ts` — QA profile scaffolding · `src/release-package.ts` — release packaging

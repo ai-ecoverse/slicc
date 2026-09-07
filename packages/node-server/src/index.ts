@@ -25,6 +25,13 @@ import {
 } from './bridge-security.js';
 import { closeLaunchedBrowserGracefully } from './browser-shutdown.js';
 import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
+import {
+  ChromeReconnectController,
+  closeClientForUpstreamReset,
+  markChromeLegDown,
+} from './cdp-proxy/chrome-reconnect.js';
+import { appendBufferedClientFrame } from './cdp-proxy/client-frame-buffer.js';
+import { CDP_SUPERSEDED_CLOSE_CODE } from './cdp-proxy/close-codes.js';
 import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
@@ -269,6 +276,8 @@ interface ServerState {
   chromeWs: WebSocket | null;
   activeClientWs: WebSocket | null;
   messageBuffer: unknown[] | null;
+  /** Supervisor that re-dials Chrome after its leg drops; created on first drop. */
+  chromeReconnect: ChromeReconnectController | null;
 }
 
 function createServerState(): ServerState {
@@ -289,6 +298,7 @@ function createServerState(): ServerState {
     chromeWs: null,
     activeClientWs: null,
     messageBuffer: null,
+    chromeReconnect: null,
   };
 }
 
@@ -798,6 +808,61 @@ function forwardChromeFrame(state: ServerState, buf: Buffer, ctx: CdpProxyContex
   }
 }
 
+/** Log one `[cdp-proxy]` transition line through the shared dedup window. */
+function logCdpProxy(ctx: CdpProxyContext, line: string): void {
+  if (ctx.cdpDedup.shouldLog(line)) console.log(line);
+}
+
+/**
+ * Close the active client with `CDP_UPSTREAM_RESET_CLOSE_CODE` after the
+ * Chrome leg was re-established (or definitively lost). Chrome discarded every
+ * CDP session with the old socket, so the page's cached `sessionId`s are dead;
+ * the close makes it re-dial `/cdp` and rebuild its session state instead of
+ * timing out on every command (issue #2417, `DIAGNOSIS.md` §2.6).
+ */
+function resetActiveCdpClient(state: ServerState, ctx: CdpProxyContext, reason: string): void {
+  closeClientForUpstreamReset(state.activeClientWs, reason, (line) => logCdpProxy(ctx, line));
+}
+
+/** Lazily create the per-process Chrome reconnect supervisor. */
+function ensureChromeReconnectController(
+  state: ServerState,
+  ctx: CdpProxyContext
+): ChromeReconnectController {
+  state.chromeReconnect ??= new ChromeReconnectController({
+    discoverChromeWsUrl: async () => {
+      const port = state.cdpPort > 0 ? state.cdpPort : await waitForServerCdpPort(state);
+      // Short retry budget — the outer loop already retries, and a Chrome that
+      // moved ports is recovered by the client's own re-dial (full discovery).
+      const url = await waitForCDP(port, 3, 500);
+      state.cdpUrl = url;
+      return url;
+    },
+    connectChrome: (url) => ensureChromeConnection(state, url, ctx),
+    isChromeLegHealthy: () => state.chromeWs?.readyState === WebSocket.OPEN,
+    resetClient: (reason) => resetActiveCdpClient(state, ctx, reason),
+    isShuttingDown: () => state.shuttingDown,
+    log: (line) => logCdpProxy(ctx, line),
+  });
+  return state.chromeReconnect;
+}
+
+/**
+ * Handle the Chrome leg going away: keep buffering client frames (instead of
+ * dropping them until a NEW client connects, which is what node-server used to
+ * do) and schedule a reconnect — parity with swift-server's
+ * `handleChromeDisconnect` / `scheduleChromeReconnect`.
+ */
+function handleChromeLegDown(
+  state: ServerState,
+  ctx: CdpProxyContext,
+  chromeWs: WebSocket,
+  reason: string
+): void {
+  if (!markChromeLegDown(state, chromeWs)) return;
+  ensureChromeReconnectController(state, ctx).schedule(reason);
+}
+
 function ensureChromeConnection(
   state: ServerState,
   url: string,
@@ -812,7 +877,9 @@ function ensureChromeConnection(
     }
     closeWebSocketQuietly(state.chromeWs);
 
-    state.messageBuffer = [];
+    // `??=`, not `=`: frames buffered while the leg was down (reconnect path)
+    // must survive to the flush on 'open'.
+    state.messageBuffer ??= [];
     // Disable the ws library's per-message size cap (default 100 MiB). The slicc
     // UI runs INSIDE the Chrome it debugs, so Chrome's Network domain reports
     // every CDP frame back as `Network.webSocketFrame*` events embedding prior
@@ -831,11 +898,11 @@ function ensureChromeConnection(
     });
     chromeWs.on('close', (code, reason) => {
       console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
-      state.chromeWs = null;
+      handleChromeLegDown(state, ctx, chromeWs, `close code=${code}`);
     });
     chromeWs.on('error', (err) => {
       console.log(`[cdp-proxy] Chrome WS error: ${err}`);
-      state.chromeWs = null;
+      handleChromeLegDown(state, ctx, chromeWs, `error: ${String(err)}`);
       reject(err);
     });
   });
@@ -859,8 +926,11 @@ function forwardClientFrame(state: ServerState, data: unknown, ctx: CdpProxyCont
     state.chromeWs.send(output);
   } else if (state.messageBuffer !== null) {
     // Buffer the ORIGINAL bytes; unmask runs on flush so the hostname tracker
-    // reflects the state at send time.
-    state.messageBuffer.push(data);
+    // reflects the state at send time. Bounded with drop-oldest so a Chrome leg
+    // that never comes back can't grow the heap without limit.
+    if (appendBufferedClientFrame(state.messageBuffer, data)) {
+      logCdpProxy(ctx, '[cdp-proxy] Client frame buffer full — dropped oldest buffered frame');
+    }
     const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
     if (ctx.cdpDedup.shouldLog(msg)) console.debug(msg);
   } else {
@@ -887,15 +957,6 @@ async function waitForServerCdpPort(state: ServerState, timeoutMs = 30_000): Pro
   }
   return state.cdpPort;
 }
-
-/**
- * WebSocket close code sent to a CDP client that is evicted because a newer
- * client took the single proxy slot. The page-side `CDPClient` recognises it
- * and stops auto-reconnecting (otherwise two webapp tabs on one instance evict
- * each other forever). Application-range code; MUST stay in sync with
- * `CDP_SUPERSEDED_CLOSE_CODE` in `packages/webapp/src/cdp/cdp-client.ts`.
- */
-const CDP_SUPERSEDED_CLOSE_CODE = 4001;
 
 async function handleCdpClient(
   state: ServerState,
@@ -964,6 +1025,11 @@ function createGracefulShutdown(state: ServerState, deps: ShutdownDeps): () => P
 
     state.electronFollower?.stop();
     state.electronFollower = null;
+
+    // Cancel the Chrome reconnect loop BEFORE closing the socket, so its close
+    // handler doesn't schedule a fresh one on the way out.
+    state.chromeReconnect?.cancel();
+    state.chromeReconnect = null;
 
     closeWebSocketQuietly(state.chromeWs);
     state.chromeWs = null;
