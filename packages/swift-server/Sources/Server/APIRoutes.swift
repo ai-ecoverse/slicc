@@ -708,8 +708,13 @@ private enum PersistedSecretAPIRoutes {
                 )
             }
             let store = injector.persistedStore
-            guard let saved = await BoundedStoreCall.runThrowing({ try store.save(name, value, domains) }) else {
-                return try persistedStoreTimeoutResponse()
+            guard
+                let saved = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.save(name, value, domains) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
             }
             if case .failure(let error) = saved {
                 return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
@@ -747,8 +752,13 @@ private enum SessionSecretAPIRoutes {
             guard existing != nil else {
                 return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
             }
-            guard let removed = await BoundedStoreCall.runThrowing({ try store.remove(name) }) else {
-                return try persistedStoreTimeoutResponse()
+            guard
+                let removed = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.remove(name) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
             }
             if case .failure(let error) = removed {
                 return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
@@ -835,9 +845,13 @@ private enum SessionSecretAPIRoutes {
                         message: EnvFileFormat.multilineValueError(name)
                     )
                 }
-                guard let saved = await BoundedStoreCall.runThrowing({ try store.save(name, existing.value, domains) })
+                guard
+                    let saved = await BoundedStoreCall.runThrowing(
+                        onLateCompletion: reconcileLateWrite(injector),
+                        { try store.save(name, existing.value, domains) }
+                    )
                 else {
-                    return try persistedStoreTimeoutResponse()
+                    return try persistedStoreWriteTimeoutResponse()
                 }
                 if case .failure(let error) = saved {
                     return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
@@ -999,6 +1013,31 @@ private func persistedStoreTimeoutResponse() throws -> Response {
         ]),
         status: .serviceUnavailable
     )
+}
+
+/// A persisted-store *write* missed its deadline. Same 503, different contract:
+/// the write may still commit, so the message must not imply it failed.
+private func persistedStoreWriteTimeoutResponse() throws -> Response {
+    try jsonResponse(
+        .object([
+            "error": .string(BoundedStoreCall.writeTimeoutMessage),
+            "errorCode": .string(BoundedStoreCall.writeTimeoutErrorCode),
+        ]),
+        status: .serviceUnavailable
+    )
+}
+
+/// Reconciles a write that commits after its route already answered.
+///
+/// The abandoned `SecItem*` call cannot be cancelled, so a rotation the caller
+/// was told nothing definite about can still land. Reloading keeps the masking
+/// pipeline from serving the superseded value — the one outcome worse than a
+/// slow write, since the fetch proxy would keep injecting the old credential.
+private func reconcileLateWrite(_ injector: SecretInjector) -> @Sendable (Result<Void, Error>) -> Void {
+    { result in
+        guard case .success = result else { return }
+        Task { await injector.reload() }
+    }
 }
 
 /// Same as `jsonErrorResponse` but tags the response with `X-Proxy-Error: 1`

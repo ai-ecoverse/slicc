@@ -129,6 +129,13 @@ E2E_TOKEN    SESSION  127.0.0.1
 secret: could not read saved secrets — saved-secret store did not respond within 5s …
 ```
 
+A timed-out `--persist` write reports that its outcome is **unknown**, not that
+it failed: the Keychain call cannot be cancelled, so it may still commit once
+the dialog is answered. Check `secret list` before retrying, so a rotation is
+not applied twice. For the same reason `secret set` refuses to run at all when
+the store cannot be read — with no way to tell whether the name already holds a
+credential, it cannot know whether the change needs approval.
+
 A missing store is never rendered as an empty one: `No secrets stored` is
 printed only when both stores answered and both were genuinely empty, so a
 script can trust a `0` exit. For the same reason `secret test <name> <url>`

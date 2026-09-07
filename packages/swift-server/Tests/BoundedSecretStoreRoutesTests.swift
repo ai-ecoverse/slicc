@@ -94,6 +94,97 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
         XCTAssertTrue(error is StoreProbeError)
     }
 
+    /// A write cannot be cancelled, so a timed-out one may still commit. The
+    /// response must not claim it failed, or a retry double-applies a rotation.
+    func testTimedOutWriteReportsAnUnknownOutcomeRatherThanFailure() async throws {
+        let fixture = StallingPersistedSecrets()
+        let injector = SecretInjector(
+            sessionId: "bounded-write-fixture",
+            persistedStore: fixture.access,
+            sessionStore: SessionSecretStore()
+        )
+        try await withApp(injector: injector) { client in
+            fixture.stall = true
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(
+                    string: #"{"name":"ROTATED","value":"rotated-fixture-value","domains":["api.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .serviceUnavailable)
+                let object = try self.decodeJSONObject(response.body)
+                XCTAssertEqual(object["errorCode"]?.stringValue, BoundedStoreCall.writeTimeoutErrorCode)
+                let message = object["error"]?.stringValue ?? ""
+                XCTAssertTrue(message.contains("outcome is unknown"), message)
+                XCTAssertTrue(message.contains("may still be applied"), message)
+                XCTAssertFalse(message.contains("failed"), message)
+                XCTAssertFalse(message.contains("rotated-fixture-value"), "never echo a value")
+            }
+        }
+    }
+
+    /// The late-completion hook is what keeps the masking pipeline honest when an
+    /// abandoned write lands after its route answered.
+    func testLateCompletionIsReportedForAWriteThatCommitsAfterTheDeadline() async throws {
+        let released = DispatchSemaphore(value: 0)
+        let lateValue = LockedBox<Bool>(false)
+        let reconciled = DispatchSemaphore(value: 0)
+
+        let result = await BoundedStoreCall.runThrowing(
+            timeoutSeconds: 0.2,
+            onLateCompletion: { (outcome: Result<Bool, Error>) in
+                if case .success(true) = outcome { lateValue.set(true) }
+                reconciled.signal()
+            },
+            {
+                released.wait()
+                return true
+            }
+        )
+        XCTAssertNil(result, "the route must answer on its own deadline")
+
+        released.signal()
+        XCTAssertEqual(reconciled.wait(timeout: .now() + 5), .success, "late completion never reported")
+        XCTAssertTrue(lateValue.get(), "a late success must be reconcilable")
+    }
+
+    /// `reload()` runs on session set/delete, so a stalled Keychain must not hang
+    /// those routes — and must not drop the secrets already being masked.
+    func testSessionMutationSurvivesAStalledReload() async throws {
+        let fixture = StallingPersistedSecrets([
+            Secret(name: "SAVED_TOKEN", value: "saved-fixture-value", domains: ["api.example"])
+        ])
+        let injector = SecretInjector(
+            sessionId: "bounded-reload-fixture",
+            persistedStore: fixture.access,
+            sessionStore: SessionSecretStore()
+        )
+        try await withApp(injector: injector) { client in
+            fixture.stall = true
+            let clock = ContinuousClock()
+            let elapsed = try await clock.measure {
+                try await client.execute(
+                    uri: "/api/secrets/session",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"name":"SESSION_TOKEN","value":"session-fixture-value"}"#)
+                ) { XCTAssertEqual($0.status, .ok) }
+            }
+            XCTAssertLessThan(elapsed, .seconds(BoundedStoreCall.defaultTimeoutSeconds + 3))
+
+            // The previously loaded secret is still masked: a failed reload keeps
+            // the last snapshot rather than serving an empty one, which would
+            // silently stop masking a live credential.
+            try await client.execute(uri: "/api/secrets/masked", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+                let text = String(buffer: response.body)
+                XCTAssertTrue(text.contains("SAVED_TOKEN"), text)
+                XCTAssertFalse(text.contains("saved-fixture-value"))
+            }
+        }
+    }
+
     func testBoundedCallGivesUpOnAStalledCall() async throws {
         let released = DispatchSemaphore(value: 0)
         let result = await BoundedStoreCall.run(timeoutSeconds: 0.2) {
@@ -145,6 +236,26 @@ final class BoundedSecretStoreRoutesTests: XCTestCase {
 }
 
 private enum StoreProbeError: Error { case boom }
+
+/// Minimal lock-guarded box for values written from a Dispatch callback.
+private final class LockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+
+    init(_ value: T) { self.value = value }
+
+    func set(_ newValue: T) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func get() -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
 
 /// Persisted store whose reads and writes can be made to hang on demand, the way
 /// an ungranted Keychain ACL hangs them. Starts responsive so the injector's own

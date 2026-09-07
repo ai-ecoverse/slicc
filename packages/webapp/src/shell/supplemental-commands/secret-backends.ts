@@ -151,6 +151,21 @@ function storeWarning(store: 'saved' | 'session', reason: string | undefined): s
   return `could not read ${store} secrets — ${reason ?? 'the bridge gave no reason'}`;
 }
 
+/**
+ * Resolve one name against a list result, failing closed on a partial answer.
+ *
+ * Absence is only trustworthy when every store answered. Reporting "no such
+ * secret" from an incomplete list would tell `secret set` the name is new, which
+ * skips the approval gate that stops an agent from overwriting an existing
+ * credential — so an unread store raises here rather than resolving to `null`.
+ */
+function resolveInfo(result: SecretListResult, name: string): SecretRecord | null {
+  const found = result.entries.find((e) => e.name === name) ?? null;
+  if (found) return found;
+  if (result.warnings.length > 0) throw new Error(result.warnings.join('; '));
+  return null;
+}
+
 type NamedDomains = { name: string; domains: string[] };
 
 /** CLI/standalone backend — talks to the node-server `/api/secrets*` routes. */
@@ -178,7 +193,7 @@ export function createCliSecretBackend(): SecretBackend {
       return { entries, warnings };
     },
     async getInfo(name) {
-      return (await this.list()).entries.find((e) => e.name === name) ?? null;
+      return resolveInfo(await this.list(), name);
     },
     async getMasked(name) {
       const { ok, data } = await apiCall('GET', '/masked');
@@ -247,7 +262,7 @@ function createMessageSecretBackend(
       return { entries, warnings };
     },
     async getInfo(name) {
-      return (await this.list()).entries.find((e) => e.name === name) ?? null;
+      return resolveInfo(await this.list(), name);
     },
     async getMasked(name) {
       const resp = await call<{ entries?: MaskedRecord[] }>({

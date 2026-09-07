@@ -127,6 +127,37 @@ describe('createCliSecretBackend.list', () => {
     ]);
   });
 
+  // Fail-closed lookup: `secret set` decides whether to demand approval from
+  // getInfo, so "not found" must never come from a list that lost a store.
+  it('getInfo raises rather than reporting absence from a partial list', async () => {
+    mockFetch(({ url }) =>
+      url.endsWith('/session')
+        ? jsonResponse([])
+        : jsonResponse({ error: 'Keychain dialog unanswered' }, { status: 503 })
+    );
+    await expect(createCliSecretBackend().getInfo('TOKEN')).rejects.toThrow(
+      'could not read saved secrets — Keychain dialog unanswered'
+    );
+  });
+
+  it('getInfo still reports a genuine absence when both stores answered', async () => {
+    mockFetch(() => jsonResponse([]));
+    expect(await createCliSecretBackend().getInfo('TOKEN')).toBeNull();
+  });
+
+  it('getInfo returns a found record even when the other store failed', async () => {
+    mockFetch(({ url }) =>
+      url.endsWith('/session')
+        ? new Response('boom', { status: 500 })
+        : jsonResponse([{ name: 'TOKEN', domains: ['api.example'] }])
+    );
+    expect(await createCliSecretBackend().getInfo('TOKEN')).toEqual({
+      name: 'TOKEN',
+      domains: ['api.example'],
+      persisted: true,
+    });
+  });
+
   it('reports an unreachable bridge with the transport reason', async () => {
     vi.stubGlobal(
       'fetch',

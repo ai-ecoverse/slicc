@@ -29,8 +29,8 @@ enum BoundedStoreCall {
     /// client timeout.
     static let defaultTimeoutSeconds: TimeInterval = 5
 
-    /// Diagnosis returned to the caller when a store call misses its deadline.
-    /// Names the likely cause and the fix; mentions no secret names or values.
+    /// Diagnosis for a read that missed its deadline. Nothing changed, so the
+    /// caller can retry freely.
     static let timeoutMessage =
         "saved-secret store did not respond within \(Int(defaultTimeoutSeconds))s — on Sliccstart this "
         + "usually means the macOS Keychain access dialog is waiting unanswered (every rebuild re-raises "
@@ -41,16 +41,42 @@ enum BoundedStoreCall {
     /// Machine-readable companion to {@link timeoutMessage}.
     static let timeoutErrorCode = "persisted-store-unavailable"
 
+    /// Diagnosis for a *write* that missed its deadline.
+    ///
+    /// Deliberately does not claim the write failed: the abandoned call still
+    /// holds its place in the Keychain queue and will commit if the dialog is
+    /// answered later. Reporting "failed" would invite a retry that double-
+    /// applies a rotation, so the caller is told the outcome is unknown and how
+    /// to check. The masking pipeline reconciles itself — the route reloads the
+    /// injector if the write lands late.
+    static let writeTimeoutMessage =
+        "saved-secret store did not respond within \(Int(defaultTimeoutSeconds))s, so this write's outcome "
+        + "is unknown — it may still be applied once the macOS Keychain access dialog is answered. Nothing "
+        + "was rolled back: check `secret list` before retrying so a rotation is not applied twice. See "
+        + "docs/secrets.md."
+
+    /// Machine-readable companion to {@link writeTimeoutMessage}.
+    static let writeTimeoutErrorCode = "persisted-store-write-unknown"
+
     /// Run a non-throwing store call. Returns `nil` on deadline miss.
+    ///
+    /// `onLateCompletion` fires when the call finishes *after* the deadline, on
+    /// the Dispatch thread that was waiting. Reads can ignore it; a write must
+    /// not, because an abandoned write still lands once the dialog is answered
+    /// and the caller has already been told the request failed.
     static func run<T: Sendable>(
         timeoutSeconds: TimeInterval = defaultTimeoutSeconds,
+        onLateCompletion: (@Sendable (T) -> Void)? = nil,
         _ body: @escaping @Sendable () -> T
     ) async -> T? {
         await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             let once = OneShotResumer<T?>(continuation)
-            DispatchQueue.global(qos: .userInitiated).async { once.resume(body()) }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let value = body()
+                if !once.resume(value) { onLateCompletion?(value) }
+            }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeoutSeconds) {
-                once.resume(nil)
+                _ = once.resume(nil)
             }
         }
     }
@@ -60,9 +86,12 @@ enum BoundedStoreCall {
     /// reporting it exactly as they did before.
     static func runThrowing<T: Sendable>(
         timeoutSeconds: TimeInterval = defaultTimeoutSeconds,
+        onLateCompletion: (@Sendable (Result<T, Error>) -> Void)? = nil,
         _ body: @escaping @Sendable () throws -> T
     ) async -> Result<T, Error>? {
-        await run(timeoutSeconds: timeoutSeconds) { Result { try body() } }
+        await run(timeoutSeconds: timeoutSeconds, onLateCompletion: onLateCompletion) {
+            Result { try body() }
+        }
     }
 }
 
@@ -77,11 +106,14 @@ private final class OneShotResumer<T>: @unchecked Sendable {
         self.continuation = continuation
     }
 
-    func resume(_ value: T) {
+    /// Returns whether this caller won the race and delivered `value`.
+    @discardableResult
+    func resume(_ value: T) -> Bool {
         lock.lock()
         let pending = continuation
         continuation = nil
         lock.unlock()
         pending?.resume(returning: value)
+        return pending != nil
     }
 }

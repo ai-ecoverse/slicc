@@ -199,7 +199,19 @@ public final class SecretInjector: @unchecked Sendable {
     /// injector picks up added/removed secrets.
     func reload() async {
         guard let sessionId else { return }
-        var loaded = self.loadSecretsKeychainAndEnvSnapshot()
+        // Bounded like the request paths: `reload()` runs on session set/delete
+        // too, so an unread Keychain must not hang those routes. On a miss the
+        // previous snapshot is kept rather than replaced with a partial one —
+        // dropping live secrets would silently stop masking and injecting them,
+        // which is worse than briefly missing the newest entry.
+        let store = persistedStore
+        guard let persisted = await BoundedStoreCall.run({ store.loadAll() }) else {
+            FileHandle.standardError.write(
+                Data("[slicc:secrets] \(BoundedStoreCall.timeoutMessage) Keeping the previous snapshot.\n".utf8)
+            )
+            return
+        }
+        var loaded = self.loadSecretsKeychainAndEnvSnapshot(persisted: persisted)
 
         // OAuth entries override Keychain + env-file entries on name
         // collision (reserved-namespace policy — see node-server's
@@ -297,13 +309,16 @@ public final class SecretInjector: @unchecked Sendable {
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
-    private func loadSecretsKeychainAndEnvSnapshot() -> [LoadedSecret] {
+    /// `persisted` lets `reload()` supply an already-bounded read; the startup
+    /// path passes nothing and reads the store directly, because that is the one
+    /// moment a Keychain dialog is in front of a user who can answer it.
+    private func loadSecretsKeychainAndEnvSnapshot(persisted: [Secret]? = nil) -> [LoadedSecret] {
         guard let sessionId else { return [] }
         // Single Keychain read + parse for every secret. Previously this did
         // SecretStore.list() followed by per-name SecretStore.get(...), which
         // re-parsed the same blob N+1 times.
         var loaded: [LoadedSecret] = []
-        for secret in persistedStore.loadAll() {
+        for secret in persisted ?? persistedStore.loadAll() {
             // Mirror the TS minimum-length guard: too-short values must not
             // be registered as masking patterns (they would collide with
             // arbitrary outbound bytes and spuriously trigger the cross-

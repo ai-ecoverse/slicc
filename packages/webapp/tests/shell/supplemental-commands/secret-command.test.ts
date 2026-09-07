@@ -735,3 +735,29 @@ describe('secret command — list and test with an unreadable store', () => {
     expect(res.exitCode).toBe(1);
   });
 });
+
+describe('secret command — set with an unreadable store fails closed', () => {
+  it('refuses the mutation instead of treating an unknown name as new', async () => {
+    const unreadable =
+      'could not read saved secrets — no response from the secret store within 10s';
+    const backend = makeBackend({
+      // What the CLI backend does when a store is lost: an unresolvable lookup
+      // raises rather than answering "absent".
+      getInfo: vi.fn(async () => {
+        throw new Error(unreadable);
+      }),
+    });
+    const broker = makeBroker({ decision: 'allow' });
+    const res = await run(['set', 'TOKEN', 'value', '--domain', 'api.x.com'], {
+      backend,
+      broker: broker.broker,
+    });
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain(unreadable);
+    // The gate exists to stop an agent overwriting a real credential; with the
+    // store unread we cannot know whether this name holds one.
+    expect(backend.setSession).not.toHaveBeenCalled();
+    expect(broker.calls()).toBe(0);
+  });
+});
