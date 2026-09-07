@@ -300,7 +300,10 @@ Browser-tab handling rules (track your IDs, never close tabs you didn't open, ha
 ### Browser-driving scoops: one tab per scoop
 
 All scoops share ONE browser, but the `playwright-cli` lock is **per tab**:
-commands on the same tab serialize, commands on different tabs run in parallel.
+commands on the same tab serialize; commands on different tabs overlap (page
+loads and waits run concurrently; individual CDP round trips still take turns
+on the bridge, so heavy screenshot/snapshot loops across many tabs interleave
+rather than truly run side by side).
 
 - **Give every browser-driving scoop its own tab, and no fan-out cap is
   needed.** Browser scoops fan out like any other work.

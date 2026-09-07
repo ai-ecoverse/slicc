@@ -754,6 +754,24 @@ export class BrowserAPI {
    * the listing fails and nothing is advertised to the leader. Priming the
    * options here lets the on-demand connect reach the LOCAL bridge instead.
    */
+  /**
+   * Re-dial the local bridge if its client is disconnected (and not
+   * superseded), replaying the captured connect options.
+   *
+   * Standalone boot passes this to the kernel-worker forwarder
+   * (`spawnKernelWorker({ reconnectCdp })`): after the `/cdp` proxy rebuilds
+   * its Chrome leg it closes the page client with `upstream-reset`, and a
+   * worker command that arrives before the page's own lazy reconnect would
+   * otherwise fail with "not connected". Same reset semantics as the lazy
+   * path every page-side call takes — the session registry is cleared.
+   */
+  async reconnectIfNeeded(): Promise<void> {
+    await this.ensureConnected();
+    // A remote (tray) transport may be current; the forwarder rides the LOCAL
+    // client, so dial that too when it is a different transport.
+    if (this.client !== this.localClient) await this.ensureLocalConnected();
+  }
+
   primeConnectOptions(options?: Partial<CDPConnectOptions>): void {
     this._lastConnectOptions = options ? { ...options } : {};
   }

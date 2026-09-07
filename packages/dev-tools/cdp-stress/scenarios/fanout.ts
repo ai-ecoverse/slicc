@@ -36,8 +36,14 @@ export interface FanoutResult {
   errors: Record<string, number>;
   lock: {
     queueDepth: number;
+    /** All queued time: `tabWaitMs + bridgeWaitMs` (or the whole wait on a bridge without the split). */
     totalWaitMs: number;
+    /** Waiting for THIS tab's own lock — a sibling driving the same tab. */
+    tabWaitMs?: number;
+    /** Waiting for the bridge-wide lock — another tab's round trip in flight. */
+    bridgeWaitMs?: number;
     acquisitions: number;
+    /** Per-goto delta of the per-tab wait (falls back to total on a bridge without the split). */
     waitPerGoto: Summary;
   };
   latencyMs: { goto: Summary; snapshot: Summary; screenshot: Summary; title: Summary };
@@ -70,12 +76,20 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
     let ops = 0;
 
     /** Charge the lock wait accrued while `fn` ran to the goto histogram. */
+    // Per-tab lock wait (a sibling driving the SAME tab). Bridge-wide waits
+    // are reported separately in `lock.bridgeWaitMs`: with an ambient session
+    // cursor, CDP round trips still take turns on the bridge, while page
+    // loads and waits overlap across tabs.
+    const tabWait = (): number => {
+      const stats = b.getTabLockStats();
+      return stats.tabWaitMs ?? stats.totalWaitMs;
+    };
     const lockWaitSample = async <T>(fn: () => Promise<T>): Promise<T> => {
-      const before = b.getTabLockStats().totalWaitMs;
+      const before = tabWait();
       try {
         return await fn();
       } finally {
-        lat['lockWait']?.push(b.getTabLockStats().totalWaitMs - before);
+        lat['lockWait']?.push(tabWait() - before);
       }
     };
     const rec = async (kind: string, fn: () => Promise<unknown>): Promise<unknown> => {

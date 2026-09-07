@@ -1556,6 +1556,10 @@ export async function bootLeaderFloat(
     connect: (boot) => {
       kernel = spawnKernelWorker({
         realCdpTransport,
+        // A worker CDP command that finds the page client closed (the /cdp
+        // proxy's `upstream-reset`) re-dials through the page BrowserAPI so
+        // the bridge URL + token are replayed (issue #2417).
+        reconnectCdp: () => browser.reconnectIfNeeded(),
         instanceId,
         makeClient: (transport) =>
           new OffscreenClient(createWcLiveCallbacks(boot.wiring), transport),

@@ -187,8 +187,9 @@ whenever the tab is re-attached, so another driver switching tabs cannot reset
 it.
 
 All playwright-cli commands share one browser, but the lock is **per tab**:
-commands on the same tab serialize, commands on different tabs run in parallel.
-A hung navigation only stalls its own tab. When callers queue up, commands may
+commands on the same tab serialize; commands on different tabs overlap — page
+loads and waits run concurrently, and only the individual CDP round trips take
+turns on the bridge. A hung navigation only stalls its own tab. When callers queue up, commands may
 emit a `note: browser bridge contended — ...` line on stderr with the total
 lock wait and queue depth; the note now says whether the wait was on **this
 tab** or **bridge-wide**. Either way it is back-off guidance — stagger callers

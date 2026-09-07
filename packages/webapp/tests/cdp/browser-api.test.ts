@@ -280,6 +280,39 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('reconnectIfNeeded (kernel-worker forwarder re-dial)', () => {
+    it('re-dials with the captured options when the client is disconnected', async () => {
+      api.primeConnectOptions({ url: 'ws://localhost:7777/cdp', protocols: 'slicc.bridge.v1' });
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+
+      await api.reconnectIfNeeded();
+
+      expect(mockClient.connect).toHaveBeenCalledTimes(1);
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:7777/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1',
+      });
+    });
+
+    it('is a no-op while connected', async () => {
+      await api.reconnectIfNeeded();
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+
+    it('never re-dials a superseded client', async () => {
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient as unknown as { superseded: boolean }).superseded = true;
+      const onSuperseded = vi.fn();
+      api.setCdpSupersededHandler(onSuperseded);
+
+      await api.reconnectIfNeeded();
+
+      expect(mockClient.connect).not.toHaveBeenCalled();
+      expect(onSuperseded).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('listPages', () => {
     it('returns page targets', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
