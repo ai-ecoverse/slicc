@@ -505,6 +505,9 @@ export function getOAuthAccountInfo(providerId: string): {
 } | null {
   const account = getAccounts().find((a) => a.providerId === providerId);
   if (!account?.accessToken) return null;
+  // `expired` is the 60s renewal buffer, not proof the provider still accepts
+  // the token. `maskedValue` is the secrets-pipeline replica that `oauth-token`
+  // prints; it can be missing while `token` is still honoured upstream (#2921).
   const expired = !!account.tokenExpiresAt && Date.now() > account.tokenExpiresAt - 60000;
   return {
     token: account.accessToken,
@@ -997,6 +1000,51 @@ export async function maskOAuthTokenWithRetry(
   return { lastError };
 }
 
+/** Outcome of a mask-replica write. Never carries a replica equal to the raw token. */
+export type OAuthMaskWriteResult = { maskedValue?: string; error?: string };
+
+/** Returned when a concurrent login/renew replaced the token while the replica write was in flight. */
+const MASK_TOKEN_ROTATED = 'access token rotated during mask write';
+
+/**
+ * Persist `maskedValue` only on the account still holding `accessToken`.
+ * A silent renew or second login can replace the token while the replica
+ * write awaits the SW / CLI round-trip; attaching the old replica to the
+ * new row would print a stale mask and leave the replica store pointing at
+ * a revoked token (#2921 review).
+ */
+function attachMaskIfTokenUnchanged(
+  providerId: string,
+  accessToken: string,
+  maskedValue: string,
+  accounts: Account[]
+): OAuthMaskWriteResult {
+  const acct = accounts.find((a) => a.providerId === providerId);
+  if (!acct?.accessToken) {
+    return { error: 'account gone after mask write' };
+  }
+  if (acct.accessToken !== accessToken) {
+    log.warn('OAuth mask write raced with token rotation; discarding replica', {
+      providerId,
+    });
+    return { error: MASK_TOKEN_ROTATED };
+  }
+  acct.maskedValue = maskedValue;
+  return { maskedValue };
+}
+
+/**
+ * A replica is only safe to print or persist when it is a distinct masked
+ * stand-in. Format-preserving masks keep prefixes like `gho_`; equality with
+ * the access token means the pipeline stored the raw secret (#2921).
+ */
+export function isUsableOAuthMaskReplica(
+  masked: string | undefined,
+  accessToken: string
+): masked is string {
+  return Boolean(masked) && masked !== accessToken;
+}
+
 /**
  * Register an OAuth token's masked replica via the service worker and persist
  * the masked value on the account.
@@ -1009,6 +1057,9 @@ export async function maskOAuthTokenWithRetry(
  * remove path does the same via `deleteOAuthReplica`. Returns (after a
  * `log.error` breadcrumb with the SW reason) if masking never succeeds, and
  * no-ops if the account row is gone. Pure + injectable; unit-testable sans `chrome`.
+ *
+ * Refuses to persist a replica equal to `accessToken` so `oauth-token` cannot
+ * print the raw secret if the mask pipeline identity-wrote it (#2921).
  */
 export async function persistOAuthMaskViaServiceWorker(
   opts: { providerId: string; accessToken: string; domains: string[] },
@@ -1022,7 +1073,7 @@ export async function persistOAuthMaskViaServiceWorker(
     saveAccounts: (accounts: Account[]) => Promise<void>;
   },
   maskOpts?: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> }
-): Promise<void> {
+): Promise<OAuthMaskWriteResult> {
   const payload = {
     providerId: opts.providerId,
     accessToken: opts.accessToken,
@@ -1032,24 +1083,222 @@ export async function persistOAuthMaskViaServiceWorker(
     () => deps.sendMaskRequest(payload),
     maskOpts
   );
-  if (!maskedValue) {
+  if (!isUsableOAuthMaskReplica(maskedValue, opts.accessToken)) {
     // Don't fail silently: the account stays unmasked and `oauth-token` will
-    // report "no masked value". log.warn is dropped at the prod ERROR level, so
-    // this give-up breadcrumb must be log.error to be visible at all (#847).
+    // remask, then report "token held but no masked replica" if this write
+    // still cannot produce a distinct replica (#2921). log.warn is dropped at
+    // the prod ERROR level, so this give-up breadcrumb must be log.error.
     // Carry the SW reason so the operator can tell a cold/empty reply apart from
-    // a write failure or "entry missing after write" pipeline fault.
+    // a write failure, "entry missing after write", or an identity-mask leak.
+    const reason = !maskedValue
+      ? (lastError ?? 'no error reported (cold SW or empty reply)')
+      : 'mask replica equals the access token';
     log.error('OAuth mask give-up: no masked value after retries', {
       providerId: opts.providerId,
-      reason: lastError ?? 'no error reported (cold SW or empty reply)',
+      reason,
     });
-    return;
+    return { error: reason };
   }
   const accounts = deps.getAccounts();
-  const acct = accounts.find((a) => a.providerId === opts.providerId);
-  if (acct) {
-    acct.maskedValue = maskedValue;
-    await deps.saveAccounts(accounts);
+  const attached = attachMaskIfTokenUnchanged(
+    opts.providerId,
+    opts.accessToken,
+    maskedValue,
+    accounts
+  );
+  if (attached.maskedValue) await deps.saveAccounts(accounts);
+  return attached;
+}
+
+function oauthMaskDomains(providerId: string): string[] {
+  const defaults = getProviderConfig(providerId).oauthTokenDomains ?? [];
+  const extras = getExtraOAuthDomains(providerId);
+  const seen = new Set<string>();
+  const domains: string[] = [];
+  for (const d of [...defaults, ...extras]) {
+    const key = d.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    domains.push(d);
   }
+  return domains;
+}
+
+type MaskRequestPayload = { providerId: string; accessToken: string; domains: string };
+
+function sendExtensionDirectMaskRequest(
+  payload: MaskRequestPayload
+): Promise<OAuthMaskWriteResult> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'secrets.mask-oauth-token', ...payload }, (r: unknown) => {
+      // Chrome sets `lastError` AND invokes the callback with `undefined` when
+      // the SW is unreachable / message port closed / listener crashed. Without
+      // explicit handling the empty resolve looks identical to "SW returned no
+      // maskedValue".
+      if (chrome.runtime.lastError) {
+        log.error('SW mask-oauth-token transport failed', {
+          providerId: payload.providerId,
+          error: chrome.runtime.lastError.message,
+        });
+      }
+      // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }` on
+      // storage-write / pipeline-build failure (see service-worker.ts
+      // secrets.mask-oauth-token catch). Surface that — matching the CLI
+      // branch's "OAuth replica POST non-ok" logging.
+      const response =
+        typeof r === 'object' && r !== null ? (r as OAuthMaskWriteResult) : undefined;
+      if (response?.error) {
+        log.warn('SW mask-oauth-token returned error', {
+          providerId: payload.providerId,
+          error: response.error,
+        });
+      }
+      resolve(response ?? {});
+    });
+  });
+}
+
+function sendExtensionDelegateMaskRequest(
+  payload: MaskRequestPayload
+): Promise<OAuthMaskWriteResult> {
+  return callSecretsBridge<OAuthMaskWriteResult | undefined>('secrets.mask-oauth-token', payload)
+    .then((r) => {
+      if (r?.error) {
+        log.warn('Bridge mask-oauth-token returned error', {
+          providerId: payload.providerId,
+          error: r.error,
+        });
+      }
+      return r ?? {};
+    })
+    .catch((err) => {
+      log.error('Bridge mask-oauth-token transport failed', {
+        providerId: payload.providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {};
+    });
+}
+
+async function persistCliMaskReplica(
+  providerId: string,
+  accessToken: string,
+  domains: string[]
+): Promise<OAuthMaskWriteResult> {
+  const r = await fetch(resolveApiUrl('/api/secrets/oauth-update'), {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ providerId, accessToken, domains }),
+  });
+  if (!r.ok) {
+    // Server reachable but rejected the push (auth, validation, 5xx).
+    // The local Account is saved either way (fail-open per spec), but
+    // without surfacing this the user gets a confusing "no masked replica"
+    // error from oauth-token / git-token-write later with no breadcrumb.
+    log.warn('OAuth replica POST non-ok', { providerId, status: r.status });
+    return { error: `OAuth replica POST HTTP ${r.status}` };
+  }
+  const data = await r.json();
+  if (typeof data.maskedValue !== 'string') {
+    // 2xx with no string maskedValue is the EXT7-triage silent-pass
+    // defect. Surface it; bootstrap retries on reload; oauth-token remasks.
+    log.warn('OAuth replica POST ok but missing maskedValue', { providerId });
+    return { error: 'OAuth replica POST ok but missing maskedValue' };
+  }
+  if (!isUsableOAuthMaskReplica(data.maskedValue, accessToken)) {
+    log.error('OAuth mask replica equals the access token; refusing to persist', { providerId });
+    return { error: 'mask replica equals the access token' };
+  }
+  const accounts = getAccounts();
+  const attached = attachMaskIfTokenUnchanged(providerId, accessToken, data.maskedValue, accounts);
+  if (attached.maskedValue) await saveAccountsAsync(accounts);
+  return attached;
+}
+
+/**
+ * Dual-mode mask replica write: CLI POST `/api/secrets/oauth-update`,
+ * extension SW `persistOAuthMaskViaServiceWorker` (#847). Fail-open: errors
+ * are logged and returned, never thrown, so a held access token is not lost.
+ * One retry if a concurrent renew/login rotated the token mid-write.
+ */
+async function writeOAuthMaskReplica(
+  providerId: string,
+  accessToken: string
+): Promise<OAuthMaskWriteResult> {
+  const result = await writeOAuthMaskReplicaOnce(providerId, accessToken);
+  if (result.error !== MASK_TOKEN_ROTATED) return result;
+  const current = getAccounts().find((a) => a.providerId === providerId)?.accessToken;
+  if (!current || current === accessToken) return result;
+  return writeOAuthMaskReplicaOnce(providerId, current);
+}
+
+async function writeOAuthMaskReplicaOnce(
+  providerId: string,
+  accessToken: string
+): Promise<OAuthMaskWriteResult> {
+  const domains = oauthMaskDomains(providerId);
+  if (domains.length === 0) {
+    return { error: 'no oauth token domains configured' };
+  }
+  const topology = resolveSecretTopology();
+  try {
+    if (topology === 'extension-direct') {
+      // #847: `oauth-token` runs in the offscreen document, which has
+      // `chrome.runtime` but NOT `chrome.storage`. Send the token + domains IN
+      // the message so the service worker writes them, then masks.
+      return persistOAuthMaskViaServiceWorker(
+        { providerId, accessToken, domains },
+        {
+          sendMaskRequest: sendExtensionDirectMaskRequest,
+          getAccounts,
+          saveAccounts: saveAccountsAsync,
+        }
+      );
+    }
+    if (topology === 'extension-delegate') {
+      // Thin-extension hosted leader / kernel worker: route the mask round-trip
+      // over the secrets.crud Port bridge. The same #847 bounded retry applies.
+      return persistOAuthMaskViaServiceWorker(
+        { providerId, accessToken, domains },
+        {
+          sendMaskRequest: sendExtensionDelegateMaskRequest,
+          getAccounts,
+          saveAccounts: saveAccountsAsync,
+        }
+      );
+    }
+    if (topology === 'connect') {
+      // Connect mode (provider-login popup on www.sliccy.ai): no node-server
+      // replica store — the local Account save is the only write.
+      return { error: 'no replica store in connect mode' };
+    }
+    return await persistCliMaskReplica(providerId, accessToken, domains);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    log.error('OAuth replica sync failed', { providerId, topology, error });
+    return { error };
+  }
+}
+
+/**
+ * Return the masked replica for a held OAuth token, remasking if the replica
+ * is missing (#2921). `oauth-token` / `skill.token` print this replica, never
+ * `accessToken`. `--check` uses the real token and can ACCEPT even when the
+ * replica is gone.
+ *
+ * Dual-mode: CLI POST `/api/secrets/oauth-update`, extension SW
+ * `persistOAuthMaskViaServiceWorker`. Never returns a replica equal to the
+ * access token.
+ */
+export async function ensureOAuthMaskReplica(providerId: string): Promise<OAuthMaskWriteResult> {
+  const account = getAccounts().find((a) => a.providerId === providerId);
+  if (!account?.accessToken) {
+    return { error: 'no access token held' };
+  }
+  if (isUsableOAuthMaskReplica(account.maskedValue, account.accessToken)) {
+    return { maskedValue: account.maskedValue };
+  }
+  return writeOAuthMaskReplica(providerId, account.accessToken);
 }
 
 /**
@@ -1100,154 +1349,9 @@ export async function saveOAuthAccount(opts: {
   await saveAccountsAsync(accounts);
 
   // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW
-  // message — the SW owns the chrome.storage write, see persistOAuthMaskViaServiceWorker)
-  const cfg = getProviderConfig(opts.providerId);
-  const defaults = cfg?.oauthTokenDomains ?? [];
-  const extras = getExtraOAuthDomains(opts.providerId);
-  // Merge + dedupe (case-insensitive, preserve provider-default order).
-  const seen = new Set<string>();
-  const domains: string[] = [];
-  for (const d of [...defaults, ...extras]) {
-    const key = d.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    domains.push(d);
-  }
-  if (domains.length === 0) return;
-
-  const topology = resolveSecretTopology();
-  try {
-    if (topology === 'extension-direct') {
-      // #847: `oauth-token` runs in the offscreen document, which has
-      // `chrome.runtime` but NOT `chrome.storage` — a direct
-      // `chrome.storage.local.set` here throws "Cannot read properties of
-      // undefined (reading 'local')", the catch swallows it, and the account is
-      // left unmasked. Send the token + domains IN the message so the service
-      // worker (which owns `chrome.storage`) writes them, then masks. The retry
-      // also covers a genuinely cold SW that isn't ready on the first round-trip.
-      const sendMaskRequest = (payload: {
-        providerId: string;
-        accessToken: string;
-        domains: string;
-      }) =>
-        new Promise<{ maskedValue?: string; error?: string }>((resolve) => {
-          chrome.runtime.sendMessage(
-            { type: 'secrets.mask-oauth-token', ...payload },
-            (r: unknown) => {
-              // Chrome sets `lastError` AND invokes the callback with
-              // `undefined` when the SW is unreachable / message port closed /
-              // listener crashed. Without explicit handling the empty
-              // resolve looks identical to "SW returned no maskedValue".
-              if (chrome.runtime.lastError) {
-                log.error('SW mask-oauth-token transport failed', {
-                  providerId: opts.providerId,
-                  error: chrome.runtime.lastError.message,
-                });
-              }
-              // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
-              // on storage-write / pipeline-build failure (see service-worker.ts
-              // secrets.mask-oauth-token catch). Surface that — matching the CLI
-              // branch's "OAuth replica POST non-ok" logging.
-              const response =
-                typeof r === 'object' && r !== null
-                  ? (r as { maskedValue?: string; error?: string })
-                  : undefined;
-              if (response?.error) {
-                log.warn('SW mask-oauth-token returned error', {
-                  providerId: opts.providerId,
-                  error: response.error,
-                });
-              }
-              resolve(response ?? {});
-            }
-          );
-        });
-      await persistOAuthMaskViaServiceWorker(
-        { providerId: opts.providerId, accessToken: opts.accessToken, domains },
-        { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
-      );
-    } else if (topology === 'extension-delegate') {
-      // Thin-extension hosted leader / kernel worker: route the mask round-trip
-      // over the secrets.crud Port bridge. The same #847 bounded retry applies
-      // (a cold SW behind the bridge can come back with no maskedValue too).
-      const sendMaskRequest = (payload: {
-        providerId: string;
-        accessToken: string;
-        domains: string;
-      }) =>
-        callSecretsBridge<{ maskedValue?: string; error?: string } | undefined>(
-          'secrets.mask-oauth-token',
-          payload
-        )
-          .then((r) => {
-            if (r?.error) {
-              log.warn('Bridge mask-oauth-token returned error', {
-                providerId: opts.providerId,
-                error: r.error,
-              });
-            }
-            return r ?? {};
-          })
-          .catch((err) => {
-            log.error('Bridge mask-oauth-token transport failed', {
-              providerId: opts.providerId,
-              error: err instanceof Error ? err.message : String(err),
-            });
-            return {};
-          });
-      await persistOAuthMaskViaServiceWorker(
-        { providerId: opts.providerId, accessToken: opts.accessToken, domains },
-        { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
-      );
-    } else if (topology === 'connect') {
-      // Connect mode (provider-login popup on www.sliccy.ai): no node-server
-      // replica store — the local Account save above is the only write.
-    } else {
-      const r = await fetch(resolveApiUrl('/api/secrets/oauth-update'), {
-        method: 'POST',
-        headers: apiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          providerId: opts.providerId,
-          accessToken: opts.accessToken,
-          domains,
-        }),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        if (typeof data.maskedValue === 'string') {
-          const accounts = getAccounts();
-          const acct = accounts.find((a) => a.providerId === opts.providerId);
-          if (acct) {
-            acct.maskedValue = data.maskedValue;
-            await saveAccountsAsync(accounts);
-          }
-        } else {
-          // 2xx with no string maskedValue is the EXT7-triage silent-pass
-          // defect: oauth-token / git-token-write later report "no masked
-          // value" with no breadcrumb. Surface it; bootstrap retries on reload.
-          log.warn('OAuth replica POST ok but missing maskedValue', {
-            providerId: opts.providerId,
-          });
-        }
-      } else {
-        // Server reachable but rejected the push (auth, validation, 5xx).
-        // The local Account is saved either way (fail-open per spec), but
-        // without surfacing this the user gets a confusing "no masked
-        // value" error from oauth-token / git-token-write later with no
-        // breadcrumb. Bootstrap-on-init retries on the next page load.
-        log.warn('OAuth replica POST non-ok', {
-          providerId: opts.providerId,
-          status: r.status,
-        });
-      }
-    }
-  } catch (err) {
-    log.error('OAuth replica sync failed', {
-      providerId: opts.providerId,
-      topology,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // message — the SW owns the chrome.storage write). Fail-open: a replica miss
+  // is recovered by `ensureOAuthMaskReplica` on the next `oauth-token` read (#2921).
+  await writeOAuthMaskReplica(opts.providerId, opts.accessToken);
 }
 
 /** Fallback returned by getApiKeyForProvider for providers with

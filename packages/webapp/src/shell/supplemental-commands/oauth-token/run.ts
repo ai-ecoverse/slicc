@@ -124,8 +124,9 @@ Exit codes:
      login: "oauth-token <id> --force-login"
 
 If no valid token exists or the token is expired (provider mode), the
-OAuth login flow is triggered automatically. The raw access token is
-printed to stdout on success.
+OAuth login flow is triggered automatically. Stdout is the masked replica,
+never the raw access token. A held token whose replica is missing is
+remasked rather than declared unusable.
 
 The --scope flag overrides the provider's default scopes for this login.
 The cached token is reused when the scopes it was granted already cover
@@ -192,15 +193,21 @@ export async function runOAuthToken(args: string[], ctx: CommandContext): Promis
       provider.value,
       config.value,
       settings.getOAuthAccountInfo,
+      settings.ensureOAuthMaskReplica,
       scope.value
     );
-    if (cached) return cached;
+    // `{ok, result}` — an errResult is not a cache hit. Missing replica
+    // remasks first; only a failed remask returns the error without falling
+    // through to interactive login (#2921).
+    if (cached?.ok) return cached.value;
+    if (cached) return cached.result;
   }
   return runInteractiveProviderLogin(
     provider.value,
     config.value,
     scope.value,
-    settings.getOAuthAccountInfo
+    settings.getOAuthAccountInfo,
+    settings.ensureOAuthMaskReplica
   );
 }
 
@@ -264,51 +271,73 @@ async function readCachedProviderToken(
   providerId: string,
   config: ProviderConfig,
   getInfo: ProviderSettings['getOAuthAccountInfo'],
+  ensureMask: ProviderSettings['ensureOAuthMaskReplica'],
   requestedScope: string | undefined
-): Promise<CommandResult | null> {
+): Promise<ValueResult<CommandResult> | null> {
   const info = getInfo(providerId);
-  if (info && !info.expired) return cachedTokenResult(providerId, info, requestedScope);
+  if (info && !info.expired) {
+    return cachedTokenResult(providerId, info, requestedScope, ensureMask);
+  }
   if (!info?.expired || !config.onSilentRenew) return null;
   const renewed = await trySilentRenew(config.onSilentRenew);
   if (!renewed) return null;
   // Re-read so the freshest recorded scopes drive the coverage check.
-  return cachedTokenResult(providerId, getInfo(providerId), requestedScope);
+  return cachedTokenResult(providerId, getInfo(providerId), requestedScope, ensureMask);
 }
 
 /**
  * A cached token only answers a `--scope` request when the scopes it was
  * granted cover it; otherwise the caller falls through to interactive login.
+ * A held, in-date token with no replica is remasked rather than treated as
+ * an error cache-hit (#2921).
  */
-function cachedTokenResult(
+async function cachedTokenResult(
   providerId: string,
-  info: { maskedValue?: string; scopes?: string } | null | undefined,
-  requestedScope: string | undefined
-): CommandResult | null {
+  info: { token?: string; maskedValue?: string; scopes?: string } | null | undefined,
+  requestedScope: string | undefined,
+  ensureMask: ProviderSettings['ensureOAuthMaskReplica']
+): Promise<ValueResult<CommandResult> | null> {
   if (requestedScope && !scopesSatisfied(info?.scopes, requestedScope)) return null;
-  return maskedTokenResult(providerId, info?.maskedValue);
+  const printed = replicaStdout(info?.maskedValue, info?.token);
+  if (printed) return { ok: true, value: printed };
+  if (!info?.token) return null;
+  const remasked = (await ensureMask(providerId)) ?? {};
+  const remaskedPrint = replicaStdout(remasked.maskedValue, info.token);
+  if (remaskedPrint) return { ok: true, value: remaskedPrint };
+  return { ok: false, result: missingReplicaResult(providerId, remasked.error) };
 }
 
-function maskedTokenResult(providerId: string, masked: string | undefined): CommandResult {
-  if (!masked) {
-    // Never say this on stdout: the caller expects a token there, and a
-    // sentence is long enough to pass a naive "looks like a token" check.
-    return errResult(
-      `oauth-token: no usable token for ${providerId}; run: oauth-token ${providerId} --force-login`
-    );
-  }
+/**
+ * Stdout is the secrets replica, never `accessToken`. A replica equal to the
+ * raw token is treated as missing so a `gho_` leak cannot ride out on stdout.
+ */
+function replicaStdout(
+  masked: string | undefined,
+  accessToken: string | undefined
+): CommandResult | null {
+  if (!masked || (accessToken && masked === accessToken)) return null;
   return { stdout: `${masked}\n`, stderr: '', exitCode: 0 };
+}
+
+function missingReplicaResult(providerId: string, detail?: string): CommandResult {
+  // Never say this on stdout: the caller expects a token there, and a
+  // sentence is long enough to pass a naive "looks like a token" check.
+  // Do not lead with --force-login: the access token is still held (#2921).
+  const why = detail ? ` (${detail})` : '';
+  return errResult(`oauth-token: token held for ${providerId} but no masked replica${why}`);
 }
 
 async function runInteractiveProviderLogin(
   providerId: string,
   config: ProviderConfig,
   scopeOverride: string | undefined,
-  getInfo: ProviderSettings['getOAuthAccountInfo']
+  getInfo: ProviderSettings['getOAuthAccountInfo'],
+  ensureMask: ProviderSettings['ensureOAuthMaskReplica']
 ): Promise<CommandResult> {
   try {
     const launch = await launchProviderLogin(providerId, config, scopeOverride);
     if (launch.error) return launch.error;
-    return readSavedProviderToken(providerId, getInfo, launch.succeeded);
+    return readSavedProviderToken(providerId, getInfo, ensureMask, launch.succeeded);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // A delegated login (#1915) that found no human reports why. Say so
@@ -363,11 +392,12 @@ async function launchProviderLogin(
   };
 }
 
-function readSavedProviderToken(
+async function readSavedProviderToken(
   providerId: string,
   getInfo: ProviderSettings['getOAuthAccountInfo'],
+  ensureMask: ProviderSettings['ensureOAuthMaskReplica'],
   launchSucceeded: boolean
-): CommandResult {
+): Promise<CommandResult> {
   if (!launchSucceeded) {
     // The interactive attempt never completed (popup cancelled, timed out, or
     // nobody could approve it). An earlier token may still be stored —
@@ -379,7 +409,16 @@ function readSavedProviderToken(
     );
   }
   const info = getInfo(providerId);
-  if (info?.token && !info.expired) return maskedTokenResult(providerId, info.maskedValue);
+  if (info?.token && !info.expired) {
+    const printed = replicaStdout(info.maskedValue, info.token);
+    if (printed) return printed;
+    // Login persisted the access token but the replica write missed. Remask
+    // rather than printing accessToken or claiming "no usable token" (#2921).
+    const remasked = (await ensureMask(providerId)) ?? {};
+    const remaskedPrint = replicaStdout(remasked.maskedValue, info.token);
+    if (remaskedPrint) return remaskedPrint;
+    return missingReplicaResult(providerId, remasked.error);
+  }
   if (info?.token) {
     return errResult('oauth-token: login completed but the saved token is already expired');
   }

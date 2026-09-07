@@ -2405,6 +2405,50 @@ describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.sto
       expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
     );
   });
+
+  it('refuses to persist a replica that equals the access token (#2921)', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'gho_REAL' }] as never[];
+    mockLog.error.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'gho_REAL', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => ({ maskedValue: 'gho_REAL' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'mask replica equals the access token' });
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({
+        providerId: 'github',
+        reason: 'mask replica equals the access token',
+      })
+    );
+  });
+
+  it('discards the replica when the access token rotates during the write', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok-old' }] as never[];
+    mockLog.warn.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok-old', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => {
+          (accounts[0] as { accessToken: string }).accessToken = 'tok-new';
+          return { maskedValue: 'MASK-old' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'access token rotated during mask write' });
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining('token rotation'),
+      expect.objectContaining({ providerId: 'github' })
+    );
+  });
 });
 
 describe('OAuth replica HTTP — thin-bridge URL + token', () => {
