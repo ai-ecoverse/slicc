@@ -86,21 +86,34 @@ function knownFlagSpecForWalk(spec: KnownFlagSpec): KnownFlagSpec {
 }
 
 /**
- * Tab-lock wait accumulated across the bridge while one command ran before the
- * command's stderr carries a contention note. All `playwright-cli` callers
- * share one serialized browser, so the note is bridge-wide: it tells a fanned-
- * out agent that siblings are queuing, and to back off deliberately instead of
- * guessing why calls are slow (or detached past `background_after`).
+ * Lock wait accumulated while one command ran before its stderr carries a
+ * contention note. Waiting comes in two flavours now that the bridge locks per
+ * tab: another caller driving the SAME tab, or another caller driving another
+ * tab and holding the bridge. The note names which one, so a fanned-out agent
+ * can back off deliberately — give this tab a rest, or reduce fan-out — instead
+ * of guessing why calls are slow (or detached past `background_after`).
  */
 const CONTENTION_NOTE_THRESHOLD_MS = 2000;
 
-function tabLockStatsSnapshot(browser: PlaywrightBrowser): { totalWaitMs: number } | undefined {
-  return typeof browser.getTabLockStats === 'function' ? browser.getTabLockStats() : undefined;
+type LockWaitSnapshot = { totalWaitMs: number; tabWaitMs?: number };
+
+function tabLockStatsSnapshot(
+  browser: PlaywrightBrowser,
+  targetId: string | null
+): LockWaitSnapshot | undefined {
+  if (typeof browser.getTabLockStats !== 'function') return undefined;
+  const bridge = browser.getTabLockStats();
+  if (!targetId) return { totalWaitMs: bridge.totalWaitMs };
+  return {
+    totalWaitMs: bridge.totalWaitMs,
+    tabWaitMs: browser.getTabLockStats(targetId).tabWaitMs,
+  };
 }
 
 function withContentionNote(
   browser: PlaywrightBrowser,
-  before: { totalWaitMs: number } | undefined,
+  before: LockWaitSnapshot | undefined,
+  targetId: string | null,
   result: CmdResult
 ): CmdResult {
   if (!before || typeof browser.getTabLockStats !== 'function') return result;
@@ -108,10 +121,18 @@ function withContentionNote(
   const waitedMs = after.totalWaitMs - before.totalWaitMs;
   if (waitedMs < CONTENTION_NOTE_THRESHOLD_MS) return result;
   const waited = (waitedMs / 1000).toFixed(1);
+  const onThisTab =
+    targetId && before.tabWaitMs !== undefined
+      ? browser.getTabLockStats(targetId).tabWaitMs - before.tabWaitMs
+      : 0;
+  const where =
+    onThisTab >= CONTENTION_NOTE_THRESHOLD_MS
+      ? `${(onThisTab / 1000).toFixed(1)}s of it waiting on this tab (--tab=${targetId})`
+      : 'all of it waiting on the bridge, not on this tab';
   const note =
-    `note: browser bridge contended — tab-lock waits totaled ${waited}s while this command ran ` +
-    `(queue depth ${after.queueDepth}). playwright-cli commands share one browser and run ` +
-    'serialized; stagger concurrent callers or reduce fan-out.\n';
+    `note: browser bridge contended — lock waits totaled ${waited}s while this command ran, ` +
+    `${where} (queue depth ${after.queueDepth}). Commands on the same tab serialize; ` +
+    'different tabs share the bridge — stagger concurrent callers or reduce fan-out.\n';
   return { ...result, stderr: result.stderr + note };
 }
 
@@ -224,7 +245,8 @@ export function createPlaywrightCommand(
     // Note: Per-tab teleport blocking is now handled within command handlers
     // via requireTab() -> browser.withTab() serialization
 
-    const lockStatsBefore = tabLockStatsSnapshot(browser);
+    const contendedTargetId = flags['tab'] ?? null;
+    const lockStatsBefore = tabLockStatsSnapshot(browser, contendedTargetId);
 
     let result: CmdResult;
     const handler = playwrightHandlers.get(subcommand);
@@ -269,6 +291,6 @@ export function createPlaywrightCommand(
       // Session logging is best-effort — never fail the command
     }
 
-    return withContentionNote(browser, lockStatsBefore, result);
+    return withContentionNote(browser, lockStatsBefore, contendedTargetId, result);
   });
 }
