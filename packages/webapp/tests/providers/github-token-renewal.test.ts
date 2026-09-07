@@ -136,7 +136,55 @@ describe('GitHub token renewal', () => {
     );
   });
 
-  it('clears a stale git-token bridge when the refreshed account has no masked value', async () => {
+  it('remasks a missing replica after refresh and rewrites the git-token bridge (#2938)', async () => {
+    seedGitHubAccount({
+      accessToken: 'ghp_old_access',
+      refreshToken: 'ghr_old_refresh',
+      tokenExpiresAt: Date.now() - 1,
+      maskedValue: 'ghp_masked_old',
+    });
+    let oauthUpdates = 0;
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      const urlString = String(url);
+      if (urlString.includes('/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'ghp_new_access',
+            refresh_token: 'ghr_rotated_refresh',
+            expires_in: 28_800,
+          }),
+        } as Response;
+      }
+      if (urlString.includes('/api/secrets/oauth-update')) {
+        oauthUpdates++;
+        // saveOAuthAccount fail-open: replica missing after refresh, remask recovers.
+        if (oauthUpdates === 1) {
+          return { ok: false, status: 503, json: async () => ({}) } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ maskedValue: 'ghp_masked_remasked' }),
+        } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }) as typeof fetch;
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.writeFile('/workspace/.git/github-token', 'ghp_masked_old');
+    const { config } = await import('../../providers/github.js');
+
+    await expect(config.onSilentRenew!()).resolves.toBe('ghp_new_access');
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghp_masked_remasked'
+    );
+    expect(oauthUpdates).toBe(2);
+  });
+
+  it('clears the git-token bridge only when remask fails after refresh (#2938)', async () => {
     seedGitHubAccount({
       accessToken: 'ghp_old_access',
       refreshToken: 'ghr_old_refresh',
@@ -177,13 +225,14 @@ describe('GitHub token renewal', () => {
     globalThis.fetch = vi.fn() as typeof fetch;
     const { getValidAccessToken } = await import('../../providers/github.js');
 
-    seedGitHubAccount({ accessToken: 'ghp_permanent' });
+    seedGitHubAccount({ accessToken: 'ghp_permanent', maskedValue: 'ghp_masked_permanent' });
     await expect(getValidAccessToken()).resolves.toBe('ghp_permanent');
 
     seedGitHubAccount({
       accessToken: 'ghp_fresh',
       refreshToken: 'ghr_fresh',
       tokenExpiresAt: Date.now() + 3_600_000,
+      maskedValue: 'ghp_masked_fresh',
     });
     await expect(getValidAccessToken()).resolves.toBe('ghp_fresh');
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -208,6 +257,66 @@ describe('GitHub token renewal', () => {
       'ghp_masked_live'
     );
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('remasks a missing replica and rewrites a stale git-token bridge when the access token is still fresh (#2938)', async () => {
+    seedGitHubAccount({
+      accessToken: 'ghp_fresh',
+      refreshToken: 'ghr_fresh',
+      tokenExpiresAt: Date.now() + 3_600_000,
+    });
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/api/secrets/oauth-update')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ maskedValue: 'ghp_masked_remasked' }),
+        } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }) as typeof fetch;
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale_snapshot');
+    const { getValidAccessToken } = await import('../../providers/github.js');
+
+    await expect(getValidAccessToken()).resolves.toBe('ghp_fresh');
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghp_masked_remasked'
+    );
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).includes('/oauth/token'))
+    ).toBe(false);
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(([url]) => String(url).includes('/api/secrets/oauth-update'))
+    ).toBe(true);
+  });
+
+  it('leaves the git-token bridge in place when remask fails on a fresh token (#2938)', async () => {
+    seedGitHubAccount({
+      accessToken: 'ghp_fresh',
+      refreshToken: 'ghr_fresh',
+      tokenExpiresAt: Date.now() + 3_600_000,
+    });
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/api/secrets/oauth-update')) {
+        return { ok: false, status: 503, json: async () => ({}) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }) as typeof fetch;
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale_snapshot');
+    const { getValidAccessToken } = await import('../../providers/github.js');
+
+    await expect(getValidAccessToken()).resolves.toBe('ghp_fresh');
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghp_masked_stale_snapshot'
+    );
   });
 
   it('transparently renews an expiring access token', async () => {

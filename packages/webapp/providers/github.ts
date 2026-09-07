@@ -40,7 +40,11 @@ import type {
   ProviderConfig,
 } from '../src/providers/types.js';
 import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
-import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
+import {
+  ensureOAuthMaskReplica,
+  getAccounts,
+  saveOAuthAccount,
+} from '../src/ui/provider-settings.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -419,6 +423,24 @@ async function clearGitToken(): Promise<void> {
   }
 }
 
+/**
+ * Align `/workspace/.git/github-token` with the live OAuth replica.
+ * Remasks a held access token when the replica is missing (#2927 / #2938).
+ * Connect mode has no replica store — remask returns an error and we do not
+ * invent a mask. Only renew/login clear the bridge on that failure;
+ * {@link syncGitTokenBridge} leaves a snapshot in place.
+ */
+async function writeGitTokenFromOAuthReplica(opts?: { clearOnFailure?: boolean }): Promise<void> {
+  const replica = await ensureOAuthMaskReplica('github');
+  if (replica.maskedValue) {
+    await writeGitToken(replica.maskedValue);
+    return;
+  }
+  if (opts?.clearOnFailure) {
+    await clearGitToken();
+  }
+}
+
 // ── Git identity bridge ────────────────────────────────────────────
 
 /**
@@ -490,12 +512,7 @@ async function renewGitHubToken(): Promise<string | null> {
       scopes: tokenResult.scope ?? account.scopes,
     });
 
-    const masked = getOAuthAccountInfo('github')?.maskedValue;
-    if (masked) {
-      await writeGitToken(masked);
-    } else {
-      await clearGitToken();
-    }
+    await writeGitTokenFromOAuthReplica({ clearOnFailure: true });
     return tokenResult.access_token;
   } catch (err) {
     console.warn(
@@ -564,13 +581,10 @@ function isRateLimited(res: Response): boolean {
  * (#2777). Network ops call {@link getValidAccessToken} before talking to
  * GitHub; syncing here — even when the access token is still fresh — means
  * isomorphic-git never keeps using a hand-written snapshot while an OAuth
- * account is logged in.
+ * account is logged in. A missing replica is remasked (#2938), not skipped.
  */
 async function syncGitTokenBridge(): Promise<void> {
-  const masked = getOAuthAccountInfo('github')?.maskedValue;
-  if (masked) {
-    await writeGitToken(masked);
-  }
+  await writeGitTokenFromOAuthReplica();
 }
 
 async function getValidAccessToken(): Promise<string> {
@@ -722,14 +736,9 @@ export const config: ProviderConfig = {
       scopes: tokenResult.scope,
     });
 
-    // Bridge token to isomorphic-git — use the masked value, not the real token
-    const info = getOAuthAccountInfo('github');
-    const masked = info?.maskedValue;
-    if (masked) {
-      await writeGitToken(masked);
-    } else {
-      await clearGitToken();
-    }
+    // Bridge token to isomorphic-git — remask if the replica is missing,
+    // then write the masked value, never the real token (#2938).
+    await writeGitTokenFromOAuthReplica({ clearOnFailure: true });
 
     // Seed git user.name / user.email so commits are attributed to the
     // authenticated GitHub identity instead of the placeholder
