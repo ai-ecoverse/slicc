@@ -9,6 +9,8 @@ import {
   ExtensionBridgeTransport,
 } from '../../src/cdp/extension-bridge-transport.js';
 import type { CDPConnectOptions } from '../../src/cdp/types.js';
+import { startPageCdpForwarder } from '../../src/kernel/cdp-page-forwarder.js';
+import { WorkerCdpProxy } from '../../src/kernel/cdp-worker-proxy.js';
 
 interface FakePort extends ExtensionBridgePort {
   posted: unknown[];
@@ -491,6 +493,151 @@ describe('ExtensionBridgeTransport', () => {
     expect(transport.state).toBe('connected');
   });
 
+  // The MV3 service worker can be evicted at any moment, killing the Port and
+  // every chrome.debugger session behind it. Without a state notification the
+  // page forwarder emits no cdp-reset/cdp-ready and the per-tab captures stay
+  // bound to listeners the reconnect already cleared (issue #2417 finding 4).
+  describe('onStateChange', () => {
+    it('notifies connected on connect and disconnected on a post-welcome port drop', async () => {
+      const seen: Array<[string, string | undefined]> = [];
+      transport.onStateChange((state, reason) => seen.push([state, reason]));
+
+      await connect(transport, port);
+      expect(seen).toEqual([['connected', undefined]]);
+
+      port.triggerDisconnect();
+      expect(seen.at(-1)?.[0]).toBe('disconnected');
+      expect(seen.at(-1)?.[1]).toContain('ExtensionBridgeTransport disconnected');
+    });
+
+    it('notifies connected again after a lazy reconnect on a fresh port', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      ports[0].triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+
+      expect(seen).toEqual(['disconnected', 'connected']);
+    });
+
+    it('notifies on an intentional disconnect() too', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      transport.disconnect();
+
+      expect(seen).toEqual(['disconnected']);
+    });
+
+    it('keeps state subscribers across a drop — only CDP event listeners are cleared', async () => {
+      const channelId = await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+      const cdpListener = vi.fn();
+      transport.on('Page.frameNavigated', cdpListener);
+
+      // A drop runs the base disconnect(), which empties the CDP listener map.
+      port.triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+      port.receive({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+        kind: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frameId: 'f1' },
+      });
+
+      // The CDP listener is gone (that is what has to be re-armed)...
+      expect(cdpListener).not.toHaveBeenCalled();
+      // ...but the state subscription that tells its owner to re-arm survived.
+      expect(seen).toEqual(['disconnected', 'connected']);
+    });
+
+    it('stops notifying after unsubscribe', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      const off = transport.onStateChange((state) => seen.push(state));
+
+      off();
+      port.triggerDisconnect();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('does not notify when a stale port from before a reconnect drops', async () => {
+      await connect(transport, port);
+      const oldPort = ports[0];
+      oldPort.triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      oldPort.triggerDisconnect();
+
+      expect(seen).toEqual([]);
+      expect(transport.state).toBe('connected');
+    });
+  });
+
+  // The kernel worker drives CDP through `WorkerCdpProxy`, so a Port loss in
+  // the leader tab is invisible to it unless the forwarder relays the
+  // transition. This is the whole reset chain for the extension float.
+  it('crosses the kernel hop: a Port loss resets the worker and the reconnect re-arms events', async () => {
+    const channel = new MessageChannel();
+    const channelId = await connect(transport, port);
+    const stop = startPageCdpForwarder(channel.port1, transport);
+    const worker = new WorkerCdpProxy(channel.port2);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const frameNavigated = (): void => {
+      port.receive({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+        kind: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frameId: 'f1' },
+      });
+    };
+    try {
+      await worker.connect();
+      const seen: unknown[] = [];
+      worker.on('Page.frameNavigated', (params) => seen.push(params));
+      await settle();
+
+      frameNavigated();
+      await settle();
+      expect(seen).toHaveLength(1);
+
+      // Service worker evicted: the Port dies and the base disconnect clears
+      // every CDP listener, including the forwarder's.
+      port.triggerDisconnect();
+      await settle();
+      expect(worker.state).toBe('disconnected');
+
+      // Lazy re-dial (what BrowserAPI.ensureConnected does on the next command).
+      nextPort();
+      expect(await connect(transport, port)).toBe(channelId);
+      await settle();
+      await worker.connect();
+
+      frameNavigated();
+      await settle();
+      expect(seen).toHaveLength(2);
+    } finally {
+      worker.disconnect();
+      stop();
+      channel.port1.close();
+      channel.port2.close();
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
   it('sendLeaderJoinUrl posts a leader.join-url envelope over the connected port', async () => {
     const channelId = await connect(transport, port);
     port.posted = [];
@@ -546,6 +693,11 @@ describe('ExtensionBridgeTransport', () => {
     expect(msg.joinUrl).toBeNull();
   });
 });
+
+/** Let queued MessagePort deliveries and microtasks drain. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 5));
+}
 
 async function connect(t: ExtensionBridgeTransport, port: FakePort): Promise<string> {
   const p = t.connect();

@@ -20,7 +20,7 @@
 import type { CDPPayload } from '@slicc/shared-ts';
 
 import { PendingRequestTable, waitForEvent } from '../cdp/pending-request-table.js';
-import type { CDPTransport } from '../cdp/transport.js';
+import type { CDPStateListener, CDPTransport } from '../cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cdp/types.js';
 
 /** Decoded form of a CDP response, regardless of envelope shape. */
@@ -153,6 +153,9 @@ export class CdpTransportBridge implements CDPTransport {
   private listeners = new Map<string, Set<CDPEventListener>>();
   private pendingCommands = new PendingRequestTable<number>();
   private unsubscribe: (() => void) | null = null;
+  private stateListeners = new Set<CDPStateListener>();
+  private lastNotifiedState: ConnectionState = 'disconnected';
+  private lastNotifiedReason: string | undefined;
   private readonly opts: CdpBridgeOptions;
   private readonly label: string;
 
@@ -163,6 +166,27 @@ export class CdpTransportBridge implements CDPTransport {
 
   get state(): ConnectionState {
     return this._state;
+  }
+
+  /**
+   * Observe connection-state transitions (see {@link CDPTransport.onStateChange}).
+   *
+   * Every proxied transport needs this, not just `CDPClient`: in the thin
+   * extension the MV3 service worker can be evicted at any moment, which kills
+   * the Port and takes every `chrome.debugger` session with it. Without a
+   * notification here `startPageCdpForwarder` emits no `cdp-reset`/`cdp-ready`
+   * over the kernel hop, and the long-lived per-tab captures (console,
+   * requests, route) plus `NavigationWatcher` stay bound to listeners that
+   * {@link disconnect} has already cleared (issue #2417).
+   *
+   * State listeners deliberately survive {@link disconnect}: they observe the
+   * connection, they are not part of it. Only CDP event listeners are cleared.
+   */
+  onStateChange(listener: CDPStateListener): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
   }
 
   async connect(_options?: CDPConnectOptions): Promise<void> {
@@ -177,15 +201,18 @@ export class CdpTransportBridge implements CDPTransport {
       this.unsubscribe = this.opts.subscribeIncoming((envelope) => this.handleIncoming(envelope));
     }
     this._state = 'connected';
+    this.notifyState('connected');
   }
 
   disconnect(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
 
-    this.pendingCommands.rejectAll(`${this.label} disconnected`);
+    const reason = `${this.label} disconnected`;
+    this.pendingCommands.rejectAll(reason);
     this.listeners.clear();
     this._state = 'disconnected';
+    this.notifyState('disconnected', reason);
   }
 
   async send(
@@ -292,6 +319,10 @@ export class CdpTransportBridge implements CDPTransport {
    * subscriptions on its own transport when the upstream comes back (the
    * bridge's 0→1 `onSubscribeEvent` edge never fires again for listeners the
    * worker still holds).
+   *
+   * `onStateChange` follows `state`, so a `reset` notifies `'disconnected'`
+   * and a `ready` notifies nothing — the `'connected'` edge belongs to
+   * `connect()`, which is what actually flips the state back.
    */
   private handleControl(control: ParsedCdpControl): void {
     if (control.kind === 'ready') {
@@ -299,9 +330,29 @@ export class CdpTransportBridge implements CDPTransport {
       return;
     }
     const reason = control.reason ?? 'upstream connection reset';
-    this.pendingCommands.rejectAll(`${this.label}: upstream CDP connection was reset (${reason})`);
+    const rejectReason = `${this.label}: upstream CDP connection was reset (${reason})`;
+    this.pendingCommands.rejectAll(rejectReason);
     this._state = 'disconnected';
     this.opts.onUpstreamReset?.(reason);
+    this.notifyState('disconnected', rejectReason);
+  }
+
+  /**
+   * Fan a state transition out to `onStateChange` subscribers, dropping exact
+   * repeats of the last (state, reason) pair so one transition produces one
+   * notification. Mirrors `CDPClient.notifyState`.
+   */
+  private notifyState(state: ConnectionState, reason?: string): void {
+    if (state === this.lastNotifiedState && reason === this.lastNotifiedReason) return;
+    this.lastNotifiedState = state;
+    this.lastNotifiedReason = reason;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state, reason);
+      } catch {
+        // A state observer must not break the CDP path.
+      }
+    }
   }
 
   private handleResponse(resp: ParsedCdpResponse): void {

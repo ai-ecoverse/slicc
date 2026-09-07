@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { CDP_UPSTREAM_RESET_CLOSE_CODE, CDPClient } from '../../src/cdp/cdp-client.js';
 import type { CDPStateListener, CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
 import { startPageCdpForwarder } from '../../src/kernel/cdp-page-forwarder.js';
@@ -99,6 +100,24 @@ function makeStubTransport(): {
     notifyState,
     dropListeners: () => listeners.clear(),
   };
+}
+
+/**
+ * Just enough `WebSocket` for a real `CDPClient` to open and close over. The
+ * end-to-end reason test needs the client's own close handling, which a stub
+ * transport cannot model.
+ */
+class FakeCdpSocket {
+  static last: FakeCdpSocket | null = null;
+  onopen: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  constructor(public url: string) {
+    FakeCdpSocket.last = this;
+  }
+  send(_data: string): void {}
+  close(): void {}
 }
 
 /** Record every raw envelope the page side puts on the wire. */
@@ -345,19 +364,73 @@ describe('page CDP connection resets across the worker hop', () => {
     teardown();
   });
 
-  it('collapses the close/cleanup notification pair into a single cdp-reset', async () => {
+  it('relays one cdp-reset per drop, ignoring repeats of a state already on the wire', async () => {
     const { stub, worker, wire, teardown } = setup();
     await worker.connect();
 
-    // `CDPClient` announces the drop twice: once from cleanup() with a
-    // generic reason, once from handleClose() with the close reason.
-    stub.setState('disconnected', 'CDP client disconnected');
+    stub.setState('disconnected', 'CDP connection closed');
     stub.notifyState('disconnected', 'CDP connection closed');
     await tick();
 
-    expect(wire.filter((m) => m.type === 'cdp-reset')).toHaveLength(1);
+    expect(wire.filter((m) => m.type === 'cdp-reset')).toEqual([
+      { type: 'cdp-reset', reason: 'CDP connection closed' },
+    ]);
 
     teardown();
+  });
+
+  // Only the FIRST notification of a transition crosses the hop, so the reason
+  // the real client announces has to be the specific one. It used to announce
+  // a generic 'CDP client disconnected' from cleanup() first, and the worker
+  // never learned that the proxy had reset its Chrome leg (review finding 10).
+  it('carries the 4002 upstream-reset reason from a real CDPClient to the worker', async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    (globalThis as unknown as Record<string, unknown>).WebSocket = FakeCdpSocket;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const channel = new MessageChannel();
+    const resetReason =
+      'CDP connection reset by proxy (upstream Chrome connection was re-established)';
+    try {
+      const client = new CDPClient();
+      const connecting = client.connect({ url: 'ws://test/cdp' });
+      FakeCdpSocket.last?.onopen?.();
+      await connecting;
+
+      const stop = startPageCdpForwarder(channel.port1, client);
+      const wire = tapWire(channel.port2);
+      const worker = new WorkerCdpProxy(channel.port2);
+      await worker.connect();
+
+      // Attach the rejection handler up front: the close rejects this command
+      // before the assertion below runs, and a late handler is an unhandled
+      // rejection.
+      const inFlight = expect(worker.send('Page.navigate')).rejects.toThrow(resetReason);
+      await tick();
+      FakeCdpSocket.last?.onclose?.({ code: CDP_UPSTREAM_RESET_CLOSE_CODE });
+      await tick();
+
+      expect(wire.filter((m) => m.type === 'cdp-reset')).toEqual([
+        { type: 'cdp-reset', reason: resetReason },
+      ]);
+      // Worker-side diagnostics — the whole point of carrying the reason.
+      expect(warn).toHaveBeenCalledWith(
+        '[WorkerCdpProxy] page CDP connection reset; sessions are stale',
+        resetReason
+      );
+      await inFlight;
+
+      worker.disconnect();
+      stop();
+    } finally {
+      channel.port1.close();
+      channel.port2.close();
+      warn.mockRestore();
+      error.mockRestore();
+      info.mockRestore();
+      (globalThis as unknown as Record<string, unknown>).WebSocket = originalWebSocket;
+    }
   });
 
   it('connect() is re-callable after a reset and commands round-trip again', async () => {
@@ -426,6 +499,60 @@ describe('page CDP connection resets across the worker hop', () => {
     stub.fire('Page.frameNavigated', { frameId: 'f1' });
     await tick();
     expect(seen).toEqual([{ frameId: 'f1' }]);
+
+    teardown();
+  });
+
+  // `CdpTransportBridge.onStateChange` — the base every proxied transport
+  // shares. Without it a bridge-backed transport (thin-extension Port bridge,
+  // worker proxy) can drop with nobody downstream ever hearing about it.
+  it('announces its own state transitions to onStateChange subscribers', async () => {
+    const { stub, worker, teardown } = setup();
+    const seen: Array<[string, string | undefined]> = [];
+    worker.onStateChange((state, reason) => seen.push([state, reason]));
+
+    await worker.connect();
+    expect(seen).toEqual([['connected', undefined]]);
+
+    stub.setState('disconnected', 'CDP connection closed');
+    await tick();
+    expect(seen.at(-1)?.[0]).toBe('disconnected');
+    expect(seen.at(-1)?.[1]).toContain('CDP connection closed');
+
+    await worker.connect();
+    expect(seen.at(-1)).toEqual(['connected', undefined]);
+
+    teardown();
+  });
+
+  it('stops announcing after the state subscription is released', async () => {
+    const { stub, worker, teardown } = setup();
+    await worker.connect();
+    const seen: string[] = [];
+    const off = worker.onStateChange((state) => seen.push(state));
+
+    off();
+    stub.setState('disconnected', 'CDP connection closed');
+    await tick();
+
+    expect(seen).toEqual([]);
+
+    teardown();
+  });
+
+  it('keeps announcing to the other subscribers when one throws', async () => {
+    const { stub, worker, teardown } = setup();
+    await worker.connect();
+    const seen: string[] = [];
+    worker.onStateChange(() => {
+      throw new Error('observer blew up');
+    });
+    worker.onStateChange((state) => seen.push(state));
+
+    stub.setState('disconnected', 'CDP connection closed');
+    await tick();
+
+    expect(seen).toEqual(['disconnected']);
 
     teardown();
   });
