@@ -367,12 +367,14 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private pendingSudoBypasses = new Map<string, number>();
   /**
    * Env writes performed by supplemental commands during a `bash.exec()` call
-   * (currently only `secret set` injecting a masked value). `bash.exec()`
-   * returns its own snapshot of the working env that overwrites `lastEnv` on
-   * return — these pending writes are reapplied after that overwrite so they
-   * survive into the next exec call.
+   * (`secret set` injecting a masked value, `secret delete` dropping one).
+   * `bash.exec()` returns its own snapshot of the working env that overwrites
+   * `lastEnv` on return — these pending writes are reapplied after that
+   * overwrite so they survive into the next exec call. A `null` value is a
+   * pending REMOVAL: the snapshot still carries the old value, so the var has
+   * to be deleted again after the overwrite, not just before it.
    */
-  private pendingEnvWrites = new Map<string, string>();
+  private pendingEnvWrites = new Map<string, string | null>();
 
   /**
    * The `kind:'shell'` pid of the in-flight `executeCommand` call, set by
@@ -557,6 +559,14 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       setEnv: (name, value) => {
         this.pendingEnvWrites.set(name, value);
         this.lastEnv[name] = value;
+      },
+      // `secret delete` must also drop the var, and the removal has to be
+      // queued the same way: `bash.exec`'s returned env snapshot still carries
+      // the old value, so deleting it from `lastEnv` alone would be undone on
+      // return and the mask would come back.
+      unsetEnv: (name) => {
+        this.pendingEnvWrites.set(name, null);
+        delete this.lastEnv[name];
       },
     });
   }
@@ -1035,10 +1045,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // Reapply env writes performed by supplemental commands during this exec
     // (e.g. `secret set` injecting a masked value). `bash.exec`'s `result.env`
     // does not include them — without this re-merge the next exec would not see
-    // `$NAME`.
+    // `$NAME`. A `null` is a removal: `result.env` DOES still carry the old
+    // value, so it has to be deleted after the overwrite or it comes back.
     if (this.pendingEnvWrites.size > 0) {
       for (const [k, v] of this.pendingEnvWrites) {
-        this.lastEnv[k] = v;
+        if (v === null) {
+          delete this.lastEnv[k];
+        } else {
+          this.lastEnv[k] = v;
+        }
       }
       this.pendingEnvWrites.clear();
     }

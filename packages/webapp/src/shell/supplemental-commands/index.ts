@@ -63,7 +63,7 @@ import { createPython3LikeCommand } from './python-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
-import { createSecretCommand } from './secret-command.js';
+import { createSecretCommand, type SecretCommandDeps } from './secret-command.js';
 import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSessionCommand } from './session-command.js';
@@ -166,6 +166,12 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * shell session (LLM-context parity with container-loaded secrets).
    */
   setEnv?: (name: string, value: string) => void;
+  /**
+   * Removal counterpart to {@link setEnv}, so a successful `secret delete` also
+   * drops the masked `$NAME` that `secret set` injected — otherwise the mask
+   * outlives the secret and expands to a value nothing can unmask.
+   */
+  unsetEnv?: (name: string) => void;
   /** Runtime topology and tray-status readers for the webhook command. */
   webhook?: WebhookCommandOptions;
   /** Runtime topology reader for the crontask command. */
@@ -179,6 +185,18 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * then falls back to the global PM / an ephemeral PM, parented to pid 1).
    */
   buildProcessConfig?: (runEnv?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
+}
+
+/**
+ * `secret` deps: the paired shell-env hooks plus the SAME sudo broker the rest
+ * of the shell uses (never a locally constructed one — see `secret-command.ts`).
+ */
+function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDeps {
+  return {
+    setEnv: options.setEnv,
+    unsetEnv: options.unsetEnv,
+    broker: options.sudoCommand?.broker,
+  };
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -281,7 +299,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     // Reuses the SAME broker as the explicit `sudo <cmd>` command and SudoFS
     // write gating — one properly-composed broker per float (#2276), not an
     // independent one `secret-command.ts` constructs for itself.
-    createSecretCommand({ setEnv: options.setEnv, broker: options.sudoCommand?.broker }),
+    createSecretCommand(secretCommandDeps(options)),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),

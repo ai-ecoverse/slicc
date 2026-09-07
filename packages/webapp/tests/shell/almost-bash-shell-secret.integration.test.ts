@@ -60,6 +60,11 @@ function installSecretApiFetchMock(session: Map<string, SessionEntry>) {
         }))
       );
     }
+    if (url.startsWith('/api/secrets/') && method === 'DELETE') {
+      const name = decodeURIComponent(url.slice('/api/secrets/'.length));
+      if (!session.delete(name)) return json({ error: 'not-found' }, false, 404);
+      return json({ ok: true, name, fromSession: true });
+    }
     return json({ error: 'unhandled' }, false, 404);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -98,6 +103,25 @@ describe('AlmostBashShellHeadless + secret set — masked-env injection (LLM-con
     expect(echoRes.stdout.trim()).toBe(maskFor('real-value'));
     // The real value MUST NOT have been injected into the shell env.
     expect(echoRes.stdout).not.toContain('real-value');
+  });
+
+  it('drops $NAME again after secret delete, so no dead mask survives the secret', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    await shell.executeCommand('secret set K real-value --domain api.x.com');
+    expect((await shell.executeCommand('echo $K')).stdout.trim()).toBe(maskFor('real-value'));
+
+    const delRes = await shell.executeCommand('secret delete K');
+    expect(delRes.exitCode).toBe(0);
+    expect(session.has('K')).toBe(false);
+
+    // `bash.exec`'s returned env snapshot still carries the old value, so this
+    // is what proves the removal is reapplied after that overwrite rather than
+    // being silently undone.
+    const echoRes = await shell.executeCommand('echo "[$K]"');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe('[]');
+    expect(echoRes.stdout).not.toContain(maskFor('real-value'));
   });
 
   it('accepts the value via stdin (echo v | secret set K2)', async () => {

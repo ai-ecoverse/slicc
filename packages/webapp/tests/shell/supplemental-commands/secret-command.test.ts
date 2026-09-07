@@ -462,6 +462,68 @@ describe('secret command — masked-env injection on set', () => {
     expect(res.exitCode).toBe(0);
     expect(setEnv).not.toHaveBeenCalled();
   });
+
+  // A mask that outlives its secret is worse than a missing var: `$NAME` still
+  // expands, so the request is built and sent, and the fetch proxy has no
+  // secret left to match — it neither unmasks nor 403s. Upstream just receives
+  // a dead credential. Observed live on both privileged bridges.
+  it('clears the masked shell env var after a successful delete', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: true })),
+    });
+    const unsetEnv = vi.fn();
+    const res = await run(['delete', 'OPENAI_KEY'], {
+      backend,
+      broker: broker.broker,
+      unsetEnv,
+    });
+    expect(res.exitCode).toBe(0);
+    expect(unsetEnv).toHaveBeenCalledWith('OPENAI_KEY');
+  });
+
+  it('clears the masked shell env var after deleting a persisted secret too', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: false })),
+    });
+    const unsetEnv = vi.fn();
+    const res = await run(['rm', 'TOKEN'], { backend, broker: broker.broker, unsetEnv });
+    expect(res.exitCode).toBe(0);
+    expect(unsetEnv).toHaveBeenCalledWith('TOKEN');
+  });
+
+  it('leaves the env alone when the secret did not exist', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: false })),
+    });
+    const unsetEnv = vi.fn();
+    const res = await run(['delete', 'NOPE'], { backend, broker: broker.broker, unsetEnv });
+    expect(res.exitCode).toBe(1);
+    expect(unsetEnv).not.toHaveBeenCalled();
+  });
+
+  it('skips the env clear for non-POSIX dot-namespaced names', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: true })),
+    });
+    const unsetEnv = vi.fn();
+    const res = await run(['delete', 's3.r2.access_key_id'], {
+      backend,
+      broker: broker.broker,
+      unsetEnv,
+    });
+    expect(res.exitCode).toBe(0);
+    // Never injected (same POSIX filter as `secret set`), so nothing to clear.
+    expect(unsetEnv).not.toHaveBeenCalled();
+  });
+
+  it('deletes fine when no unsetEnv hook is supplied (backward compatible)', async () => {
+    const backend = makeBackend({
+      delete: vi.fn(async () => ({ removed: true, fromSession: true })),
+    });
+    const res = await run(['delete', 'OPENAI_KEY'], { backend, broker: broker.broker });
+    expect(res.exitCode).toBe(0);
+    expect(backend.delete).toHaveBeenCalledWith('OPENAI_KEY');
+  });
 });
 
 describe('secret command — delete / rm', () => {

@@ -58,6 +58,8 @@ Do **not** treat `git config github.token "$(oauth-token github)"` as a long-liv
 
 ### Shell-env naming convention
 
+`secret set` injects the masked value into the owning shell's env and `secret delete` removes it again, so `$NAME` never outlives the secret it stands for. That symmetry matters: a mask whose secret is gone still expands, so the request is built and sent, but the fetch proxy has no secret left to match — it neither unmasks nor 403s, and upstream silently receives a dead credential.
+
 Only secrets whose names are valid POSIX env identifiers — `[A-Za-z_][A-Za-z0-9_]*` — are exposed as `$NAME` in the agent shell. Names containing dots, hyphens, or starting with a digit (e.g. `s3.r2.access_key_id`, `oauth.adobe.token`, `db.prod.password`) are still loaded into the fetch-proxy for header unmasking, but they do not leak into `printenv` or `$VAR` resolution. Use this to keep subsystem secrets (mount backends, OAuth replicas) out of the agent's environment while still letting the proxy substitute them when an HTTP request happens to carry the masked value.
 
 Set file permissions: `chmod 600 ~/.slicc/secrets.env`.
@@ -96,7 +98,7 @@ Inside the SLICC shell, the `secret` command manages secrets:
 | `secret test <name> <url>`                           | None       | Check whether a secret would be injected for a given URL.                                                                  |
 | `secret set <name> <value> --domain <pat> --persist` | **Prompt** | Persist to `.env` / Keychain / `chrome.storage.local`.                                                                     |
 | `secret scope <name> --domain <pat>`                 | **Prompt** | Edit the allowed host/domain scope of an existing secret.                                                                  |
-| `secret delete <name>`                               | None       | Remove a secret (or show how, in CLI mode).                                                                                |
+| `secret delete <name>`                               | None       | Remove a secret (or show how, in CLI mode). Also drops the masked `$NAME` from the shell env.                              |
 
 ### Session secrets and the sudo model
 
