@@ -164,7 +164,73 @@ describe('git diff --no-index', () => {
     expect(result.exitCode).toBe(1);
 
     const stat = await git.execute(['diff', '--no-index', '--stat', 'b1.bin', 'b2.bin'], CWD);
-    expect(plain(stat.stdout)).toContain('b1.bin => b2.bin | Bin 4 -> 4 bytes');
+    expect(plain(stat.stdout)).toBe(
+      [
+        ' b1.bin => b2.bin | Bin 4 -> 4 bytes',
+        // git suppresses a zero clause only when the OTHER one is non-zero.
+        ' 1 file changed, 0 insertions(+), 0 deletions(-)',
+        '',
+      ].join('\n')
+    );
+  });
+
+  describe('a missing trailing newline', () => {
+    it('is a real hunk, not exit 1 with empty output', async () => {
+      await vfs.writeFile(`${CWD}/eol.txt`, 'a\nb\n');
+      await vfs.writeFile(`${CWD}/noeol.txt`, 'a\nb');
+
+      const result = await git.execute(['diff', '--no-index', 'eol.txt', 'noeol.txt'], CWD);
+
+      expect(plain(result.stdout)).toBe(
+        [
+          'diff --git a/eol.txt b/noeol.txt',
+          '--- a/eol.txt',
+          '+++ b/noeol.txt',
+          '@@ -1,2 +1,2 @@',
+          ' a',
+          '-b',
+          '+b',
+          '\\ No newline at end of file',
+          '',
+        ].join('\n')
+      );
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('marks a shared incomplete last line once, on the context line', async () => {
+      await vfs.writeFile(`${CWD}/g1.txt`, 'x\nb');
+      await vfs.writeFile(`${CWD}/g2.txt`, 'y\nb');
+
+      const result = await git.execute(['diff', '--no-index', 'g1.txt', 'g2.txt'], CWD);
+
+      expect(plain(result.stdout)).toBe(
+        [
+          'diff --git a/g1.txt b/g2.txt',
+          '--- a/g1.txt',
+          '+++ b/g2.txt',
+          '@@ -1,2 +1,2 @@',
+          '-x',
+          '+y',
+          ' b',
+          '\\ No newline at end of file',
+          '',
+        ].join('\n')
+      );
+    });
+
+    it('counts toward --stat', async () => {
+      await vfs.writeFile(`${CWD}/f2.txt`, 'a\nb');
+
+      const result = await git.execute(['diff', '--no-index', '--stat', 'd1.txt', 'f2.txt'], CWD);
+
+      expect(plain(result.stdout)).toBe(
+        [
+          ' d1.txt => f2.txt |    3 +--',
+          ' 1 file changed, 1 insertion(+), 2 deletions(-)',
+          '',
+        ].join('\n')
+      );
+    });
   });
 
   it('rejects anything other than exactly two paths', async () => {

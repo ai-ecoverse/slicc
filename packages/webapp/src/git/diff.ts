@@ -123,12 +123,53 @@ export function myersDiff(a: string[], b: string[]): Edit[] {
   return backtrackTrace(a, b, n, m, offset, trace, finalD);
 }
 
+/**
+ * How a line ended, carried as a one-character PREFIX on every line handed to
+ * `myersDiff`. It is what makes an incomplete final line compare UNEQUAL to the
+ * same text followed by a newline, so `a\nb\n` vs `a\nb` produces a real hunk
+ * instead of an empty diff. A prefix is collision-free where a sentinel suffix
+ * would not be: exactly one character is added and exactly one is stripped,
+ * whatever the line itself contains.
+ */
+const ENDS_WITH_NEWLINE = '\n';
+const ENDS_WITHOUT_NEWLINE = '\0';
+
+/** git's marker for a side whose last line has no terminating newline. */
+const NO_NEWLINE_MARKER = '\\ No newline at end of file';
+
+/**
+ * Split content into terminator-tagged lines. Empty content has no lines at
+ * all, and a terminating newline leaves a trailing `''` that is not one.
+ */
+function taggedLines(content: string): string[] {
+  if (content === '') return [];
+  const incomplete = !content.endsWith('\n');
+  const lines = content.split('\n');
+  if (!incomplete) lines.pop();
+  const last = lines.length - 1;
+  return lines.map(
+    (line, i) => `${incomplete && i === last ? ENDS_WITHOUT_NEWLINE : ENDS_WITH_NEWLINE}${line}`
+  );
+}
+
+/** One rendered diff line: its marker, its text, and git's no-newline flag. */
+interface DiffLine {
+  sign: ' ' | '-' | '+';
+  text: string;
+  /** This line is its side's last and had no terminating newline. */
+  incomplete: boolean;
+}
+
+function diffLine(sign: DiffLine['sign'], tagged: string): DiffLine {
+  return { sign, text: tagged.slice(1), incomplete: tagged[0] === ENDS_WITHOUT_NEWLINE };
+}
+
 interface Hunk {
   oldStart: number;
   oldCount: number;
   newStart: number;
   newCount: number;
-  lines: string[];
+  lines: DiffLine[];
 }
 
 /**
@@ -171,23 +212,23 @@ function buildHunk(edits: Edit[], hunkStart: number, hunkEnd: number): Hunk {
     if (edits[i].type !== 'delete') newLine++;
   }
 
-  const lines: string[] = [];
+  const lines: DiffLine[] = [];
   let oldCount = 0;
   let newCount = 0;
   for (let i = hunkStart; i <= hunkEnd; i++) {
     const edit = edits[i];
     switch (edit.type) {
       case 'equal':
-        lines.push(` ${edit.line}`);
+        lines.push(diffLine(' ', edit.line));
         oldCount++;
         newCount++;
         break;
       case 'delete':
-        lines.push(`-${edit.line}`);
+        lines.push(diffLine('-', edit.line));
         oldCount++;
         break;
       case 'insert':
-        lines.push(`+${edit.line}`);
+        lines.push(diffLine('+', edit.line));
         newCount++;
         break;
     }
@@ -242,15 +283,7 @@ export function unifiedDiff(opts: UnifiedDiffOptions): string {
 
   if (oldContent === newContent) return '';
 
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-
-  // Remove trailing empty element from split if content ends with \n
-  // (avoids a phantom empty-line diff)
-  if (oldLines.length > 0 && oldLines[oldLines.length - 1] === '') oldLines.pop();
-  if (newLines.length > 0 && newLines[newLines.length - 1] === '') newLines.pop();
-
-  const edits = myersDiff(oldLines, newLines);
+  const edits = myersDiff(taggedLines(oldContent), taggedLines(newContent));
   const hunks = buildHunks(edits, context);
 
   if (hunks.length === 0) return '';
@@ -274,13 +307,10 @@ export function unifiedDiff(opts: UnifiedDiffOptions): string {
     const newRange = hunkRange(hunk.newStart, hunk.newCount);
     output += `${CYAN}@@ -${oldRange} +${newRange} @@${RESET}\n`;
     for (const line of hunk.lines) {
-      if (line.startsWith('+')) {
-        output += `${GREEN}${line}${RESET}\n`;
-      } else if (line.startsWith('-')) {
-        output += `${RED}${line}${RESET}\n`;
-      } else {
-        output += `${line}\n`;
-      }
+      const color = line.sign === '+' ? GREEN : line.sign === '-' ? RED : '';
+      output += `${color}${line.sign}${line.text}${color ? RESET : ''}\n`;
+      // git puts the marker on the line it applies to, and never counts it.
+      if (line.incomplete) output += `${NO_NEWLINE_MARKER}\n`;
     }
   }
 
@@ -297,12 +327,7 @@ export function diffStat(
 ): { insertions: number; deletions: number } {
   if (oldContent === newContent) return { insertions: 0, deletions: 0 };
 
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  if (oldLines.length > 0 && oldLines[oldLines.length - 1] === '') oldLines.pop();
-  if (newLines.length > 0 && newLines[newLines.length - 1] === '') newLines.pop();
-
-  const edits = myersDiff(oldLines, newLines);
+  const edits = myersDiff(taggedLines(oldContent), taggedLines(newContent));
 
   let insertions = 0;
   let deletions = 0;
@@ -366,9 +391,11 @@ export function formatDiffStatText(entries: readonly DiffStatEntry[]): string {
   }
 
   output += ` ${entries.length} file${entries.length !== 1 ? 's' : ''} changed`;
-  if (totalInsertions > 0)
+  // git suppresses a zero clause only when the OTHER one is non-zero, so a
+  // binary-only change still reports `0 insertions(+), 0 deletions(-)`.
+  if (totalInsertions > 0 || totalDeletions === 0)
     output += `, ${totalInsertions} insertion${totalInsertions !== 1 ? 's' : ''}(+)`;
-  if (totalDeletions > 0)
+  if (totalDeletions > 0 || totalInsertions === 0)
     output += `, ${totalDeletions} deletion${totalDeletions !== 1 ? 's' : ''}(-)`;
   output += '\n';
 

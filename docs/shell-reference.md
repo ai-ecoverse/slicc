@@ -417,6 +417,15 @@ addition to an empty file, not `-1,0`), and a one-line side omits its count
 (`@@ -1 +0,0 @@`). Both forms are what `git apply` and `patch` expect to read
 back.
 
+Every line handed to the Myers diff carries a one-character PREFIX recording
+whether it ended with a newline, so an incomplete final line can never compare
+equal to the same text followed by one. Adding or removing a trailing newline is
+therefore a real hunk closed by `\ No newline at end of file`, not an empty
+diff — a prefix is collision-free where a sentinel suffix would not be. The
+`patch` applier (`git/patch-core.ts`) has always PARSED that marker; this is the
+first SLICC producer that emits it, so the `git diff | patch` round trip now
+preserves a missing trailing newline.
+
 ### `git stash` moves bytes, not text
 
 Push and pop/apply are byte paths end to end (#2885). Push reads each dirty
