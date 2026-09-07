@@ -39,6 +39,24 @@ actor CDPProxy {
     /// match the latch, so a Sliccstart user would see the eviction war.
     static let supersededCloseCode: UInt16 = 4001
 
+    /// WebSocket close code SLICC sends after the Chrome leg was rebuilt under
+    /// a live `/cdp` client. Chrome discards every CDP session attached to the
+    /// socket it closed, so the client's cached `sessionId`s are dead the
+    /// moment the leg drops — but nothing tells the webapp, which keeps
+    /// short-circuiting "already attached" and fails every command on that tab
+    /// (issue #2417). Closing with 4002 makes `CDPClient` reconnect
+    /// immediately and reset its session state, distinct from the 4001
+    /// supersede latch which deliberately stops re-dialing.
+    ///
+    /// MUST stay in sync with `packages/webapp/src/cdp/cdp-client.ts`
+    /// `CDP_UPSTREAM_RESET_CLOSE_CODE` and node-server's mirror of this proxy.
+    static let upstreamResetCloseCode: UInt16 = 4002
+
+    /// Consecutive failed reconnect attempts after which the client is cut
+    /// loose with `upstreamResetCloseCode` rather than left hanging on a proxy
+    /// whose Chrome leg is gone. The loop keeps retrying afterwards.
+    static let upstreamResetFailureThreshold = 3
+
     private let logger: Logger
     private let logDedup: CliLogDedup
     private let discoverer: @Sendable (Int) async throws -> String
@@ -83,6 +101,7 @@ actor CDPProxy {
                 try await Self.defaultChromeConnector(
                     url: url,
                     maxFrameSize: maxMessageSize,
+                    logger: logger,
                     onMessage: onMessage,
                     onEvent: onEvent
                 )
@@ -696,26 +715,58 @@ actor CDPProxy {
             self.chromeReconnectTask = nil
         }
 
+        var consecutiveFailures = 0
+        var didSignalFailure = false
+
         while !Task.isCancelled {
             do {
                 try await self.sleep(self.reconnectDelayNanoseconds)
                 let freshURL = try await Self.cdpURL(for: cdpPort, using: self.discoverer)
                 self.cachedCDPPort = cdpPort
                 self.cachedCDPURL = freshURL
+                // `ensureChromeConnection` returns only once the Chrome leg is
+                // open AND the buffered client frames have been flushed, so the
+                // client is cut loose after — never before — the reconnect.
+                // Closing earlier would let the reconnecting client race the
+                // very reconnect it is waiting for.
                 try await self.ensureChromeConnection(url: freshURL)
                 self.logger.info("[cdp-proxy] Chrome WS auto-reconnected")
+                await self.closeActiveClientForUpstreamReset(reason: "Chrome WS auto-reconnected")
                 return
             } catch is CancellationError {
                 return
             } catch {
+                consecutiveFailures += 1
                 self.logger.warning("[cdp-proxy] Auto-reconnect failed: \(String(describing: error))")
+                if !didSignalFailure, consecutiveFailures >= Self.upstreamResetFailureThreshold {
+                    didSignalFailure = true
+                    await self.closeActiveClientForUpstreamReset(
+                        reason: "\(consecutiveFailures) failed Chrome WS reconnect attempts"
+                    )
+                }
             }
         }
+    }
+
+    /// Close the live `/cdp` client with `upstreamResetCloseCode` so the webapp
+    /// reconnects and drops the CDP sessions Chrome discarded with the old leg.
+    /// The slot is cleared here rather than waiting for the inbound loop, so a
+    /// Chrome→Client frame is never forwarded into a socket we just closed and
+    /// the next `addClient` does not re-close it as "superseded".
+    private func closeActiveClientForUpstreamReset(reason: String) async {
+        guard let activeClient = self.activeClient else {
+            return
+        }
+
+        self.activeClient = nil
+        self.logger.info("[cdp-proxy] Closing client (upstream-reset): \(reason)")
+        await activeClient.close(.unknown(Self.upstreamResetCloseCode), "upstream-reset")
     }
 
     private static func defaultChromeConnector(
         url: String,
         maxFrameSize: Int,
+        logger: Logger,
         onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
         onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
     ) async throws -> ChromeSocketHandle {
@@ -733,28 +784,22 @@ actor CDPProxy {
             on: HTTPClient.defaultEventLoopGroup
         ) { socket in
             socket.onText { _, text in
-                let result = messagePump.enqueue(.text(text))
-                if case .overflow = result,
-                    terminationState.markOverflow(
-                        reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
-                    )
-                {
-                    Task {
-                        try? await socket.close(code: .messageTooLarge)
-                    }
-                }
+                Self.handleInboundEnqueue(
+                    result: messagePump.enqueue(.text(text)),
+                    messagePump: messagePump,
+                    terminationState: terminationState,
+                    logger: logger,
+                    socket: socket
+                )
             }
             socket.onBinary { _, buffer in
-                let result = messagePump.enqueue(.binary(buffer))
-                if case .overflow = result,
-                    terminationState.markOverflow(
-                        reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
-                    )
-                {
-                    Task {
-                        try? await socket.close(code: .messageTooLarge)
-                    }
-                }
+                Self.handleInboundEnqueue(
+                    result: messagePump.enqueue(.binary(buffer)),
+                    messagePump: messagePump,
+                    terminationState: terminationState,
+                    logger: logger,
+                    socket: socket
+                )
             }
             socket.onClose.whenComplete { result in
                 Task {
@@ -809,6 +854,54 @@ actor CDPProxy {
 }
 
 extension CDPProxy {
+    /// Decide what an inbound enqueue result means for the Chrome leg: `nil` to
+    /// keep pumping, otherwise the warning line to log before the leg is torn
+    /// down. Split from the socket callback so the overflow attribution is
+    /// testable without a live Chrome WebSocket. The cap itself is unchanged;
+    /// only the attribution is new.
+    static func inboundOverflowLogLine(
+        result: ChromeInboundMessagePump.EnqueueResult,
+        messagePump: ChromeInboundMessagePump,
+        terminationState: ChromeSocketTerminationState
+    ) -> String? {
+        guard case .overflow = result,
+            terminationState.markOverflow(
+                reason:
+                    "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
+            )
+        else {
+            return nil
+        }
+
+        let diagnostics = messagePump.overflowDiagnosticsSummary() ?? "unavailable"
+        return "[cdp-proxy] Inbound Chrome frame buffer overflowed — \(diagnostics)"
+    }
+
+    /// Shared `onText`/`onBinary` tail: on overflow, log what stormed (once)
+    /// and close the Chrome leg so the reconnect loop rebuilds it.
+    private static func handleInboundEnqueue(
+        result: ChromeInboundMessagePump.EnqueueResult,
+        messagePump: ChromeInboundMessagePump,
+        terminationState: ChromeSocketTerminationState,
+        logger: Logger,
+        socket: WebSocket
+    ) {
+        guard
+            let logLine = Self.inboundOverflowLogLine(
+                result: result,
+                messagePump: messagePump,
+                terminationState: terminationState
+            )
+        else {
+            return
+        }
+
+        logger.warning("\(logLine)")
+        Task {
+            try? await socket.close(code: .messageTooLarge)
+        }
+    }
+
     static func runChromeMessagePump(
         _ messagePump: ChromeInboundMessagePump,
         onMessage: @escaping @Sendable (ProxyMessage) async -> Void
@@ -861,6 +954,7 @@ final class ChromeInboundMessagePump: @unchecked Sendable {
     private var buffer: [ProxyMessage] = []
     private var pendingContinuation: CheckedContinuation<ProxyMessage?, Never>?
     private var isFinished = false
+    private var overflowSnapshot: [ProxyMessage]?
 
     init(maxBufferedMessages: Int = CDPProxy.defaultChromeInboundMessageBufferLimit) {
         self.maxBufferedMessages = max(1, maxBufferedMessages)
@@ -881,6 +975,9 @@ final class ChromeInboundMessagePump: @unchecked Sendable {
 
             guard self.buffer.count < self.maxBufferedMessages else {
                 self.isFinished = true
+                // Snapshot (O(1), copy-on-write) so the overflow can be
+                // attributed after the pump has drained the buffer.
+                self.overflowSnapshot = self.buffer
                 return .overflow
             }
 
@@ -890,6 +987,16 @@ final class ChromeInboundMessagePump: @unchecked Sendable {
 
         continuation?.resume(returning: message)
         return result
+    }
+
+    /// Method/session attribution for the frames that were queued when the cap
+    /// was hit; `nil` until an `enqueue` returns `.overflow`.
+    func overflowDiagnosticsSummary() -> String? {
+        let snapshot = self.stateQueue.sync { self.overflowSnapshot }
+        guard let snapshot else {
+            return nil
+        }
+        return ChromeInboundOverflowDiagnostics.summary(for: snapshot)
     }
 
     func next() async -> ProxyMessage? {

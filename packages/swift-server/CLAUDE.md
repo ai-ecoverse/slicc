@@ -36,6 +36,8 @@ npm run format -w @slicc/swift-server         # swift format --in-place
 - `Sources/Server/` — HTTP routes, thin-bridge CORS, logging, shutdown. `Sources/Signing/` — `SigV4Signer` (mirrors JS signers vs AWS vectors).
 - `Sources/WebSocket/` — `CDPProxy.swift` (one browser WebSocket, ordered bounded pump) + `LickSystem.swift` (actor: tracks clients + pending requests; `LickWebSocketRoute` exposes `/licks-ws`; browser messages resolve pending requests or broadcast events). Both install separately from `/api`.
 
+**`/cdp` close codes (mirror node-server; the webapp `cdp-client.ts` latches on both).** `4001` = superseded, a newer client took the single slot — the evicted tab stops re-dialing. `4002 upstream-reset` = the Chrome leg dropped, so Chrome discarded every CDP session: the proxy closes the client **after** the reconnect loop has the leg back and buffered frames flushed (closing earlier makes the reconnecting client race the reconnect), or after `upstreamResetFailureThreshold` failed attempts so it never hangs on a dead proxy. The webapp reconnects and resets its session state. On inbound-pump overflow the warning line names the top event methods and how many distinct `sessionId`s they span, so a storm (usually leaked per-tab sessions) is attributable from the log alone.
+
 ## Electron `--join` — egress decides the attach route
 
 Two routes, chosen by whether the app allows renderer egress:
