@@ -95,6 +95,37 @@ describe('renderMessageContent', () => {
     expect(html).not.toContain('<span class="tok-keyword">from</span> class="tok-string"&gt;');
   });
 
+  // Regression: highlighting ran over already-escaped HTML, so a string whose
+  // body contained markup (`'<svg …>'` — every inline icon table) left the
+  // string body plain and painted the gap between two strings instead,
+  // swallowing the trailing comment and the next key.
+  it('highlights JS strings that contain markup without inverting the spans', () => {
+    const content = [
+      '```js',
+      'const ICONS = {',
+      `  npm: '<svg viewBox="0 0 256"><rect fill="#CB3837"/></svg>', // brand red`,
+      `  macos: '<svg fill="currentColor"></svg>',`,
+      '};',
+      '```',
+    ].join('\n');
+
+    const html = renderMessageContent(content);
+
+    expect(html).toContain(
+      `<span class="tok-string">'&lt;svg viewBox="0 0 256"&gt;&lt;rect fill="#CB3837"/&gt;&lt;/svg&gt;'</span>`
+    );
+    expect(html).toContain('<span class="tok-comment">// brand red</span>');
+    // The entity-splitting tell: `&#39;` chopped into `&#<span…>39</span>;`.
+    expect(html).not.toContain('&#<span');
+    expect(html).not.toContain('&amp;#39;');
+  });
+
+  it('does not turn a quoted bash argument into a comment', () => {
+    const html = renderMessageContent("```bash\necho 'hello world'\n```");
+    expect(html).toContain('<span class="tok-string">\'hello world\'</span>');
+    expect(html).not.toContain('tok-comment');
+  });
+
   it('renders code blocks without a language', () => {
     const content = '```\nplain text\n```';
     const html = renderMessageContent(content);
