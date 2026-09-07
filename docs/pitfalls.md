@@ -654,6 +654,47 @@ uses real native Files and writes; its hooks only control timing. A once-overwri
 run recovers to `after!`; overwriting every snapshot still fails after three
 attempts. Unit guards live in `tests/fs/zenfs-opfs-read-retry.test.ts` in the webapp.
 
+## A Torn `/.metadata.json` Must Be Reseeded, Not Honored
+
+**Files**: `packages/webapp/src/fs/virtual-fs.ts`
+(`seedOpfsMetadataSidecarIfMissing`, `isUsableMetadataSidecar`),
+`packages/webapp/src/fs/sidecar-repair.ts`.
+
+`createWritable()` **truncates before it writes**, so a page reload landing
+inside a sidecar flush leaves a short file — a JSON document cut mid-string.
+The seed step used to check only whether the sidecar EXISTED, and a truncated
+file exists, so it was kept; ZenFS' `WebAccessFS._loadMetadata` then threw
+`SyntaxError: Unterminated string in JSON` on every later mount and the kernel
+worker failed to boot **forever**, with no user-reachable recovery:
+
+```text
+[main] Fatal error Error: Kernel worker boot failed: Unterminated string in JSON at position 47
+[kernel-worker] boot failed SyntaxError: Unterminated string in JSON at position 47
+```
+
+`repairOpfsMetadataSidecar` does not cover this class either — it needs a
+parseable document to repair and returns `null` for anything else, which the
+on-throw retry reads as "unrepairable" and rethrows.
+
+The rule: a sidecar whose bytes PARSE into something ZenFS cannot consume is
+treated as ABSENT and reseeded with an empty index. That is safe because the
+sidecar carries only
+recorded mode/mtime — never file CONTENT, which lives in separate OPFS entries —
+so ZenFS rebuilds inodes from the real tree and the files are still there. A
+parseable sidecar is still left untouched, so persisted metadata survives a
+normal reload.
+
+**A failed READ is not corruption.** This decision destroys data when it is
+wrong, so only a parse or schema failure may reach it. `getFile()` hands out a
+snapshot that a concurrent native overwrite invalidates (the `NotReadableError`
+race above), and a blanket `catch` around the read would report that as "torn"
+and reseed over an intact index. So the read retries a FRESH snapshot up to
+three times, every other error is rethrown, and the validate-then-reseed pair
+runs under `withWriteLock` so it cannot observe another context's flush
+mid-write. A boot that fails loudly is recoverable on the next reload; a reseed
+over good metadata is not. Regression:
+`tests/fs/virtual-fs-torn-sidecar.test.ts`.
+
 ## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
 
 **Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,
