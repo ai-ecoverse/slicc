@@ -420,6 +420,50 @@ describe('CDPClient', () => {
       expect(seen.map(([, reason]) => reason)).toContain('CDP connection closed');
     });
 
+    // A subscriber that relays across a process hop (`startPageCdpForwarder`)
+    // can only forward the FIRST notification of a transition — everything
+    // after it is a repeat of a state the far side already has. Announcing a
+    // generic reason first and the specific one second therefore threw the
+    // specific reason away at the worker boundary (issue #2417 review 10).
+    it('announces a close exactly once, with the specific close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        [
+          'disconnected',
+          'CDP connection reset by proxy (upstream Chrome connection was re-established)',
+        ],
+      ]);
+    });
+
+    it('announces a supersede close exactly once, with the supersede reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        ['disconnected', 'CDP connection superseded by another SLICC tab/window on this instance'],
+      ]);
+    });
+
+    it('rejects in-flight commands with the same reason it announces', async () => {
+      const ws = await connectOpen();
+      const seen: Array<string | undefined> = [];
+      client.onStateChange((_state, reason) => seen.push(reason));
+      const inFlight = client.send('Page.navigate');
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(inFlight).rejects.toThrow(seen[0]!);
+      expect(seen).toHaveLength(1);
+    });
+
     it('notifies on an explicit disconnect()', async () => {
       await connectOpen();
       const seen: string[] = [];

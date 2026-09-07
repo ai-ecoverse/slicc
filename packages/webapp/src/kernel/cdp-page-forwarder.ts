@@ -173,8 +173,10 @@ export function startPageCdpForwarder(
 
   // Relay the real transport's connection state across the hop. A drop is
   // invisible to the worker otherwise — see the wire-format note in the file
-  // header. `lastRelayed` collapses the repeat notifications a close produces
-  // (`cleanup()` then `handleClose()`) into a single `cdp-reset`.
+  // header. `lastRelayed` collapses repeat notifications of a state the wire
+  // already carries into a single `cdp-reset` / `cdp-ready`; because only the
+  // FIRST notification of a transition is relayed, the transport must announce
+  // a close once, with its final reason (`CDPClient.cleanup` does).
   let lastRelayed: ConnectionState = realTransport.state;
   const unsubscribeState = realTransport.onStateChange?.((state, reason) => {
     if (state === lastRelayed) return;

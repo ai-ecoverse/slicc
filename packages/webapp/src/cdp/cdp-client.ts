@@ -311,29 +311,29 @@ export class CDPClient implements CDPTransport {
     } else {
       log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
     }
-    const reason = closeRejectReason(code);
-    this.pending.rejectAll(reason);
-    this.cleanup();
-    // Re-announce the drop with the specific close reason; `cleanup()` has
-    // already flipped the state with a generic one.
-    this.notifyState('disconnected', reason);
+    // One tear-down, carrying the specific close reason. Announcing a generic
+    // reason first and the specific one second lost the 4002 upstream-reset
+    // attribution at the worker boundary: `startPageCdpForwarder` relays the
+    // FIRST notification of a transition and suppresses the rest, so the
+    // worker only ever saw "CDP client disconnected" (issue #2417).
+    this.cleanup(closeRejectReason(code));
   }
 
-  private cleanup(): void {
+  private cleanup(reason = 'CDP client disconnected'): void {
     this.ws = null;
     this._state = 'disconnected';
-    this.pending.rejectAll('CDP client disconnected');
-    this.notifyState('disconnected', 'CDP client disconnected');
+    this.pending.rejectAll(reason);
+    this.notifyState('disconnected', reason);
   }
 
   /**
    * Fan a state transition out to `onStateChange` subscribers.
    *
    * Repeats of the same (state, reason) pair are dropped so a subscriber sees
-   * one notification per transition. A close still notifies twice — once from
-   * `cleanup()` and once from `handleClose()` with the specific close reason —
-   * because the reason differs; `startPageCdpForwarder` collapses the pair
-   * into a single `cdp-reset` by tracking the state it last relayed.
+   * one notification per transition. A close notifies exactly once, with the
+   * reason `closeRejectReason` derived from the close code — subscribers such
+   * as `startPageCdpForwarder` relay that reason verbatim, so anything less
+   * specific here is diagnostic detail the worker never gets back.
    */
   private notifyState(state: ConnectionState, reason?: string): void {
     if (state === this.lastNotifiedState && reason === this.lastNotifiedReason) return;
