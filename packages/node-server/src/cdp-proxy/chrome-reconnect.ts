@@ -18,9 +18,14 @@
  * Retry indefinitely with a 1 s delay between attempts, until shutdown — there
  * is no attempt cap. Close the active client with 4002 `upstream-reset` after
  * the 3rd consecutive failure, so it does not hang on a proxy whose Chrome leg
- * is gone, and again (once) after a later successful reconnect if a client is
- * connected by then. Never leave a clientless buffer around: buffered frames
- * are dropped whenever the client that wrote them loses the slot.
+ * is gone. After a successful reconnect, reset the active client ONLY if it is
+ * the same client that held the slot when the Chrome leg went down — it is the
+ * one whose sessions Chrome discarded. A client that connected during the
+ * outage never had sessions on the dead leg and its buffered frames were just
+ * flushed onto the replacement connection, so closing it with 4002 would make
+ * the page retry commands that already ran (a sessionless `Target.createTarget`
+ * opens a duplicate tab). Never leave a clientless buffer around: buffered
+ * frames are dropped whenever the client that wrote them loses the slot.
  */
 
 import { type ClientFrameBuffer, createClientFrameBuffer } from './client-frame-buffer.js';
@@ -43,6 +48,12 @@ export interface ChromeReconnectDeps {
   connectChrome: (url: string) => Promise<void>;
   /** Close the active `/cdp` client with the upstream-reset code, if any. */
   resetClient: (reason: string) => void;
+  /**
+   * Id of the client holding the single `/cdp` slot right now, or null when it
+   * is empty. Sampled on every leg drop and compared again after a successful
+   * reconnect: only the holder that saw the dead leg carries stale sessions.
+   */
+  activeClientId: () => number | null;
   /** True once graceful shutdown started — no reconnect, no client reset. */
   isShuttingDown: () => boolean;
   /**
@@ -134,6 +145,8 @@ const defaultSleep = (ms: number): Promise<void> =>
 export class ChromeReconnectController {
   private task: Promise<void> | null = null;
   private cancelled = false;
+  /** Slot holder at the most recent Chrome-leg drop — the one with stale sessions. */
+  private slotHolderAtDrop: number | null = null;
 
   constructor(private readonly deps: ChromeReconnectDeps) {}
 
@@ -148,6 +161,11 @@ export class ChromeReconnectController {
       this.deps.log(`[cdp-proxy] Chrome WS dropped during shutdown — not reconnecting (${reason})`);
       return;
     }
+    // Sampled on EVERY drop, including one that lands while a loop is already
+    // running (a client that connected during the outage rebuilt the leg and
+    // then lost it too): the stale-session client is whoever held the slot at
+    // the most recent drop.
+    this.slotHolderAtDrop = this.deps.activeClientId();
     if (this.task !== null) return;
 
     const delayMs = this.deps.delayMs ?? CHROME_RECONNECT_DELAY_MS;
@@ -209,14 +227,37 @@ export class ChromeReconnectController {
       await this.deps.connectChrome(url);
       if (this.stopped()) return true;
       this.deps.log('[cdp-proxy] Chrome WS auto-reconnected');
-      // Chrome dropped every session with the old socket, so the page's cached
-      // sessionIds are stale — close it so it re-dials with a clean slate. A
-      // no-op when the failure threshold already cut the previous client loose.
-      this.deps.resetClient('reconnected');
+      this.resetStaleSlotHolder();
       return true;
     } catch (err) {
       this.deps.log(`[cdp-proxy] Auto-reconnect attempt ${attempt} failed: ${String(err)}`);
       return false;
+    }
+  }
+
+  /**
+   * Close the client that held the slot when the leg dropped: Chrome discarded
+   * every session with the old socket, so that page's cached sessionIds are
+   * dead and it must re-dial with a clean slate.
+   *
+   * A client that connected DURING the outage is left alone. It never had
+   * sessions on the dead leg, and the frames it buffered were just flushed onto
+   * the replacement connection — closing it with 4002 would make the page retry
+   * commands that already ran, and a sessionless `Target.createTarget` among
+   * them opens a duplicate tab (issue #2417). The third-failure reset clears
+   * the slot, so the comparison below naturally fails for any replacement.
+   */
+  private resetStaleSlotHolder(): void {
+    const holder = this.slotHolderAtDrop;
+    const current = this.deps.activeClientId();
+    if (holder !== null && current === holder) {
+      this.deps.resetClient('reconnected');
+      return;
+    }
+    if (current !== null) {
+      this.deps.log(
+        '[cdp-proxy] Client connected during the outage — no stale sessions, not resetting it'
+      );
     }
   }
 

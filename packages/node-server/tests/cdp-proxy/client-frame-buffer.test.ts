@@ -153,6 +153,28 @@ describe('takeClientFrameBuffer', () => {
     expect(state.messageBuffer).toBeNull();
   });
 
+  it('flushes what a client that connected DURING the outage buffered', () => {
+    // Client 1 saw the leg die, so its buffer names the dead connection. Client
+    // 2 then took the slot mid-outage: it lost no sessions, so its frames run
+    // on the replacement connection — and `ChromeReconnectController` leaves it
+    // connected rather than closing it with 4002 (it would otherwise retry the
+    // `Target.createTarget` that just ran and open a duplicate tab).
+    const state = makeHost({ chromeWs: null, chromeConnectionId: 1, activeClientId: 1 });
+    state.messageBuffer = createClientFrameBuffer({ chromeConnectionId: 1, clientId: 1 });
+    state.messageBuffer.frames.push('{"id":1,"method":"Target.createTarget"}');
+
+    expect(adoptClientSlot(state, 2)).toEqual({ count: 1, reason: 'client-superseded' });
+    state.messageBuffer?.frames.push('{"id":9,"method":"Target.createTarget"}');
+
+    state.chromeWs = CHROME_SOCKET;
+    state.chromeConnectionId = 2;
+    expect(takeClientFrameBuffer(state, 2)).toEqual({
+      frames: ['{"id":9,"method":"Target.createTarget"}'],
+      dropped: null,
+    });
+    expect(state.messageBuffer).toBeNull();
+  });
+
   it('drops frames buffered by a client that has since been superseded', () => {
     const state = makeHost({ activeClientId: 2 });
     state.messageBuffer = createClientFrameBuffer({ chromeConnectionId: 1, clientId: 1 });

@@ -32,6 +32,8 @@ interface Harness {
   connect: ReturnType<typeof vi.fn>;
   sleeps: number[];
   shuttingDown: { value: boolean };
+  /** Id of the client holding the single `/cdp` slot; mutate it mid-outage. */
+  activeClient: { id: number | null };
 }
 
 function makeHarness(overrides: Partial<ChromeReconnectDeps> = {}): Harness {
@@ -39,6 +41,7 @@ function makeHarness(overrides: Partial<ChromeReconnectDeps> = {}): Harness {
   const resets: string[] = [];
   const sleeps: number[] = [];
   const shuttingDown = { value: false };
+  const activeClient: { id: number | null } = { id: 1 };
   const discover = vi.fn(async () => 'ws://127.0.0.1:9222/devtools/browser/fresh');
   const connect = vi.fn(async () => {});
 
@@ -46,6 +49,7 @@ function makeHarness(overrides: Partial<ChromeReconnectDeps> = {}): Harness {
     discoverChromeWsUrl: discover,
     connectChrome: connect,
     resetClient: (reason) => resets.push(reason),
+    activeClientId: () => activeClient.id,
     isShuttingDown: () => shuttingDown.value,
     log: (line) => logs.push(line),
     sleep: async (ms) => {
@@ -54,7 +58,7 @@ function makeHarness(overrides: Partial<ChromeReconnectDeps> = {}): Harness {
     ...overrides,
   });
 
-  return { controller, logs, resets, discover, connect, sleeps, shuttingDown };
+  return { controller, logs, resets, discover, connect, sleeps, shuttingDown, activeClient };
 }
 
 describe('ChromeReconnectController', () => {
@@ -77,11 +81,80 @@ describe('ChromeReconnectController', () => {
     expect(h.logs).toContain('[cdp-proxy] Chrome WS auto-reconnected');
   });
 
-  it('resets the active client once the Chrome leg is back', async () => {
+  it('resets the slot holder that saw the dead leg once the Chrome leg is back', async () => {
+    // Client 1 held the slot at the drop, so Chrome discarded ITS sessions.
     h.controller.schedule('close code=1009');
     await h.controller.settled();
 
     expect(h.resets).toEqual(['reconnected']);
+  });
+
+  it('leaves a client that connected during the outage connected', async () => {
+    const harness = makeHarness();
+    harness.activeClient.id = 7;
+    harness.controller.schedule('close code=1006');
+    // The reset at the 3rd failure never ran (the first attempt succeeds), but
+    // client 7 dropped off and client 8 took the slot while Chrome was away.
+    harness.activeClient.id = 8;
+    await harness.controller.settled();
+
+    // Client 8 never had sessions on the dead leg and its buffered frames were
+    // just flushed onto the replacement connection: a 4002 here would make the
+    // page retry commands that already ran (duplicate-tab bug, issue #2417).
+    expect(harness.resets).toEqual([]);
+    expect(harness.logs).toContain(
+      '[cdp-proxy] Client connected during the outage — no stale sessions, not resetting it'
+    );
+  });
+
+  it('resets nobody when a replacement arrives after the third-failure reset', async () => {
+    const resets: string[] = [];
+    const slot: { id: number | null } = { id: 4 };
+    let calls = 0;
+    const harness = makeHarness({
+      connectChrome: async () => {
+        calls++;
+        if (calls <= 3) throw new Error('ECONNREFUSED');
+      },
+      activeClientId: () => slot.id,
+      resetClient: (reason) => {
+        resets.push(reason);
+        // The third-failure reset clears the slot (`releaseClientSlot`); a
+        // fresh SLICC tab then dials in while the loop is still retrying.
+        if (reason === 'reconnect-failed') slot.id = 5;
+      },
+    });
+
+    harness.controller.schedule('close code=1006');
+    await harness.controller.settled();
+
+    // Exactly one close: the one that cut the stale client loose. Client 5 keeps
+    // its connection — and the frames it buffered during the outage, which the
+    // flush onto the replacement connection delivered.
+    expect(resets).toEqual(['reconnect-failed']);
+    expect(calls).toBe(4);
+  });
+
+  it('re-samples the slot holder when the leg drops again mid-loop', async () => {
+    // A client that connected during the outage rebuilt the leg and then lost
+    // it too — it now DOES hold stale sessions, so it must be reset.
+    const harness = makeHarness();
+    harness.activeClient.id = 1;
+    harness.controller.schedule('close code=1006');
+    harness.activeClient.id = 2;
+    harness.controller.schedule('close code=1006');
+    await harness.controller.settled();
+
+    expect(harness.resets).toEqual(['reconnected']);
+  });
+
+  it('does not reset when the slot is empty at both the drop and the reconnect', async () => {
+    const harness = makeHarness();
+    harness.activeClient.id = null;
+    harness.controller.schedule('close code=1006');
+    await harness.controller.settled();
+
+    expect(harness.resets).toEqual([]);
   });
 
   it('is idempotent — an error plus a close schedules one loop', async () => {
@@ -148,7 +221,8 @@ describe('ChromeReconnectController', () => {
     );
     // The loop did NOT stop at the threshold — it kept going to the 6th attempt.
     expect(calls).toBe(6);
-    // Closed once on the failure threshold, once more when the leg came back.
+    // Closed once on the failure threshold, once more when the leg came back —
+    // the same client held the slot throughout, so it owns the stale sessions.
     expect(harness.resets).toEqual(['reconnect-failed', 'reconnected']);
   });
 

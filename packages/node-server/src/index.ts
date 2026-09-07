@@ -889,6 +889,7 @@ function ensureChromeReconnectController(
     connectChrome: (url) => ensureChromeConnection(state, url, ctx),
     isChromeLegHealthy: () => state.chromeWs?.readyState === WebSocket.OPEN,
     resetClient: (reason) => resetActiveCdpClient(state, ctx, reason),
+    activeClientId: () => state.activeClientId,
     isShuttingDown: () => state.shuttingDown,
     log: (line) => logCdpProxy(ctx, line),
   });
