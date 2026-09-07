@@ -94,6 +94,13 @@ const STALE_SESSION_ERRORS = [
   'No tab attached for sessionId',
 ] as const;
 
+/**
+ * A session died PART WAY through a command, so what reached the page is
+ * unknown. Distinct from a plain stale-session error, which means nothing
+ * landed and the command can simply be replayed — this one must not be.
+ */
+class SessionResetError extends Error {}
+
 function isStaleSessionError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return STALE_SESSION_ERRORS.some((needle) => message.includes(needle));
@@ -502,44 +509,53 @@ export class BrowserAPI {
    * click's `mousePressed` fired twice. So the retry is gated on the stale
    * error having been the FIRST CDP round trip of this callback on this
    * session (the attach itself, or the first send): nothing was applied, and
-   * re-running is safe.
-   *
-   * Once a send has landed the outcome is genuinely unknown — the command may
-   * have half-completed — so the session is invalidated and the caller gets an
-   * error saying so. Re-checking page state is the agent's job then; guessing
-   * on its behalf is what corrupted input in the first place.
+   * re-running is safe. A {@link SessionResetError} is the other case and is
+   * never retried.
    */
   private async runOnTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
-    // `null` until the attach succeeds, so a stale attach still heals.
-    let session: string | null = null;
-    let applied = 0;
     try {
-      session = await this.attachToPage(targetId);
-      applied = this._appliedSends.get(session) ?? 0;
-      return await fn(session);
+      return await this.attemptOnTab(targetId, fn);
     } catch (err) {
-      if (!isStaleSessionError(err)) throw err;
-      const sent = session === null ? 0 : (this._appliedSends.get(session) ?? 0);
-      this.invalidateSession(targetId);
-      if (sent > applied) {
-        log.warn('CDP session reset mid-command — not replaying', {
-          targetId,
-          applied: sent - applied,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw new Error(
-          `The CDP session for tab ${targetId} was reset mid-command, after ${sent - applied} ` +
-            'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
-            're-armed: check the page state before repeating this command. ' +
-            `(underlying error: ${err instanceof Error ? err.message : String(err)})`
-        );
-      }
+      if (err instanceof SessionResetError || !isStaleSessionError(err)) throw err;
       log.warn('Stale CDP session — re-attaching and retrying once', {
         targetId,
         error: err instanceof Error ? err.message : String(err),
       });
-      const sessionId = await this.attachToPage(targetId);
+      this.invalidateSession(targetId);
+      return await this.attemptOnTab(targetId, fn);
+    }
+  }
+
+  /**
+   * One attempt: attach, run, and decide whether a stale-session failure left
+   * the page untouched.
+   *
+   * Once a send has landed the outcome is genuinely unknown — the command may
+   * have half-completed — so the session is invalidated and the caller gets a
+   * {@link SessionResetError} saying so. Re-checking page state is the agent's
+   * job then; guessing on its behalf is what corrupted input in the first
+   * place.
+   */
+  private async attemptOnTab<T>(
+    targetId: string,
+    fn: (sessionId: string) => Promise<T>
+  ): Promise<T> {
+    const sessionId = await this.attachToPage(targetId);
+    const before = this._appliedSends.get(sessionId) ?? 0;
+    try {
       return await fn(sessionId);
+    } catch (err) {
+      if (!isStaleSessionError(err)) throw err;
+      const applied = (this._appliedSends.get(sessionId) ?? 0) - before;
+      if (applied === 0) throw err; // nothing landed — safe to replay
+      this.invalidateSession(targetId);
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn('CDP session reset mid-command — not replaying', { targetId, applied, reason });
+      throw new SessionResetError(
+        `The CDP session for tab ${targetId} was reset mid-command, after ${applied} ` +
+          'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
+          `re-armed: check the page state before repeating this command. (underlying error: ${reason})`
+      );
     }
   }
 

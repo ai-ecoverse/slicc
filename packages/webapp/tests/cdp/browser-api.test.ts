@@ -1878,6 +1878,36 @@ describe('BrowserAPI', () => {
       expect(callsTo('Target.attachToTarget')).toHaveLength(1);
     });
 
+    it('does not replay a RETRY that had already changed the page', async () => {
+      let sessCount = 0;
+      let inserts = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        async (method: string, _params: unknown, sessionId?: string) => {
+          if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+          // The first session is dead on arrival: nothing lands, so the heal
+          // replays. On the fresh session the first insert lands and THEN the
+          // session dies — the replay gate has to hold on that pass too.
+          if (sessionId === 'sess-1') throw new Error('Session with given id not found');
+          if (method === 'Input.insertText') {
+            inserts += 1;
+            if (inserts > 1) throw new Error('Session with given id not found');
+            return {};
+          }
+          return {};
+        }
+      );
+
+      await expect(
+        api.withTab('t1', async () => {
+          await api.insertText('a');
+          await api.insertText('b');
+        })
+      ).rejects.toThrow(/outcome is unknown/);
+
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      expect(inserts).toBe(2);
+    });
+
     it('re-arms the tab after an uncertain-outcome failure', async () => {
       let sessCount = 0;
       (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
