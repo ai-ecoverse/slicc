@@ -27,6 +27,7 @@ import {
 import {
   getNavigatorUsb,
   getSharedUsbRegistry,
+  type UsbControlSetup,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
 } from '../kernel/usb-device-registry.js';
@@ -222,15 +223,48 @@ export interface SprinkleSerialApi {
 }
 
 /**
- * `slicc.usb` — parity surface for WebUSB. Mirrors the realm `usb`
- * global's `list`/`request`/`open`/`close` shape; control/bulk
- * transfers stay on the realm-side API for v1.
+ * `slicc.usb` — parity surface for WebUSB, mirroring the realm `usb` global.
+ *
+ * Transfers are here rather than realm-only because a page-side consumer
+ * cannot use the realm for a continuous stream: `.jsh` stdout is buffered
+ * and delivered on completion, so anything that reads a device for as long
+ * as it is interesting (a video stream, a sensor feed) has to drive the
+ * device from the page.
+ *
+ * Payloads cross the sandboxed-iframe boundary as base64, matching
+ * `readFileBinary` / `writeFileBinary`; the boundary is not structured
+ * clone, so a `Uint8Array` cannot be passed through directly.
  */
 export interface SprinkleUsbApi {
   list(): Promise<UsbDeviceInfo[]>;
   request(filters?: UsbDeviceFilter[]): Promise<UsbDeviceInfo>;
   open(handle: string): Promise<void>;
   close(handle: string): Promise<void>;
+  reset(handle: string): Promise<void>;
+  selectConfiguration(handle: string, configurationValue: number): Promise<void>;
+  claimInterface(handle: string, interfaceNumber: number): Promise<void>;
+  releaseInterface(handle: string, interfaceNumber: number): Promise<void>;
+  clearHalt(handle: string, direction: 'in' | 'out', endpointNumber: number): Promise<void>;
+  controlTransferIn(
+    handle: string,
+    setup: UsbControlSetup,
+    length: number
+  ): Promise<{ status: string; bytes: Uint8Array }>;
+  controlTransferOut(
+    handle: string,
+    setup: UsbControlSetup,
+    bytes: Uint8Array
+  ): Promise<{ status: string; bytesWritten: number }>;
+  transferIn(
+    handle: string,
+    endpointNumber: number,
+    length: number
+  ): Promise<{ status: string; bytes: Uint8Array }>;
+  transferOut(
+    handle: string,
+    endpointNumber: number,
+    bytes: Uint8Array
+  ): Promise<{ status: string; bytesWritten: number }>;
 }
 
 // ── Tier 1 jsh bridge: node -e command builder + result parser ──
@@ -323,6 +357,13 @@ export async function runJshOp(
 }
 
 /** Base64-encode bytes for transport across the page→iframe boundary. */
+/** Detach a `Uint8Array` view into its own buffer for the WebUSB call. */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
+}
+
 function u8ToBase64(bytes: Uint8Array): string {
   let bin = '';
   const chunk = 0x8000;
@@ -709,6 +750,67 @@ export class SprinkleBridge {
         await usbOps.usbClose(reg, args[0] as string);
         return { ok: true };
       }
+      case 'reset': {
+        await usbOps.usbReset(reg, args[0] as string);
+        return { ok: true };
+      }
+      case 'selectConfig': {
+        await usbOps.usbSelectConfiguration(reg, args[0] as string, args[1] as number);
+        return { ok: true };
+      }
+      case 'claim': {
+        await usbOps.usbClaimInterface(reg, args[0] as string, args[1] as number);
+        return { ok: true };
+      }
+      case 'release': {
+        await usbOps.usbReleaseInterface(reg, args[0] as string, args[1] as number);
+        return { ok: true };
+      }
+      case 'clearHalt': {
+        await usbOps.usbClearHalt(
+          reg,
+          args[0] as string,
+          args[1] as 'in' | 'out',
+          args[2] as number
+        );
+        return { ok: true };
+      }
+      case 'controlIn': {
+        const r = await usbOps.usbControlTransferIn(
+          reg,
+          args[0] as string,
+          args[1] as UsbControlSetup,
+          args[2] as number
+        );
+        return { status: r.status, base64: u8ToBase64(new Uint8Array(r.bytes)) };
+      }
+      case 'controlOut': {
+        const r = await usbOps.usbControlTransferOut(
+          reg,
+          args[0] as string,
+          args[1] as UsbControlSetup,
+          toArrayBuffer(base64ToU8(args[2] as string))
+        );
+        return { status: r.status, bytesWritten: r.bytesWritten };
+      }
+      case 'transferIn': {
+        const r = await usbOps.usbTransferIn(
+          reg,
+          args[0] as string,
+          args[1] as number,
+          args[2] as number
+        );
+        return { status: r.status, base64: u8ToBase64(new Uint8Array(r.bytes)) };
+      }
+      case 'transferOut': {
+        const r = await usbOps.usbTransferOut(
+          reg,
+          args[0] as string,
+          args[1] as number,
+          toArrayBuffer(base64ToU8(args[2] as string))
+        );
+        return { status: r.status, bytesWritten: r.bytesWritten };
+      }
       default:
         throw new Error(`usb: unknown op '${op}'`);
     }
@@ -996,6 +1098,47 @@ export class SprinkleBridge {
       close: async (handle: string) => {
         await this.usbOp(sprinkleName, 'close', [handle]);
       },
+      reset: async (handle: string) => {
+        await this.usbOp(sprinkleName, 'reset', [handle]);
+      },
+      selectConfiguration: async (handle: string, configurationValue: number) => {
+        await this.usbOp(sprinkleName, 'selectConfig', [handle, configurationValue]);
+      },
+      claimInterface: async (handle: string, interfaceNumber: number) => {
+        await this.usbOp(sprinkleName, 'claim', [handle, interfaceNumber]);
+      },
+      releaseInterface: async (handle: string, interfaceNumber: number) => {
+        await this.usbOp(sprinkleName, 'release', [handle, interfaceNumber]);
+      },
+      clearHalt: async (handle: string, direction: 'in' | 'out', endpointNumber: number) => {
+        await this.usbOp(sprinkleName, 'clearHalt', [handle, direction, endpointNumber]);
+      },
+      controlTransferIn: async (handle: string, setup: UsbControlSetup, length: number) => {
+        const r = (await this.usbOp(sprinkleName, 'controlIn', [handle, setup, length])) as {
+          status: string;
+          base64: string;
+        };
+        return { status: r.status, bytes: base64ToU8(r.base64) };
+      },
+      controlTransferOut: async (handle: string, setup: UsbControlSetup, bytes: Uint8Array) =>
+        this.usbOp(sprinkleName, 'controlOut', [handle, setup, u8ToBase64(bytes)]) as Promise<{
+          status: string;
+          bytesWritten: number;
+        }>,
+      transferIn: async (handle: string, endpointNumber: number, length: number) => {
+        const r = (await this.usbOp(sprinkleName, 'transferIn', [
+          handle,
+          endpointNumber,
+          length,
+        ])) as { status: string; base64: string };
+        return { status: r.status, bytes: base64ToU8(r.base64) };
+      },
+      transferOut: async (handle: string, endpointNumber: number, bytes: Uint8Array) =>
+        this.usbOp(sprinkleName, 'transferOut', [
+          handle,
+          endpointNumber,
+          u8ToBase64(bytes),
+        ]) as Promise<{ status: string; bytesWritten: number }>,
     };
   }
 

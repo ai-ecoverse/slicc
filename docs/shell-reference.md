@@ -2084,18 +2084,19 @@ slicc.hid.on('inputreport', ({ handle, reportId, data }) => {
 await slicc.hid.sendReport(info.handle, 0, new Uint8Array([0x01, 0x02]));
 ```
 
-| Method                                                   | Returns                       | Notes                                                                                                                           |
-| -------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `slicc.hid.list()`                                       | `Promise<HidDeviceInfo[]>`    | Already-granted devices; no picker.                                                                                             |
-| `slicc.hid.request(filters?)`                            | `Promise<HidDeviceInfo[]>`    | Shows the WebHID picker; every granted interface of a multi-interface device is registered.                                     |
-| `slicc.hid.open(handle)` / `slicc.hid.close(handle)`     | `Promise<void>`               | `open` auto-attaches the host's input-report listener; `close` (or sprinkle close) detaches it.                                 |
-| `slicc.hid.sendReport(handle, reportId, data)`           | `Promise<void>`               | `data` is `Uint8Array`.                                                                                                         |
-| `slicc.hid.on('inputreport', cb)` / `slicc.hid.off(...)` | `void`                        | `cb({handle, reportId, data})` — `data` is a `Uint8Array`. Subscriptions are torn down on close.                                |
-| `slicc.serial.list()` / `slicc.serial.request(filters?)` | `Promise<SerialDeviceInfo[]>` | Already-granted vs. picker; parity with `hid`.                                                                                  |
-| `slicc.serial.open(handle, options)` / `serial.close(h)` | `Promise<void>`               | `options` mirrors the Web Serial open shape (`baudRate`, `dataBits`, …).                                                        |
-| `slicc.usb.list()` / `slicc.usb.request(filters?)`       | `Promise<UsbDeviceInfo[]>`    | Already-granted vs. picker; parity with `hid`. Each `UsbDeviceInfo` carries `configurations` — see below.                       |
-| `slicc.usb.open(handle)` / `slicc.usb.close(handle)`     | `Promise<void>`               | Control / bulk transfers stay on the realm-side `usb` global for v1.                                                            |
-| `slicc.usb.clearHalt(handle, direction, endpoint)`       | `Promise<void>`               | Clears one stalled endpoint; `direction` is `'in'` or `'out'`. Targeted alternative to `reset`, which re-enumerates the device. |
+| Method                                                              | Returns                                                        | Notes                                                                                                                                                                                  |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slicc.hid.list()`                                                  | `Promise<HidDeviceInfo[]>`                                     | Already-granted devices; no picker.                                                                                                                                                    |
+| `slicc.hid.request(filters?)`                                       | `Promise<HidDeviceInfo[]>`                                     | Shows the WebHID picker; every granted interface of a multi-interface device is registered.                                                                                            |
+| `slicc.hid.open(handle)` / `slicc.hid.close(handle)`                | `Promise<void>`                                                | `open` auto-attaches the host's input-report listener; `close` (or sprinkle close) detaches it.                                                                                        |
+| `slicc.hid.sendReport(handle, reportId, data)`                      | `Promise<void>`                                                | `data` is `Uint8Array`.                                                                                                                                                                |
+| `slicc.hid.on('inputreport', cb)` / `slicc.hid.off(...)`            | `void`                                                         | `cb({handle, reportId, data})` — `data` is a `Uint8Array`. Subscriptions are torn down on close.                                                                                       |
+| `slicc.serial.list()` / `slicc.serial.request(filters?)`            | `Promise<SerialDeviceInfo[]>`                                  | Already-granted vs. picker; parity with `hid`.                                                                                                                                         |
+| `slicc.serial.open(handle, options)` / `serial.close(h)`            | `Promise<void>`                                                | `options` mirrors the Web Serial open shape (`baudRate`, `dataBits`, …).                                                                                                               |
+| `slicc.usb.list()` / `slicc.usb.request(filters?)`                  | `Promise<UsbDeviceInfo[]>`                                     | Already-granted vs. picker; parity with `hid`. Each `UsbDeviceInfo` carries `configurations` — see below.                                                                              |
+| `slicc.usb.open(handle)` / `slicc.usb.close(handle)`                | `Promise<void>`                                                | Also `reset`, `selectConfiguration(h, value)`, `claimInterface(h, n)`, `releaseInterface(h, n)`, `clearHalt(h, direction, ep)`.                                                        |
+| `slicc.usb.transferIn(h, ep, length)` / `transferOut(h, ep, bytes)` | `Promise<{status, bytes}>` / `Promise<{status, bytesWritten}>` | Bulk/interrupt transfers, page-side. `controlTransferIn`/`controlTransferOut` take a setup packet. Payloads cross the iframe boundary as base64 and arrive back as real `Uint8Array`s. |
+| `slicc.usb.clearHalt(handle, direction, endpoint)`                  | `Promise<void>`                                                | Clears one stalled endpoint; `direction` is `'in'` or `'out'`. Targeted alternative to `reset`, which re-enumerates the device.                                                        |
 
 #### `UsbDeviceInfo.configurations`
 
@@ -2146,6 +2147,11 @@ const adb = (device.configurations ?? [])
     (a) => a.interfaceClass === 0xff && a.interfaceSubclass === 0x42 && a.interfaceProtocol === 0x01
   );
 ```
+
+Transfers are available page-side, not only in the realm, because a `.jsh`
+cannot stream: realm stdout is buffered and delivered when the run completes,
+so anything that reads a device for as long as it stays interesting — a video
+stream, a sensor feed — has to drive the device from the sprinkle.
 
 Untrusted inline-chat dips (fenced ` ```shtml ` blocks emitted by the agent) NEVER receive `slicc.hid` / `serial` / `usb`. Any spoofed request from such an iframe is rejected with `device access not allowed for this dip` before it reaches the registry.
 

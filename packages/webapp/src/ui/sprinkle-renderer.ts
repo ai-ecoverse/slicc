@@ -561,7 +561,37 @@ export class SprinkleRenderer {
       list: function() { return _deviceCall('usb', 'list', []); },
       request: function(filters) { return _deviceCall('usb', 'request', [filters || []]); },
       open: function(handle) { return _deviceCall('usb', 'open', [handle]).then(function() {}); },
-      close: function(handle) { return _deviceCall('usb', 'close', [handle]).then(function() {}); }
+      close: function(handle) { return _deviceCall('usb', 'close', [handle]).then(function() {}); },
+      reset: function(handle) { return _deviceCall('usb', 'reset', [handle]).then(function() {}); },
+      selectConfiguration: function(handle, value) {
+        return _deviceCall('usb', 'selectConfig', [handle, value]).then(function() {});
+      },
+      claimInterface: function(handle, n) {
+        return _deviceCall('usb', 'claim', [handle, n]).then(function() {});
+      },
+      releaseInterface: function(handle, n) {
+        return _deviceCall('usb', 'release', [handle, n]).then(function() {});
+      },
+      clearHalt: function(handle, direction, ep) {
+        return _deviceCall('usb', 'clearHalt', [handle, direction, ep]).then(function() {});
+      },
+      // Payloads cross as base64 — see the note on SprinkleUsbApi.
+      controlTransferIn: function(handle, setup, length) {
+        return _deviceCall('usb', 'controlIn', [handle, setup, length]).then(function(r) {
+          return { status: r.status, bytes: _b64ToU8(r.base64) };
+        });
+      },
+      controlTransferOut: function(handle, setup, bytes) {
+        return _deviceCall('usb', 'controlOut', [handle, setup, _u8ToB64(bytes)]);
+      },
+      transferIn: function(handle, ep, length) {
+        return _deviceCall('usb', 'transferIn', [handle, ep, length]).then(function(r) {
+          return { status: r.status, bytes: _b64ToU8(r.base64) };
+        });
+      },
+      transferOut: function(handle, ep, bytes) {
+        return _deviceCall('usb', 'transferOut', [handle, ep, _u8ToB64(bytes)]);
+      }
     },
     readFileBinary: function(path) { return _jshCall('readFileBinary', [path]).then(function(r) { return _b64ToU8(r.base64); }); },
     writeFileBinary: function(path, bytes) { return _jshCall('writeFileBinary', [path, _u8ToB64(bytes)]); },

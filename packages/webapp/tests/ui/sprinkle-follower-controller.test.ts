@@ -79,6 +79,7 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
   return { SprinkleRenderer: FakeRenderer };
 });
 
+import type { SprinkleUsbApi } from '../../src/ui/sprinkle-bridge.js';
 // Bring the mock surface into the test file so we can assert against it.
 import { SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
@@ -93,6 +94,7 @@ const FakeRenderer = SprinkleRenderer as unknown as {
       stopCone: () => void;
       on: (event: 'update', cb: (data: unknown) => void) => void;
       off: (event: 'update', cb: (data: unknown) => void) => void;
+      usb: SprinkleUsbApi;
     };
   }>;
   reset(): void;
@@ -373,6 +375,34 @@ describe('SprinkleFollowerController', () => {
 
       expect(removeSprinkle).toHaveBeenCalledWith('welcome');
       expect(FakeRenderer.instances[0].disposed).toBe(true);
+    });
+
+    it('every slicc.usb method rejects on a follower, none is undefined', async () => {
+      // The follower has no device registry, so all USB ops must reject. The
+      // failure mode this guards is a NEW method on SprinkleUsbApi being
+      // absent here and surfacing inside the sprinkle as
+      // "api.usb.transferIn is not a function" instead of a clear rejection.
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const { usb } = FakeRenderer.instances[0].api;
+
+      const calls: Array<[string, Promise<unknown>]> = [
+        ['list', usb.list()],
+        ['request', usb.request()],
+        ['open', usb.open('usb1')],
+        ['close', usb.close('usb1')],
+        ['reset', usb.reset('usb1')],
+        ['selectConfiguration', usb.selectConfiguration('usb1', 1)],
+        ['claimInterface', usb.claimInterface('usb1', 1)],
+        ['releaseInterface', usb.releaseInterface('usb1', 1)],
+        ['clearHalt', usb.clearHalt('usb1', 'in', 3)],
+        ['transferIn', usb.transferIn('usb1', 3, 64)],
+        ['transferOut', usb.transferOut('usb1', 2, new Uint8Array([1]))],
+      ];
+
+      for (const [name, promise] of calls) {
+        await expect(promise, name).rejects.toThrow(/usb not supported/);
+      }
     });
 
     it('publishes the renderer before releasing a queued close lifecycle call', async () => {

@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
+import { SprinkleBridge, type SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
 import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
@@ -263,6 +263,41 @@ describe('full document rendering', () => {
     expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
     // Should NOT have a .sprinkle-content wrapper
     expect(container.querySelector('.sprinkle-content')).toBeNull();
+  });
+
+  it('the in-iframe usb shim exposes every method the page-side API has', async () => {
+    // The sprinkle's `slicc.usb` is a hand-written shim inside the srcdoc,
+    // separate from `SprinkleBridge.createAPI`. Adding a method to one and
+    // not the other compiles and unit-tests clean, then fails at runtime with
+    // "slicc.usb.<name> is not a function" — which is exactly how the
+    // transfer surface first shipped half-wired.
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const srcdoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+
+    // Source of truth is the real page-side API, not the hand-built fake.
+    const real = new SprinkleBridge(
+      {} as never,
+      vi.fn() as never,
+      vi.fn() as never,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn().mockResolvedValue({ base64: '', width: 0, height: 0, mimeType: 'image/png' }),
+      undefined,
+      vi.fn()
+    ).createAPI('parity');
+    const pageSide = Object.keys(real.usb as unknown as Record<string, unknown>);
+    expect(pageSide.length).toBeGreaterThan(4);
+    for (const method of pageSide) {
+      expect(srcdoc, `slicc.usb.${method} missing from the iframe shim`).toContain(
+        `${method}: function(`
+      );
+    }
   });
 
   it('injects bridge script into srcdoc', async () => {
