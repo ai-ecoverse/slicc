@@ -193,7 +193,10 @@ write as login (CLI `POST /api/secrets/oauth-update`, extension SW
 `persistOAuthMaskViaServiceWorker`) and prints the new replica. A remask failure
 reports `token held but no masked replica` rather than `no usable token` /
 `--force-login` — the access token is still held. Stdout never equals the raw
-access token; a replica that matches it is refused.
+access token; a replica that matches it is refused. GitHub git network ops do
+the same remask before writing `/workspace/.git/github-token`: a missing replica
+is recovered, not treated as "no token" (renew only clears the bridge if remask
+itself fails).
 
 Failure output names `oauth-token <id> --force-login` when a human may need to
 re-consent, but only claims a human is unavoidable when that is established.
