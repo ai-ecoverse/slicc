@@ -634,9 +634,18 @@ private enum PersistedSecretAPIRoutes {
         registerSet(router: router, injector: injector)
     }
 
+    /// List — the one routinely-hit route that reads the Keychain per request,
+    /// so it is where an unanswered ACL dialog surfaced as a hung `secret list`.
+    /// Bounded, and a miss reports WHY rather than hanging or answering `[]`
+    /// (an empty list would read as "you have no saved secrets", which is the
+    /// one wrong answer here).
     private static func registerList(router: Router<some RequestContext>, injector: SecretInjector) {
         router.get("/api/secrets") { _, _ in
-            let items: [LickSystem.JSONValue] = injector.persistedStore.list().map { entry in
+            let store = injector.persistedStore
+            guard let entries = await BoundedStoreCall.run({ store.list() }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            let items: [LickSystem.JSONValue] = entries.map { entry in
                 .object([
                     "name": .string(entry.name),
                     "domains": .array(entry.domains.map { .string($0) }),
@@ -698,9 +707,16 @@ private enum PersistedSecretAPIRoutes {
                         + "overwritten from the API; edit that file and restart instead"
                 )
             }
-            do {
-                try injector.persistedStore.save(name, value, domains)
-            } catch {
+            let store = injector.persistedStore
+            guard
+                let saved = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.save(name, value, domains) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
+            }
+            if case .failure(let error) = saved {
                 return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
             }
             // Pick the new secret up in the masking pipeline without a restart
@@ -729,12 +745,22 @@ private enum SessionSecretAPIRoutes {
                 await injector.reload()
                 return try deleteResponse(name: name, fromSession: true)
             }
-            guard injector.persistedStore.get(name: name) != nil else {
+            let store = injector.persistedStore
+            guard let existing = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            guard existing != nil else {
                 return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
             }
-            do {
-                try injector.persistedStore.remove(name)
-            } catch {
+            guard
+                let removed = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.remove(name) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
+            }
+            if case .failure(let error) = removed {
                 return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
             }
             await injector.reload()
@@ -779,7 +805,11 @@ private enum SessionSecretAPIRoutes {
             if let record = await injector.sessionStore.getRecord(name: name) {
                 return try secretPreviewResponse(name: name, value: record.value, domains: record.domains)
             }
-            if let secret = injector.persistedStore.get(name: name) {
+            let store = injector.persistedStore
+            guard let persisted = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            if let secret = persisted {
                 return try secretPreviewResponse(name: name, value: secret.value, domains: secret.domains)
             }
             return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
@@ -798,7 +828,11 @@ private enum SessionSecretAPIRoutes {
                 return try jsonErrorResponse(status: .badRequest, message: "bad-request")
             }
             if !((await injector.sessionStore.setDomains(name: name, domains: domains))) {
-                guard let existing = injector.persistedStore.get(name: name) else {
+                let store = injector.persistedStore
+                guard let found = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                    return try persistedStoreTimeoutResponse()
+                }
+                guard let existing = found else {
                     return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
                 }
                 // Re-saving is a full rewrite of the value, so a value the
@@ -811,9 +845,15 @@ private enum SessionSecretAPIRoutes {
                         message: EnvFileFormat.multilineValueError(name)
                     )
                 }
-                do {
-                    try injector.persistedStore.save(name, existing.value, domains)
-                } catch {
+                guard
+                    let saved = await BoundedStoreCall.runThrowing(
+                        onLateCompletion: reconcileLateWrite(injector),
+                        { try store.save(name, existing.value, domains) }
+                    )
+                else {
+                    return try persistedStoreWriteTimeoutResponse()
+                }
+                if case .failure(let error) = saved {
                     return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
                 }
             }
@@ -958,6 +998,46 @@ private func jsonResponse(
 
 private func jsonErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
     try jsonResponse(.object(["error": .string(message)]), status: status)
+}
+
+/// A persisted-store call missed its deadline (`BoundedStoreCall`). 503 rather
+/// than 500: the store is temporarily unreachable, not broken, and the request
+/// is worth retrying once the Keychain grant exists. Carries the diagnosis so
+/// the shell can print WHY instead of a bare status — a hung `secret list` gave
+/// the user nothing to act on.
+private func persistedStoreTimeoutResponse() throws -> Response {
+    try jsonResponse(
+        .object([
+            "error": .string(BoundedStoreCall.timeoutMessage),
+            "errorCode": .string(BoundedStoreCall.timeoutErrorCode),
+        ]),
+        status: .serviceUnavailable
+    )
+}
+
+/// A persisted-store *write* missed its deadline. Same 503, different contract:
+/// the write may still commit, so the message must not imply it failed.
+private func persistedStoreWriteTimeoutResponse() throws -> Response {
+    try jsonResponse(
+        .object([
+            "error": .string(BoundedStoreCall.writeTimeoutMessage),
+            "errorCode": .string(BoundedStoreCall.writeTimeoutErrorCode),
+        ]),
+        status: .serviceUnavailable
+    )
+}
+
+/// Reconciles a write that commits after its route already answered.
+///
+/// The abandoned `SecItem*` call cannot be cancelled, so a rotation the caller
+/// was told nothing definite about can still land. Reloading keeps the masking
+/// pipeline from serving the superseded value — the one outcome worse than a
+/// slow write, since the fetch proxy would keep injecting the old credential.
+private func reconcileLateWrite(_ injector: SecretInjector) -> @Sendable (Result<Void, Error>) -> Void {
+    { result in
+        guard case .success = result else { return }
+        Task { await injector.reload() }
+    }
 }
 
 /// Same as `jsonErrorResponse` but tags the response with `X-Proxy-Error: 1`

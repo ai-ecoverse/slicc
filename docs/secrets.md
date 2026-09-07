@@ -94,7 +94,7 @@ Inside the SLICC shell, the `secret` command manages secrets:
 | `secret set <name> <value> --domain <pat>`           | None       | Create an in-memory **session-only** secret (never persisted). Changing the value of an existing secret requires approval. |
 | `secret get <name>` / `secret read <name>`           | None       | Show the masked value and scope.                                                                                           |
 | `secret peek <name>`                                 | None       | Show the first/last characters of the unmasked value (middle elided).                                                      |
-| `secret list`                                        | None       | Show secrets (names, domains, and `SESSION`/`SAVED` type — never values).                                                  |
+| `secret list`                                        | None       | Show secrets (names, domains, and `SESSION`/`SAVED` type — never values). Reports any store it could not read.             |
 | `secret test <name> <url>`                           | None       | Check whether a secret would be injected for a given URL.                                                                  |
 | `secret set <name> <value> --domain <pat> --persist` | **Prompt** | Persist to `.env` / Keychain / `chrome.storage.local`.                                                                     |
 | `secret scope <name> --domain <pat>`                 | **Prompt** | Edit the allowed host/domain scope of an existing secret.                                                                  |
@@ -115,6 +115,36 @@ independent of `/etc/sudoers`): **persisting** a secret (`--persist`), **editing
 scope** (`secret scope`), and **changing the value** of an existing secret.
 A deny blocks the mutation; choosing **"Always"** records a NOPASSWD-style grant
 that skips future prompts for that operation for the rest of the session.
+
+### When a store cannot be read
+
+`secret list` reads two independent stores (saved + session) and prints whatever
+it got, followed by a reason on stderr for whichever one failed, and exits `1`:
+
+```bash
+$ secret list
+NAME         TYPE     DOMAINS
+E2E_TOKEN    SESSION  127.0.0.1
+
+secret: could not read saved secrets — saved-secret store did not respond within 5s …
+```
+
+A timed-out `--persist` write reports that its outcome is **unknown**, not that
+it failed: the Keychain call cannot be cancelled, so it may still commit once
+the dialog is answered. Check `secret list` before retrying, so a rotation is
+not applied twice. For the same reason `secret set` refuses to run at all when
+the store cannot be read — with no way to tell whether the name already holds a
+credential, it cannot know whether the change needs approval.
+
+A missing store is never rendered as an empty one: `No secrets stored` is
+printed only when both stores answered and both were genuinely empty, so a
+script can trust a `0` exit. For the same reason `secret test <name> <url>`
+reports the unreadable store instead of `no secret named "<name>"` — a name it
+could not look up is not a scope decision. Every `/api/secrets*` call carries a
+10 s deadline, above the swift bridge's own 5 s store deadline so the bridge's
+more specific diagnosis wins; on Sliccstart the usual cause is an unanswered
+macOS Keychain access dialog (see
+[`swift-server-details.md`](swift-server-details.md#keychain-trust-model--why-the-prompt-recurs)).
 
 `secret test` is useful for verifying domain restrictions before making real requests:
 
