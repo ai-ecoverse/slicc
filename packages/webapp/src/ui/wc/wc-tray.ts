@@ -105,7 +105,7 @@ import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyComposerAvailability, type SwitcherScoop, type WcShellRefs } from './wc-shell.js';
-import { toScoopSummaries } from './wc-tray-scoops.js';
+import { toScoopSummaries, turnsFromUnits } from './wc-tray-scoops.js';
 import { rootForSelection } from './wc-unit-context.js';
 
 export interface WcTrayDeps {
@@ -827,7 +827,12 @@ export function createLeaderOptionsFactory(
     getMessages: () => deps.getController()?.getMessages() ?? [],
     getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
-    getScoops: () => toScoopSummaries(client.getScoops(), refs.switcher.scoops),
+    getScoops: () =>
+      toScoopSummaries(
+        client.getScoops(),
+        refs.switcher.scoops,
+        turnsFromUnits(deps.workUnits.currentUnits())
+      ),
     getModelCatalog: modelCatalogForTray,
     ...leaderModelCallbacks(deps),
     onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>

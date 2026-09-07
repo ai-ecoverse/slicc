@@ -33,6 +33,14 @@ export interface WcLiveWiring {
   statuses: Map<string, ScoopStatus>;
   fills: Map<string, number>;
   phases: Map<string, ScoopBusyPhase>;
+  /**
+   * Completed turns per unit, incremented on the kernel STATUS EVENT itself —
+   * the only place a turn boundary is observed rather than sampled. The strip
+   * repaints from sampled state and can afford to miss a frame; a follower
+   * cannot, because its roster pushes are coalesced, so the count rides the
+   * protocol as `WorkUnitSummary.turns` and the boundary survives.
+   */
+  turns: Map<string, number>;
   lickBackpressure: Map<string, LickBackpressureState>;
   pendingUrlContext: string | null;
   lastActivity: Map<string, string>;
@@ -98,6 +106,7 @@ export function ensureWorkUnitClient(wiring: WcLiveWiring): LocalWorkUnitClient 
     getClient: () => wiring.getClient(),
     phases: wiring.phases,
     statuses: wiring.statuses,
+    turns: wiring.turns,
   });
   return wiring.workUnits;
 }
@@ -144,6 +153,17 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       const next = status as ScoopStatus;
       wiring.statuses.set(jid, next);
       if (next !== 'ready' && wiring.awaitingInput === jid) wiring.awaitingInput = null;
+      // A turn ENDED: the unit was busy and no longer is. Counted here, at the
+      // event, because everything downstream samples — the strip on repaint, a
+      // follower on a coalesced roster push — and a sampler cannot tell a turn
+      // it never saw from one that never happened. `broken` counts too: a turn
+      // that failed still left something on screen to read.
+      if (
+        presentationStateFor(previous) === 'working' &&
+        presentationStateFor(next) !== 'working'
+      ) {
+        wiring.turns.set(jid, (wiring.turns.get(jid) ?? 0) + 1);
+      }
       // Eyes are a function of the rendered state (`broken` → dead,
       // `initializing` → none, else open), so one comparison covers what the
       // two used to: repaint the strip only when the face actually changes.
@@ -176,6 +196,9 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       for (const jid of wiring.lickBackpressure.keys()) {
         if (!registered.has(jid)) wiring.lickBackpressure.delete(jid);
       }
+      // A dropped unit's turn count would otherwise outlive it and, if the jid
+      // were ever reused, read as turns a brand-new unit had already finished.
+      for (const jid of wiring.turns.keys()) if (!registered.has(jid)) wiring.turns.delete(jid);
       refreshScoops();
       ensureSelection();
     },

@@ -477,6 +477,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     statuses: new Map(),
     fills: new Map(),
     phases: new Map(),
+    turns: new Map(),
     lickBackpressure,
     lastActivity: new Map(),
     // The thread component owns the `ctx` param — the host only routes it.

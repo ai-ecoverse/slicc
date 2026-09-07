@@ -71,10 +71,32 @@ export function expandWireState(scoop: ScoopSummary): ExpandedState {
   return { state };
 }
 
-/** Join registered scoop metadata with the leader toolbar's rendered state. */
+/**
+ * Completed turns per unit, as {@link toScoopSummaries} wants them.
+ *
+ * Exists so the leader's tray options can hand over its own client roster
+ * without knowing which field of it the wire needs.
+ */
+export function turnsFromUnits(
+  units: readonly Pick<WorkUnitSummary, 'id' | 'turns'>[]
+): ReadonlyMap<string, number> {
+  const turns = new Map<string, number>();
+  for (const unit of units) if (typeof unit.turns === 'number') turns.set(unit.id, unit.turns);
+  return turns;
+}
+
+/**
+ * Join registered scoop metadata with the leader toolbar's rendered state.
+ *
+ * `turns` comes separately because it is the one field the toolbar's rendered
+ * descriptors do not carry: the strip draws sampled state, while a turn COUNT
+ * is bookkeeping the shell does on the kernel event. A follower needs it
+ * precisely because these payloads are coalesced (#2948).
+ */
 export function toScoopSummaries(
   scoops: readonly SummarySource[],
-  rendered: readonly RenderedState[]
+  rendered: readonly RenderedState[],
+  turns?: ReadonlyMap<string, number>
 ): ScoopSummary[] {
   const byJid = new Map(rendered.map((scoop) => [scoop.key, scoop]));
   return scoops.map((scoop) => {
@@ -100,6 +122,9 @@ export function toScoopSummaries(
       ...(model ? { model } : {}),
       ...toWire(descriptor),
       fill: typeof descriptor?.fill === 'number' ? descriptor.fill : 0,
+      // Omitted until the unit has finished a turn on this page, so a follower
+      // never re-baselines against a zero the leader never counted.
+      ...(turns?.has(scoop.jid) ? { turns: turns.get(scoop.jid) } : {}),
     };
   });
 }
@@ -153,6 +178,11 @@ export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
     ...(expanded.phase ? { phase: expanded.phase } : {}),
     ...(expanded.awaiting ? { awaiting: true as const } : {}),
     fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
+    // Carried through untouched: it is the leader's counter, and the reader
+    // that cares (the unread ledger) diffs it against what it last saw. A
+    // leader too old to send it leaves it absent, which is what tells the
+    // ledger to fall back to watching state instead.
+    ...(typeof scoop.turns === 'number' ? { turns: scoop.turns } : {}),
     // Absent means "not known yet", never "the global selection": an empty
     // catalog is warm-up, not an answer (#2329), so a reader must not latch.
     ...(scoop.model ? { model: scoop.model } : {}),

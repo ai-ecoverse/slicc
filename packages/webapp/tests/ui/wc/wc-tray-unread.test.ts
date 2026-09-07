@@ -10,9 +10,13 @@ import { buildFollowerOptions } from '../../../src/ui/wc/wc-tray.js';
 
 /**
  * Follower parity for the strip's unread dot. The leader counts the same thing
- * in `wc-live.test.ts`; both go through `UnreadLedger`, which reads only the
- * presentation state a roster push already carries — so a follower needs no new
- * tray-wire field to dot a tab.
+ * in `wc-live.test.ts`; both go through `UnreadLedger`, which reads what a
+ * roster push carries — the presentation state, and the leader's completed-turn
+ * counter where it is present.
+ *
+ * The counter is what makes the follower's answer complete rather than
+ * best-effort: `scoops.list` is coalesced for 50ms, so a turn that opens and
+ * closes inside one window is delivered in its final state alone (#2948).
  */
 function mountFollower(): {
   switcher: HTMLElement & { scoops: Array<{ key: string; unread?: number }> };
@@ -50,9 +54,16 @@ function mountFollower(): {
 }
 
 const CONE = { jid: 'cone-a', name: 'cone', isCone: true, parentId: null };
-const roster = (state: 'working' | 'idle') => [
+const roster = (state: 'working' | 'idle', turns?: number) => [
   CONE,
-  { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a', state },
+  {
+    jid: 'scoop-a',
+    name: 'helper',
+    isCone: false,
+    parentId: 'cone-a',
+    state,
+    ...(turns === undefined ? {} : { turns }),
+  },
 ];
 
 describe('follower strip unread', () => {
@@ -71,6 +82,19 @@ describe('follower strip unread', () => {
       new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' }, bubbles: true })
     );
     expect(unreadOf('scoop-a')).toBeUndefined();
+  });
+
+  it('dots a turn the coalescing window swallowed, seen only as a bumped counter', () => {
+    const { switcher, onScoopsList } = mountFollower();
+    const unreadOf = (key: string): number | undefined =>
+      switcher.scoops.find((chip) => chip.key === key)?.unread;
+
+    onScoopsList(roster('idle', 3), 'cone-a');
+    expect(unreadOf('scoop-a')).toBeUndefined();
+    // The leader ran a whole turn between these two frames. State says `idle`
+    // both times; the counter is the only thing that says a turn ended.
+    onScoopsList(roster('idle', 4), 'cone-a');
+    expect(unreadOf('scoop-a')).toBe(1);
   });
 
   it('opens a first roster with nothing unread', () => {

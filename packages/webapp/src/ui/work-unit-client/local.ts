@@ -47,6 +47,12 @@ export interface LocalWorkUnitClientDeps {
   /** 0–1 share of the context window, as the kernel reports it. */
   fills: ReadonlyMap<string, number>;
   phases: ReadonlyMap<string, ScoopBusyPhase>;
+  /**
+   * Completed turns per unit, counted by the shell off the kernel's status
+   * events. Read here so the protocol carries it to a follower, whose roster
+   * frames are coalesced and cannot show every turn boundary on their own.
+   */
+  turns?: ReadonlyMap<string, number>;
   getAwaiting?(): string | null | undefined;
 }
 
@@ -90,6 +96,7 @@ export class LocalWorkUnitClient implements WorkUnitClient {
       fill: this.deps.fills.get(scoop.jid),
       phase: this.deps.phases.get(scoop.jid),
       status: this.deps.statuses.get(scoop.jid),
+      turns: this.deps.turns?.get(scoop.jid),
     });
   }
 

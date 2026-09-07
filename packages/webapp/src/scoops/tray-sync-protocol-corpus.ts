@@ -1131,6 +1131,10 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     state: 'mirrored',
     activity: 'mirrored',
     fill: 'mirrored',
+    // Completed-turn counter for the web follower's unread dot (#2948). iOS
+    // shows no unread indicator and has no Swift field for it, so the leader
+    // sends it and the app drops it — the `addedAt` arrangement exactly.
+    turns: 'dropped',
     model: 'mirrored',
   },
   sample: {
@@ -1147,6 +1151,9 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     state: 'idle',
     activity: 'awaiting',
     fill: 82,
+    // A version, not a total: a reader counts the INCREASE since it last
+    // looked, which is what survives the leader's 50ms coalescing window.
+    turns: 6,
     // Per-cone model (#2310): a follower reads the model of the unit it is
     // looking at straight off the list.
     model: { provider: 'example', id: 'reasoner' },

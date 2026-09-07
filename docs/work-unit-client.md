@@ -277,16 +277,35 @@ descriptor as `unread`.
 **The signal is the roster, not a message stream** — which is what lets both
 sides share it. A leader could count `turn_end` per unit, but a follower
 subscribes only to the transcript of the unit it is SHOWING and would have
-nothing to count for the rest. Both sides do see every unit's presentation
-state, so one increment is one `working` unit that stops working. A follower
-therefore needs no new tray-wire field, and a leader too old to send `state`
-simply never presents a transition to count.
+nothing to count for the rest. Both sides do see every unit, so a turn ending is
+a unit that was working and is not any more.
 
-Three consequences worth keeping:
+The roster answers that two ways, and the ledger prefers the second:
 
-- **Transitions, not states.** A repeated roster push adds nothing; a unit seen
-  for the first time is not news the user missed, so a first roster opens with
-  every tab clean.
+| Signal                    | Where it comes from                                                                                          | Why it is not enough on its own                                                                                                                                                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state` leaving `working` | Sampled at every roster push                                                                                 | The leader coalesces `scoops.list` for 50 ms and only the SELECTED unit sends direct status frames, so an off-screen turn that starts and finishes inside one window reaches a follower in its final `idle`/`broken` state alone. Sampled state cannot tell that turn from one that never happened. |
+| `turns` going up          | `WorkUnitSummary.turns` / `ScoopSummary.turns`, incremented by the producing page on the kernel status EVENT | Absent from a leader too old to send it, and absent for a unit that has not finished a turn on that page yet.                                                                                                                                                                                       |
+
+`turns` is a **version, not a total**: the ledger keeps the value it last saw per
+unit and treats any increase as that many finished turns, so a frame the wire
+coalesced away still leaves its increment in the next one. A decrease means the
+leader reloaded and restarted at zero, which re-baselines instead of counting
+backwards. Where the counter is absent the ledger watches `state` exactly as it
+did before the field existed (#2948).
+
+The leader keeps the count in `WcLiveWiring.turns`, incremented in
+`onStatusChange` — at the event, because everything downstream samples — and
+projects it through `recordToWorkUnitSummary` → `toScoopSummaries`. A follower
+reads it back in `summaryToWorkUnit`. It is deliberately NOT the leader's unread
+count: read state is per-device, so each side counts from its own baseline and
+clears on its own selection.
+
+Three more consequences worth keeping:
+
+- **Finished turns, not states.** A repeated roster push adds nothing; a unit
+  seen for the first time is not news the user missed, so a first roster opens
+  with every tab clean — including one whose counter arrives already at 7.
 - **Selection is the read receipt.** The selected unit is always at zero, and
   `toTabDescriptors` re-applies that rule even for a caller that hands over its
   own map.
