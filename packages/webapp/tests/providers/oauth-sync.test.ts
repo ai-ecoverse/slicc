@@ -110,6 +110,27 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('names the resolved target when a 2xx comes back without a mask', async () => {
+    // #2929: a misrouted push reaches the tray hub, which answers 200 with its
+    // route catalog for any unmatched path. `r.ok` is true and the JSON parses,
+    // so at this call site the reply is indistinguishable from a real replica
+    // that declined — the breadcrumb has to name where the POST actually went
+    // or the operator debugs a node-server that never saw the request.
+    globalThis.fetch = vi.fn(
+      async () => ({ ok: true, json: async () => ({ routes: ['/tray', '/join'] }) }) as any
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { saveOAuthAccount } = await import('../../src/ui/provider-settings.js');
+    await saveOAuthAccount({ providerId: 'github', accessToken: 'ghp_real_token' });
+
+    const logged = warn.mock.calls.find((c) =>
+      c.some((a) => String(a).includes('missing maskedValue'))
+    );
+    expect(logged).toBeDefined();
+    expect(JSON.stringify(logged)).toContain('/api/secrets/oauth-update');
+    warn.mockRestore();
+  });
+
   it('persists granted scopes and surfaces them via getOAuthAccountInfo', async () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
 
