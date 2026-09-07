@@ -190,10 +190,11 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }
 
-    func testSuccessAfterFailuresResetsAClientThatConnectedInTheMeantime() async throws {
-        // The "and again (once) after a later successful reconnect" half of the
-        // policy: the failure-threshold close emptied the slot, so the success
-        // close only fires for whoever holds it now.
+    func testSuccessAfterFailuresLeavesAClientThatConnectedInTheMeantimeConnected() async throws {
+        // The refined half of the policy: a successful reconnect resets ONLY the
+        // client that held the slot when the leg went down. The failure-threshold
+        // close emptied the slot, so the replacement — which never had sessions on
+        // the dead leg — keeps its connection.
         let attemptGate = StepGate()
         let harness = ChromeConnectorHarness()
         let proxy = self.makeProxy(harness: harness, sleep: { _ in await attemptGate.wait() })
@@ -221,10 +222,14 @@ final class CDPProxyBufferGenerationTests: XCTestCase {
         XCTAssertEqual(second.closeCodesSnapshot(), [])
 
         await attemptGate.step()
-        try await self.waitUntil("the second client to be reset by the reconnect") {
-            !second.closeCodesSnapshot().isEmpty
+        try await self.waitUntil("the reconnect to succeed on the fourth attempt") {
+            harness.connectCountSnapshot() >= 2
         }
-        XCTAssertEqual(second.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
+
+        // Nobody is reset by that success: the stale client is long gone and the
+        // replacement's commands already ran on the fresh leg — a 4002 here would
+        // make the page retry them (duplicate `Target.createTarget`, issue #2417).
+        XCTAssertEqual(second.closeCodesSnapshot(), [])
         XCTAssertEqual(first.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }
 

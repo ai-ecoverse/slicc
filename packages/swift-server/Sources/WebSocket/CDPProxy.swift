@@ -61,10 +61,16 @@ actor CDPProxy {
     /// Retry indefinitely with a 1 s delay between attempts, until shutdown —
     /// there is no attempt cap. Close the active client with 4002
     /// `upstream-reset` after the 3rd consecutive failure, so it does not hang
-    /// on a proxy whose Chrome leg is gone, and again (once) after a later
-    /// successful reconnect if a client is connected by then. Never leave a
-    /// clientless buffer around: buffered frames are dropped whenever the
-    /// client that wrote them loses the slot. node-server's twin is
+    /// on a proxy whose Chrome leg is gone. After a successful reconnect, reset
+    /// the active client ONLY if it is the same client that held the slot when
+    /// the Chrome leg went down — it is the one whose sessions Chrome
+    /// discarded. A client that connected during the outage never had sessions
+    /// on the dead leg and its buffered frames were just flushed onto the
+    /// replacement connection, so closing it with 4002 would make the page
+    /// retry commands that already ran (a sessionless `Target.createTarget`
+    /// opens a duplicate tab). Never leave a clientless buffer around: buffered
+    /// frames are dropped whenever the client that wrote them loses the slot.
+    /// node-server's twin is
     /// `CHROME_RECONNECT_FAILURE_THRESHOLD` in
     /// `packages/node-server/src/cdp-proxy/chrome-reconnect.ts`.
     static let upstreamResetFailureThreshold = 3
@@ -87,6 +93,9 @@ actor CDPProxy {
     private var chromeConnectionTask: Task<ChromeSocketHandle, Error>?
     private var chromeReconnectTask: Task<Void, Never>?
     private var activeClient: ClientHandle?
+    /// Slot holder at the most recent Chrome-leg drop — the one whose sessions
+    /// Chrome discarded, and so the only client a successful reconnect resets.
+    private var chromeDropSlotHolderID: UUID?
     private var messageBuffer: ClientFrameBuffer?
 
     // Session→URL tracking populated by sniffing Chrome→Client frames. Used
@@ -756,6 +765,11 @@ actor CDPProxy {
 
     private func handleChromeDisconnect(reason: String, bufferMessage: ProxyMessage? = nil) {
         let droppedConnectionID = self.chromeConnectionID
+        // Sampled on EVERY drop, including one that lands while the reconnect
+        // loop is already running (a client that connected during the outage
+        // rebuilt the leg and then lost it too): the stale-session client is
+        // whoever held the slot at the most recent drop.
+        self.chromeDropSlotHolderID = self.activeClient?.id
         self.chromeSocket = nil
         self.chromeConnectionID = nil
         self.chromeConnectionTask = nil
@@ -817,7 +831,7 @@ actor CDPProxy {
                 // very reconnect it is waiting for.
                 try await self.ensureChromeConnection(url: freshURL)
                 self.logger.info("[cdp-proxy] Chrome WS auto-reconnected")
-                await self.closeActiveClientForUpstreamReset(reason: "Chrome WS auto-reconnected")
+                await self.resetStaleSlotHolderAfterReconnect()
                 return
             } catch is CancellationError {
                 return
@@ -832,6 +846,29 @@ actor CDPProxy {
                 }
             }
         }
+    }
+
+    /// Close the client that held the slot when the Chrome leg dropped: Chrome
+    /// discarded every session with the old socket, so that page's cached
+    /// `sessionId`s are dead and it must re-dial with a clean slate.
+    ///
+    /// A client that connected DURING the outage is left alone. It never had
+    /// sessions on the dead leg, and the frames it buffered were just flushed
+    /// onto the replacement connection — closing it with 4002 would make the
+    /// page retry commands that already ran, and a sessionless
+    /// `Target.createTarget` among them opens a duplicate tab (issue #2417).
+    /// The third-failure reset clears the slot, so the comparison below
+    /// naturally fails for any replacement. node-server's twin is
+    /// `ChromeReconnectController.resetStaleSlotHolder`.
+    private func resetStaleSlotHolderAfterReconnect() async {
+        guard let holderID = self.chromeDropSlotHolderID, self.activeClient?.id == holderID else {
+            if self.activeClient != nil {
+                self.logger.info("[cdp-proxy] Client connected during the outage — no stale sessions, not resetting it")
+            }
+            return
+        }
+
+        await self.closeActiveClientForUpstreamReset(reason: "Chrome WS auto-reconnected")
     }
 
     /// Close the live `/cdp` client with `upstreamResetCloseCode` so the webapp

@@ -106,6 +106,53 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
     }
 
+    func testClientThatConnectedDuringTheOutageIsNotResetAndItsFramesFlush() async throws {
+        let reconnectGate = AsyncGate()
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            },
+            reconnectDelayNanoseconds: 0,
+            sleep: { _ in await reconnectGate.wait() }
+        )
+        let stale = ClientRecorder()
+        let replacement = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(stale.handle)
+
+        // The leg dies under the first client, whose frames name sessions
+        // Chrome just discarded …
+        await harness.emitEvent(.closed("code=Optional(messageTooLarge)"))
+        await proxy.receive(.text("{\"id\":1,\"method\":\"Target.createTarget\"}"), from: stale.handle.id)
+
+        // … and a replacement tab takes the slot while the loop still retries.
+        await proxy.addClient(replacement.handle)
+        await proxy.receive(.text("{\"id\":2,\"method\":\"Target.createTarget\"}"), from: replacement.handle.id)
+
+        await reconnectGate.open()
+        try await self.waitUntil("the replacement's buffered frame to reach the fresh Chrome leg") {
+            !harness.sentTextsSnapshot().isEmpty
+        }
+
+        // Only the replacement's frame runs: it connected during the outage, so
+        // it lost no sessions and its buffer flushes onto the new connection.
+        XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":2,\"method\":\"Target.createTarget\"}"])
+        // And it is NOT cut loose with 4002 — its commands already executed, so
+        // the page's retry would open a duplicate tab (issue #2417).
+        XCTAssertEqual(replacement.closeCodesSnapshot(), [])
+        XCTAssertEqual(stale.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
+
+        // Still the slot holder: Chrome→Client frames keep reaching it.
+        await harness.emitText("{\"method\":\"Target.targetCreated\",\"params\":{}}")
+        try await self.waitUntil("the replacement to keep receiving Chrome frames") {
+            !replacement.sentTextsSnapshot().isEmpty
+        }
+    }
+
     func testChromeMessagePumpOverflowSummarizesQueuedFrames() async {
         let messagePump = ChromeInboundMessagePump(maxBufferedMessages: 3)
 
