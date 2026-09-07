@@ -459,6 +459,17 @@ export class BrowserAPI {
     return this.accountedTransportFor(this.client);
   }
 
+  /**
+   * The real current transport, without the accounting facade. For wiring
+   * other machinery to the connection (the kernel-worker forwarder, tray
+   * federation) where the transport's concrete type matters; commands issued
+   * from inside a `withTab` body must go through {@link getTransport} so they
+   * count toward the replay guard.
+   */
+  getUnderlyingTransport(): CDPTransport {
+    return this.client;
+  }
+
   private readonly _accountedTransports = new WeakMap<CDPTransport, AccountedTransport>();
 
   /** The stable {@link AccountedTransport} facade for a real transport. */
@@ -2484,11 +2495,25 @@ export class BrowserAPI {
 
   /** Forget a session without touching the wire (it is already gone). */
   private forgetSession(targetId: string, entry: TabSession): void {
+    this.unregisterSession(targetId);
+    this.disposeSessionTransport(entry);
+  }
+
+  /** Remove the registry entry and clear the cursor if it pointed here (synchronous). */
+  private unregisterSession(targetId: string): void {
     this._sessions.delete(targetId);
     if (this.attachedTargetId === targetId) {
       this.sessionId = null;
       this.attachedTargetId = null;
     }
+  }
+
+  /**
+   * Release what the entry's transport was holding for it. For a tray target
+   * this disposes the follower-side transport, so it must run AFTER any
+   * `Target.detachFromTarget` that still needs that transport.
+   */
+  private disposeSessionTransport(entry: TabSession): void {
     this.releaseLifecycleTransport(entry.transport);
     if (entry.remote) {
       const stillUsed = [...this._sessions.values()].some(
@@ -2507,12 +2532,18 @@ export class BrowserAPI {
 
   /** Drop a session AND tell the browser about it (best effort). */
   private async detachSession(targetId: string, entry: TabSession): Promise<void> {
-    this.forgetSession(targetId, entry);
+    // Unregister synchronously so a concurrent attach never sees the entry,
+    // but keep the transport alive until the browser has been told: for a
+    // tray target, disposing it first would make the detach always fail and
+    // leave the follower-side session leaked.
+    this.unregisterSession(targetId);
     try {
       await entry.transport.send('Target.detachFromTarget', { sessionId: entry.sessionId });
     } catch {
       // Already detached, tab closed, or the transport went away — either way
       // the session is not ours any more.
+    } finally {
+      this.disposeSessionTransport(entry);
     }
   }
 

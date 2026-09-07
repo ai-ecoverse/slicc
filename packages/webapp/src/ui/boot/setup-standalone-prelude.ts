@@ -432,7 +432,7 @@ export async function setupStandalonePrelude(
       browser.setCdpSupersededHandler(() => showCdpSupersededBanner(win.document));
     }
   }
-  const realCdpTransport = browser.getTransport();
+  const realCdpTransport = browser.getUnderlyingTransport();
 
   // Expose the page-side BrowserAPI so the OAuth intercept launcher
   // (active-transport.ts) can resolve a CDP transport from the main

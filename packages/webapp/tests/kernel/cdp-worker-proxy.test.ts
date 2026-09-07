@@ -661,6 +661,33 @@ describe('lazy page-client reconnect on worker command', () => {
     teardown();
   });
 
+  it('never executes a command that crossed a cdp-reset in flight, even after the re-dial', async () => {
+    let stubRef: ReturnType<typeof makeStubTransport> | null = null;
+    const reconnect = vi.fn(async () => {
+      stubRef!.setState('connected');
+    });
+    const { stub, worker, teardown } = setup(reconnect);
+    stubRef = stub;
+    await worker.connect();
+
+    // The worker sends a mutating browser-level command; before the page
+    // handles it, the page client drops and announces the reset.
+    const crossed = worker.send('Target.createTarget', { url: 'about:blank' });
+    stub.setState('disconnected', 'upstream reset');
+    await expect(crossed).rejects.toThrow(/upstream CDP connection was reset/);
+    await tick();
+
+    // The page must NOT have run it on the replacement connection.
+    expect(stub.send).not.toHaveBeenCalledWith('Target.createTarget', expect.anything(), undefined);
+
+    // A command issued AFTER the worker processed the reset is served (re-dial).
+    await worker.connect();
+    const after = await worker.send('Runtime.evaluate');
+    expect(after['method']).toBe('Runtime.evaluate');
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    teardown();
+  });
+
   it('does not re-dial a superseded page client — the slot belongs to another tab', async () => {
     const reconnect = vi.fn(async () => undefined);
     const { stub, worker, teardown } = setup(reconnect);

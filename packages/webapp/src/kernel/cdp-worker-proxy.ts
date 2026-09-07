@@ -75,6 +75,15 @@ export interface CdpCmdMsg {
   /** Per-method CDP params; shape is known only to the caller that issued the method. */
   params?: CDPPayload;
   sessionId?: string;
+  /**
+   * The worker's reset generation when the command was sent: how many
+   * `cdp-reset` frames it had processed. The page compares it with the number
+   * of resets it has announced; a command from an older generation crossed a
+   * reset in flight — the worker has already rejected it — and must not be
+   * executed on the replacement connection (a `Target.createTarget` run after
+   * its caller saw an error is the duplicate-tab bug).
+   */
+  gen?: number;
 }
 
 export interface CdpResponseMsg {
@@ -127,6 +136,9 @@ export type WorkerCdpMessage = WorkerToPageCdpMsg | PageToWorkerCdpMsg;
 export class WorkerCdpProxy extends CdpTransportBridge {
   constructor(port: MessagePortLike) {
     const transport = createMessageChannelTransport<WorkerCdpMessage, WorkerCdpMessage>(port);
+    // Bumped on every processed `cdp-reset`; stamped on every command so the
+    // page can tell a command that crossed a reset from one issued after it.
+    let generation = 0;
     const opts: CdpBridgeOptions = {
       label: 'WorkerCdpProxy',
       buildCommandEnvelope: (id, method, params, sessionId) =>
@@ -136,6 +148,7 @@ export class WorkerCdpProxy extends CdpTransportBridge {
           method,
           params,
           sessionId,
+          gen: generation,
         }) satisfies CdpCmdMsg,
       sendEnvelope: (envelope) => {
         transport.send(envelope as WorkerCdpMessage);
@@ -176,6 +189,7 @@ export class WorkerCdpProxy extends CdpTransportBridge {
         return null;
       },
       onUpstreamReset: (reason) => {
+        generation += 1;
         console.warn('[WorkerCdpProxy] page CDP connection reset; sessions are stale', reason);
       },
       onUpstreamReady: () => {

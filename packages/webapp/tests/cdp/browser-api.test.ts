@@ -2040,6 +2040,25 @@ describe('BrowserAPI', () => {
       );
     }
 
+    it('detaches a remote session BEFORE disposing its follower transport', async () => {
+      const { remoteClient, removeRemoteTransport } = await twoTransports();
+      const order: string[] = [];
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.detachFromTarget') order.push('detach');
+        return method === 'Target.attachToTarget' ? { sessionId: 'remote-sess-2' } : {};
+      });
+      removeRemoteTransport.mockImplementation(() => order.push('dispose'));
+
+      await api.closePage('follower-1:tab-1');
+
+      // Disposing first made the detach always fail (the transport was gone),
+      // leaking the follower-side session on every eviction (review finding).
+      // closePage's own remote-close path disposes once more afterwards, which
+      // the providers treat as idempotent; the ordering is what matters here.
+      expect(order[0]).toBe('detach');
+      expect(order.slice(1).every((step) => step === 'dispose')).toBe(true);
+    });
+
     it('keeps local sessions when a follower transport drops', async () => {
       const { remoteClient, removeRemoteTransport } = await twoTransports();
 

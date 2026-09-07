@@ -46,13 +46,27 @@ async function handlePageCdpIncoming(
   realTransport: CDPTransport,
   transport: KernelTransport<WorkerCdpMessage, WorkerCdpMessage>,
   eventListeners: Map<string, CDPEventListener>,
-  reconnect: (() => Promise<void>) | null
+  reconnect: (() => Promise<void>) | null,
+  announcedResets: () => number
 ): Promise<void> {
   const env = msg as { type?: string };
   if (!env?.type) return;
 
   if (env.type === 'cdp-cmd') {
     const cmd = msg as CdpCmdMsg;
+    // A command stamped with an older reset generation was already in flight
+    // when the page announced `cdp-reset`; the worker rejected it on receipt.
+    // Executing it on the replacement connection would run a side effect its
+    // caller has already been told failed (duplicate tab on retry).
+    const sentAt = cmd.gen ?? announcedResets();
+    if (sentAt < announcedResets()) {
+      transport.send({
+        type: 'cdp-response',
+        id: cmd.id,
+        error: 'dropped: command crossed a CDP connection reset in flight',
+      } satisfies CdpResponseMsg);
+      return;
+    }
     try {
       // A command arriving while the page client is down (the proxy closed it
       // with `upstream-reset`, or a plain drop) re-dials first instead of
@@ -211,7 +225,14 @@ export function startPageCdpForwarder(
 
   // Sync listener — async cmd handling is fire-and-forget via void (noMisusedPromises).
   const unsubscribeIncoming = transport.onMessage((msg): void => {
-    void handlePageCdpIncoming(msg, realTransport, transport, eventListeners, reconnectOnce);
+    void handlePageCdpIncoming(
+      msg,
+      realTransport,
+      transport,
+      eventListeners,
+      reconnectOnce,
+      () => resetsAnnounced
+    );
   });
 
   // Relay the real transport's connection state across the hop. A drop is
@@ -221,10 +242,12 @@ export function startPageCdpForwarder(
   // FIRST notification of a transition is relayed, the transport must announce
   // a close once, with its final reason (`CDPClient.cleanup` does).
   let lastRelayed: ConnectionState = realTransport.state;
+  let resetsAnnounced = 0;
   const unsubscribeState = realTransport.onStateChange?.((state, reason) => {
     if (state === lastRelayed) return;
     lastRelayed = state;
     if (state === 'disconnected') {
+      resetsAnnounced += 1;
       transport.send({
         type: 'cdp-reset',
         reason: reason ?? 'page CDP client disconnected',
