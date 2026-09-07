@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<pre id="output">Reading...</pre>
+<script type="module">
+  const worker = new Worker('./bundle.js', { type: 'module' });
+  worker.onmessage = ({ data }) => {
+    document.querySelector('#output').textContent = JSON.stringify(data, null, 2);
+    worker.terminate();
+  };
+  worker.postMessage({ always: false });
+</script>

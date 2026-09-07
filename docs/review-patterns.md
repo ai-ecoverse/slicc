@@ -201,6 +201,9 @@ Verify `getModelIds` forwards all metadata fields from cached models. Check
 - New source files under `src/` with no mirrored file under `tests/`.
 - Modified business logic with no corresponding test change.
 - A bug fix with no regression test.
+- OPFS snapshot retries tested only with a stable File: cover fresh snapshots,
+  bounded exhaustion, and propagation of unrelated errors; use native OPFS to
+  verify the invalidation mechanism.
 - A new HTTP endpoint or shell command with no integration test.
 
 **Historical precedent** — CI enforces per-package coverage floors via

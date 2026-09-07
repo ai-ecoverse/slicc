@@ -36,8 +36,7 @@ thinking levels through discovery, enrichment, account storage, API effort mappi
 
 ## 7. Test coverage
 
-New `src/` files need mirrored tests; changed logic updated tests; bug fixes a
-regression test. Don't lower coverage floors.
+Require mirrored tests, regressions, and coverage floors. OPFS retries need fresh Files, bounded attempts, and error tests.
 
 ## 8. Follower surface wiring parity (often Critical)
 
