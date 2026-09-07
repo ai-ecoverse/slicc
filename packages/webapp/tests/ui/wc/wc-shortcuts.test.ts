@@ -19,6 +19,7 @@ import {
   helpKeyLabel,
   indexForDigit,
   isActivationTarget,
+  isFrameTarget,
   isTypingTarget,
   nextInCycle,
   prevInCycle,
@@ -391,6 +392,17 @@ describe('isTypingTarget / deepTarget', () => {
     div.setAttribute('contenteditable', 'false');
     document.body.append(div);
     expect(isTypingTarget(div)).toBe(false);
+  });
+});
+
+describe('isFrameTarget', () => {
+  it('sees every nested browsing context, and nothing else', () => {
+    expect(isFrameTarget(document.createElement('iframe'))).toBe(true);
+    expect(isFrameTarget(document.createElement('object'))).toBe(true);
+    expect(isFrameTarget(document.createElement('embed'))).toBe(true);
+    expect(isFrameTarget(document.createElement('div'))).toBe(false);
+    expect(isFrameTarget(document.createElement('textarea'))).toBe(false);
+    expect(isFrameTarget(null)).toBe(false);
   });
 });
 
@@ -1244,6 +1256,118 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(false);
+  });
+
+  /**
+   * A sprinkle panel, a dip's approval card, a Cherry mount: the keystrokes go
+   * to the frame's own document and never reach this listener, so the badge
+   * there would advertise a keyboard the mode does not have.
+   */
+  it('drops the mode while a frame holds the focus, and takes it back', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    frame.focus();
+    // Inline, so the badge does not outlive the focus by a macrotask.
+    expect(handles.active()).toBe(false);
+    expect(hud()).toBeNull();
+    await flush();
+    expect(handles.active()).toBe(false);
+    // A suspension, not a decision: the mode the user chose is untouched.
+    expect(handles.intent()).toBe('keyboard');
+    frame.blur();
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  /**
+   * Codex P2: a frame is where the focus STOPS, so removing the focused frame
+   * resets `activeElement` to the body without firing a `focusout` — nothing
+   * else notices, and a reloaded sprinkle (`SprinkleRenderer.dispose()` removes
+   * its iframe) would leave the mode suspended for a frame that is gone.
+   */
+  it('takes the mode back when the focused frame is removed outright', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles } = harness();
+    await flush();
+    frame.focus();
+    expect(handles.active()).toBe(false);
+    frame.remove();
+    // The removal is seen by an observer, which then schedules a settle.
+    await flush();
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  /**
+   * Codex P2: `esc` never auto-enters, so a mode a frame (or another window)
+   * took away has to be handed back explicitly — otherwise the user presses
+   * Escape again for a mode they never left.
+   */
+  it('restores an Escape-entered mode after a frame gives the focus back', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles } = harness();
+    handles.setTrigger('esc');
+    await flush();
+    expect(handles.active()).toBe(false);
+    escape();
+    expect(handles.active()).toBe(true);
+    frame.focus();
+    expect(handles.active()).toBe(false);
+    await flush();
+    frame.blur();
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  it('restores an Escape-entered mode after the window gives the keyboard back', async () => {
+    const { handles } = harness();
+    handles.setTrigger('esc');
+    await flush();
+    escape();
+    expect(handles.active()).toBe(true);
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    window.dispatchEvent(new Event('blur'));
+    expect(handles.active()).toBe(false);
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    window.dispatchEvent(new Event('focus'));
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  /**
+   * A live trigger switch DECIDES the mode — a suspension left over from a
+   * frame must not put back what the switch just cleared.
+   */
+  it('does not let a suspension undo a switch to esc', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    frame.focus();
+    await flush();
+    handles.setTrigger('esc');
+    frame.blur();
+    await flush();
+    expect(handles.active()).toBe(false);
+  });
+
+  it('stays out of the mode a frame took while it was already off', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles, composerField } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    frame.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(handles.intent()).toBe('composer');
   });
 
   /**

@@ -454,6 +454,28 @@ export function isWithinElement(
 }
 
 /**
+ * Does the focus sit on a nested browsing context — a sprinkle panel, a dip's
+ * approval card, a Cherry mount, a terminal a rail hosts in a frame?
+ *
+ * A frame element is where the parent document's focus STOPS: everything the
+ * user types from there is delivered to the frame's own document and never
+ * reaches this module's listener, whatever the origin. So the mode cannot work
+ * while a frame holds focus, and wearing the badge there advertises a keyboard
+ * that belongs to somebody else — the same lie as a badge in a document nobody
+ * is looking at.
+ *
+ * Duck-typed for the same cross-realm reason as {@link isTypingTarget}, and
+ * narrowing, because the caller that watches a frame for removal needs the
+ * element it just recognised.
+ */
+export function isFrameTarget(target: EventTarget | null | undefined): target is Element {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as { tagName?: unknown };
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  return tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT' || tag === 'EMBED';
+}
+
+/**
  * Is the focus on something a bare key ACTIVATES rather than types into?
  *
  * Only Enter (and Space, for a keymap that binds it) is at stake, and only
@@ -1692,6 +1714,17 @@ function createSettler(
   restore(): void;
   /** Record a deliberate choice (Escape leaving the composer). */
   choose(next: ModeIntent): void;
+  /**
+   * Put the mode down for something that has taken the keyboard away without
+   * changing where it belongs — another window, another frame. Remembered, so
+   * the settle that finds the keyboard back can put it up again.
+   */
+  suspend(): void;
+  /**
+   * Forget a pending suspension, for a change that decides the mode outright
+   * (a live trigger switch) and must not be undone by one.
+   */
+  dropSuspension(): void;
   intent(): ModeIntent;
   dispose(): void;
 } {
@@ -1703,6 +1736,56 @@ function createSettler(
   const composerAvailable = deps.composerAvailable ?? ((): boolean => !!deps.focusComposer);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let intent: ModeIntent = 'composer';
+  /**
+   * A mode that was UP when something else took the keyboard. Under `auto` the
+   * next settle works the mode out from the focus anyway, but `esc` never
+   * auto-enters — so without this the suspension would be permanent and the
+   * user would have to press Escape again for a mode they never left.
+   */
+  let suspended = false;
+  /** The frame we are suspended for; see {@link watchFrame}. */
+  let watchedFrame: Element | null = null;
+  let framePresence: MutationObserver | null = null;
+
+  const unwatchFrame = (): void => {
+    framePresence?.disconnect();
+    framePresence = null;
+    watchedFrame = null;
+  };
+
+  /**
+   * Watch a focused frame for as long as it holds the keyboard — because
+   * REMOVING the focused element resets `activeElement` to the body and fires
+   * no `focusout` at all, so nothing else would ever notice.
+   *
+   * That is not a corner case: reloading or closing a sprinkle removes its
+   * iframe (`SprinkleRenderer.dispose()`), and the mode would stay suspended
+   * for a frame that no longer exists — badge gone, letters dead, until some
+   * unrelated focus change happened to settle it.
+   *
+   * Cheap by construction: it lives only while a frame has the focus, and the
+   * callback is one `isConnected` test.
+   */
+  const watchFrame = (frame: Element): void => {
+    if (watchedFrame === frame) return;
+    unwatchFrame();
+    const ObserverCtor = view?.MutationObserver ?? globalThis.MutationObserver;
+    if (!ObserverCtor) return;
+    watchedFrame = frame;
+    framePresence = new ObserverCtor(() => {
+      if (frame.isConnected) return;
+      unwatchFrame();
+      schedule();
+    });
+    framePresence.observe(doc.documentElement, { childList: true, subtree: true });
+  };
+
+  const suspend = (): void => {
+    // `||=`, so a second suspension (a frame taking the focus in a window that
+    // then goes away) does not forget the mode the first one put down.
+    suspended ||= mode.on();
+    mode.set(false);
+  };
 
   /**
    * Bring the mode in line with where the focus actually is.
@@ -1722,15 +1805,28 @@ function createSettler(
     // keyboard that is somewhere else entirely.
     if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
     const focused = deepActiveElement(doc);
-    applyTriggerSettle(
-      readTrigger(),
-      isTypingTarget(focused) || isWithinElement(deps.composerBand, focused) || !!keepExtra?.(),
-      composerAvailable(),
-      mode,
-      (next) => {
-        intent = next;
-      }
-    );
+    // A frame holding the focus takes every keystroke with it, so there is no
+    // mode to be in — a suspension exactly like the window losing the
+    // keyboard, and the intent is left alone so the mode comes back with the
+    // focus.
+    if (isFrameTarget(focused)) {
+      watchFrame(focused);
+      suspend();
+      return;
+    }
+    unwatchFrame();
+    const keepComposer =
+      isTypingTarget(focused) || isWithinElement(deps.composerBand, focused) || !!keepExtra?.();
+    // The keyboard is back. Under `auto` the policy below works the mode out
+    // from the focus on its own; `esc` never auto-enters, so a mode the user
+    // entered by hand has to be put back here or it is lost for good.
+    if (suspended) {
+      suspended = false;
+      if (!keepComposer && readTrigger() === 'esc') mode.set(true);
+    }
+    applyTriggerSettle(readTrigger(), keepComposer, composerAvailable(), mode, (next) => {
+      intent = next;
+    });
   };
 
   /**
@@ -1770,11 +1866,17 @@ function createSettler(
     choose: (next) => {
       intent = next;
     },
+    suspend,
+    dropSuspension: () => {
+      suspended = false;
+    },
     intent: () => intent,
     dispose: () => {
       // A settle that outlived its wiring would re-enter a mode nothing owns.
       if (timer !== undefined) clearTimer(timer);
       timer = undefined;
+      // An observer that outlived its wiring would schedule into a dead shell.
+      unwatchFrame();
     },
   };
 }
@@ -2254,7 +2356,13 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // Composer chrome (+, model pill, …) is not a typing target but must still
     // leave the mode — otherwise a click there under `auto` would keep letters
     // bound until settle runs, and a letter in the same task would fire a command.
-    if (
+    // A frame is the third case, and the only one where the keys do not merely
+    // mean something else — they never arrive at all (see {@link isFrameTarget}).
+    // SUSPENDED rather than dropped, because the settle that gets the keyboard
+    // back cannot work an `esc` mode out from the focus; either way it happens
+    // inline, so the badge does not outlive the focus by a macrotask.
+    if (mode.on() && isFrameTarget(target)) settler.suspend();
+    else if (
       mode.on() &&
       (isTypingTarget(target) || isWithinElement(deps.composerBand, target as Node | null))
     ) {
@@ -2276,9 +2384,11 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
    * the focus already sitting on nothing there is no `focusout` to fire, so the
    * badge would go on claiming keystrokes that are now going to the host page
    * (Cherry) or to another app entirely. A suspension, not a decision — the
-   * intent is untouched, and `onWindowFocus` settles it back on return.
+   * intent is untouched, and `onWindowFocus` settles it back on return, which
+   * under `esc` means the settle has to be TOLD the mode was up (a trigger
+   * that never auto-enters cannot work it out from the focus).
    */
-  const onWindowBlur = (): void => mode.set(false);
+  const onWindowBlur = (): void => settler.suspend();
   const stopWatchingUnit = observeSelectedUnit(deps.switcher, doc, settler.restore);
 
   const view = doc.defaultView;
@@ -2339,6 +2449,9 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       // and Esc's settle deliberately does not auto-enter — so without this
       // clear, bare shortcuts would keep working until the composer is focused.
       if (next === null || next === 'esc') mode.set(false);
+      // A live switch DECIDES the mode, so a suspension left over from a frame
+      // or another window must not put back what it just cleared.
+      settler.dropSuspension();
       settler.schedule();
     },
   };
