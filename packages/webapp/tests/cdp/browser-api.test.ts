@@ -1883,6 +1883,83 @@ describe('BrowserAPI', () => {
       expect(onReplaced).toHaveBeenCalledTimes(2);
     });
 
+    /** Local `/cdp` client + one tray runtime's transport, one tab on each. */
+    async function twoTransports() {
+      const remoteClient = createMockClient();
+      const removeRemoteTransport = vi.fn();
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+        removeRemoteTransport,
+      });
+      attachCounting();
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: 'remote-sess' } : {}
+      );
+      await api.withTab('local-1', async () => {});
+      await api.withTab('follower-1:tab-1', async () => {});
+      return { remoteClient, removeRemoteTransport };
+    }
+
+    function remoteAttaches(remoteClient: ReturnType<typeof createMockClient>) {
+      return (remoteClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([m]) => m === 'Target.attachToTarget'
+      );
+    }
+
+    it('keeps local sessions when a follower transport drops', async () => {
+      const { remoteClient, removeRemoteTransport } = await twoTransports();
+
+      // The follower went away while its transport was the current one.
+      (remoteClient as unknown as { state: string }).state = 'disconnected';
+      await api.withTab('local-1', async () => {});
+
+      // The local session is untouched: forgetting it without detaching is
+      // what made the next local command mint a duplicate (review finding 6).
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+      expect(api.getSessionId()).toBe('sess-1');
+      expect(removeRemoteTransport).toHaveBeenCalledWith('follower-1', 'tab-1');
+      // ...and the dead transport stops being listened to.
+      expect(remoteClient.off).toHaveBeenCalledWith(
+        'Target.detachedFromTarget',
+        expect.any(Function)
+      );
+      expect(remoteClient.off).toHaveBeenCalledWith('Target.targetDestroyed', expect.any(Function));
+    });
+
+    it('keeps remote sessions when the local client drops', async () => {
+      const { remoteClient } = await twoTransports();
+      // Drive the local tab so the local client is the current transport.
+      await api.withTab('local-1', async () => {});
+
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      await api.withTab('local-1', async () => {});
+      (mockClient as unknown as { state: string }).state = 'connected';
+
+      // The local tab re-attached (its session died with the socket); the
+      // follower's did not, because its transport never dropped.
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      await api.withTab('follower-1:tab-1', async () => {});
+      expect(remoteAttaches(remoteClient)).toHaveLength(1);
+      expect(api.getSessionId()).toBe('remote-sess');
+    });
+
+    it('stops listening to a remote transport once its last session goes', async () => {
+      const { remoteClient } = await twoTransports();
+
+      await api.closePage('follower-1:tab-1');
+
+      expect(remoteClient.off).toHaveBeenCalledWith(
+        'Target.detachedFromTarget',
+        expect.any(Function)
+      );
+      // A late lifecycle event from the forgotten transport is nobody's
+      // business any more — the local session must survive it.
+      remoteClient._fireEvent('Target.targetDestroyed', { targetId: 'local-1' });
+      await api.withTab('local-1', async () => {});
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
     it('keeps a remote tray session alive while another tab is driven locally', async () => {
       const remoteClient = createMockClient();
       const removeRemoteTransport = vi.fn();

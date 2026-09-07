@@ -2129,6 +2129,7 @@ export class BrowserAPI {
       return;
     }
     if (this.client.state === 'disconnected') {
+      const dropped = this.client;
       // If we were using a remote transport that got disconnected (follower went away),
       // restore the local transport and clear stale remote state.
       if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
@@ -2139,9 +2140,13 @@ export class BrowserAPI {
         this.setClient(this.localClient);
         this.remoteTargetInfo = null;
       }
-      // Every session lived on the transport that just dropped — Chrome
-      // discards them all on reconnect, so the registry goes with it.
-      this.clearSessions();
+      // ONLY the sessions on the transport that dropped: the registry spans
+      // several (the local `/cdp` client and a transport per tray runtime), and
+      // Chrome discards sessions per connection. Wiping the whole map when one
+      // follower went away forgot healthy local sessions WITHOUT detaching
+      // them, so the next local command minted duplicates — the fan-out leak
+      // this registry exists to close.
+      this.clearSessionsForTransport(dropped);
       if (this.client.state === 'disconnected') {
         // Replay the last-used connect options so the bridge URL + subprotocol survive.
         await this.connect(this._lastConnectOptions ?? undefined);
@@ -2186,6 +2191,27 @@ export class BrowserAPI {
     this._sessionEventTransports.add(client);
     client.on('Target.detachedFromTarget', this.handleDetachedFromTarget);
     client.on('Target.targetDestroyed', this.handleTargetDestroyed);
+  }
+
+  /**
+   * Unsubscribe from a transport's session-lifecycle events once no registry
+   * entry lives on it any more.
+   *
+   * The local `/cdp` client keeps its subscription: it is the permanent
+   * channel and gets reconnected in place. Everything else is a per-runtime
+   * remote transport thrown away with its last session — without this, every
+   * follower this bridge ever talked to stayed in the set (and kept its
+   * listeners) for the life of the page. A transport that comes back gets its
+   * listeners again through {@link addSessionLifecycleListeners}, which both
+   * `setClient` and the attach path call.
+   */
+  private releaseLifecycleTransport(transport: CDPTransport): void {
+    if (transport === this.localClient) return;
+    if (!this._sessionEventTransports.has(transport)) return;
+    for (const entry of this._sessions.values()) if (entry.transport === transport) return;
+    this._sessionEventTransports.delete(transport);
+    transport.off('Target.detachedFromTarget', this.handleDetachedFromTarget);
+    transport.off('Target.targetDestroyed', this.handleTargetDestroyed);
   }
 
   private setClient(client: CDPTransport): void {
@@ -2299,6 +2325,7 @@ export class BrowserAPI {
       this.sessionId = null;
       this.attachedTargetId = null;
     }
+    this.releaseLifecycleTransport(entry.transport);
     if (entry.remote) {
       const stillUsed = [...this._sessions.values()].some(
         (e) =>
@@ -2347,7 +2374,20 @@ export class BrowserAPI {
     if (entry) this.forgetSession(targetId, entry);
   }
 
-  /** Drop every session: the transport they lived on is gone. */
+  /**
+   * Drop the sessions bound to ONE transport — the connection that dropped
+   * discarded them, so they cannot be detached and must not be reused.
+   * Entries on other transports are healthy and stay.
+   */
+  private clearSessionsForTransport(transport: CDPTransport): void {
+    for (const [targetId, entry] of [...this._sessions]) {
+      if (entry.transport === transport) this.forgetSession(targetId, entry);
+    }
+    // The cursor may have pointed at a survivor's tab; `forgetSession` already
+    // cleared it if it pointed at one of ours.
+  }
+
+  /** Drop every session: the bridge itself is going away. */
   private clearSessions(): void {
     for (const [targetId, entry] of [...this._sessions]) this.forgetSession(targetId, entry);
     this._sessions.clear();
