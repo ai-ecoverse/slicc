@@ -157,6 +157,16 @@ export function takeClientFrameBuffer(
 }
 
 /**
+ * Whether `clientId` still holds the single `/cdp` slot. A frame from a
+ * client that was superseded, closed, or reset with 4002 must not reach
+ * Chrome even if it arrives before that client's socket has finished
+ * closing — swift-server's `receive` guard, mirrored here.
+ */
+export function clientHoldsSlot(state: ClientFrameBufferHost, clientId: number): boolean {
+  return state.activeClientId === clientId;
+}
+
+/**
  * Give the single `/cdp` slot to `clientId`. Anything the previous holder
  * buffered belongs to IT — running those frames under the new client is the
  * duplicate-tab bug from issue #2417 — so it is dropped, and a fresh buffer is

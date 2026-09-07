@@ -34,6 +34,7 @@ import {
   adoptClientSlot,
   appendBufferedClientFrame,
   type ClientFrameBuffer,
+  clientHoldsSlot,
   createClientFrameBuffer,
   currentBufferGeneration,
   type DroppedClientFrames,
@@ -1030,10 +1031,20 @@ async function handleCdpClient(
     // Take the slot and (re)open the buffer BEFORE any await, so messages
     // arriving during waitForCDP / ensureChromeConnection are captured rather
     // than dropped — and so anything the PREVIOUS holder buffered dies with it.
-    logDroppedClientFrames(ctx, adoptClientSlot(state, ++state.clientConnectionSeq));
+    const clientId = ++state.clientConnectionSeq;
+    logDroppedClientFrames(ctx, adoptClientSlot(state, clientId));
 
     // Register ALL handlers BEFORE any async work so no messages are lost.
     clientWs.on('message', (data) => {
+      // A superseded / reset client can still emit a frame or two before its
+      // socket finishes closing; those belong to a dead generation.
+      if (!clientHoldsSlot(state, clientId)) {
+        logCdpProxy(
+          ctx,
+          '[cdp-proxy] Client→Chrome (DROPPED — client no longer holds the /cdp slot)'
+        );
+        return;
+      }
       forwardClientFrame(state, data, ctx);
     });
     clientWs.on('close', () => {

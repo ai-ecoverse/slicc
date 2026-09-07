@@ -16,6 +16,7 @@ import {
   CDP_CLIENT_FRAME_BUFFER_LIMIT,
   type ClientFrameBufferHost,
   clientFrameBufferDropReason,
+  clientHoldsSlot,
   createClientFrameBuffer,
   currentBufferGeneration,
   describeDroppedClientFrames,
@@ -218,6 +219,20 @@ describe('adoptClientSlot', () => {
 
     expect(adoptClientSlot(state, 7)).toBeNull();
     expect(state.messageBuffer?.generation).toEqual({ chromeConnectionId: 4, clientId: 7 });
+  });
+});
+
+describe('clientHoldsSlot', () => {
+  it('is true only for the current slot holder', () => {
+    const state = makeHost({ activeClientId: 3 });
+    expect(clientHoldsSlot(state, 3)).toBe(true);
+    expect(clientHoldsSlot(state, 2)).toBe(false);
+  });
+
+  it('is false for everyone once the slot was released (4002 reset / disconnect)', () => {
+    const state = makeHost({ activeClientId: 3 });
+    releaseClientSlot(state, 'upstream-reset');
+    expect(clientHoldsSlot(state, 3)).toBe(false);
   });
 });
 
