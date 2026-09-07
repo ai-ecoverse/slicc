@@ -923,6 +923,11 @@ with ONE cheap authenticated call (GitHub uses `GET /user`) so `oauth-token
   (401). Statuses a healthy token also produces — GitHub answers 403 for rate
   limits — must be `unknown`, or a throttled caller gets sent through a consent
   window that cannot fix anything.
+- **Read the verdict where the provider puts it.** Adobe IMS
+  (`POST {imsHost}/ims/validate_token/v1`) answers HTTP 200 for BOTH verdicts
+  and reports `{"valid":false,"reason":"…"}` in the body, so treating the
+  status as the answer would call every revoked token valid. A non-2xx there is
+  the check failing, not a refusal — `unknown`.
 - Return `unknown` for 5xx, transport failures, and "nothing stored". `unknown`
   says nothing about the token; only `rejected` costs the user a re-login.
 - Bound the request (`AbortSignal.timeout`) — `--check` must always answer.

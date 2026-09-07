@@ -179,11 +179,27 @@ they report which token is **held** (`token held for <user>, local expiry in
 
 `oauth-token --check [<id>]` is the surface that answers whether the token still
 **works**: it calls the provider's optional `onValidateToken` hook — one cheap,
-time-bounded authenticated call, `GET /user` for GitHub — and reports
-`ACCEPTED`, `REJECTED`, or `UNKNOWN`. Only a response that proves refusal (401)
-is `REJECTED`; statuses a healthy token also produces (GitHub answers 403 when
-throttling), 5xx, and transport failures are `UNKNOWN`, which says nothing about
-the token. Providers without the hook say so rather than guessing.
+time-bounded call — and reports `ACCEPTED`, `REJECTED`, or `UNKNOWN`. Only a
+response that proves refusal is `REJECTED`; statuses a healthy token also
+produces (GitHub answers 403 when throttling), 5xx, and transport failures are
+`UNKNOWN`, which says nothing about the token. Providers without the hook say so
+rather than guessing.
+
+Each provider asks in whatever way its identity service answers honestly, and
+the two shipped hooks differ in where the verdict lives:
+
+| Provider | Call                                                         | Where the verdict is                                                                                 |
+| -------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| GitHub   | `GET https://api.github.com/user`                            | The HTTP status. 401 is a refusal; a 403 with rate-limit headers is `UNKNOWN`.                       |
+| Adobe    | `POST {imsHost}/ims/validate_token/v1` (`type=access_token`) | The **body**. IMS answers 200 either way, with `{"valid":true}` or `{"valid":false,"reason":"..."}`. |
+
+Adobe's shape is the trap worth knowing: reading the status as the answer would
+call every revoked IMS token valid, and a non-2xx there means the check itself
+did not run (a 400 `bad_request` for a malformed call), so it is `UNKNOWN` and
+must never send a caller with a good token through a consent window. The
+`client_id` the call requires is read back from the access token's own JWT
+claims, so `--check adobe` works on a cold page, before anything has fetched the
+proxy's `/v1/config`.
 
 `oauth-token <id>` (no flags) and `skill.token('<id>')` print the secrets-pipeline
 **replica** (`account.maskedValue`), never `accessToken`. `--check` is the
