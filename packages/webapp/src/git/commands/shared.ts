@@ -72,9 +72,11 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
   clean: CLEAN_SPEC,
   diff: {
-    string: ['format', 'diff-filter'],
-    boolean: ['staged', 'cached', 'name-only', 'stat'],
-    alias: { pretty: 'format' },
+    string: ['format', 'diff-filter', 'unified'],
+    // `no-index` is listed for help detection; mri strips any `--no-<x>` to
+    // `{ x: false }` on its own, so `diff()` reads BOTH spellings.
+    boolean: ['staged', 'cached', 'name-only', 'stat', 'no-index'],
+    alias: { pretty: 'format', U: 'unified' },
     '--': true,
   },
   show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },

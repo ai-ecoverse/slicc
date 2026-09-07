@@ -132,78 +132,88 @@ interface Hunk {
 }
 
 /**
- * Group edits into unified diff hunks with context lines.
+ * Index ranges of `edits` that become one hunk each: every run of changes,
+ * padded by `contextLines` on both sides, with runs closer together than twice
+ * the context merged into a single range.
  */
-function buildHunks(edits: Edit[], contextLines = 3): Hunk[] {
-  const hunks: Hunk[] = [];
-
-  // Find ranges of changes
-  const changeIndices: number[] = [];
+function hunkRanges(edits: Edit[], contextLines: number): [number, number][] {
+  const changes: number[] = [];
   for (let i = 0; i < edits.length; i++) {
-    if (edits[i].type !== 'equal') {
-      changeIndices.push(i);
+    if (edits[i].type !== 'equal') changes.push(i);
+  }
+  if (changes.length === 0) return [];
+
+  const runs: [number, number][] = [];
+  let first = changes[0];
+  let last = changes[0];
+  for (const index of changes.slice(1)) {
+    if (index - last > 2 * contextLines) {
+      runs.push([first, last]);
+      first = index;
+    }
+    last = index;
+  }
+  runs.push([first, last]);
+
+  return runs.map(([runStart, runEnd]) => [
+    Math.max(0, runStart - contextLines),
+    Math.min(edits.length - 1, runEnd + contextLines),
+  ]);
+}
+
+/** Render the hunk covering the edit range `[hunkStart, hunkEnd]` inclusive. */
+function buildHunk(edits: Edit[], hunkStart: number, hunkEnd: number): Hunk {
+  // Old/new line positions consumed before the hunk starts.
+  let oldLine = 0;
+  let newLine = 0;
+  for (let i = 0; i < hunkStart; i++) {
+    if (edits[i].type !== 'insert') oldLine++;
+    if (edits[i].type !== 'delete') newLine++;
+  }
+
+  const lines: string[] = [];
+  let oldCount = 0;
+  let newCount = 0;
+  for (let i = hunkStart; i <= hunkEnd; i++) {
+    const edit = edits[i];
+    switch (edit.type) {
+      case 'equal':
+        lines.push(` ${edit.line}`);
+        oldCount++;
+        newCount++;
+        break;
+      case 'delete':
+        lines.push(`-${edit.line}`);
+        oldCount++;
+        break;
+      case 'insert':
+        lines.push(`+${edit.line}`);
+        newCount++;
+        break;
     }
   }
 
-  if (changeIndices.length === 0) return [];
+  // A side that contributes no lines is numbered by what came BEFORE the hunk,
+  // not by its first line: git heads an addition to an empty file
+  // `@@ -0,0 +1,3 @@`, and a `-U0` insertion after line 2 `@@ -2,0 +3 @@`.
+  // `oldLine + 1` there would name a line the old file does not have.
+  return {
+    oldStart: oldCount === 0 ? oldLine : oldLine + 1,
+    oldCount,
+    newStart: newCount === 0 ? newLine : newLine + 1,
+    newCount,
+    lines,
+  };
+}
 
-  // Group changes that are close together (within 2*context)
-  let groupStart = 0;
-  const groups: [number, number][] = [];
+/** Group edits into unified diff hunks with `contextLines` of context. */
+function buildHunks(edits: Edit[], contextLines = 3): Hunk[] {
+  return hunkRanges(edits, contextLines).map(([start, end]) => buildHunk(edits, start, end));
+}
 
-  for (let i = 1; i < changeIndices.length; i++) {
-    if (changeIndices[i] - changeIndices[i - 1] > 2 * contextLines) {
-      groups.push([groupStart, i - 1]);
-      groupStart = i;
-    }
-  }
-  groups.push([groupStart, changeIndices.length - 1]);
-
-  for (const [gStart, gEnd] of groups) {
-    const firstChange = changeIndices[gStart];
-    const lastChange = changeIndices[gEnd];
-
-    const hunkStart = Math.max(0, firstChange - contextLines);
-    const hunkEnd = Math.min(edits.length - 1, lastChange + contextLines);
-
-    const lines: string[] = [];
-
-    // Count old/new line positions up to hunkStart
-    let oldLine = 0;
-    let newLine = 0;
-    for (let i = 0; i < hunkStart; i++) {
-      if (edits[i].type === 'equal' || edits[i].type === 'delete') oldLine++;
-      if (edits[i].type === 'equal' || edits[i].type === 'insert') newLine++;
-    }
-
-    const oldStart = oldLine + 1;
-    const newStart = newLine + 1;
-    let oldCount = 0;
-    let newCount = 0;
-
-    for (let i = hunkStart; i <= hunkEnd; i++) {
-      const edit = edits[i];
-      switch (edit.type) {
-        case 'equal':
-          lines.push(` ${edit.line}`);
-          oldCount++;
-          newCount++;
-          break;
-        case 'delete':
-          lines.push(`-${edit.line}`);
-          oldCount++;
-          break;
-        case 'insert':
-          lines.push(`+${edit.line}`);
-          newCount++;
-          break;
-      }
-    }
-
-    hunks.push({ oldStart, oldCount, newStart, newCount, lines });
-  }
-
-  return hunks;
+/** git omits the `,<count>` of a one-line side: `@@ -1 +0,0 @@`, not `-1,1`. */
+function hunkRange(start: number, count: number): string {
+  return count === 1 ? `${start}` : `${start},${count}`;
 }
 
 export interface UnifiedDiffOptions {
@@ -212,6 +222,15 @@ export interface UnifiedDiffOptions {
   oldName: string;
   newName: string;
   color?: boolean;
+  /** Context lines kept around each hunk (git's `-U<n>`). Defaults to 3. */
+  context?: number;
+  /**
+   * Render one side as `/dev/null`, the way git heads a pure addition or
+   * deletion, instead of `a/<name>` / `b/<name>`. The caller passes the
+   * PRESENT path as both `oldName` and `newName` — that is what git puts on
+   * the `diff --git` line for an add or a delete.
+   */
+  absent?: 'old' | 'new';
 }
 
 /**
@@ -219,7 +238,7 @@ export interface UnifiedDiffOptions {
  * Returns empty string if the contents are identical.
  */
 export function unifiedDiff(opts: UnifiedDiffOptions): string {
-  const { oldContent, newContent, oldName, newName, color = true } = opts;
+  const { oldContent, newContent, oldName, newName, color = true, context = 3, absent } = opts;
 
   if (oldContent === newContent) return '';
 
@@ -232,7 +251,7 @@ export function unifiedDiff(opts: UnifiedDiffOptions): string {
   if (newLines.length > 0 && newLines[newLines.length - 1] === '') newLines.pop();
 
   const edits = myersDiff(oldLines, newLines);
-  const hunks = buildHunks(edits);
+  const hunks = buildHunks(edits, context);
 
   if (hunks.length === 0) return '';
 
@@ -242,13 +261,18 @@ export function unifiedDiff(opts: UnifiedDiffOptions): string {
   const BOLD = color ? '\x1b[1m' : '';
   const RESET = color ? '\x1b[0m' : '';
 
+  const oldLabel = absent === 'old' ? '/dev/null' : `a/${oldName}`;
+  const newLabel = absent === 'new' ? '/dev/null' : `b/${newName}`;
+
   let output = '';
   output += `${BOLD}diff --git a/${oldName} b/${newName}${RESET}\n`;
-  output += `${BOLD}--- a/${oldName}${RESET}\n`;
-  output += `${BOLD}+++ b/${newName}${RESET}\n`;
+  output += `${BOLD}--- ${oldLabel}${RESET}\n`;
+  output += `${BOLD}+++ ${newLabel}${RESET}\n`;
 
   for (const hunk of hunks) {
-    output += `${CYAN}@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@${RESET}\n`;
+    const oldRange = hunkRange(hunk.oldStart, hunk.oldCount);
+    const newRange = hunkRange(hunk.newStart, hunk.newCount);
+    output += `${CYAN}@@ -${oldRange} +${newRange} @@${RESET}\n`;
     for (const line of hunk.lines) {
       if (line.startsWith('+')) {
         output += `${GREEN}${line}${RESET}\n`;
@@ -287,4 +311,66 @@ export function diffStat(
     if (edit.type === 'delete') deletions++;
   }
   return { insertions, deletions };
+}
+
+/** One row of a `--stat` summary. */
+export interface DiffStatEntry {
+  /** Row label. Usually a path; `git diff --no-index` renders `a => b` forms. */
+  name: string;
+  oldContent: string;
+  newContent: string;
+  /**
+   * Byte sizes when the pair is binary. Set it and the row renders git's
+   * `Bin <old> -> <new> bytes` instead of a +/- bar, and contributes no
+   * insertions or deletions to the summary line.
+   */
+  binary?: { oldSize: number; newSize: number };
+}
+
+/**
+ * Render git's `--stat` block (one row per entry plus the summary line).
+ *
+ * Shared by every diff producer — the commit/index/workdir walks in
+ * `commands/diff.ts` and `git diff --no-index` — so the row layout and the
+ * "N files changed" arithmetic have exactly one implementation.
+ */
+export function formatDiffStatText(entries: readonly DiffStatEntry[]): string {
+  const RED = '\x1b[31m';
+  const GREEN = '\x1b[32m';
+  const RESET = '\x1b[0m';
+
+  let output = '';
+  let totalInsertions = 0;
+  let totalDeletions = 0;
+  let maxNameLen = 0;
+
+  const rows = entries.map((entry) => {
+    const counts = entry.binary
+      ? { insertions: 0, deletions: 0 }
+      : diffStat(entry.oldContent, entry.newContent);
+    if (entry.name.length > maxNameLen) maxNameLen = entry.name.length;
+    totalInsertions += counts.insertions;
+    totalDeletions += counts.deletions;
+    return { name: entry.name, binary: entry.binary, ...counts };
+  });
+
+  for (const row of rows) {
+    const label = row.name.padEnd(maxNameLen);
+    if (row.binary) {
+      output += ` ${label} | Bin ${row.binary.oldSize} -> ${row.binary.newSize} bytes\n`;
+      continue;
+    }
+    const total = row.insertions + row.deletions;
+    const bar = `${GREEN}${'+'.repeat(row.insertions)}${RESET}${RED}${'-'.repeat(row.deletions)}${RESET}`;
+    output += ` ${label} | ${String(total).padStart(4)} ${bar}\n`;
+  }
+
+  output += ` ${entries.length} file${entries.length !== 1 ? 's' : ''} changed`;
+  if (totalInsertions > 0)
+    output += `, ${totalInsertions} insertion${totalInsertions !== 1 ? 's' : ''}(+)`;
+  if (totalDeletions > 0)
+    output += `, ${totalDeletions} deletion${totalDeletions !== 1 ? 's' : ''}(-)`;
+  output += '\n';
+
+  return output;
 }
