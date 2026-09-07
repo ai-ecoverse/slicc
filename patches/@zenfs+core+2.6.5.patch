@@ -1,3 +1,93 @@
+diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
+index ac8b186..e20f4ec 100644
+--- a/node_modules/@zenfs/core/dist/mixins/async.js
++++ b/node_modules/@zenfs/core/dist/mixins/async.js
+@@ -162,26 +162,67 @@ export function Async(FS) {
+         /**
+          * @internal
+          */
+-        async crossCopy(path) {
+-            this.checkSync();
+-            const stats = await this.stat(path);
+-            if (!isDirectory(stats)) {
+-                this._sync.createFileSync(path, stats);
+-                const buffer = new Uint8Array(stats.size);
+-                await this.read(path, buffer, 0, stats.size);
+-                this._sync.writeSync(path, buffer, 0);
+-                this._sync.touchSync(path, stats);
+-                return;
+-            }
+-            if (path !== '/') {
+-                this._sync.mkdirSync(path, stats);
+-                this._sync.touchSync(path, stats);
++        // PATCH(zen-fs/core#318): one limit and first-failure state per preload tree.
++        // A fresh traversal gets fresh state; descendants share it across directories.
++        async crossCopy(path, preload = { active: 0, waiters: [], failure: null }) {
++            try {
++                if (preload.failure)
++                    throw preload.failure.error;
++                this.checkSync();
++                const stats = await this.stat(path);
++                if (preload.failure)
++                    throw preload.failure.error;
++                if (!isDirectory(stats)) {
++                    if (preload.active >= 16)
++                        await new Promise((resolve, reject) => preload.waiters.push({ resolve, reject }));
++                    else
++                        preload.active++;
++                    try {
++                        // A slot may have been handed off just before another copy failed.
++                        if (preload.failure)
++                            throw preload.failure.error;
++                        this._sync.createFileSync(path, stats);
++                        const buffer = new Uint8Array(stats.size);
++                        await this.read(path, buffer, 0, stats.size);
++                        this._sync.writeSync(path, buffer, 0);
++                        this._sync.touchSync(path, stats);
++                    }
++                    catch (error) {
++                        // Record failure before releasing the slot: do not start queued work.
++                        preload.failure ??= { error };
++                        throw preload.failure.error;
++                    }
++                    finally {
++                        const next = !preload.failure && preload.waiters.shift();
++                        if (next)
++                            next.resolve();
++                        else
++                            preload.active--;
++                    }
++                    return;
++                }
++                if (path !== '/') {
++                    this._sync.mkdirSync(path, stats);
++                    this._sync.touchSync(path, stats);
++                }
++                const promises = [];
++                for (const file of await this.readdir(path)) {
++                    if (preload.failure)
++                        break;
++                    promises.push(this.crossCopy(join(path, file), preload));
++                }
++                // Queued copies reject immediately on failure; only issued backend work
++                // remains to drain. Preserve the first error, not directory ordering.
++                await Promise.allSettled(promises);
++                if (preload.failure)
++                    throw preload.failure.error;
+             }
+-            const promises = [];
+-            for (const file of await this.readdir(path)) {
+-                promises.push(this.crossCopy(join(path, file)));
++            catch (error) {
++                preload.failure ??= { error };
++                for (const waiter of preload.waiters.splice(0))
++                    waiter.reject(preload.failure.error);
++                throw preload.failure.error;
+             }
+-            await Promise.all(promises);
+         }
+         /**
+          * @internal
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index e978bba..0e00a9e 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js

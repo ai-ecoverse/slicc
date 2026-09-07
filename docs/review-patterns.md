@@ -60,6 +60,10 @@ there are additional parity boundaries where bugs hide:
 
 **Trigger patterns**
 
+- Recursive filesystem preloads that start every payload read at once, limit each
+  directory separately, or reject while sibling copies still run. Bound leaf copies
+  globally before allocating buffers; cancel queued work on the first failure,
+  release slots, and drain only the copies already active.
 - `fetch()` to an external host without `signal: AbortSignal.timeout(ms)`.
 - E2B / sandbox calls (`Sandbox.create()`, `Sandbox.connect()`) without `requestTimeoutMs`.
 - External API calls with no retry / backoff.
