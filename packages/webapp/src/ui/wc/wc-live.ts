@@ -111,6 +111,12 @@ export interface WcShellBoot {
   getSelected(): WorkUnitSummary | null;
   clearSelection(): void;
   /**
+   * Hold the selected cone's queued pile before a non-selection surface
+   * replaces the thread (the Freezer's thaw), so re-selecting that cone
+   * restores it instead of the replay cancelling it. See `holdQueuedPile`.
+   */
+  holdQueuedPile(): void;
+  /**
    * Render `id`'s transcript WITHOUT claiming the roster describes it.
    *
    * `selectScoop` is the normal path and takes a summary. A biscotto seat has
@@ -139,78 +145,80 @@ export interface WcShellBoot {
 }
 
 /**
+ * Park the live queued pile under the cone that owns `jid`, so a later
+ * selection of that cone can hand it straight back. A unit missing from the
+ * roster has no knowable owner (`rootForSelection` would fall back to the
+ * DEFAULT root, which would silently read as "some other cone's pile"), so it
+ * is held under its own jid — a hold only its own unit can claim.
+ *
+ * Must run BEFORE whatever replaces the thread: `loadMessages` cancels any
+ * pile still live at that moment.
+ */
+function holdQueuedPile(args: {
+  controller: WcChatController | null;
+  held: Map<string, ChatMessage[]>;
+  jid: string;
+  roster: readonly WorkUnitSummary[];
+}): void {
+  const { controller, held, jid, roster } = args;
+  const items = controller?.stashQueued() ?? [];
+  if (items.length === 0) return;
+  const unit = roster.find((u) => u.id === jid);
+  const key = unit ? (rootForSelection(roster, unit)?.id ?? unit.id) : jid;
+  held.set(key, [...(held.get(key) ?? []), ...items]);
+}
+
+/**
  * Decide what happens to the queued pile when the selection moves (#2354).
  *
- * A read-only detour that stays inside the queue owner's own cone HOLDS the
- * pile; anything else cancels it on the backend, because the orchestrator must
- * never silently deliver a prompt the user dropped by navigating away. The
- * hold is keyed by the OWNING CONE, not by the unit being left: the queue
- * belongs to the cone, so a hop between two of its scoops must not re-key the
- * hold onto a scoop jid that no destination owner could ever match.
+ * The pile belongs to the CONE the user typed into, not to the tab that
+ * happens to be on screen: every queued prompt was already handed to the
+ * backend synchronously on send, and looking at a second cone is not a
+ * retraction. So a switch never cancels — it HOLDS the pile, keyed by the
+ * owning cone, and re-installs it the moment the user lands back on that
+ * cone. Reconciling it against what the cone actually consumed while the user
+ * was away is {@link WcChatController.restoreQueued}'s job.
  *
- * Returns the stash to carry forward, or `null` when there is none left.
+ * The hold is keyed by the OWNING CONE (see {@link holdQueuedPile}), not by
+ * the unit being left: the queue belongs to the cone, so a hop between two of
+ * its scoops must not re-key the hold onto a scoop jid that no destination
+ * owner could ever match.
+ *
+ * Mutates `held` in place; the only way an entry leaves it is the user
+ * returning to its cone, that cone dropping off the roster, or the user
+ * dismissing the cards one by one.
  */
 function reconcileQueueForSwitch(args: {
   controller: WcChatController | null;
-  deleteQueued: (jid: string, id: string) => void;
   destination: string;
+  held: Map<string, ChatMessage[]>;
   previousJid: string | null;
-  readOnly: boolean;
   roster: readonly WorkUnitSummary[];
-  stashed: { jid: string; items: ChatMessage[] } | null;
-}): { jid: string; items: ChatMessage[] } | null {
-  const { controller, deleteQueued, destination, previousJid, readOnly, roster } = args;
-  let stashed = args.stashed;
-  const cancel = (jid: string, ids: readonly string[]): void => {
-    for (const id of ids) deleteQueued(jid, id);
-  };
-  /**
-   * The cone that owns a unit — itself for a cone, its root for a scoop.
-   * `undefined` when the unit is not in the live roster: `rootForSelection`
-   * would fall back to the DEFAULT root there, which would silently read as
-   * "same cone" and preserve a queue the user actually walked away from.
-   * Unknown owner therefore means "cancel", the conservative direction and the
-   * behaviour that predates the hold.
-   */
-  const ownerOf = (jid: string | undefined): string | undefined => {
-    const unit = jid === undefined ? undefined : roster.find((u) => u.id === jid);
-    return unit ? (rootForSelection(roster, unit)?.id ?? unit.id) : undefined;
-  };
-  const destinationOwner = ownerOf(destination);
-  // Snapshot the OLD unit's queued ids and cancel them BEFORE the selection
-  // moves. The controller's own pile is dropped locally later by the replay;
-  // its `onQueuedCancel` hook then fires against the NEW jid as
-  // defense-in-depth (a redundant per-id delete is a no-op).
+}): void {
+  const { controller, destination, held, previousJid, roster } = args;
+  // Take the pile BEFORE the selection moves: the replay for the new unit
+  // drops whatever is still live (and cancels it on the backend through
+  // `onQueuedCancel`), which is right for a session reload and wrong for a
+  // switch — the prompts were queued against the unit we are leaving.
   if (previousJid && previousJid !== destination) {
-    const previousOwner = ownerOf(previousJid);
-    if (readOnly && destinationOwner !== undefined && destinationOwner === previousOwner) {
-      const items = controller?.stashQueued() ?? [];
-      if (items.length > 0) stashed = { items, jid: previousOwner };
-    } else {
-      const queued = controller?.getQueuedMessages() ?? [];
-      cancel(
-        previousJid,
-        queued.map((m) => m.id)
-      );
+    holdQueuedPile({ controller, held, jid: previousJid, roster });
+  }
+  // A cone whose pile is held is not on screen, so nothing can clear these but
+  // the cone going away. Pruned only against a roster that demonstrably knows
+  // the current selection — a transiently empty one must not eat live piles.
+  if (roster.some((u) => u.id === destination)) {
+    for (const key of [...held.keys()]) {
+      if (!roster.some((u) => u.id === key)) held.delete(key);
     }
   }
-  if (!stashed) return null;
-  // Back on the cone that owns the pile: hand it to the controller, which
-  // re-installs it after the replay. Still somewhere inside that cone's subtree
-  // (a sibling scoop): keep holding. Anywhere else — including a DIFFERENT
-  // cone's scoop — the detour is over and the prompts really were abandoned.
-  if (stashed.jid === destination) {
-    controller?.restoreQueued(stashed.items);
-    return null;
+  // Back on the cone that owns a pile: hand it to the controller, which
+  // re-installs it after the replay lands. Anywhere else — a scoop of this
+  // cone, another cone entirely — the hold simply stays put.
+  const returning = held.get(destination);
+  if (returning) {
+    held.delete(destination);
+    controller?.restoreQueued(returning);
   }
-  if (destinationOwner !== stashed.jid) {
-    cancel(
-      stashed.jid,
-      stashed.items.map((m) => m.id)
-    );
-    return null;
-  }
-  return stashed;
 }
 
 /**
@@ -304,21 +312,19 @@ function createSelection(deps: {
   selectScoop(unit: WorkUnitSummary): void;
   getSelected(): WorkUnitSummary | null;
   clear(): void;
+  holdQueue(): void;
 } {
   const { refs } = deps;
   let selected: WorkUnitSummary | null = null;
   /**
-   * A cone's queued pile held while the user reads one of its scoops (#2312).
-   * Selecting a read-only unit is not "dropping a prompt by navigating away"
-   * — there is nowhere else to talk — so the pile survives that round trip.
-   *
-   * The hold is scoped to the OWNING CONE, not merely to "the destination is
-   * read-only": leaving cone A for a scoop of cone B is the user going
-   * somewhere else to work, and A's prompt is abandoned exactly as it would
-   * be by clicking B itself. Only a detour INSIDE A's own subtree preserves
-   * it (Codex P1).
+   * Queued piles held while their cone is off screen, keyed by the OWNING
+   * CONE. Started as a hold for the read-only-scoop detour (#2312) and now
+   * covers every switch: a prompt typed into a working cone is already
+   * committed to that cone's backend queue, so walking over to another cone
+   * must not throw it away. Each entry is handed back the moment its cone is
+   * selected again.
    */
-  let stashedQueue: { jid: string; items: ChatMessage[] } | null = null;
+  const heldQueues = new Map<string, ChatMessage[]>();
 
   const selectScoop = (unit: WorkUnitSummary): void => {
     // The unit we are LEAVING, read before the assignment. It used to be the
@@ -328,14 +334,12 @@ function createSelection(deps: {
     selected = unit;
     const readOnly = isReadOnlyRole(unitRoleFor(unit));
     const host = deps.host();
-    stashedQueue = reconcileQueueForSwitch({
+    reconcileQueueForSwitch({
       controller: deps.controller(),
-      deleteQueued: (jid, id) => void host.deleteQueuedMessage(jid, id).catch(() => undefined),
       destination: unit.id,
+      held: heldQueues,
       previousJid,
-      readOnly,
       roster: deps.client().currentUnits(),
-      stashed: stashedQueue,
     });
     const cachedBackpressure = deps.lickBackpressure.get(unit.id);
     deps
@@ -411,6 +415,22 @@ function createSelection(deps: {
       selected = null;
     },
     getSelected: () => selected,
+    /**
+     * Park the selected cone's pile before something OTHER than a selection
+     * replaces the thread — thawing a frozen chat is the one such surface.
+     * It goes through the same per-cone hold, so re-selecting the cone hands
+     * the cards back exactly as a return from a scoop does.
+     */
+    holdQueue: () => {
+      const jid = selected?.id;
+      if (!jid) return;
+      holdQueuedPile({
+        controller: deps.controller(),
+        held: heldQueues,
+        jid,
+        roster: deps.client().currentUnits(),
+      });
+    },
     selectScoop,
   };
 }
@@ -507,6 +527,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     selectScoop,
     getSelected: () => selection.getSelected(),
     clearSelection: () => selection.clear(),
+    holdQueuedPile: () => selection.holdQueue(),
     watchUnit,
     getController: () => controller,
     setController: (next) => {
@@ -1211,6 +1232,7 @@ export function attachWcWorkbench(
     getSelected: () => boot.getSelected(),
     selectScoop: boot.selectScoop,
     clearSelection: boot.clearSelection,
+    holdQueuedPile: boot.holdQueuedPile,
     log,
   });
   const { refreshFreezer, openFrozen, getViewedFrozenSessionId } = freezerRail;

@@ -486,12 +486,33 @@ own.
     cone B renders in B rather than in the oldest cone. The reply travels back
     by `requestId` alone (`ToolUIActionMsg` carries no jid), so the scoop's
     pending promise still settles where it was raised.
-  - **The cone's queued pile survives the detour.** A selection change
-    normally cancels the pile on the backend — the user navigated away to
-    talk somewhere else. Reading a scoop is not that: there is nowhere else
-    to talk. `stashQueued` / `restoreQueued` hold it across the round trip
-    (re-installed after the returning unit's replay, which clears the pile of
-    its own accord); landing on a _different_ cone cancels it as before.
+  - **The cone's queued pile survives every selection change.** A prompt
+    typed into a working cone stacks as a queue card, and the backend has
+    already accepted it (`Bridge.handleUserMessage` buffers on send). Walking
+    off to read a scoop — or to another cone entirely — is not a retraction,
+    so a switch never cancels: `reconcileQueueForSwitch` (`ui/wc/wc-live.ts`)
+    `stashQueued`s the pile into a per-cone `heldQueues` map before the
+    selection moves and `restoreQueued`s it the moment the user lands back on
+    the owning cone (re-installed after that unit's replay, which clears the
+    live pile of its own accord). The hold is keyed by the **owning cone**, so
+    a hop between two of a cone's scoops cannot re-key it onto a jid no
+    destination could match; a unit missing from the roster has no knowable
+    owner and is held under its own jid. The stash has to happen ahead of the
+    switch because `loadMessages` cancels whatever pile is still live — right
+    for a session reload, wrong for a switch. Entries leave the map only when
+    their cone is selected again, drops off the roster, or the user dismisses
+    the cards with `×`. Cancelling on a switch was the original #2312
+    behaviour and read as SLICC silently discarding work the user had already
+    committed to.
+  - **The Freezer takes the same hold.** Thawing an archive replaces the
+    thread WITHOUT a selection change — `openFrozen` calls `loadMessages`
+    itself and only then `clearSelection` — so the pile used to be cancelled
+    by the very path a switch no longer takes. `wireFreezerRail` gets
+    `holdQueuedPile()` (the shell's `boot.holdQueuedPile`, keyed by the
+    selected unit's owning cone) and calls it **before** the thaw lands; the
+    detour ends with an ordinary `selectScoop`, which finds the hold and
+    restores it. Restoring keys off the DESTINATION alone, so it does not
+    matter that the thaw left `previousJid` null.
   - **The held pile is reconciled against the backend on the way home**
     ([#2354](https://github.com/ai-ecoverse/slicc/issues/2354)). The snapshot
     the panel is holding is a guess about a queue it stopped watching. The
