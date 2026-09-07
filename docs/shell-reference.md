@@ -234,6 +234,11 @@ git fetch origin feature
 git checkout -b feature origin/feature
 ```
 
+`git checkout -b <new> <start-point>` and `git checkout <branch>` reset the index and
+working tree to the start-point, matching real git: files tracked on the previous branch
+and absent from the target are removed, so they cannot ride along on the next commit
+(issue #2928). `git checkout -- <paths>` is file restoration and does not switch branches.
+
 Use `--depth <n>` to request a different history depth.
 
 ### Git revision resolution

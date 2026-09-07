@@ -160,6 +160,11 @@ describe('GitCommands', () => {
     // Branch HEAD should point at the start point, not at current main
     const headResult = await git.execute(['log', '--format', '%H', '-1'], '/project');
     expect(headResult.stdout.trim()).toBe(firstCommit);
+
+    // Index and worktree match the start-point tree (no leftover `new.txt`).
+    expect(await vfs.readTextFile('/project/file.txt')).toBe('v1');
+    expect(await vfs.exists('/project/new.txt')).toBe(false);
+    expect((await git.execute(['status', '-s'], '/project')).stdout.trim()).toBe('');
   });
 
   it('sets and gets config', async () => {

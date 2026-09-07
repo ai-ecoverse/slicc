@@ -44,15 +44,31 @@ export async function checkout(
     const afterB = args.slice(bIdx + 1).filter((a) => !a.startsWith('-'));
     const startPoint = afterB.length > 1 ? afterB[1] : undefined;
     try {
+      // isomorphic-git's `branch({ checkout: true })` only moves HEAD — it
+      // leaves the previous branch's index and worktree in place, so the next
+      // commit silently includes those files (#2928). Create the ref, then
+      // materialize the start-point through checkoutRef().
       await git.branch({
         fs: ctx.lfs,
         dir: cwd,
         ref,
         object: startPoint,
-        checkout: true,
+        checkout: false,
         force,
       });
     } catch (err: unknown) {
+      return formatCheckoutError(err, ref);
+    }
+    try {
+      await checkoutRef(ctx, cwd, ref, force);
+    } catch (err: unknown) {
+      if (!force) {
+        try {
+          await git.deleteBranch({ fs: ctx.lfs, dir: cwd, ref });
+        } catch {
+          // Keep the checkout error; an unused ref is less surprising.
+        }
+      }
       return formatCheckoutError(err, ref);
     }
     await ctx.fs.flush();
@@ -64,7 +80,7 @@ export async function checkout(
   }
 
   try {
-    await git.checkout({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref, force });
+    await checkoutRef(ctx, cwd, ref, force);
   } catch (err: unknown) {
     return formatCheckoutError(err, ref);
   }
@@ -79,6 +95,94 @@ export async function checkout(
     stderr: '',
     exitCode: 0,
   };
+}
+
+/**
+ * Switch HEAD to `ref` and make the index + worktree match that tree.
+ * isomorphic-git checkout updates HEAD (and often the index) but can leave
+ * paths from the previous branch staged as additions, and can skip rewriting
+ * a worktree file whose size did not change. Drop leftovers and, when the
+ * target commit differs, write the target blobs so the next commit cannot
+ * absorb the old tree (#2928).
+ */
+async function checkoutRef(
+  ctx: GitCommandContext,
+  cwd: string,
+  ref: string,
+  force: boolean
+): Promise<void> {
+  let previousHead: string | undefined;
+  try {
+    previousHead = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
+  } catch {
+    previousHead = undefined;
+  }
+  const previous = new Set(await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd }));
+  await git.checkout({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref, force });
+  const targetOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
+  const target = new Set(
+    await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: targetOid })
+  );
+  await dropPathsAbsentFromTarget(ctx, cwd, previous, target);
+  // Same commit (`checkout -b feat` with no start-point): keep local edits.
+  if (!force && previousHead === targetOid) return;
+  await materializeWorktree(ctx, cwd, targetOid, previous, target);
+}
+
+async function dropPathsAbsentFromTarget(
+  ctx: GitCommandContext,
+  cwd: string,
+  previous: Set<string>,
+  target: Set<string>
+): Promise<void> {
+  for (const filepath of previous) {
+    if (target.has(filepath)) continue;
+    try {
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
+    } catch {
+      // already unindexed
+    }
+    try {
+      await ctx.fs.rm(`${cwd}/${filepath}`);
+    } catch {
+      // already unlinked
+    }
+  }
+}
+
+async function materializeWorktree(
+  ctx: GitCommandContext,
+  cwd: string,
+  oid: string,
+  previous: Set<string>,
+  files: Set<string>
+): Promise<void> {
+  for (const filepath of files) {
+    // Paths git.checkout created (including symlinks) already have the right
+    // type. Only rewrite files that existed on the previous tree — those are
+    // the same-size blobs isomorphic-git can skip.
+    if (!previous.has(filepath)) continue;
+    const full = `${cwd}/${filepath}`;
+    try {
+      const st = await ctx.fs.lstat(full);
+      if (st.type === 'symlink' || st.type === 'directory') continue;
+    } catch {
+      continue;
+    }
+    const { blob } = await git.readBlob({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid,
+      filepath,
+    });
+    const slashIdx = filepath.lastIndexOf('/');
+    if (slashIdx !== -1) {
+      await ctx.fs.mkdir(`${cwd}/${filepath.slice(0, slashIdx)}`, { recursive: true });
+    }
+    await ctx.fs.writeFile(full, blob);
+    await git.resetIndex({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath, ref: oid });
+  }
 }
 
 /**
