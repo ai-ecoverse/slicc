@@ -38,6 +38,16 @@ export interface ParsedCdpEvent {
   params?: CDPPayload;
 }
 
+/**
+ * Decoded form of an out-of-band control signal from the far side of the
+ * wire: `'reset'` when it lost its upstream CDP connection (every session
+ * minted on it is gone), `'ready'` when that connection came back.
+ */
+export interface ParsedCdpControl {
+  kind: 'reset' | 'ready';
+  reason?: string;
+}
+
 export interface CdpBridgeOptions {
   /**
    * Wrap `(id, method, params, sessionId)` into the outbound envelope
@@ -76,6 +86,31 @@ export interface CdpBridgeOptions {
    * envelope isn't an event.
    */
   parseEvent: (envelope: unknown) => ParsedCdpEvent | null;
+
+  /**
+   * Pluck an out-of-band control signal out of an inbound envelope. Returns
+   * `null` if the envelope isn't one (it's a response or an event).
+   *
+   * Optional: only proxies whose far side owns a droppable upstream
+   * connection need it. `WorkerCdpProxy` does — the page-side `CDPClient`'s
+   * WebSocket can close underneath it — while the chrome.runtime proxies talk
+   * to a service worker that has no separate upstream to lose.
+   */
+  parseControl?: (envelope: unknown) => ParsedCdpControl | null;
+
+  /**
+   * Fired when the far side reports its upstream connection came back
+   * (`kind: 'ready'`). The bridge deliberately does NOT flip `state` back to
+   * `'connected'` here — see {@link CdpTransportBridge.handleControl}.
+   */
+  onUpstreamReady?: () => void;
+
+  /**
+   * Fired when the far side reports its upstream connection was reset.
+   * Diagnostic only; the bridge has already rejected the pending commands
+   * and flipped `state` by the time this runs.
+   */
+  onUpstreamReset?: (reason: string) => void;
 
   /**
    * Logger for listener exceptions. Implementations historically split
@@ -134,7 +169,13 @@ export class CdpTransportBridge implements CDPTransport {
     if (this._state !== 'disconnected') {
       throw new Error(`Cannot connect: state is ${this._state}`);
     }
-    this.unsubscribe = this.opts.subscribeIncoming((envelope) => this.handleIncoming(envelope));
+    // An upstream reset leaves the wire subscription in place and flips only
+    // `state`, so a re-connect after one must not stack a second incoming
+    // handler (which would double-dispatch every event and make every
+    // response look like an unknown id on the second pass).
+    if (!this.unsubscribe) {
+      this.unsubscribe = this.opts.subscribeIncoming((envelope) => this.handleIncoming(envelope));
+    }
     this._state = 'connected';
   }
 
@@ -215,6 +256,11 @@ export class CdpTransportBridge implements CDPTransport {
   // -------------------------------------------------------------------------
 
   private handleIncoming(envelope: unknown): void {
+    const control = this.opts.parseControl?.(envelope) ?? null;
+    if (control) {
+      this.handleControl(control);
+      return;
+    }
     const response = this.opts.parseResponse(envelope);
     if (response) {
       this.handleResponse(response);
@@ -224,6 +270,38 @@ export class CdpTransportBridge implements CDPTransport {
     if (event) {
       this.handleEvent(event);
     }
+  }
+
+  /**
+   * Handle an upstream reset / ready signal from the far side.
+   *
+   * On `reset` the far side's CDP connection is gone, taking every session
+   * minted on it with it. Pending commands can never be answered, so reject
+   * them with a reason that names the cause, and flip `state` to
+   * `'disconnected'` — that is the ONLY signal `BrowserAPI.ensureConnected()`
+   * reads, and without it the worker keeps sending commands against a session
+   * Chrome has already discarded (issue #2417 / DIAGNOSIS § 2.7).
+   *
+   * `ready` deliberately does NOT flip back: the state has to stay
+   * `'disconnected'` until `BrowserAPI.ensureConnected()` observes it, clears
+   * its session cache and calls `connect()` — which flips it. Auto-flipping
+   * here would race the worker back into the stale-session bug we just fixed.
+   *
+   * The wire subscription and the listener registry both survive a reset: the
+   * MessagePort is still alive, and the page forwarder re-registers our event
+   * subscriptions on its own transport when the upstream comes back (the
+   * bridge's 0→1 `onSubscribeEvent` edge never fires again for listeners the
+   * worker still holds).
+   */
+  private handleControl(control: ParsedCdpControl): void {
+    if (control.kind === 'ready') {
+      this.opts.onUpstreamReady?.();
+      return;
+    }
+    const reason = control.reason ?? 'upstream connection reset';
+    this.pendingCommands.rejectAll(`${this.label}: upstream CDP connection was reset (${reason})`);
+    this._state = 'disconnected';
+    this.opts.onUpstreamReset?.(reason);
   }
 
   private handleResponse(resp: ParsedCdpResponse): void {
