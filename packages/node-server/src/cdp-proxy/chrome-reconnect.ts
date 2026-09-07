@@ -8,24 +8,33 @@
  * `/cdp` client connected — i.e. until the SLICC tab was reloaded by hand
  * (issue #2417, `DIAGNOSIS.md` §2.6). swift-server already reconnects
  * (`CDPProxy.scheduleChromeReconnect` / `runChromeReconnectLoop`); this brings
- * node-server to parity and adds the missing half both floats needed: once the
- * Chrome leg is back (or definitively gone), the active client is closed with
- * `CDP_UPSTREAM_RESET_CLOSE_CODE` so the page re-dials and resets its session
- * state instead of issuing commands against sessions Chrome has forgotten.
+ * node-server to parity and adds the missing half both floats needed: the
+ * active client is closed with `CDP_UPSTREAM_RESET_CLOSE_CODE` so the page
+ * re-dials and resets its session state instead of issuing commands against
+ * sessions Chrome has forgotten.
+ *
+ * ## Reconnect policy (identical in node-server and swift-server)
+ *
+ * Retry indefinitely with a 1 s delay between attempts, until shutdown — there
+ * is no attempt cap. Close the active client with 4002 `upstream-reset` after
+ * the 3rd consecutive failure, so it does not hang on a proxy whose Chrome leg
+ * is gone, and again (once) after a later successful reconnect if a client is
+ * connected by then. Never leave a clientless buffer around: buffered frames
+ * are dropped whenever the client that wrote them loses the slot.
  */
 
+import { type ClientFrameBuffer, createClientFrameBuffer } from './client-frame-buffer.js';
 import { CDP_UPSTREAM_RESET_CLOSE_CODE, CDP_UPSTREAM_RESET_CLOSE_REASON } from './close-codes.js';
 
 /** Delay before each reconnect attempt. Mirrors swift `defaultReconnectDelayNanoseconds`. */
 export const CHROME_RECONNECT_DELAY_MS = 1000;
 
 /**
- * Attempts before the supervisor gives up and resets the client anyway. Swift
- * retries forever; here a bounded loop is better because closing the client
- * makes the page re-dial `/cdp`, and a fresh client runs the full discovery
- * path (`waitForCDP` → `ensureChromeConnection`) from scratch.
+ * Consecutive failed attempts after which the active client is cut loose with
+ * 4002 rather than left hanging on a proxy whose Chrome leg is gone. The loop
+ * keeps retrying afterwards. Mirrors swift `upstreamResetFailureThreshold`.
  */
-export const CHROME_RECONNECT_MAX_ATTEMPTS = 10;
+export const CHROME_RECONNECT_FAILURE_THRESHOLD = 3;
 
 export interface ChromeReconnectDeps {
   /** Re-discover Chrome's browser-level ws URL (via `/json/version`). */
@@ -46,14 +55,18 @@ export interface ChromeReconnectDeps {
   log: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
   delayMs?: number;
-  maxAttempts?: number;
+  failureThreshold?: number;
 }
 
 /** The proxy state a Chrome-leg drop mutates (a slice of `ServerState`). */
 export interface ChromeLegState<Socket = unknown> {
   chromeWs: Socket | null;
+  /** Id of the Chrome connection `chromeWs` refers to (0 = never connected). */
+  chromeConnectionId: number;
+  /** Id of the client holding the single `/cdp` slot, or null for none. */
+  activeClientId: number | null;
   /** Non-null = buffering Client→Chrome frames instead of forwarding them. */
-  messageBuffer: unknown[] | null;
+  messageBuffer: ClientFrameBuffer | null;
   shuttingDown: boolean;
 }
 
@@ -63,6 +76,10 @@ export interface ChromeLegState<Socket = unknown> {
  * NEW `/cdp` client connected). Returns false — meaning "do not schedule a
  * reconnect" — when the event came from a socket a newer connect already
  * replaced, or when the server is shutting down.
+ *
+ * The buffer opened here is tagged with the connection that just died, so the
+ * flush onto the REPLACEMENT connection discards it: those frames name sessions
+ * Chrome dropped with the old socket, and the client is being reset anyway.
  */
 export function markChromeLegDown<Socket>(
   state: ChromeLegState<Socket>,
@@ -73,7 +90,10 @@ export function markChromeLegDown<Socket>(
   if (state.chromeWs !== null && state.chromeWs !== droppedWs) return false;
   state.chromeWs = null;
   if (state.shuttingDown) return false;
-  if (state.messageBuffer === null) state.messageBuffer = [];
+  state.messageBuffer ??= createClientFrameBuffer({
+    chromeConnectionId: state.chromeConnectionId,
+    clientId: state.activeClientId,
+  });
   return true;
 }
 
@@ -149,25 +169,36 @@ export class ChromeReconnectController {
     await this.task;
   }
 
+  /**
+   * Retry until the leg is back or shutdown stops us — no attempt cap, so a
+   * Chrome that comes back after a long outage is picked up without needing a
+   * fresh client to drive discovery (swift parity).
+   */
   private async run(delayMs: number): Promise<void> {
-    const maxAttempts = this.deps.maxAttempts ?? CHROME_RECONNECT_MAX_ATTEMPTS;
+    const threshold = this.deps.failureThreshold ?? CHROME_RECONNECT_FAILURE_THRESHOLD;
     const sleep = this.deps.sleep ?? defaultSleep;
+    let consecutiveFailures = 0;
+    let didSignalFailure = false;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    for (;;) {
       await sleep(delayMs);
       if (this.stopped()) return;
-      if (await this.attempt(attempt, maxAttempts)) return;
-    }
+      if (await this.attempt(consecutiveFailures + 1)) return;
 
-    if (this.stopped()) return;
-    this.deps.log(
-      `[cdp-proxy] Chrome WS reconnect gave up after ${maxAttempts} attempts — resetting client`
-    );
-    this.deps.resetClient('reconnect-failed');
+      consecutiveFailures++;
+      if (didSignalFailure || consecutiveFailures < threshold) continue;
+      // Cut the client loose ONCE so it stops waiting on a dead proxy; the loop
+      // keeps going and resets whoever holds the slot when Chrome returns.
+      didSignalFailure = true;
+      this.deps.log(
+        `[cdp-proxy] Chrome WS reconnect failed ${consecutiveFailures}x — resetting client (still retrying)`
+      );
+      this.deps.resetClient('reconnect-failed');
+    }
   }
 
   /** One discover + connect round. Returns true when the leg is back. */
-  private async attempt(attempt: number, maxAttempts: number): Promise<boolean> {
+  private async attempt(attempt: number): Promise<boolean> {
     if (this.deps.isChromeLegHealthy?.() === true) {
       this.deps.log('[cdp-proxy] Chrome WS already re-established — no client reset needed');
       return true;
@@ -179,13 +210,12 @@ export class ChromeReconnectController {
       if (this.stopped()) return true;
       this.deps.log('[cdp-proxy] Chrome WS auto-reconnected');
       // Chrome dropped every session with the old socket, so the page's cached
-      // sessionIds are stale — close it so it re-dials with a clean slate.
+      // sessionIds are stale — close it so it re-dials with a clean slate. A
+      // no-op when the failure threshold already cut the previous client loose.
       this.deps.resetClient('reconnected');
       return true;
     } catch (err) {
-      this.deps.log(
-        `[cdp-proxy] Auto-reconnect attempt ${attempt}/${maxAttempts} failed: ${String(err)}`
-      );
+      this.deps.log(`[cdp-proxy] Auto-reconnect attempt ${attempt} failed: ${String(err)}`);
       return false;
     }
   }

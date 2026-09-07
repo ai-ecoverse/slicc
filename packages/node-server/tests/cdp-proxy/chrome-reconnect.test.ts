@@ -1,21 +1,24 @@
 /**
  * Chrome-leg reconnect supervisor for the `/cdp` proxy (issue #2417,
- * `DIAGNOSIS.md` §2.6 / phase 3.1). Pins the swift-server parity behaviour:
- * schedule once per drop, retry with a delay, re-discover the ws URL, and
- * close the active client with 4002 once the leg is back — or once it is
- * definitively gone — so the page resets its dead sessions. Also pins that
- * shutdown cancels the loop instead of reconnecting a browser we're closing.
+ * `DIAGNOSIS.md` §2.6 / phase 3.1). Pins the ONE reconnect policy both floats
+ * now share (review finding 8): schedule once per drop, retry indefinitely with
+ * a delay, re-discover the ws URL, close the active client with 4002 after the
+ * 3rd consecutive failure so it does not hang on a dead proxy, and close it
+ * again (once) when a later attempt gets the leg back. Also pins that shutdown
+ * cancels the loop instead of reconnecting a browser we're closing, and that a
+ * buffer opened by a leg drop is tagged with the connection that died.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CHROME_RECONNECT_DELAY_MS,
-  CHROME_RECONNECT_MAX_ATTEMPTS,
+  CHROME_RECONNECT_FAILURE_THRESHOLD,
   type ChromeLegState,
   ChromeReconnectController,
   type ChromeReconnectDeps,
   closeClientForUpstreamReset,
   markChromeLegDown,
 } from '../../src/cdp-proxy/chrome-reconnect.js';
+import { createClientFrameBuffer } from '../../src/cdp-proxy/client-frame-buffer.js';
 import {
   CDP_UPSTREAM_RESET_CLOSE_CODE,
   CDP_UPSTREAM_RESET_CLOSE_REASON,
@@ -120,29 +123,60 @@ describe('ChromeReconnectController', () => {
     const failures = harness.logs.filter((l) => l.includes('Auto-reconnect attempt'));
     expect(failures).toHaveLength(2);
     expect(failures[0]).toMatch(
-      new RegExp(
-        `^\\[cdp-proxy\\] Auto-reconnect attempt 1/${CHROME_RECONNECT_MAX_ATTEMPTS} failed: Error: ECONNREFUSED`
-      )
+      /^\[cdp-proxy\] Auto-reconnect attempt 1 failed: Error: ECONNREFUSED/
     );
-    expect(failures[1]).toContain(`attempt 2/${CHROME_RECONNECT_MAX_ATTEMPTS} failed`);
+    expect(failures[1]).toContain('attempt 2 failed');
+    // Two failures are under the threshold, so the only reset is the success one.
     expect(harness.resets).toEqual(['reconnected']);
   });
 
-  it('gives up after the attempt cap and resets the client anyway', async () => {
+  it('resets the client after the 3rd consecutive failure and keeps retrying', async () => {
+    let calls = 0;
     const harness = makeHarness({
-      discoverChromeWsUrl: async () => {
-        throw new Error('no /json/version');
+      connectChrome: async () => {
+        calls++;
+        if (calls <= 5) throw new Error('ECONNREFUSED');
       },
     });
 
     harness.controller.schedule('close code=1006');
     await harness.controller.settled();
 
-    expect(harness.sleeps).toHaveLength(CHROME_RECONNECT_MAX_ATTEMPTS);
+    expect(CHROME_RECONNECT_FAILURE_THRESHOLD).toBe(3);
     expect(harness.logs).toContain(
-      `[cdp-proxy] Chrome WS reconnect gave up after ${CHROME_RECONNECT_MAX_ATTEMPTS} attempts — resetting client`
+      '[cdp-proxy] Chrome WS reconnect failed 3x — resetting client (still retrying)'
     );
+    // The loop did NOT stop at the threshold — it kept going to the 6th attempt.
+    expect(calls).toBe(6);
+    // Closed once on the failure threshold, once more when the leg came back.
+    expect(harness.resets).toEqual(['reconnect-failed', 'reconnected']);
+  });
+
+  it('never gives up — no attempt cap, only shutdown stops the loop', async () => {
+    // The old policy stopped at 10 attempts; the shared one retries until
+    // shutdown, so the outage is survived without a fresh client to drive
+    // discovery. Cancel from inside `sleep` to end an otherwise endless loop.
+    const attemptsBeforeCancel = 25;
+    let attempts = 0;
+    const harness = makeHarness({
+      discoverChromeWsUrl: async () => {
+        attempts++;
+        throw new Error('no /json/version');
+      },
+    });
+    harness.controller.schedule('close code=1006');
+
+    for (let i = 0; i < 2000 && attempts < attemptsBeforeCancel; i++) {
+      await Promise.resolve();
+    }
+    harness.controller.cancel();
+    await harness.controller.settled();
+
+    expect(attempts).toBeGreaterThanOrEqual(attemptsBeforeCancel);
+    expect(harness.sleeps.length).toBeGreaterThanOrEqual(attemptsBeforeCancel);
+    // Exactly one reset, on the 3rd failure — the loop never "gives up".
     expect(harness.resets).toEqual(['reconnect-failed']);
+    expect(harness.logs.some((l) => l.includes('gave up'))).toBe(false);
   });
 
   it('skips the reset when a new client already rebuilt the Chrome leg', async () => {
@@ -233,21 +267,38 @@ describe('markChromeLegDown', () => {
   const socket = { id: 'chrome-1' };
 
   function makeState(overrides: Partial<ChromeLegState<object>> = {}): ChromeLegState<object> {
-    return { chromeWs: socket, messageBuffer: null, shuttingDown: false, ...overrides };
+    return {
+      chromeWs: socket,
+      chromeConnectionId: 7,
+      activeClientId: 3,
+      messageBuffer: null,
+      shuttingDown: false,
+      ...overrides,
+    };
   }
 
   it('clears the leg and starts buffering client frames', () => {
     const state = makeState();
     expect(markChromeLegDown(state, socket)).toBe(true);
     expect(state.chromeWs).toBeNull();
-    // Non-null buffer = forwardClientFrame buffers instead of dropping.
-    expect(state.messageBuffer).toEqual([]);
+    // Non-null buffer = forwardClientFrame buffers instead of dropping. It is
+    // tagged with the leg that just died, so the flush onto the REPLACEMENT
+    // connection discards it rather than replaying dead-session frames.
+    expect(state.messageBuffer).toEqual({
+      generation: { chromeConnectionId: 7, clientId: 3 },
+      frames: [],
+    });
   });
 
   it('keeps frames already buffered while the leg was down', () => {
-    const state = makeState({ chromeWs: null, messageBuffer: ['{"id":1}'] });
+    const existing = createClientFrameBuffer({ chromeConnectionId: null, clientId: 3 });
+    existing.frames.push('{"id":1}');
+    const state = makeState({ chromeWs: null, messageBuffer: existing });
     expect(markChromeLegDown(state, socket)).toBe(true);
-    expect(state.messageBuffer).toEqual(['{"id":1}']);
+    // Untouched — an initial-connect buffer keeps its flushable generation even
+    // when the socket that never opened is torn down.
+    expect(state.messageBuffer).toBe(existing);
+    expect(state.messageBuffer?.frames).toEqual(['{"id":1}']);
   });
 
   it('ignores a late close from a socket a newer connect replaced', () => {
