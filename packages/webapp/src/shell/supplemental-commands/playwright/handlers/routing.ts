@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '../../../../base/logger.js';
-import { onSessionReplaced } from '../session-rebind.js';
+import { bindTabCapture, type TabCaptureBinding } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   PlaywrightHandler,
@@ -18,6 +18,9 @@ import type {
 } from '../types.js';
 
 const log = createLogger('playwright-route');
+
+/** Intercept every request at the request stage; re-sent on each rebind. */
+const FETCH_PATTERNS = [{ urlPattern: '*', requestStage: 'Request' }];
 
 // Named via the handler context rather than imported from `cdp/` so this
 // module stays inside the shell layer (see layer-stack import direction).
@@ -101,53 +104,41 @@ async function enableFetchInterception(
   await browser.withTab(targetId, async (sessionId) => {
     const transport = browser.getTransport();
 
-    await transport.send(
-      'Fetch.enable',
-      { patterns: [{ urlPattern: '*', requestStage: 'Request' }] },
-      sessionId
-    );
+    await transport.send('Fetch.enable', { patterns: FETCH_PATTERNS }, sessionId);
 
     // The interception is pinned to a session id; the bridge replaces that
     // session when it heals a stale one (issue #2417), so routes have to be
-    // re-armed on the replacement or every request sails through unmocked.
-    let activeSessionId = sessionId;
-    let activeTransport = transport;
+    // re-armed on the replacement — and `Fetch` re-enabled on it — or every
+    // request sails through unmocked.
+    let binding: TabCaptureBinding | undefined;
 
     // Sync listener — async work is fire-and-forget via void (noMisusedPromises).
     const handler = (params: unknown): void => {
-      void handleRequestPaused(activeTransport, activeSessionId, state, targetId, params);
+      if (!binding) return; // cannot fire before the bind returns
+      void handleRequestPaused(binding.transport, binding.sessionId, state, targetId, params);
     };
 
-    const unsubscribeReplaced = onSessionReplaced(
-      browser,
-      targetId,
-      (newSessionId, newTransport) => {
-        if (newTransport !== activeTransport) {
-          activeTransport.off('Fetch.requestPaused', handler);
-          newTransport.on('Fetch.requestPaused', handler);
-          activeTransport = newTransport;
-        }
-        activeSessionId = newSessionId;
-        void newTransport
-          .send(
-            'Fetch.enable',
-            { patterns: [{ urlPattern: '*', requestStage: 'Request' }] },
-            newSessionId
-          )
-          .catch(() => undefined);
-      }
-    );
+    try {
+      binding = bindTabCapture({
+        browser,
+        targetId,
+        transport,
+        sessionId,
+        listeners: [['Fetch.requestPaused', handler]],
+        enable: (t, s) => t.send('Fetch.enable', { patterns: FETCH_PATTERNS }, s),
+      });
+    } catch (err) {
+      // `Fetch.enable` already landed. Leaving it on with nobody listening
+      // would stall every request on this tab, so undo it before unwinding.
+      await transport.send('Fetch.disable', {}, sessionId).catch(() => undefined);
+      throw err;
+    }
 
-    // Set cleanup BEFORE registering the event handler to avoid a race where
-    // transport.on throws and routeCleanup is never populated.
-    const cleanup = () => {
-      unsubscribeReplaced();
-      activeTransport.off('Fetch.requestPaused', handler);
-      activeTransport.send('Fetch.disable', {}, activeSessionId).catch(() => undefined);
-    };
-    state.routeCleanup.set(targetId, cleanup);
-
-    transport.on('Fetch.requestPaused', handler);
+    const bound = binding;
+    state.routeCleanup.set(targetId, () => {
+      bound.stop();
+      bound.transport.send('Fetch.disable', {}, bound.sessionId).catch(() => undefined);
+    });
   });
 }
 

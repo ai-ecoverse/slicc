@@ -8,7 +8,7 @@
  *           response-headers, response-body
  */
 
-import { onSessionReplaced } from '../session-rebind.js';
+import { bindTabCapture } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   NetworkEntry,
@@ -86,13 +86,13 @@ function ensureCapturing(
 
   // A tab keeps ONE session, but the bridge replaces it after a stale-session
   // heal (issue #2417). Filtering on the id captured at subscribe time would
-  // make the capture go deaf from that moment on.
-  let activeSessionId = sessionId;
-  let activeTransport = transport;
+  // make the capture go deaf from that moment on, so every handler reads
+  // `binding.sessionId` per event; `bindTabCapture` re-arms the listeners and
+  // re-enables `Network` on the replacement session.
 
   const onRequest = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkRequestWillBeSentEvent;
-    if (params.sessionId !== activeSessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     const request = params.request;
     if (!requestId || !request) return;
@@ -128,7 +128,7 @@ function ensureCapturing(
 
   const onResponse = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkResponseReceivedEvent;
-    if (params.sessionId !== activeSessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     const response = params.response;
     if (!requestId || !response) return;
@@ -144,15 +144,15 @@ function ensureCapturing(
 
   const onLoadingFinished = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as NetworkLoadingFinishedEvent;
-    if (params.sessionId !== activeSessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const requestId = params.requestId;
     if (!requestId) return;
 
     const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
     if (!entry || entry.isStatic || entry.responseBody !== null) return;
 
-    activeTransport
-      .send('Network.getResponseBody', { requestId }, activeSessionId)
+    binding.transport
+      .send('Network.getResponseBody', { requestId }, binding.sessionId)
       .then((result) => {
         const r = result as NetworkGetResponseBodyResult | undefined;
         if (!r) return;
@@ -166,34 +166,20 @@ function ensureCapturing(
       });
   };
 
-  const subscribe = (t: CDPTransport): void => {
-    t.on('Network.requestWillBeSent', onRequest);
-    t.on('Network.responseReceived', onResponse);
-    t.on('Network.loadingFinished', onLoadingFinished);
-  };
-  const unsubscribe = (t: CDPTransport): void => {
-    t.off('Network.requestWillBeSent', onRequest);
-    t.off('Network.responseReceived', onResponse);
-    t.off('Network.loadingFinished', onLoadingFinished);
-  };
-
-  subscribe(transport);
-
-  const unsubscribeReplaced = onSessionReplaced(browser, targetId, (newSessionId, newTransport) => {
-    if (newTransport !== activeTransport) {
-      unsubscribe(activeTransport);
-      subscribe(newTransport);
-      activeTransport = newTransport;
-    }
-    activeSessionId = newSessionId;
-    // A fresh session starts with every domain disabled.
-    void newTransport.send('Network.enable', {}, newSessionId).catch(() => undefined);
+  const binding = bindTabCapture({
+    browser,
+    targetId,
+    transport,
+    sessionId,
+    listeners: [
+      ['Network.requestWillBeSent', onRequest],
+      ['Network.responseReceived', onResponse],
+      ['Network.loadingFinished', onLoadingFinished],
+    ],
+    enable: (t, s) => t.send('Network.enable', {}, s),
   });
 
-  state.networkCleanup.set(targetId, () => {
-    unsubscribeReplaced();
-    unsubscribe(activeTransport);
-  });
+  state.networkCleanup.set(targetId, () => binding.stop());
 }
 
 /** Decoded response-body bytes, or the reason the body cannot be decoded. */

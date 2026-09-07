@@ -39,6 +39,14 @@ export interface MockTransport {
   emit: (event: string, params: Record<string, unknown>) => Promise<void>;
   /** True once a listener for `event` is registered. */
   hasListener: (event: string) => boolean;
+  /** How many listeners are registered for `event` (double-arm probe). */
+  listenerCount: (event: string) => number;
+  /**
+   * Empty the listener registry without changing the transport's identity —
+   * what `CdpTransportBridge.disconnect()` does on the thin extension's
+   * reconnect path (issue #2417).
+   */
+  clearListeners: () => void;
 }
 
 /**
@@ -70,6 +78,35 @@ export function createMockTransport(
       await Promise.all([...(listeners.get(event) ?? [])].map((cb) => cb(params)));
     },
     hasListener: (event) => (listeners.get(event)?.size ?? 0) > 0,
+    listenerCount: (event) => listeners.get(event)?.size ?? 0,
+    clearListeners: () => listeners.clear(),
+  };
+}
+
+/** `(sessionId, transport, targetId)` — a replacement session for one tab. */
+export type SessionReplacedFn = (
+  sessionId: string,
+  transport: CDPTransport,
+  targetId: string
+) => void;
+
+/**
+ * Give a mock browser the per-tab session-replaced hook and return a function
+ * that fires it, standing in for `BrowserAPI.notifySessionChange`. The per-tab
+ * captures (`console`, `requests`, `route`) use it to re-arm their listeners
+ * and re-enable their CDP domain (issue #2417).
+ */
+export function withSessionReplaced(browser: BrowserAPI): SessionReplacedFn {
+  type Cb = Parameters<BrowserAPI['onSessionReplaced']>[1];
+  const subs = new Set<Cb>();
+  Object.assign(browser, {
+    onSessionReplaced: (_targetId: string, cb: Cb) => {
+      subs.add(cb);
+      return () => subs.delete(cb);
+    },
+  });
+  return (sessionId, transport, targetId) => {
+    for (const cb of [...subs]) cb(sessionId, transport, targetId);
   };
 }
 

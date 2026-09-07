@@ -5,7 +5,7 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
-import { onSessionReplaced } from '../session-rebind.js';
+import { bindTabCapture } from '../session-rebind.js';
 import { requireTab } from '../state.js';
 import type {
   ConsoleMessage,
@@ -66,13 +66,12 @@ function ensureCapturing(
 
   // The tab's session can be replaced under us (the bridge re-attaches when a
   // proxy reset invalidates it), and events for the new session carry a new
-  // id. Tracking it here keeps a long-lived capture from going silently deaf.
-  let activeSessionId = sessionId;
-  let activeTransport = transport;
-
+  // id. `binding.sessionId` is read per event so a long-lived capture does not
+  // go silently deaf; `bindTabCapture` also re-arms this listener and
+  // re-enables `Runtime` on the replacement session.
   const handler = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
     const params = rawParams as ConsoleApiCalledEvent;
-    if (params.sessionId !== activeSessionId) return;
+    if (params.sessionId !== binding.sessionId) return;
     const type = params.type ?? 'log';
     const level = CDP_TYPE_NORMALIZATION[type] ?? type;
     const args = params.args ?? [];
@@ -85,25 +84,18 @@ function ensureCapturing(
     }
   };
 
-  transport.on('Runtime.consoleAPICalled', handler);
   // ponytail: Runtime.exceptionThrown (uncaught errors, rejected promises) not surfaced
   // here — would need a separate subscription. Add when agents need JS exception capture.
-
-  const unsubscribeReplaced = onSessionReplaced(browser, targetId, (newSessionId, newTransport) => {
-    if (newTransport !== activeTransport) {
-      activeTransport.off('Runtime.consoleAPICalled', handler);
-      newTransport.on('Runtime.consoleAPICalled', handler);
-      activeTransport = newTransport;
-    }
-    activeSessionId = newSessionId;
-    // A fresh session starts with every domain disabled.
-    void newTransport.send('Runtime.enable', {}, newSessionId).catch(() => undefined);
+  const binding = bindTabCapture({
+    browser,
+    targetId,
+    transport,
+    sessionId,
+    listeners: [['Runtime.consoleAPICalled', handler]],
+    enable: (t, s) => t.send('Runtime.enable', {}, s),
   });
 
-  state.consoleCleanup.set(targetId, () => {
-    unsubscribeReplaced();
-    activeTransport.off('Runtime.consoleAPICalled', handler);
-  });
+  state.consoleCleanup.set(targetId, () => binding.stop());
 }
 
 export const consoleHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {

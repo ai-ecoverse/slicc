@@ -5,6 +5,7 @@ import {
   createMockBrowser,
   createMockTransport,
   createPlaywrightState,
+  withSessionReplaced,
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
@@ -45,6 +46,34 @@ describe('console handler', () => {
     const result = await consoleHandler(ctx);
     expect(result.stdout).toBe('[log] hello world\n');
     expect(result.exitCode).toBe(0);
+  });
+
+  // The bridge keeps one session per tab and replaces it when it heals a stale
+  // one; in the thin extension the transport reconnects IN PLACE, so the same
+  // object comes back with an empty listener registry (issue #2417 finding 4).
+  it('re-arms and re-enables Runtime when the session is replaced on the same transport', async () => {
+    const transport = createMockTransport();
+    const { browser } = createMockBrowser({ transport, sessionId: 'session-1' });
+    const replaced = withSessionReplaced(browser);
+    const state = createPlaywrightState();
+    const ctx = createHandlerCtx({ browser, state, flags: { tab: TAB } });
+
+    await consoleHandler(ctx);
+    transport.clearListeners();
+    transport.send.mockClear();
+
+    replaced('session-2', transport.transport, TAB);
+
+    expect(transport.listenerCount('Runtime.consoleAPICalled')).toBe(1);
+    expect(transport.send).toHaveBeenCalledWith('Runtime.enable', {}, 'session-2');
+
+    await transport.emit('Runtime.consoleAPICalled', {
+      sessionId: 'session-2',
+      type: 'log',
+      args: [{ value: 'after-heal' }],
+    });
+    const result = await consoleHandler(ctx);
+    expect(result.stdout).toBe('[log] after-heal\n');
   });
 
   it('ignores events from other sessions', async () => {
