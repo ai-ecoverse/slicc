@@ -624,8 +624,11 @@ describe('SprinkleBridge', () => {
       const bytes = await api.fetchToFile('https://h/file.bin', '/workspace/file.bin');
       expect(bytes).toBe(1234);
       expect(execHandler.mock.calls[0][0]).toContain('fetchToFile');
-      // Realm has no bare `fs` global — VFS is `require("fs")`.
-      expect(execHandler.mock.calls[0][0]).toContain('require("fs").fetchToFile');
+      // Realm has no bare `fs` global — VFS is `require("node:fs")`.
+      // Use the `node:` specifier so the page bundle does not contain the
+      // CI-forbidden `require("fs")` literal.
+      expect(execHandler.mock.calls[0][0]).toContain('require("node:fs").fetchToFile');
+      expect(execHandler.mock.calls[0][0]).not.toContain('require("fs").fetchToFile');
       expect(execHandler.mock.calls[0][0]).not.toContain('await fs.fetchToFile');
     });
 

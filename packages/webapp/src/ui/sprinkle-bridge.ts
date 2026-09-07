@@ -324,7 +324,7 @@ export function buildJshNodeScript(op: string, args: unknown[]): string {
     "}else if(op==='spawn'){" +
     'out=await require("sliccy:exec").spawn(a[0]);' +
     "}else if(op==='fetchToFile'){" +
-    'out=await require("fs").fetchToFile(a[0],a[1]);' +
+    'out=await require("node:fs").fetchToFile(a[0],a[1]);' +
     '}else{throw new Error("unknown jsh op: "+op);}' +
     'emit({ok:true,value:out});' +
     '}catch(e){emit({ok:false,error:(e&&e.message)?e.message:String(e)});}'
