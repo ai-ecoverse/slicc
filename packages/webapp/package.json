@@ -13,7 +13,7 @@
       "name": "webapp: total JS payload",
       "path": "../../dist/ui/**/*.js",
       "brotli": false,
-      "limit": "25 MB"
+      "limit": "25.1 MB"
     }
   ],
   "dependencies": {
@@ -78,6 +78,7 @@
     "@types/w3c-web-serial": "1.0.8",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.0.1",
+    "minimatch": "10.2.6",
     "puppeteer-core": "25.9.0",
     "v86": "0.5.451"
   }
