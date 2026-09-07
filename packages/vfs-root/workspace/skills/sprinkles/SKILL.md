@@ -327,7 +327,7 @@ Available as `slicc` in `<script>` tags and `onclick` attributes:
 - `slicc.stat(path)` — get file metadata (returns `Promise<{type, size}>`).
 - `slicc.mkdir(path)` — create a directory (recursive).
 - `slicc.rm(path)` — remove a file.
-- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL. Note: the screenshot captures a DOM clone using SVG foreignObject. External stylesheets and some computed styles may not be fully reproduced. For best results, use inline styles on elements you intend to screenshot.
+- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL. No argument targets `document.body` (fragment mode: the sprinkle container). The target must have non-zero width AND height; zero-sized elements are rejected, not captured. Works in a hidden tab — you do not need to foreground the sprinkle. Note: the screenshot captures a DOM clone using SVG `foreignObject`. External stylesheets, web fonts, and some computed styles may not be fully reproduced; huge serialised SVGs can fail to rasterise. For best results, use inline styles on elements you intend to screenshot.
 - `slicc.captureScreen()` — capture a screen, window, or browser tab via Chrome's native picker. Takes no arguments. Returns `Promise<{base64: string, width: number, height: number, mimeType: string}>`. The picker appears immediately; the Promise resolves once the user selects a target and the frame is grabbed. Rejects if the user cancels or screen capture is unavailable. Use `slicc.attachImage(shot.base64, 'screenshot.png', shot.mimeType)` to send the result to the agent. Key difference from `screenshot()`: this captures external content (any tab/window/screen), not the sprinkle's own DOM.
 
 ### Shell, agent, and jsh globals

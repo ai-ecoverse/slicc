@@ -173,6 +173,43 @@ describe('SprinkleBridge', () => {
     expect(result).toBe('');
   });
 
+  it('screenshot() names a zero-size container and rect', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api._container = {
+      getBoundingClientRect: () =>
+        ({
+          width: 1072.4,
+          height: 0,
+          top: 0,
+          left: 0,
+          right: 1072.4,
+          bottom: 0,
+          x: 0,
+          y: 0,
+          toJSON() {
+            return {};
+          },
+        }) as DOMRect,
+      querySelector: () => null,
+      cloneNode: () => ({}),
+    } as unknown as HTMLElement;
+    await expect(api.screenshot()).rejects.toThrow(
+      'Element has zero dimensions (container, 1072.4x0)'
+    );
+  });
+
+  it('screenshot() keeps Element not found: #no-such-element', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api._container = {
+      querySelector: () => null,
+      getBoundingClientRect: () => ({ width: 10, height: 10 }) as DOMRect,
+      cloneNode: () => ({}),
+    } as unknown as HTMLElement;
+    await expect(api.screenshot('#no-such-element')).rejects.toThrow(
+      'Element not found: #no-such-element'
+    );
+  });
+
   it('on/off registers and removes update listeners', () => {
     vi.useFakeTimers();
     const api = bridge.createAPI('test-sprinkle');

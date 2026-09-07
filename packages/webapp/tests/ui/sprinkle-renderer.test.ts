@@ -314,6 +314,12 @@ describe('full document rendering', () => {
     // exec/agent bridge methods are wired into the srcdoc bridge script
     expect(srcdoc).toContain('sprinkle-exec');
     expect(srcdoc).toContain('sprinkle-agent');
+    // Dual copy of slicc.screenshot() — keep in lockstep with sprinkle-screenshot.ts.
+    expect(srcdoc).toContain('Element has zero dimensions');
+    expect(srcdoc).toContain('image decode failed');
+    expect(srcdoc).toContain('XMLSerializer threw');
+    expect(srcdoc).toContain('http://www.w3.org/1999/xhtml');
+    expect(srcdoc).toContain('var screenshotTargetLabel = ');
   });
 
   it('handles bridge calls posted while the iframe is being appended', async () => {

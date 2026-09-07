@@ -35,6 +35,7 @@ import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
+import { captureSprinkleScreenshot } from './sprinkle-screenshot.js';
 
 export interface CaptureScreenResult {
   base64: string;
@@ -971,36 +972,14 @@ export class SprinkleBridge {
 
   /**
    * Capture a sprinkle DOM element or its child as a PNG data URL.
-   * Uses SVG foreignObject trick + canvas rendering to capture styled content.
+   * Keep in lockstep with the iframe `screenshot()` copy in sprinkle-renderer.ts.
    */
   private createScreenshotHandler(
     container: HTMLElement | undefined
   ): (selector?: string) => Promise<string> {
     return async (selector) => {
       if (!container) return '';
-      const target = selector ? container.querySelector<HTMLElement>(selector) : container;
-      if (!target) throw new Error('Element not found: ' + (selector || 'container'));
-      const rect = target.getBoundingClientRect();
-      const w = Math.ceil(rect.width);
-      const h = Math.ceil(rect.height);
-      if (w === 0 || h === 0) throw new Error('Element has zero dimensions');
-      const canvas = document.createElement('canvas');
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      const ctx = canvas.getContext('2d')!;
-      ctx.scale(dpr, dpr);
-      const clone = (target as HTMLElement).cloneNode(true) as HTMLElement;
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
-      return new Promise<string>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          ctx.drawImage(img, 0, 0);
-          resolve(canvas.toDataURL('image/png'));
-        };
-        img.onerror = () => reject(new Error('Screenshot rendering failed'));
-        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      });
+      return captureSprinkleScreenshot(selector, container);
     };
   }
 
