@@ -250,8 +250,73 @@ export const FullnessLadder: Story = {
   args: { scoops: fullnessRoster(), active: 'fill-50', width: 620 },
 };
 
+export const Unread: Story = {
+  args: {
+    scoops: BASE_ROSTER.map((scoop) =>
+      scoop.key === 'researcher'
+        ? { ...scoop, unread: 3 }
+        : scoop.key === 'tester'
+          ? { ...scoop, unread: 12 }
+          : scoop
+    ),
+    active: 'cone',
+    width: 720,
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'A scoop that spoke while you were elsewhere wears a hue dot notched onto ' +
+          'its status ring: drawn inside the glyph SVG, so it costs the segment no ' +
+          'width, never drifts with the label, and cannot be clipped by the track. ' +
+          'The hue is the agent’s own even on the broken tab, whose ring stays red — ' +
+          'state is the ring’s job, identity is the dot’s. Nothing animates.',
+      },
+    },
+  },
+};
+
+export const UnreadOnSelected: Story = {
+  args: {
+    scoops: BASE_ROSTER.map((scoop) => ({ ...scoop, unread: 4 })),
+    active: 'designer',
+    width: 720,
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'Every tab carries unread, including the selected one — which paints no dot, ' +
+          'because the tab you are reading is read. The host may leave a stale count ' +
+          'in its model while the user sits inside that unit.',
+      },
+    },
+  },
+};
+
 export const Narrow360: Story = {
   args: { scoops: EXTRA_ROSTER, active: 'designer', width: 360 },
+};
+
+export const UnreadNarrow360: Story = {
+  args: {
+    scoops: EXTRA_ROSTER.map((scoop, index) =>
+      index % 2 === 1 ? { ...scoop, unread: index } : scoop
+    ),
+    active: 'designer',
+    width: 360,
+    overflowOpen: true,
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'Unread survives the squeeze: a collapsed tab hands its count to the ' +
+          'overflow, which marks its trigger in ink (it stands for several agents) and ' +
+          'repeats the per-scoop dot on each row.',
+      },
+    },
+  },
 };
 
 export const OverflowOpen: Story = {

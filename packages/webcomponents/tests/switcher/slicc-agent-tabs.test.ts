@@ -1301,4 +1301,110 @@ describe('slicc-agent-tabs', () => {
     const hidden = segments(element).find((item) => item.classList.contains('hide')) as HTMLElement;
     expect(getComputedStyle(hidden).display).toBe('none');
   });
+
+  describe('unread', () => {
+    const UNREAD_ROSTER: ScoopDescriptor[] = [
+      { key: 'cone', type: 'cone', label: 'Sliccy', fill: 10, state: 'idle' },
+      {
+        key: 'researcher',
+        label: 'Research',
+        color: '#06b6d4',
+        fill: 20,
+        state: 'idle',
+        unread: 3,
+      },
+      { key: 'designer', label: 'Design', color: '#8b5cf6', fill: 30, state: 'idle', unread: 42 },
+    ];
+
+    function dot(element: SliccAgentTabs, key: string): SVGCircleElement {
+      return segment(element, key).querySelector(
+        '.slicc-agent-tabs__glyph-unread'
+      ) as SVGCircleElement;
+    }
+
+    function mountUnread(active = 'cone'): SliccAgentTabs {
+      const element = mount(UNREAD_ROSTER);
+      element.active = active;
+      return element;
+    }
+
+    it('marks unread segments and suppresses the dot on the selected one', () => {
+      const element = mountUnread('researcher');
+      expect(segment(element, 'researcher').hasAttribute('data-unread')).toBe(false);
+      expect(getComputedStyle(dot(element, 'researcher')).display).toBe('none');
+      expect(segment(element, 'designer').dataset.unread).toBe('42');
+      expect(getComputedStyle(dot(element, 'designer')).display).toBe('inline');
+      expect(segment(element, 'cone').hasAttribute('data-unread')).toBe(false);
+      element.active = 'cone';
+      expect(segment(element, 'researcher').dataset.unread).toBe('3');
+    });
+
+    it('ignores non-positive and non-finite counts', () => {
+      const element = mountUnread();
+      element.scoops = [
+        { key: 'cone', label: 'Sliccy' },
+        { key: 'zero', label: 'Zero', unread: 0 },
+        { key: 'negative', label: 'Negative', unread: -4 },
+        { key: 'nan', label: 'NaN', unread: Number.NaN },
+        { key: 'fraction', label: 'Fraction', unread: 2.7 },
+      ];
+      for (const key of ['zero', 'negative', 'nan']) {
+        expect(segment(element, key).hasAttribute('data-unread')).toBe(false);
+      }
+      expect(segment(element, 'fraction').dataset.unread).toBe('2');
+    });
+
+    it('announces the unread count on the segment label', () => {
+      const element = mountUnread();
+      expect(segment(element, 'researcher').getAttribute('aria-label')).toContain(
+        '3 unread messages'
+      );
+      element.scoops = [{ key: 'solo', label: 'Solo', unread: 1 }, ...UNREAD_ROSTER];
+      expect(segment(element, 'solo').getAttribute('aria-label')).toMatch(/, 1 unread message$/);
+    });
+
+    it('anchors the dot to the status ring, costing the segment no padding', () => {
+      const element = mountUnread();
+      // The ring's 45 degree top-right, nudged out so the halo eats the stroke.
+      expect(dot(element, 'researcher').getAttribute('cx')).toBe('10.89');
+      expect(dot(element, 'researcher').getAttribute('cy')).toBe('3.11');
+      expect(getComputedStyle(segment(element, 'researcher')).paddingRight).toBe(
+        getComputedStyle(segment(element, 'cone')).paddingRight
+      );
+    });
+
+    it('keeps the dot in the scoop hue over a broken red ring', () => {
+      const element = mountUnread();
+      element.scoops = [
+        { key: 'cone', label: 'Sliccy' },
+        { key: 'broken', label: 'Broken', color: '#f59e0b', state: 'broken', unread: 2 },
+      ];
+      const broken = dot(element, 'broken');
+      const ring = segment(element, 'broken').querySelector(
+        '.slicc-agent-tabs__status-glyph'
+      ) as SVGElement;
+      expect(getComputedStyle(broken).fill).toBe('rgb(245, 158, 11)');
+      expect(getComputedStyle(broken).fill).not.toBe(getComputedStyle(ring).color);
+    });
+
+    it('halos the dot in whichever surface the segment sits on', () => {
+      const element = mountUnread('researcher');
+      const unselected = getComputedStyle(dot(element, 'designer')).stroke;
+      element.active = 'designer';
+      expect(getComputedStyle(dot(element, 'designer')).stroke).not.toBe(unselected);
+    });
+
+    it('hands unread counts to the overflow for collapsed segments', () => {
+      const element = mount(
+        [...UNREAD_ROSTER, { key: 'writer', label: 'Writing', unread: 7 }],
+        180
+      );
+      element.active = 'cone';
+      element.reflow();
+      const hidden = overflow(element).items;
+      expect(hidden.length).toBeGreaterThan(0);
+      expect(hidden.find((item) => item.id === 'designer')?.unread).toBe(42);
+      expect(hidden.find((item) => item.id === 'cone')).toBeUndefined();
+    });
+  });
 });

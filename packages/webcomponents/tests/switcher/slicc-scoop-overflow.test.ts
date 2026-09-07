@@ -535,6 +535,37 @@ describe('slicc-scoop-overflow', () => {
       expect(el.shadowRoot?.activeElement).toBe(moreBtn(el));
     });
 
+    it('marks unread hidden scoops on the rows and once on the trigger', () => {
+      const el = mount((e) => {
+        e.items = [{ ...ITEMS[0], unread: 2 }, ITEMS[1], { ...ITEMS[2], unread: 5 }];
+      });
+      el.show();
+      expect(moreBtn(el).dataset.unread).toBe('7');
+      expect(moreBtn(el).getAttribute('aria-label')).toContain('7 unread messages');
+      const marked = rows(el).filter((row) => row.hasAttribute('data-unread'));
+      expect(marked.map((row) => row.dataset.k)).toEqual(['researcher', 'tester']);
+      expect(marked[0].getAttribute('aria-label')).toContain('2 unread messages');
+      // One dot per unread row, in that scoop's hue rather than the ring's colour.
+      const dot = marked[0].querySelector('.glyph-unread') as SVGCircleElement;
+      expect(dot).toBeTruthy();
+      expect(getComputedStyle(dot).fill).toBe('rgb(6, 182, 212)');
+      expect(rows(el)[1].querySelector('.glyph-unread')).toBeNull();
+    });
+
+    it('ignores non-positive and non-finite unread counts', () => {
+      const el = mount((e) => {
+        e.items = [
+          { ...ITEMS[0], unread: 0 },
+          { ...ITEMS[1], unread: -3 },
+          { ...ITEMS[2], unread: Number.NaN },
+        ];
+      });
+      el.show();
+      expect(moreBtn(el).hasAttribute('data-unread')).toBe(false);
+      expect(moreBtn(el).getAttribute('aria-label')).not.toContain('unread');
+      expect(rows(el).some((row) => row.hasAttribute('data-unread'))).toBe(false);
+    });
+
     it('removes the document listener on disconnect (no leak)', () => {
       const el = mount((e) => {
         e.items = ITEMS;

@@ -50,7 +50,21 @@ export interface ScoopDescriptor {
    * rides the optional field that older followers never read.
    */
   awaiting?: boolean;
+  /**
+   * Messages this agent has produced since the user last looked at it. `0` or
+   * absent means nothing new. The strip suppresses it on the selected segment —
+   * the tab you are reading is by definition read — so a host may leave a stale
+   * count in place while the user is inside that unit.
+   */
+  unread?: number;
 }
+
+/**
+ * Where the unread dot sits on the status glyph: centred on the ring stroke at
+ * its 45° top-right, its halo biting a gap out of the ring so the two marks
+ * stay separate at 14px. Values are the glyph's own 0–14 user units.
+ */
+const UNREAD_DOT = { cx: 10.89, cy: 3.11, r: 2.4, halo: 1.5 } as const;
 
 export interface ScoopSelectDetail extends SliccScoopSelectDetail {
   key: string;
@@ -111,6 +125,14 @@ const STYLE = `
 .slicc-agent-tabs [data-state='initializing'] .slicc-agent-tabs__initializing-ring{display:inline;}
 .slicc-agent-tabs__broken-x{stroke:currentColor;stroke-linecap:round;}
 .slicc-agent-tabs__initializing-ring{fill:none;stroke:currentColor;stroke-dasharray:1.7 1.7;}
+/* Unread. A hue dot on the status glyph's top-right, drawn INSIDE the glyph
+   SVG: it needs no segment padding, cannot be pushed around by a label of any
+   length, and cannot be clipped by the track's overflow. The hue holds even on
+   a broken agent's red ring — state is the ring's job, identity is the dot's —
+   and the halo takes whichever surface the segment sits on. */
+.slicc-agent-tabs__glyph-unread{display:none;fill:var(--slicc-agent-tabs-hue);stroke:var(--ghost);}
+.slicc-agent-tabs__segment[data-unread] .slicc-agent-tabs__glyph-unread{display:inline;}
+.slicc-agent-tabs__segment[aria-selected='true'] .slicc-agent-tabs__glyph-unread{stroke:var(--canvas);}
 .slicc-agent-tabs slicc-scoop-overflow{display:none;}
 .slicc-agent-tabs slicc-scoop-overflow[count]{position:absolute;top:50%;right:2px;display:block;width:39px;height:24px;transform:translateY(-50%);}
 .slicc-agent-tabs slicc-scoop-overflow::part(wrap){display:flex;height:24px;}
@@ -184,6 +206,15 @@ function activityFor(scoop: ScoopDescriptor, state: AgentState): AgentActivity |
   if (state === 'working') return phaseFor(scoop, state) === 'tool' ? 'working' : 'thinking';
   if (state === 'idle') return scoop.awaiting ? 'awaiting' : 'idle';
   return null;
+}
+
+/**
+ * The unread count a segment should paint, or `0` for none. Selected segments
+ * always read as `0`: whatever arrived is on screen in front of the user.
+ */
+function unreadFor(scoop: ScoopDescriptor, selected: boolean): number {
+  if (selected || typeof scoop.unread !== 'number' || !Number.isFinite(scoop.unread)) return 0;
+  return Math.max(0, Math.floor(scoop.unread));
 }
 
 function stateFor(scoop: ScoopDescriptor, attention: string | null): AgentState {
@@ -269,6 +300,15 @@ function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
       cy: 7,
       r: ARC_RADIUS,
       'stroke-width': 1.7,
+    }),
+    // The unread dot. Built always, shown by CSS for a segment with unread; it
+    // sits LAST so it stacks over the ring, the arc and the pin.
+    svgEl('circle', {
+      class: `${PREFIX}__glyph-unread`,
+      cx: UNREAD_DOT.cx,
+      cy: UNREAD_DOT.cy,
+      r: UNREAD_DOT.r,
+      'stroke-width': UNREAD_DOT.halo,
     }),
   ];
   return svgEl(
@@ -625,21 +665,24 @@ export class SliccAgentTabs extends HTMLElement {
     const phase = phaseFor(scoop, state);
     const fill = boundedFill(scoop.fill);
     const wantsAttention = this.attention === scoop.key;
+    const unread = unreadFor(scoop, scoop.key === focused);
     segment.className = `${PREFIX}__segment${scoop.ephemeral ? ' ephemeral' : ''}`;
     segment.setAttribute('aria-selected', String(scoop.key === focused));
     segment.tabIndex = scoop.key === focused ? 0 : -1;
     // The pin's shape is the only carrier of the phase, so spell it out for
     // anyone who cannot see it.
     const busyDetail = phase === 'tool' ? ' (running a tool)' : phase ? ' (thinking)' : '';
+    const unreadDetail = unread > 0 ? `, ${unread} unread message${unread === 1 ? '' : 's'}` : '';
     segment.setAttribute(
       'aria-label',
-      `${scoop.label ?? scoop.key}: ${state}${busyDetail}, ${Math.round(fill)}% context fill${wantsAttention ? ', spoke most recently' : ''}`
+      `${scoop.label ?? scoop.key}: ${state}${busyDetail}, ${Math.round(fill)}% context fill${wantsAttention ? ', spoke most recently' : ''}${unreadDetail}`
     );
     segment.dataset.k = scoop.key;
     segment.dataset.state = state;
     this.#setAttribute(segment, 'data-phase', phase);
     this.#setAttribute(segment, 'data-attention', wantsAttention ? 'true' : null);
     segment.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
+    this.#setAttribute(segment, 'data-unread', unread > 0 ? String(unread) : null);
     const label = segment.querySelector<HTMLElement>(`.${PREFIX}__label`);
     if (label) label.textContent = scoop.label ?? scoop.key;
     const arc = segment.querySelector<SVGCircleElement>(`.${PREFIX}__glyph-arc`);
@@ -696,6 +739,9 @@ export class SliccAgentTabs extends HTMLElement {
           eyes: eyesFor(scoop),
           state: stateFor(scoop, this.attention),
           fill: boundedFill(scoop.fill),
+          // Read back off the segment rather than recomputed, so a hidden tab
+          // and a visible one cannot disagree about what counts as unread.
+          unread: Number(segment.dataset.unread ?? 0),
         };
       }
     );
