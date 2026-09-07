@@ -256,6 +256,12 @@ export class BrowserAPI {
    * wait has handed the bridge lock away) cannot be mistaken for our own.
    */
   private _appliedSends = new Map<string, number>();
+  /**
+   * Tabs with work in flight, by pin count — skipped by LRU eviction so a
+   * `withTab` body (or a page wait that released the bridge lock) cannot have
+   * the session it is using detached underneath it.
+   */
+  private _pinnedTargets = new Map<string, number>();
   /** Per-target lock chains — commands on different tabs no longer queue behind each other. */
   private _tabLocks = new Map<string, Promise<void>>();
   /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
@@ -468,6 +474,10 @@ export class BrowserAPI {
     const counters = this.tabCounters(targetId);
     counters.queueDepth += 1;
     const releaseTab = await this.acquireTabLock(targetId, counters);
+    // Pinned for the whole body: a body that hands the bridge lock to another
+    // tab (a navigate waiting for load) would otherwise age into the eviction
+    // candidate and lose the session its wait is bound to.
+    const unpin = this.pinTarget(targetId);
     try {
       const releaseBridge = await this.acquireBridgeLock({ counters, targetId });
       try {
@@ -477,6 +487,7 @@ export class BrowserAPI {
         releaseBridge();
       }
     } finally {
+      unpin();
       counters.queueDepth -= 1;
       releaseTab();
     }
@@ -726,6 +737,11 @@ export class BrowserAPI {
   private async waitOffBridgeLock<T>(targetId: string | null, wait: () => Promise<T>): Promise<T> {
     const hold = this._bridgeHold;
     if (!hold) return wait();
+    // Also pinned here, not only in `withTab`: `navigate` and
+    // `waitForSelector` are session-less methods a caller may drive directly,
+    // and the tab whose session the wait is bound to is exactly the one the
+    // tabs running during the gap would otherwise evict.
+    const unpin = targetId === null ? () => undefined : this.pinTarget(targetId);
     this._bridgeHold = null;
     hold.release();
     try {
@@ -737,6 +753,10 @@ export class BrowserAPI {
       // token before the wait would stop being able to re-enter afterwards.
       await this.acquireBridgeLock({ token: hold.owner, targetId: hold.targetId });
       if (targetId) this.restoreCurrentTarget(targetId);
+      // Unpinned only once the bridge is ours again and the cursor is back on
+      // this tab — dropping the pin any earlier reopens the eviction window
+      // for the tabs that queued while we waited.
+      unpin();
     }
   }
 
@@ -2266,16 +2286,56 @@ export class BrowserAPI {
     this.addSessionLifecycleListeners(entry.transport);
     this.pruneAppliedSends();
     this._sessions.set(targetId, entry);
+    this.enforceSessionCap(targetId);
+  }
+
+  /**
+   * Detach least-recently-used sessions until the registry is back under the
+   * cap, skipping tabs with work in flight.
+   *
+   * `protect` is the entry just inserted. Pinned entries are skipped because
+   * detaching a tab whose `withTab` body is still running kills the session
+   * its session-scoped waits are subscribed to: a `navigate` releases the
+   * bridge lock while waiting for load, so touching 32 other tabs used to make
+   * the navigating tab the oldest and cost it the load event it was waiting
+   * for — a 30 s timeout with no explanation. When every candidate is pinned
+   * the cap is exceeded until the next release, which calls back in here.
+   */
+  private enforceSessionCap(protect?: string): void {
     while (this._sessions.size > MAX_TAB_SESSIONS) {
-      const oldest = this._sessions.keys().next().value;
-      if (oldest === undefined || oldest === targetId) break;
-      const evicted = this._sessions.get(oldest);
-      this._sessions.delete(oldest);
+      let victim: string | undefined;
+      for (const targetId of this._sessions.keys()) {
+        if (targetId === protect || this._pinnedTargets.has(targetId)) continue;
+        victim = targetId;
+        break;
+      }
+      if (victim === undefined) return; // everything is busy; retry on release
+      const evicted = this._sessions.get(victim);
+      this._sessions.delete(victim);
       if (evicted) {
-        log.debug('Evicting least-recently-used CDP session', { targetId: oldest });
-        void this.detachSession(oldest, evicted);
+        log.debug('Evicting least-recently-used CDP session', { targetId: victim });
+        void this.detachSession(victim, evicted);
       }
     }
+  }
+
+  /**
+   * Pin a tab's registry entry for the length of an operation, so LRU eviction
+   * cannot detach a session that is still being used. Returns the release.
+   * Nested pins (a `withTab` body whose navigate also pins) just count.
+   */
+  private pinTarget(targetId: string): () => void {
+    this._pinnedTargets.set(targetId, (this._pinnedTargets.get(targetId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this._pinnedTargets.get(targetId) ?? 1) - 1;
+      if (left > 0) this._pinnedTargets.set(targetId, left);
+      else this._pinnedTargets.delete(targetId);
+      // An overflow that had nothing evictable is waiting for exactly this.
+      this.enforceSessionCap();
+    };
   }
 
   /**

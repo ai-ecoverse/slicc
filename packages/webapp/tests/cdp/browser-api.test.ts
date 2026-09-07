@@ -1687,6 +1687,67 @@ describe('BrowserAPI', () => {
       expect(callsTo('Target.attachToTarget')).toHaveLength(34);
     });
 
+    it('never evicts the session a navigation is still waiting on', async () => {
+      attachCounting();
+      // t-nav parks on its load event, which releases the bridge lock — so 32
+      // other tabs can attach while it waits. Ageing it out would detach the
+      // session its session-scoped wait is bound to and strand it for the full
+      // 30 s timeout (review finding 7).
+      const navigating = api.withTab('t-nav', async () => {
+        await api.navigate('https://slow.example');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      for (let i = 0; i < 32; i++) await api.withTab(`t${i}`, async () => {});
+
+      const detached = callsTo('Target.detachFromTarget').map(
+        ([, params]) => (params as { sessionId: string }).sessionId
+      );
+      expect(detached).not.toContain('sess-1'); // t-nav's session
+      expect(detached).toEqual(['sess-2']); // the oldest UNPINNED tab instead
+
+      mockClient._fireEvent('Page.loadEventFired', { sessionId: 'sess-1' });
+      await navigating;
+      // Still the same session — no re-attach was needed.
+      expect(api.getSessionId()).toBe('sess-1');
+      expect(callsTo('Target.attachToTarget')).toHaveLength(33);
+    });
+
+    it('defers eviction while every candidate is busy', async () => {
+      attachCounting();
+      // Fill the registry with tabs parked on their load event: each holds a
+      // pin (its body is still running) but not the bridge.
+      const navigating: Array<Promise<void>> = [];
+      // 32 is the cap in browser-api.ts.
+      for (let i = 0; i < 32; i++) {
+        navigating.push(
+          api.withTab(`t${i}`, async () => {
+            await api.navigate('https://slow.example');
+          })
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      let detachesWhileBusy = -1;
+      await api.withTab('t-extra', async () => {
+        // The cap is exceeded here and every older entry is pinned, so the
+        // eviction has nothing it may take.
+        detachesWhileBusy = callsTo('Target.detachFromTarget').length;
+      });
+      expect(detachesWhileBusy).toBe(0);
+
+      // Releasing a pin re-runs the cap check. `t-extra` is now the only
+      // unpinned entry, so it is the one that goes — never a tab whose
+      // session a parked wait is still bound to.
+      expect(callsTo('Target.detachFromTarget')).toEqual([
+        ['Target.detachFromTarget', { sessionId: 'sess-33' }],
+      ]);
+
+      for (let i = 1; i <= 32; i++) {
+        mockClient._fireEvent('Page.loadEventFired', { sessionId: `sess-${i}` });
+      }
+      await Promise.all(navigating);
+    });
+
     it('keeps the most-recently-used tabs when the cap is reached', async () => {
       attachCounting();
       for (let i = 0; i < 32; i++) await api.withTab(`t${i}`, async () => {});
