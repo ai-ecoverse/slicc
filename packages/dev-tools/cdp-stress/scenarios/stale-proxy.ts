@@ -36,7 +36,7 @@ export type StaleProxyResult = Partial<Record<ProxyPolicy, StalePolicyResult>>;
 const SETTLE_AFTER_DROP_MS = 1500;
 
 export async function run(opts: { policies?: ProxyPolicy[] } = {}): Promise<StaleProxyResult> {
-  const policies = opts.policies ?? (['swift', 'node'] as ProxyPolicy[]);
+  const policies = opts.policies ?? (['swift', 'node', 'legacy-swift'] as ProxyPolicy[]);
   const chrome = await launchChrome();
   const site = await startSite();
   const out: StaleProxyResult = {};

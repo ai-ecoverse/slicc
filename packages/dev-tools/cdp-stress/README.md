@@ -50,8 +50,9 @@ Environment knobs:
 - `chrome.ts` — launches headless Chrome with a throwaway profile.
 - `site.ts` — local HTTP site: `/page/<name>?delay=&subdelay=&items=`,
   `/reloader?every=`, `/hang`, `/console?n=`.
-- `proxy.ts` — single-client `/cdp` relay; `policy: 'node'` drops frames after a
-  Chrome-leg close, `policy: 'swift'` silently reconnects; `dropChromeLeg()`,
+- `proxy.ts` — single-client `/cdp` relay; `policy: 'node' | 'swift'` model the shipped
+  proxies (reconnect the Chrome leg, then close the client with 4002 `upstream-reset`),
+  `'legacy-swift'` reconnects silently, `'legacy-node'` never reconnects; `dropChromeLeg()`,
   `killClient()`, `evictClient()`.
 - `stack.ts` — builds the real client stack from `packages/webapp/src`, wraps
   the transport with counters (sends by method, inbound events by method, burst

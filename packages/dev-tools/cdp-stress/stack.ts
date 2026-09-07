@@ -102,7 +102,15 @@ export async function buildStack(cdpUrl: string, opts: StackOptions = {}): Promi
     // only the DOM-vs-Node `Transferable` unions disagree.
     const port1 = channel.port1 as unknown as MessagePortLike;
     const port2 = channel.port2 as unknown as MessagePortLike;
-    const stopForwarder = slicc.startPageCdpForwarder(port1, pageClient);
+    // Same wiring as standalone boot: a worker command arriving while the
+    // page client is down re-dials the bridge before it is forwarded.
+    const stopForwarder = slicc.startPageCdpForwarder(port1, pageClient, {
+      reconnect: async () => {
+        if (pageClient.state === 'disconnected') {
+          await pageClient.connect({ url: cdpUrl, timeout: CONNECT_TIMEOUT_MS });
+        }
+      },
+    });
     const proxy: WorkerCdpProxy = new slicc.WorkerCdpProxy(port2);
     await proxy.connect();
     transport = proxy;

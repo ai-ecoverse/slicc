@@ -445,3 +445,81 @@ describe('page CDP connection resets across the worker hop', () => {
     teardown();
   });
 });
+
+describe('lazy page-client reconnect on worker command', () => {
+  function setup(reconnect?: () => Promise<void>) {
+    const channel = new MessageChannel();
+    const stub = makeStubTransport();
+    const stop = startPageCdpForwarder(channel.port1, stub.transport, { reconnect });
+    const worker = new WorkerCdpProxy(channel.port2);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    return {
+      stub,
+      worker,
+      teardown: () => {
+        warn.mockRestore();
+        info.mockRestore();
+        worker.disconnect();
+        stop();
+        channel.port1.close();
+        channel.port2.close();
+      },
+    };
+  }
+
+  it('re-dials once for a burst of commands while the page client is down, then serves them', async () => {
+    let stubRef: ReturnType<typeof makeStubTransport> | null = null;
+    const reconnect = vi.fn(async () => {
+      await tick();
+      stubRef!.setState('connected');
+    });
+    const { stub, worker, teardown } = setup(reconnect);
+    stubRef = stub;
+    await worker.connect();
+    // The proxy closed the page client (4002); the worker has not been told
+    // yet, or was told and reconnected its own bridge — either way a command
+    // arrives at the page side while the real transport is down.
+    stub.setState('disconnected', 'reset');
+    await tick();
+    await worker.connect();
+
+    const results = await Promise.all([
+      worker.send('Runtime.evaluate'),
+      worker.send('Page.enable'),
+    ]);
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r['method'])).toEqual(['Runtime.evaluate', 'Page.enable']);
+    teardown();
+  });
+
+  it('does not re-dial a superseded page client — the slot belongs to another tab', async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const { stub, worker, teardown } = setup(reconnect);
+    await worker.connect();
+    (stub.transport as { superseded?: boolean }).superseded = true;
+    stub.setState('disconnected', 'superseded');
+    await tick();
+    await worker.connect();
+    stub.send.mockRejectedValueOnce(new Error('CDP client is not connected'));
+
+    await expect(worker.send('Runtime.evaluate')).rejects.toThrow(/not connected/);
+    expect(reconnect).not.toHaveBeenCalled();
+    teardown();
+  });
+
+  it('surfaces a failed re-dial as the command error instead of hanging', async () => {
+    const reconnect = vi.fn(async () => {
+      throw new Error('bridge unreachable');
+    });
+    const { stub, worker, teardown } = setup(reconnect);
+    await worker.connect();
+    stub.setState('disconnected', 'reset');
+    await tick();
+    await worker.connect();
+
+    await expect(worker.send('Runtime.evaluate')).rejects.toThrow(/bridge unreachable/);
+    teardown();
+  });
+});

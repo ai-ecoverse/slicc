@@ -15,15 +15,23 @@ process.env['HARNESS_CDP_TIMEOUT_MS'] ??= '8000';
 const quick = process.argv.includes('--quick');
 const outDir =
   process.env['HARNESS_OUT'] ?? resolve(import.meta.dirname, '../../../dist/cdp-stress');
-const results: Record<string, unknown> = { startedAt: new Date().toISOString(), quick };
+/** One scenario's `run()` result, or the error that stopped it. */
+type StepOutcome = unknown | { crashed: string };
+interface RunAllResults {
+  startedAt: string;
+  finishedAt?: string;
+  quick: boolean;
+  steps: Record<string, StepOutcome>;
+}
+const results: RunAllResults = { startedAt: new Date().toISOString(), quick, steps: {} };
 
 const step = async (name: string, fn: () => Promise<unknown>) => {
   const t0 = Date.now();
   process.stderr.write(`▶ ${name}\n`);
   try {
-    results[name] = await fn();
+    results.steps[name] = await fn();
   } catch (e) {
-    results[name] = { crashed: e instanceof Error ? e.message : String(e) };
+    results.steps[name] = { crashed: e instanceof Error ? e.message : String(e) };
   }
   process.stderr.write(`  done in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 };
@@ -46,9 +54,9 @@ if (!quick) {
   );
 }
 
-results['finishedAt'] = new Date().toISOString();
+results.finishedAt = new Date().toISOString();
 mkdirSync(outDir, { recursive: true });
-const stamp = String(results['startedAt']).replace(/[:.]/g, '-');
+const stamp = results.startedAt.replace(/[:.]/g, '-');
 const json = JSON.stringify(results, null, 2);
 writeFileSync(join(outDir, `${stamp}.json`), json);
 writeFileSync(join(outDir, 'latest.json'), json);

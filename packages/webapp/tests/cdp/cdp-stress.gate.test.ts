@@ -75,11 +75,14 @@ describeStress('cdp bridge stress gates', () => {
     expect(r.reproduced).toBe(false);
   });
 
-  it('stale-proxy: a Chrome-leg drop self-heals under both proxy policies', {
+  it('stale-proxy: a Chrome-leg drop self-heals under the shipped and legacy proxies', {
     timeout: 300_000,
   }, async () => {
+    // 'swift' / 'node' model the shipped proxies (reconnect + 4002 reset);
+    // 'legacy-swift' models an older Sliccstart that reconnects silently, so
+    // the bridge's own stale-session self-heal is what has to carry it.
     const r = await runStaleProxy();
-    for (const policy of ['swift', 'node'] as const) {
+    for (const policy of ['swift', 'node', 'legacy-swift'] as const) {
       const p = r[policy];
       expect(p, `${policy} policy ran`).toBeDefined();
       if (!p) continue;
