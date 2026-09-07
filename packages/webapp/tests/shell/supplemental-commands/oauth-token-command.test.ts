@@ -6,6 +6,7 @@ vi.mock('../../../src/providers/account-store.js', () => ({
   getSelectedProvider: vi.fn(),
   getAccounts: vi.fn(() => []),
   saveOAuthAccount: vi.fn(),
+  ensureOAuthMaskReplica: vi.fn(),
 }));
 
 vi.mock('../../../src/providers/index.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
 }));
 
 import {
+  ensureOAuthMaskReplica,
   getAccounts,
   getOAuthAccountInfo,
   getSelectedProvider,
@@ -36,6 +38,7 @@ import { createOAuthTokenCommand } from '../../../src/shell/supplemental-command
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
+const mockEnsureOAuthMaskReplica = vi.mocked(ensureOAuthMaskReplica);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
 const mockGetRegisteredProviderConfig = vi.mocked(getRegisteredProviderConfig);
 const mockGetRegisteredProviderIds = vi.mocked(getRegisteredProviderIds);
@@ -74,6 +77,8 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('fall back to --force-login');
     expect(result.stdout).toContain('Exit codes:');
     expect(result.stdout).toContain('automated recovery is exhausted');
+    expect(result.stdout).toContain('masked replica');
+    expect(result.stdout).not.toContain('The raw access token is printed');
   });
 
   it('rejects an unknown flag instead of silently ignoring it', async () => {
@@ -918,6 +923,80 @@ describe('oauth-token command', () => {
     );
   });
 
+  it('--force-login remasks and prints the replica, never the access token (#2921)', async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'gho_REAL_must_not_leak',
+        expired: false,
+      });
+      onSuccess();
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      expired: false,
+    });
+    mockEnsureOAuthMaskReplica.mockResolvedValue({ maskedValue: 'gho_masked_after_login' });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--force-login'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('gho_masked_after_login\n');
+    expect(result.stdout).not.toContain('gho_REAL_must_not_leak');
+    expect(mockEnsureOAuthMaskReplica).toHaveBeenCalledWith('github');
+  });
+
+  it('--force-login does not print accessToken when remask fails (#2921)', async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'gho_REAL_must_not_leak',
+        expired: false,
+      });
+      onSuccess();
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      expired: false,
+    });
+    mockEnsureOAuthMaskReplica.mockResolvedValue({ error: 'SW unreachable' });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--force-login'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('token held for github but no masked replica');
+    expect(result.stderr).toContain('SW unreachable');
+    expect(result.stderr).not.toContain('no usable token');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('gho_REAL_must_not_leak');
+  });
+
   it('--scope without value returns error', async () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['github', '--scope'], createMockCtx());
@@ -985,7 +1064,7 @@ describe('oauth-token command', () => {
     expect(result.stdout).not.toContain('ghp_REAL_must_not_leak');
   });
 
-  it('returns error when maskedValue is missing', async () => {
+  it('remasks a held token whose replica is missing and prints the replica (#2921)', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'github',
       name: 'GitHub',
@@ -996,10 +1075,35 @@ describe('oauth-token command', () => {
       onOAuthLogin: vi.fn(),
     });
     mockGetOAuthAccountInfo.mockReturnValue({
-      token: 'ghp_real_token',
+      token: 'gho_REAL_must_not_leak',
       expired: false,
-      // maskedValue is missing
+      // maskedValue is missing — access token survived, replica did not
     });
+    mockEnsureOAuthMaskReplica.mockResolvedValue({ maskedValue: 'gho_masked_replica' });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('gho_masked_replica\n');
+    expect(result.stdout).not.toContain('gho_REAL_must_not_leak');
+    expect(mockEnsureOAuthMaskReplica).toHaveBeenCalledWith('github');
+  });
+
+  it('names the missing replica when remask fails, not "no usable token" (#2921)', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'gho_REAL_must_not_leak',
+      expired: false,
+    });
+    mockEnsureOAuthMaskReplica.mockResolvedValue({ error: 'entry missing after write' });
 
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['github'], createMockCtx());
@@ -1007,8 +1111,40 @@ describe('oauth-token command', () => {
     // Prose must stay off stdout — a caller reads stdout as the token, and
     // this sentence is long enough to pass a naive length check (#2695).
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('no usable token for github');
-    expect(result.stderr).toContain('oauth-token github --force-login');
+    expect(result.stderr).toContain('token held for github but no masked replica');
+    expect(result.stderr).toContain('entry missing after write');
+    expect(result.stderr).not.toContain('no usable token');
+    expect(result.stderr).not.toContain('--force-login');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('gho_REAL_must_not_leak');
+    expect(mockEnsureOAuthMaskReplica).toHaveBeenCalledWith('github');
+  });
+
+  it('refuses to print a replica that equals the access token (#2921)', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'gho_REAL_must_not_leak',
+      maskedValue: 'gho_REAL_must_not_leak',
+      expired: false,
+    });
+    mockEnsureOAuthMaskReplica.mockResolvedValue({
+      maskedValue: 'gho_REAL_must_not_leak',
+      error: 'mask replica equals the access token',
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('token held for github but no masked replica');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('gho_REAL_must_not_leak');
   });
 
   it('--renew triggers onSilentRenew and reports success', async () => {
@@ -1207,6 +1343,7 @@ describe('oauth-token command', () => {
       token: 'gho_live',
       expiresAt: Date.now() + 3600_000,
       expired: false,
+      // Replica can be missing: --check uses accessToken via GET /user (#2921).
     });
 
     const cmd = createOAuthTokenCommand();
@@ -1215,6 +1352,7 @@ describe('oauth-token command', () => {
     expect(onValidateToken).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ACCEPTED (as trieloff)');
+    expect(mockEnsureOAuthMaskReplica).not.toHaveBeenCalled();
   });
 
   it('--check sends a refused token to --renew first when renewal is possible', async () => {

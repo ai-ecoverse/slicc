@@ -635,3 +635,150 @@ describe('Bootstrap-on-init re-push', () => {
     (providersMod as any).getRegisteredProviderConfig = original;
   });
 });
+
+describe('ensureOAuthMaskReplica — remask a held token (#2921)', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalChrome: unknown;
+  let originalLocalStorage: Storage;
+
+  function installLocalStorage(): Record<string, string> {
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    return lsData;
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalChrome = (globalThis as any).chrome;
+    originalLocalStorage = globalThis.localStorage;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) {
+      delete (globalThis as any).chrome;
+    } else {
+      (globalThis as any).chrome = originalChrome;
+    }
+    (globalThis as any).localStorage = originalLocalStorage;
+  });
+
+  it('returns an existing distinct replica without writing', async () => {
+    const lsData = installLocalStorage();
+    delete (globalThis as any).chrome;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    lsData['slicc_accounts'] = JSON.stringify([
+      {
+        providerId: 'github',
+        apiKey: '',
+        accessToken: 'gho_REAL',
+        maskedValue: 'gho_masked_existing',
+      },
+    ]);
+
+    const { ensureOAuthMaskReplica } = await import('../../src/ui/provider-settings.js');
+    const result = await ensureOAuthMaskReplica('github');
+    expect(result).toEqual({ maskedValue: 'gho_masked_existing' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('CLI: remasks when maskedValue is missing and persists the replica', async () => {
+    const lsData = installLocalStorage();
+    delete (globalThis as any).chrome;
+    lsData['slicc_accounts'] = JSON.stringify([
+      { providerId: 'github', apiKey: '', accessToken: 'gho_REAL' },
+    ]);
+    globalThis.fetch = vi.fn(async (url: unknown) => {
+      if (String(url).includes('/api/secrets/oauth-update')) {
+        return {
+          ok: true,
+          json: async () => ({ maskedValue: 'gho_masked_cli' }),
+        } as Response;
+      }
+      return { ok: false } as Response;
+    });
+
+    const { ensureOAuthMaskReplica, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    const result = await ensureOAuthMaskReplica('github');
+    expect(result).toEqual({ maskedValue: 'gho_masked_cli' });
+    expect(getOAuthAccountInfo('github')?.maskedValue).toBe('gho_masked_cli');
+    expect(getOAuthAccountInfo('github')?.token).toBe('gho_REAL');
+  });
+
+  it('CLI: names the replica when the mask write fails', async () => {
+    const lsData = installLocalStorage();
+    delete (globalThis as any).chrome;
+    lsData['slicc_accounts'] = JSON.stringify([
+      { providerId: 'github', apiKey: '', accessToken: 'gho_REAL' },
+    ]);
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 503 }) as Response);
+
+    const { ensureOAuthMaskReplica, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    const result = await ensureOAuthMaskReplica('github');
+    expect(result.error).toMatch(/replica/i);
+    expect(result.maskedValue).toBeUndefined();
+    expect(getOAuthAccountInfo('github')?.maskedValue).toBeUndefined();
+    expect(getOAuthAccountInfo('github')?.token).toBe('gho_REAL');
+  });
+
+  it('extension: remasks via SW persistOAuthMaskViaServiceWorker', async () => {
+    const lsData = installLocalStorage();
+    lsData['slicc_accounts'] = JSON.stringify([
+      { providerId: 'github', apiKey: '', accessToken: 'gho_REAL' },
+    ]);
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        lastError: undefined,
+        sendMessage: vi.fn((_msg: unknown, cb: (r: unknown) => void) => {
+          cb({ maskedValue: 'gho_masked_sw' });
+        }),
+      },
+    };
+
+    const { ensureOAuthMaskReplica, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    const result = await ensureOAuthMaskReplica('github');
+    expect(result).toEqual({ maskedValue: 'gho_masked_sw' });
+    expect(getOAuthAccountInfo('github')?.maskedValue).toBe('gho_masked_sw');
+  });
+
+  it('refuses a replica that equals the access token', async () => {
+    const lsData = installLocalStorage();
+    delete (globalThis as any).chrome;
+    lsData['slicc_accounts'] = JSON.stringify([
+      {
+        providerId: 'github',
+        apiKey: '',
+        accessToken: 'gho_REAL',
+        maskedValue: 'gho_REAL',
+      },
+    ]);
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ maskedValue: 'gho_REAL' }),
+    })) as unknown as typeof fetch;
+
+    const { ensureOAuthMaskReplica } = await import('../../src/ui/provider-settings.js');
+    const result = await ensureOAuthMaskReplica('github');
+    expect(result.maskedValue).toBeUndefined();
+    expect(result.error).toBe('mask replica equals the access token');
+  });
+});

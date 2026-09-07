@@ -185,8 +185,20 @@ is `REJECTED`; statuses a healthy token also produces (GitHub answers 403 when
 throttling), 5xx, and transport failures are `UNKNOWN`, which says nothing about
 the token. Providers without the hook say so rather than guessing.
 
-Failure output always names `oauth-token <id> --force-login`, but only claims a
-human is unavoidable when that is established. `onSilentRenew` returning `null`
+`oauth-token <id>` (no flags) and `skill.token('<id>')` print the secrets-pipeline
+**replica** (`account.maskedValue`), never `accessToken`. `--check` is the
+surface that uses the real token (GitHub: `GET /user`). If a token is held and
+not expired but the replica is missing, retrieval remasks via the same dual-mode
+write as login (CLI `POST /api/secrets/oauth-update`, extension SW
+`persistOAuthMaskViaServiceWorker`) and prints the new replica. A remask failure
+reports `token held but no masked replica` rather than `no usable token` /
+`--force-login` — the access token is still held. Stdout never equals the raw
+access token; a replica that matches it is refused.
+
+Failure output names `oauth-token <id> --force-login` when a human may need to
+re-consent, but only claims a human is unavoidable when that is established.
+A held token with no replica is a remask problem, not a login problem.
+`onSilentRenew` returning `null`
 does not prove it — provider hooks collapse transport failures into `null` too —
 so a declined `--renew` runs the upstream check before deciding. Exit codes:
 

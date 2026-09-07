@@ -2405,6 +2405,28 @@ describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.sto
       expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
     );
   });
+
+  it('refuses to persist a replica that equals the access token (#2921)', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'gho_REAL' }] as never[];
+    mockLog.error.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'gho_REAL', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => ({ maskedValue: 'gho_REAL' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'mask replica equals the access token' });
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({
+        providerId: 'github',
+        reason: 'mask replica equals the access token',
+      })
+    );
+  });
 });
 
 describe('OAuth replica HTTP — thin-bridge URL + token', () => {
