@@ -2165,7 +2165,9 @@ describe('BrowserAPI', () => {
       expect(t1.acquisitions).toBe(2);
       expect(t2.acquisitions).toBe(1);
       // The second t1 caller queued behind its own tab; t2 only ever waited
-      // for the bridge.
+      // for the bridge. Exactly 0, not "about 0": with no predecessor on its
+      // own chain there is nothing to time, so this cannot read 1 ms because
+      // the machine was busy (review finding 11).
       expect(t1.tabWaitMs).toBeGreaterThanOrEqual(10);
       expect(t2.tabWaitMs).toBe(0);
       expect(t2.bridgeWaitMs).toBeGreaterThanOrEqual(10);
@@ -2174,6 +2176,23 @@ describe('BrowserAPI', () => {
       expect(bridge.acquisitions).toBe(3);
       expect(bridge.totalWaitMs).toBe(t1.totalWaitMs + t2.totalWaitMs);
       expect(bridge.queueDepth).toBe(0);
+    });
+
+    it('records no wait at all when neither lock was contended', async () => {
+      attachCounting();
+      // Serial, uncontended commands on two tabs: an already-resolved lock
+      // chain is not contention, however slow the machine is.
+      await api.withTab('t1', async () => {});
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+
+      for (const targetId of ['t1', 't2']) {
+        const stats = api.getTabLockStats(targetId);
+        expect(stats.tabWaitMs).toBe(0);
+        expect(stats.bridgeWaitMs).toBe(0);
+        expect(stats.totalWaitMs).toBe(0);
+      }
+      expect(api.getTabLockStats().acquisitions).toBe(3);
     });
 
     it('reports zeroed stats for a tab that was never driven', () => {

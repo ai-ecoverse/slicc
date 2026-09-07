@@ -599,17 +599,28 @@ export class BrowserAPI {
     return counters;
   }
 
-  /** FIFO lock for one target; different targets never wait on each other. */
+  /**
+   * FIFO lock for one target; different targets never wait on each other.
+   *
+   * A tab with no chain entry has no predecessor, so it neither waits nor
+   * records a wait. Awaiting an already-resolved promise still costs a
+   * scheduler turn that `Date.now()` can round up to 1 ms, which turned an
+   * uncontended tab into a "1 ms of contention" reading — enough to make the
+   * accounting test flaky and enough to mislead the `playwright-cli`
+   * contention note it feeds.
+   */
   private async acquireTabLock(targetId: string, counters: TabLockCounters): Promise<() => void> {
     let release!: () => void;
     const next = new Promise<void>((r) => {
       release = r;
     });
-    const prev = this._tabLocks.get(targetId) ?? Promise.resolve();
+    const prev = this._tabLocks.get(targetId);
     this._tabLocks.set(targetId, next);
-    const waitStart = Date.now();
-    await prev;
-    counters.tabWaitMs += Date.now() - waitStart;
+    if (prev) {
+      const waitStart = Date.now();
+      await prev;
+      counters.tabWaitMs += Date.now() - waitStart;
+    }
     return () => {
       // Drop the chain once nobody is queued behind us, so a long-lived
       // bridge does not keep a resolved promise per tab it ever touched.
