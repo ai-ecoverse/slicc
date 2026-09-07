@@ -122,7 +122,7 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertNotNil(CDPProxy.chromeFrameDropReason(.text(oversized)))
     }
 
-    func testChromeCloseReconnectsAndFlushesBufferedMessages() async throws {
+    func testChromeCloseReconnectDiscardsFramesBufferedForTheDeadLeg() async throws {
         let reconnectGate = AsyncGate()
         let harness = ChromeConnectorHarness()
         let proxy = CDPProxy(
@@ -154,7 +154,11 @@ final class CDPProxyTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.connectCountSnapshot(), 2)
-        XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":24,\"method\":\"Target.getTargets\"}"])
+        // Chrome discarded every CDP session with the socket it closed, so the
+        // buffered frame names a session the replacement connection never had.
+        // Replaying it is the duplicate-tab bug from issue #2417 — the client is
+        // closed with 4002 and re-issues whatever it still needs.
+        XCTAssertEqual(harness.sentTextsSnapshot(), [])
     }
 
     func testChromeReconnectRediscoversCDPURL() async throws {

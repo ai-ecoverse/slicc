@@ -51,10 +51,11 @@ final class CDPProxyUpstreamResetTests: XCTestCase {
         // rather than latch "superseded" and stop re-dialing.
         XCTAssertEqual(client.closeCodesSnapshot(), [.unknown(CDPProxy.upstreamResetCloseCode)])
         XCTAssertEqual(client.closeReasonsSnapshot(), ["upstream-reset"])
-        // Buffered frames are flushed by the reconnect before the client is cut
-        // loose, so nothing queued during the outage is lost.
+        // Frames buffered during the outage are NOT replayed onto the fresh
+        // connection: they reference sessions Chrome dropped with the old
+        // socket, and the client re-issues what it needs after the 4002 close.
         XCTAssertEqual(harness.connectCountSnapshot(), 2)
-        XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":24,\"method\":\"Target.getTargets\"}"])
+        XCTAssertEqual(harness.sentTextsSnapshot(), [])
     }
 
     func testChromeReconnectClosesClientWithUpstreamResetAfterThirdFailedAttempt() async throws {
