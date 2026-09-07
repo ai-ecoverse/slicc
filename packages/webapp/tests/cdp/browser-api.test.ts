@@ -816,11 +816,20 @@ describe('BrowserAPI', () => {
       // A capture-every-tab loop used to leave the LAST captured tab in
       // front, backgrounding SLICC — which Chrome may then freeze.
       vi.spyOn(
-        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        api as unknown as {
+          findFocusedLocalPage: (x: string | null, owner?: symbol) => Promise<string | null>;
+        },
         'findFocusedLocalPage'
       ).mockResolvedValue('front-1');
+      // The wake path attaches through the owner-token form so the focus probe
+      // can walk other tabs under the hold it already took.
       const attachSpy = vi
-        .spyOn(api, 'attachToPage')
+        .spyOn(
+          api as unknown as {
+            attachToPageOwned: (id: string, owner?: symbol) => Promise<string>;
+          },
+          'attachToPageOwned'
+        )
         .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot'))
@@ -833,10 +842,8 @@ describe('BrowserAPI', () => {
       // The probe leaves the attachment on a candidate page, so the captured
       // tab must be re-attached BEFORE the first bringToFront — otherwise the
       // capture returns the wrong tab's pixels (review catch on #2100).
-      expect(attachSpy.mock.calls[0]).toEqual(['target-1']);
       // Restore leg: attach the old front, re-front it, re-attach the captured tab.
-      expect(attachSpy).toHaveBeenCalledWith('front-1');
-      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      expect(attachSpy.mock.calls.map((c) => c[0])).toEqual(['target-1', 'front-1', 'target-1']);
       const fronts = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
         (c) => c[0] === 'Page.bringToFront'
       );
@@ -847,11 +854,20 @@ describe('BrowserAPI', () => {
       // A failed screenshot must not leave the captured tab in front — the
       // restoration lives in a finally (review catch on #2100).
       vi.spyOn(
-        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        api as unknown as {
+          findFocusedLocalPage: (x: string | null, owner?: symbol) => Promise<string | null>;
+        },
         'findFocusedLocalPage'
       ).mockResolvedValue('front-1');
+      // The wake path attaches through the owner-token form so the focus probe
+      // can walk other tabs under the hold it already took.
       const attachSpy = vi
-        .spyOn(api, 'attachToPage')
+        .spyOn(
+          api as unknown as {
+            attachToPageOwned: (id: string, owner?: symbol) => Promise<string>;
+          },
+          'attachToPageOwned'
+        )
         .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt
@@ -860,8 +876,7 @@ describe('BrowserAPI', () => {
         .mockResolvedValueOnce({}); // Page.bringToFront (restore)
 
       await expect(api.screenshot()).rejects.toThrow('target crashed');
-      expect(attachSpy).toHaveBeenCalledWith('front-1');
-      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      expect(attachSpy.mock.calls.map((c) => c[0])).toEqual(['target-1', 'front-1', 'target-1']);
     });
 
     it('foregroundFallback:false fails fast instead of stealing window focus', async () => {
@@ -2038,6 +2053,92 @@ describe('BrowserAPI', () => {
         new Promise((r) => setTimeout(() => r('deadlocked'), 300)),
       ]);
       expect(done).toBe('ok');
+    });
+
+    it('makes an outside attachToPage wait for the body that holds the bridge', async () => {
+      attachCounting();
+      const order: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+
+      const body = api.withTab('t1', async () => {
+        order.push('body-start');
+        await gate;
+        order.push('body-end');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+
+      // The WC peek timer's shape: a cursor move from outside any command.
+      // Re-entrancy used to hand it the running body's hold, so it re-pointed
+      // the bridge mid-command (issue #2417, review finding 3).
+      const peek = api.attachToPage('t2').then(() => order.push('peek-attached'));
+      await new Promise((r) => setTimeout(r, 5));
+      expect(order).toEqual(['body-start']);
+
+      release();
+      await Promise.all([body, peek]);
+      expect(order).toEqual(['body-start', 'body-end', 'peek-attached']);
+    });
+
+    it('keeps a body on its own tab when a sibling tried to move the cursor', async () => {
+      attachCounting();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let sawTarget: string | null = null;
+      let sawSession: string | null = null;
+
+      const body = api.withTab('t1', async () => {
+        await gate;
+        // A session-less call: it reads whatever the bridge cursor says.
+        sawTarget = api.getAttachedTargetId();
+        sawSession = api.getSessionId();
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const stray = api.attachToPage('t2');
+      await new Promise((r) => setTimeout(r, 5));
+
+      release();
+      await Promise.all([body, stray]);
+      expect(sawTarget).toBe('t1');
+      expect(sawSession).toBe('sess-1');
+    });
+
+    it('lets the peek path front a tab once the body it queued behind is done', async () => {
+      attachCounting();
+      const order: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+
+      const body = api.withTab('t1', async () => {
+        await gate;
+        order.push('body-end');
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const front = api.bringTabToFront('t2').then(() => order.push('fronted'));
+      await new Promise((r) => setTimeout(r, 5));
+      expect(order).toEqual([]);
+
+      release();
+      await Promise.all([body, front]);
+      expect(order).toEqual(['body-end', 'fronted']);
+      expect(api.getAttachedTargetId()).toBe('t2');
+    });
+
+    it('selectTab moves the cursor under the locks and nothing else', async () => {
+      attachCounting();
+      await api.selectTab('t1');
+      expect(api.getAttachedTargetId()).toBe('t1');
+      expect(
+        (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.some(
+          ([m]) => m === 'Page.bringToFront'
+        )
+      ).toBe(false);
     });
 
     it('reports per-tab and bridge-wide contention separately', async () => {

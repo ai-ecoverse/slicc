@@ -69,8 +69,8 @@ interface PeekDeps {
  * and the reason that reports success is here: a peek that never left must
  * not schedule a trip home.
  *
- * Coming back has two steps that must not be confused. `bringToFront` on
- * SLICC's own target is what the USER sees; re-attaching whatever page the
+ * Coming back has two steps that must not be confused. `bringTabToFront` on
+ * SLICC's own target is what the USER sees; re-selecting whatever page the
  * AGENT was driving is what keeps the gesture out of its way, and is
  * invisible because attaching does not foreground. Only SLICC itself is
  * excluded from that restore — including when the agent was already on the
@@ -118,9 +118,11 @@ function createPeek(deps: PeekDeps): (id: string) => Promise<void> {
       timer = null;
       void (async () => {
         try {
-          await browser.attachToPage(self);
-          await browser.bringToFront();
-          if (previous && previous !== self) await browser.attachToPage(previous);
+          // Both legs go through the bridge's own locks: a peek that fires
+          // while an agent command is mid-flight must queue behind it, not
+          // re-point the shared session cursor underneath it (issue #2417).
+          await browser.bringTabToFront(self);
+          if (previous && previous !== self) await browser.selectTab(previous);
         } catch (err) {
           log.error('WC browser overlay: peek return failed', err);
         }
@@ -182,19 +184,23 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     for (const p of pages) {
       if (seq !== refreshSeq || !overlay.hasAttribute('open')) return;
       try {
-        await browser.attachToPage(p.targetId);
-        const shot = await browser.screenshot({
-          format: 'jpeg',
-          quality: 72,
-          // Cards are `minmax(220px, 1fr)` and stretch well past that in a
-          // wide window, so a 480px capture was being upscaled — the reason
-          // thumbnails looked soft. Capture at device resolution for the
-          // widest realistic card instead of CSS pixels.
-          maxWidth: deps.thumbWidth ?? Math.round(560 * Math.min(devicePixelRatio || 1, 2)),
-          // Never wake suspended tabs via bringToFront here — that steals
-          // window focus from SLICC; they keep the globe placeholder.
-          foregroundFallback: false,
-        });
+        // `withTab` rather than a bare attach: the loop walks every tab, so
+        // without the locks it would move the session cursor out from under
+        // whatever command the agent is running.
+        const shot = await browser.withTab(p.targetId, () =>
+          browser.screenshot({
+            format: 'jpeg',
+            quality: 72,
+            // Cards are `minmax(220px, 1fr)` and stretch well past that in a
+            // wide window, so a 480px capture was being upscaled — the reason
+            // thumbnails looked soft. Capture at device resolution for the
+            // widest realistic card instead of CSS pixels.
+            maxWidth: deps.thumbWidth ?? Math.round(560 * Math.min(devicePixelRatio || 1, 2)),
+            // Never wake suspended tabs via bringToFront here — that steals
+            // window focus from SLICC; they keep the globe placeholder.
+            foregroundFallback: false,
+          })
+        );
         if (seq !== refreshSeq) return;
         overlay.tabs = overlay.tabs.map((t) =>
           t.id === p.targetId ? { ...t, screenshot: `data:image/jpeg;base64,${shot}` } : t
@@ -247,8 +253,7 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
         overlay.hide();
         return true;
       }
-      await browser.attachToPage(id);
-      await browser.bringToFront();
+      await browser.bringTabToFront(id);
       overlay.hide();
       return true;
     } catch (err) {

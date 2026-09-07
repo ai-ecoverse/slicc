@@ -157,6 +157,20 @@ interface TabSession {
   remote?: { runtimeId: string; localTargetId: string };
 }
 
+/**
+ * A live hold on the bridge-wide lock.
+ *
+ * `owner` is a private token minted when the hold is taken; presenting it is
+ * the ONLY way to re-enter the lock (see
+ * {@link BrowserAPI.acquireBridgeLock}). `targetId` is the tab the hold is
+ * driving, which is how same-tab helpers recover the token.
+ */
+interface BridgeHold {
+  release: () => void;
+  owner: symbol;
+  targetId: string | null;
+}
+
 /** Per-tab and bridge-wide contention counters — see {@link BrowserAPI.getTabLockStats}. */
 export interface TabLockStats {
   queueDepth: number;
@@ -246,8 +260,10 @@ export class BrowserAPI {
   private _tabLocks = new Map<string, Promise<void>>();
   /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
   private _bridgeLock: Promise<void> = Promise.resolve();
-  /** Non-null while this bridge-wide lock is held, so nested sections re-enter. */
-  private _bridgeHold: { release: () => void } | null = null;
+  /** Non-null while the bridge-wide lock is held. See {@link BridgeHold}. */
+  private _bridgeHold: BridgeHold | null = null;
+  /** Callers queued for the bridge lock; with no hold either, it is free. */
+  private _bridgeWaiters = 0;
   private _viewportOverrides = new Map<string, ViewportOverride>();
   private _tabLockStats = new Map<string, TabLockCounters>();
   private _onSessionChange?: SessionChangeCallback | undefined;
@@ -453,7 +469,7 @@ export class BrowserAPI {
     counters.queueDepth += 1;
     const releaseTab = await this.acquireTabLock(targetId, counters);
     try {
-      const releaseBridge = await this.acquireBridgeLock({ counters });
+      const releaseBridge = await this.acquireBridgeLock({ counters, targetId });
       try {
         counters.acquisitions += 1;
         return await this.runOnTab(targetId, fn);
@@ -608,27 +624,59 @@ export class BrowserAPI {
    * methods read, `Page.bringToFront` / focus probing, and local↔remote
    * transport swaps.
    *
-   * `reentrant: true` is for helpers reached from INSIDE an operation that
-   * already holds the lock (the screenshot wake-up fallback foregrounds tabs
-   * and probes focus) — they must not deadlock against their own caller. A
-   * fresh operation never passes it: an existing hold there belongs to another
-   * caller and has to be waited out.
+   * **Invariant: the bridge cursor (`sessionId` / `attachedTargetId`) may only
+   * be moved while holding this lock.** Every public entry point that moves it
+   * — {@link withTab}, {@link attachToPage}, {@link selectTab},
+   * {@link bringTabToFront}, {@link bringToFront} — takes it.
+   *
+   * Re-entry is by TOKEN, not by "a hold exists". `opts.owner` bypasses the
+   * queue only when it is the token of the live hold, and the only holders of
+   * a live token are code running underneath it: the internal wake/focus
+   * fallback, which is handed the token explicitly, and same-tab helpers,
+   * which recover it from {@link reentrantOwner}. The boolean this replaces
+   * treated ANY current hold as the caller's own, so a UI timer's
+   * `attachToPage` could move the cursor out from under a running command and
+   * that command's next session-less call ran against the peeked tab.
    */
   private async acquireBridgeLock(opts?: {
-    reentrant?: boolean;
+    /** Token of the live hold this caller is already running under. */
+    owner?: symbol | undefined;
+    /** Token to install on the new hold (a page wait taking its lock back). */
+    token?: symbol;
+    /** The tab this hold drives; what {@link reentrantOwner} matches on. */
+    targetId?: string | null;
     counters?: TabLockCounters;
   }): Promise<() => void> {
-    if (opts?.reentrant && this._bridgeHold) return () => undefined; // our own hold
+    if (opts?.owner !== undefined && this._bridgeHold?.owner === opts.owner) {
+      return () => undefined; // our own hold
+    }
     let release!: () => void;
     const next = new Promise<void>((r) => {
       release = r;
     });
     const prev = this._bridgeLock;
+    const contended = this._bridgeHold !== null || this._bridgeWaiters > 0;
     this._bridgeLock = next;
-    const waitStart = Date.now();
-    await prev;
-    if (opts?.counters) opts.counters.bridgeWaitMs += Date.now() - waitStart;
-    this._bridgeHold = { release };
+    if (contended) {
+      // Nobody may be scheduled between the decrement and the hold below, so
+      // "no hold and no waiter" is a reliable "the chain is already settled" —
+      // which lets the uncontended path skip the await entirely. That keeps
+      // taking this lock on the attach path free of an extra scheduler turn,
+      // and keeps `bridgeWaitMs` from reporting the turn as contention.
+      this._bridgeWaiters += 1;
+      const waitStart = Date.now();
+      try {
+        await prev;
+      } finally {
+        this._bridgeWaiters -= 1;
+      }
+      if (opts?.counters) opts.counters.bridgeWaitMs += Date.now() - waitStart;
+    }
+    this._bridgeHold = {
+      release,
+      owner: opts?.token ?? Symbol('bridge-hold'),
+      targetId: opts?.targetId ?? null,
+    };
     let released = false;
     return () => {
       // Release whichever hold is current, not the one taken above: a page
@@ -640,6 +688,19 @@ export class BrowserAPI {
       this._bridgeHold = null;
       current?.release();
     };
+  }
+
+  /**
+   * The live hold's token, but ONLY when that hold is driving `targetId` —
+   * i.e. the caller is running inside that tab's `withTab` body (or its
+   * `attachToPage`). Anything else, including a UI timer that happens to fire
+   * while a command holds the bridge, gets `undefined` and queues like any
+   * other caller.
+   */
+  private reentrantOwner(targetId: string | null): symbol | undefined {
+    const hold = this._bridgeHold;
+    if (!hold || targetId === null || hold.targetId !== targetId) return undefined;
+    return hold.owner;
   }
 
   /**
@@ -660,8 +721,10 @@ export class BrowserAPI {
       return await wait();
     } finally {
       // The enclosing owner's release closure frees whatever hold is current,
-      // so the handle taken back here needs no separate bookkeeping.
-      await this.acquireBridgeLock();
+      // so the handle taken back here needs no separate bookkeeping. The hold
+      // is taken back under the SAME token, or a helper that recovered the
+      // token before the wait would stop being able to re-enter afterwards.
+      await this.acquireBridgeLock({ token: hold.owner, targetId: hold.targetId });
       if (targetId) this.restoreCurrentTarget(targetId);
     }
   }
@@ -970,18 +1033,60 @@ export class BrowserAPI {
    * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
-    await this.ensureConnected();
+    return this.attachToPageOwned(targetId, this.reentrantOwner(targetId));
+  }
 
-    // One session per tab: reuse the live one. Re-attaching on every tab
-    // switch is what leaked a session (and its event fan-out) per switch.
-    const existing = this._sessions.get(targetId);
-    if (existing) {
-      this.activateSession(targetId, existing);
-      return existing.sessionId;
+  /**
+   * Move the bridge cursor to a tab under the bridge lock.
+   *
+   * `owner` is the token of a hold the caller is already running under — the
+   * `withTab` body for this same tab (recovered by {@link reentrantOwner}), or
+   * the wake/focus fallback, which is handed its own token so it can walk
+   * across tabs without queueing against itself. Everything else queues, which
+   * is what stops a UI timer from re-pointing the cursor mid-command.
+   */
+  private async attachToPageOwned(targetId: string, owner: symbol | undefined): Promise<string> {
+    const release = await this.acquireBridgeLock({ owner, targetId });
+    try {
+      await this.ensureConnected();
+
+      // One session per tab: reuse the live one. Re-attaching on every tab
+      // switch is what leaked a session (and its event fan-out) per switch.
+      const existing = this._sessions.get(targetId);
+      if (existing) {
+        this.activateSession(targetId, existing);
+        return existing.sessionId;
+      }
+
+      const isRemote = !!this.trayTargetProvider?.createRemoteTransport && targetId.includes(':');
+      return await (isRemote
+        ? this.attachRemoteTarget(targetId)
+        : this.attachLocalTarget(targetId));
+    } finally {
+      release();
     }
+  }
 
-    const isRemote = !!this.trayTargetProvider?.createRemoteTransport && targetId.includes(':');
-    return isRemote ? this.attachRemoteTarget(targetId) : this.attachLocalTarget(targetId);
+  /**
+   * Point the bridge at a tab and leave it there — the cursor move a UI switch
+   * needs, taken under the same locks a command takes so it cannot land in the
+   * middle of one.
+   */
+  async selectTab(targetId: string): Promise<void> {
+    await this.withTab(targetId, async () => undefined);
+  }
+
+  /**
+   * Attach to a tab and raise its window, under the command locks.
+   *
+   * The public entry point for foregrounding from OUTSIDE a command (the tab
+   * switcher, the peek return). {@link bringToFront} is the in-command form:
+   * it acts on whatever tab the caller already holds.
+   */
+  async bringTabToFront(targetId: string): Promise<void> {
+    await this.withTab(targetId, async () => {
+      await this.bringToFront();
+    });
   }
 
   /** Attach to a tray target ("{runtimeId}:{localTargetId}") over its remote transport. */
@@ -1103,9 +1208,14 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
     // Window focus is browser-global state, not tab state: two tabs raising
-    // themselves concurrently would fight. Re-entrant when a `withTab` body
-    // already holds the bridge lock.
-    const release = await this.acquireBridgeLock({ reentrant: true });
+    // themselves concurrently would fight. Re-enters only the hold that is
+    // driving THIS tab — realm-host's `screenshotTab` fronts the tab its own
+    // `withTab` body holds and must not deadlock; a caller from outside any
+    // body waits its turn (see bringTabToFront).
+    const release = await this.acquireBridgeLock({
+      owner: this.reentrantOwner(this.attachedTargetId),
+      targetId: this.attachedTargetId,
+    });
     try {
       await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
     } finally {
@@ -1124,22 +1234,31 @@ export class BrowserAPI {
   private async wakeCaptureAndRestoreFocus(params: CdpPayload): Promise<CdpPayload> {
     // Foregrounding and the focus probe walk every tab and move the bridge's
     // current-target cursor, so they run under the bridge-wide lock (a no-op
-    // re-entry when the caller is already inside `withTab`).
-    const release = await this.acquireBridgeLock({ reentrant: true });
+    // re-entry when the caller is already inside `withTab` for this tab).
+    const release = await this.acquireBridgeLock({
+      owner: this.reentrantOwner(this.attachedTargetId),
+      targetId: this.attachedTargetId,
+    });
     try {
-      return await this.wakeCaptureLocked(params);
+      // Whichever hold is live now is the one this walk runs under; its token
+      // is what lets the probe attach to OTHER tabs without queueing against
+      // itself (and without the blanket "any hold is mine" bypass).
+      return await this.wakeCaptureLocked(params, this._bridgeHold?.owner);
     } finally {
       release();
     }
   }
 
-  private async wakeCaptureLocked(params: CdpPayload): Promise<CdpPayload> {
+  private async wakeCaptureLocked(
+    params: CdpPayload,
+    owner: symbol | undefined
+  ): Promise<CdpPayload> {
     const captured = this.getAttachedTargetId();
-    const previousFront = await this.findFocusedLocalPage(captured).catch(() => null);
+    const previousFront = await this.findFocusedLocalPage(captured, owner).catch(() => null);
     // The probe attaches to candidate pages; put the attachment back on the
     // tab being captured BEFORE fronting it, or the capture below runs on the
     // last-probed page's session and returns the wrong tab's pixels.
-    if (captured) await this.attachToPage(captured);
+    if (captured) await this.attachToPageOwned(captured, owner);
     try {
       await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
       return await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
@@ -1149,10 +1268,10 @@ export class BrowserAPI {
       // backgrounded — the exact state this helper exists to prevent.
       if (previousFront && captured) {
         try {
-          await this.attachToPage(previousFront);
+          await this.attachToPageOwned(previousFront, owner);
           await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
           // Leave the attachment where the caller expects it.
-          await this.attachToPage(captured);
+          await this.attachToPageOwned(captured, owner);
         } catch {
           // The focus donor may have closed mid-capture; the capture outcome
           // is unaffected, so swallow.
@@ -1164,18 +1283,21 @@ export class BrowserAPI {
   /**
    * The local page that currently holds window focus, or `null`. Probed by
    * evaluating `document.hasFocus()` per candidate — CDP exposes no focus
-   * flag on targets. Uses raw `attachToPage` (never `withTab`) so a caller
-   * already holding the tab lock cannot deadlock; only the rare
-   * foreground-fallback path pays this cost. Remote (tray) targets are
-   * skipped: their focus lives on another machine.
+   * flag on targets. Attaches under the wake path's own bridge token (never
+   * `withTab`) so a caller already holding the tab lock cannot deadlock; only
+   * the rare foreground-fallback path pays this cost. Remote (tray) targets
+   * are skipped: their focus lives on another machine.
    */
-  private async findFocusedLocalPage(excludeTargetId: string | null): Promise<string | null> {
+  private async findFocusedLocalPage(
+    excludeTargetId: string | null,
+    owner: symbol | undefined
+  ): Promise<string | null> {
     const pages = await this.listPages();
     for (const page of pages) {
       if (!page.targetId || page.targetId === excludeTargetId) continue;
       if (page.targetId.includes(':')) continue; // composite = remote tray target
       try {
-        await this.attachToPage(page.targetId);
+        await this.attachToPageOwned(page.targetId, owner);
         const focused = await this.evaluate('document.hasFocus()');
         if (focused === true) return page.targetId;
       } catch {
