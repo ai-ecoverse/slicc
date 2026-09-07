@@ -1964,6 +1964,20 @@ request — `supportsPromptCaching` and `buildAdditionalModelRequestFields`
 already gate on `isAnthropicClaudeModel`, and both stay correct. The one real
 change was the `temperature` reject-list, which was Claude-only.
 
+Two consequences of that gating, easy to miss:
+
+- **Effort control is Claude-only.** Because `buildAdditionalModelRequestFields`
+  emits nothing off the Claude path, low/medium/high/xhigh all produce a
+  byte-identical request for gpt-5.6. The composer gates its thinking-level
+  selector on `model.reasoning`, so `account-store.ts` clears that flag for
+  non-Claude picker entries via `isBedrockCampClaudeModel`. This does not
+  suppress `reasoningContent` — gpt-5.6 still reasons, it just cannot be told
+  how hard.
+- **The allowlist is anchored per variant** (`sol|terra|luna`), not a
+  `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
+  catalogue gains without anyone measuring its caching, which is the
+  default-deny hole the list exists to prevent.
+
 **Prompt caching is the bar for this allowlist**, so measure it before adding
 a model (`bedrock-runtime.us-west-2`):
 

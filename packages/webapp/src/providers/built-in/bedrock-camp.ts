@@ -105,7 +105,12 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // `buildAdditionalModelRequestFields` already handle both. It does not accept
 // an explicit `cachePoint` block either — caching is automatic and sending one
 // 403s.
-const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5[.-]6-/;
+//
+// Anchored and spelled out per variant on purpose. A looser `gpt-5[.-]6-`
+// would auto-admit any future `*.openai.gpt-5.6-*` the catalogue gains — the
+// exact default-deny hole this list exists to avoid — and would accept the
+// `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
+const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5\.6-(?:sol|terra|luna)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =

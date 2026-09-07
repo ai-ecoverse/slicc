@@ -15,7 +15,20 @@
  * the adaptive shape itself.
  */
 
-export type ClaudeFamily = 'opus' | 'sonnet' | 'haiku' | 'fable';
+/**
+ * Every Claude family this codebase knows about, in one place.
+ *
+ * `CLAUDE_VERSION_RE` is built from this list, and
+ * `tests/providers/bedrock-camp-compat.test.ts` asserts the bedrock picker's
+ * own family alternation accepts all of them. Without that pin, adding a
+ * family here (so the capability shims resolve) while forgetting the picker
+ * regex would make the model parse correctly for temperature/caching yet
+ * never appear in the dropdown — the exact silent-invisibility bug that hid
+ * Claude 5.
+ */
+export const CLAUDE_FAMILIES = ['opus', 'sonnet', 'haiku', 'fable'] as const;
+
+export type ClaudeFamily = (typeof CLAUDE_FAMILIES)[number];
 
 export interface ClaudeVersion {
   family: ClaudeFamily;
@@ -44,7 +57,9 @@ function matchCandidates(modelId: string, modelName?: string): string[] {
  * constraint + negative lookahead prevents false positives on legacy IDs like
  * `claude-3-5-sonnet-20241022` where the date suffix would otherwise match.
  */
-const CLAUDE_VERSION_RE = /(opus|sonnet|haiku|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/;
+const CLAUDE_VERSION_RE = new RegExp(
+  `(${CLAUDE_FAMILIES.join('|')})-(\\d{1,2})(?:-(\\d{1,2}))?(?!\\d)`
+);
 
 /**
  * Parse a Claude family/major/minor out of an id or display name. Returns

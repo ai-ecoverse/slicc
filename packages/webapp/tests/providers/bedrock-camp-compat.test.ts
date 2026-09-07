@@ -18,8 +18,10 @@ import {
 } from '../../src/providers/built-in/bedrock-camp.js';
 import {
   bedrockCampRegionFromBaseUrl,
+  isBedrockCampClaudeModel,
   isBedrockCampCompatible,
 } from '../../src/providers/built-in/bedrock-camp-compat.js';
+import { CLAUDE_FAMILIES, parseClaudeVersion } from '../../src/providers/claude-model-version.js';
 
 describe('bedrockCampRegionFromBaseUrl', () => {
   it('extracts the region from standard, FIPS, and China runtime hosts', () => {
@@ -159,6 +161,20 @@ describe('isBedrockCampCompatible', () => {
     }
   });
 
+  // The allowlist is spelled out per variant, so a future catalogue addition
+  // cannot slip into the picker without someone verifying its caching.
+  it('does not auto-admit unverified gpt-5.6 variants or spellings', () => {
+    for (const id of [
+      'global.openai.gpt-5.6-nova',
+      'global.openai.gpt-5.6-sol-preview',
+      // Dash spelling: no Bedrock id uses it and it was never verified.
+      'global.openai.gpt-5-6-sol',
+      'global.openai.gpt-5.7-sol',
+    ]) {
+      expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(false);
+    }
+  });
+
   it('still requires an inference-profile prefix for allowlisted models', () => {
     // Bare ids 400 with "on-demand throughput isn't supported".
     expect(isBedrockCampCompatible({ id: 'openai.gpt-5.6-sol' }, 'us-west-2')).toBe(false);
@@ -168,6 +184,45 @@ describe('isBedrockCampCompatible', () => {
     expect(isBedrockCampCompatible({ id: 'eu.anthropic.claude-opus-4-8' }, null)).toBe(true);
     expect(isBedrockCampCompatible({ id: 'eu.anthropic.claude-opus-4-8' })).toBe(true);
   });
+});
+
+// The Claude family set lives in two independent places: `CLAUDE_FAMILIES`
+// (which builds the version parser used by the capability shims) and the
+// picker's own `BEDROCK_CAMP_CLAUDE_RE`. Nothing at runtime couples them, so
+// pin them here — a family added to the parser but not the picker would
+// resolve correctly for temperature/caching and still never be selectable.
+// `account-store.ts` clears `model.reasoning` for anything this returns false
+// for, because effort control never reaches the wire off the Claude path.
+describe('isBedrockCampClaudeModel', () => {
+  it.each([
+    ['us.anthropic.claude-opus-5'],
+    ['global.anthropic.claude-sonnet-5'],
+    ['us.anthropic.claude-fable-5'],
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0'],
+  ])('is true for %s', (id) => {
+    expect(isBedrockCampClaudeModel({ id })).toBe(true);
+  });
+
+  it.each([
+    ['global.openai.gpt-5.6-sol'],
+    ['global.openai.gpt-5.6-terra'],
+    ['global.openai.gpt-5.6-luna'],
+  ])('is false for the allowlisted non-Claude model %s', (id) => {
+    // Still selectable — it just must not advertise a thinking-level control.
+    expect(isBedrockCampCompatible({ id }, 'us-west-2'), id).toBe(true);
+    expect(isBedrockCampClaudeModel({ id })).toBe(false);
+  });
+});
+
+describe('picker family alternation covers every parsed Claude family', () => {
+  it.each(CLAUDE_FAMILIES.map((f) => [f]))(
+    'the picker accepts the %s family the version parser knows',
+    (family) => {
+      const id = `us.anthropic.claude-${family}-5`;
+      expect(parseClaudeVersion(id), `${id} must parse`).not.toBeNull();
+      expect(isBedrockCampCompatible({ id }, 'us-west-2'), `${id} must be selectable`).toBe(true);
+    }
+  );
 });
 
 describe('parity with the private copies in bedrock-camp.ts', () => {

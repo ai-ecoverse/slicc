@@ -61,7 +61,12 @@ const BEDROCK_CAMP_CLAUDE_RE = /\.anthropic\.claude-(opus|sonnet|haiku|fable)-(?
 // `buildAdditionalModelRequestFields` already handle both. It does not accept
 // an explicit `cachePoint` block either — caching is automatic and sending one
 // 403s.
-const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5[.-]6-/;
+//
+// Anchored and spelled out per variant on purpose. A looser `gpt-5[.-]6-`
+// would auto-admit any future `*.openai.gpt-5.6-*` the catalogue gains — the
+// exact default-deny hole this list exists to avoid — and would accept the
+// `gpt-5-6-` spelling, which no Bedrock id uses and which was never verified.
+const BEDROCK_CAMP_ALLOWED_NON_CLAUDE_RE = /\.openai\.gpt-5\.6-(?:sol|terra|luna)$/;
 // Matches standard (us-east-1), FIPS (us-east-1-fips) and China
 // (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
 const BEDROCK_RUNTIME_HOST_RE =
@@ -89,6 +94,22 @@ function profileMatchesRegion(prefix: string, region: string): boolean {
   if (prefix === 'jp') return JP_REGIONS.has(region);
   if (prefix === 'au') return AU_REGIONS.has(region);
   return false;
+}
+
+/**
+ * True when a picker-visible id is an Anthropic Claude model.
+ *
+ * `buildAdditionalModelRequestFields` emits a thinking shape ONLY for Claude,
+ * so effort control (low/medium/high/xhigh) never reaches the wire for the
+ * allowlisted non-Claude models — every level would produce a byte-identical
+ * request. The UI gates its thinking-level selector on `model.reasoning`
+ * (`no-thinking` in `wc-nav.ts` / `wc-live-thinking-hydration.ts`), so
+ * `account-store.ts` uses this to clear that flag and hide a control that
+ * does nothing. It does NOT suppress rendering of `reasoningContent` — gpt-5.6
+ * still reasons, it just cannot be told how hard.
+ */
+export function isBedrockCampClaudeModel(model: { id: string }): boolean {
+  return BEDROCK_CAMP_CLAUDE_RE.test(model.id);
 }
 
 export function isBedrockCampCompatible(model: { id: string }, region?: string | null): boolean {
