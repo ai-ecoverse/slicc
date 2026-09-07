@@ -260,19 +260,29 @@ async function cdpSendCommand(
   return result ?? {};
 }
 
-/** Forward `chrome.debugger` events to the offscreen document. */
+/**
+ * Forward `chrome.debugger` events for LEGACY sessions to the offscreen
+ * document.
+ *
+ * Gated on a legacy `sessionToTab` mapping rather than on "some consumer is
+ * attached": a bridge-owned attachment forwards its own events per-Port inside
+ * `bridge-sw.ts`, so keying off mere attachment also broadcast every bridge
+ * event onto the offscreen channel — with `sessionId` undefined, since the
+ * bridge never populates `sessionToTab`. The offscreen proxy then saw those as
+ * browser-level (session-less) events for sessions it never attached.
+ */
 function forwardDebuggerEvent(
   source: ChromeDebuggerTarget,
   method: string,
   params?: CdpPayload
 ): void {
-  if (!debuggerAttachmentOwners.has(source.tabId)) return;
   const sessionId = legacySessionIdForTab(source.tabId);
+  if (sessionId === undefined) return;
 
   postServiceWorkerMessage({
     type: 'cdp-event',
     method,
-    params: sessionId ? { ...params, sessionId } : (params ?? {}),
+    params: { ...params, sessionId },
   } satisfies CdpEventMsg);
 }
 

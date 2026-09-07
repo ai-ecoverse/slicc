@@ -85,7 +85,9 @@ to the leader over the tray.
   focus, discard-freeze exemption, update-reload guard) + its pure URL resolvers.
 - `src/cdp-proxy-sw.ts` - `chrome.debugger` translation for the legacy offscreen
   path, shared per-tab attachment ownership (`'bridge'` vs `'legacy'`), outgoing
-  `maybeUnmaskCdpFrame`, and event/detach forwarding.
+  `maybeUnmaskCdpFrame`, and event/detach forwarding. Debugger events reach the
+  offscreen channel only for tabs with a legacy `sessionToTab` mapping — the
+  bridge forwards its own events per-Port.
 - `src/secrets-sw.ts` - SW-owned `SecretsPipeline` + every `secrets.*` handler
   and the `secrets.crud` Port.
 - `src/mount-backends-sw.ts` - S3 / DA sign-and-forward (message + Port).
