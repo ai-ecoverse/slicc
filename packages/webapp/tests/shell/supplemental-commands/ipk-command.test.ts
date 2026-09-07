@@ -784,6 +784,27 @@ describe('createIpkCommand', () => {
     expect(depNested.version).toBe('3.0.0');
   });
 
+  it('incremental global install after -g -D keeps the earlier devDependency', async () => {
+    const reg = buildRegistry([
+      { name: 'eslint', version: '8.57.1' },
+      { name: 'left-pad', version: '1.3.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const first = await cmd.execute(['install', '-g', '-D', 'eslint'], ctxOf(fs) as never);
+    expect(first.exitCode).toBe(0);
+    const second = await cmd.execute(['install', '-g', 'left-pad'], ctxOf(fs) as never);
+    expect(second.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/eslint/package.json`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/left-pad/package.json`)).toBe(true);
+    const globalManifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(globalManifest.devDependencies.eslint).toBeDefined();
+    expect(globalManifest.dependencies['left-pad']).toBeDefined();
+    const listed = await cmd.execute(['list', '-g'], ctxOf(fs) as never);
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toMatch(/eslint@/);
+    expect(listed.stdout).toMatch(/left-pad@/);
+  });
+
   it('global upgrade prunes orphaned transitive bins from PATH', async () => {
     const reg = buildRegistry([
       {
