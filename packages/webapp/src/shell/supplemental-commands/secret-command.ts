@@ -400,9 +400,15 @@ async function handleScope(args: string[], env: SecretCmdEnv): Promise<ExecResul
 async function handleList(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
   const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return flagError(parsed.error);
-  const entries = await env.backend.list();
+  const { entries, warnings } = await env.backend.list();
+  // A store that could not be read is reported, never rendered as absence:
+  // "No secrets stored" would be a lie, and exit 0 would let a script act on a
+  // list it should not trust. Whatever *was* readable still prints.
+  const stderr = warnings.map((warning) => `secret: ${warning}\n`).join('');
+  const exitCode = warnings.length > 0 ? 1 : 0;
   if (entries.length === 0) {
-    return { stdout: 'No secrets stored\n', stderr: '', exitCode: 0 };
+    const stdout = warnings.length > 0 ? '' : 'No secrets stored\n';
+    return { stdout, stderr, exitCode };
   }
   const nameWidth = Math.max(4, ...entries.map((e) => e.name.length));
   let output = `${'NAME'.padEnd(nameWidth)}  TYPE     DOMAINS\n`;
@@ -410,7 +416,7 @@ async function handleList(args: string[], env: SecretCmdEnv): Promise<ExecResult
     const type = entry.persisted ? 'SAVED' : 'SESSION';
     output += `${entry.name.padEnd(nameWidth)}  ${type.padEnd(7)}  ${entry.domains.join(', ')}\n`;
   }
-  return { stdout: output, stderr: '', exitCode: 0 };
+  return { stdout: output, stderr, exitCode };
 }
 
 async function handleDelete(
@@ -453,10 +459,17 @@ async function handleTest(args: string[], env: SecretCmdEnv): Promise<ExecResult
     return { stdout: '', stderr: `secret: invalid URL "${url}"\n`, exitCode: 1 };
   }
 
-  const entries = await env.backend.list();
+  const { entries, warnings } = await env.backend.list();
   const entry = entries.find((e) => e.name === name);
   if (!entry) {
-    return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
+    // With a store unread, "no secret named X" would be a guess. Report the
+    // gap instead, so a denied `secret test` is never mistaken for a scope
+    // decision.
+    const reason =
+      warnings.length > 0
+        ? warnings.map((warning) => `secret: ${warning}\n`).join('')
+        : `secret: no secret named "${name}"\n`;
+    return { stdout: '', stderr: reason, exitCode: 1 };
   }
 
   // Client-side domain check using the same logic as the fetch proxy

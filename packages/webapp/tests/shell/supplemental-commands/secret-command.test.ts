@@ -11,7 +11,7 @@ const ctx = (stdin = '') => mockCommandContext({ stdin });
 
 function makeBackend(overrides: Partial<SecretBackend> = {}): SecretBackend {
   return {
-    list: vi.fn(async () => []),
+    list: vi.fn(async () => ({ entries: [], warnings: [] })),
     getInfo: vi.fn(async () => null),
     getMasked: vi.fn(async () => null),
     peek: vi.fn(async () => null),
@@ -620,7 +620,10 @@ describe('secret command — unknown flags (#2255)', () => {
 
   it('rejects unknown flags on verbs that take no flags', async () => {
     const backend = makeBackend({
-      list: vi.fn(async () => [{ name: 'K', domains: ['x'], persisted: false }]),
+      list: vi.fn(async () => ({
+        entries: [{ name: 'K', domains: ['x'], persisted: false }],
+        warnings: [],
+      })),
     });
     const res = await run(['list', '--json'], { backend });
     expect(res.exitCode).toBe(1);
@@ -664,5 +667,71 @@ describe('secret command — unknown flags (#2255)', () => {
     });
     expect(res.exitCode).toBe(0);
     expect(backend.setSession).toHaveBeenCalledWith('TOKEN', '-sk-leading-dash', ['api.x.com']);
+  });
+});
+
+describe('secret command — list and test with an unreadable store', () => {
+  const stalledSaved =
+    'could not read saved secrets — no response from the secret store within 10s';
+
+  it('lists the readable half and reports the store it could not read', async () => {
+    const backend = makeBackend({
+      list: vi.fn(async () => ({
+        entries: [{ name: 'E2E_TOKEN', domains: ['127.0.0.1'], persisted: false }],
+        warnings: [stalledSaved],
+      })),
+    });
+    const res = await run(['list'], { backend });
+
+    // The SESSION row still prints — a store that cannot be read must not
+    // suppress the one that can.
+    expect(res.stdout).toContain('E2E_TOKEN');
+    expect(res.stdout).toContain('SESSION');
+    expect(res.stderr).toBe(`secret: ${stalledSaved}\n`);
+    // Non-zero so a script piping `secret list` cannot mistake a partial
+    // answer for the whole truth.
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('never reports "No secrets stored" when a store was unreadable', async () => {
+    const backend = makeBackend({
+      list: vi.fn(async () => ({ entries: [], warnings: [stalledSaved] })),
+    });
+    const res = await run(['list'], { backend });
+
+    expect(res.stdout).toBe('');
+    expect(res.stdout).not.toContain('No secrets stored');
+    expect(res.stderr).toContain(stalledSaved);
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('still reports an empty store as empty', async () => {
+    const backend = makeBackend({
+      list: vi.fn(async () => ({ entries: [], warnings: [] })),
+    });
+    const res = await run(['list'], { backend });
+
+    expect(res.stdout).toBe('No secrets stored\n');
+    expect(res.stderr).toBe('');
+    expect(res.exitCode).toBe(0);
+  });
+
+  it('blames the unreadable store rather than claiming the secret is missing', async () => {
+    const backend = makeBackend({
+      list: vi.fn(async () => ({ entries: [], warnings: [stalledSaved] })),
+    });
+    const res = await run(['test', 'E2E_TOKEN', 'https://api.example.com/v1'], { backend });
+
+    expect(res.stderr).toContain(stalledSaved);
+    expect(res.stderr).not.toContain('no secret named');
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('keeps the not-found message when the stores were read cleanly', async () => {
+    const backend = makeBackend();
+    const res = await run(['test', 'MISSING', 'https://api.example.com/v1'], { backend });
+
+    expect(res.stderr).toContain('no secret named "MISSING"');
+    expect(res.exitCode).toBe(1);
   });
 });

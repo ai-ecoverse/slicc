@@ -11,7 +11,12 @@ import {
   createExtensionSecretBackend,
 } from '../../../src/shell/supplemental-commands/secret-backends.js';
 
-type FetchInit = { method?: string; body?: string; headers?: Record<string, string> };
+type FetchInit = {
+  method?: string;
+  body?: string;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+};
 type Recorded = { url: string; init: FetchInit };
 
 function mockFetch(handler: (call: Recorded) => Response | Promise<Response>) {
@@ -52,21 +57,87 @@ describe('createCliSecretBackend.list', () => {
       return jsonResponse([{ name: 'PERSIST', domains: ['y.example'] }]);
     });
     const records = await createCliSecretBackend().list();
-    expect(records).toEqual([
-      { name: 'PERSIST', domains: ['y.example'], persisted: true },
-      { name: 'TMP', domains: ['x.example'], persisted: false },
-    ]);
+    expect(records).toEqual({
+      entries: [
+        { name: 'PERSIST', domains: ['y.example'], persisted: true },
+        { name: 'TMP', domains: ['x.example'], persisted: false },
+      ],
+      warnings: [],
+    });
   });
 
-  it('skips a failing store and still returns the healthy one', async () => {
+  it('returns the healthy store and a warning naming the failed one', async () => {
     mockFetch(({ url }) =>
       url.endsWith('/session')
         ? new Response('boom', { status: 500 })
         : jsonResponse([{ name: 'A', domains: [] }])
     );
-    expect(await createCliSecretBackend().list()).toEqual([
-      { name: 'A', domains: [], persisted: true },
+    const { entries, warnings } = await createCliSecretBackend().list();
+    expect(entries).toEqual([{ name: 'A', domains: [], persisted: true }]);
+    expect(warnings).toEqual(['could not read session secrets — the bridge gave no reason']);
+  });
+
+  // The bridge answers 503 with a diagnosis when its Keychain read misses its
+  // deadline; that text is the only thing telling the user what to do, so it
+  // must reach them verbatim rather than being flattened into a generic error.
+  it('carries the bridge diagnosis for an unavailable saved store', async () => {
+    mockFetch(({ url }) =>
+      url.endsWith('/session')
+        ? jsonResponse([{ name: 'TMP', domains: [] }])
+        : jsonResponse(
+            {
+              error: 'saved-secret store did not respond within 5s — allow Keychain access',
+              errorCode: 'persisted-store-unavailable',
+            },
+            { status: 503 }
+          )
+    );
+    const { entries, warnings } = await createCliSecretBackend().list();
+    expect(entries).toEqual([{ name: 'TMP', domains: [], persisted: false }]);
+    expect(warnings).toEqual([
+      'could not read saved secrets — saved-secret store did not respond within 5s — allow Keychain access',
     ]);
+  });
+
+  // A bridge that never answers is what hung `secret list`, so every call
+  // carries its own deadline. Asserted as two halves: the signal is attached,
+  // and the abort it produces becomes a readable diagnosis.
+  it('bounds every call with an abort signal', async () => {
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls.length).toBeGreaterThan(0);
+    for (const { init } of calls) {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.signal?.aborted).toBe(false);
+    }
+  });
+
+  it('turns an aborted call into a warning instead of a rejection', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('signal timed out', 'TimeoutError');
+      })
+    );
+    const { entries, warnings } = await createCliSecretBackend().list();
+    expect(entries).toEqual([]);
+    expect(warnings).toEqual([
+      'could not read saved secrets — no response from the secret store within 10s',
+      'could not read session secrets — no response from the secret store within 10s',
+    ]);
+  });
+
+  it('reports an unreachable bridge with the transport reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      })
+    );
+    const { warnings } = await createCliSecretBackend().list();
+    expect(warnings[0]).toBe(
+      'could not read saved secrets — secret store unreachable: Failed to fetch'
+    );
   });
 });
 
@@ -196,15 +267,23 @@ describe('createExtensionSecretBackend', () => {
       return { entries: [{ name: 'P', domains: ['a.example'] }] };
     });
     const records = await createExtensionSecretBackend().list();
-    expect(records).toEqual([
-      { name: 'P', domains: ['a.example'], persisted: true },
-      { name: 'S', domains: [], persisted: false },
-    ]);
+    expect(records).toEqual({
+      entries: [
+        { name: 'P', domains: ['a.example'], persisted: true },
+        { name: 'S', domains: [], persisted: false },
+      ],
+      warnings: [],
+    });
   });
 
-  it('tolerates a malformed SW response by treating entries as empty', async () => {
+  it('reports a malformed SW response instead of an empty list', async () => {
     stubChromeRuntime(() => ({}));
-    expect(await createExtensionSecretBackend().list()).toEqual([]);
+    const { entries, warnings } = await createExtensionSecretBackend().list();
+    expect(entries).toEqual([]);
+    expect(warnings).toEqual([
+      'could not read saved secrets — the bridge gave no reason',
+      'could not read session secrets — the bridge gave no reason',
+    ]);
   });
 
   it('peek rejects when the SW response carries an error field', async () => {
@@ -370,10 +449,13 @@ describe('createBridgeSecretBackend — worker realm over panel-RPC', () => {
         : { entries: [{ name: 'P', domains: ['a.example'] }] }
     );
     const records = await createBridgeSecretBackend().list();
-    expect(records).toEqual([
-      { name: 'P', domains: ['a.example'], persisted: true },
-      { name: 'S', domains: [], persisted: false },
-    ]);
+    expect(records).toEqual({
+      entries: [
+        { name: 'P', domains: ['a.example'], persisted: true },
+        { name: 'S', domains: [], persisted: false },
+      ],
+      warnings: [],
+    });
     expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls.every(([op]) => op === 'secrets-bridge')).toBe(true);
   });

@@ -46,9 +46,24 @@ export interface DeleteResult {
   fromSession?: boolean;
 }
 
+/**
+ * Outcome of {@link SecretBackend.list}, which reads two independent stores
+ * (saved + session) and can lose one of them.
+ *
+ * The reason travels with the entries because dropping it made a broken store
+ * indistinguishable from an empty one: when the Keychain read behind
+ * `GET /api/secrets` stalled on an unanswered ACL dialog, `secret list` showed
+ * no saved secrets at all — or, before that call was bounded, never returned.
+ */
+export interface SecretListResult {
+  entries: SecretRecord[];
+  /** One line per store that could not be read; empty on a complete answer. */
+  warnings: string[];
+}
+
 /** The trusted-realm operations the `secret` command depends on. */
 export interface SecretBackend {
-  list(): Promise<SecretRecord[]>;
+  list(): Promise<SecretListResult>;
   getInfo(name: string): Promise<SecretRecord | null>;
   getMasked(name: string): Promise<MaskedRecord | null>;
   peek(name: string): Promise<PeekRecord | null>;
@@ -87,6 +102,19 @@ function swSendMessage<T>(msg: SecretsControlMessage): Promise<T> {
   });
 }
 
+/**
+ * Ceiling for one `/api/secrets*` call.
+ *
+ * Sits above the swift bridge's own 5 s persisted-store deadline so its
+ * specific diagnosis wins the race and reaches the user, and at the
+ * control-plane budget (`REST_CONTROL_CALL_TIMEOUT_MS`) so a broker waiting on
+ * us never gives up first. Without it a stalled bridge hung the shell forever.
+ */
+const SECRET_API_TIMEOUT_MS = 10_000;
+
+/** Status used for a call that never produced an HTTP response. */
+const NO_RESPONSE_STATUS = 0;
+
 async function apiCall(
   method: string,
   path: string,
@@ -95,11 +123,32 @@ async function apiCall(
   const init: RequestInit = {
     method,
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    signal: AbortSignal.timeout(SECRET_API_TIMEOUT_MS),
   };
   if (body) init.body = JSON.stringify(body);
-  const resp = await fetch(resolveApiUrl(`/api/secrets${path}`), init);
-  const data = await resp.json().catch(() => ({}));
-  return { ok: resp.ok, status: resp.status, data };
+  try {
+    const resp = await fetch(resolveApiUrl(`/api/secrets${path}`), init);
+    const data = await resp.json().catch(() => ({}));
+    return { ok: resp.ok, status: resp.status, data };
+  } catch (err) {
+    // Shaped like a failed response rather than rethrown, so every caller
+    // reports a transport stall through the same path it already uses for a
+    // server-side error instead of surfacing a raw DOMException.
+    return { ok: false, status: NO_RESPONSE_STATUS, data: { error: transportErrorMessage(err) } };
+  }
+}
+
+function transportErrorMessage(err: unknown): string {
+  const name = err instanceof Error ? err.name : '';
+  if (name === 'TimeoutError' || name === 'AbortError') {
+    return `no response from the secret store within ${SECRET_API_TIMEOUT_MS / 1000}s`;
+  }
+  return `secret store unreachable: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+/** Diagnosis for one half of a {@link SecretBackend.list} that came back empty-handed. */
+function storeWarning(store: 'saved' | 'session', reason: string | undefined): string {
+  return `could not read ${store} secrets — ${reason ?? 'the bridge gave no reason'}`;
 }
 
 type NamedDomains = { name: string; domains: string[] };
@@ -112,17 +161,24 @@ export function createCliSecretBackend(): SecretBackend {
         apiCall('GET', ''),
         apiCall('GET', '/session'),
       ]);
-      const out: SecretRecord[] = [];
-      if (persisted.ok)
+      const entries: SecretRecord[] = [];
+      const warnings: string[] = [];
+      if (persisted.ok) {
         for (const e of persisted.data as NamedDomains[])
-          out.push({ name: e.name, domains: e.domains, persisted: true });
-      if (session.ok)
+          entries.push({ name: e.name, domains: e.domains, persisted: true });
+      } else {
+        warnings.push(storeWarning('saved', errOf(persisted.data)));
+      }
+      if (session.ok) {
         for (const e of session.data as NamedDomains[])
-          out.push({ name: e.name, domains: e.domains, persisted: false });
-      return out;
+          entries.push({ name: e.name, domains: e.domains, persisted: false });
+      } else {
+        warnings.push(storeWarning('session', errOf(session.data)));
+      }
+      return { entries, warnings };
     },
     async getInfo(name) {
-      return (await this.list()).find((e) => e.name === name) ?? null;
+      return (await this.list()).entries.find((e) => e.name === name) ?? null;
     },
     async getMasked(name) {
       const { ok, data } = await apiCall('GET', '/masked');
@@ -178,15 +234,20 @@ function createMessageSecretBackend(
           type: 'secrets.session.list',
         }),
       ]);
-      const out: SecretRecord[] = [];
+      const entries: SecretRecord[] = [];
+      const warnings: string[] = [];
       for (const e of persisted?.entries ?? [])
-        out.push({ name: e.name, domains: e.domains, persisted: true });
+        entries.push({ name: e.name, domains: e.domains, persisted: true });
       for (const e of session?.entries ?? [])
-        out.push({ name: e.name, domains: e.domains, persisted: false });
-      return out;
+        entries.push({ name: e.name, domains: e.domains, persisted: false });
+      // The handlers report a failed store as `error` with no `entries`; that
+      // used to be swallowed, leaving a partial list looking complete.
+      if (!persisted?.entries) warnings.push(storeWarning('saved', persisted?.error));
+      if (!session?.entries) warnings.push(storeWarning('session', session?.error));
+      return { entries, warnings };
     },
     async getInfo(name) {
-      return (await this.list()).find((e) => e.name === name) ?? null;
+      return (await this.list()).entries.find((e) => e.name === name) ?? null;
     },
     async getMasked(name) {
       const resp = await call<{ entries?: MaskedRecord[] }>({
