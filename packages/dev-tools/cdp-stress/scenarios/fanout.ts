@@ -34,6 +34,8 @@ export interface FanoutResult {
   ops: number;
   wrongTabResults: number;
   errors: Record<string, number>;
+  /** One example message per error kind, so a rare timeout names its method. */
+  errorSamples: Record<string, string>;
   lock: {
     queueDepth: number;
     /** All queued time: `tabWaitMs + bridgeWaitMs` (or the whole wait on a bridge without the split). */
@@ -72,6 +74,7 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
       lockWait: [],
     };
     const errors = new Map<string, number>();
+    const errorSamples = new Map<string, string>();
     let wrongTab = 0;
     let ops = 0;
 
@@ -99,6 +102,9 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
         return await fn();
       } catch (e) {
         errors.set(errKind(e), (errors.get(errKind(e)) ?? 0) + 1);
+        if (!errorSamples.has(errKind(e))) {
+          errorSamples.set(errKind(e), e instanceof Error ? e.message : String(e));
+        }
         return undefined;
       } finally {
         lat[kind]?.push(Date.now() - t0);
@@ -150,6 +156,7 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
       ops,
       wrongTabResults: wrongTab,
       errors: Object.fromEntries(errors),
+      errorSamples: Object.fromEntries(errorSamples),
       lock: { ...stats, waitPerGoto: summarize(lat['lockWait'] ?? []) },
       latencyMs: {
         goto: summarize(lat['goto'] ?? []),
