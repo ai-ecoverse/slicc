@@ -19,6 +19,7 @@ import {
   helpKeyLabel,
   indexForDigit,
   isActivationTarget,
+  isFrameTarget,
   isTypingTarget,
   nextInCycle,
   prevInCycle,
@@ -391,6 +392,17 @@ describe('isTypingTarget / deepTarget', () => {
     div.setAttribute('contenteditable', 'false');
     document.body.append(div);
     expect(isTypingTarget(div)).toBe(false);
+  });
+});
+
+describe('isFrameTarget', () => {
+  it('sees every nested browsing context, and nothing else', () => {
+    expect(isFrameTarget(document.createElement('iframe'))).toBe(true);
+    expect(isFrameTarget(document.createElement('object'))).toBe(true);
+    expect(isFrameTarget(document.createElement('embed'))).toBe(true);
+    expect(isFrameTarget(document.createElement('div'))).toBe(false);
+    expect(isFrameTarget(document.createElement('textarea'))).toBe(false);
+    expect(isFrameTarget(null)).toBe(false);
   });
 });
 
@@ -1244,6 +1256,43 @@ describe('the mode is the resting state', () => {
     const { handles } = harness();
     await flush();
     expect(handles.active()).toBe(false);
+  });
+
+  /**
+   * A sprinkle panel, a dip's approval card, a Cherry mount: the keystrokes go
+   * to the frame's own document and never reach this listener, so the badge
+   * there would advertise a keyboard the mode does not have.
+   */
+  it('drops the mode while a frame holds the focus, and takes it back', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    frame.focus();
+    // Inline, so the badge does not outlive the focus by a macrotask.
+    expect(handles.active()).toBe(false);
+    expect(hud()).toBeNull();
+    await flush();
+    expect(handles.active()).toBe(false);
+    // A suspension, not a decision: the mode the user chose is untouched.
+    expect(handles.intent()).toBe('keyboard');
+    frame.blur();
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
+  it('stays out of the mode a frame took while it was already off', async () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const { handles, composerField } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    frame.focus();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(handles.intent()).toBe('composer');
   });
 
   /**

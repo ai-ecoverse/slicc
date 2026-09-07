@@ -454,6 +454,26 @@ export function isWithinElement(
 }
 
 /**
+ * Does the focus sit on a nested browsing context — a sprinkle panel, a dip's
+ * approval card, a Cherry mount, a terminal a rail hosts in a frame?
+ *
+ * A frame element is where the parent document's focus STOPS: everything the
+ * user types from there is delivered to the frame's own document and never
+ * reaches this module's listener, whatever the origin. So the mode cannot work
+ * while a frame holds focus, and wearing the badge there advertises a keyboard
+ * that belongs to somebody else — the same lie as a badge in a document nobody
+ * is looking at.
+ *
+ * Duck-typed for the same cross-realm reason as {@link isTypingTarget}.
+ */
+export function isFrameTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as { tagName?: unknown };
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  return tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT' || tag === 'EMBED';
+}
+
+/**
  * Is the focus on something a bare key ACTIVATES rather than types into?
  *
  * Only Enter (and Space, for a keymap that binds it) is at stake, and only
@@ -1722,6 +1742,14 @@ function createSettler(
     // keyboard that is somewhere else entirely.
     if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
     const focused = deepActiveElement(doc);
+    // A frame holding the focus takes every keystroke with it, so there is no
+    // mode to be in — a suspension exactly like the window losing the
+    // keyboard, and the intent is left alone so the mode comes back with the
+    // focus.
+    if (isFrameTarget(focused)) {
+      mode.set(false);
+      return;
+    }
     applyTriggerSettle(
       readTrigger(),
       isTypingTarget(focused) || isWithinElement(deps.composerBand, focused) || !!keepExtra?.(),
@@ -2254,9 +2282,15 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // Composer chrome (+, model pill, …) is not a typing target but must still
     // leave the mode — otherwise a click there under `auto` would keep letters
     // bound until settle runs, and a letter in the same task would fire a command.
+    // A frame is the third case, and the only one where the keys do not merely
+    // mean something else — they never arrive at all (see {@link isFrameTarget}).
+    // Inline for the same reason: the badge must not outlive the focus by a
+    // macrotask.
     if (
       mode.on() &&
-      (isTypingTarget(target) || isWithinElement(deps.composerBand, target as Node | null))
+      (isTypingTarget(target) ||
+        isFrameTarget(target) ||
+        isWithinElement(deps.composerBand, target as Node | null))
     ) {
       mode.set(false);
     }
