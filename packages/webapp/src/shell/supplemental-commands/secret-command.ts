@@ -132,6 +132,14 @@ export interface SecretCommandDeps {
    * skipped; a null `getMasked` lookup is also skipped silently.
    */
   setEnv?: (name: string, value: string) => void;
+  /**
+   * Counterpart to {@link setEnv}, called after a successful `secret delete`.
+   * Without it the masked value injected by `secret set` outlives the secret it
+   * stood for, and `$NAME` keeps expanding to a mask that no longer resolves —
+   * so a request built from it ships a dead credential upstream with no error
+   * (the domain gate cannot fire for a secret that is gone).
+   */
+  unsetEnv?: (name: string) => void;
 }
 
 /**
@@ -147,6 +155,7 @@ interface SecretCmdEnv {
   inExtension: boolean;
   gate: (op: GatedOp, name: string) => Promise<GateOutcome>;
   injectMaskedEnv: (name: string) => Promise<void>;
+  clearMaskedEnv: (name: string) => void;
 }
 
 function refused(decision: SudoDecision): ExecResult {
@@ -211,7 +220,16 @@ function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
     }
   };
 
-  return { backend, inExtension, gate, injectMaskedEnv };
+  // Removal counterpart, called only after the backend confirms the secret is
+  // gone. Mirrors `injectMaskedEnv`'s POSIX-name filter: a name that was never
+  // injected has nothing to clear.
+  const clearMaskedEnv = (name: string): void => {
+    if (!deps.unsetEnv) return;
+    if (!isValidShellEnvName(name)) return;
+    deps.unsetEnv(name);
+  };
+
+  return { backend, inExtension, gate, injectMaskedEnv, clearMaskedEnv };
 }
 
 // Pipeline-friendly: `echo $TOKEN | secret set NAME` keeps the literal
@@ -414,6 +432,7 @@ async function handleDelete(
   if (!result.removed) {
     return { stdout: '', stderr: `secret: no secret named "${name}"\n`, exitCode: 1 };
   }
+  env.clearMaskedEnv(name);
   const scope = result.fromSession === true ? 'session' : 'persisted';
   return { stdout: `Removed ${scope} secret "${name}"\n`, stderr: '', exitCode: 0 };
 }
