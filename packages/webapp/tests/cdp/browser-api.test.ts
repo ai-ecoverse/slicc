@@ -1750,6 +1750,85 @@ describe('BrowserAPI', () => {
       expect(calls).toBe(2);
     });
 
+    it('heals when the stale error was the callback\u2019s first round trip', async () => {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        async (method: string, _params: unknown, sessionId?: string) => {
+          if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+          // The dead session rejects the callback's very first command.
+          if (sessionId === 'sess-1' && method === 'Runtime.enable') {
+            throw new Error('Session with given id not found');
+          }
+          if (method === 'Runtime.evaluate') return { result: { type: 'string', value: 'ok' } };
+          return {};
+        }
+      );
+
+      let runs = 0;
+      const out = await api.withTab('t1', async () => {
+        runs += 1;
+        return api.evaluate('document.title');
+      });
+
+      // Nothing had been applied, so replaying is free of side effects.
+      expect(out).toBe('ok');
+      expect(runs).toBe(2);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+    });
+
+    it('does not replay a callback that had already changed the page', async () => {
+      let sessCount = 0;
+      let keys = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.dispatchKeyEvent') {
+          keys += 1;
+          // Two characters land, then the proxy's Chrome leg resets.
+          if (keys > 4) throw new Error('Session with given id not found');
+          return {};
+        }
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async () => {
+          await api.type('abcdef');
+        })
+        // Replaying would have typed 'ab' twice; the agent is told the
+        // outcome is unknown instead.
+      ).rejects.toThrow(/reset mid-command.*outcome is unknown/s);
+
+      expect(keys).toBe(5);
+      expect(callsTo('Target.attachToTarget')).toHaveLength(1);
+    });
+
+    it('re-arms the tab after an uncertain-outcome failure', async () => {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Input.insertText') throw new Error('Target closed');
+        if (method === 'Runtime.evaluate') return { result: { type: 'number', value: 1 } };
+        return {};
+      });
+
+      await expect(
+        api.withTab('t1', async () => {
+          // One applied send (Runtime.enable via evaluate) before the drop.
+          await api.evaluate('1');
+          await api.insertText('hello');
+        })
+      ).rejects.toThrow(/outcome is unknown/);
+
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+      await api.withTab('t1', async () => {});
+
+      // The dead session was invalidated, so the next command re-attaches.
+      expect(callsTo('Target.attachToTarget')).toHaveLength(2);
+      expect(api.getSessionId()).toBe('sess-2');
+    });
+
     it('does not retry an ordinary command failure', async () => {
       attachCounting();
       let calls = 0;

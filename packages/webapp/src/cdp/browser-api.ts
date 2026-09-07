@@ -234,6 +234,14 @@ export class BrowserAPI {
   private _sessionEventTransports = new Set<CDPTransport>();
   /** Per-target session-replaced subscribers (console/network/routing capture). */
   private _sessionReplacedSubs = new Map<string, Set<SessionChangeCallback>>();
+  /**
+   * Successful session-scoped CDP round trips, per session id — the
+   * "has this command already changed the page?" signal behind
+   * {@link runOnTab}'s replay gate. Keyed by session rather than kept as one
+   * bridge-wide counter so a sibling tab's traffic (which runs while a page
+   * wait has handed the bridge lock away) cannot be mistaken for our own.
+   */
+  private _appliedSends = new Map<string, number>();
   /** Per-target lock chains — commands on different tabs no longer queue behind each other. */
   private _tabLocks = new Map<string, Promise<void>>();
   /** Bridge-wide lock chain; see {@link acquireBridgeLock}. */
@@ -269,6 +277,9 @@ export class BrowserAPI {
     if (!sessionId) return;
 
     try {
+      // Deliberately NOT `sendOnSession`: an auto-dismissed dialog is the
+      // bridge's own housekeeping, not the running command's side effect, so
+      // it must not count against `runOnTab`'s replay gate.
       await this.client.send('Page.handleJavaScriptDialog', { accept: false }, sessionId, 5000);
       log.warn('Auto-dismissed unexpected JavaScript dialog', {
         sessionId,
@@ -455,21 +466,83 @@ export class BrowserAPI {
     }
   }
 
-  /** Attach and run, healing exactly one stale-session failure. */
+  /**
+   * Attach and run, healing a stale-session failure that changed nothing.
+   *
+   * `fn` is opaque: the bridge cannot tell `title` from `type("abcdef")`.
+   * Replaying it after a mid-command session death re-applied whatever it had
+   * already done — `abc` typed before the drop came back as `abcabcdef`, a
+   * click's `mousePressed` fired twice. So the retry is gated on the stale
+   * error having been the FIRST CDP round trip of this callback on this
+   * session (the attach itself, or the first send): nothing was applied, and
+   * re-running is safe.
+   *
+   * Once a send has landed the outcome is genuinely unknown — the command may
+   * have half-completed — so the session is invalidated and the caller gets an
+   * error saying so. Re-checking page state is the agent's job then; guessing
+   * on its behalf is what corrupted input in the first place.
+   */
   private async runOnTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+    // `null` until the attach succeeds, so a stale attach still heals.
+    let session: string | null = null;
+    let applied = 0;
     try {
-      const sessionId = await this.attachToPage(targetId);
-      return await fn(sessionId);
+      session = await this.attachToPage(targetId);
+      applied = this._appliedSends.get(session) ?? 0;
+      return await fn(session);
     } catch (err) {
       if (!isStaleSessionError(err)) throw err;
+      const sent = session === null ? 0 : (this._appliedSends.get(session) ?? 0);
+      this.invalidateSession(targetId);
+      if (sent > applied) {
+        log.warn('CDP session reset mid-command — not replaying', {
+          targetId,
+          applied: sent - applied,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new Error(
+          `The CDP session for tab ${targetId} was reset mid-command, after ${sent - applied} ` +
+            'command(s) had already been applied, so the outcome is unknown. The tab has been ' +
+            're-armed: check the page state before repeating this command. ' +
+            `(underlying error: ${err instanceof Error ? err.message : String(err)})`
+        );
+      }
       log.warn('Stale CDP session — re-attaching and retrying once', {
         targetId,
         error: err instanceof Error ? err.message : String(err),
       });
-      this.invalidateSession(targetId);
       const sessionId = await this.attachToPage(targetId);
       return await fn(sessionId);
     }
+  }
+
+  /**
+   * Send a session-scoped CDP command and record that it landed.
+   *
+   * Every command this class issues against a tab's session goes through here
+   * (or {@link sendOn} for a captured transport) so {@link runOnTab} can tell
+   * "the session was already dead" from "the session died after we changed the
+   * page". Sends that are not the running command's own work — the
+   * out-of-band dialog dismissal — deliberately bypass it.
+   */
+  private sendOnSession(
+    method: string,
+    params: CdpPayload,
+    sessionId: string
+  ): Promise<CdpPayload> {
+    return this.sendOn(this.client, method, params, sessionId);
+  }
+
+  /** {@link sendOnSession} against an explicitly captured transport. */
+  private async sendOn(
+    transport: CDPTransport,
+    method: string,
+    params: CdpPayload,
+    sessionId: string
+  ): Promise<CdpPayload> {
+    const result = await transport.send(method, params, sessionId);
+    this._appliedSends.set(sessionId, (this._appliedSends.get(sessionId) ?? 0) + 1);
+    return result;
   }
 
   /**
@@ -641,7 +714,7 @@ export class BrowserAPI {
 
   /** Send the recorded metrics (and UA + touch, for mobile emulation) to a session. */
   private async applyViewportOverride(vp: ViewportOverride, sessionId: string): Promise<void> {
-    await this.client.send(
+    await this.sendOnSession(
       'Emulation.setDeviceMetricsOverride',
       {
         width: vp.width,
@@ -654,14 +727,14 @@ export class BrowserAPI {
     if (vp.mobile) {
       // Sites that feature-detect touch (navigator.maxTouchPoints) rather
       // than sniffing width/UA won't switch layouts without this.
-      await this.client.send(
+      await this.sendOnSession(
         'Emulation.setTouchEmulationEnabled',
         { enabled: true, maxTouchPoints: 5 },
         sessionId
       );
     }
     if (vp.userAgent !== undefined) {
-      await this.client.send(
+      await this.sendOnSession(
         'Emulation.setUserAgentOverride',
         { userAgent: vp.userAgent },
         sessionId
@@ -996,7 +1069,7 @@ export class BrowserAPI {
     const transport = this.client;
 
     // Enable Page domain for lifecycle events
-    await transport.send('Page.enable', {}, sessionId);
+    await this.sendOn(transport, 'Page.enable', {}, sessionId);
 
     const loadPromise = onceForSession(
       transport,
@@ -1013,7 +1086,7 @@ export class BrowserAPI {
     // a URL that never responds hangs HERE, not in the load wait — both go
     // off the bridge lock or a single hung goto stalls every other tab again.
     await this.waitOffBridgeLock(targetId, async () => {
-      await transport.send('Page.navigate', { url }, sessionId);
+      await this.sendOn(transport, 'Page.navigate', { url }, sessionId);
       await loadPromise;
     });
   }
@@ -1034,7 +1107,7 @@ export class BrowserAPI {
     // already holds the bridge lock.
     const release = await this.acquireBridgeLock({ reentrant: true });
     try {
-      await this.client.send('Page.bringToFront', {}, this.sessionId ?? undefined);
+      await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
     } finally {
       release();
     }
@@ -1068,8 +1141,8 @@ export class BrowserAPI {
     // last-probed page's session and returns the wrong tab's pixels.
     if (captured) await this.attachToPage(captured);
     try {
-      await this.client.send('Page.bringToFront', {}, this.sessionId!);
-      return await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
+      return await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
     } finally {
       // In a finally: a retry capture that THROWS must still give focus back,
       // or a failed screenshot leaves the captured tab in front and SLICC
@@ -1077,7 +1150,7 @@ export class BrowserAPI {
       if (previousFront && captured) {
         try {
           await this.attachToPage(previousFront);
-          await this.client.send('Page.bringToFront', {}, this.sessionId!);
+          await this.sendOnSession('Page.bringToFront', {}, this.sessionId!);
           // Leave the attachment where the caller expects it.
           await this.attachToPage(captured);
         } catch {
@@ -1142,8 +1215,8 @@ export class BrowserAPI {
         let cssWidth = 0;
         let cssScrollHeight = 0;
         try {
-          await this.client.send('Runtime.enable', {}, this.sessionId!);
-          const evalResult = await this.client.send(
+          await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
+          const evalResult = await this.sendOnSession(
             'Runtime.evaluate',
             {
               expression:
@@ -1176,7 +1249,7 @@ export class BrowserAPI {
 
       let result: CdpPayload;
       try {
-        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+        result = await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
       } catch (err: unknown) {
         // Background/throttled tabs have a suspended renderer — wake it and
         // retry once. Foregrounding steals window focus, so callers that
@@ -1222,8 +1295,8 @@ export class BrowserAPI {
       let vw = 1280;
       let vh = 800;
       try {
-        await this.client.send('Runtime.enable', {}, this.sessionId!);
-        const dim = await this.client.send(
+        await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
+        const dim = await this.sendOnSession(
           'Runtime.evaluate',
           {
             expression: 'JSON.stringify({w:window.innerWidth,h:window.innerHeight})',
@@ -1242,7 +1315,7 @@ export class BrowserAPI {
     params['captureBeyondViewport'] = true;
 
     try {
-      const resized = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      const resized = await this.sendOnSession('Page.captureScreenshot', params, this.sessionId!);
       return resized['data'] as string;
     } catch (err) {
       log.warn('maxWidth re-capture failed, returning original', err);
@@ -1258,9 +1331,9 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
-    const result = await this.client.send(
+    const result = await this.sendOnSession(
       'Runtime.evaluate',
       {
         expression,
@@ -1301,12 +1374,12 @@ export class BrowserAPI {
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
@@ -1321,12 +1394,12 @@ export class BrowserAPI {
     this.ensureAttached();
 
     for (const char of text) {
-      await this.client.send(
+      await this.sendOnSession(
         'Input.dispatchKeyEvent',
         { type: 'keyDown', text: char },
         this.sessionId!
       );
-      await this.client.send(
+      await this.sendOnSession(
         'Input.dispatchKeyEvent',
         { type: 'keyUp', text: char },
         this.sessionId!
@@ -1346,7 +1419,7 @@ export class BrowserAPI {
   async insertText(text: string): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
-    await this.client.send('Input.insertText', { text }, this.sessionId!);
+    await this.sendOnSession('Input.insertText', { text }, this.sessionId!);
   }
 
   /**
@@ -1405,7 +1478,7 @@ export class BrowserAPI {
     // The injected script runs in page context and cannot access CDP backendNodeIds,
     // so we fetch them separately and match by role+name.
     try {
-      const axResult = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
+      const axResult = await this.sendOnSession('Accessibility.getFullAXTree', {}, this.sessionId!);
       const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
       if (Array.isArray(nodes)) {
         annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
@@ -1427,11 +1500,11 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('DOM.enable', {}, this.sessionId!);
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
     // Resolve backendNodeId to a remote object
-    const resolveResult = await this.client.send(
+    const resolveResult = await this.sendOnSession(
       'DOM.resolveNode',
       { backendNodeId },
       this.sessionId!
@@ -1442,7 +1515,7 @@ export class BrowserAPI {
     }
 
     // Scroll into view and get bounding box via JS
-    const boxResult = await this.client.send(
+    const boxResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId: object.objectId,
@@ -1459,7 +1532,7 @@ export class BrowserAPI {
     const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
     if (!boxValue || boxValue.width === 0 || boxValue.height === 0) {
       // Element has no dimensions — fall back to programmatic click
-      await this.client.send(
+      await this.sendOnSession(
         'Runtime.callFunctionOn',
         {
           objectId: object.objectId,
@@ -1474,12 +1547,12 @@ export class BrowserAPI {
     const x = boxValue.x + boxValue.width / 2;
     const y = boxValue.y + boxValue.height / 2;
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
@@ -1499,22 +1572,22 @@ export class BrowserAPI {
 
     const { x, y } = await this.resolveNodeCenter(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
@@ -1530,7 +1603,7 @@ export class BrowserAPI {
 
     const { x, y } = await this.resolveNodeCenter(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x, y },
       this.sessionId!
@@ -1546,7 +1619,7 @@ export class BrowserAPI {
 
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -1572,7 +1645,7 @@ export class BrowserAPI {
 
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    const stateResult = await this.client.send(
+    const stateResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -1602,17 +1675,17 @@ export class BrowserAPI {
     const start = await this.resolveNodeCenter(startBackendNodeId);
     const end = await this.resolveNodeCenter(endBackendNodeId);
 
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x: end.x, y: end.y },
       this.sessionId!
     );
-    await this.client.send(
+    await this.sendOnSession(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 },
       this.sessionId!
@@ -1626,8 +1699,8 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('Page.enable', {}, this.sessionId!);
-    const result = await this.client.send('Page.getFrameTree', {}, this.sessionId!);
+    await this.sendOnSession('Page.enable', {}, this.sessionId!);
+    const result = await this.sendOnSession('Page.getFrameTree', {}, this.sessionId!);
     const frameTree = result['frameTree'] as {
       frame: { id: string; parentId?: string; url: string; name?: string; securityOrigin?: string };
       childFrames?: unknown[];
@@ -1693,7 +1766,7 @@ export class BrowserAPI {
     };
 
     const createIsolatedWorld = async (): Promise<number> => {
-      const worldResult = await this.client.send(
+      const worldResult = await this.sendOnSession(
         'Page.createIsolatedWorld',
         { frameId, worldName: '__slicc_iframe' },
         this.sessionId!
@@ -1707,11 +1780,11 @@ export class BrowserAPI {
       if (options?.world !== 'main') {
         return this._frameContextCache.get(frameId) ?? createIsolatedWorld();
       }
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
       let id = this._mainWorldContextCache.get(frameId);
       if (id === undefined) {
-        await this.client.send('Runtime.disable', {}, this.sessionId!);
-        await this.client.send('Runtime.enable', {}, this.sessionId!);
+        await this.sendOnSession('Runtime.disable', {}, this.sessionId!);
+        await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
         id = this._mainWorldContextCache.get(frameId);
       }
       if (id === undefined) {
@@ -1736,7 +1809,7 @@ export class BrowserAPI {
     }
 
     if (options?.world !== 'main') {
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
     }
 
     const evaluateParams = {
@@ -1748,12 +1821,12 @@ export class BrowserAPI {
 
     let result: CdpPayload;
     try {
-      result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
+      result = await this.sendOnSession('Runtime.evaluate', evaluateParams, this.sessionId!);
     } catch (err) {
       if (isDestroyedContextError(err)) {
         invalidateContext();
         contextId = await resolveContext();
-        result = await this.client.send(
+        result = await this.sendOnSession(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
           this.sessionId!
@@ -1772,7 +1845,7 @@ export class BrowserAPI {
       if (isDestroyedContextError(new Error(msg))) {
         invalidateContext();
         contextId = await resolveContext();
-        const retryResult = await this.client.send(
+        const retryResult = await this.sendOnSession(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
           this.sessionId!
@@ -1835,7 +1908,7 @@ export class BrowserAPI {
   async sendCDP(method: string, params: CdpPayload = {}): Promise<CdpPayload> {
     await this.ensureConnected();
     this.ensureAttached();
-    return await this.client.send(method, params, this.sessionId!);
+    return await this.sendOnSession(method, params, this.sessionId!);
   }
 
   // -------------------------------------------------------------------------
@@ -1846,10 +1919,10 @@ export class BrowserAPI {
    * Resolve a backend node ID to a remote object ID.
    */
   private async resolveNodeObjectId(backendNodeId: number): Promise<string> {
-    await this.client.send('DOM.enable', {}, this.sessionId!);
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('Runtime.enable', {}, this.sessionId!);
 
-    const resolveResult = await this.client.send(
+    const resolveResult = await this.sendOnSession(
       'DOM.resolveNode',
       { backendNodeId },
       this.sessionId!
@@ -1868,7 +1941,7 @@ export class BrowserAPI {
   private async resolveNodeCenter(backendNodeId: number): Promise<{ x: number; y: number }> {
     const objectId = await this.resolveNodeObjectId(backendNodeId);
 
-    const boxResult = await this.client.send(
+    const boxResult = await this.sendOnSession(
       'Runtime.callFunctionOn',
       {
         objectId,
@@ -2013,9 +2086,26 @@ export class BrowserAPI {
     }
   }
 
+  /**
+   * Forget applied-send counters for sessions that left the registry.
+   *
+   * Deliberately not done on detach: {@link runOnTab} reads the counter of a
+   * session that has just been dropped — that IS the stale case — so an entry
+   * has to outlive its session. Sweeping on a size cap keeps the map bounded
+   * without racing the reader.
+   */
+  private pruneAppliedSends(): void {
+    if (this._appliedSends.size <= MAX_TAB_SESSIONS * 4) return;
+    const live = new Set([...this._sessions.values()].map((e) => e.sessionId));
+    for (const sessionId of [...this._appliedSends.keys()]) {
+      if (!live.has(sessionId)) this._appliedSends.delete(sessionId);
+    }
+  }
+
   /** Insert a fresh session and evict the least-recently-used one over the cap. */
   private rememberSession(targetId: string, entry: TabSession): void {
     this.addSessionLifecycleListeners(entry.transport);
+    this.pruneAppliedSends();
     this._sessions.set(targetId, entry);
     while (this._sessions.size > MAX_TAB_SESSIONS) {
       const oldest = this._sessions.keys().next().value;
@@ -2136,14 +2226,14 @@ export class BrowserAPI {
    * Get the bounding box of an element by CSS selector.
    */
   private async boundingBox(selector: string): Promise<BoundingBox | null> {
-    await this.client.send('DOM.enable', {}, this.sessionId!);
+    await this.sendOnSession('DOM.enable', {}, this.sessionId!);
 
-    const docResult = await this.client.send('DOM.getDocument', { depth: 0 }, this.sessionId!);
+    const docResult = await this.sendOnSession('DOM.getDocument', { depth: 0 }, this.sessionId!);
     const rootNodeId = (docResult['root'] as { nodeId: number }).nodeId;
 
     let nodeId: number;
     try {
-      const queryResult = await this.client.send(
+      const queryResult = await this.sendOnSession(
         'DOM.querySelector',
         { nodeId: rootNodeId, selector },
         this.sessionId!
@@ -2155,7 +2245,7 @@ export class BrowserAPI {
 
     if (!nodeId) return null;
 
-    const boxModel = await this.client.send('DOM.getBoxModel', { nodeId }, this.sessionId!);
+    const boxModel = await this.sendOnSession('DOM.getBoxModel', { nodeId }, this.sessionId!);
     const model = boxModel['model'] as {
       content: number[];
       width: number;
