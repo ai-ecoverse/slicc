@@ -471,3 +471,75 @@ describe('bedrock-camp built-in provider', () => {
     expect(result.errorMessage).toContain('Unsupported image MIME type');
   });
 });
+
+/**
+ * The provider default has to survive the picker filter, not just exist in
+ * pi-ai's catalogue. `getProviderModels()` resolves `defaultModelId` with a
+ * case-insensitive substring match over the ALREADY-FILTERED list
+ * (`account-store.ts`), so a default naming a model the filter hides silently
+ * falls through to "first visible model". Runs against the real catalogue.
+ */
+describe('config.defaultModelId resolves against the real catalogue', () => {
+  const REGION = 'us-west-2';
+
+  async function visibleModels(): Promise<Array<{ id: string }>> {
+    const { getModels } = await import('../../../src/core/index.js');
+    const all = (getModels as (p: string) => Array<{ id: string }>)('amazon-bedrock');
+    return all.filter((m) => isBedrockCampCompatible(m, REGION));
+  }
+
+  it('is a Claude 5 default', () => {
+    expect(config.defaultModelId).toBe('claude-opus-5');
+  });
+
+  it('matches at least one model the picker actually shows', async () => {
+    const id = config.defaultModelId!;
+    const matches = (await visibleModels()).filter((m) =>
+      m.id.toLowerCase().includes(id.toLowerCase())
+    );
+    expect(matches.length).toBeGreaterThan(0);
+    for (const m of matches) expect(m.id).toMatch(/anthropic\.claude-opus-5/);
+  });
+});
+
+/**
+ * The allowlisted non-Claude model (gpt-5.6) caches IMPLICITLY on Bedrock — an
+ * explicit `cachePoint` block 403s, and every `additionalModelRequestFields`
+ * thinking shape 400s with `unknown_parameter`. Verified live on
+ * `bedrock-runtime.us-west-2`.
+ *
+ * `supportsPromptCaching` and `buildAdditionalModelRequestFields` both gate on
+ * `isAnthropicClaudeModel`, so this already holds — these tests pin it so
+ * widening the picker allowlist can never start emitting either field.
+ */
+describe('allowlisted non-Claude models get no Claude-shaped fields', () => {
+  const NON_CLAUDE = [['global.openai.gpt-5.6-sol', 'GPT-5.6 Sol (Global)']] as const;
+
+  it.each(NON_CLAUDE)('sends no cachePoint for %s', async (id, name) => {
+    const payload = await capturePayload(baseModel({ id, name }), {});
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain('cachePoint');
+  });
+
+  it.each(NON_CLAUDE)(
+    'sends no thinking fields for %s even at reasoning=high',
+    async (id, name) => {
+      const payload = await capturePayload(baseModel({ id, name, reasoning: true }), {
+        reasoning: 'high',
+      });
+      expect(payload.additionalModelRequestFields).toBeUndefined();
+    }
+  );
+
+  it('still sends both for a Claude model (control)', async () => {
+    const payload = await capturePayload(
+      baseModel({ id: 'us.anthropic.claude-opus-5', name: 'Claude Opus 5', reasoning: true }),
+      { reasoning: 'high' }
+    );
+    expect(JSON.stringify(payload)).toContain('cachePoint');
+    expect(payload.additionalModelRequestFields.thinking).toEqual({
+      type: 'adaptive',
+      display: 'summarized',
+    });
+  });
+});

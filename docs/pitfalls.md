@@ -1867,7 +1867,7 @@ bump that learns the model makes the shims no-ops.
 Both shims share a version-threshold parser (`src/providers/claude-model-version.ts`)
 so future releases are picked up automatically.
 
-### 1. `temperature` is deprecated (Opus ≥ 4.7)
+### 1. `temperature` is deprecated (Opus ≥ 4.7, Sonnet ≥ 5.0, all Fable)
 
 Bedrock returns `400 "temperature is deprecated for this model."`. This
 bites the **thinking-disabled** helper calls: `providers/quick-llm.ts` sends
@@ -1878,9 +1878,13 @@ background helpers 502.
 
 Fix: `src/providers/temperature-support.ts` exposes
 `modelSupportsTemperature` / `withSupportedTemperature`, both delegating to
-`claudeRejectsTemperature` (Opus ≥ 4.7) in `claude-model-version.ts`.
+`claudeRejectsTemperature` in `claude-model-version.ts`. The deprecation
+tracks **generations, not families** — Opus picked it up at 4.7, Sonnet at
+5.0, and Fable shipped with it. Haiku 4.5 still accepts `temperature`.
+Assume the next new family also rejects it and verify against the real
+endpoint before adding it.
 
-### 2. Adaptive thinking required (Opus/Sonnet ≥ 4.6)
+### 2. Adaptive thinking required (everything except Haiku, ≥ 4.6)
 
 With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
 not supported for this model. Use thinking.type.adaptive and
@@ -1888,13 +1892,123 @@ output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` may not
 recognize new models and falls back to the legacy shape.
 
 Fix: `src/providers/adaptive-thinking.ts` — an `onPayload` hook rewrites
-`enabled → adaptive` + `output_config.effort` for any Claude Opus/Sonnet
-≥ 4.6. The rewrite only fires when the enabled shape is present, so it's
-a no-op when thinking is off or pi-ai already emits the adaptive shape.
+`enabled → adaptive` + `output_config.effort` for any Claude Opus, Sonnet,
+or Fable ≥ 4.6. The rewrite only fires when the enabled shape is present, so
+it's a no-op when thinking is off or pi-ai already emits the adaptive shape.
+Haiku is the lone holdout — `claude-haiku-4-5` answers `400 "adaptive
+thinking is not supported on this model"` and stays on the legacy shape.
+
+### 3. Version substrings are not capability tests
+
+`bedrock-camp.ts` gated prompt caching on `id.includes('-4-')` and the model
+picker on `/\.anthropic\.claude-(opus|sonnet|haiku)-4/`. Both silently
+mis-answered for Claude 5, whose ids (`us.anthropic.claude-opus-5`,
+`…-sonnet-5`, `…-fable-5`) contain no `-4-`: Opus 5 never appeared in the
+picker at all, and the models that did get through lost every `cachePoint`.
+Neither failure raises an error — the filter just returns `false`.
+
+Route new gates through the `claude-model-version.ts` predicates
+(`claudeSupportsPromptCaching`, `claudeSupportsAdaptiveThinking`,
+`claudeSupportsNativeXhighEffort`, `claudeRejectsTemperature`), which parse
+family + major + minor. Adding a _family_ (as `fable` was) still needs an
+edit in three places: `ClaudeFamily`, `CLAUDE_VERSION_RE`, and the picker's
+`BEDROCK_CAMP_CLAUDE_RE` — which is duplicated in `bedrock-camp.ts` and
+`bedrock-camp-compat.ts` (a parity test pins them together). New _versions_
+within a known family need no edit.
+
+### 4. Bedrock inference-profile prefixes are three tiers, not one
+
+`GET /inference-profiles` per region (the bearer token works cross-region on
+the control plane even when `InvokeModel` doesn't) returns:
+
+| region                         | Anthropic profile prefixes |
+| ------------------------------ | -------------------------- |
+| `us-east-1`, `us-west-2`       | `us.`, `global.`           |
+| `eu-central-1`, `eu-west-1`    | `eu.`, `global.`           |
+| `ap-northeast-1` (Tokyo)       | `apac.`, `jp.`, `global.`  |
+| `ap-southeast-2` (Sydney)      | `apac.`, `au.`, `global.`  |
+| `ap-southeast-1`, `ap-south-1` | `apac.`, `global.`         |
+
+The country tier (`jp.`, `au.`) is **narrower than a region-family prefix
+match** — `jp.` must not be resolved with `startsWith('ap-northeast-')`
+because that would wrongly claim Seoul (`ap-northeast-2`). `profileMatchesRegion`
+enumerates them (`JP_REGIONS`, `AU_REGIONS`); adding a country tier means
+adding its regions explicitly.
+
+Wrong-region ids fail closed but confusingly: `jp.anthropic.claude-sonnet-4-6`
+returns `400 "The provided model identifier is invalid."` on the `us-west-2`
+runtime, while on `ap-northeast-1` the same id returns `403` (an authorization
+error) — so a `403` means the id resolved and a `400` means it didn't.
+
+Separately, pi-ai's `amazon-bedrock` catalogue carries `us.`/`eu.`/`global.`/
+`au.`/`jp.` ids but **no `apac.` ids at all**, so an `ap-southeast-1` or
+`ap-south-1` endpoint sees only the `global.` tier regardless of this filter.
+That is a catalogue gap, not a filter bug.
+
+### 5. Non-Claude Bedrock models: caching is implicit, and `cachePoint` 403s
+
+The picker is default-deny for non-Claude (rule 2 in
+`bedrock-camp-compat.ts`). The allowlist holds exactly one family —
+`openai.gpt-5.6-{sol,terra,luna}` — admitted only after live verification,
+because these models differ from Claude in three ways that each fail silently
+or mid-loop:
+
+|                | Claude                                            | gpt-5.6                                                    |
+| -------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| prompt caching | explicit `cachePoint` block                       | **implicit**; a `cachePoint` block returns `403`           |
+| `temperature`  | rejected from Opus 4.7 / Sonnet 5.0               | rejected                                                   |
+| thinking shape | `thinking.type.adaptive` + `output_config.effort` | **none accepted**; 400s `unknown_parameter` on every shape |
+
+So enabling gpt-5.6 required removing nothing and adding nothing to the
+request — `supportsPromptCaching` and `buildAdditionalModelRequestFields`
+already gate on `isAnthropicClaudeModel`, and both stay correct. The one real
+change was the `temperature` reject-list, which was Claude-only.
+
+Two consequences of that gating, easy to miss:
+
+- **Effort control is Claude-only.** Because `buildAdditionalModelRequestFields`
+  emits nothing off the Claude path, low/medium/high/xhigh all produce a
+  byte-identical request for gpt-5.6. The composer gates its thinking-level
+  selector on `model.reasoning`, so `account-store.ts` clears that flag for
+  non-Claude picker entries via `isBedrockCampClaudeModel`. This does not
+  suppress `reasoningContent` — gpt-5.6 still reasons, it just cannot be told
+  how hard.
+- **The allowlist is anchored per variant** (`sol|terra|luna`), not a
+  `gpt-5.6-` prefix. A prefix would auto-admit any future variant the
+  catalogue gains without anyone measuring its caching, which is the
+  default-deny hole the list exists to prevent.
+
+**Prompt caching is the bar for this allowlist**, so measure it before adding
+a model (`bedrock-runtime.us-west-2`):
+
+- **gpt-5.6** — reliable. `cacheWriteInputTokens` on the first call, then
+  `cacheReadInputTokens` on every repeat, including with a system prompt and
+  `toolConfig` attached.
+- **grok-4.6** — NOT allowlisted. Fully functional (200s, tool calls, system
+  prompts) but cached on only 2 of 15 attempts at ~18-20k tokens, so it would
+  bill full input on nearly every turn.
+- **glm-5 / minimax-m2.5** — no caching at 8k, 20k or 40k; the usage response
+  omits the cache fields entirely, matching their `cacheRead: 0`,
+  `cacheWrite: 0` in pi-ai's catalogue.
+
+Three traps worth naming. **A short prefix is not proof of no caching** —
+grok's first cache hits only appeared once the prompt passed ~18k. **A few
+hits are not proof of caching either** — grok looked like it cached (2 of 4)
+until a larger sample put it at 2 of 15; measure across at least ten runs in
+the shape the agent actually sends. And pi-ai's catalogue prices `cacheRead`
+whether caching is explicit, implicit, or effectively absent, so **cost
+metadata is not evidence** — only `usage` on a live repeat is.
+
+One structural gotcha if grok is ever revisited: Bedrock serves it only
+through an inference profile (bare `xai.grok-4.6` 400s with "on-demand
+throughput isn't supported"), while pi-ai's catalogue ships only the bare id.
+`global.xai.grok-4.6` and `us.xai.grok-4.6` both work when invoked directly,
+so admitting it needs an upstream catalogue fix or a synthesized entry — an
+allowlist alone cannot surface it.
 
 **Related tests:** `claude-model-version.test.ts`,
 `temperature-support.test.ts`, `adaptive-thinking.test.ts`,
-`bedrock-camp.test.ts`.
+`bedrock-camp.test.ts`, `bedrock-camp-compat.test.ts`.
 
 ## Detached popout (historical, removed)
 

@@ -26,6 +26,7 @@ import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 // this eagerly-loaded module's graph in both realms (#first-load ratchet).
 import {
   bedrockCampRegionFromBaseUrl,
+  isBedrockCampClaudeModel,
   isBedrockCampCompatible,
 } from './built-in/bedrock-camp-compat.js';
 import { findFamilyCost } from './family-cost.js';
@@ -386,10 +387,11 @@ function applyModelMetadata(
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     // Bedrock CAMP uses Amazon Bedrock models with a custom API. Filter to
-    // inference-profile-prefixed Claude 4.x whose region matches the
-    // configured endpoint (eu.* against us-* 400s "invalid model
-    // identifier"). pi-ai's amazon-bedrock registry now ships every Opus 4.7
-    // profile variant; no manual extras list is needed.
+    // inference-profile-prefixed Claude 4.x and newer (plus the narrow
+    // non-Claude allowlist) whose region matches the configured endpoint
+    // (eu.* against us-* 400s "invalid model identifier"). pi-ai's
+    // amazon-bedrock registry ships every profile variant we surface; no
+    // manual extras list is needed.
     if (providerId === 'bedrock-camp') {
       const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
       return getModelsDynamic('amazon-bedrock')
@@ -398,6 +400,10 @@ export function getProviderModels(providerId: string): Model<Api>[] {
           ...m,
           api: 'bedrock-camp-converse' as Api,
           provider: 'bedrock-camp',
+          // Effort control only reaches the wire for Claude, so don't let a
+          // non-Claude model advertise a thinking-level selector that would
+          // produce an identical request at every level.
+          reasoning: m.reasoning === true && isBedrockCampClaudeModel(m),
         }));
     }
     // Providers that use Anthropic's model registry with custom API
