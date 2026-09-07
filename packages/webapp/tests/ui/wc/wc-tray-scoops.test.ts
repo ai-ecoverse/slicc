@@ -7,6 +7,7 @@ import {
   summaryRole,
   summaryToWorkUnit,
   toScoopSummaries,
+  turnsFromUnits,
 } from '../../../src/ui/wc/wc-tray-scoops.js';
 import { toTabDescriptors } from '../../../src/work-unit/client/presentation.js';
 
@@ -121,6 +122,24 @@ describe('tray scoop tab adapters', () => {
     expect(toScoopSummaries([cone], [])).toEqual([
       expect.objectContaining({ jid: 'cone', state: 'idle', fill: 0 }),
     ]);
+  });
+
+  it('carries the completed-turn counter to the follower and back', () => {
+    // The counter exists because these payloads are coalesced: a turn that
+    // opens and closes inside one window reaches the follower as its final
+    // state alone, so the boundary has to survive as a number (#2948).
+    const turns = turnsFromUnits([{ id: 'cone', turns: 4 }]);
+    const [summary] = toScoopSummaries([cone], [{ key: 'cone', state: 'idle', fill: 0 }], turns);
+    expect(summary?.turns).toBe(4);
+    expect(summaryToWorkUnit(summary as ScoopSummary).turns).toBe(4);
+    // Absent for a unit that has not finished a turn here, and for a leader
+    // that counts none at all — which is what tells a follower to fall back to
+    // watching state.
+    expect(toScoopSummaries([cone], [], turnsFromUnits([{ id: 'cone' }]))[0]).not.toHaveProperty(
+      'turns'
+    );
+    expect(toScoopSummaries([cone], [])[0]).not.toHaveProperty('turns');
+    expect(summaryToWorkUnit({ ...cone, state: 'idle' })).not.toHaveProperty('turns');
   });
 
   it('expands every wire pair back into follower descriptor fields', () => {

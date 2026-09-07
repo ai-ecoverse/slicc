@@ -133,6 +133,23 @@ export const MoreThanNine: Story = {
   },
 };
 
+/**
+ * Hidden scoops with unread output. Each row repeats the strip's own dot on its
+ * status ring, in that scoop's hue; the trigger takes one ink dot for the lot,
+ * because it stands for several agents at once.
+ */
+export const Unread: Story = {
+  args: {
+    open: true,
+    items: SCOOPS.map((item, index) => (index % 2 === 0 ? { ...item, unread: index + 2 } : item)),
+  },
+};
+
+/** The same unread trigger with the popup shut — the only cue a tab is missing. */
+export const UnreadClosed: Story = {
+  args: { items: SCOOPS.map((item) => ({ ...item, unread: 3 })) },
+};
+
 /** Dark theme — popup surfaces flip via the inherited `.dark` scope. */
 export const Dark: Story = {
   args: { open: true },

@@ -171,6 +171,7 @@ function makeWiring(options: {
     statuses: new Map(),
     fills: new Map(),
     phases: new Map(),
+    turns: new Map(),
     lickBackpressure: new Map(),
     lastActivity: new Map(),
     pendingUrlContext: null,
@@ -336,6 +337,52 @@ describe('createWcLiveCallbacks', () => {
     expect(segment()?.dataset.state).toBe('idle');
     expect(notifyScoopStateChanged).toHaveBeenCalledTimes(2);
     wiring.refs.switcher.remove();
+  });
+
+  it('dots a tab whose turn ended while the user was on another one', () => {
+    const worker = scoop({ jid: 'scoop-worker', name: 'worker' });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, worker] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    const unreadOf = (jid: string): number | undefined =>
+      wiring.refs.switcher.scoops.find((chip) => chip.key === jid)?.unread;
+
+    callbacks.onStatusChange(worker.jid, 'processing' as never);
+    expect(unreadOf(worker.jid)).toBeUndefined();
+    callbacks.onStatusChange(worker.jid, 'ready' as never);
+    expect(unreadOf(worker.jid)).toBe(1);
+    // The selected tab is read by definition, even across its own turn.
+    callbacks.onStatusChange(cone.jid, 'processing' as never);
+    callbacks.onStatusChange(cone.jid, 'ready' as never);
+    expect(unreadOf(cone.jid)).toBeUndefined();
+
+    // Selecting the scoop is the read receipt; the next repaint clears the dot.
+    wiring.selectScoop(asUnit(worker));
+    wiring.refreshScoops?.();
+    expect(unreadOf(worker.jid)).toBeUndefined();
+  });
+
+  it('counts a completed turn where a follower can still see it', () => {
+    // The count is kept on the STATUS EVENT, not on the repaint, because a
+    // follower's roster pushes are coalesced: a turn that opens and closes
+    // inside one 50ms window arrives as its final state alone, and only this
+    // counter still shows it happened (#2948).
+    const worker = scoop({ jid: 'scoop-worker', name: 'worker' });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, worker] });
+    const callbacks = createWcLiveCallbacks(wiring);
+
+    callbacks.onStatusChange(worker.jid, 'processing' as never);
+    expect(wiring.turns.get(worker.jid)).toBeUndefined();
+    callbacks.onStatusChange(worker.jid, 'ready' as never);
+    expect(wiring.turns.get(worker.jid)).toBe(1);
+    // A failed turn still left something to read, so it counts too.
+    callbacks.onStatusChange(worker.jid, 'processing' as never);
+    callbacks.onStatusChange(worker.jid, 'error' as never);
+    expect(wiring.turns.get(worker.jid)).toBe(2);
+    // It rides the protocol, which is how it reaches the wire projection.
+    expect(wiring.workUnits?.currentUnits().find((u) => u.id === worker.jid)?.turns).toBe(2);
+    // A dropped unit takes its count with it rather than seeding a recycled id.
+    callbacks.onScoopListUpdate([{ ...cone, parentId: cone.parentJid, status: 'ready' }]);
+    expect(wiring.turns.has(worker.jid)).toBe(false);
   });
 
   it('caches lick backpressure for every scoop and renders only the selected scoop', () => {

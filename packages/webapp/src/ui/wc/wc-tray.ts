@@ -56,6 +56,7 @@ import {
   toTabDescriptors,
 } from '../../work-unit/client/presentation.js';
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
+import { UnreadLedger } from '../../work-unit/client/unread.js';
 import { parseQualifiedModelId, qualifiedModelId, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
@@ -104,7 +105,7 @@ import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyComposerAvailability, type SwitcherScoop, type WcShellRefs } from './wc-shell.js';
-import { toScoopSummaries } from './wc-tray-scoops.js';
+import { toScoopSummaries, turnsFromUnits } from './wc-tray-scoops.js';
 import { rootForSelection } from './wc-unit-context.js';
 
 export interface WcTrayDeps {
@@ -454,11 +455,18 @@ export function buildFollowerOptions(
    * moved to `toTabDescriptors`.
    */
   const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
+  // Unread from the same ledger the leader publishes through: it reads only the
+  // presentation state every roster push already carries, so a follower needs no
+  // new wire field to dot a tab (and one too old to send `state` simply never
+  // sees a transition to count).
+  const unread = new UnreadLedger();
   const publishFollowerScoops = (): void => {
+    const units = workUnits.currentUnits();
     deps.refs.switcher.scoops = toTabDescriptors(
-      workUnits.currentUnits(),
+      units,
       selectedScoopJid,
-      scoopColor
+      scoopColor,
+      unread.sync(units, selectedScoopJid)
     ) as SwitcherScoop[];
   };
   const transcript = createTranscriptWatch(workUnits, () => deps.getController());
@@ -819,7 +827,12 @@ export function createLeaderOptionsFactory(
     getMessages: () => deps.getController()?.getMessages() ?? [],
     getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
-    getScoops: () => toScoopSummaries(client.getScoops(), refs.switcher.scoops),
+    getScoops: () =>
+      toScoopSummaries(
+        client.getScoops(),
+        refs.switcher.scoops,
+        turnsFromUnits(deps.workUnits.currentUnits())
+      ),
     getModelCatalog: modelCatalogForTray,
     ...leaderModelCallbacks(deps),
     onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>

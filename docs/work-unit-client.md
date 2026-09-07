@@ -267,6 +267,58 @@ about.
 leader-side home (`Orchestrator.ownerRootOrDefault`, #2312): the client
 protocol does not settle approvals, it only agrees on who owns whom.
 
+### Unread (`work-unit/client/unread.ts`)
+
+Multiple cones made the strip a place you leave things running, so a tab has to
+be able to say it has news. `UnreadLedger.sync(units, selectedId)` folds a roster
+plus the selection into per-unit counts, which `toTabDescriptors` puts on the
+descriptor as `unread`.
+
+**The signal is the roster, not a message stream** — which is what lets both
+sides share it. A leader could count `turn_end` per unit, but a follower
+subscribes only to the transcript of the unit it is SHOWING and would have
+nothing to count for the rest. Both sides do see every unit, so a turn ending is
+a unit that was working and is not any more.
+
+The roster answers that two ways, and the ledger prefers the second:
+
+| Signal                    | Where it comes from                                                                                          | Why it is not enough on its own                                                                                                                                                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state` leaving `working` | Sampled at every roster push                                                                                 | The leader coalesces `scoops.list` for 50 ms and only the SELECTED unit sends direct status frames, so an off-screen turn that starts and finishes inside one window reaches a follower in its final `idle`/`broken` state alone. Sampled state cannot tell that turn from one that never happened. |
+| `turns` going up          | `WorkUnitSummary.turns` / `ScoopSummary.turns`, incremented by the producing page on the kernel status EVENT | Absent from a leader too old to send it, and absent for a unit that has not finished a turn on that page yet.                                                                                                                                                                                       |
+
+`turns` is a **version, not a total**: the ledger keeps the value it last saw per
+unit and treats any increase as that many finished turns, so a frame the wire
+coalesced away still leaves its increment in the next one. A decrease means the
+leader reloaded and restarted at zero, which re-baselines instead of counting
+backwards. Where the counter is absent the ledger watches `state` exactly as it
+did before the field existed (#2948).
+
+The leader keeps the count in `WcLiveWiring.turns`, incremented in
+`onStatusChange` — at the event, because everything downstream samples — and
+projects it through `recordToWorkUnitSummary` → `toScoopSummaries`. A follower
+reads it back in `summaryToWorkUnit`. It is deliberately NOT the leader's unread
+count: read state is per-device, so each side counts from its own baseline and
+clears on its own selection.
+
+Three more consequences worth keeping:
+
+- **Finished turns, not states.** A repeated roster push adds nothing; a unit
+  seen for the first time is not news the user missed, so a first roster opens
+  with every tab clean — including one whose counter arrives already at 7.
+- **Selection is the read receipt.** The selected unit is always at zero, and
+  `toTabDescriptors` re-applies that rule even for a caller that hands over its
+  own map.
+- **One publisher or none.** Both floats fold unread in at their strip publisher
+  (`installStripPublisher`, `publishFollowerScoops`), because that is the only
+  place holding the roster and the selection in the same instant. A second
+  projection of the same records — the leader's 15 s stats poll used to be one —
+  republishes descriptors without the counts and wipes every dot, so that path
+  now goes through `refreshScoops` instead.
+
+Nothing persists: unread is per-page-session by design, the way an unseen
+streamed reply is.
+
 Read-only chrome stays one rule, and it moved onto the protocol:
 `isReadOnlyUnit(summary)` states it over `role`, and `isReadOnlyRole` (the
 UI's `cone`/`scoop` spelling) delegates there. Both shells reach one answer.

@@ -79,6 +79,18 @@ export interface WorkUnitSummary {
   /** Context-window fullness, 0–100 — the agent tabs' scale on both sides. */
   fill: number;
   /**
+   * Turns this unit has COMPLETED, counted monotonically since the producing
+   * page loaded. Absent where the transport does not carry it (a leader too
+   * old to send `ScoopSummary.turns`).
+   *
+   * A VERSION rather than a total: a reader compares it with the value it last
+   * saw and treats an increase as that many finished turns. It is on the
+   * protocol because `state` is sampled and this is not — the leader coalesces
+   * roster pushes, so an off-screen turn can be delivered in its final state
+   * alone, and only a counter still shows that it happened.
+   */
+  turns?: number;
+  /**
    * The model THIS unit runs on (#2310), provider-qualified. Absent means
    * "not pinned / not known yet", never "the global selection": an empty
    * catalog is warm-up, not an answer (#2329), so a reader must not latch on

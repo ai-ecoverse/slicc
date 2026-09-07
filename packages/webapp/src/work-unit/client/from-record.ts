@@ -20,6 +20,8 @@ export interface RecordUnitState {
   fill?: number;
   phase?: WorkUnitPhase;
   awaiting?: boolean;
+  /** Completed turns, as the page has counted them off kernel status events. */
+  turns?: number;
 }
 
 /** Map the page's status vocabulary onto the protocol's rendered state. */
@@ -63,6 +65,9 @@ export function recordToWorkUnitSummary(
     ...(rendered === 'idle' && state.awaiting ? { awaiting: true as const } : {}),
     // The kernel reports a 0–1 ratio; the protocol (and both strips) speak percent.
     fill: typeof state.fill === 'number' ? Math.round(state.fill * 100) : 0,
+    // Counted by the shell off the kernel's status events, so it is present
+    // only once a unit has finished a turn on this page.
+    ...(typeof state.turns === 'number' ? { turns: state.turns } : {}),
     ...(model ? { model } : {}),
     ...(scoop.trigger ? { trigger: scoop.trigger } : {}),
     ...(scoop.addedAt ? { addedAt: scoop.addedAt } : {}),

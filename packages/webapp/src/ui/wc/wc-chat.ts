@@ -21,6 +21,7 @@
 
 import { toTabDescriptors } from '../../work-unit/client/presentation.js';
 import type { WorkUnitClient } from '../../work-unit/client/types.js';
+import { UnreadLedger } from '../../work-unit/client/unread.js';
 import type { AgentHandle } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import type { WcChatHost } from './wc-chat-host.js';
@@ -52,11 +53,18 @@ export interface WcChatAttachment {
  * event behind them, so a cached copy would render the previous instant.
  */
 export function installStripPublisher(wiring: WcLiveWiring, client: WorkUnitClient): () => void {
+  // Unread is folded in HERE rather than in the callback bag because the ledger
+  // needs the roster and the selection in the same instant, and this is the one
+  // place that has both (a selection change repaints through `refreshScoops`).
+  const unread = new UnreadLedger();
   const publish = (): void => {
+    const units = client.currentUnits();
+    const selectedId = wiring.getSelected()?.id;
     wiring.refs.switcher.scoops = toTabDescriptors(
-      client.currentUnits(),
-      wiring.getSelected()?.id,
-      scoopColor
+      units,
+      selectedId,
+      scoopColor,
+      unread.sync(units, selectedId)
     ) as SwitcherScoop[];
     wiring.refreshConeActions?.();
   };

@@ -851,6 +851,26 @@ export interface ScoopSummary {
   /** Context-window fullness on the same 0-100 scale as the agent tabs. Absent from older leaders. */
   fill?: number;
   /**
+   * Turns this unit has COMPLETED, counted monotonically by the leader since
+   * its page loaded. Absent from older leaders.
+   *
+   * It exists because `state` is SAMPLED and this is not. The leader coalesces
+   * `scoops.list` for 50ms and only the selected unit sends direct status
+   * frames, so an off-screen turn that starts and finishes inside one window
+   * reaches a follower in its final `idle` state alone — the intermediate
+   * `working` never lands, and a follower inferring "a turn ended" from the
+   * states it saw would miss it entirely. A counter survives coalescing: a
+   * frame the wire dropped still leaves its increment in the next one.
+   *
+   * Read it as a VERSION, not a total: compare it with the value you last saw
+   * for this unit and treat any increase as that many completed turns. The
+   * absolute number is meaningless across a leader reload (it restarts at 0),
+   * so a decrease means "new leader" and must re-baseline rather than
+   * underflow. A follower that does not receive it falls back to watching
+   * `state` leave `working`, which is what every build did before this field.
+   */
+  turns?: number;
+  /**
    * The model THIS unit runs on (#2310). Model selection is per cone and
    * lives on the leader's work-unit record, so a follower can show — and
    * change — the model of the cone it is looking at instead of one global

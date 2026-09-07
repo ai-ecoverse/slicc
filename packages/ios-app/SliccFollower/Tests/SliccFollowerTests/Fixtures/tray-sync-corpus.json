@@ -1330,7 +1330,8 @@
         "trigger"
       ],
       "dropped": [
-        "addedAt"
+        "addedAt",
+        "turns"
       ],
       "sample": {
         "jid": "reviewer",
@@ -1344,6 +1345,7 @@
         "state": "idle",
         "activity": "awaiting",
         "fill": 82,
+        "turns": 6,
         "model": {
           "provider": "example",
           "id": "reasoner"

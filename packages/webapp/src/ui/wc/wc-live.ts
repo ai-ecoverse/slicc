@@ -45,7 +45,6 @@ import {
   createWcLiveCallbacks,
   ensureWorkUnitClient,
   type LickBackpressureState,
-  toSwitcherScoops,
   type WcLiveWiring,
 } from './wc-live-callbacks.js';
 import { wireWcComposer } from './wc-live-composer.js';
@@ -478,6 +477,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     statuses: new Map(),
     fills: new Map(),
     phases: new Map(),
+    turns: new Map(),
     lickBackpressure,
     lastActivity: new Map(),
     // The thread component owns the `ctx` param — the host only routes it.
@@ -618,14 +618,11 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
       if (stats.scoops) fb.costScoops = stats.scoops;
       wiring.fills.clear();
       for (const f of stats.fills) wiring.fills.set(f.jid, f.fill);
-      wiring.refs.switcher.scoops = toSwitcherScoops(
-        client.getScoops(),
-        wiring.statuses,
-        wiring.fills,
-        wiring.phases,
-        wiring.awaitingInput,
-        wiring.getSelected()?.id
-      );
+      // Through the ONE publisher, not a second projection of the same records:
+      // the client already reads this `fills` map, and a direct assignment here
+      // would drop everything the publisher adds on top of the roster — it wiped
+      // the unread dots off every tab on each 15s tick.
+      wiring.refreshScoops?.();
     });
   };
   setInterval(refresh, 15_000);

@@ -341,6 +341,34 @@ keyboard.
 The composer's side of it is `slicc-composer[keys]`: everything the band holds
 recedes to 55% except the HUD.
 
+## Unread on the tab strip
+
+`ScoopDescriptor.unread` (a count, `0`/absent for nothing new) puts a dot in the
+scoop's own hue on the status glyph's top-right, at the ring's 45° corner. Rules
+a host has to know:
+
+- **The selected segment never shows it.** The tab you are reading is read, so
+  the strip zeroes the count for `active` itself — a host may leave a stale
+  number in its model while the user sits inside that unit.
+- **The dot is drawn INSIDE the glyph SVG**, last in the child list so it stacks
+  over the ring, the arc and the pin. That is what keeps it free: it costs the
+  segment no padding (so it does not push tabs into the overflow), never drifts
+  as a label changes length, and cannot be clipped by the track's
+  `overflow: hidden` the way a segment-corner marker was.
+- **Hue, not state.** The fill is the agent's hue even on a broken tab, whose
+  ring stays red: state is the ring's job, identity is the dot's. The halo takes
+  `--canvas` on the selected segment and `--ghost` elsewhere, so it matches
+  whichever surface the segment sits on in both themes.
+- **Nothing animates.** The rotating fullness arc already owns motion here.
+- **A collapsed tab is not silent.** `#feedOverflow` reads each hidden segment's
+  count back off the DOM into `SliccScoopOverflowItem.unread`;
+  `<slicc-scoop-overflow>` repeats the same dot on the row's glyph and marks its
+  trigger with one dot in `--ink` (it stands for several agents, so it carries no
+  single hue). The count also reaches the screen reader through both aria labels.
+
+The webapp derives the count in `work-unit/client/unread.ts` — see
+[`work-unit-client.md`](work-unit-client.md).
+
 ## Tablist arrows vs a host keyboard
 
 `<slicc-agent-tabs>` implements the ARIA tablist keyboard: with a segment

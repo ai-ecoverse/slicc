@@ -25,7 +25,11 @@ import { h, sheet } from '../internal/dom.js';
 const STYLE = `
 :host{display:inline-block;}
 .switcher-more{position:relative;}
-.morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
+.morebtn{position:relative;display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
+/* Hidden scoops with unread output. The grid's cells are 3px and already
+   severity-coded, so the aggregate rides the button's own corner instead — in
+   ink rather than a hue, because it stands for several agents at once. */
+.morebtn[data-unread]::after{position:absolute;top:1px;right:1px;width:6px;height:6px;border-radius:50%;background:var(--ink);box-shadow:0 0 0 1.5px var(--canvas);content:'';}
 .morebtn:hover{background:var(--ghost);color:var(--ink);}
 :host([count]:not([count="0"])) .morebtn,.switcher-more.has-overflow .morebtn{display:inline-flex;}
 .overflow-grid{display:grid;grid-template:repeat(3,3px)/repeat(3,3px);gap:2px;width:13px;height:13px;flex:0 0 13px;}
@@ -47,6 +51,9 @@ const STYLE = `
 .glyph-base{fill:none;stroke:color-mix(in srgb,currentColor 30%,var(--line));}
 .glyph-arc{fill:none;stroke:currentColor;stroke-linecap:round;transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;}
 .glyph-pin{fill:currentColor;}
+/* Same mark, same geometry as the strip's own unread dot (see
+   \`slicc-agent-tabs\`), halo in the row's surface. */
+.glyph-unread{fill:var(--hue);stroke:var(--canvas);}
 .popup-row[data-state="working"] .glyph-arc{animation:scoopArc 10.8s linear infinite;}
 .popup-row[data-state="broken"] .status-glyph{color:var(--red);}
 .broken-x{stroke:currentColor;stroke-linecap:round;}
@@ -89,7 +96,7 @@ function arcDash(fill: number): number {
   return (sweep / 360) * ARC_CIRCUMFERENCE;
 }
 
-function statusGlyph(state: AgentState, fill: number): SVGSVGElement {
+function statusGlyph(state: AgentState, fill: number, unread = 0): SVGSVGElement {
   const children: SVGElement[] = [];
   if (state === 'initializing') {
     children.push(
@@ -148,6 +155,12 @@ function statusGlyph(state: AgentState, fill: number): SVGSVGElement {
       })
     );
   }
+  // Last, so it stacks over the ring and the pin.
+  if (unread > 0) {
+    children.push(
+      svgEl('circle', { class: 'glyph-unread', cx: 10.89, cy: 3.11, r: 2.4, 'stroke-width': 1.5 })
+    );
+  }
   return svgEl(
     'svg',
     {
@@ -159,6 +172,13 @@ function statusGlyph(state: AgentState, fill: number): SVGSVGElement {
     },
     ...children
   );
+}
+
+/** Whole messages a hidden scoop has produced since the user last read it. */
+function itemUnread(item: SliccScoopOverflowItem): number {
+  return typeof item.unread === 'number' && Number.isFinite(item.unread)
+    ? Math.max(0, Math.floor(item.unread))
+    : 0;
 }
 
 function dotState(item: SliccScoopOverflowItem): OverflowDotState {
@@ -181,7 +201,9 @@ function hiddenSummary(items: SliccScoopOverflowItem[]): string {
     return dotSeverity(state) > dotSeverity(current) ? state : current;
   }, 'idle');
   const stateLabel = worst === 'near-limit' ? 'near context limit' : worst;
-  return `${items.length} hidden scoop${items.length === 1 ? '' : 's'}; worst state ${stateLabel}`;
+  const unread = items.reduce((total, item) => total + itemUnread(item), 0);
+  const unreadLabel = unread > 0 ? `; ${unread} unread message${unread === 1 ? '' : 's'}` : '';
+  return `${items.length} hidden scoop${items.length === 1 ? '' : 's'}; worst state ${stateLabel}${unreadLabel}`;
 }
 
 function gridCell(state?: OverflowDotState, plus = false): HTMLElement {
@@ -243,6 +265,12 @@ export interface SliccScoopOverflowItem {
   state?: 'working' | 'broken' | 'initializing' | 'idle';
   /** Context-window fullness from 0–100; 75+ is represented as near-limit. */
   fill?: number;
+  /**
+   * Messages this scoop has produced since the user last read it. `0` or absent
+   * means nothing new. The host suppresses the count for the SELECTED scoop
+   * before it gets here, exactly as the strip does for its own segments.
+   */
+  unread?: number;
 }
 
 /** The `detail` payload of the `slicc-scoop-select` event. */
@@ -430,6 +458,9 @@ export class SliccScoopOverflow extends HTMLElement {
     this.#moreBtn.setAttribute('aria-haspopup', 'true');
     const summary = hiddenSummary(this.#items);
     this.#moreBtn.setAttribute('aria-label', `${summary}. Show hidden scoops`);
+    const unread = this.#items.reduce((total, item) => total + itemUnread(item), 0);
+    if (unread > 0) this.#moreBtn.setAttribute('data-unread', String(unread));
+    else this.#moreBtn.removeAttribute('data-unread');
     this.#moreSlot.replaceChildren(overflowGrid(this.#items));
 
     if (n === 0) {
@@ -445,6 +476,8 @@ export class SliccScoopOverflow extends HTMLElement {
       const label = item.label ?? item.id;
       const state = itemState(item);
       const fill = boundedFill(item.fill);
+      const unread = itemUnread(item);
+      const unreadLabel = unread > 0 ? `, ${unread} unread message${unread === 1 ? '' : 's'}` : '';
       // `--i` drives the per-item stagger (animation-delay) on reveal.
       const row = h(
         'button',
@@ -453,12 +486,13 @@ export class SliccScoopOverflow extends HTMLElement {
           part: 'row',
           type: 'button',
           role: 'menuitem',
-          'aria-label': `${label}: ${state}, ${fill}% context fill`,
+          'aria-label': `${label}: ${state}, ${fill}% context fill${unreadLabel}`,
           'data-state': state,
           'data-k': id,
+          ...(unread > 0 ? { 'data-unread': String(unread) } : {}),
           style: `--hue:${item.color ?? 'var(--rose)'};--i:${i}`,
         },
-        statusGlyph(state, fill),
+        statusGlyph(state, fill, unread),
         h('span', { class: 'popup-label' }, label),
         h('span', { class: 'popup-state' }, `${state} · ${fill}%`)
       ) as HTMLButtonElement;
