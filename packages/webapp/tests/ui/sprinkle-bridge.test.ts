@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import type { VirtualFS } from '../../src/fs/index.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
+  buildFetchResponse,
   buildJshNodeCommand,
   type CaptureScreenResult,
   JSH_RESULT_PREFIX,
@@ -9,6 +10,7 @@ import {
   runJshOp,
   SprinkleBridge,
   type SprinkleExecResult,
+  type SprinkleFetchResult,
 } from '../../src/ui/sprinkle-bridge.js';
 
 /** Build a worker-shell stdout payload carrying a successful jsh result. */
@@ -499,6 +501,30 @@ describe('SprinkleBridge', () => {
       expect(await res.text()).toBe('{"hi":1}');
     });
 
+    it('_jsh(fetch) returns a structured-cloneable wire shape, not a Response', async () => {
+      const wire: SprinkleFetchResult = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        url: 'https://api.example.com/x',
+        headers: { 'content-type': 'text/plain' },
+        bodyBase64: btoa('hello'),
+      };
+      const execHandler = vi.fn().mockResolvedValue(jshOk(wire));
+      const api = bridgeWith(execHandler).createAPI('s');
+      const raw = await api._jsh('fetch', ['https://api.example.com/x', null]);
+      expect(raw).toEqual(wire);
+      expect(raw).not.toBeInstanceOf(Response);
+      expect(() => structuredClone(raw)).not.toThrow();
+      expect(() => structuredClone(new Response('hello'))).toThrow(
+        /could not be cloned|DataCloneError|unsupported type/
+      );
+      const rebuilt = buildFetchResponse(raw as SprinkleFetchResult);
+      expect(rebuilt).toBeInstanceOf(Response);
+      expect(rebuilt.status).toBe(200);
+      expect(await rebuilt.text()).toBe('hello');
+    });
+
     it('fetch() parses JSON via the native Response.json()', async () => {
       const execHandler = vi.fn().mockResolvedValue(
         jshOk({
@@ -598,6 +624,12 @@ describe('SprinkleBridge', () => {
       const bytes = await api.fetchToFile('https://h/file.bin', '/workspace/file.bin');
       expect(bytes).toBe(1234);
       expect(execHandler.mock.calls[0][0]).toContain('fetchToFile');
+      // Realm has no bare `fs` global — VFS is `require("node:fs")`.
+      // Use the `node:` specifier so the page bundle does not contain the
+      // CI-forbidden `require("fs")` literal.
+      expect(execHandler.mock.calls[0][0]).toContain('require("node:fs").fetchToFile');
+      expect(execHandler.mock.calls[0][0]).not.toContain('require("fs").fetchToFile');
+      expect(execHandler.mock.calls[0][0]).not.toContain('await fs.fetchToFile');
     });
 
     it('readFileBinary() reads raw bytes from the VFS (no realm round-trip)', async () => {
@@ -636,7 +668,7 @@ describe('jsh node-command helpers', () => {
     const cmd = buildJshNodeCommand('spawn', [['echo', "it's"]]);
     expect(cmd.startsWith("node -e '")).toBe(true);
     expect(cmd.endsWith("'")).toBe(true);
-    expect(cmd).toContain('exec.spawn');
+    expect(cmd).toContain('require("sliccy:exec").spawn');
     // The realm awaits only the top-level AsyncFunction body, so the program
     // must use top-level await rather than a detached `(async()=>{…})()`
     // IIFE (the IIFE promise was never awaited → no sentinel on stdout).
@@ -644,7 +676,8 @@ describe('jsh node-command helpers', () => {
     expect(cmd).not.toContain('(async ()=>');
     expect(cmd).not.toContain('})()');
     expect(cmd).toContain('var REQ=');
-    expect(cmd).toContain('await exec.spawn');
+    expect(cmd).toContain('await require("sliccy:exec").spawn');
+    expect(cmd).not.toContain('await exec.spawn');
   });
 
   it('parseJshResult returns the value behind the sentinel', () => {

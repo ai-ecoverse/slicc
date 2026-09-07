@@ -320,6 +320,9 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('XMLSerializer threw');
     expect(srcdoc).toContain('http://www.w3.org/1999/xhtml');
     expect(srcdoc).toContain('var screenshotTargetLabel = ');
+    // iframe rebuilds Response from the cloneable SprinkleFetchResult wire.
+    expect(srcdoc).toContain('var buildFetchResponse = ');
+    expect(srcdoc).toContain('.then(function(v) { return buildFetchResponse(v); })');
   });
 
   it('handles bridge calls posted while the iframe is being appended', async () => {
@@ -719,5 +722,86 @@ describe('full document rendering', () => {
       },
       '*'
     );
+  });
+
+  it('posts a structured-cloneable sprinkle-jsh fetch payload', async () => {
+    const bridge = makeBridge('full-doc');
+    const wire = {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://example.com/',
+      headers: { 'content-type': 'text/plain' },
+      bodyBase64: btoa('hello'),
+    };
+    (bridge._jsh as ReturnType<typeof vi.fn>).mockResolvedValue(wire);
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render('<!DOCTYPE html><html><head></head><body>Hi</body></html>', 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn((data: unknown) => {
+      structuredClone(data);
+    });
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const event = new dom.window.MessageEvent('message', {
+      data: {
+        type: 'sprinkle-jsh',
+        id: 'fetch-1',
+        op: 'fetch',
+        args: ['https://example.com/', null],
+      },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await vi.waitFor(() => expect(postMessageSpy).toHaveBeenCalled());
+
+    expect(bridge._jsh).toHaveBeenCalledWith('fetch', ['https://example.com/', null]);
+    const payload = postMessageSpy.mock.calls[0][0] as {
+      type: string;
+      id: string;
+      result: unknown;
+    };
+    expect(payload).toEqual({
+      type: 'sprinkle-jsh-response',
+      id: 'fetch-1',
+      result: wire,
+    });
+    expect(() => structuredClone(payload)).not.toThrow();
+  });
+
+  it('posts { error } instead of hanging when the jsh result is not cloneable', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge._jsh as ReturnType<typeof vi.fn>).mockResolvedValue(new Response('nope'));
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render('<!DOCTYPE html><html><head></head><body>Hi</body></html>', 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn((data: unknown) => {
+      structuredClone(data);
+    });
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-jsh', id: 'fetch-bad', op: 'fetch', args: ['https://example.com/'] },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await vi.waitFor(() => expect(postMessageSpy).toHaveBeenCalled());
+
+    const payload = postMessageSpy.mock.calls[postMessageSpy.mock.calls.length - 1][0] as {
+      type: string;
+      id: string;
+      error?: string;
+    };
+    expect(payload.type).toBe('sprinkle-jsh-response');
+    expect(payload.id).toBe('fetch-bad');
+    expect(payload.error).toMatch(/could not be cloned|DataCloneError|unsupported type/);
   });
 });
