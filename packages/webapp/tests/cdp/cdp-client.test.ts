@@ -382,4 +382,83 @@ describe('CDPClient', () => {
       expect(client.superseded).toBe(false);
     });
   });
+
+  // The kernel worker can't see this client at all: it drives CDP through
+  // `WorkerCdpProxy` over a MessagePort. `onStateChange` is what
+  // `startPageCdpForwarder` relays across that hop as `cdp-reset` /
+  // `cdp-ready`, so a drop stops being silent worker-side (issue #2417).
+  describe('onStateChange', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('notifies on connect', async () => {
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      await connectOpen();
+
+      expect(seen).toEqual([['connected', undefined]]);
+    });
+
+    it('notifies on an unexpected close, carrying the close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose();
+
+      expect(seen.every(([state]) => state === 'disconnected')).toBe(true);
+      expect(seen.map(([, reason]) => reason)).toContain('CDP connection closed');
+    });
+
+    it('notifies on an explicit disconnect()', async () => {
+      await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      client.disconnect();
+
+      expect(seen).toEqual(['disconnected']);
+    });
+
+    it('notifies again on a reconnect after a drop', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      ws.simulateClose();
+      await connectOpen();
+
+      expect(seen.at(-1)).toBe('connected');
+      expect(seen).toContain('disconnected');
+    });
+
+    it('stops notifying after unsubscribe', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      const off = client.onStateChange((state) => seen.push(state));
+
+      off();
+      ws.simulateClose();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('keeps notifying the other subscribers when one throws', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange(() => {
+        throw new Error('observer blew up');
+      });
+      client.onStateChange((state) => seen.push(state));
+
+      expect(() => ws.simulateClose()).not.toThrow();
+      expect(seen).toContain('disconnected');
+    });
+  });
 });

@@ -11,7 +11,7 @@ import type { CDPPayload } from '@slicc/shared-ts';
 
 import { createLogger } from '../base/logger.js';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
-import type { CDPTransport } from './transport.js';
+import type { CDPStateListener, CDPTransport } from './transport.js';
 import type {
   CDPCommand,
   CDPConnectOptions,
@@ -40,9 +40,26 @@ export class CDPClient implements CDPTransport {
   private pending = new PendingRequestTable<number>();
   private listeners = new Map<string, Set<CDPEventListener>>();
   private _state: ConnectionState = 'disconnected';
+  private stateListeners = new Set<CDPStateListener>();
+  private lastNotifiedState: ConnectionState = 'disconnected';
+  private lastNotifiedReason: string | undefined;
 
   get state(): ConnectionState {
     return this._state;
+  }
+
+  /**
+   * Observe connection-state transitions (see {@link CDPTransport.onStateChange}).
+   *
+   * The kernel-worker hop needs this: `startPageCdpForwarder` relays a drop as
+   * a `cdp-reset` wire message so `WorkerCdpProxy` can flip its own state and
+   * the worker's `BrowserAPI` stops reusing a session Chrome has discarded.
+   */
+  onStateChange(listener: CDPStateListener): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
   }
 
   /**
@@ -91,6 +108,7 @@ export class CDPClient implements CDPTransport {
         this._state = 'connected';
         this._superseded = false; // a fresh connection clears any prior eviction latch
         log.info('Connected', { url });
+        this.notifyState('connected');
         resolve();
       };
 
@@ -264,11 +282,37 @@ export class CDPClient implements CDPTransport {
       : 'CDP connection closed';
     this.pending.rejectAll(reason);
     this.cleanup();
+    // Re-announce the drop with the specific close reason; `cleanup()` has
+    // already flipped the state with a generic one.
+    this.notifyState('disconnected', reason);
   }
 
   private cleanup(): void {
     this.ws = null;
     this._state = 'disconnected';
     this.pending.rejectAll('CDP client disconnected');
+    this.notifyState('disconnected', 'CDP client disconnected');
+  }
+
+  /**
+   * Fan a state transition out to `onStateChange` subscribers.
+   *
+   * Repeats of the same (state, reason) pair are dropped so a subscriber sees
+   * one notification per transition. A close still notifies twice — once from
+   * `cleanup()` and once from `handleClose()` with the specific close reason —
+   * because the reason differs; `startPageCdpForwarder` collapses the pair
+   * into a single `cdp-reset` by tracking the state it last relayed.
+   */
+  private notifyState(state: ConnectionState, reason?: string): void {
+    if (state === this.lastNotifiedState && reason === this.lastNotifiedReason) return;
+    this.lastNotifiedState = state;
+    this.lastNotifiedReason = reason;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state, reason);
+      } catch {
+        // A state observer must not break the CDP path.
+      }
+    }
   }
 }
