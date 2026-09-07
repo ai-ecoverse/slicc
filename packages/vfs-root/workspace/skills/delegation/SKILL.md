@@ -299,14 +299,15 @@ Browser-tab handling rules (track your IDs, never close tabs you didn't open, ha
 
 ### Browser-driving scoops: one tab per scoop
 
-All scoops share ONE browser, but the `playwright-cli` lock is **per tab**:
-commands on the same tab serialize; commands on different tabs overlap (page
-loads and waits run concurrently; individual CDP round trips still take turns
-on the bridge, so heavy screenshot/snapshot loops across many tabs interleave
-rather than truly run side by side).
+All scoops share ONE browser. `playwright-cli` orders commands on the same tab
+with a per-tab lock and serializes command bodies across tabs with a bridge-wide
+lock; page loads and waits release the bridge, so one scoop's slow or hung
+navigation no longer stalls the others, but short commands on different tabs
+still take turns. Fan-out is safe; it just does not multiply browser throughput.
 
-- **Give every browser-driving scoop its own tab, and no fan-out cap is
-  needed.** Browser scoops fan out like any other work.
+- **Give every browser-driving scoop its own tab; no fan-out cap is needed
+  for correctness.** Browser scoops fan out like any other work, but expect
+  their short commands to interleave on the bridge rather than speed up.
 - **Two scoops on the SAME tab still queue.** If a slice needs a shared tab,
   hand it to one scoop rather than splitting it.
 - A hung navigation stalls only its own tab, so one stuck scoop no longer

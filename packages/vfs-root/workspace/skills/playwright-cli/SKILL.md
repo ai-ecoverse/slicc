@@ -186,10 +186,12 @@ A `resize` sticks to its tab: the viewport override is re-applied automatically
 whenever the tab is re-attached, so another driver switching tabs cannot reset
 it.
 
-All playwright-cli commands share one browser, but the lock is **per tab**:
-commands on the same tab serialize; commands on different tabs overlap — page
-loads and waits run concurrently, and only the individual CDP round trips take
-turns on the bridge. A hung navigation only stalls its own tab. When callers queue up, commands may
+All playwright-cli commands share one browser. Two locks apply: a **per-tab**
+lock orders commands on the same tab, and a **bridge-wide** lock serializes
+command bodies across tabs — except that page loads and waits (`goto`,
+`waitForSelector`-style polling) release the bridge while they wait. So a slow
+or hung navigation on one tab does not block other tabs, but short commands on
+different tabs still take turns rather than run side by side. When callers queue up, commands may
 emit a `note: browser bridge contended — ...` line on stderr with the total
 lock wait and queue depth; the note now says whether the wait was on **this
 tab** or **bridge-wide**. Either way it is back-off guidance — stagger callers
