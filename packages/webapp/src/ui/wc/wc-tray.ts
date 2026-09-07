@@ -56,6 +56,7 @@ import {
   toTabDescriptors,
 } from '../../work-unit/client/presentation.js';
 import type { Unsubscribe, WorkUnitClient, WorkUnitSummary } from '../../work-unit/client/types.js';
+import { UnreadLedger } from '../../work-unit/client/unread.js';
 import { parseQualifiedModelId, qualifiedModelId, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
@@ -454,11 +455,18 @@ export function buildFollowerOptions(
    * moved to `toTabDescriptors`.
    */
   const workUnits = new RemoteWorkUnitClient({ getSync: () => getSync() ?? null });
+  // Unread from the same ledger the leader publishes through: it reads only the
+  // presentation state every roster push already carries, so a follower needs no
+  // new wire field to dot a tab (and one too old to send `state` simply never
+  // sees a transition to count).
+  const unread = new UnreadLedger();
   const publishFollowerScoops = (): void => {
+    const units = workUnits.currentUnits();
     deps.refs.switcher.scoops = toTabDescriptors(
-      workUnits.currentUnits(),
+      units,
       selectedScoopJid,
-      scoopColor
+      scoopColor,
+      unread.sync(units, selectedScoopJid)
     ) as SwitcherScoop[];
   };
   const transcript = createTranscriptWatch(workUnits, () => deps.getController());

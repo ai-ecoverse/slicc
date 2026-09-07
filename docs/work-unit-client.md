@@ -267,6 +267,39 @@ about.
 leader-side home (`Orchestrator.ownerRootOrDefault`, #2312): the client
 protocol does not settle approvals, it only agrees on who owns whom.
 
+### Unread (`work-unit/client/unread.ts`)
+
+Multiple cones made the strip a place you leave things running, so a tab has to
+be able to say it has news. `UnreadLedger.sync(units, selectedId)` folds a roster
+plus the selection into per-unit counts, which `toTabDescriptors` puts on the
+descriptor as `unread`.
+
+**The signal is the roster, not a message stream** — which is what lets both
+sides share it. A leader could count `turn_end` per unit, but a follower
+subscribes only to the transcript of the unit it is SHOWING and would have
+nothing to count for the rest. Both sides do see every unit's presentation
+state, so one increment is one `working` unit that stops working. A follower
+therefore needs no new tray-wire field, and a leader too old to send `state`
+simply never presents a transition to count.
+
+Three consequences worth keeping:
+
+- **Transitions, not states.** A repeated roster push adds nothing; a unit seen
+  for the first time is not news the user missed, so a first roster opens with
+  every tab clean.
+- **Selection is the read receipt.** The selected unit is always at zero, and
+  `toTabDescriptors` re-applies that rule even for a caller that hands over its
+  own map.
+- **One publisher or none.** Both floats fold unread in at their strip publisher
+  (`installStripPublisher`, `publishFollowerScoops`), because that is the only
+  place holding the roster and the selection in the same instant. A second
+  projection of the same records — the leader's 15 s stats poll used to be one —
+  republishes descriptors without the counts and wipes every dot, so that path
+  now goes through `refreshScoops` instead.
+
+Nothing persists: unread is per-page-session by design, the way an unseen
+streamed reply is.
+
 Read-only chrome stays one rule, and it moved onto the protocol:
 `isReadOnlyUnit(summary)` states it over `role`, and `isReadOnlyRole` (the
 UI's `cone`/`scoop` spelling) delegates there. Both shells reach one answer.

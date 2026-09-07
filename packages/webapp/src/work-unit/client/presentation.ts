@@ -33,6 +33,12 @@ export interface WorkUnitTabDescriptor {
   fill: number;
   phase?: 'thinking' | 'tool';
   awaiting?: boolean;
+  /**
+   * Messages produced since the user last looked at this unit, from
+   * {@link import('./unread.js').UnreadLedger}. Omitted at zero, and always
+   * omitted for the selected unit.
+   */
+  unread?: number;
 }
 
 /** A unit is a root (cone) when its role says so — never the wire's shape. */
@@ -188,7 +194,12 @@ function eyesFor(state: WorkUnitPresentationState): WorkUnitTabDescriptor['eyes'
 export function toTabDescriptors(
   units: readonly WorkUnitSummary[],
   selectedId: WorkUnitId | null | undefined,
-  colorFor: (unit: { isRoot: boolean; name: string }) => string
+  colorFor: (unit: { isRoot: boolean; name: string }) => string,
+  /**
+   * Unread counts per unit id, from an {@link import('./unread.js').UnreadLedger}.
+   * Absent means the caller does not track unread and no tab is dotted.
+   */
+  unread?: ReadonlyMap<string, number>
 ): WorkUnitTabDescriptor[] {
   return orderUnits(units, selectedId).map((unit) => {
     const isRoot = isRootSummary(unit);
@@ -205,6 +216,11 @@ export function toTabDescriptors(
       // pin on an idle tab.
       ...(unit.state === 'working' && unit.phase ? { phase: unit.phase } : {}),
       ...(unit.state === 'idle' && unit.awaiting ? { awaiting: true as const } : {}),
+      // The selected unit is read by definition; the ledger already clears it,
+      // and this keeps that true even for a caller that hands over its own map.
+      ...(unit.id !== selectedId && (unread?.get(unit.id) ?? 0) > 0
+        ? { unread: unread?.get(unit.id) }
+        : {}),
     };
   });
 }
