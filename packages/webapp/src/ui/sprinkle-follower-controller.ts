@@ -19,7 +19,7 @@
 import { createLogger } from '../base/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import type { SprinkleBridgeAPI, SprinkleUsbApi } from './sprinkle-bridge.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 
@@ -82,6 +82,35 @@ interface OpenEntry {
 }
 
 type UpdateCallback = (data: unknown) => void;
+
+/**
+ * The `slicc.usb` surface for a follower-rendered sprinkle: every op rejects,
+ * because a follower has no device registry of its own.
+ *
+ * Built from one shared thunk rather than written out per method so a future
+ * addition to {@link SprinkleUsbApi} cannot silently be missing here and
+ * surface inside the sprinkle as "api.usb.transferIn is not a function"
+ * instead of a clear rejection.
+ */
+function followerUsbApi(): SprinkleUsbApi {
+  const unsupported = () =>
+    Promise.reject(new Error('usb not supported in follower-rendered sprinkle'));
+  return {
+    list: unsupported,
+    request: unsupported,
+    open: unsupported,
+    close: unsupported,
+    reset: unsupported,
+    selectConfiguration: unsupported,
+    claimInterface: unsupported,
+    releaseInterface: unsupported,
+    clearHalt: unsupported,
+    controlTransferIn: unsupported,
+    controlTransferOut: unsupported,
+    transferIn: unsupported,
+    transferOut: unsupported,
+  } as SprinkleUsbApi;
+}
 
 export class SprinkleFollowerController {
   private readonly sync: SprinkleFollowerSync;
@@ -632,12 +661,7 @@ export class SprinkleFollowerController {
         close: () =>
           Promise.reject(new Error('serial not supported in follower-rendered sprinkle')),
       },
-      usb: {
-        list: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
-        request: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
-        open: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
-        close: () => Promise.reject(new Error('usb not supported in follower-rendered sprinkle')),
-      },
+      usb: followerUsbApi(),
       readFileBinary: () =>
         Promise.reject(new Error('readFileBinary not supported in follower-rendered sprinkle')),
       writeFileBinary: () =>

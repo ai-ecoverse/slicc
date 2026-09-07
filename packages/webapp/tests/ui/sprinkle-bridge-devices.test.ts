@@ -6,6 +6,11 @@ import {
   type HidDevice,
   type HidInputReportEvent,
 } from '../../src/kernel/hid-device-registry.js';
+import {
+  getSharedUsbRegistry,
+  type UsbApi,
+  type UsbDevice,
+} from '../../src/kernel/usb-device-registry.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import { SprinkleBridge, type SprinkleHidInputReport } from '../../src/ui/sprinkle-bridge.js';
 
@@ -77,6 +82,57 @@ function buildBridge(iframePusher?: (name: string, channel: string, payload: unk
     undefined,
     iframePusher
   );
+}
+
+/** A fake WebUSB device that records transfer calls. */
+function makeFakeUsbDevice(over: Partial<UsbDevice> = {}): UsbDevice {
+  return {
+    vendorId: 0x22b8,
+    productId: 0x2e76,
+    productName: 'Fake Phone',
+    manufacturerName: 'Test',
+    serialNumber: 'USB-1',
+    opened: false,
+    open: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    reset: vi.fn(async () => undefined),
+    selectConfiguration: vi.fn(async () => undefined),
+    claimInterface: vi.fn(async () => undefined),
+    releaseInterface: vi.fn(async () => undefined),
+    clearHalt: vi.fn(async () => undefined),
+    controlTransferIn: vi.fn(async () => ({
+      status: 'ok',
+      data: { buffer: new Uint8Array([1, 2, 3]).buffer, byteOffset: 0, byteLength: 3 },
+    })),
+    controlTransferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 2 })),
+    transferIn: vi.fn(async () => ({
+      status: 'ok',
+      data: {
+        buffer: new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer,
+        byteOffset: 0,
+        byteLength: 4,
+      },
+    })),
+    transferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 4 })),
+    ...over,
+  } as UsbDevice;
+}
+
+/** Stub `navigator.usb` for the duration of a test, then restore. */
+function stubNavigatorUsb(usb: UsbApi): () => void {
+  const nav = (globalThis as { navigator?: { usb?: UsbApi } }).navigator;
+  if (!nav) {
+    (globalThis as { navigator?: { usb?: UsbApi } }).navigator = { usb };
+    return () => {
+      delete (globalThis as { navigator?: { usb?: UsbApi } }).navigator;
+    };
+  }
+  const prev = nav.usb;
+  nav.usb = usb;
+  return () => {
+    if (prev) nav.usb = prev;
+    else delete nav.usb;
+  };
 }
 
 /** Stub `navigator.hid` for the duration of a test, then restore. */
@@ -230,5 +286,95 @@ describe('SprinkleBridge — slicc.hid surface', () => {
     await expect(api._device('bogus' as 'hid', 'list', [])).rejects.toThrow(
       /unknown device channel/
     );
+  });
+});
+
+describe('SprinkleBridge — slicc.usb transfers', () => {
+  let restoreUsb: (() => void) | null = null;
+
+  afterEach(() => {
+    const reg = getSharedUsbRegistry();
+    for (const { handle } of reg.list()) reg.remove(handle);
+    if (restoreUsb) {
+      restoreUsb();
+      restoreUsb = null;
+    }
+  });
+
+  async function grant(device: UsbDevice) {
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const api = buildBridge().createAPI('demo');
+    const [info] = await api.usb.list();
+    return { api, handle: info.handle };
+  }
+
+  it('routes the interface lifecycle ops to the device', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    await api.usb.selectConfiguration(handle, 1);
+    await api.usb.claimInterface(handle, 1);
+    await api.usb.clearHalt(handle, 'in', 3);
+    await api.usb.releaseInterface(handle, 1);
+    await api.usb.reset(handle);
+    expect(device.selectConfiguration).toHaveBeenCalledWith(1);
+    expect(device.claimInterface).toHaveBeenCalledWith(1);
+    expect(device.clearHalt).toHaveBeenCalledWith('in', 3);
+    expect(device.releaseInterface).toHaveBeenCalledWith(1);
+    expect(device.reset).toHaveBeenCalled();
+  });
+
+  it('transferIn decodes the base64 the boundary carries back into bytes', async () => {
+    // The sandboxed-iframe boundary is not structured clone, so payloads
+    // cross as base64. A caller must still see real bytes.
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const r = await api.usb.transferIn(handle, 3, 64);
+    expect(device.transferIn).toHaveBeenCalledWith(3, 64);
+    expect(r.status).toBe('ok');
+    expect(r.bytes).toBeInstanceOf(Uint8Array);
+    expect([...r.bytes]).toEqual([0xde, 0xad, 0xbe, 0xef]);
+  });
+
+  it('transferOut delivers the caller bytes to the device unchanged', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const payload = new Uint8Array([0x00, 0x01, 0xfe, 0xff]);
+    const r = await api.usb.transferOut(handle, 2, payload);
+    expect(r.bytesWritten).toBe(4);
+    const sent = (device.transferOut as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(sent[0]).toBe(2);
+    expect([...new Uint8Array(sent[1] as ArrayBuffer)]).toEqual([0x00, 0x01, 0xfe, 0xff]);
+  });
+
+  it('round-trips bytes that are not valid UTF-8', async () => {
+    // Guards the base64 marshalling: a naive string conversion mangles
+    // high bytes and lone surrogates.
+    const payload = new Uint8Array([0x80, 0xff, 0x00, 0xed, 0xa0, 0x80]);
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    await api.usb.transferOut(handle, 2, payload);
+    const sent = (device.transferOut as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect([...new Uint8Array(sent[1] as ArrayBuffer)]).toEqual([...payload]);
+  });
+
+  it('controlTransferIn/Out carry the setup packet through', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const setup = {
+      requestType: 'standard' as const,
+      recipient: 'device' as const,
+      request: 6,
+      value: 0x0200,
+      index: 0,
+    };
+    const inResult = await api.usb.controlTransferIn(handle, setup, 9);
+    expect(device.controlTransferIn).toHaveBeenCalledWith(setup, 9);
+    expect([...inResult.bytes]).toEqual([1, 2, 3]);
+    await api.usb.controlTransferOut(handle, setup, new Uint8Array([0xaa, 0xbb]));
+    expect(device.controlTransferOut).toHaveBeenCalled();
   });
 });
