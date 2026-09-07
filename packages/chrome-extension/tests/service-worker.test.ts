@@ -360,6 +360,54 @@ describe('extension service worker', () => {
     expect(socket.closeArgs).toEqual({ code: 1000, reason: 'done' });
   });
 
+  // A reconnect on the same tray-socket id replaces the WebSocket. Chrome
+  // delivers the replaced socket's close/error events asynchronously, by which
+  // time the id already refers to the REPLACEMENT — so emitting from them told
+  // the offscreen its brand-new socket had failed.
+  it('does not report the replacement tray socket as closed when the socket it replaced closes', async () => {
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/a' });
+    const first = MockWebSocket.instances[0];
+    first.emit('open');
+    await flushAsync();
+
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/b' });
+    expect(MockWebSocket.instances).toHaveLength(2);
+    const second = MockWebSocket.instances[1];
+    expect(first.closeArgs).toEqual({ code: 1000, reason: 'replaced' });
+
+    runtimeSentMessages.length = 0;
+    first.emit('close');
+    first.emit('error');
+    first.emit('message', { data: '{"stale":true}' });
+    await flushAsync();
+    expect(runtimeSentMessages).toEqual([]);
+
+    // The replacement is still registered and usable.
+    second.emit('open');
+    await flushAsync();
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-opened', id: 7 },
+    });
+    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 7, data: '{"type":"ping"}' });
+    expect(second.sent).toEqual(['{"type":"ping"}']);
+  });
+
+  it('still confirms the close of a tray socket the offscreen closed explicitly', async () => {
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 3, url: 'wss://tray.example.com/c' });
+    const socket = MockWebSocket.instances[0];
+    dispatchOffscreenMessage({ type: 'tray-socket-close', id: 3, code: 1000, reason: 'done' });
+    runtimeSentMessages.length = 0;
+
+    socket.emit('close');
+    await flushAsync();
+
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-closed', id: 3 },
+    });
+  });
+
   it('reports tray socket command failures back to offscreen', async () => {
     dispatchOffscreenMessage({ type: 'tray-socket-send', id: 99, data: '{"type":"ping"}' });
     await flushAsync();

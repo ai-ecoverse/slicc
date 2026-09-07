@@ -22,6 +22,19 @@ import { postServiceWorkerMessage } from './sw-broadcast.js';
 
 const traySockets = new Map<number, WebSocket>();
 
+/**
+ * Sockets replaced by a later `tray-socket-open` on the same id.
+ *
+ * A replaced socket keeps its own `error`/`close` listeners, which fire
+ * asynchronously AFTER the map already points at the replacement. Emitting from
+ * them would report the REPLACEMENT socket as failed/closed the moment it was
+ * created (the offscreen keys tray-socket events by id, not by socket), leaving
+ * the tray permanently disconnected until the next reconnect. Marking the old
+ * socket superseded silences only its own tail events — an explicitly
+ * `tray-socket-close`d socket still emits its `-closed` confirmation.
+ */
+const supersededSockets = new WeakSet<WebSocket>();
+
 export function isTraySocketCommand(
   payload: ExtensionMessage['payload']
 ): payload is TraySocketCommandMessage {
@@ -55,17 +68,23 @@ export async function handleTraySocketCommand(command: TraySocketCommandMessage)
 }
 
 function openTraySocket(command: TraySocketOpenMsg): void {
-  traySockets.get(command.id)?.close(1000, 'replaced');
+  const previous = traySockets.get(command.id);
+  if (previous !== undefined) {
+    supersededSockets.add(previous);
+    previous.close(1000, 'replaced');
+  }
   const socket = new WebSocket(command.url);
   traySockets.set(command.id, socket);
 
   socket.addEventListener('open', () => {
+    if (supersededSockets.has(socket)) return;
     postServiceWorkerMessage({
       type: 'tray-socket-opened',
       id: command.id,
     } satisfies TraySocketOpenedMsg);
   });
   socket.addEventListener('message', (event) => {
+    if (supersededSockets.has(socket)) return;
     postServiceWorkerMessage({
       type: 'tray-socket-message',
       id: command.id,
@@ -73,6 +92,7 @@ function openTraySocket(command: TraySocketOpenMsg): void {
     } satisfies TraySocketMessageMsg);
   });
   socket.addEventListener('error', () => {
+    if (supersededSockets.has(socket)) return;
     if (traySockets.get(command.id) === socket) {
       traySockets.delete(command.id);
     }
@@ -83,6 +103,7 @@ function openTraySocket(command: TraySocketOpenMsg): void {
     } satisfies TraySocketErrorMsg);
   });
   socket.addEventListener('close', () => {
+    if (supersededSockets.has(socket)) return;
     if (traySockets.get(command.id) === socket) {
       traySockets.delete(command.id);
     }
