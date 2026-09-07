@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CDP_SUPERSEDED_CLOSE_CODE, CDPClient } from '../../src/cdp/cdp-client.js';
+import {
+  CDP_SUPERSEDED_CLOSE_CODE,
+  CDP_UPSTREAM_RESET_CLOSE_CODE,
+  CDPClient,
+} from '../../src/cdp/cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket
@@ -459,6 +463,45 @@ describe('CDPClient', () => {
 
       expect(() => ws.simulateClose()).not.toThrow();
       expect(seen).toContain('disconnected');
+    });
+  });
+
+  describe('upstream reset (proxy rebuilt its Chrome leg)', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('uses close code 4002', () => {
+      expect(CDP_UPSTREAM_RESET_CLOSE_CODE).toBe(4002);
+    });
+
+    it('does NOT latch superseded — the slot is still ours', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.superseded).toBe(false);
+    });
+
+    it('leaves the client disconnected so the next command reconnects lazily', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.state).toBe('disconnected');
+      // A fresh connect must be possible (ensureConnected's lazy re-dial).
+      await connectOpen();
+      expect(client.state).toBe('connected');
+    });
+
+    it('rejects in-flight commands with the reset reason', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.navigate');
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(sendPromise).rejects.toThrow(/reset by proxy/i);
+      await expect(sendPromise).rejects.toThrow(/upstream Chrome connection was re-established/i);
+      await expect(sendPromise).rejects.not.toThrow(/superseded/i);
     });
   });
 });
