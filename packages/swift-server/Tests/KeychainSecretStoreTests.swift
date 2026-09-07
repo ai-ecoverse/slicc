@@ -138,4 +138,62 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertNoThrow(try SecretStore.readBlob())
         XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
     }
+
+    /// The test above cannot catch the hang it describes: the runner already
+    /// holds ACL access, so no dialog is raised either way. What actually keeps
+    /// a headless launch from blocking inside `SecItemCopyMatching` on the
+    /// legacy file-based keychain is `SecKeychainSetUserInteractionAllowed` —
+    /// `kSecUseAuthenticationUIFail` only covers the data-protection keychain.
+    /// Assert the switch is flipped around the read, and restored after it.
+    func testNonInteractiveReadSuppressesLegacyKeychainInteraction() throws {
+        setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
+        var calls: [Bool] = []
+        SecretStore.setUserInteractionAllowed = { calls.append($0) }
+        defer {
+            unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE")
+            SecretStore.setUserInteractionAllowed = { allowed in
+                SecKeychainSetUserInteractionAllowed(allowed)
+            }
+        }
+
+        _ = try? SecretStore.readBlob()
+
+        XCTAssertEqual(calls, [false, true], "read must suppress interaction, then restore it")
+    }
+
+    /// A write raises the same dialog, so `POST /api/secrets` must not be able
+    /// to hang a request the way startup could hang a launch.
+    func testNonInteractiveWriteSuppressesLegacyKeychainInteraction() throws {
+        setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
+        var calls: [Bool] = []
+        SecretStore.setUserInteractionAllowed = { calls.append($0) }
+        defer {
+            unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE")
+            SecretStore.setUserInteractionAllowed = { allowed in
+                SecKeychainSetUserInteractionAllowed(allowed)
+            }
+        }
+
+        try SecretStore.set(name: secretName("NONINTERACTIVE_WRITE"), value: "v", domains: ["a.com"])
+
+        XCTAssertTrue(calls.contains(false), "write must suppress interaction")
+        XCTAssertEqual(calls.last, true, "write must restore interaction")
+    }
+
+    /// Without the env var the switch must never be touched: an interactive
+    /// Sliccstart run depends on the first-run "Always Allow" grant working.
+    func testInteractiveRunLeavesTheInteractionSwitchAlone() throws {
+        unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE")
+        var calls: [Bool] = []
+        SecretStore.setUserInteractionAllowed = { calls.append($0) }
+        defer {
+            SecretStore.setUserInteractionAllowed = { allowed in
+                SecKeychainSetUserInteractionAllowed(allowed)
+            }
+        }
+
+        _ = try? SecretStore.readBlob()
+
+        XCTAssertTrue(calls.isEmpty, "interactive runs must not suppress the ACL dialog")
+    }
 }
