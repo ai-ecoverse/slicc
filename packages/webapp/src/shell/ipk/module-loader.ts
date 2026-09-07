@@ -68,6 +68,13 @@ export interface ModuleGraph {
    * preloaded graph.
    */
   edges: Record<string, Record<string, string>>;
+  /**
+   * Per-file DEFERRED resolution failures: for each module path, a map of the
+   * literal specifier to the resolver's error message. The realm shim throws
+   * it from `require()` — and only then — so a specifier a module never
+   * actually requires costs nothing, exactly as in Node.
+   */
+  edgeErrors: Record<string, Record<string, string>>;
 }
 
 /** ESM->CJS transpile hook (wired host-side in M5 via esbuild/tsc). */
@@ -206,8 +213,19 @@ async function toCjsSource(
 /**
  * Build the ordered CJS module graph for `entrySpecifiers`, recursively
  * following nested `require()` edges over `reader`. Cycles terminate (each
- * file is visited once); unresolvable bare requires propagate the resolver's
- * exact `Cannot find module '<x>' (run: ipk install <x>)` error.
+ * file is visited once).
+ *
+ * An unresolvable NESTED specifier is deferred, not fatal: the resolver's
+ * exact `Cannot find module '<x>' (run: ipk install <x>)` message is recorded
+ * in `edgeErrors[<requiring file>][<specifier>]` and thrown by the realm shim
+ * only if that module actually requires it. This is what Node does, and the
+ * optional-dependency idiom depends on it — `debug/src/node.js` requires
+ * `supports-color` inside a `try/catch`, so a hard failure here sank the whole
+ * graph (and with it every package that transitively uses `debug`) over a
+ * specifier the code is written to do without.
+ *
+ * An unresolvable ENTRY specifier still throws: `buildRealmModuleGraph`
+ * resolves entries one at a time and records each failure in `errors`.
  */
 export async function buildModuleGraph(options: BuildModuleGraphOptions): Promise<ModuleGraph> {
   const { entrySpecifiers, fromDir, reader, conditions, transpile } = options;
@@ -217,6 +235,7 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
   const built = new Map<string, LoadedModule>();
   const order: string[] = [];
   const edges: Record<string, Record<string, string>> = {};
+  const edgeErrors: Record<string, Record<string, string>> = {};
 
   async function visit(path: string, kind: ModuleKind): Promise<void> {
     if (built.has(path)) return;
@@ -226,14 +245,15 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
     built.set(path, { path, source, cjsSource, kind });
     const moduleDir = dirOf(path);
     const fileEdges: Record<string, string> = {};
+    const fileEdgeErrors: Record<string, string> = {};
     for (const { specifier, kind: edgeKind } of extractModuleSpecifiers(source)) {
       let result: ResolveResult;
       try {
         const edgeConditions = edgeKind === 'import' ? importConditions : requireConditions;
         result = await resolve(specifier, moduleDir, reader, { conditions: edgeConditions });
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(`While loading '${path}': ${reason}`);
+        fileEdgeErrors[specifier] = err instanceof Error ? err.message : String(err);
+        continue;
       }
       if (result.type === 'file') {
         fileEdges[specifier] = result.path;
@@ -241,6 +261,7 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
       }
     }
     edges[path] = fileEdges;
+    if (Object.keys(fileEdgeErrors).length > 0) edgeErrors[path] = fileEdgeErrors;
     order.push(path);
   }
 
@@ -261,6 +282,7 @@ export async function buildModuleGraph(options: BuildModuleGraphOptions): Promis
     }),
     entryMap,
     edges,
+    edgeErrors,
   };
 }
 
@@ -269,6 +291,7 @@ export interface RealmGraphResult {
   files: { path: string; cjsSource: string; kind: ModuleKind }[];
   entryMap: Record<string, string>;
   edges: Record<string, Record<string, string>>;
+  edgeErrors: Record<string, Record<string, string>>;
   errors: Record<string, string>;
   /**
    * The transpiled entry source when the entry used ESM / dynamic-import
@@ -307,6 +330,21 @@ function isGraphSpecifier(specifier: string): boolean {
 }
 
 /**
+ * Fold one per-entry-specifier `fromPath -> specifier -> value` map into the
+ * accumulator, merging rather than replacing each file's inner record: two
+ * entry specifiers can reach the same shared file and each may have walked a
+ * different subset of its edges.
+ */
+function mergePerFileMaps(
+  target: Record<string, Record<string, string>>,
+  source: Record<string, Record<string, string>>
+): void {
+  for (const [path, entries] of Object.entries(source)) {
+    target[path] = { ...(target[path] ?? {}), ...entries };
+  }
+}
+
+/**
  * Build the realm's complete CJS module graph from its ENTRY CODE: extract the
  * tagged `require`/`import` specifiers, resolve each in isolation (so a single
  * uninstalled entry surfaces as `errors[specifier]` without sinking the
@@ -325,6 +363,7 @@ export async function buildRealmModuleGraph(
   const order: string[] = [];
   const entryMap: Record<string, string> = {};
   const edges: Record<string, Record<string, string>> = {};
+  const edgeErrors: Record<string, Record<string, string>> = {};
   const errors: Record<string, string> = {};
 
   for (const { specifier, kind } of extractModuleSpecifiers(entryCode)) {
@@ -346,9 +385,8 @@ export async function buildRealmModuleGraph(
         }
       }
       Object.assign(entryMap, graph.entryMap);
-      for (const [path, fileEdges] of Object.entries(graph.edges)) {
-        edges[path] = { ...(edges[path] ?? {}), ...fileEdges };
-      }
+      mergePerFileMaps(edges, graph.edges);
+      mergePerFileMaps(edgeErrors, graph.edgeErrors);
     } catch (err) {
       errors[specifier] = err instanceof Error ? err.message : String(err);
     }
@@ -371,6 +409,7 @@ export async function buildRealmModuleGraph(
     }),
     entryMap,
     edges,
+    edgeErrors,
     errors,
   };
   if (entrySource !== undefined) result.entrySource = entrySource;

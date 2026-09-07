@@ -223,12 +223,64 @@ function nodePromisify(original: Function): Function {
   return fn;
 }
 
+/**
+ * Node's `util.deprecate(fn, msg, code)`: a wrapper that warns ONCE on first
+ * call and then forwards to `fn` forever. Packages call it at module scope to
+ * mark a legacy export (`eslint/universal` reaches it through
+ * `@eslint/eslintrc`), so an absent `deprecate` is a `TypeError` at REQUIRE
+ * time — the package never loads at all, however deprecated the wrapped
+ * function is.
+ *
+ * The warning goes to `warn`, which the per-realm module wires to THAT realm's
+ * stderr — where Node puts a `DeprecationWarning`. Module scope has no access
+ * to a realm's streams, so a bare `console.error` here would land on the
+ * kernel worker's console and never reach the script's output; that is the
+ * same reason `os` and `readline` are per-realm. The realm has no
+ * `--no-deprecation` flag and no `process.on('warning')`, so there is nothing
+ * to consult before emitting; `code` is accepted and included for parity.
+ */
+function makeDeprecate(warn: (message: string) => void) {
+  return function nodeDeprecate<T extends Function>(fn: T, msg: string, code?: string): T {
+    if (typeof fn !== 'function') {
+      throw new TypeError('The "fn" argument must be of type function');
+    }
+    let warned = false;
+    function deprecated(this: unknown, ...args: unknown[]): unknown {
+      if (!warned) {
+        warned = true;
+        warn(code ? `[${code}] DeprecationWarning: ${msg}` : `DeprecationWarning: ${msg}`);
+      }
+      // An ES class throws `cannot be invoked without 'new'` when called, so a
+      // construct call has to stay a construct call. Forwarding `new.target`
+      // also keeps the instance's prototype right when the wrapper is
+      // subclassed.
+      if (new.target) {
+        return Reflect.construct(
+          fn as unknown as new (
+            ...a: unknown[]
+          ) => object,
+          args,
+          new.target
+        );
+      }
+      return (fn as unknown as (...a: unknown[]) => unknown).apply(this, args);
+    }
+    // Node keeps the wrapper substitutable for the original: same prototype
+    // (so `new deprecated()` still works for a deprecated constructor) and the
+    // original's own properties.
+    Object.setPrototypeOf(deprecated, Object.getPrototypeOf(fn));
+    if (fn.prototype) deprecated.prototype = fn.prototype;
+    return deprecated as unknown as T;
+  };
+}
+
 export interface NodeUtil {
   format(...args: unknown[]): string;
   formatWithOptions(opts: NodeInspectOptions, ...args: unknown[]): string;
   inspect: { (value: unknown, opts?: NodeInspectOptions): string; custom: symbol };
   inherits(ctor: Function, superCtor: Function): void;
   promisify: { (original: Function): Function; custom: symbol };
+  deprecate<T extends Function>(fn: T, msg: string, code?: string): T;
 }
 
 const utilInspect = nodeInspect as NodeUtil['inspect'];
@@ -236,10 +288,27 @@ utilInspect.custom = UTIL_INSPECT_CUSTOM;
 const utilPromisify = nodePromisify as NodeUtil['promisify'];
 utilPromisify.custom = UTIL_PROMISIFY_CUSTOM;
 
-export const nodeUtil: NodeUtil = {
-  format: nodeFormat,
-  formatWithOptions: nodeFormatWithOptions,
-  inspect: utilInspect,
-  inherits: nodeInherits,
-  promisify: utilPromisify,
-};
+/**
+ * Build the per-realm `util` module. `warn` receives one already-formatted
+ * `DeprecationWarning` line (no trailing newline) and should put it on THIS
+ * realm's stderr. Everything else on the module is stateless and shared.
+ */
+export function createNodeUtil(warn: (message: string) => void): NodeUtil {
+  return {
+    format: nodeFormat,
+    formatWithOptions: nodeFormatWithOptions,
+    inspect: utilInspect,
+    inherits: nodeInherits,
+    promisify: utilPromisify,
+    deprecate: makeDeprecate(warn),
+  };
+}
+
+/**
+ * Sink-less default, for a caller with no realm streams to write to (tests and
+ * the require-shim fallback). Deprecation warnings are dropped rather than
+ * misrouted to the kernel worker's console; the wrapped function still runs.
+ */
+export const nodeUtil: NodeUtil = createNodeUtil(() => {
+  /* no realm stderr to write to */
+});

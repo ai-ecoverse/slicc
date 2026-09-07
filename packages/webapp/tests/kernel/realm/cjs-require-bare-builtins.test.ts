@@ -307,6 +307,65 @@ describe('NS3: util built-in is served by the nodeUtil shim', () => {
     expect(out.stderr).not.toContain('not available in the browser');
     expect(out.stdout.trim()).toBe("{ k: 'v' }");
   });
+
+  it('util.deprecate forwards to the wrapped function and warns once on stderr', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const util = require('util');
+       const doubled = util.deprecate((v) => v * 2, 'twice() is deprecated', 'DEP0001');
+       console.log(doubled(2), doubled(3), doubled(4));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('4 6 8');
+    expect(out.stderr).toContain('[DEP0001] DeprecationWarning: twice() is deprecated');
+    // Three calls, exactly one warning.
+    expect(out.stderr.match(/DeprecationWarning/g)?.length).toBe(1);
+  });
+
+  it('util.deprecate keeps a deprecated ES class constructible with new', async () => {
+    // A class body throws `cannot be invoked without 'new'` when merely called,
+    // so the wrapper has to forward a construct call as a construct call.
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const util = require('util');
+       class Legacy { constructor(v) { this.v = v; } label() { return 'v=' + this.v; } }
+       const Wrapped = util.deprecate(Legacy, 'Legacy is deprecated');
+       const inst = new Wrapped(7);
+       console.log(inst.label(), inst instanceof Wrapped, inst instanceof Legacy);
+       class Sub extends Wrapped { constructor() { super(9); } }
+       const sub = new Sub();
+       console.log(sub.label(), sub instanceof Sub, sub instanceof Legacy);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain("cannot be invoked without 'new'");
+    expect(out.stdout.trim().split('\n')).toEqual(['v=7 true true', 'v=9 true true']);
+    // One warning for the construct call, one for the subclass's super().
+    expect(out.stderr.match(/DeprecationWarning/g)?.length).toBe(1);
+  });
+
+  it('util.deprecate is present at module scope, so a package calling it loads', async () => {
+    // `@eslint/eslintrc` (reached by `require('eslint/universal')`) calls
+    // `util.deprecate` while its module body evaluates: an absent `deprecate`
+    // is a TypeError at REQUIRE time, so the package never loads at all.
+    const ctx = makeCtx({
+      files: {
+        '/workspace/node_modules/deprecating/package.json': JSON.stringify({
+          name: 'deprecating',
+          version: '1.0.0',
+          main: 'index.js',
+        }),
+        '/workspace/node_modules/deprecating/index.js':
+          "const util = require('util');\n" +
+          "module.exports = util.deprecate(function legacy() { return 'ran'; }, 'legacy');",
+      },
+    });
+    const out = await runCode("console.log(require('deprecating')());", ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('is not a function');
+    expect(out.stdout.trim()).toBe('ran');
+  });
 });
 
 describe('NS3: crypto.createHash is served by the pure-JS hasher bridge', () => {

@@ -10,6 +10,7 @@ import {
   fmt,
   type NodeChildProcess,
   type NodeOs,
+  type NodeUtil,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
@@ -87,7 +88,9 @@ export async function loadModuleGraph(
   cwd: string,
   filename: string
 ): Promise<RealmModuleGraph> {
-  if (!mightNeedModuleGraph(code)) return { files: [], entryMap: {}, edges: {}, errors: {} };
+  if (!mightNeedModuleGraph(code)) {
+    return { files: [], entryMap: {}, edges: {}, edgeErrors: {}, errors: {} };
+  }
   return rpc.call<RealmModuleGraph>('module', 'buildGraph', [
     code,
     entryFromDir(filename, cwd),
@@ -165,6 +168,12 @@ export function createModuleSystem(opts: {
    * unit (#2267). Omitted, the envless default keeps the pre-#2267 constants.
    */
   nodeOsModule?: NodeOs;
+  /**
+   * Per-realm `util` module — `util.deprecate`'s one-shot warning lands on
+   * THIS realm's stderr. Omitted, the sink-less default drops the warning
+   * rather than misrouting it to the kernel worker's console.
+   */
+  nodeUtilModule?: NodeUtil;
 }): { require: (id: string) => unknown } {
   const {
     graph,
@@ -176,6 +185,7 @@ export function createModuleSystem(opts: {
     shimmedPackages = {},
     nodeReadline,
     nodeOsModule = nodeOs,
+    nodeUtilModule = nodeUtil,
   } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
@@ -186,14 +196,14 @@ export function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(
-      bareId,
+    const served = resolveServedBuiltin(bareId, {
       fsBridge,
       processShim,
       childProcess,
       nodeOsModule,
-      nodeReadline
-    );
+      nodeUtilModule,
+      nodeReadline,
+    });
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -201,12 +211,24 @@ export function createModuleSystem(opts: {
     return { hit: false };
   };
 
-  const requireFromEdges = (edgeMap: Record<string, string> | undefined, id: string): unknown => {
+  /**
+   * Resolve one specifier for the module at `fromPath` (`null` for the entry).
+   * Deferred failures are consulted only after the edge lookup misses, so a
+   * specifier the host DID resolve is never shadowed by a stale error entry.
+   */
+  const requireFromEdges = (
+    edgeMap: Record<string, string> | undefined,
+    id: string,
+    fromPath: string | null
+  ): unknown => {
     const builtin = resolveBuiltin(id);
     if (builtin.hit) return builtin.value;
     const targetPath = edgeMap?.[id];
     if (targetPath) return requireFile(targetPath);
-    if (id in graph.errors) throw new Error(graph.errors[id]);
+    // The host deferred this specifier's resolution failure to require time
+    // (Node semantics), so surface its exact message now.
+    const deferred = fromPath === null ? graph.errors[id] : graph.edgeErrors?.[fromPath]?.[id];
+    if (deferred) throw new Error(deferred);
     throw cannotFindModuleError(id);
   };
 
@@ -218,7 +240,7 @@ export function createModuleSystem(opts: {
     const moduleObj = { exports: {} as ModuleExports };
     // Register before evaluation so a require cycle sees the partial exports.
     cache.set(path, moduleObj);
-    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
+    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id, path);
     const moduleDir = dirnameOf(path);
     const compiled = new Function(
       'module',
@@ -248,7 +270,7 @@ export function createModuleSystem(opts: {
   }
 
   return {
-    require: (id: string): unknown => requireFromEdges(graph.entryMap, id),
+    require: (id: string): unknown => requireFromEdges(graph.entryMap, id, null),
   };
 }
 
@@ -266,12 +288,17 @@ export function createModuleSystem(opts: {
  */
 function resolveServedBuiltin(
   bareId: string,
-  fsBridge: unknown,
-  processShim: unknown,
-  childProcess: NodeChildProcess,
-  nodeOsModule: NodeOs,
-  nodeReadline?: NodeReadlineModule
+  served: {
+    fsBridge: unknown;
+    processShim: unknown;
+    childProcess: NodeChildProcess;
+    nodeOsModule: NodeOs;
+    nodeUtilModule: NodeUtil;
+    nodeReadline?: NodeReadlineModule;
+  }
 ): { hit: boolean; value?: unknown } {
+  const { fsBridge, processShim, childProcess, nodeOsModule, nodeUtilModule, nodeReadline } =
+    served;
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
@@ -284,7 +311,7 @@ function resolveServedBuiltin(
   }
   if (bareId === 'assert') return { hit: true, value: nodeAssert };
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
-  if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'util') return { hit: true, value: nodeUtilModule };
   if (bareId === 'events') return { hit: true, value: nodeEvents };
   if (bareId === 'os') return { hit: true, value: nodeOsModule };
   if (bareId === 'tty') return { hit: true, value: nodeTty };

@@ -27,6 +27,7 @@ import {
   createColor,
   createNodeChildProcess,
   createNodeOs,
+  createNodeUtil,
 } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
@@ -365,6 +366,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     // Per-realm too: `os.tmpdir()`/`os.homedir()` read the SAME `init.env`
     // that `process.env` exposes, so one script cannot see two machines.
     nodeOsModule: createNodeOs(init.env),
+    // And `util`, so `util.deprecate`'s one-shot DeprecationWarning reaches
+    // THIS realm's stderr instead of the kernel worker's console.
+    nodeUtilModule: createNodeUtil((message) => writeStderr(`${message}\n`)),
   });
   const requireShim = moduleSystem.require;
 

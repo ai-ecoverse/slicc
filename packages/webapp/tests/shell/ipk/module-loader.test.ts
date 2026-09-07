@@ -173,13 +173,57 @@ describe('buildModuleGraph()', () => {
     expect(paths).toEqual(['/app/a.js', '/app/b.js']);
   });
 
-  it('propagates the resolver install-hint error for an unresolvable nested require', async () => {
+  it('defers an unresolvable nested require to edgeErrors instead of sinking the graph', async () => {
     const reader = makeReader({
       '/app/index.js': "module.exports = require('not-installed');",
     });
-    await expect(
-      buildModuleGraph({ entrySpecifiers: ['./index.js'], fromDir: '/app', reader })
-    ).rejects.toThrow("Cannot find module 'not-installed' (run: ipk install not-installed)");
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['./index.js'],
+      fromDir: '/app',
+      reader,
+    });
+    // The requiring file is still in the graph — only the edge failed.
+    expect(graph.files.map((f) => f.path)).toEqual(['/app/index.js']);
+    expect(graph.edges['/app/index.js']).toEqual({});
+    expect(graph.edgeErrors['/app/index.js']['not-installed']).toBe(
+      "Cannot find module 'not-installed' (run: ipk install not-installed)"
+    );
+  });
+
+  it('keeps a package usable when only an OPTIONAL nested require is missing', async () => {
+    // The `debug/src/node.js` shape: a `try { require('supports-color') }`
+    // whose absence is by design. A hard graph failure here took out every
+    // package that transitively depends on `debug` (eslint among them).
+    const reader = makeReader({
+      '/app/node_modules/withoptional/package.json': JSON.stringify({ main: 'index.js' }),
+      '/app/node_modules/withoptional/index.js': `
+        let color = null;
+        try { color = require('supports-color'); } catch {}
+        module.exports = { color, ok: true };
+      `,
+    });
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['withoptional'],
+      fromDir: '/app',
+      reader,
+    });
+    expect(graph.entryMap.withoptional).toBe('/app/node_modules/withoptional/index.js');
+    expect(graph.edgeErrors['/app/node_modules/withoptional/index.js']['supports-color']).toContain(
+      "Cannot find module 'supports-color'"
+    );
+  });
+
+  it('records no edgeErrors entry for a file whose specifiers all resolve', async () => {
+    const reader = makeReader({
+      '/app/index.js': "module.exports = require('./dep.js');",
+      '/app/dep.js': 'module.exports = 1;',
+    });
+    const graph = await buildModuleGraph({
+      entrySpecifiers: ['./index.js'],
+      fromDir: '/app',
+      reader,
+    });
+    expect(graph.edgeErrors).toEqual({});
   });
 
   it('throws a clear error for an ESM module when no transpile hook is given', async () => {
