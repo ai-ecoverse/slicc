@@ -478,4 +478,111 @@ describe('slicc-error-card', () => {
       expect((spy.mock.calls[0][0] as CustomEvent).detail).toEqual({ messageId: 'err-2' });
     });
   });
+  describe('secondary action', () => {
+    it('renders no secondary button by default', () => {
+      const el = mount({ message: 'oops' });
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')).toBeNull();
+      expect(el.secondaryAction).toBeNull();
+    });
+
+    it('does NOT normalize an unknown secondary-action into a button', () => {
+      // Unlike `action`, an unrecognized value must not conjure a second CTA
+      // the host never asked for.
+      const el = mount({ message: 'oops', 'secondary-action': 'teleport' });
+      expect(el.secondaryAction).toBeNull();
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')).toBeNull();
+    });
+
+    it('renders the secondary CTA before the primary with its own glyph and label', () => {
+      const el = mount({
+        message: 'Weekly budget has been fully used.',
+        action: 'change-model',
+        'button-label': 'Switch provider and try again',
+        'secondary-action': 'settings',
+        'secondary-button-label': 'Add a provider',
+      });
+      const foot = el.shadowRoot?.querySelector('.foot') as HTMLElement;
+      const buttons = [...foot.querySelectorAll('button')];
+      expect(buttons).toHaveLength(2);
+      expect(buttons[0].getAttribute('part')).toBe('secondary-button');
+      expect(buttons[1].getAttribute('part')).toBe('button');
+      expect(buttons[0].textContent?.trim()).toBe('Add a provider');
+      expect(buttons[1].textContent?.trim()).toBe('Switch provider and try again');
+      expect(buttons[0].querySelector('svg')?.innerHTML).toBe(iconShape('settings', 12));
+      expect(buttons[1].querySelector('svg')?.innerHTML).toBe(iconShape('sparkles', 12));
+    });
+
+    it('defaults the secondary label to the secondary action default', () => {
+      const el = mount({ message: 'oops', action: 'retry', 'secondary-action': 'settings' });
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')?.textContent?.trim()).toBe(
+        'Open Settings'
+      );
+    });
+
+    it('fires each button its own event, and only its own', () => {
+      const el = mount({
+        message: 'Weekly budget has been fully used.',
+        'message-id': 'err-q',
+        action: 'change-model',
+        'secondary-action': 'settings',
+      });
+      const changeSeen: CustomEvent[] = [];
+      const settingsSeen: CustomEvent[] = [];
+      const retrySeen: CustomEvent[] = [];
+      document.body.addEventListener('slicc-error-change-model', (e) =>
+        changeSeen.push(e as CustomEvent)
+      );
+      document.body.addEventListener('slicc-error-open-settings', (e) =>
+        settingsSeen.push(e as CustomEvent)
+      );
+      document.body.addEventListener('slicc-error-retry', (e) => retrySeen.push(e as CustomEvent));
+
+      (el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement).click();
+      expect(changeSeen).toHaveLength(1);
+      expect(changeSeen[0].detail).toEqual({ messageId: 'err-q' });
+      expect(settingsSeen).toHaveLength(0);
+
+      (el.shadowRoot?.querySelector('[part="secondary-button"]') as HTMLButtonElement).click();
+      expect(settingsSeen).toHaveLength(1);
+      expect(settingsSeen[0].bubbles).toBe(true);
+      expect(settingsSeen[0].composed).toBe(true);
+      expect(settingsSeen[0].detail).toEqual({ messageId: 'err-q' });
+      expect(changeSeen).toHaveLength(1);
+      expect(retrySeen).toHaveLength(0);
+    });
+
+    it('reflects the secondary-action property and drops the button when cleared', () => {
+      const el = mount({ message: 'oops', 'secondary-action': 'login' });
+      expect(el.secondaryAction).toBe('login');
+      el.secondaryAction = null;
+      expect(el.hasAttribute('secondary-action')).toBe(false);
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')).toBeNull();
+      el.secondaryButtonLabel = 'Sign back in';
+      el.secondaryAction = 'login';
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')?.textContent?.trim()).toBe(
+        'Sign back in'
+      );
+    });
+
+    it('suppresses the secondary CTA under no-action (read-only transcripts)', () => {
+      const el = mount({
+        message: 'oops',
+        action: 'change-model',
+        'secondary-action': 'settings',
+        'no-action': '',
+      });
+      expect(el.shadowRoot?.querySelector('.foot')).toBeNull();
+      expect(el.shadowRoot?.querySelector('[part="secondary-button"]')).toBeNull();
+    });
+
+    it('unbinds the secondary click listener on disconnect', () => {
+      const el = mount({ message: 'oops', action: 'retry', 'secondary-action': 'settings' });
+      const btn = el.shadowRoot?.querySelector('[part="secondary-button"]') as HTMLButtonElement;
+      const spy = vi.fn();
+      document.body.addEventListener('slicc-error-open-settings', spy);
+      el.remove();
+      btn.click();
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
 });

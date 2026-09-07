@@ -118,7 +118,7 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 | `convert`      | Cone fed a scoop   | scoop folder name                         | `'scoop-feed'`                      | `emitScoopLifecycle('feed', ...)`, called from `scoop-message-router.ts`                                                                                       |
 | `leave`        | Scoop completed    | scoop folder name                         | `'scoop-complete'`                  | `emitScoopLifecycle('complete', ...)`, called from `scoop-completion-service.ts`                                                                               |
 
-A scoop failure reuses the `error` checkpoint row above rather than getting its own row: `trackScoopLifecycle()` sets `source: 'scoop:<name>'` (not the bare scoop name used by `enter`/`convert`/`leave`) and runs the message through the same `sanitizeError` used for `trackError`, dropping known user-fixable error families (no-api-key, invalid-model, auth-expired) before emitting.
+A scoop failure reuses the `error` checkpoint row above rather than getting its own row: `trackScoopLifecycle()` sets `source: 'scoop:<name>'` (not the bare scoop name used by `enter`/`convert`/`leave`) and runs the message through the same `sanitizeError` used for `trackError`, dropping known user-fixable error families (no-api-key, invalid-model, auth-expired, quota-exceeded) before emitting.
 
 ### Auto-instrumented (from enhancer, CLI/Electron only)
 

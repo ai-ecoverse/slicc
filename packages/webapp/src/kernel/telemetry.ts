@@ -241,8 +241,8 @@ export function trackImageView(context: string): void {
 export function trackError(errorType: string, details?: string): void {
   let target = details;
   if (typeof target === 'string') {
-    // User-fixable known states (no-api-key, invalid-model, auth-expired)
-    // own dedicated remediation UX and are not regressions — beaconing them
+    // User-fixable known states (no-api-key, invalid-model, auth-expired,
+    // quota-exceeded) own dedicated remediation UX and are not regressions — beaconing them
     // would only add triage noise. Mirrors the sibling filters in
     // `trackScoopLifecycle` and `wc-chat-controller.ts#emitErrorCardBeacon`
     // so the raw `llm` beacon emitted from `scoop-context.ts` doesn't leak

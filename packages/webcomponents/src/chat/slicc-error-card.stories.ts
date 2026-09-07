@@ -7,6 +7,8 @@ interface ErrorCardArgs {
   bodyHtml?: string;
   'button-label'?: string;
   action?: 'retry' | 'settings' | 'change-model' | 'login';
+  'secondary-action'?: 'retry' | 'settings' | 'change-model' | 'login';
+  'secondary-button-label'?: string;
   theme?: 'light' | 'dark';
 }
 
@@ -36,6 +38,10 @@ function build(args: ErrorCardArgs): HTMLElement {
   if (args.label != null) el.setAttribute('label', args.label);
   if (args['button-label'] != null) el.setAttribute('button-label', args['button-label']);
   if (args.action) el.setAttribute('action', args.action);
+  if (args['secondary-action']) el.setAttribute('secondary-action', args['secondary-action']);
+  if (args['secondary-button-label'] != null) {
+    el.setAttribute('secondary-button-label', args['secondary-button-label']);
+  }
   if (args.theme) el.setAttribute('theme', args.theme);
   // Rich slotted markup wins over the plain `message` attribute when supplied.
   if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
@@ -72,6 +78,17 @@ const meta: Meta<ErrorCardArgs> = {
         '"Open Settings" and fires `slicc-error-open-settings`; `change-model` flips it to ' +
         '"Change model" and fires `slicc-error-change-model`; `login` flips it to "Log in again" ' +
         'and fires `slicc-error-login`.',
+    },
+    'secondary-action': {
+      control: 'inline-radio',
+      options: ['retry', 'settings', 'change-model', 'login'],
+      description:
+        'Optional second CTA rendered as an outline button before the primary one. Fires the ' +
+        'same events as `action`. Absent means no secondary button.',
+    },
+    'secondary-button-label': {
+      control: 'text',
+      description: 'Secondary CTA label (defaults to the secondary action\u2019s own default)',
     },
     theme: { control: 'inline-radio', options: ['light', 'dark'], description: 'Theme override' },
   },
@@ -171,6 +188,31 @@ export const LoginAction: Story = {
     label: 'Session expired',
     action: 'login',
     message: 'Your session has expired. Log in again to continue.',
+  },
+};
+
+/**
+ * The exhausted-provider-budget card: the primary CTA switches to another
+ * connected provider (and replays the turn), the outline secondary one opens
+ * account settings to connect a new provider. Both remediations are real, so
+ * both are offered.
+ */
+export const QuotaExceeded: Story = {
+  args: {
+    label: 'Out of AI budget',
+    action: 'change-model',
+    'button-label': 'Switch provider and try again',
+    'secondary-action': 'settings',
+    'secondary-button-label': 'Add a provider',
+    message: 'Weekly budget has been fully used. Resets on 2026-09-14.',
+  },
+};
+
+/** Quota card in dark mode — the outline secondary must still read as a button. */
+export const QuotaExceededDark: Story = {
+  args: {
+    ...QuotaExceeded.args,
+    theme: 'dark',
   },
 };
 

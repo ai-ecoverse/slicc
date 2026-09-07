@@ -508,8 +508,9 @@ function handleTrayActionId(id: string, log: BootStageLogger): boolean {
 
 /**
  * Route every "open the provider Settings dialog" trigger to `openSettings`:
- * the "No API key" error card's `slicc-error-open-settings` (bubbled on the
- * thread — same surface as the composer-meta `add-ai` action), and the extension
+ * the error card's `slicc-error-open-settings` (bubbled on the thread — same
+ * surface as the composer-meta `add-ai` action) from either the "No API key"
+ * primary CTA or the exhausted-budget card's "Add a provider", and the extension
  * side-panel follower's `slicc:open-settings-from-panel` window event (the SW's
  * `extension.open-settings` bridge command, re-broadcast by
  * `setup-standalone-prelude`, so a side-panel sign-in lands on the login UI, not
@@ -524,8 +525,10 @@ function wireOpenSettingsSurfaces(refs: WcShellRefs, openSettings: () => void): 
 /**
  * The invalid-model error card (see `wc-message-view.ts:errorCardEl`) flips
  * its CTA to "Change model" and bubbles `slicc-error-change-model` up through
- * the thread. Route it to the composer model picker so the user can pick a
- * working model without re-running the same failed turn first; stamp the
+ * the thread; the exhausted-budget card reuses the same event behind a
+ * "Switch provider and try again" label, which is exactly what the staged
+ * replay below delivers. Route it to the composer model picker so the user can
+ * pick a working model without re-running the same failed turn first; stamp the
  * failed message id so the NEXT model-change auto-replays the originating
  * turn (the chat controller's `#handleErrorRetry` walks back from that id
  * through any preceding lick — the onboarding welcome lick is the common

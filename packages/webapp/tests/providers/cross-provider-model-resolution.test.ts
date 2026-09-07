@@ -381,3 +381,71 @@ describe('resolveModelSelectionForScoop (/etc/models policy)', () => {
     expect(providers).toContain(OTHER);
   });
 });
+
+/**
+ * The exhausted-budget error card asks this: is "switch provider" a real offer
+ * right now, or must the card say "add a provider" instead?
+ */
+describe('getAlternativeModelProviders', () => {
+  beforeEach(async () => {
+    storage.clear();
+    await registerProviders();
+    storage.set('selected-model', `${SELECTED}:claude-opus-5`);
+  });
+
+  afterEach(async () => {
+    setActiveModelPolicy(emptyModelPolicy());
+    const { unregisterProviderConfig } = await import('../../src/providers/index.js');
+    for (const id of [SELECTED, OTHER, SECOND_OTHER]) unregisterProviderConfig(id);
+  });
+
+  it('lists the other connected providers, never the excluded one', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: SELECTED, apiKey: '', accessToken: 'x' },
+        { providerId: OTHER, apiKey: 'sk-or-x' },
+      ])
+    );
+    const { getAlternativeModelProviders } = await import('../../src/providers/account-store.js');
+    expect(getAlternativeModelProviders(SELECTED)).toEqual([OTHER]);
+  });
+
+  it('is empty when the exhausted provider is the only account', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: SELECTED, apiKey: '', accessToken: 'x' }])
+    );
+    const { getAlternativeModelProviders } = await import('../../src/providers/account-store.js');
+    expect(getAlternativeModelProviders(SELECTED)).toEqual([]);
+  });
+
+  it('omits a provider whose models the picker would not show either', async () => {
+    // A denied catalogue empties the group, so `getAllAvailableModels` drops
+    // the provider — the CTA must not promise a dropdown entry that is gone.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: SELECTED, apiKey: '', accessToken: 'x' },
+        { providerId: SECOND_OTHER, apiKey: 'sk-third-x' },
+      ])
+    );
+    setActiveModelPolicy(
+      parseModelPolicy(`[${SELECTED}]\n-${SECOND_OTHER}:shared/ambiguous-model\n`)
+    );
+    const { getAlternativeModelProviders } = await import('../../src/providers/account-store.js');
+    expect(getAlternativeModelProviders(SELECTED)).toEqual([]);
+  });
+
+  it('keeps every provider when nothing is excluded', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: SELECTED, apiKey: '', accessToken: 'x' },
+        { providerId: OTHER, apiKey: 'sk-or-x' },
+      ])
+    );
+    const { getAlternativeModelProviders } = await import('../../src/providers/account-store.js');
+    expect(getAlternativeModelProviders(null)).toEqual([SELECTED, OTHER]);
+  });
+});

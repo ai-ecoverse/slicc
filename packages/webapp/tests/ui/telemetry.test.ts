@@ -207,6 +207,12 @@ describe('telemetry', () => {
       'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
     );
     trackError('llm', 'Adobe session expired — please log in again');
+    // The Adobe rate-limit family: the exhausted-budget card owns its own
+    // switch-provider / add-provider remediation, so it is not a regression.
+    trackError(
+      'llm',
+      '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14.","resets_at":"2026-09-14T00:00:00.000Z"}}'
+    );
 
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
     expect(errorCalls).toHaveLength(0);
