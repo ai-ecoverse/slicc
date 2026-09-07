@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<pre id="output">Seeding 30,000 one-byte files...</pre>
+<script type="module">
+  const run = (seed) => new Promise((resolve, reject) => {
+    const worker = new Worker('./bundle.js', { type: 'module' });
+    worker.onmessage = ({ data }) => { worker.terminate(); resolve(data); };
+    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)); };
+    worker.postMessage(seed);
+  });
+  await run(true); // All writers closed; seed worker terminated before mounting.
+  document.querySelector('#output').textContent = JSON.stringify(await run(false), null, 2);
+</script>

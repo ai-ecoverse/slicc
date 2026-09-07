@@ -89,6 +89,7 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **`/tmp` is granted to every scoop, sandbox or not** — `builtinScoopGrants()`
   (`base/sudoers.ts`) + `ALWAYS_WRITABLE_PREFIXES` (`fs/restricted-fs.ts`) gate independently, so
   change together. It is SHARED: never store secrets; private scratch is `/scoops/<folder>/tmp`.
+- **OPFS startup reads** (`docs/pitfalls.md`): keep the ZenFS preload cap across the whole tree and drain copies before failure; the sync cache is required. Browser reproduction: `tests/e2e/zenfs-preload/`.
 - **Frozen-session recovery** (`docs/work-unit.md`) uses the **bounded** legacy enrichment call,
   never the unbounded curator. Save / Skip memory / Erase clear the SELECTED cone's chat +
   non-mount `/tmp`, not scoops; root via `wc-unit-context.ts` (`chatSessionIdFor`), never literal

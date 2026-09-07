@@ -5,7 +5,7 @@ spots. Flag only genuine risks. Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
-External calls need bounded failure: timeouts, retry/backoff, surfaced errors. Flag unbounded `fetch()`, E2B calls, async work.
+Bound external calls and surface errors. Cap filesystem preload leaf copies globally; drain them before rejection.
 
 ## 2. Cross-runtime parity (often Critical)
 

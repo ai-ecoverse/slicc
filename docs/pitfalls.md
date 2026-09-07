@@ -547,6 +547,26 @@ Consequences for anyone touching this layer:
   when both halves are present, and one adapter can span backends whose inode
   spaces are unrelated — there is no honest single `dev`.
 
+## OPFS Startup: Bound Preload Reads Across the Tree
+
+ZenFS's `Async.crossCopy` preloads file contents into its synchronous cache.
+Unbounded recursion starts every payload read and file-sized buffer allocation
+at once. A real Chromium reproduction with 30,000 static one-byte files (30 KB)
+fails with `NotReadableError`; a 16-read control over the same tree succeeds.
+No writer is active during mounting. The failure also reproduces on upstream
+core 2.7.2 / dom 1.2.13: [zen-fs/core#318](https://github.com/zen-fs/core/issues/318).
+
+The `@zenfs/core` patch caps payload copies at 16 **across the entire tree**,
+including buffer allocations. Limiting each directory independently multiplies
+concurrency; holding a slot while waiting for a directory's children can deadlock.
+Every leaf releases its slot in `finally`, and every directory drains its children
+before propagating failure, so another mount cannot overlap abandoned work.
+The synchronous cache remains enabled for synchronous filesystem callers.
+
+Run the [standalone browser reproduction](../packages/webapp/tests/e2e/zenfs-preload/README.md).
+`tests/fs/zenfs-preload-concurrency.test.ts` in `packages/webapp` guards the global
+limit, synchronous cached data, and completion of outstanding work on failure.
+
 ## OPFS Writes: Serialize Per Mount, Across Contexts
 
 **Files**: `packages/webapp/src/fs/virtual-fs.ts` (`withWriteLock`),

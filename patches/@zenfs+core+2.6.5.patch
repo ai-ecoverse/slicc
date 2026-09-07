@@ -1,3 +1,59 @@
+diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
+index ac8b186..2a8ff19 100644
+--- a/node_modules/@zenfs/core/dist/mixins/async.js
++++ b/node_modules/@zenfs/core/dist/mixins/async.js
+@@ -162,15 +162,32 @@ export function Async(FS) {
+         /**
+          * @internal
+          */
++        // PATCH: cap file payload copies across the entire tree. A per-directory
++        // limit still multiplies by the number of concurrently visited directories.
++        _preloadActive = 0;
++        _preloadWaiters = [];
+         async crossCopy(path) {
+             this.checkSync();
+             const stats = await this.stat(path);
+             if (!isDirectory(stats)) {
+-                this._sync.createFileSync(path, stats);
+-                const buffer = new Uint8Array(stats.size);
+-                await this.read(path, buffer, 0, stats.size);
+-                this._sync.writeSync(path, buffer, 0);
+-                this._sync.touchSync(path, stats);
++                if (this._preloadActive >= 16)
++                    await new Promise(resolve => this._preloadWaiters.push(resolve));
++                else
++                    this._preloadActive++;
++                try {
++                    this._sync.createFileSync(path, stats);
++                    const buffer = new Uint8Array(stats.size);
++                    await this.read(path, buffer, 0, stats.size);
++                    this._sync.writeSync(path, buffer, 0);
++                    this._sync.touchSync(path, stats);
++                }
++                finally {
++                    const next = this._preloadWaiters.shift();
++                    if (next)
++                        next();
++                    else
++                        this._preloadActive--;
++                }
+                 return;
+             }
+             if (path !== '/') {
+@@ -181,7 +198,12 @@ export function Async(FS) {
+             for (const file of await this.readdir(path)) {
+                 promises.push(this.crossCopy(join(path, file)));
+             }
+-            await Promise.all(promises);
++            // Drain every child before rejecting: a caller may retry a failed
++            // mount, and the previous attempt must not keep copying in the background.
++            const results = await Promise.allSettled(promises);
++            const failure = results.find(result => result.status === 'rejected');
++            if (failure)
++                throw failure.reason;
+         }
+         /**
+          * @internal
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index e978bba..0e00a9e 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js

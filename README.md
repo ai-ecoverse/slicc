@@ -168,7 +168,7 @@ On macOS, launching a terminal follower from Sliccstart also exposes its managed
 
 SLICC shares one core across every runtime ("float"). The browser is not just where you view the product — it is where the agent runtime lives.
 
-- **Browser-first runtime:** the agent loop, virtual filesystem, shell, UI, and tools run client-side.
+- **Browser-first runtime:** the agent loop, virtual filesystem, shell, UI, and tools run client-side. Startup bounds parallel file reads to support large local filesystems.
 - **Thin server where needed:** the CLI path mainly exists to launch Chrome, proxy CDP, and bridge the few things browsers cannot do alone. The Chrome extension is even thinner — UI and agent engine load from the hosted leader tab.
 - **One model across floats:** CLI / standalone, thin Chrome extension, Electron, Cherry (embedded follower in third-party pages), hosted-leader / cloud (`@slicc/cloud-core` over an e2b sandbox), and the native macOS / iOS surfaces (`Sliccstart`, `slicc-server`, `SliccFollower`) all reuse the same underlying system.
 - **Cone + scoops delegation:** the main agent orchestrates; sub-agents execute in isolated sandboxes and report back.
