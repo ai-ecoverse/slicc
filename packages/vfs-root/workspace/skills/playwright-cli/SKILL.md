@@ -198,9 +198,14 @@ tab** or **bridge-wide**. Either way it is back-off guidance — stagger callers
 or give each one its own tab, never re-run the command; it already ran, it was
 just slow to get the lock.
 
-**Stale session.** The bridge re-attaches automatically after a Chrome reset.
-If a command fails once with `Session with given id not found`, simply re-run
-it — there is no need to reload the tab or open a new one.
+**Stale session.** The bridge re-attaches automatically after a Chrome reset;
+there is no need to reload the tab or open a new one. Two error shapes:
+
+- `Session with given id not found` — the bridge already re-attached; re-run
+  the command.
+- `… was reset mid-command … the outcome is unknown` — part of the command may
+  have landed (keys typed, a click delivered) before the session died. Do NOT
+  blindly re-run it: `snapshot` the tab first and continue from what you see.
 
 ### Save As
 
