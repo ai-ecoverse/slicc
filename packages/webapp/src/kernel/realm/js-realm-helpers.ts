@@ -33,7 +33,7 @@ export { nodeTty } from './helpers/node-tty.js';
 export type { NodeUrl } from './helpers/node-url.js';
 export { nodeUrl } from './helpers/node-url.js';
 export type { NodeInspectOptions, NodeUtil } from './helpers/node-util.js';
-export { nodeUtil } from './helpers/node-util.js';
+export { createNodeUtil, nodeUtil } from './helpers/node-util.js';
 export type { NodeZlib } from './helpers/node-zlib.js';
 export { nodeZlib } from './helpers/node-zlib.js';
 export type { ParsedFlags } from './helpers/parse-flags.js';

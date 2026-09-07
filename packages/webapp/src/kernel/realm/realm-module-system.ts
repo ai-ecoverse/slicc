@@ -10,6 +10,7 @@ import {
   fmt,
   type NodeChildProcess,
   type NodeOs,
+  type NodeUtil,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
@@ -167,6 +168,12 @@ export function createModuleSystem(opts: {
    * unit (#2267). Omitted, the envless default keeps the pre-#2267 constants.
    */
   nodeOsModule?: NodeOs;
+  /**
+   * Per-realm `util` module — `util.deprecate`'s one-shot warning lands on
+   * THIS realm's stderr. Omitted, the sink-less default drops the warning
+   * rather than misrouting it to the kernel worker's console.
+   */
+  nodeUtilModule?: NodeUtil;
 }): { require: (id: string) => unknown } {
   const {
     graph,
@@ -178,6 +185,7 @@ export function createModuleSystem(opts: {
     shimmedPackages = {},
     nodeReadline,
     nodeOsModule = nodeOs,
+    nodeUtilModule = nodeUtil,
   } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
@@ -188,14 +196,14 @@ export function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(
-      bareId,
+    const served = resolveServedBuiltin(bareId, {
       fsBridge,
       processShim,
       childProcess,
       nodeOsModule,
-      nodeReadline
-    );
+      nodeUtilModule,
+      nodeReadline,
+    });
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -280,12 +288,17 @@ export function createModuleSystem(opts: {
  */
 function resolveServedBuiltin(
   bareId: string,
-  fsBridge: unknown,
-  processShim: unknown,
-  childProcess: NodeChildProcess,
-  nodeOsModule: NodeOs,
-  nodeReadline?: NodeReadlineModule
+  served: {
+    fsBridge: unknown;
+    processShim: unknown;
+    childProcess: NodeChildProcess;
+    nodeOsModule: NodeOs;
+    nodeUtilModule: NodeUtil;
+    nodeReadline?: NodeReadlineModule;
+  }
 ): { hit: boolean; value?: unknown } {
+  const { fsBridge, processShim, childProcess, nodeOsModule, nodeUtilModule, nodeReadline } =
+    served;
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
@@ -298,7 +311,7 @@ function resolveServedBuiltin(
   }
   if (bareId === 'assert') return { hit: true, value: nodeAssert };
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
-  if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'util') return { hit: true, value: nodeUtilModule };
   if (bareId === 'events') return { hit: true, value: nodeEvents };
   if (bareId === 'os') return { hit: true, value: nodeOsModule };
   if (bareId === 'tty') return { hit: true, value: nodeTty };

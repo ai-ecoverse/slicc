@@ -165,9 +165,16 @@ self-reference.
 ### `util`
 
 `promisify` (with `promisify.custom`), `inspect` (with `inspect.custom`),
-`inherits`, `format`, `formatWithOptions`.
+`inherits`, `format`, `formatWithOptions`, `deprecate`.
 
-**Not available:** `types`, `deprecate`, `callbackify`,
+**Per-realm**: `deprecate`'s one-shot `DeprecationWarning` goes to the calling
+realm's stderr, so a shared module-scope shim would misroute it to the kernel
+worker's console. Packages call `deprecate` while their module body evaluates
+(`@eslint/eslintrc` does), so an absent one is a `TypeError` at REQUIRE time and
+the package never loads at all. There is no `--no-deprecation` flag and no
+`process.on('warning')` to consult, so the warning always fires once.
+
+**Not available:** `types`, `callbackify`,
 `TextEncoder` / `TextDecoder` (use the globals).
 
 ### `events`
