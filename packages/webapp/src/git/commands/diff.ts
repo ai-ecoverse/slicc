@@ -7,13 +7,24 @@
  */
 
 import * as git from 'isomorphic-git';
+import type { ArgFlagValue } from '../../shell/arg-parser.js';
 import { parseArgs } from '../../shell/arg-parser.js';
-import { diffStat, unifiedDiff } from '../diff.js';
+import { formatDiffStatText, unifiedDiff } from '../diff.js';
+import { diffNoIndex } from './diff-no-index.js';
 import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision.js';
 import { GIT_FLAG_SPECS, NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 type FileChange = { filepath: string; oldContent: string; newContent: string };
+
+/** The output-shaping flags every diff mode threads through to the renderer. */
+interface DiffFormatOptions {
+  nameOnly: boolean;
+  stat: boolean;
+  pathspecs?: string[];
+  /** Context lines around each hunk (`-U<n>`); `unifiedDiff` defaults to 3. */
+  context?: number;
+}
 
 /**
  * Decides whether a walk should descend into a child path.
@@ -54,13 +65,23 @@ export async function diff(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags, positionals, doubleDashRest } = parseArgs(args, GIT_FLAG_SPECS.diff);
+  const { flags, positionals, doubleDashRest } = parseArgs(
+    normalizeUnifiedFlag(args),
+    GIT_FLAG_SPECS.diff
+  );
   const staged = flags.staged === true || flags.cached === true;
-  const opts = {
+  const opts: DiffFormatOptions = {
     nameOnly: flags['name-only'] === true,
     stat: flags.stat === true,
     pathspecs: doubleDashRest,
+    context: parseContext(flags.unified),
   };
+
+  // mri rewrites `--no-index` to `{ index: false }`; accept the literal name
+  // too so a future spec change cannot silently drop the flag.
+  if (flags['no-index'] === true || flags.index === false) {
+    return diffNoIndex(ctx, cwd, positionals, opts);
+  }
 
   if (positionals.length >= 2) {
     return diffCommits(ctx, cwd, positionals[0], positionals[1], opts);
@@ -97,6 +118,7 @@ export async function diff(
       newContent: change.newContent,
       oldName: change.filepath,
       newName: change.filepath,
+      context: opts.context,
     });
   }
 
@@ -147,7 +169,7 @@ async function diffCommitIndex(
   ctx: GitCommandContext,
   cwd: string,
   ref: string,
-  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+  opts: DiffFormatOptions
 ): Promise<GitCommandResult> {
   let resolved: string;
   try {
@@ -256,7 +278,7 @@ export async function diffCommits(
   cwd: string,
   ref1: string,
   ref2: string,
-  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+  opts: DiffFormatOptions
 ): Promise<GitCommandResult> {
   try {
     const resolvedRef1 = await resolveRevision(ctx, cwd, ref1);
@@ -273,7 +295,7 @@ async function diffResolvedTrees(
   cwd: string,
   resolvedRef1: string,
   resolvedRef2: string,
-  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+  opts: DiffFormatOptions
 ): Promise<GitCommandResult> {
   const changes: FileChange[] = [];
 
@@ -300,7 +322,7 @@ async function diffCommitWorkdir(
   ctx: GitCommandContext,
   cwd: string,
   ref: string,
-  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+  opts: DiffFormatOptions
 ): Promise<GitCommandResult> {
   let resolved: string;
   try {
@@ -386,10 +408,7 @@ async function compareWalkerEntries(
   };
 }
 
-function formatChanges(
-  changes: FileChange[],
-  opts: { nameOnly: boolean; stat: boolean }
-): GitCommandResult {
+function formatChanges(changes: FileChange[], opts: DiffFormatOptions): GitCommandResult {
   if (changes.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
   if (opts.nameOnly) {
     return { stdout: `${changes.map((c) => c.filepath).join('\n')}\n`, stderr: '', exitCode: 0 };
@@ -402,10 +421,32 @@ function formatChanges(
         newContent: change.newContent,
         oldName: change.filepath,
         newName: change.filepath,
+        context: opts.context,
       })
     )
     .join('');
   return { stdout, stderr: '', exitCode: 0 };
+}
+
+/**
+ * `-U<n>` is a short flag with an attached value, which `mri` mis-parses
+ * (`-U3` becomes `{ '3': …, U: '' }` and eats the next positional). Rewrite it
+ * to the `--unified=<n>` long form before the spec-driven parse. Tokens after
+ * a `--` terminator are pathspecs and stay untouched.
+ */
+function normalizeUnifiedFlag(args: readonly string[]): string[] {
+  const terminator = args.indexOf('--');
+  return args.map((arg, i) =>
+    (terminator === -1 || i < terminator) && /^-U\d+$/.test(arg) ? `--unified=${arg.slice(2)}` : arg
+  );
+}
+
+/** The `-U<n>` / `--unified=<n>` context width, or undefined when unset. */
+function parseContext(value: ArgFlagValue | undefined): number | undefined {
+  const raw = Array.isArray(value) ? value[value.length - 1] : value;
+  if (raw === undefined || typeof raw === 'boolean' || raw === '') return undefined;
+  const parsed = Number.parseInt(String(raw), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function splitTwoDotRange(value: string): [string, string] | null {
@@ -435,37 +476,10 @@ function ambiguousRevision(ref: string): GitCommandResult {
 function formatDiffStat(
   changes: { filepath: string; oldContent: string; newContent: string }[]
 ): GitCommandResult {
-  const RED = '\x1b[31m';
-  const GREEN = '\x1b[32m';
-  const RESET = '\x1b[0m';
-
-  let output = '';
-  let totalInsertions = 0;
-  let totalDeletions = 0;
-  let maxNameLen = 0;
-
-  const stats = changes.map((c) => {
-    const s = diffStat(c.oldContent, c.newContent);
-    if (c.filepath.length > maxNameLen) maxNameLen = c.filepath.length;
-    totalInsertions += s.insertions;
-    totalDeletions += s.deletions;
-    return { filepath: c.filepath, ...s };
-  });
-
-  for (const s of stats) {
-    const total = s.insertions + s.deletions;
-    const bar = `${GREEN}${'+'.repeat(s.insertions)}${RESET}${RED}${'-'.repeat(s.deletions)}${RESET}`;
-    output += ` ${s.filepath.padEnd(maxNameLen)} | ${String(total).padStart(4)} ${bar}\n`;
-  }
-
-  output += ` ${changes.length} file${changes.length !== 1 ? 's' : ''} changed`;
-  if (totalInsertions > 0)
-    output += `, ${totalInsertions} insertion${totalInsertions !== 1 ? 's' : ''}(+)`;
-  if (totalDeletions > 0)
-    output += `, ${totalDeletions} deletion${totalDeletions !== 1 ? 's' : ''}(-)`;
-  output += '\n';
-
-  return { stdout: output, stderr: '', exitCode: 0 };
+  const stdout = formatDiffStatText(
+    changes.map((c) => ({ name: c.filepath, oldContent: c.oldContent, newContent: c.newContent }))
+  );
+  return { stdout, stderr: '', exitCode: 0 };
 }
 
 export async function diffInitialCommit(
