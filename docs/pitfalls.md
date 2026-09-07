@@ -793,6 +793,14 @@ Two rules come out of it:
   twice is idempotent; setting it late is not. `ui/main.ts` now wires it ahead
   of the OAuth bootstrap, guarded by
   `packages/webapp/tests/ui/main-oauth-bridge-wiring.test.ts`.
+- **The launch query string is attacker input, not configuration.** Because the
+  page is served from the hosted origin, anything reached via a link can carry
+  `?bridge=…`, and `apiBaseUrl` is derived straight from that host —
+  so an unchecked bridge aims the whole local `/api` surface, OAuth replica push
+  included, at a remote server that need only permit the request via CORS.
+  `parseBridgeLaunchParams` enforces the loopback contract its own type already
+  documented, at the parser rather than at each consumer, so the SW
+  registration, `/api` base, lick socket, and CDP dial are covered by one check.
 - **A fail-open sync must leave the state recoverable.** Clearing a cached
   value up front and restoring it only on success turns every transport hiccup
   into data loss. Prefer re-deriving over carrying the old value forward:

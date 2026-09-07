@@ -42,13 +42,49 @@ describe('parseBridgeLaunchParams', () => {
 
   it('accepts wss:// bridge URLs (apiBaseUrl uses https://, lickWsUrl uses wss://)', () => {
     const params = parseBridgeLaunchParams(
-      '?bridge=wss%3A%2F%2Fbridge.example%2Fcdp&bridgeToken=xyz'
+      '?bridge=wss%3A%2F%2Flocalhost%3A5710%2Fcdp&bridgeToken=xyz'
     );
-    expect(params?.url).toBe('wss://bridge.example/cdp');
+    expect(params?.url).toBe('wss://localhost:5710/cdp');
     expect(params?.subprotocol).toBe('slicc.bridge.v1.xyz');
     expect(params?.token).toBe('xyz');
-    expect(params?.apiBaseUrl).toBe('https://bridge.example');
-    expect(params?.lickWsUrl).toBe('wss://bridge.example/licks-ws');
+    expect(params?.apiBaseUrl).toBe('https://localhost:5710');
+    expect(params?.lickWsUrl).toBe('wss://localhost:5710/licks-ws');
+  });
+
+  it('rejects a bridge pointing anywhere but loopback', () => {
+    // The query string is attacker-suppliable — the page is served from the
+    // hosted origin, so a crafted link can name any host here. `apiBaseUrl` is
+    // derived straight from it, which would aim the local /api surface (and the
+    // boot-time OAuth replica push, raw access tokens included) at a remote
+    // server that only has to permit the request via CORS (#2939 review).
+    for (const host of [
+      'attacker.example',
+      'bridge.example',
+      '169.254.169.254',
+      '10.0.0.5',
+      'localhost.attacker.example',
+      '127.0.0.1.attacker.example',
+    ]) {
+      expect(
+        parseBridgeLaunchParams(`?bridge=${encodeURIComponent(`wss://${host}/cdp`)}&bridgeToken=x`)
+      ).toBeNull();
+    }
+  });
+
+  it('accepts every loopback spelling a launcher may emit', () => {
+    // Must match `isLoopbackHostname` — a stricter check here would break the
+    // IPv6 and 127.0.0.0/8 launches the servers legitimately produce.
+    for (const host of ['localhost', '127.0.0.1', '127.0.0.2', '[::1]']) {
+      const params = parseBridgeLaunchParams(
+        `?bridge=${encodeURIComponent(`ws://${host}:5710/cdp`)}&bridgeToken=x`
+      );
+      expect(params, host).not.toBeNull();
+      expect(params?.apiBaseUrl).toBe(`http://${host}:5710`);
+    }
+  });
+
+  it('returns null when the bridge URL passes the scheme test but will not parse', () => {
+    expect(parseBridgeLaunchParams('?bridge=ws://%5B/cdp&bridgeToken=x')).toBeNull();
   });
 
   it('extracts role=leader and role=follower when the launcher stamped one', () => {
