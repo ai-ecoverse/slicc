@@ -311,7 +311,8 @@ export class CDPClient implements CDPTransport {
     } else {
       log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
     }
-    this.pending.rejectAll(closeRejectReason(code));
+    const reason = closeRejectReason(code);
+    this.pending.rejectAll(reason);
     this.cleanup();
     // Re-announce the drop with the specific close reason; `cleanup()` has
     // already flipped the state with a generic one.
