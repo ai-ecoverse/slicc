@@ -9,6 +9,7 @@ import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
+import { raceAbort, throwIfAborted } from './command-abort.js';
 import { HarRecorder } from './har-recorder.js';
 import type {
   CdpPayload,
@@ -119,6 +120,16 @@ interface BridgeHold {
   release: () => void;
   owner: symbol;
   targetId: string | null;
+}
+
+/** Options for {@link BrowserAPI.withTab}. */
+export interface WithTabOptions {
+  /**
+   * Cooperative cancellation for the whole hold — see `CommandAbortedError`
+   * (`cdp/command-abort.ts`) for exactly where it lands and what it cannot
+   * cancel. Omitted, `withTab` behaves as it always has.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** Per-tab and bridge-wide contention counters — see {@link BrowserAPI.getTabLockStats}. */
@@ -527,18 +538,40 @@ export class BrowserAPI implements TabHost {
    * A stale session (the proxy's Chrome leg reset underneath us) is healed in
    * place: the entry is invalidated, the tab re-attached, and `fn` retried
    * exactly once with a FRESH handle.
+   *
+   * `opts.signal` makes the whole hold abandonable, for a caller that has
+   * stopped waiting for the result (the agent's bash tool hit its `timeout`,
+   * the turn was cancelled, someone ran `kill <pid>`). It rejects a caller
+   * still queued for the tab lock, gates the attach handshake, and rides the
+   * {@link TabPage} handed to `fn` so every page operation stops at its next
+   * step. See `CommandAbortedError` for what it cannot cancel.
    */
-  async withTab<T>(targetId: string, fn: (tab: TabPage) => Promise<T>): Promise<T> {
+  async withTab<T>(
+    targetId: string,
+    fn: (tab: TabPage) => Promise<T>,
+    opts?: WithTabOptions
+  ): Promise<T> {
+    const signal = opts?.signal;
+    throwIfAborted(signal, `starting a command on tab ${targetId}`);
     const counters = this.tabCounters(targetId);
     counters.queueDepth += 1;
-    const releaseTab = await this.acquireTabLock(targetId, counters);
+    let releaseTab: () => void;
+    try {
+      releaseTab = await this.acquireTabLock(targetId, counters, signal);
+    } catch (err) {
+      // Decremented here on the abort path: a caller that never got the lock
+      // is no longer queued, and leaving it counted would inflate the
+      // contention note every later command reads.
+      counters.queueDepth -= 1;
+      throw err;
+    }
     // Pinned for the whole body: a body that waits on the page (a navigate
     // waiting for load) would otherwise age into the eviction candidate and
     // lose the session its wait is bound to.
     const unpin = this.pinTarget(targetId);
     try {
       counters.acquisitions += 1;
-      return await this.runOnTab(targetId, fn);
+      return await this.runOnTab(targetId, fn, signal);
     } finally {
       unpin();
       counters.queueDepth -= 1;
@@ -558,9 +591,13 @@ export class BrowserAPI implements TabHost {
    * re-running is safe. A {@link SessionResetError} is the other case and is
    * never retried.
    */
-  private async runOnTab<T>(targetId: string, fn: (tab: TabPage) => Promise<T>): Promise<T> {
+  private async runOnTab<T>(
+    targetId: string,
+    fn: (tab: TabPage) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
     try {
-      return await this.attemptOnTab(targetId, fn);
+      return await this.attemptOnTab(targetId, fn, signal);
     } catch (err) {
       if (err instanceof SessionResetError || !isStaleSessionError(err)) throw err;
       log.warn('Stale CDP session — re-attaching and retrying once', {
@@ -568,7 +605,7 @@ export class BrowserAPI implements TabHost {
         error: err instanceof Error ? err.message : String(err),
       });
       this.invalidateSession(targetId);
-      return await this.attemptOnTab(targetId, fn);
+      return await this.attemptOnTab(targetId, fn, signal);
     }
   }
 
@@ -582,8 +619,16 @@ export class BrowserAPI implements TabHost {
    * job then; guessing on its behalf is what corrupted input in the first
    * place.
    */
-  private async attemptOnTab<T>(targetId: string, fn: (tab: TabPage) => Promise<T>): Promise<T> {
-    const tab = await this.attachHandle(targetId, this.reentrantOwner(targetId));
+  private async attemptOnTab<T>(
+    targetId: string,
+    fn: (tab: TabPage) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    const tab = await this.attachHandle(targetId, this.reentrantOwner(targetId), signal);
+    // Attaching a fresh tab is two or three round trips of its own, each able
+    // to burn a transport timeout on a slow bridge. Re-checked here so an
+    // abort that landed anywhere in there stops before the body starts.
+    throwIfAborted(signal, `about to run a command on tab ${targetId}`);
     const sessionId = tab.sessionId;
     const before = this._appliedSends.get(sessionId) ?? 0;
     try {
@@ -610,14 +655,19 @@ export class BrowserAPI implements TabHost {
    * send it makes — including raw `tab.transport.send(…, tab.sessionId)` from
    * a caller — is credited to {@link runOnTab}'s replay guard.
    */
-  private async attachHandle(targetId: string, owner: symbol | undefined): Promise<TabHandle> {
-    const sessionId = await this.attachToPageOwned(targetId, owner);
+  private async attachHandle(
+    targetId: string,
+    owner: symbol | undefined,
+    signal?: AbortSignal
+  ): Promise<TabHandle> {
+    const sessionId = await this.attachToPageOwned(targetId, owner, signal);
     const entry = this._sessions.get(targetId);
     return new TabHandle(
       this,
       targetId,
       sessionId,
-      this.accountedTransportFor(entry?.transport ?? this.client)
+      this.accountedTransportFor(entry?.transport ?? this.client),
+      signal
     );
   }
 
@@ -678,25 +728,41 @@ export class BrowserAPI implements TabHost {
    * uncontended tab into a "1 ms of contention" reading — enough to make the
    * accounting test flaky and enough to mislead the `playwright-cli`
    * contention note it feeds.
+   *
+   * A `signal` that fires while queued rejects this caller immediately, but
+   * its slot in the chain is handed on only once the PREDECESSOR actually
+   * finishes — releasing early would let the next caller drive the tab
+   * alongside the one still holding it.
    */
-  private async acquireTabLock(targetId: string, counters: TabLockCounters): Promise<() => void> {
+  private async acquireTabLock(
+    targetId: string,
+    counters: TabLockCounters,
+    signal?: AbortSignal
+  ): Promise<() => void> {
     let release!: () => void;
     const next = new Promise<void>((r) => {
       release = r;
     });
     const prev = this._tabLocks.get(targetId);
     this._tabLocks.set(targetId, next);
-    if (prev) {
-      const waitStart = Date.now();
-      await prev;
-      counters.tabWaitMs += Date.now() - waitStart;
-    }
-    return () => {
+    const drop = (): void => {
       // Drop the chain once nobody is queued behind us, so a long-lived
       // bridge does not keep a resolved promise per tab it ever touched.
       if (this._tabLocks.get(targetId) === next) this._tabLocks.delete(targetId);
       release();
     };
+    if (prev) {
+      const waitStart = Date.now();
+      try {
+        await raceAbort(prev, signal, `queued for the lock on tab ${targetId}`);
+      } catch (err) {
+        counters.tabWaitMs += Date.now() - waitStart;
+        void prev.then(drop, drop);
+        throw err;
+      }
+      counters.tabWaitMs += Date.now() - waitStart;
+    }
+    return drop;
   }
 
   /**
@@ -1086,7 +1152,11 @@ export class BrowserAPI implements TabHost {
    * across tabs without queueing against itself. Everything else queues, which
    * is what stops a UI timer from re-pointing the cursor mid-command.
    */
-  private async attachToPageOwned(targetId: string, owner: symbol | undefined): Promise<string> {
+  private async attachToPageOwned(
+    targetId: string,
+    owner: symbol | undefined,
+    signal?: AbortSignal
+  ): Promise<string> {
     // Counters passed so the ONLY bridge-wide wait left in a command's path —
     // moving the cursor — is still reported as `bridgeWaitMs`, and the
     // `playwright-cli` contention note keeps telling "this tab is busy" apart
@@ -1109,8 +1179,8 @@ export class BrowserAPI implements TabHost {
 
       const isRemote = !!this.trayTargetProvider?.createRemoteTransport && targetId.includes(':');
       return await (isRemote
-        ? this.attachRemoteTarget(targetId)
-        : this.attachLocalTarget(targetId));
+        ? this.attachRemoteTarget(targetId, signal)
+        : this.attachLocalTarget(targetId, signal));
     } finally {
       release();
     }
@@ -1137,7 +1207,7 @@ export class BrowserAPI implements TabHost {
   }
 
   /** Attach to a tray target ("{runtimeId}:{localTargetId}") over its remote transport. */
-  private async attachRemoteTarget(targetId: string): Promise<string> {
+  private async attachRemoteTarget(targetId: string, signal?: AbortSignal): Promise<string> {
     const colonIdx = targetId.indexOf(':');
     const runtimeId = targetId.substring(0, colonIdx);
     const localTargetId = targetId.substring(colonIdx + 1);
@@ -1151,6 +1221,10 @@ export class BrowserAPI implements TabHost {
     );
     if (!remoteTransport) throw new Error(`No remote transport for target ${targetId}`);
 
+    // Raw `transport.send`, so the handle's own cancellation boundary does not
+    // apply — gated here, or an abandoned command would still pay for the
+    // whole attach handshake before anything noticed.
+    throwIfAborted(signal, `about to attach to tray tab ${targetId}`);
     const result = await remoteTransport.send('Target.attachToTarget', {
       targetId: localTargetId,
       flatten: true,
@@ -1162,17 +1236,21 @@ export class BrowserAPI implements TabHost {
     };
     this.rememberSession(targetId, entry);
     this.activateSession(targetId, entry);
+    throwIfAborted(signal, `about to enable Page on tray tab ${targetId}`);
     await remoteTransport.send('Page.enable', {}, entry.sessionId);
+    throwIfAborted(signal, `about to restore the viewport of tray tab ${targetId}`);
     await this.reapplyViewportOverride(targetId, entry);
     this.notifySessionChange(targetId, entry);
     return entry.sessionId;
   }
 
   /** Attach to a local browser target over the `/cdp` client. */
-  private async attachLocalTarget(targetId: string): Promise<string> {
+  private async attachLocalTarget(targetId: string, signal?: AbortSignal): Promise<string> {
     this.useLocalTransport();
     await this.ensureLocalConnected();
 
+    // Raw `localClient.send` — see the tray path above.
+    throwIfAborted(signal, `about to attach to tab ${targetId}`);
     const result = await this.localClient.send('Target.attachToTarget', {
       targetId,
       flatten: true,
@@ -1185,7 +1263,9 @@ export class BrowserAPI implements TabHost {
     this.activateSession(targetId, entry);
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
+    throwIfAborted(signal, `about to enable Page on tab ${targetId}`);
     await this.localClient.send('Page.enable', {}, entry.sessionId);
+    throwIfAborted(signal, `about to restore the viewport of tab ${targetId}`);
     await this.reapplyViewportOverride(targetId, entry);
     this.notifySessionChange(targetId, entry);
     return entry.sessionId;

@@ -124,4 +124,72 @@ describe('waitForEvent', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
+
+  describe('abort waiter', () => {
+    const gaveUp = () => new Error('caller gave up');
+
+    it("rejects with the caller's own error and unsubscribes when the signal fires", async () => {
+      const unsubscribe = vi.fn();
+      const controller = new AbortController();
+
+      const promise = waitForEvent<number>(() => unsubscribe, 5000, 'timed out', {
+        signal: controller.signal,
+        error: gaveUp,
+      });
+      controller.abort();
+
+      await expect(promise).rejects.toThrow('caller gave up');
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects without ever subscribing when the signal already fired', async () => {
+      const subscribe = vi.fn(() => vi.fn());
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        waitForEvent<number>(subscribe, 5000, 'timed out', {
+          signal: controller.signal,
+          error: gaveUp,
+        })
+      ).rejects.toThrow('caller gave up');
+      expect(subscribe).not.toHaveBeenCalled();
+    });
+
+    it('drops the abort listener once the event arrives', async () => {
+      const controller = new AbortController();
+      const unsubscribe = vi.fn();
+      let deliver!: (value: number) => void;
+
+      const promise = waitForEvent<number>(
+        (handler) => {
+          deliver = handler;
+          return unsubscribe;
+        },
+        5000,
+        'timed out',
+        { signal: controller.signal, error: gaveUp }
+      );
+      deliver(42);
+      expect(await promise).toBe(42);
+
+      // A later abort must not resurface as an unhandled rejection on a
+      // promise that already resolved.
+      controller.abort();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the timeout path intact when no signal is supplied', async () => {
+      vi.useFakeTimers();
+      const unsubscribe = vi.fn();
+      const promise = waitForEvent<number>(() => unsubscribe, 100, 'timed out waiting', {
+        signal: undefined,
+        error: gaveUp,
+      });
+      vi.advanceTimersByTime(101);
+
+      await expect(promise).rejects.toThrow('timed out waiting');
+      vi.useRealTimers();
+    });
+  });
 });

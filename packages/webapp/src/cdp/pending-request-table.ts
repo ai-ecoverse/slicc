@@ -79,26 +79,59 @@ export class PendingRequestTable<Id, Result = CDPPayload> {
 }
 
 /**
+ * Cooperative cancellation for a wait, supplied by the caller.
+ *
+ * `error()` mints the rejection so this module never has to name the caller's
+ * error type — `browser-api` rejects with its own abort error, a transport
+ * could reject with something else, and neither has to be imported here.
+ */
+export interface AbortWaiter {
+  signal: AbortSignal | undefined;
+  error: () => Error;
+}
+
+/**
  * Resolve with the first value delivered by `subscribe`, or reject with
  * `timeoutMessage` after `timeoutMs`. Unsubscribes on both paths.
+ *
+ * An `abort` waiter is a THIRD settle path: a caller that has given up (the
+ * agent's bash tool abandoned the command) rejects the wait immediately
+ * instead of leaving it to run out its timeout. An already-aborted signal
+ * rejects synchronously, before `subscribe` is ever called.
  */
 export function waitForEvent<T>(
   subscribe: (handler: (value: T) => void) => () => void,
   timeoutMs: number,
-  timeoutMessage: string
+  timeoutMessage: string,
+  abort?: AbortWaiter
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (abort?.signal?.aborted) {
+      reject(abort.error());
+      return;
+    }
     let unsubscribe: (() => void) | null = null;
     let settled = false;
-    const timer = setTimeout(() => {
+    let onAbort: (() => void) | undefined;
+    const finish = (): void => {
       settled = true;
+      clearTimeout(timer);
+      if (onAbort) abort?.signal?.removeEventListener('abort', onAbort);
       unsubscribe?.();
+    };
+    const timer = setTimeout(() => {
+      finish();
       reject(new Error(timeoutMessage));
     }, timeoutMs);
+    if (abort?.signal) {
+      onAbort = (): void => {
+        finish();
+        reject(abort.error());
+      };
+      abort.signal.addEventListener('abort', onAbort, { once: true });
+    }
     unsubscribe = subscribe((value) => {
-      clearTimeout(timer);
-      settled = true;
-      unsubscribe?.();
+      finish();
       resolve(value);
     });
     // A subscriber that delivered synchronously settled before `unsubscribe`

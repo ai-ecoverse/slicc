@@ -2476,6 +2476,322 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('cooperative cancellation (withTab signal)', () => {
+    function attachCounting() {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+    }
+
+    /** Flush enough microtask/macrotask turns for a rejection to propagate. */
+    const settle = () => new Promise((r) => setTimeout(r, 5));
+
+    /**
+     * A promise plus its resolver. Holders are released explicitly rather than
+     * on a timer: "the holder is still working when the abort lands" has to be
+     * a fact of the test, not a race a slow CI box can lose.
+     */
+    function deferred(): { promise: Promise<void>; resolve: () => void } {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    /** Poll until `ready()` — for waiting on state, never on a duration. */
+    async function until(ready: () => boolean, what: string): Promise<void> {
+      for (let i = 0; i < 500; i++) {
+        if (ready()) return;
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    }
+
+    it('rejects a caller still queued for the tab lock, without running its body', async () => {
+      attachCounting();
+      const controller = new AbortController();
+      const release = deferred();
+      let holding = false;
+      let holderDone = false;
+      let queuedBodyRan = false;
+
+      const holder = api.withTab('t1', async () => {
+        holding = true;
+        await release.promise;
+        holderDone = true;
+      });
+      await until(() => holding, 'the holder to take the tab');
+
+      const queued = api.withTab(
+        't1',
+        async () => {
+          queuedBodyRan = true;
+        },
+        { signal: controller.signal }
+      );
+      const rejected = queued.catch((e: unknown) => e);
+      await settle();
+
+      controller.abort();
+      const err = (await rejected) as Error;
+      // Rejected while the holder is still working — not after it finished.
+      expect(holderDone).toBe(false);
+      expect(queuedBodyRan).toBe(false);
+      expect(err.name).toBe('CommandAbortedError');
+      expect(err.message).toContain('queued for the lock on tab t1');
+
+      release.resolve();
+      await holder;
+      expect(holderDone).toBe(true);
+    });
+
+    it('keeps FIFO order for the caller behind an aborted one', async () => {
+      attachCounting();
+      const controller = new AbortController();
+      const release = deferred();
+      const order: string[] = [];
+      let holding = false;
+
+      const first = api.withTab('t1', async () => {
+        holding = true;
+        await release.promise;
+        order.push('first');
+      });
+      await until(() => holding, 'the first caller to take the tab');
+      const aborted = api
+        .withTab('t1', async () => order.push('aborted-body'), { signal: controller.signal })
+        .catch(() => order.push('aborted'));
+      await settle();
+      const third = api.withTab('t1', async () => order.push('third'));
+      await settle();
+
+      controller.abort();
+      await until(() => order.includes('aborted'), 'the abandoned caller to reject');
+      // Still queued behind a holder that has not finished: releasing the
+      // abandoned slot must not let `third` overtake it.
+      expect(order).toEqual(['aborted']);
+
+      release.resolve();
+      await Promise.all([first, aborted, third]);
+      expect(order).toEqual(['aborted', 'first', 'third']);
+    });
+
+    it('rejects an already-aborted caller before it takes any lock', async () => {
+      attachCounting();
+      const controller = new AbortController();
+      controller.abort();
+      let ran = false;
+
+      await expect(
+        api.withTab(
+          't1',
+          async () => {
+            ran = true;
+          },
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/aborted while starting a command on tab t1/);
+      expect(ran).toBe(false);
+      expect(mockClient.send).not.toHaveBeenCalled();
+      // The tab is immediately usable again.
+      await api.withTab('t1', async () => undefined);
+    });
+
+    it('stops during the attach handshake, before the body runs', async () => {
+      const seen: string[] = [];
+      const controller = new AbortController();
+      let bodyRan = false;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        seen.push(method);
+        if (method === 'Target.attachToTarget') {
+          // The caller gives up while the attach handshake is in flight.
+          controller.abort();
+          return { sessionId: 'sess-1' };
+        }
+        return {};
+      });
+
+      await expect(
+        api.withTab(
+          't1',
+          async () => {
+            bodyRan = true;
+          },
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/about to enable Page on tab t1/);
+
+      // The attach's own follow-up round trips did not run, and neither did fn.
+      expect(seen).toEqual(['Target.attachToTarget']);
+      expect(bodyRan).toBe(false);
+      // And the lock came back: an unrelated caller is served immediately.
+      await api.withTab('t2', async () => undefined);
+    });
+
+    it("rejects navigate's load wait as soon as the signal fires", async () => {
+      attachCounting();
+      const controller = new AbortController();
+
+      const navigating = api
+        .withTab('t1', async (tab) => tab.navigate('https://never-loads.example'), {
+          signal: controller.signal,
+        })
+        .catch((e: unknown) => e);
+      // Wait for the load wait to be ARMED, not for a duration: aborting
+      // earlier would stop the command at `Page.navigate` instead, and the
+      // assertion below is about which wait was cancelled.
+      await until(
+        () =>
+          (mockClient.on as ReturnType<typeof vi.fn>).mock.calls.some(
+            (c: unknown[]) => c[0] === 'Page.loadEventFired'
+          ),
+        'the load wait to be armed'
+      );
+
+      controller.abort();
+      const err = (await navigating) as Error;
+      expect(err.name).toBe('CommandAbortedError');
+      expect(err.message).toContain('waiting for https://never-loads.example to fire its load');
+      // The tab is free again long before the 30s load bound would elapse.
+      const t0 = Date.now();
+      await api.withTab('t1', async () => undefined);
+      expect(Date.now() - t0).toBeLessThan(1000);
+    });
+
+    it('stops a multi-step page operation between CDP round trips', async () => {
+      const seen: string[] = [];
+      const controller = new AbortController();
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        seen.push(method);
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        // Aborting DURING the first round trip of the body: the send in
+        // flight still completes, the next one must not start.
+        if (method === 'Runtime.enable') controller.abort();
+        return { result: { type: 'string', value: 'title' } };
+      });
+
+      await expect(
+        api.withTab('t1', async (tab) => tab.evaluate('document.title'), {
+          signal: controller.signal,
+        })
+      ).rejects.toThrow(/about to send Runtime.evaluate/);
+
+      expect(seen).toContain('Runtime.enable');
+      expect(seen).not.toContain('Runtime.evaluate');
+    });
+
+    it('stops a raw tab.send between round trips, like a handler does', async () => {
+      const seen: string[] = [];
+      const controller = new AbortController();
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        seen.push(method);
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        // Fires DURING the body's first send, not during the attach that
+        // precedes it (which sends Page.enable of its own).
+        if (method === 'DOM.enable') controller.abort();
+        return {};
+      });
+
+      // The shape most handlers use: two `tab.send` calls in one hold.
+      await expect(
+        api.withTab(
+          't1',
+          async (tab) => {
+            await tab.send('DOM.enable');
+            await tab.send('DOM.getDocument', { depth: 0 });
+          },
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/about to send DOM.getDocument/);
+
+      expect(seen).toContain('DOM.enable');
+      expect(seen).not.toContain('DOM.getDocument');
+    });
+
+    it('stops a waitForSelector poll loop and frees the tab', async () => {
+      const controller = new AbortController();
+      let sessCount = 0;
+      let probes = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') return { sessionId: `sess-${++sessCount}` };
+        if (method === 'Runtime.evaluate') {
+          probes += 1;
+          return { result: { type: 'boolean', value: false } };
+        }
+        return {};
+      });
+
+      const waiting = api
+        .withTab('t1', async (tab) => tab.waitForSelector('#never', { interval: 10 }), {
+          signal: controller.signal,
+        })
+        .catch((e: unknown) => e);
+      await settle();
+      const probesAtAbort = probes;
+      controller.abort();
+
+      const err = (await waiting) as Error;
+      expect(err.name).toBe('CommandAbortedError');
+      expect(err.message).toContain('polling for selector #never');
+      // No further probes after the abort — the loop really stopped.
+      await settle();
+      expect(probes).toBeLessThanOrEqual(probesAtAbort + 1);
+    });
+
+    it('never cancels a handle minted for a different command', async () => {
+      attachCounting();
+      const controller = new AbortController();
+
+      // A handle taken WITHOUT a signal keeps working while an unrelated
+      // signalled command on another tab is being abandoned — the signal
+      // belongs to its own hold, never to the bridge.
+      const unsignalled = await api.withTab('t2', async (tab) => tab);
+      const abandoned = api
+        .withTab(
+          't1',
+          async (tab) => {
+            controller.abort();
+            await expect(unsignalled.send('Runtime.enable')).resolves.toEqual({});
+            await tab.send('Runtime.enable');
+          },
+          { signal: controller.signal }
+        )
+        .catch((e: unknown) => (e as Error).name);
+
+      expect(await abandoned).toBe('CommandAbortedError');
+    });
+
+    it('leaves the bridge usable after an abandoned body unwinds', async () => {
+      attachCounting();
+      const controller = new AbortController();
+
+      const abandoned = api
+        .withTab('t1', async (tab) => tab.navigate('https://never-loads.example'), {
+          signal: controller.signal,
+        })
+        .catch(() => 'aborted');
+      await settle();
+      controller.abort();
+      expect(await abandoned).toBe('aborted');
+
+      await api.withTab('t2', async () => undefined);
+      await api.withTab('t1', async () => undefined);
+      expect(api.getTabLockStats().queueDepth).toBe(0);
+    });
+
+    it('is a no-op when no signal is supplied', async () => {
+      attachCounting();
+      const order: string[] = [];
+      await api.withTab('t1', async () => order.push('ran'));
+      await api.withTab('t1', async () => order.push('ran-again'), {});
+      expect(order).toEqual(['ran', 'ran-again']);
+    });
+  });
+
   describe('createHarRecorder', () => {
     it('returns a HarRecorder bound to the browser transport', async () => {
       const fs = await VirtualFS.create({ dbName: `har-factory-${dbCounter++}`, wipe: true });
