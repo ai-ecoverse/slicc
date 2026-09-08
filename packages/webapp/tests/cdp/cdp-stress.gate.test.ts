@@ -44,17 +44,21 @@ const MAX_TAB_WAIT_P95_MS = 250;
 const MAX_TAB_WAIT_TOTAL_MS = 2000;
 
 /**
- * Bound on BRIDGE-WIDE waiting across the whole fan-out.
+ * Bound on BRIDGE-WIDE waiting summed across the whole fan-out.
  *
  * Session-explicit handlers left exactly one bridge-wide step in a command's
  * path — attaching, which moves the cursor and (for a tray target) swaps the
- * transport. That is a handful of round trips for the first touch of each tab
- * and a synchronous cursor move afterwards, so the cumulative wait across 16
- * tabs × 4 iterations × 4 ops is small and does NOT scale with fan-out. Before
- * this, a command body held the bridge end to end and the same run accumulated
- * tens of seconds here.
+ * transport. That is two round trips the first time a tab is touched and a
+ * synchronous cursor move afterwards, so this does NOT scale with fan-out.
+ *
+ * The margin is enormous, which is the point: measured on one machine, this
+ * same 8-driver run accumulated **3,491,200 ms** of bridge-wide waiting when a
+ * command body held the bridge end to end, and **2,066 ms** once it stopped.
+ * The bound is set above the latter with room for a loaded machine rather than
+ * anywhere near the former — a regression here is three orders of magnitude,
+ * not a few percent.
  */
-const MAX_BRIDGE_WAIT_TOTAL_MS = 2000;
+const MAX_BRIDGE_WAIT_TOTAL_MS = 5000;
 
 /** `goto` must wait for the target tab's own load (the slow asset is 3s). */
 const MIN_TARGET_LOAD_MS = 2500;

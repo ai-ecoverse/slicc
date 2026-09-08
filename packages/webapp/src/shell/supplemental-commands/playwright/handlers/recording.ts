@@ -16,12 +16,17 @@ export const recordHandler: PlaywrightHandler = async ({
   const filterCode = flags['filter'];
   await resolveAppTabId(browser, state);
   const newTargetId = await browser.createPage(url);
-  const transport = browser.getTransport();
-  const attachResult = await transport.send('Target.attachToTarget', {
-    targetId: newTargetId,
-    flatten: true,
+  // The recorder gets its OWN session, so an LRU eviction of the tab's
+  // registry entry cannot end a recording mid-flight — but it is minted on
+  // the tab's own transport, which for a tray target is that runtime's remote
+  // channel rather than whatever the bridge last pointed at.
+  const { transport, sessionId } = await browser.withTab(newTargetId, async (page) => {
+    const attachResult = await page.transport.send('Target.attachToTarget', {
+      targetId: newTargetId,
+      flatten: true,
+    });
+    return { transport: page.transport, sessionId: attachResult['sessionId'] as string };
   });
-  const sessionId = attachResult['sessionId'] as string;
   if (!state.harRecorder) {
     state.harRecorder = browser.createHarRecorder(fs, transport);
   }
