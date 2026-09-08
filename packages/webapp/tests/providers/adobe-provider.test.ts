@@ -741,16 +741,22 @@ describe('X-Session-Id fallback enforcement', () => {
 });
 
 describe('fetchProxyConfig caching contract', () => {
-  // Mirrors the caching logic in adobe.ts fetchProxyConfig. Same
-  // mirror-rather-than-import pattern: adobe.ts pulls in import.meta.glob
-  // and chrome globals that aren't available under vitest/node.
+  // Mirrors the caching + retry logic in adobe.ts fetchProxyConfig /
+  // attemptFetchProxyConfig. Same mirror-rather-than-import pattern: adobe.ts
+  // pulls in import.meta.glob and chrome globals unavailable under vitest/node.
   //
-  // Regression for: a failed /v1/config fetch used to cache an empty {}
-  // object, so every subsequent login retry in the same session reused the
-  // poisoned cache even after the proxy recovered — requiring a full page
-  // reload to clear it.
+  // Covers two generations of bugs:
+  //   1. Failed /v1/config used to be cached as {}, poisoning every subsequent
+  //      retry in the same session — required a full page reload to recover.
+  //   2. Transient Chrome SW timing race on a fresh profile: the very first
+  //      cross-origin fetch fired before the SW had the bridge config, which
+  //      routed to same-origin wrangler (404 "not available in worker mode") or
+  //      threw ERR_FAILED. resolveClientId({}) then threw "Could not determine
+  //      IMS client ID". Fixed by a single in-call retry after RETRY_DELAY_MS.
 
   const SLICC_VERSION_HEADER = 'X-Slicc-Version';
+  // Must match the production value in adobe.ts.
+  const RETRY_DELAY_MS = 600;
 
   interface ProxyConfig {
     clientId?: string;
@@ -758,36 +764,47 @@ describe('fetchProxyConfig caching contract', () => {
     imsEnvironment?: string;
   }
 
-  async function fetchProxyConfig(
+  // Single-attempt helper — mirrors attemptFetchProxyConfig.
+  async function attemptFetchProxyConfig(
     proxyEndpoint: string,
-    cache: Map<string, ProxyConfig>,
     fetchImpl: typeof fetch
-  ): Promise<ProxyConfig> {
-    const cached = cache.get(proxyEndpoint);
-    if (cached) return cached;
+  ): Promise<ProxyConfig | null> {
     try {
       const res = await fetchImpl(`${proxyEndpoint}/v1/config`, {
         headers: { [SLICC_VERSION_HEADER]: '1.0.0-test' },
       });
-      if (res.ok) {
-        const config = (await res.json()) as ProxyConfig;
-        cache.set(proxyEndpoint, config);
-        return config;
-      }
-      console.warn(
-        `[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`
-      );
-    } catch (err) {
-      console.warn(
-        '[adobe] Failed to fetch proxy config:',
-        err instanceof Error ? err.message : String(err)
-      );
+      if (res.ok) return (await res.json()) as ProxyConfig;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Retry wrapper — mirrors fetchProxyConfig.
+  // `delay` is injectable so tests run without real timers.
+  async function fetchProxyConfig(
+    proxyEndpoint: string,
+    cache: Map<string, ProxyConfig>,
+    fetchImpl: typeof fetch,
+    delay: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
+  ): Promise<ProxyConfig> {
+    const cached = cache.get(proxyEndpoint);
+    if (cached) return cached;
+    let config = await attemptFetchProxyConfig(proxyEndpoint, fetchImpl);
+    if (!config) {
+      await delay(RETRY_DELAY_MS);
+      config = await attemptFetchProxyConfig(proxyEndpoint, fetchImpl);
+    }
+    if (config) {
+      cache.set(proxyEndpoint, config);
+      return config;
     }
     // ponytail: failures are intentionally NOT cached
     return {};
   }
 
   const ENDPOINT = 'https://proxy.example.com';
+  const noDelay = async (_ms: number) => {};
 
   it('successful fetch is cached — second call does not re-fetch', async () => {
     let callCount = 0;
@@ -799,53 +816,100 @@ describe('fetchProxyConfig caching contract', () => {
       } as Response;
     };
     const cache = new Map<string, ProxyConfig>();
-    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
     expect(callCount).toBe(1);
     expect(first.clientId).toBe('test-client');
     expect(second.clientId).toBe('test-client');
   });
 
-  it('failed fetch (non-ok status) is NOT cached — second call re-fetches', async () => {
+  it('SW race regression — first attempt throws (ERR_FAILED), retry succeeds within single call', async () => {
+    // Regression for the Chrome SW timing race on a fresh profile: the first
+    // fetch throws before the SW has settled. The caller should receive a
+    // resolved config from the same invocation (no page reload required).
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      if (callCount === 1) throw new TypeError('Failed to fetch'); // ERR_FAILED
+      return {
+        ok: true,
+        json: async () => ({ clientId: 'experience-catalyst-prod', scopes: 'openid' }),
+      } as Response;
+    };
+    const delayedMs: number[] = [];
+    const captureDelay = async (ms: number) => {
+      delayedMs.push(ms);
+    };
+    const cache = new Map<string, ProxyConfig>();
+    const result = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, captureDelay);
+    expect(result.clientId).toBe('experience-catalyst-prod'); // resolved from retry
+    expect(callCount).toBe(2); // one failed attempt + one successful retry
+    expect(delayedMs).toEqual([RETRY_DELAY_MS]); // exactly one delay of 600 ms
+    expect(cache.size).toBe(1); // retry result was cached
+  });
+
+  it('SW race regression — first attempt returns non-ok (wrangler 404), retry succeeds', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      if (callCount === 1) return { ok: false, status: 404 } as Response; // wrangler 404
+      return {
+        ok: true,
+        json: async () => ({ clientId: 'experience-catalyst-prod' }),
+      } as Response;
+    };
+    const cache = new Map<string, ProxyConfig>();
+    const result = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    expect(result.clientId).toBe('experience-catalyst-prod');
+    expect(callCount).toBe(2);
+    expect(cache.size).toBe(1);
+  });
+
+  it('both attempts fail (non-ok) — returns {} without caching, next caller re-fetches', async () => {
     let callCount = 0;
     const mockFetch = async () => {
       callCount++;
       return { ok: false, status: 503 } as Response;
     };
     const cache = new Map<string, ProxyConfig>();
-    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    expect(callCount).toBe(2);
-    expect(cache.size).toBe(0);
+    // Two separate caller invocations; each makes 2 fetch calls internally.
+    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    expect(first.clientId).toBeUndefined();
+    expect(second.clientId).toBeUndefined();
+    expect(callCount).toBe(4); // 2 attempts per invocation × 2 invocations
+    expect(cache.size).toBe(0); // never cached
   });
 
-  it('failed fetch (network throw) is NOT cached — second call re-fetches', async () => {
+  it('both attempts throw (network error) — returns {} without caching', async () => {
     let callCount = 0;
     const mockFetch = async () => {
       callCount++;
-      throw new Error('fetch failed');
+      throw new TypeError('Failed to fetch');
     };
     const cache = new Map<string, ProxyConfig>();
-    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    expect(callCount).toBe(2);
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    expect(callCount).toBe(4);
     expect(cache.size).toBe(0);
   });
 
-  it('recovers after a blip — retry after failure returns real clientId without reload', async () => {
+  it('recovers across separate invocations — blip then proxy up, no reload needed', async () => {
     let callCount = 0;
-    // First call: proxy down
-    // Second call: proxy recovered
     const mockFetch = async () => {
       callCount++;
-      if (callCount === 1) return { ok: false, status: 503 } as Response;
-      return { ok: true, json: async () => ({ clientId: 'experience-catalyst-prod' }) } as Response;
+      // Attempts 1+2: both fail (genuine outage, not just a SW race)
+      if (callCount <= 2) return { ok: false, status: 503 } as Response;
+      return {
+        ok: true,
+        json: async () => ({ clientId: 'experience-catalyst-prod' }),
+      } as Response;
     };
     const cache = new Map<string, ProxyConfig>();
-    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    expect(first.clientId).toBeUndefined(); // blip: empty fallback
-    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
-    expect(second.clientId).toBe('experience-catalyst-prod'); // recovery: real value
-    expect(callCount).toBe(2);
+    const blip = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    expect(blip.clientId).toBeUndefined();
+    const recovered = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch, noDelay);
+    expect(recovered.clientId).toBe('experience-catalyst-prod');
+    expect(cache.size).toBe(1);
   });
 });
