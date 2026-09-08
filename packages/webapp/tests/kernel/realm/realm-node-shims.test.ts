@@ -90,8 +90,12 @@ describe('createNodeConsole', () => {
     const { con, out, err } = makeConsole();
     expect(() => con.trace('here')).not.toThrow();
     expect(out()).toBe('');
-    expect(err()).toMatch(/^Trace: here\n/);
-    expect(err()).toContain('at ');
+    const stderr = err();
+    expect(stderr).toMatch(/^Trace: here\n/);
+    const firstFrame = stderr.split('\n')[1] ?? '';
+    expect(firstFrame).toContain('at ');
+    expect(firstFrame).not.toMatch(/consoleTrace|createNodeConsole/);
+    expect(firstFrame).not.toMatch(/src\/kernel\/realm\/realm-node-shims/);
   });
 
   it('group / groupCollapsed indent subsequent lines until groupEnd', () => {

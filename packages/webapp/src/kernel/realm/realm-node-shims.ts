@@ -76,7 +76,10 @@ function consoleTrace(
   error(prefix);
   const stack = new Error().stack;
   if (!stack) return;
-  const frames = stack.split('\n').slice(2).join('\n');
+  // Drop `Error`, this helper, and the `trace:` wrapper on the returned
+  // object so the first frame is the user call site (Node hides its own
+  // console frames).
+  const frames = stack.split('\n').slice(3).join('\n');
   if (!frames) return;
   const body = frames.endsWith('\n') ? frames : `${frames}\n`;
   writeRaw(indent > 0 ? `${'  '.repeat(indent)}${body}` : body);
