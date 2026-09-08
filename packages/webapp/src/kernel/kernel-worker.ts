@@ -169,6 +169,16 @@ export interface KernelWorkerInitMsg {
    * stay empty.
    */
   flagFloat?: FeatureFlagFloat | null;
+  /**
+   * `location.href` of the page that spawned this worker — SLICC's own leader
+   * tab. The worker cannot derive it: `self.location.href` is the WORKER script
+   * URL (`/assets/kernel-worker-<hash>.js`), which shares the origin but not
+   * the path. Used by `createKernelHost` to keep the `NavigationWatcher` off
+   * our own tab; the page passes it at boot rather than answering a panel-RPC
+   * round trip, because the watcher starts before the page-side RPC handler is
+   * guaranteed to be installed. Absent on older pages → no tab is skipped.
+   */
+  appPageUrl?: string | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -452,6 +462,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       logger: console,
       localLickWsUrl: init.localLickWsUrl ?? null,
       syncFsChannelNonce: init.syncFsChannelNonce ?? null,
+      appPageUrl: init.appPageUrl ?? null,
       // Forward boot milestones to the page so it re-arms the ready
       // watchdog on progress instead of killing a slow boot (#2007).
       onBootProgress: emitBootProgress,

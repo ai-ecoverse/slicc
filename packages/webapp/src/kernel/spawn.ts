@@ -455,6 +455,11 @@ export function bootstrapKernelWorker<TClient>(
     // constructed — so `uptime` needs the page's (#2819).
     pageLoadedAt: globalThis.performance?.timeOrigin ?? Date.now(),
     flagFloat: options.flagFloat ?? null,
+    // The leader tab's own URL, so the worker's NavigationWatcher can leave
+    // this tab alone (issue #2417 follow-up). Read here rather than passed in:
+    // every caller of this function runs in the page realm, and the value is
+    // the page's identity, not a per-float configuration knob.
+    appPageUrl: globalThis.location?.href ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 

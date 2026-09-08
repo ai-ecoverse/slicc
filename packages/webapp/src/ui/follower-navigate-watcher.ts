@@ -1,5 +1,9 @@
 import { createLogger } from '../base/logger.js';
-import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
+import {
+  createOwnTabMatcher,
+  type DiscoveryEvent,
+  NavigationWatcher,
+} from '../cdp/navigation-watcher.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
@@ -140,7 +144,18 @@ export function startFollowerNavigateWatcher(
         body,
       });
     },
-    buildFollowerDiscoveryOptions(getSync)
+    {
+      ...buildFollowerDiscoveryOptions(getSync),
+      // Leave this follower's OWN tab alone: enabling Page/Network on it makes
+      // Chrome report the tab's `/cdp` WebSocket traffic back as
+      // `Network.webSocketFrame*` events (issue #2417). Matching is origin +
+      // pathname, so the handoff pages on the app's own origin
+      // (`/handoff?...`) are still watched. This runs in the page realm, so
+      // `location.href` is the tab's URL — except under Cherry, where the
+      // webapp is an iframe inside a host page; there it matches nothing and
+      // every tab stays watched, as before.
+      isOwnTab: createOwnTabMatcher(() => globalThis.location?.href ?? null),
+    }
   );
   void watcher.start();
   return () => void watcher.stop();

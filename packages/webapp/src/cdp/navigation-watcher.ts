@@ -34,8 +34,13 @@ import type { CDPEventListener } from './types.js';
 
 const log = createLogger('navigation-watcher');
 
-/** Fields read off `Target.attachedToTarget` / `Target.targetCreated` CDP events. */
-interface NavigationTargetInfo {
+/**
+ * Fields read off `Target.attachedToTarget` / `Target.targetCreated` CDP events.
+ * Every field is optional: this is what Chrome put on the wire, not a promise
+ * about what it sent. Also the argument
+ * {@link NavigationWatcherOptions.isOwnTab} is called with.
+ */
+export interface NavigationTargetInfo {
   targetId?: string;
   type?: string;
   title?: string;
@@ -153,6 +158,28 @@ export interface NavigationWatcherOptions {
   isDiscoveryEnabled?: () => boolean;
   /** Per-request well-known probe timeout in ms (forwarded to `probeWellKnown`). */
   probeTimeoutMs?: number;
+  /**
+   * Recognise a tab the watcher must ignore entirely — in practice SLICC's own
+   * leader tab. When it returns true the watcher neither attaches to the target
+   * nor tracks a session someone else attached to it, so no `Page`/`Network`
+   * traffic for that tab crosses the `/cdp` socket on our account.
+   *
+   * Why this is a caller-supplied predicate rather than a check in here: the
+   * leader tab has no cheap in-layer signal. `resolveAppTabId`
+   * (`shell/supplemental-commands/playwright/snapshot.ts`) sits above `cdp/` in
+   * the layer stack and needs a `BrowserAPI` plus a panel-RPC round trip, and a
+   * bare origin test would be actively WRONG — the handoff pages this watcher
+   * exists to observe are served from the app origin itself
+   * (`https://www.sliccy.ai/handoff?...`). {@link createOwnTabMatcher} builds
+   * the predicate both callers use; each supplies its own way of learning the
+   * app page's URL (`location.href` in the page realm; in the kernel worker,
+   * `KernelWorkerInitMsg.appPageUrl`, which the page sends at spawn — the
+   * worker's own `self.location.href` is the worker SCRIPT url).
+   *
+   * Absent → every page target is watched, which is the pre-#2417-follow-up
+   * behaviour.
+   */
+  isOwnTab?: (targetInfo: NavigationTargetInfo) => boolean;
 }
 
 interface SessionState {
@@ -162,6 +189,60 @@ interface SessionState {
   title?: string;
   /** URL at which the page currently lives (for title lookup fallback). */
   url?: string;
+}
+
+/**
+ * Parse `raw` as an http(s) URL. Anything else — `about:blank`, `chrome://`,
+ * `devtools://`, a relative fragment — yields null, so an opaque origin can
+ * never match another opaque origin.
+ */
+function parseHttpUrl(raw: string | undefined): URL | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `/`-preserving trailing-slash normalization, so `/handoff/` === `/handoff`. */
+function normalizePathname(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * Build an {@link NavigationWatcherOptions.isOwnTab} predicate that recognises
+ * SLICC's own app tab from the URL of the page that hosts this webapp.
+ *
+ * The comparison is **origin + pathname**, deliberately ignoring query and
+ * fragment:
+ *
+ *  - Query has to be ignored, because the leader tab carries float-specific
+ *    search params (`?slicc=leader&ext=<id>`, `?ui=wc`, `?tray=<join>`) that
+ *    differ per float and can change within a session.
+ *  - Path must NOT be ignored, because the handoff / upskill pages this watcher
+ *    exists to observe are served from the app's OWN origin at a different path
+ *    (`https://www.sliccy.ai/handoff?handoff=...`). An origin-only test would
+ *    suppress exactly the licks the watcher is for.
+ *
+ * `getAppPageUrl` is a getter rather than a value so a caller that does not
+ * know the URL up front can start the watcher anyway: null means "don't know",
+ * and nothing is skipped until it does.
+ */
+export function createOwnTabMatcher(
+  getAppPageUrl: () => string | null | undefined
+): (targetInfo: NavigationTargetInfo) => boolean {
+  return (targetInfo: NavigationTargetInfo): boolean => {
+    const app = parseHttpUrl(getAppPageUrl() ?? undefined);
+    if (!app) return false;
+    const target = parseHttpUrl(targetInfo.url);
+    if (!target) return false;
+    return (
+      app.origin === target.origin &&
+      normalizePathname(app.pathname) === normalizePathname(target.pathname)
+    );
+  };
 }
 
 /**
@@ -193,6 +274,8 @@ export class NavigationWatcher {
   private readonly probeFetch?: ProbeFetch;
   private readonly isDiscoveryEnabled: () => boolean;
   private readonly probeTimeoutMs?: number;
+  /** Tabs to ignore entirely — SLICC's own leader tab. Default: ignore nothing. */
+  private readonly isOwnTab: (targetInfo: NavigationTargetInfo) => boolean;
   /**
    * Origins whose well-known locations have already been probed this session.
    * A site can advertise on every navigation, so we probe each origin at most
@@ -314,6 +397,7 @@ export class NavigationWatcher {
     this.probeFetch = options.probeFetch;
     this.isDiscoveryEnabled = options.isDiscoveryEnabled ?? (() => true);
     this.probeTimeoutMs = options.probeTimeoutMs;
+    this.isOwnTab = options.isOwnTab ?? (() => false);
   }
 
   /**
@@ -433,6 +517,7 @@ export class NavigationWatcher {
         const attached = info.attached === true;
         const targetId = info.targetId;
         if (attached || typeof targetId !== 'string') continue;
+        if (this.skipOwnTab(info, 'preexisting')) continue;
         await this.requestAttach(targetId, 'Failed to attach to preexisting target');
       }
     } catch (err) {
@@ -549,8 +634,38 @@ export class NavigationWatcher {
     const info = params.targetInfo;
     if (info?.type !== 'page' || typeof info.targetId !== 'string') return;
     if (info.attached) return; // already attached
+    if (this.skipOwnTab(info, 'discovered')) return;
 
     await this.requestAttach(info.targetId, 'Failed to attach to discovered target');
+  }
+
+  /**
+   * True when `targetInfo` is a tab the caller told us to ignore (SLICC's own
+   * leader tab). Logged at debug so a mis-scoped predicate is diagnosable from
+   * a session log rather than by reasoning about missing licks.
+   *
+   * A predicate that throws is treated as "not our tab": the watcher's job is
+   * observing navigations, and losing that everywhere is a worse outcome than
+   * one unfiltered tab.
+   */
+  private skipOwnTab(targetInfo: NavigationTargetInfo, phase: string): boolean {
+    let own = false;
+    try {
+      own = this.isOwnTab(targetInfo);
+    } catch (err) {
+      log.debug('isOwnTab predicate threw; treating target as foreign', {
+        targetId: targetInfo.targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    if (!own) return false;
+    log.debug('Skipping SLICC app tab', {
+      targetId: targetInfo.targetId,
+      url: targetInfo.url,
+      phase,
+    });
+    return true;
   }
 
   /**
@@ -562,14 +677,12 @@ export class NavigationWatcher {
    * ownership is claimed first by target id (`pendingAttachTargetIds`) and then,
    * once the response lands, by session id (`ownSessionIds`).
    *
-   * NOTE: SLICC's own leader tab is attached like any other page target. There
-   * is no cheap in-layer signal that identifies it: `resolveAppTabId`
-   * (`shell/supplemental-commands/playwright/snapshot.ts`) sits above `cdp/` in
-   * the layer stack and needs a `BrowserAPI` plus a panel-RPC round trip, and
-   * matching `globalThis.location.origin` would be actively wrong — the handoff
-   * pages this watcher exists to observe are served from the app origin itself
-   * (`https://www.sliccy.ai/handoff?...`), so an origin test would suppress
-   * exactly the licks we want. Deliberately left unfiltered.
+   * SLICC's own leader tab never reaches here: both call sites consult
+   * {@link NavigationWatcherOptions.isOwnTab} first. Enabling `Page`/`Network`
+   * on the app tab made Chrome report the `/cdp` WebSocket's own traffic back
+   * as `Network.webSocketFrame*` events — the proxies drop them by prefix, but
+   * swift-server's inbound pump still has to receive them, and it kills the
+   * Chrome leg at 1,000 queued messages (issue #2417).
    */
   private async requestAttach(targetId: string, failureMessage: string): Promise<void> {
     this.pendingAttachTargetIds.add(targetId);
@@ -609,6 +722,10 @@ export class NavigationWatcher {
     const sessionId = params.sessionId;
     const info = params.targetInfo;
     if (!sessionId || !info || info.type !== 'page' || typeof info.targetId !== 'string') return;
+    // Someone else (BrowserAPI) may attach to the app tab; tracking that
+    // session would put our handoff/ARD extraction on SLICC's own navigations
+    // for no gain, so an ignored tab is ignored on every path.
+    if (this.skipOwnTab(info, 'attached')) return;
 
     this.sessions.set(sessionId, {
       targetId: info.targetId,

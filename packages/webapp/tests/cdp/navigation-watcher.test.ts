@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  createOwnTabMatcher,
   type DiscoveryEvent,
   extractHandoffFromHeaders,
   type NavigationEvent,
   NavigationWatcher,
+  type NavigationWatcherOptions,
 } from '../../src/cdp/navigation-watcher.js';
 import type { CDPStateListener, CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
@@ -1068,5 +1070,216 @@ describe('NavigationWatcher across an upstream reset', () => {
     transport.simulateReconnect();
     await tick();
     expect(transport.sentCommands.map((c) => c.method)).toContain('Target.setDiscoverTargets');
+  });
+});
+
+describe('createOwnTabMatcher', () => {
+  const LEADER = 'https://www.sliccy.ai/?slicc=leader&ext=abc123';
+
+  it('matches the app tab across differing query and fragment', () => {
+    const isOwn = createOwnTabMatcher(() => LEADER);
+    expect(isOwn({ url: 'https://www.sliccy.ai/' })).toBe(true);
+    expect(isOwn({ url: 'https://www.sliccy.ai/?ui=wc&tray=join-1' })).toBe(true);
+    expect(isOwn({ url: 'https://www.sliccy.ai/#/settings' })).toBe(true);
+  });
+
+  it('does NOT match a handoff page served from the app origin', () => {
+    // The whole reason this is a path-aware test: the pages the watcher
+    // exists to observe live on the app's own origin.
+    const isOwn = createOwnTabMatcher(() => LEADER);
+    expect(isOwn({ url: 'https://www.sliccy.ai/handoff?handoff=do%20it' })).toBe(false);
+    expect(isOwn({ url: 'https://www.sliccy.ai/preview/x/index.html' })).toBe(false);
+  });
+
+  it('ignores a trailing slash on either side', () => {
+    expect(
+      createOwnTabMatcher(() => 'http://localhost:5710/app/')({ url: 'http://localhost:5710/app' })
+    ).toBe(true);
+    expect(
+      createOwnTabMatcher(() => 'http://localhost:5710/app')({ url: 'http://localhost:5710/app/' })
+    ).toBe(true);
+  });
+
+  it('does not match a different origin, port or scheme', () => {
+    const isOwn = createOwnTabMatcher(() => 'http://localhost:5710/');
+    expect(isOwn({ url: 'http://localhost:5720/' })).toBe(false);
+    expect(isOwn({ url: 'https://localhost:5710/' })).toBe(false);
+    expect(isOwn({ url: 'https://www.sliccy.ai/' })).toBe(false);
+  });
+
+  it('never matches on an opaque or non-http URL', () => {
+    // `new URL('about:blank').origin` is the string "null" for BOTH sides, so
+    // a naive origin compare would call every blank tab our own.
+    const isOwn = createOwnTabMatcher(() => 'about:blank');
+    expect(isOwn({ url: 'about:blank' })).toBe(false);
+    const httpApp = createOwnTabMatcher(() => 'http://localhost:5710/');
+    expect(httpApp({ url: 'chrome://newtab/' })).toBe(false);
+    expect(httpApp({ url: 'devtools://devtools/bundled/x.html' })).toBe(false);
+  });
+
+  it('matches nothing while the app URL is unknown or the target has none', () => {
+    expect(createOwnTabMatcher(() => null)({ url: 'https://www.sliccy.ai/' })).toBe(false);
+    expect(createOwnTabMatcher(() => undefined)({ url: 'https://www.sliccy.ai/' })).toBe(false);
+    expect(createOwnTabMatcher(() => 'https://www.sliccy.ai/')({})).toBe(false);
+  });
+});
+
+describe('NavigationWatcher own-tab exclusion', () => {
+  const APP_URL = 'https://www.sliccy.ai/?slicc=leader';
+  const HANDOFF_URL = 'https://www.sliccy.ai/handoff?handoff=continue';
+
+  let transport: MockCDPTransport;
+  let events: NavigationEvent[];
+
+  const makeWatcher = (options: NavigationWatcherOptions = {}): NavigationWatcher =>
+    new NavigationWatcher(transport, (e) => events.push(e), options);
+
+  const ownTabOptions = (): NavigationWatcherOptions => ({
+    isOwnTab: createOwnTabMatcher(() => APP_URL),
+  });
+
+  beforeEach(() => {
+    transport = new MockCDPTransport();
+    events = [];
+  });
+
+  it('does not attach to the leader tab when it is discovered', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+    });
+    await tick();
+
+    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
+  });
+
+  it('does not attach to the leader tab when it is already open at start', async () => {
+    // The live case: the leader tab always predates the watcher.
+    transport.targetInfos = [
+      { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+      { targetId: 'tab-other', type: 'page', attached: false, url: 'https://ex.com/' },
+    ];
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    const attached = transport.sentCommands
+      .filter((c) => c.method === 'Target.attachToTarget')
+      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
+    expect(attached).toEqual(['tab-other']);
+  });
+
+  it('ignores a session someone else attached to the leader tab', async () => {
+    // BrowserAPI mints its own session per tab switch; the watcher must not
+    // track it either, or SLICC's own navigations would run through handoff
+    // extraction and the ARD probe.
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-browser-api',
+      targetInfo: { targetId: 'tab-leader', type: 'page', url: APP_URL },
+    });
+    await tick();
+    transport.emit('Page.frameNavigated', {
+      sessionId: 'sess-browser-api',
+      frame: { id: 'root-leader', url: APP_URL },
+    });
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-browser-api',
+      type: 'Document',
+      frameId: 'root-leader',
+      response: { url: APP_URL, headers: { link: `<>; rel="${HANDOFF_REL}"; title="self"` } },
+    });
+
+    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-browser-api')).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('still attaches to a handoff page on the app origin and emits its lick', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    await attachOwnTab(transport, 'sess-handoff', {
+      targetId: 'tab-handoff',
+      url: HANDOFF_URL,
+    });
+    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-handoff')).toHaveLength(3);
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-handoff',
+      type: 'Document',
+      frameId: 'root-sess-handoff',
+      response: {
+        url: HANDOFF_URL,
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="continue the signup flow"` },
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      url: HANDOFF_URL,
+      verb: 'handoff',
+      instruction: 'continue the signup flow',
+      targetId: 'tab-handoff',
+    });
+  });
+
+  it('attaches to every tab, app URL included, when no predicate is supplied', async () => {
+    const watcher = makeWatcher();
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+    });
+    await tick();
+
+    expect(
+      transport.sentCommands
+        .filter((c) => c.method === 'Target.attachToTarget')
+        .map((c) => (c.params as { targetId?: string } | undefined)?.targetId)
+    ).toEqual(['tab-leader']);
+  });
+
+  it('treats a throwing predicate as "not our tab" rather than losing every tab', async () => {
+    const watcher = makeWatcher({
+      isOwnTab: () => {
+        throw new Error('predicate blew up');
+      },
+    });
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-1', type: 'page', attached: false, url: 'https://ex.com/' },
+    });
+    await tick();
+
+    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toHaveLength(
+      1
+    );
+  });
+
+  it('keeps skipping the leader tab after an upstream reset re-enumerates targets', async () => {
+    transport.targetInfos = [
+      { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+      { targetId: 'tab-other', type: 'page', attached: false, url: 'https://ex.com/' },
+    ];
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    transport.simulateDrop();
+    transport.simulateReconnect();
+    await tick();
+    await tick();
+
+    const attached = transport.sentCommands
+      .filter((c) => c.method === 'Target.attachToTarget')
+      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
+    expect(attached).toEqual(['tab-other', 'tab-other']);
   });
 });
