@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 /**
  * agent-merch — render a hash-stable grid of scoop avatars for merch.
  *
- *   node packages/dev-tools/tools/agent-merch.mjs [--seed <str>] [--grid 10]
+ *   node packages/dev-tools/tools/agent-merch.mjs [--seed <str>] [--grid 10] [--rows N]
  *        [--color 3] [--cell 300] [--scale 2] [--sparse 0.25]
  *        [--tagline "<text>"] [--theme light,dark] [--out dist/merch]
  *
@@ -39,6 +39,7 @@ const args = Object.fromEntries(
 );
 const SEED = args.seed ?? 'slicc';
 const GRID = Number(args.grid ?? 10);
+const ROWS = Number(args.rows ?? args.grid ?? 10); // rows < grid = wider composition
 const COLORED = Number(args.color ?? 3);
 const CELL = Number(args.cell ?? 300);
 const SCALE = Number(args.scale ?? 2);
@@ -124,7 +125,7 @@ async function generate() {
   const { adjectives, flavors } = await loadPools();
   const gen = fnv1a(`gen:${SEED}`);
   const r = rng(gen);
-  const total = GRID * GRID;
+  const total = GRID * ROWS;
   const emptyCount = Math.round((total - 1) * SPARSE);
   const empties = new Set();
   while (empties.size < emptyCount) empties.add(Math.floor(r() * (total - 1)));
@@ -216,7 +217,7 @@ function pageHtml({ cells: grid, headline, featured }, theme) {
   html,body{margin:0;background:transparent;}
   body{width:${w}px;padding:${fs * 1.6}px 0 ${fs * 1.4}px;box-sizing:border-box;font-family:"Adobe Clean",sans-serif;color:${ink};text-align:center;}
   .head{font-size:${fs * 1.05}px;white-space:nowrap;font-weight:800;letter-spacing:-0.025em;line-height:1.1;padding:0 ${fs}px;}
-  .names{font-size:${fs * 0.7}px;font-weight:700;letter-spacing:-0.01em;line-height:1.3;margin:${fs * 0.5}px 0 ${fs * 1.1}px;}
+  .names{font-size:${fs * 0.7}px;font-weight:700;letter-spacing:-0.01em;line-height:1.3;margin:${fs * 0.5}px 0 ${fs * 1.1}px;padding:0 ${fs}px;}
   .names span{white-space:nowrap;}
   .foot{font-size:${fs * 1.05}px;font-weight:800;letter-spacing:-0.025em;line-height:1.1;margin-top:${fs * 1.1}px;}
   .grid{display:grid;grid-template-columns:repeat(${GRID},${CELL}px);justify-content:center;}
@@ -269,6 +270,7 @@ async function main() {
       {
         seed: SEED,
         grid: GRID,
+        rows: ROWS,
         cell: CELL,
         scale: SCALE,
         dpi: PRINT_DENSITY,
