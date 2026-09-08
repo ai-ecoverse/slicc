@@ -29,7 +29,7 @@ Every scenario is also runnable standalone and prints JSON:
 ```bash
 npx tsx packages/dev-tools/cdp-stress/run-all.ts [--quick]
 npx tsx packages/dev-tools/cdp-stress/scenarios/fanout.ts 8 [--poison]
-npx tsx packages/dev-tools/cdp-stress/scenarios/session-leak.ts [--watcher]
+npx tsx packages/dev-tools/cdp-stress/scenarios/session-leak.ts [--watcher] [--leader-tab] [--skip-own-tab]
 npx tsx packages/dev-tools/cdp-stress/scenarios/stale-proxy.ts
 npx tsx packages/dev-tools/cdp-stress/scenarios/load-bleed.ts
 npx tsx packages/dev-tools/cdp-stress/scenarios/abandoned.ts
@@ -71,3 +71,20 @@ Environment knobs:
   | `abandoned`        | a caller that gives up still holds the lock                                 |
 - `run-all.ts` — runs everything and writes `<out>/<timestamp>.json` +
   `<out>/latest.json`.
+
+## Measuring SLICC's own leader tab
+
+`session-leak --leader-tab` opens `/leader` — a page that holds a busy WebSocket
+to the site — with `Target.createTarget`, so `BrowserAPI` never attaches and the
+`NavigationWatcher` is the only thing that can. `--skip-own-tab` then hands the
+watcher an `isOwnTab` predicate matching that URL. Measured here (12 rounds,
+4 tabs, macOS):
+
+| run                                     | events per navigation | `Network.webSocketFrame*` |
+| --------------------------------------- | --------------------- | ------------------------- |
+| `--watcher`                             | 23                    | 0                         |
+| `--watcher --leader-tab`                | 35 (33-39)            | 276                       |
+| `--watcher --leader-tab --skip-own-tab` | 23                    | 0                         |
+
+So an attached leader tab costs ~12 extra inbound events per navigation, all of
+them frames of SLICC's own `/cdp` socket coming straight back at it.

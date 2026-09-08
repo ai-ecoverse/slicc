@@ -54,6 +54,7 @@ export async function loadSlicc() {
     WorkerCdpProxy: workerProxy.WorkerCdpProxy,
     startPageCdpForwarder: pageForwarder.startPageCdpForwarder,
     NavigationWatcher: navigationWatcher.NavigationWatcher,
+    createOwnTabMatcher: navigationWatcher.createOwnTabMatcher,
   };
 }
 
@@ -84,6 +85,12 @@ export interface Stack {
 export interface StackOptions {
   direct?: boolean;
   navigationWatcher?: boolean;
+  /**
+   * URL of the tab the watcher must treat as SLICC's own leader tab and leave
+   * alone (`NavigationWatcherOptions.isOwnTab`). Omitted → the watcher attaches
+   * to every page target, which is the pre-fix behaviour.
+   */
+  ownTabUrl?: string;
 }
 
 /** Per-command CDP timeout; production default is 30s. */
@@ -156,8 +163,14 @@ export async function buildStack(cdpUrl: string, opts: StackOptions = {}): Promi
   browser.primeConnectOptions({ url: cdpUrl });
   if (opts.navigationWatcher) {
     // Same as the kernel host: the watcher rides the worker transport,
-    // attaches to every page target and enables Page + Network per session.
-    const watcher = new slicc.NavigationWatcher(transport, () => {}, {});
+    // attaches to every page target and enables Page + Network per session —
+    // except the app tab, when the caller names one.
+    const ownTabUrl = opts.ownTabUrl;
+    const watcher = new slicc.NavigationWatcher(
+      transport,
+      () => {},
+      ownTabUrl ? { isOwnTab: slicc.createOwnTabMatcher(() => ownTabUrl) } : {}
+    );
     await watcher.start();
     const prevStop = stop;
     stop = () => {
