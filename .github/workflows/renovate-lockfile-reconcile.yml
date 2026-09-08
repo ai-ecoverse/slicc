@@ -122,8 +122,12 @@ jobs:
           fi
           npm run lint:lockfile
 
+      # Best-effort: the push below is the point of this workflow, and a
+      # transient `gh` failure here would otherwise fail the job and skip it,
+      # stranding a verified repair on the runner.
       - name: Comment the outcome
         if: steps.detect.outputs.stale == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
