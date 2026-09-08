@@ -103,6 +103,38 @@ describe('bootstrapKernelWorker', () => {
     host.dispose();
   });
 
+  it("carries the page's own URL so the worker can skip the leader tab", () => {
+    // The worker cannot derive this: `self.location.href` there is the worker
+    // SCRIPT url. Without it the NavigationWatcher attaches to SLICC's own tab
+    // and Chrome reports the /cdp socket's traffic back to us (issue #2417).
+    vi.stubGlobal('location', { href: 'https://www.sliccy.ai/?slicc=leader&ext=abc' });
+    try {
+      const worker = makeMockWorker();
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: makeStubCdpTransport(),
+        makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      });
+      const init = worker.posted[0].message as { appPageUrl?: string | null };
+      expect(init.appPageUrl).toBe('https://www.sliccy.ai/?slicc=leader&ext=abc');
+      host.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('sends a null page URL in a realm without a location', () => {
+    const worker = makeMockWorker();
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+    });
+    const init = worker.posted[0].message as { appPageUrl?: string | null };
+    expect(init.appPageUrl).toBeNull();
+    host.dispose();
+  });
+
   it('ready resolves when the worker posts kernel-worker-ready', async () => {
     const worker = makeMockWorker({ autoReady: true });
     const host = bootstrapKernelWorker({

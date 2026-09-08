@@ -1,28 +1,42 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
-// Capture the onEvent (navigate) + onDiscovery + isDiscoveryEnabled
+// Capture the onEvent (navigate) + onDiscovery + isDiscoveryEnabled + isOwnTab
 // NavigationWatcher is constructed with, and drive them.
 let captured: ((e: unknown) => void) | null = null;
 let capturedDiscovery: ((e: unknown) => void) | null = null;
 let capturedIsEnabled: (() => boolean) | null = null;
-vi.mock('../../src/cdp/navigation-watcher.js', () => ({
-  NavigationWatcher: class {
-    onEvent: (e: unknown) => void;
-    constructor(
-      _t: unknown,
-      onEvent: (e: unknown) => void,
-      options?: { onDiscovery?: (e: unknown) => void; isDiscoveryEnabled?: () => boolean }
-    ) {
-      this.onEvent = onEvent;
-      captured = onEvent;
-      capturedDiscovery = options?.onDiscovery ?? null;
-      capturedIsEnabled = options?.isDiscoveryEnabled ?? null;
-    }
-    start() {}
-    stop() {}
-  },
-}));
+let capturedIsOwnTab: ((info: { url?: string }) => boolean) | null = null;
+vi.mock('../../src/cdp/navigation-watcher.js', async () => {
+  // `createOwnTabMatcher` is a pure URL comparison — keep the real one so the
+  // follower's predicate is exercised end to end rather than re-stated here.
+  const real = await vi.importActual<typeof import('../../src/cdp/navigation-watcher.js')>(
+    '../../src/cdp/navigation-watcher.js'
+  );
+  return {
+    createOwnTabMatcher: real.createOwnTabMatcher,
+    NavigationWatcher: class {
+      onEvent: (e: unknown) => void;
+      constructor(
+        _t: unknown,
+        onEvent: (e: unknown) => void,
+        options?: {
+          onDiscovery?: (e: unknown) => void;
+          isDiscoveryEnabled?: () => boolean;
+          isOwnTab?: (info: { url?: string }) => boolean;
+        }
+      ) {
+        this.onEvent = onEvent;
+        captured = onEvent;
+        capturedDiscovery = options?.onDiscovery ?? null;
+        capturedIsEnabled = options?.isDiscoveryEnabled ?? null;
+        capturedIsOwnTab = options?.isOwnTab ?? null;
+      }
+      start() {}
+      stop() {}
+    },
+  };
+});
 
 function makeMemoryStorage(): Storage {
   const store = new Map<string, string>();
@@ -193,5 +207,30 @@ describe('startFollowerNavigateWatcher', () => {
     startFollowerNavigateWatcher({} as never, () => ({ forwardLick }));
     expect(capturedIsEnabled).not.toBeNull();
     expect(capturedIsEnabled!()).toBe(true);
+  });
+});
+
+describe('startFollowerNavigateWatcher own-tab exclusion', () => {
+  /** Install the follower with `location.href` stubbed to `href`. */
+  async function startWith(href: string | undefined): Promise<void> {
+    vi.stubGlobal('location', href === undefined ? undefined : { href });
+    const { startFollowerNavigateWatcher } = await import(
+      '../../src/ui/follower-navigate-watcher.js'
+    );
+    capturedIsOwnTab = null;
+    startFollowerNavigateWatcher({} as never, () => null);
+  }
+
+  it("skips the follower's own tab but keeps watching handoff pages on the same origin", async () => {
+    await startWith('https://www.sliccy.ai/?tray=join-1');
+    expect(capturedIsOwnTab).toBeTypeOf('function');
+    expect(capturedIsOwnTab!({ url: 'https://www.sliccy.ai/' })).toBe(true);
+    expect(capturedIsOwnTab!({ url: 'https://www.sliccy.ai/handoff?handoff=go' })).toBe(false);
+    expect(capturedIsOwnTab!({ url: 'https://example.com/' })).toBe(false);
+  });
+
+  it('skips nothing when the realm has no location (worker / Cherry-style host)', async () => {
+    await startWith(undefined);
+    expect(capturedIsOwnTab!({ url: 'https://www.sliccy.ai/' })).toBe(false);
   });
 });

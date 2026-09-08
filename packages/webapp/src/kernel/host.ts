@@ -53,7 +53,11 @@
 import { matchLickTargetAlias } from '../base/lick-target-match.js';
 import { setLastSeenVersionReader } from '../base/slicc-version.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
+import {
+  createOwnTabMatcher,
+  type DiscoveryEvent,
+  NavigationWatcher,
+} from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
 import { resolveFloatTopology } from '../core/float-topology.js';
 import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
@@ -179,6 +183,17 @@ export interface KernelHostConfig {
    * is not installed (realms fall back to the bounded snapshot).
    */
   syncFsChannelNonce?: SyncFsNonce | null;
+  /**
+   * `location.href` of the page hosting this kernel — SLICC's own leader tab.
+   * The `NavigationWatcher` keeps the `Network` domain off that tab so Chrome
+   * stops reporting the `/cdp` WebSocket's own traffic back to us as
+   * `Network.webSocketFrame*` events (issue #2417: swift-server's inbound pump
+   * kills the Chrome leg at 1,000 queued messages). Supplied by
+   * `kernel-worker.ts` from `KernelWorkerInitMsg.appPageUrl`; absent → every
+   * tab gets `Network`, which is the pre-#2417 behaviour.
+   */
+  appPageUrl?: string | null;
+
   /**
    * Privileged-capability adapter for this float (#2276). Default: the
    * adapter for `resolveFloatTopology()`, resolved ONCE here — nothing below
@@ -760,7 +775,8 @@ async function startLickWsBridgeForHost(
 function startNavigationWatcherForHost(
   browser: BrowserAPI,
   lickManager: LickManager,
-  log: KernelHostLogger
+  log: KernelHostLogger,
+  appPageUrl: string | null | undefined
 ): (() => Promise<void>) | null {
   const transport = browser.getTransport();
   if (transport.isExtensionBridge) {
@@ -791,7 +807,13 @@ function startNavigationWatcherForHost(
           body,
         });
       },
-      buildDiscoveryWatcherOptions(lickManager)
+      {
+        ...buildDiscoveryWatcherOptions(lickManager),
+        // Keep `Network` off SLICC's own leader tab. `appPageUrl` is fixed for
+        // the life of the worker — the page is gone the moment it navigates
+        // away — so a constant getter is the whole contract the matcher needs.
+        isOwnTab: createOwnTabMatcher(() => appPageUrl ?? null),
+      }
     );
     void navWatcher.start();
     return () => navWatcher.stop();
@@ -1124,7 +1146,8 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const navigationWatcherStop: (() => Promise<void>) | null = startNavigationWatcherForHost(
     browser,
     lickManager,
-    log
+    log,
+    config.appPageUrl
   );
 
   // 9. Restore persisted mounts. MUST run AFTER setEventHandler so the

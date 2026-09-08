@@ -23,6 +23,7 @@ import { chromeBinary } from '../../../dev-tools/cdp-stress/chrome.js';
 import { run as runAbandoned } from '../../../dev-tools/cdp-stress/scenarios/abandoned.js';
 import { run as runFanout } from '../../../dev-tools/cdp-stress/scenarios/fanout.js';
 import { run as runLoadBleed } from '../../../dev-tools/cdp-stress/scenarios/load-bleed.js';
+import { run as runOwnTab } from '../../../dev-tools/cdp-stress/scenarios/own-tab.js';
 import { run as runSessionLeak } from '../../../dev-tools/cdp-stress/scenarios/session-leak.js';
 import { run as runStaleProxy } from '../../../dev-tools/cdp-stress/scenarios/stale-proxy.js';
 
@@ -70,6 +71,22 @@ describeStress('cdp bridge stress gates', () => {
     // No leaked Page-enabled sessions ⇒ one navigation costs the same in the
     // last round as in the first (allow 50% for renderer noise).
     expect(r.eventsPerNavLast).toBeLessThanOrEqual(Math.ceil(r.eventsPerNavFirst * 1.5));
+  });
+
+  it("own-tab: SLICC's own tab costs no WebSocket events and still yields its handoff", {
+    timeout: 180_000,
+  }, async () => {
+    const r = await runOwnTab();
+    // The whole point: no Network domain on the app tab ⇒ Chrome never reports
+    // that tab's /cdp socket back at us (issue #2417 follow-up 3).
+    expect(r.guarded.webSocketFrameEvents).toBe(0);
+    // Control — the same run without `isOwnTab` does see them, so a zero above
+    // means the guard worked and not that the stand-in tab went quiet.
+    expect(r.unguarded.webSocketFrameEvents).toBeGreaterThan(0);
+    // And the tab navigating itself out of the app URL is armed early enough
+    // that the handoff Link on THAT response is still observed.
+    expect(r.guarded.navigateVerbs).toEqual(['handoff']);
+    expect(r.guarded.navigateInstructions).toEqual(['armed in time']);
   });
 
   it('load-bleed: goto waits for its own tab, not a sibling load event', {

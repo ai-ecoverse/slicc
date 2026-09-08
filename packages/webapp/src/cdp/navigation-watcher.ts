@@ -34,8 +34,13 @@ import type { CDPEventListener } from './types.js';
 
 const log = createLogger('navigation-watcher');
 
-/** Fields read off `Target.attachedToTarget` / `Target.targetCreated` CDP events. */
-interface NavigationTargetInfo {
+/**
+ * Fields read off `Target.attachedToTarget` / `Target.targetCreated` CDP events.
+ * Every field is optional: this is what Chrome put on the wire, not a promise
+ * about what it sent. Also the argument
+ * {@link NavigationWatcherOptions.isOwnTab} is called with.
+ */
+export interface NavigationTargetInfo {
   targetId?: string;
   type?: string;
   title?: string;
@@ -153,15 +158,109 @@ export interface NavigationWatcherOptions {
   isDiscoveryEnabled?: () => boolean;
   /** Per-request well-known probe timeout in ms (forwarded to `probeWellKnown`). */
   probeTimeoutMs?: number;
+  /**
+   * Recognise SLICC's own app tab (the leader tab hosting this webapp).
+   *
+   * The watcher still attaches to it and enables `Page`, but leaves `Network`
+   * OFF for as long as the predicate holds. `Network` is the expensive domain
+   * on that tab: Chrome reports the tab's own `/cdp` WebSocket back as
+   * `Network.webSocketFrame*` events, which is what overflows swift-server's
+   * 1,000-message inbound pump (issue #2417). `Page` on a tab that does not
+   * navigate costs nothing, and it is what lets the watcher arm `Network` at
+   * the START of a navigation away from the app URL — early enough to still
+   * see that navigation's document response, which is the one thing a
+   * detach-and-reattach-later scheme cannot recover.
+   *
+   * Why this is a caller-supplied predicate rather than a check in here: the
+   * leader tab has no cheap in-layer signal. `resolveAppTabId`
+   * (`shell/supplemental-commands/playwright/snapshot.ts`) sits above `cdp/` in
+   * the layer stack and needs a `BrowserAPI` plus a panel-RPC round trip, and a
+   * bare origin test would be actively WRONG — the handoff pages this watcher
+   * exists to observe are served from the app origin itself
+   * (`https://www.sliccy.ai/handoff?...`). {@link createOwnTabMatcher} builds
+   * the predicate both callers use; each supplies its own way of learning the
+   * app page's URL (`location.href` in the page realm; in the kernel worker,
+   * `KernelWorkerInitMsg.appPageUrl`, which the page sends at spawn — the
+   * worker's own `self.location.href` is the worker SCRIPT url).
+   *
+   * Consulted on attach, on every navigation the tab starts, and on
+   * `Target.targetInfoChanged` — so the transition works in BOTH directions: a
+   * tab that leaves the app URL gets `Network` on, and one that navigates INTO
+   * it gets `Network` off again before the new SLICC page opens its socket.
+   *
+   * Absent → `Network` is enabled on every page target, which is the
+   * pre-#2417-follow-up behaviour.
+   */
+  isOwnTab?: (targetInfo: NavigationTargetInfo) => boolean;
 }
 
 interface SessionState {
   targetId: string;
   rootFrameId: string | null;
+  /**
+   * `Network` is enabled on this session. Only ever true for sessions the
+   * watcher attached itself; an own-tab session sits at `false` until the tab
+   * navigates away from the app URL.
+   */
+  networkEnabled: boolean;
   /** Last-seen title, populated by Page.frameNavigated / Target.targetInfoChanged. */
   title?: string;
   /** URL at which the page currently lives (for title lookup fallback). */
   url?: string;
+}
+
+/**
+ * Parse `raw` as an http(s) URL. Anything else — `about:blank`, `chrome://`,
+ * `devtools://`, a relative fragment — yields null, so an opaque origin can
+ * never match another opaque origin.
+ */
+function parseHttpUrl(raw: string | undefined): URL | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `/`-preserving trailing-slash normalization, so `/handoff/` === `/handoff`. */
+function normalizePathname(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * Build an {@link NavigationWatcherOptions.isOwnTab} predicate that recognises
+ * SLICC's own app tab from the URL of the page that hosts this webapp.
+ *
+ * The comparison is **origin + pathname**, deliberately ignoring query and
+ * fragment:
+ *
+ *  - Query has to be ignored, because the leader tab carries float-specific
+ *    search params (`?slicc=leader&ext=<id>`, `?ui=wc`, `?tray=<join>`) that
+ *    differ per float and can change within a session.
+ *  - Path must NOT be ignored, because the handoff / upskill pages this watcher
+ *    exists to observe are served from the app's OWN origin at a different path
+ *    (`https://www.sliccy.ai/handoff?handoff=...`). An origin-only test would
+ *    suppress exactly the licks the watcher is for.
+ *
+ * `getAppPageUrl` is a getter rather than a value so a caller that does not
+ * know the URL up front can start the watcher anyway: null means "don't know",
+ * and nothing is skipped until it does.
+ */
+export function createOwnTabMatcher(
+  getAppPageUrl: () => string | null | undefined
+): (targetInfo: NavigationTargetInfo) => boolean {
+  return (targetInfo: NavigationTargetInfo): boolean => {
+    const app = parseHttpUrl(getAppPageUrl() ?? undefined);
+    if (!app) return false;
+    const target = parseHttpUrl(targetInfo.url);
+    if (!target) return false;
+    return (
+      app.origin === target.origin &&
+      normalizePathname(app.pathname) === normalizePathname(target.pathname)
+    );
+  };
 }
 
 /**
@@ -193,6 +292,8 @@ export class NavigationWatcher {
   private readonly probeFetch?: ProbeFetch;
   private readonly isDiscoveryEnabled: () => boolean;
   private readonly probeTimeoutMs?: number;
+  /** Tabs to keep `Network` off — SLICC's own app tab. Default: no tab is ours. */
+  private readonly isOwnTab: (targetInfo: NavigationTargetInfo) => boolean;
   /**
    * Origins whose well-known locations have already been probed this session.
    * A site can advertise on every navigation, so we probe each origin at most
@@ -235,9 +336,33 @@ export class NavigationWatcher {
         if (typeof info.url === 'string') state.url = info.url;
       }
     }
+    // Backstop for both directions of the own-tab transition. `Page.frame*`
+    // arms a departing tab earlier (in time for its document response); this
+    // catches a tab that arrived at the app URL — a watched tab the user
+    // navigated to SLICC, whose new page opens a `/cdp` socket we must not
+    // start reporting on — and any departure the frame events missed.
+    this.reconcileTargetNetwork(info);
   };
   private readonly onTargetCreated: CDPEventListener = (raw) => {
     void this.handleTargetCreated(raw as TargetCreatedParams);
+  };
+  /**
+   * `Page.frameRequestedNavigation` — renderer-initiated navigation (link
+   * click, `location.assign`), fired BEFORE the request goes out. The earliest
+   * point at which an own tab can be armed for its own document response.
+   */
+  private readonly onFrameRequestedNavigation: CDPEventListener = (raw) => {
+    const p = raw as { sessionId?: string; frameId?: string; url?: string };
+    this.maybeArmNetwork(p.sessionId, p.frameId, p.url);
+  };
+  /**
+   * `Page.frameStartedNavigating` — fired for browser-initiated navigations
+   * too (address bar, bookmark), which `frameRequestedNavigation` never sees.
+   * Still ahead of the response.
+   */
+  private readonly onFrameStartedNavigating: CDPEventListener = (raw) => {
+    const p = raw as { sessionId?: string; frameId?: string; url?: string };
+    this.maybeArmNetwork(p.sessionId, p.frameId, p.url);
   };
   private readonly onFrameNavigated: CDPEventListener = (raw) => {
     const params = raw as PageFrameNavigatedParams;
@@ -300,6 +425,8 @@ export class NavigationWatcher {
     ['Target.targetInfoChanged', this.onTargetInfoChanged],
     ['Target.targetCreated', this.onTargetCreated],
     ['Page.frameNavigated', this.onFrameNavigated],
+    ['Page.frameRequestedNavigation', this.onFrameRequestedNavigation],
+    ['Page.frameStartedNavigating', this.onFrameStartedNavigating],
     ['Network.responseReceived', this.onResponseReceived],
   ];
 
@@ -314,6 +441,7 @@ export class NavigationWatcher {
     this.probeFetch = options.probeFetch;
     this.isDiscoveryEnabled = options.isDiscoveryEnabled ?? (() => true);
     this.probeTimeoutMs = options.probeTimeoutMs;
+    this.isOwnTab = options.isOwnTab ?? (() => false);
   }
 
   /**
@@ -554,6 +682,80 @@ export class NavigationWatcher {
   }
 
   /**
+   * Arm `Network` on one of our own sessions when the navigation it is about to
+   * make leaves the app URL. Called from the two `Page.frame*` events that fire
+   * BEFORE the document request, so the response that carries the handoff
+   * `Link` header is still reported to us.
+   *
+   * Main frame only: a subframe navigating (a sprinkle iframe, a preview) says
+   * nothing about what the tab is, and arming on one would switch `Network` on
+   * for the app tab itself.
+   */
+  private maybeArmNetwork(
+    sessionId: string | undefined,
+    frameId: string | undefined,
+    url: string | undefined
+  ): void {
+    if (!sessionId || !frameId) return;
+    const state = this.sessions.get(sessionId);
+    if (!state || state.networkEnabled || !this.ownSessionIds.has(sessionId)) return;
+    if (state.rootFrameId !== frameId) return;
+    if (this.isOwnTabSafe({ targetId: state.targetId, url })) return;
+    void this.setSessionNetwork(sessionId, state, true);
+  }
+
+  /**
+   * Re-decide `Network` for every own session on `targetInfo`'s target now that
+   * its URL changed. Turns it OFF for a tab that became SLICC's own — the case
+   * a one-way "skip at attach time" test misses, and the one that would put the
+   * `/cdp` amplification straight back — and ON for a departure the frame
+   * events did not cover.
+   */
+  private reconcileTargetNetwork(targetInfo: NavigationTargetInfo): void {
+    const own = this.isOwnTabSafe(targetInfo);
+    for (const [sessionId, state] of this.sessions) {
+      if (state.targetId !== targetInfo.targetId) continue;
+      if (!this.ownSessionIds.has(sessionId)) continue;
+      if (state.networkEnabled === !own) continue;
+      void this.setSessionNetwork(sessionId, state, !own);
+    }
+  }
+
+  /** `Network.enable` / `Network.disable` on one session, flag kept in step. */
+  private async setSessionNetwork(
+    sessionId: string,
+    state: SessionState,
+    enable: boolean
+  ): Promise<void> {
+    // Set before awaiting: two navigation events for the same frame arrive
+    // back to back, and the second must not send the command again.
+    state.networkEnabled = enable;
+    try {
+      await this.transport.send(enable ? 'Network.enable' : 'Network.disable', {}, sessionId);
+    } catch (err) {
+      state.networkEnabled = !enable;
+      log.debug(`Failed to ${enable ? 'enable' : 'disable'} Network on session`, {
+        sessionId,
+        targetId: state.targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** {@link NavigationWatcherOptions.isOwnTab}, with a throw read as `false`. */
+  private isOwnTabSafe(targetInfo: NavigationTargetInfo): boolean {
+    try {
+      return this.isOwnTab(targetInfo);
+    } catch (err) {
+      log.debug('isOwnTab predicate threw; treating target as foreign', {
+        targetId: targetInfo.targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
    * Ask Chrome to attach this watcher to `targetId`, remembering that the
    * resulting session is ours so {@link handleAttachedToTarget} enables
    * `Page`/`Network` on it — and only on it.
@@ -562,14 +764,13 @@ export class NavigationWatcher {
    * ownership is claimed first by target id (`pendingAttachTargetIds`) and then,
    * once the response lands, by session id (`ownSessionIds`).
    *
-   * NOTE: SLICC's own leader tab is attached like any other page target. There
-   * is no cheap in-layer signal that identifies it: `resolveAppTabId`
-   * (`shell/supplemental-commands/playwright/snapshot.ts`) sits above `cdp/` in
-   * the layer stack and needs a `BrowserAPI` plus a panel-RPC round trip, and
-   * matching `globalThis.location.origin` would be actively wrong — the handoff
-   * pages this watcher exists to observe are served from the app origin itself
-   * (`https://www.sliccy.ai/handoff?...`), so an origin test would suppress
-   * exactly the licks we want. Deliberately left unfiltered.
+   * SLICC's own leader tab is attached like any other page target; what it does
+   * NOT get is `Network` (see {@link NavigationWatcherOptions.isOwnTab}).
+   * Enabling that domain on the app tab made Chrome report the `/cdp`
+   * WebSocket's own traffic back as `Network.webSocketFrame*` events — the
+   * proxies drop them by prefix, but swift-server's inbound pump still has to
+   * receive them, and it kills the Chrome leg at 1,000 queued messages
+   * (issue #2417).
    */
   private async requestAttach(targetId: string, failureMessage: string): Promise<void> {
     this.pendingAttachTargetIds.add(targetId);
@@ -613,6 +814,7 @@ export class NavigationWatcher {
     this.sessions.set(sessionId, {
       targetId: info.targetId,
       rootFrameId: null,
+      networkEnabled: false,
       title: info.title,
       url: info.url,
     });
@@ -627,9 +829,19 @@ export class NavigationWatcher {
     // stop adding to the amplification ourselves.
     if (!this.claimOwnSession(sessionId, info.targetId)) return;
 
+    const own = this.isOwnTabSafe(info);
+    if (own) {
+      log.debug('Attaching to the SLICC app tab with Network off', {
+        targetId: info.targetId,
+        url: info.url,
+      });
+    }
     try {
       await this.transport.send('Page.enable', {}, sessionId);
-      await this.transport.send('Network.enable', {}, sessionId);
+      if (!own) {
+        const state = this.sessions.get(sessionId);
+        if (state) await this.setSessionNetwork(sessionId, state, true);
+      }
       const tree = (await this.transport.send(
         'Page.getFrameTree',
         {},
