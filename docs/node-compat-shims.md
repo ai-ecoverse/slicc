@@ -147,6 +147,26 @@ they throw an error naming the async escape hatch instead.
 `nextTick()`, `hrtime`. (Source: `createProcessShim` in
 `realm-node-shims.ts` — the shim object has exactly the keys listed above.)
 
+### `console` (global)
+
+Built by `createNodeConsole` in `realm-node-shims.ts` and injected as the
+realm's bare `console`. All 19 standard methods are functions so library code
+that calls `console.debug` / `console.assert` does not TypeError (#2981).
+`assert` writes `Assertion failed` to stderr when the condition is falsy and
+does **not** throw.
+
+| Method                                        | Notes                                          |
+| --------------------------------------------- | ---------------------------------------------- |
+| `log` / `info` / `debug` / `dirxml` / `table` | stdout                                         |
+| `dir(obj)`                                    | stdout, inspected object                       |
+| `warn` / `error`                              | stderr                                         |
+| `assert(cond, ...args)`                       | no-op if truthy; stderr if falsy; never throws |
+| `trace(...args)`                              | stderr `Trace:` + stack                        |
+| `group` / `groupCollapsed` / `groupEnd`       | indent subsequent lines                        |
+| `time` / `timeEnd` / `timeLog`                | `Map` of labels to timestamps                  |
+| `count` / `countReset`                        | `Map` of labels to counters                    |
+| `clear`                                       | no-op                                          |
+
 ### `buffer`
 
 Re-exports the global `Buffer` polyfill. Available as both

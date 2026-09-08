@@ -287,6 +287,30 @@ describe('executeJshFile', () => {
     expect(result.stderr).toBe('warning!\n');
   });
 
+  it('exposes all 19 standard console methods so libraries do not TypeError (#2981)', async () => {
+    const ctx = createMockCtx({
+      '/workspace/console-methods.jsh': [
+        'const names=["log","info","warn","error","debug","trace","assert","dir","table","group",',
+        '  "groupEnd","groupCollapsed","time","timeEnd","timeLog","count","countReset","clear","dirxml"];',
+        'const missing=[], present=[];',
+        'for (const n of names) { (typeof console[n]==="function"?present:missing).push(n); }',
+        'console.debug("x");',
+        'console.assert(true);',
+        'console.assert(false, "x");',
+        'console.log("present:", present.join(" "));',
+        'console.log("MISSING:", missing.join(" "));',
+      ].join('\n'),
+    });
+    const result = await executeJshFile('/workspace/console-methods.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      'present: log info warn error debug trace assert dir table group groupEnd groupCollapsed time timeEnd timeLog count countReset clear dirxml'
+    );
+    expect(result.stdout).toMatch(/MISSING: \n/);
+    expect(result.stdout).toContain('x\n');
+    expect(result.stderr).toContain('Assertion failed: x');
+  });
+
   it("require('fs').readFile reads from the VFS", async () => {
     const ctx = createMockCtx({
       '/workspace/reader.jsh':
@@ -485,6 +509,17 @@ describe('executeJshFile', () => {
 });
 
 describe('executeJsCode', () => {
+  it('console.debug and console.assert do not throw from node -e (#2981)', async () => {
+    const result = await executeJsCode(
+      'console.debug("x"); console.assert(true); console.assert(false, "x"); console.log("ok");',
+      ['node', '-e'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('x\nok\n');
+    expect(result.stderr).toBe('Assertion failed: x\n');
+  });
+
   it('executes inline code with argv', async () => {
     const ctx = createMockCtx();
     const result = await executeJsCode(
