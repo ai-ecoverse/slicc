@@ -86,11 +86,14 @@ export interface StackOptions {
   direct?: boolean;
   navigationWatcher?: boolean;
   /**
-   * URL of the tab the watcher must treat as SLICC's own leader tab and leave
-   * alone (`NavigationWatcherOptions.isOwnTab`). Omitted → the watcher attaches
-   * to every page target, which is the pre-fix behaviour.
+   * URL of the tab the watcher must treat as SLICC's own leader tab
+   * (`NavigationWatcherOptions.isOwnTab`): it is attached like any other, but
+   * `Network` stays off while it sits there. Omitted → `Network` is enabled on
+   * every page target, which is the pre-fix behaviour.
    */
   ownTabUrl?: string;
+  /** Receives every handoff / upskill `NavigationEvent` the watcher emits. */
+  onNavigation?: (event: unknown) => void;
 }
 
 /** Per-command CDP timeout; production default is 30s. */
@@ -166,9 +169,10 @@ export async function buildStack(cdpUrl: string, opts: StackOptions = {}): Promi
     // attaches to every page target and enables Page + Network per session —
     // except the app tab, when the caller names one.
     const ownTabUrl = opts.ownTabUrl;
+    const onNavigation = opts.onNavigation;
     const watcher = new slicc.NavigationWatcher(
       transport,
-      () => {},
+      (event) => onNavigation?.(event),
       ownTabUrl ? { isOwnTab: slicc.createOwnTabMatcher(() => ownTabUrl) } : {}
     );
     await watcher.start();

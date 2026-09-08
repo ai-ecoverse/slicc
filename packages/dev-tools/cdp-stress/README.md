@@ -30,6 +30,7 @@ Every scenario is also runnable standalone and prints JSON:
 npx tsx packages/dev-tools/cdp-stress/run-all.ts [--quick]
 npx tsx packages/dev-tools/cdp-stress/scenarios/fanout.ts 8 [--poison]
 npx tsx packages/dev-tools/cdp-stress/scenarios/session-leak.ts [--watcher] [--leader-tab] [--skip-own-tab]
+npx tsx packages/dev-tools/cdp-stress/scenarios/own-tab.ts
 npx tsx packages/dev-tools/cdp-stress/scenarios/stale-proxy.ts
 npx tsx packages/dev-tools/cdp-stress/scenarios/load-bleed.ts
 npx tsx packages/dev-tools/cdp-stress/scenarios/abandoned.ts
@@ -49,7 +50,8 @@ Environment knobs:
 
 - `chrome.ts` — launches headless Chrome with a throwaway profile.
 - `site.ts` — local HTTP site: `/page/<name>?delay=&subdelay=&items=`,
-  `/reloader?every=`, `/hang`, `/console?n=`.
+  `/reloader?every=`, `/hang`, `/console?n=`, `/leader?every=&burst=&goto=&after=`
+  (+ a `/ws` echo endpoint); any route takes `?link=` to echo a raw `Link` header.
 - `proxy.ts` — single-client `/cdp` relay; `policy: 'node' | 'swift'` model the shipped
   proxies, which now share ONE policy: reconnect the Chrome leg every 1 s indefinitely,
   DISCARD frames buffered under a Chrome/client generation that no longer matches, close
@@ -69,10 +71,11 @@ Environment knobs:
   | `stale-worker-hop` | client-leg drop across the `WorkerCdpProxy` hop                             |
   | `fanout`           | one global tab lock serializes every driver (`--poison` adds a hung `goto`) |
   | `abandoned`        | a caller that gives up still holds the lock                                 |
+  | `own-tab`          | SLICC's own tab's `/cdp` socket is reported back to it                      |
 - `run-all.ts` — runs everything and writes `<out>/<timestamp>.json` +
   `<out>/latest.json`.
 
-## Measuring SLICC's own leader tab
+## SLICC's own leader tab
 
 `session-leak --leader-tab` opens `/leader` — a page that holds a busy WebSocket
 to the site — with `Target.createTarget`, so `BrowserAPI` never attaches and the
@@ -86,5 +89,18 @@ watcher an `isOwnTab` predicate matching that URL. Measured here (12 rounds,
 | `--watcher --leader-tab`                | 35 (33-39)            | 276                       |
 | `--watcher --leader-tab --skip-own-tab` | 23                    | 0                         |
 
-So an attached leader tab costs ~12 extra inbound events per navigation, all of
-them frames of SLICC's own `/cdp` socket coming straight back at it.
+So a `Network`-enabled leader tab costs ~12 extra inbound events per navigation,
+all of them frames of SLICC's own `/cdp` socket coming straight back at it.
+
+The `own-tab` scenario is the focused version of the same thing, and is the one
+the gate asserts. It runs two arms, each with a `/leader` tab that navigates
+ITSELF to a page serving a handoff `Link` header:
+
+| arm                       | `Network.webSocketFrame*` while it dwells | handoff lick on the way out |
+| ------------------------- | ----------------------------------------- | --------------------------- |
+| `isOwnTab` wired          | 0                                         | seen                        |
+| unguarded (old behaviour) | 76                                        | seen                        |
+
+The second column is why the app tab keeps `Page` and only loses `Network`: a
+watcher that detached from it could not re-attach before the navigation
+committed, and the document response carrying the header would be gone.

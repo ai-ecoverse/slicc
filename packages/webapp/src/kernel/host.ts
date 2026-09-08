@@ -185,12 +185,12 @@ export interface KernelHostConfig {
   syncFsChannelNonce?: SyncFsNonce | null;
   /**
    * `location.href` of the page hosting this kernel — SLICC's own leader tab.
-   * The `NavigationWatcher` skips that tab so Chrome stops reporting the
-   * `/cdp` WebSocket's own traffic back to us as `Network.webSocketFrame*`
-   * events (issue #2417: swift-server's inbound pump kills the Chrome leg at
-   * 1,000 queued messages). Supplied by `kernel-worker.ts` from
-   * `KernelWorkerInitMsg.appPageUrl`; absent → every tab is watched, which is
-   * the pre-#2417 behaviour.
+   * The `NavigationWatcher` keeps the `Network` domain off that tab so Chrome
+   * stops reporting the `/cdp` WebSocket's own traffic back to us as
+   * `Network.webSocketFrame*` events (issue #2417: swift-server's inbound pump
+   * kills the Chrome leg at 1,000 queued messages). Supplied by
+   * `kernel-worker.ts` from `KernelWorkerInitMsg.appPageUrl`; absent → every
+   * tab gets `Network`, which is the pre-#2417 behaviour.
    */
   appPageUrl?: string | null;
 
@@ -809,9 +809,9 @@ function startNavigationWatcherForHost(
       },
       {
         ...buildDiscoveryWatcherOptions(lickManager),
-        // Leave SLICC's own leader tab alone. `appPageUrl` is fixed for the
-        // life of the worker — the page is gone the moment it navigates away —
-        // so a constant getter is the whole contract the matcher needs.
+        // Keep `Network` off SLICC's own leader tab. `appPageUrl` is fixed for
+        // the life of the worker — the page is gone the moment it navigates
+        // away — so a constant getter is the whole contract the matcher needs.
         isOwnTab: createOwnTabMatcher(() => appPageUrl ?? null),
       }
     );

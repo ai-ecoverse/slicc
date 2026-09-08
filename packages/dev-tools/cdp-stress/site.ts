@@ -7,10 +7,13 @@
  *   /reloader?every=<ms>  — page that reloads itself every <ms>
  *   /hang                 — never responds (navigation never fires load)
  *   /console?n=<k>        — page that logs k console lines then keeps logging
- *   /leader?every=<ms>&burst=<n>  — stand-in for SLICC's own leader tab: holds a
- *                                   WebSocket to /ws and pushes `burst` frames
- *                                   every `every` ms, the way the real leader
- *                                   tab's /cdp socket does
+ *   /leader?every=<ms>&burst=<n>&goto=<url>&after=<ms>
+ *                         — stand-in for SLICC's own leader tab: holds a
+ *                           WebSocket to /ws and pushes `burst` frames every
+ *                           `every` ms, the way the real leader tab's /cdp
+ *                           socket does. `goto` makes it navigate itself away
+ *                           after `after` ms (a renderer-initiated navigation,
+ *                           as if the user followed a link out of SLICC)
  *   /ws                   — WebSocket echo endpoint the /leader page talks to
  */
 import { createServer, type Server } from 'node:http';
@@ -44,12 +47,15 @@ function reloaderHtml(u: URL): string {
 function leaderHtml(u: URL): string {
   const every = Number(u.searchParams.get('every') ?? 50);
   const burst = Number(u.searchParams.get('burst') ?? 2);
+  const goto = u.searchParams.get('goto');
+  const after = Number(u.searchParams.get('after') ?? 500);
+  const leave = goto ? `setTimeout(()=>{location.href=${JSON.stringify(goto)}},${after});` : '';
   return (
     `<!doctype html><title>slicc-leader</title><h1>leader</h1><script>` +
     `const ws=new WebSocket(location.origin.replace(/^http/,'ws')+'/ws');` +
     `ws.onopen=()=>setInterval(()=>{` +
     `for(let i=0;i<${burst};i++)ws.send('{"id":'+i+',"method":"Runtime.evaluate"}')` +
-    `},${every});</script>`
+    `},${every});${leave}</script>`
   );
 }
 
@@ -93,10 +99,14 @@ export async function startSite(): Promise<SiteHandle> {
     const u = new URL(req.url ?? '/', 'http://x');
     hits.set(u.pathname, (hits.get(u.pathname) ?? 0) + 1);
     const delay = Number(u.searchParams.get('delay') ?? 0);
+    // `?link=<value>` echoes a raw RFC 8288 Link header, so a navigation in the
+    // harness can carry a real handoff / upskill rel for the NavigationWatcher.
+    const link = u.searchParams.get('link');
     const send = (html: string) => {
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
+        ...(link ? { link } : {}),
       });
       res.end(html);
     };

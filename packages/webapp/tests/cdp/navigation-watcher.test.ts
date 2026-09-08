@@ -1124,7 +1124,7 @@ describe('createOwnTabMatcher', () => {
   });
 });
 
-describe('NavigationWatcher own-tab exclusion', () => {
+describe('NavigationWatcher own-tab handling', () => {
   const APP_URL = 'https://www.sliccy.ai/?slicc=leader';
   const HANDOFF_URL = 'https://www.sliccy.ai/handoff?handoff=continue';
 
@@ -1138,26 +1138,27 @@ describe('NavigationWatcher own-tab exclusion', () => {
     isOwnTab: createOwnTabMatcher(() => APP_URL),
   });
 
+  /** Methods sent on `sessionId`, in order. */
+  const methodsFor = (sessionId: string): string[] =>
+    transport.sentCommands.filter((c) => c.sessionId === sessionId).map((c) => c.method);
+
   beforeEach(() => {
     transport = new MockCDPTransport();
     events = [];
   });
 
-  it('does not attach to the leader tab when it is discovered', async () => {
+  it('attaches to the leader tab with Page on and Network off', async () => {
+    // Network is the expensive domain there: with it on, Chrome reports the
+    // tab's own /cdp socket back as Network.webSocketFrame* (issue #2417).
     const watcher = makeWatcher(ownTabOptions());
     await watcher.start();
-    transport.sentCommands.length = 0;
 
-    transport.emit('Target.targetCreated', {
-      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
-    });
-    await tick();
+    await attachOwnTab(transport, 'sess-leader', { targetId: 'tab-leader', url: APP_URL });
 
-    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
+    expect(methodsFor('sess-leader')).toEqual(['Page.enable', 'Page.getFrameTree']);
   });
 
-  it('does not attach to the leader tab when it is already open at start', async () => {
-    // The live case: the leader tab always predates the watcher.
+  it('leaves Network off on a leader tab that was already open at start', async () => {
     transport.targetInfos = [
       { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
       { targetId: 'tab-other', type: 'page', attached: false, url: 'https://ex.com/' },
@@ -1165,49 +1166,33 @@ describe('NavigationWatcher own-tab exclusion', () => {
     const watcher = makeWatcher(ownTabOptions());
     await watcher.start();
 
-    const attached = transport.sentCommands
-      .filter((c) => c.method === 'Target.attachToTarget')
-      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
-    expect(attached).toEqual(['tab-other']);
-  });
-
-  it('ignores a session someone else attached to the leader tab', async () => {
-    // BrowserAPI mints its own session per tab switch; the watcher must not
-    // track it either, or SLICC's own navigations would run through handoff
-    // extraction and the ARD probe.
-    const watcher = makeWatcher(ownTabOptions());
-    await watcher.start();
-    transport.sentCommands.length = 0;
+    // Both tabs are attached — only their domain sets differ.
+    expect(
+      transport.sentCommands
+        .filter((c) => c.method === 'Target.attachToTarget')
+        .map((c) => (c.params as { targetId?: string } | undefined)?.targetId)
+    ).toEqual(['tab-leader', 'tab-other']);
 
     transport.emit('Target.attachedToTarget', {
-      sessionId: 'sess-browser-api',
+      sessionId: 'sess-leader',
       targetInfo: { targetId: 'tab-leader', type: 'page', url: APP_URL },
     });
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-other',
+      targetInfo: { targetId: 'tab-other', type: 'page', url: 'https://ex.com/' },
+    });
     await tick();
-    transport.emit('Page.frameNavigated', {
-      sessionId: 'sess-browser-api',
-      frame: { id: 'root-leader', url: APP_URL },
-    });
-    transport.emit('Network.responseReceived', {
-      sessionId: 'sess-browser-api',
-      type: 'Document',
-      frameId: 'root-leader',
-      response: { url: APP_URL, headers: { link: `<>; rel="${HANDOFF_REL}"; title="self"` } },
-    });
 
-    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-browser-api')).toEqual([]);
-    expect(events).toEqual([]);
+    expect(methodsFor('sess-leader')).not.toContain('Network.enable');
+    expect(methodsFor('sess-other')).toContain('Network.enable');
   });
 
-  it('still attaches to a handoff page on the app origin and emits its lick', async () => {
+  it('still watches a handoff page on the app origin', async () => {
     const watcher = makeWatcher(ownTabOptions());
     await watcher.start();
 
-    await attachOwnTab(transport, 'sess-handoff', {
-      targetId: 'tab-handoff',
-      url: HANDOFF_URL,
-    });
-    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-handoff')).toHaveLength(3);
+    await attachOwnTab(transport, 'sess-handoff', { targetId: 'tab-handoff', url: HANDOFF_URL });
+    expect(methodsFor('sess-handoff')).toContain('Network.enable');
 
     transport.emit('Network.responseReceived', {
       sessionId: 'sess-handoff',
@@ -1228,21 +1213,144 @@ describe('NavigationWatcher own-tab exclusion', () => {
     });
   });
 
-  it('attaches to every tab, app URL included, when no predicate is supplied', async () => {
-    const watcher = makeWatcher();
+  it('arms Network when the app tab starts navigating away, in time for the response', async () => {
+    // The reason `isOwnTab` gates a DOMAIN instead of the attach: a tab
+    // detached as ours could only be re-attached after the navigation
+    // committed, by which point its document response is unrecoverable.
+    const watcher = makeWatcher(ownTabOptions());
     await watcher.start();
-    transport.sentCommands.length = 0;
+    await attachOwnTab(transport, 'sess-app', { targetId: 'tab-app', url: APP_URL });
+    expect(methodsFor('sess-app')).not.toContain('Network.enable');
 
-    transport.emit('Target.targetCreated', {
-      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+    transport.emit('Page.frameRequestedNavigation', {
+      sessionId: 'sess-app',
+      frameId: 'root-sess-app',
+      url: HANDOFF_URL,
+    });
+    await tick();
+    expect(methodsFor('sess-app')).toContain('Network.enable');
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-app',
+      type: 'Document',
+      frameId: 'root-sess-app',
+      response: { url: HANDOFF_URL, headers: { link: `<>; rel="${HANDOFF_REL}"; title="late"` } },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ instruction: 'late', targetId: 'tab-app' });
+  });
+
+  it('arms on a browser-initiated navigation too, and only once', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    await attachOwnTab(transport, 'sess-app', { targetId: 'tab-app', url: APP_URL });
+
+    // Chrome emits both events for one address-bar navigation.
+    transport.emit('Page.frameStartedNavigating', {
+      sessionId: 'sess-app',
+      frameId: 'root-sess-app',
+      url: 'https://ex.com/',
+    });
+    transport.emit('Page.frameStartedNavigating', {
+      sessionId: 'sess-app',
+      frameId: 'root-sess-app',
+      url: 'https://ex.com/',
     });
     await tick();
 
-    expect(
-      transport.sentCommands
-        .filter((c) => c.method === 'Target.attachToTarget')
-        .map((c) => (c.params as { targetId?: string } | undefined)?.targetId)
-    ).toEqual(['tab-leader']);
+    expect(methodsFor('sess-app').filter((m) => m === 'Network.enable')).toHaveLength(1);
+  });
+
+  it('does not arm on a subframe navigation or an in-app navigation', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    await attachOwnTab(transport, 'sess-app', { targetId: 'tab-app', url: APP_URL });
+
+    // A sprinkle iframe loading something is not the tab changing identity.
+    transport.emit('Page.frameStartedNavigating', {
+      sessionId: 'sess-app',
+      frameId: 'sprinkle-frame',
+      url: 'https://ex.com/',
+    });
+    // ...and neither is the app changing its own query string.
+    transport.emit('Page.frameStartedNavigating', {
+      sessionId: 'sess-app',
+      frameId: 'root-sess-app',
+      url: 'https://www.sliccy.ai/?ui=wc',
+    });
+    await tick();
+
+    expect(methodsFor('sess-app')).not.toContain('Network.enable');
+  });
+
+  it('turns Network back off when a watched tab navigates INTO the app URL', async () => {
+    // The reverse transition: that page opens its own /cdp socket, so leaving
+    // our session armed would put the amplification straight back.
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    await attachOwnTab(transport, 'sess-1', { targetId: 'tab-1', url: 'https://ex.com/' });
+    expect(methodsFor('sess-1')).toContain('Network.enable');
+
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-1', type: 'page', url: APP_URL },
+    });
+    await tick();
+
+    expect(methodsFor('sess-1')).toContain('Network.disable');
+    // Idempotent: a second info change for the same URL sends nothing more.
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-1', type: 'page', url: `${APP_URL}&x=1` },
+    });
+    await tick();
+    expect(methodsFor('sess-1').filter((m) => m === 'Network.disable')).toHaveLength(1);
+  });
+
+  it('re-arms via targetInfoChanged when the frame events were missed', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+    await attachOwnTab(transport, 'sess-app', { targetId: 'tab-app', url: APP_URL });
+
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-app', type: 'page', url: 'https://ex.com/' },
+    });
+    await tick();
+
+    expect(methodsFor('sess-app')).toContain('Network.enable');
+  });
+
+  it('never touches Network on a session it did not attach', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-foreign',
+      targetInfo: { targetId: 'tab-foreign', type: 'page', url: APP_URL },
+    });
+    await tick();
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-foreign', type: 'page', url: 'https://ex.com/' },
+    });
+    transport.emit('Page.frameStartedNavigating', {
+      sessionId: 'sess-foreign',
+      frameId: 'root-foreign',
+      url: 'https://ex.com/',
+    });
+    await tick();
+
+    expect(methodsFor('sess-foreign')).toEqual([]);
+  });
+
+  it('enables Network on every tab when no predicate is supplied', async () => {
+    const watcher = makeWatcher();
+    await watcher.start();
+
+    await attachOwnTab(transport, 'sess-leader', { targetId: 'tab-leader', url: APP_URL });
+
+    expect(methodsFor('sess-leader')).toEqual([
+      'Page.enable',
+      'Network.enable',
+      'Page.getFrameTree',
+    ]);
   });
 
   it('treats a throwing predicate as "not our tab" rather than losing every tab', async () => {
@@ -1252,70 +1360,15 @@ describe('NavigationWatcher own-tab exclusion', () => {
       },
     });
     await watcher.start();
-    transport.sentCommands.length = 0;
 
-    transport.emit('Target.targetCreated', {
-      targetInfo: { targetId: 'tab-1', type: 'page', attached: false, url: 'https://ex.com/' },
-    });
-    await tick();
+    await attachOwnTab(transport, 'sess-1', { targetId: 'tab-1', url: 'https://ex.com/' });
 
-    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toHaveLength(
-      1
-    );
+    expect(methodsFor('sess-1')).toContain('Network.enable');
   });
 
-  it('adopts a skipped tab once it navigates away from the app URL', async () => {
-    // A SECOND tab the user opened on the app URL and then pointed at a handoff
-    // page. Skipping it forever would drop exactly the lick we want.
-    const watcher = makeWatcher(ownTabOptions());
-    await watcher.start();
-
-    transport.emit('Target.targetCreated', {
-      targetInfo: { targetId: 'tab-2', type: 'page', attached: false, url: APP_URL },
-    });
-    await tick();
-    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
-
-    transport.emit('Target.targetInfoChanged', {
-      targetInfo: { targetId: 'tab-2', type: 'page', attached: false, url: HANDOFF_URL },
-    });
-    await tick();
-
-    const attached = transport.sentCommands
-      .filter((c) => c.method === 'Target.attachToTarget')
-      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
-    expect(attached).toEqual(['tab-2']);
-
-    // ...and only once: a second info change must not re-request the attach.
-    transport.emit('Target.targetInfoChanged', {
-      targetInfo: { targetId: 'tab-2', type: 'page', attached: true, url: HANDOFF_URL },
-    });
-    await tick();
-    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toHaveLength(
-      1
-    );
-  });
-
-  it('does not adopt a skipped tab that only changed its query string', async () => {
-    const watcher = makeWatcher(ownTabOptions());
-    await watcher.start();
-
-    transport.emit('Target.targetCreated', {
-      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
-    });
-    await tick();
-    transport.emit('Target.targetInfoChanged', {
-      targetInfo: { targetId: 'tab-leader', type: 'page', url: 'https://www.sliccy.ai/?ui=wc' },
-    });
-    await tick();
-
-    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
-  });
-
-  it('keeps skipping the leader tab after an upstream reset re-enumerates targets', async () => {
+  it('keeps Network off the leader tab after an upstream reset re-enumerates targets', async () => {
     transport.targetInfos = [
       { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
-      { targetId: 'tab-other', type: 'page', attached: false, url: 'https://ex.com/' },
     ];
     const watcher = makeWatcher(ownTabOptions());
     await watcher.start();
@@ -1324,10 +1377,14 @@ describe('NavigationWatcher own-tab exclusion', () => {
     transport.simulateReconnect();
     await tick();
     await tick();
+    transport.sentCommands.length = 0;
 
-    const attached = transport.sentCommands
-      .filter((c) => c.method === 'Target.attachToTarget')
-      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
-    expect(attached).toEqual(['tab-other', 'tab-other']);
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-leader-2',
+      targetInfo: { targetId: 'tab-leader', type: 'page', url: APP_URL },
+    });
+    await tick();
+
+    expect(methodsFor('sess-leader-2')).not.toContain('Network.enable');
   });
 });

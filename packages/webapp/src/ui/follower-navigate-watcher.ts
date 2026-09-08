@@ -146,14 +146,13 @@ export function startFollowerNavigateWatcher(
     },
     {
       ...buildFollowerDiscoveryOptions(getSync),
-      // Leave this follower's OWN tab alone: enabling Page/Network on it makes
-      // Chrome report the tab's `/cdp` WebSocket traffic back as
-      // `Network.webSocketFrame*` events (issue #2417). Matching is origin +
-      // pathname, so the handoff pages on the app's own origin
-      // (`/handoff?...`) are still watched. This runs in the page realm, so
-      // `location.href` is the tab's URL — except under Cherry, where the
-      // webapp is an iframe inside a host page; there it matches nothing and
-      // every tab stays watched, as before.
+      // Keep `Network` off this follower's OWN tab: with it on, Chrome reports
+      // the tab's `/cdp` WebSocket traffic back as `Network.webSocketFrame*`
+      // events (issue #2417). Matching is origin + pathname, so the handoff
+      // pages on the app's own origin (`/handoff?...`) are still watched. This
+      // runs in the page realm, so `location.href` is the tab's URL — except
+      // under Cherry, where the webapp is an iframe inside a host page; there
+      // it matches nothing and every tab keeps `Network`, as before.
       isOwnTab: createOwnTabMatcher(() => globalThis.location?.href ?? null),
     }
   );

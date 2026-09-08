@@ -173,10 +173,11 @@ export interface KernelWorkerInitMsg {
    * `location.href` of the page that spawned this worker — SLICC's own leader
    * tab. The worker cannot derive it: `self.location.href` is the WORKER script
    * URL (`/assets/kernel-worker-<hash>.js`), which shares the origin but not
-   * the path. Used by `createKernelHost` to keep the `NavigationWatcher` off
-   * our own tab; the page passes it at boot rather than answering a panel-RPC
-   * round trip, because the watcher starts before the page-side RPC handler is
-   * guaranteed to be installed. Absent on older pages → no tab is skipped.
+   * the path. Used by `createKernelHost` to keep the `NavigationWatcher`'s
+   * `Network` domain off our own tab; the page passes it at boot rather than
+   * answering a panel-RPC round trip, because the watcher starts before the
+   * page-side RPC handler is guaranteed to be installed. Absent on older pages
+   * → every tab gets `Network`, as before.
    */
   appPageUrl?: string | null;
 }
