@@ -754,6 +754,124 @@ describe('node:stream shim', () => {
   });
 });
 
+describe('node:module shim', () => {
+  it('require("module") and require("node:module") return the SAME object', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const m = require('module');
+       const aliased = require('node:module');
+       console.log(m === aliased, typeof m.createRequire, Array.isArray(m.builtinModules));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.trim()).toBe('true function true');
+  });
+
+  it('isBuiltin distinguishes Node built-ins from packages; findPnpApi is absent', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const m = require('module');
+       console.log(m.isBuiltin('fs'), m.isBuiltin('node:fs'), m.isBuiltin('stylelint'));
+       console.log(typeof m.findPnpApi, 'findPnpApi' in m);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['true true false', 'undefined false']);
+  });
+
+  it('Module._nodeModulePaths walks POSIX ancestors', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { _nodeModulePaths } = require('module');
+       console.log(_nodeModulePaths('/workspace/pkg/lib').join(','));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe(
+      '/workspace/pkg/lib/node_modules,/workspace/pkg/node_modules,/workspace/node_modules,/node_modules'
+    );
+  });
+
+  it('createRequire loads a relative file resolved against filename, not cwd', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/a/msg.js': "module.exports = 'from-a';",
+        '/workspace/b/msg.js': "module.exports = 'from-b';",
+      },
+    });
+    // Static absolute requires pull both files into the graph; createRequire
+    // then picks between them by resolving `./msg.js` against each filename.
+    const out = await runCode(
+      `require('/workspace/a/msg.js');
+       require('/workspace/b/msg.js');
+       const { createRequire } = require('module');
+       const a = createRequire('/workspace/a/index.js');
+       const b = createRequire('/workspace/b/index.js');
+       console.log(a('./msg.js'), b('./msg.js'));
+       console.log(a.resolve('./msg.js'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      'from-a from-b',
+      '/workspace/a/msg.js',
+    ]);
+  });
+
+  it('createRequire accepts a file: URL string', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/pkg/helper.js': "module.exports = 'via-url';",
+      },
+    });
+    const out = await runCode(
+      `require('/workspace/pkg/helper.js');
+       const { createRequire } = require('module');
+       const req = createRequire('file:///workspace/pkg/index.js');
+       console.log(req('./helper.js'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('via-url');
+  });
+
+  it('a node_modules package that internally requires module loads and runs', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/node_modules/usesmodule/package.json': JSON.stringify({
+          name: 'usesmodule',
+          version: '1.0.0',
+          main: 'index.js',
+        }),
+        '/workspace/node_modules/usesmodule/index.js':
+          "const { isBuiltin } = require('module'); module.exports = (n) => isBuiltin(n);",
+      },
+    });
+    const out = await runCode(
+      "const u = require('usesmodule'); console.log(u('fs'), u('stylelint'));",
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stdout.trim()).toBe('true false');
+  });
+
+  it('ESM named import { createRequire } from node:module works', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `import { createRequire, isBuiltin, builtinModules } from 'node:module';
+       console.log(typeof createRequire, isBuiltin('fs'), builtinModules.includes('module'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stdout.trim()).toBe('function true true');
+  });
+});
+
 describe('node:fs/promises alias', () => {
   it('require("fs/promises") returns the same object as require("fs")', async () => {
     const ctx = makeCtx();

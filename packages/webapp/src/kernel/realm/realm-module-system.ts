@@ -7,8 +7,11 @@
 
 import type { NodeReadlineModule } from './helpers/node-readline.js';
 import {
+  createNodeModule,
   fmt,
+  isPathSpecifier,
   type NodeChildProcess,
+  type NodeModuleApi,
   type NodeOs,
   type NodeUtil,
   nodeAssert,
@@ -22,6 +25,7 @@ import {
   nodeUrl,
   nodeUtil,
   nodeZlib,
+  pickExistingCandidate,
   pool,
   time,
 } from './js-realm-helpers.js';
@@ -191,6 +195,11 @@ export function createModuleSystem(opts: {
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: ModuleExports }>();
 
+  const nodeModule: NodeModuleApi = createNodeModule({
+    requireFrom: (fromPath, specifier) => loadFromParent(fromPath, specifier),
+    resolveFrom: (fromPath, specifier) => resolveFromParent(fromPath, specifier),
+  });
+
   const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
     if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
@@ -203,6 +212,7 @@ export function createModuleSystem(opts: {
       nodeOsModule,
       nodeUtilModule,
       nodeReadline,
+      nodeModule,
     });
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
@@ -269,6 +279,36 @@ export function createModuleSystem(opts: {
     return moduleObj.exports;
   }
 
+  function graphHas(path: string): boolean {
+    return sourceByPath.has(path);
+  }
+
+  /**
+   * Resolve `specifier` as if required from `fromPath`. Builtins, the
+   * host-resolved edge map for that file, and a runtime relative/absolute
+   * lookup against the already-loaded graph (so `createRequire(filename)`
+   * can load a sibling that a static `require()` already pulled in).
+   */
+  function resolveFromParent(fromPath: string, specifier: string): string {
+    const builtin = resolveBuiltin(specifier);
+    if (builtin.hit) return specifier;
+    const edged = graph.edges[fromPath]?.[specifier];
+    if (edged) return edged;
+    if (isPathSpecifier(specifier)) {
+      const resolved = pickExistingCandidate(dirnameOf(fromPath), specifier, graphHas);
+      if (resolved) return resolved;
+    }
+    const deferred = graph.edgeErrors?.[fromPath]?.[specifier];
+    if (deferred) throw new Error(deferred);
+    throw cannotFindModuleError(specifier);
+  }
+
+  function loadFromParent(fromPath: string, specifier: string): unknown {
+    const builtin = resolveBuiltin(specifier);
+    if (builtin.hit) return builtin.value;
+    return requireFile(resolveFromParent(fromPath, specifier));
+  }
+
   return {
     require: (id: string): unknown => requireFromEdges(graph.entryMap, id, null),
   };
@@ -295,10 +335,18 @@ function resolveServedBuiltin(
     nodeOsModule: NodeOs;
     nodeUtilModule: NodeUtil;
     nodeReadline?: NodeReadlineModule;
+    nodeModule?: NodeModuleApi;
   }
 ): { hit: boolean; value?: unknown } {
-  const { fsBridge, processShim, childProcess, nodeOsModule, nodeUtilModule, nodeReadline } =
-    served;
+  const {
+    fsBridge,
+    processShim,
+    childProcess,
+    nodeOsModule,
+    nodeUtilModule,
+    nodeReadline,
+    nodeModule,
+  } = served;
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
@@ -324,6 +372,7 @@ function resolveServedBuiltin(
   if (bareId === 'readline/promises' && nodeReadline) {
     return { hit: true, value: nodeReadline.promises };
   }
+  if (bareId === 'module' && nodeModule) return { hit: true, value: nodeModule };
   return { hit: false };
 }
 
