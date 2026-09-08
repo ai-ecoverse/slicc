@@ -1648,3 +1648,63 @@ describe('OffscreenClient.spawnAgent wire-safe cancel (#1972)', () => {
     expect(payloads('agent-spawn-abort')).toHaveLength(0);
   });
 });
+
+describe('OffscreenClient.getSessionStats budget round-trip', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+
+  beforeEach(() => {
+    messageListeners.length = 0;
+    sentMessages.length = 0;
+    client = new OffscreenClient({
+      onStatusChange: vi.fn(),
+      onScoopCreated: vi.fn(),
+      onScoopListUpdate: vi.fn(),
+      onMessage: vi.fn(),
+      onScoopStatusChange: vi.fn(),
+      onReady: vi.fn(),
+    } as never);
+  });
+
+  /** Answer the pending stats request the way the worker does. */
+  function replyWithStats(extra: Record<string, unknown>): void {
+    const envelope = sentMessages
+      .map((m) => m as { payload?: { type?: string; requestId?: string } })
+      .find((m) => m?.payload?.type === 'request-session-stats');
+    simulateMessage('offscreen', {
+      type: 'session-stats',
+      requestId: envelope?.payload?.requestId,
+      totalCost: 29.06,
+      burnRate: 1.4,
+      fills: [],
+      models: [],
+      scoops: [],
+      ...extra,
+    });
+  }
+
+  it('carries the provider budget through to the caller', async () => {
+    // The floatbar and the monitor read `stats.budget`; dropping it here is
+    // invisible on the worker side and silently keeps both on the $ headline.
+    const pending = client.getSessionStats();
+    replyWithStats({
+      budget: {
+        percent: 9.5,
+        status: 'ok',
+        window: 'weekly',
+        resetsAt: '2026-09-14T00:00:00.000Z',
+        providerId: 'adobe',
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      totalCost: 29.06,
+      budget: { percent: 9.5, status: 'ok', window: 'weekly', providerId: 'adobe' },
+    });
+  });
+
+  it('leaves the key ABSENT for a metered provider', async () => {
+    const pending = client.getSessionStats();
+    replyWithStats({});
+    const stats = await pending;
+    expect(stats && 'budget' in stats).toBe(false);
+  });
+});

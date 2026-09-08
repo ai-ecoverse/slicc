@@ -30,6 +30,7 @@ import type {
   ScoopSnapshotConfig,
   ScoopStatusMsg,
   ScoopTranscriptMsg,
+  SessionBudgetWindow,
   SessionStatsMsg,
   SetScoopModelAckMsg,
   SetThinkingLevelAckMsg,
@@ -121,6 +122,8 @@ export interface SessionStats {
     type: 'cone' | 'scoop';
     source: 'live' | 'dropped' | 'frozen';
   }>;
+  /** The provider's rolling budget window, when it bills against one. */
+  budget?: SessionBudgetWindow;
 }
 
 /**
@@ -1095,6 +1098,10 @@ export class OffscreenClient implements KernelClientFacade {
             fills: m.fills,
             models: m.models ?? [],
             scoops: m.scoops ?? [],
+            // Absent stays absent: a metered provider must reach the floatbar
+            // and the monitor with NO budget key at all, which is what keeps
+            // their `$` headline.
+            ...(m.budget ? { budget: m.budget } : {}),
           });
         }
         break;

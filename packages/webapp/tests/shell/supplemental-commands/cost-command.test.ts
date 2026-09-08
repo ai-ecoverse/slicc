@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { ProviderBudgetWindow } from '../../../src/providers/provider-budget.js';
 import {
   _resetSessionCostsProvider,
   createCostCommand,
   frozenSessionToCostData,
+  registerSessionBudgetProvider,
   registerSessionCostsProvider,
   type ScoopCostData,
   type SessionCostScope,
@@ -115,7 +117,7 @@ describe('cost command', () => {
     const result = await createCostCommand().execute(['--json', '--all'], ctx);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout);
-    expect(parsed).toHaveLength(4);
+    expect(parsed.scoops).toHaveLength(4);
     expect(scopes).toEqual(['all']);
   });
 
@@ -183,10 +185,13 @@ describe('cost command', () => {
     const result = await createCostCommand().execute(['--json'], ctx);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout);
-    expect(parsed).toHaveLength(2);
-    expect(parsed[0].name).toBe('sliccy');
-    expect(parsed[1].name).toBe('worker');
-    expect(parsed[0].usage.cost.total).toBe(1.13);
+    // The envelope is stable in both directions: `budget` is null on a metered
+    // provider rather than absent, so a script never has to shape-check.
+    expect(parsed.budget).toBeNull();
+    expect(parsed.scoops).toHaveLength(2);
+    expect(parsed.scoops[0].name).toBe('sliccy');
+    expect(parsed.scoops[1].name).toBe('worker');
+    expect(parsed.scoops[0].usage.cost.total).toBe(1.13);
     expect(scopes).toEqual(['live']);
   });
 
@@ -195,7 +200,7 @@ describe('cost command', () => {
     registerScopedProvider(scopes);
     const result = await createCostCommand().execute(['--all', '--json'], ctx);
     const parsed = JSON.parse(result.stdout);
-    expect(parsed.map((row: ScoopCostData) => row.source)).toEqual([
+    expect(parsed.scoops.map((row: ScoopCostData) => row.source)).toEqual([
       'live',
       'live',
       'dropped',
@@ -204,11 +209,13 @@ describe('cost command', () => {
     expect(scopes).toEqual(['all']);
   });
 
-  it('shows no data message with --json for empty data', async () => {
+  it('emits an EMPTY envelope with --json rather than prose', async () => {
+    // `--json` is now parseable in every case; it used to answer the
+    // no-data path with the human sentence, which no `JSON.parse` survives.
     registerSessionCostsProvider(() => []);
     const result = await createCostCommand().execute(['--json'], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('No session cost data');
+    expect(JSON.parse(result.stdout)).toEqual({ budget: null, scoops: [] });
   });
 
   it('supports async provider', async () => {
@@ -216,7 +223,7 @@ describe('cost command', () => {
     const result = await createCostCommand().execute(['--json'], ctx);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout);
-    expect(parsed).toHaveLength(2);
+    expect(parsed.scoops).toHaveLength(2);
   });
 
   it('renders frozen sessions without cost data as unknown', async () => {
@@ -253,7 +260,7 @@ describe('cost command', () => {
     expect(total).not.toContain('$1.13');
 
     const jsonResult = await createCostCommand().execute(['--all', '--json'], ctx);
-    const rows = JSON.parse(jsonResult.stdout) as ScoopCostData[];
+    const rows = JSON.parse(jsonResult.stdout).scoops as ScoopCostData[];
     expect(rows[0].usage.cost.total).toBe(1.13);
     expect(rows[1].costAvailable).toBe(false);
   });
@@ -277,7 +284,7 @@ describe('cost command', () => {
     });
     registerSessionCostsProvider(() => [aggregateOnly]);
     const jsonResult = await createCostCommand().execute(['--all', '--json'], ctx);
-    expect(JSON.parse(jsonResult.stdout)[0].usage).toMatchObject({
+    expect(JSON.parse(jsonResult.stdout).scoops[0].usage).toMatchObject({
       input: null,
       output: null,
       cacheRead: null,
@@ -288,5 +295,104 @@ describe('cost command', () => {
     const row = result.stdout.split('\n').find((line) => line.includes('aggregate-only')) ?? '';
     expect(row).toContain('    - /     -');
     expect(row).not.toContain('<0.01');
+  });
+});
+
+describe('cost on a budget provider', () => {
+  let ctx: ReturnType<typeof createMockCtx>;
+
+  const week = (over: Partial<ProviderBudgetWindow> = {}): ProviderBudgetWindow => ({
+    percent: 9.5,
+    status: 'ok',
+    window: 'weekly',
+    resetsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString(),
+    providerId: 'adobe',
+    ...over,
+  });
+
+  beforeEach(() => {
+    _resetSessionCostsProvider();
+    ctx = createMockCtx();
+    registerSessionCostsProvider(() => mockCosts);
+  });
+
+  it('leads the report with the window, above the dollar table', () => {
+    registerSessionBudgetProvider(() => week());
+    return createCostCommand()
+      .execute([], ctx)
+      .then((result) => {
+        expect(result.exitCode).toBe(0);
+        const lines = result.stdout.split('\n');
+        expect(lines[0]).toBe('Weekly budget: 9.5% used');
+        expect(lines[1]).toContain('resets in 6d');
+        expect(lines[1]).toContain('adobe');
+        // The dollars survive, below the headline.
+        expect(result.stdout).toContain('Session Cost Breakdown');
+        expect(result.stdout).toContain('$1.13');
+        expect(result.stdout.indexOf('Weekly budget')).toBeLessThan(
+          result.stdout.indexOf('Session Cost Breakdown')
+        );
+      });
+  });
+
+  it('says plainly that a rate-limited provider is refusing calls', async () => {
+    registerSessionBudgetProvider(() => week({ percent: 96, status: 'rate-limited' }));
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.stdout).toContain('RATE-LIMITED');
+    expect(result.stdout).toContain('refusing calls until the window resets');
+  });
+
+  it('draws a full bar for an overrun but still reports the real figure', async () => {
+    registerSessionBudgetProvider(() => week({ percent: 104, status: 'rate-limited' }));
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.stdout).toContain('104% used');
+    expect(result.stdout).toContain('█'.repeat(24));
+    expect(result.stdout).not.toContain('░');
+  });
+
+  it('still shows the window when this session has spent nothing', async () => {
+    // The allowance is SHARED: it can be half gone before this session's first
+    // turn, so "no cost data" must not swallow the headline.
+    registerSessionCostsProvider(() => []);
+    registerSessionBudgetProvider(() => week({ percent: 63.2 }));
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.stdout).toContain('Weekly budget: 63% used');
+    expect(result.stdout).toContain('No session cost data yet.');
+  });
+
+  it('carries the window in the JSON envelope beside the scoops', async () => {
+    registerSessionBudgetProvider(() => week());
+    const result = await createCostCommand().execute(['--json'], ctx);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.budget).toMatchObject({ percent: 9.5, status: 'ok', window: 'weekly' });
+    expect(parsed.scoops).toHaveLength(2);
+  });
+
+  it('prints the dollar report unchanged when no budget source is registered', async () => {
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.stdout.startsWith('Session Cost Breakdown')).toBe(true);
+    expect(result.stdout).not.toContain('budget');
+  });
+
+  it('prints the dollar report when the budget source reports none', async () => {
+    registerSessionBudgetProvider(() => null);
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.stdout.startsWith('Session Cost Breakdown')).toBe(true);
+  });
+
+  it('keeps reporting the dollars when the budget source THROWS', async () => {
+    // A missing headline is not a failed report: what is below it is still true.
+    registerSessionBudgetProvider(() => Promise.reject(new Error('proxy 503')));
+    const result = await createCostCommand().execute([], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Session Cost Breakdown');
+    const json = await createCostCommand().execute(['--json'], ctx);
+    expect(JSON.parse(json.stdout).budget).toBeNull();
+  });
+
+  it('documents the budget behaviour in --help', async () => {
+    const result = await createCostCommand().execute(['--help'], ctx);
+    expect(result.stdout).toContain('rolling allowance');
+    expect(result.stdout).toContain('"budget"');
   });
 });

@@ -309,6 +309,66 @@ describe('prepareWcShell + attachLeaderShell', () => {
     });
   });
 
+  it('hands the provider budget to the floatbar, with the reset already formatted', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    fake.raw.getSessionStats.mockResolvedValueOnce({
+      totalCost: 29.06,
+      burnRate: 1.4,
+      fills: [],
+      models: [],
+      scoops: [],
+      budget: {
+        percent: 9.5,
+        status: 'ok',
+        window: 'weekly',
+        // The wire carries an ISO instant; the copy is computed at the edge,
+        // because a string formatted in the worker would be stale by the time
+        // the pill rendered it.
+        resetsAt: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(),
+      },
+    } as unknown as SessionStats);
+    attachLeaderShell(boot, fake.client, log);
+
+    boot.wiring.notifyReady?.();
+    const floatbar = boot.refs.floatbar as HTMLElement & { budget?: unknown };
+    await vi.waitFor(() => {
+      expect(floatbar.budget).toEqual({
+        percent: 9.5,
+        status: 'ok',
+        window: 'weekly',
+        resets: 'resets in 18h',
+      });
+    });
+    // The dollars stay set, demoted to the hover card and the tip.
+    expect(boot.refs.floatbar.getAttribute('spent')).toBe('29.06');
+  });
+
+  it('clears the floatbar budget for a provider that reports none', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    fake.raw.getSessionStats.mockResolvedValueOnce({
+      totalCost: 1.234,
+      burnRate: 0.5,
+      fills: [],
+      models: [],
+      scoops: [],
+    } as unknown as SessionStats);
+    const floatbar = boot.refs.floatbar as HTMLElement & { budget?: unknown };
+    floatbar.budget = { percent: 63, status: 'ok', window: 'weekly' };
+    attachLeaderShell(boot, fake.client, log);
+
+    boot.wiring.notifyReady?.();
+    await vi.waitFor(() => {
+      expect(floatbar.budget).toBeNull();
+    });
+    expect(boot.refs.floatbar.getAttribute('rate')).toBe('0.50');
+  });
+
   it('onClientReady fires listeners on notifyReady, and immediately when already ready', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);

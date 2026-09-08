@@ -24,8 +24,9 @@
  *  4. `orchestrator.init()`.
  *  5. `publishAgentBridge` on `globalThis.__slicc_agent` (worker-safe;
  *     no chrome.runtime).
- *  6. `registerSessionCostsProvider` — supplemental commands consult
- *     this for the `cost` shell command.
+ *  6. `registerSessionCostsProvider` (+ `registerSessionBudgetProvider`, the
+ *     provider's rolling allowance) — supplemental commands consult
+ *     these for the `cost` shell command.
  *  7. `LickManager.init()` + default lick-event handler (route via
  *     `formatLickEventForCone` to the cone or the named target scoop).
  *     Callers that need different routing (the standalone wizard's
@@ -564,10 +565,12 @@ async function initCostsAndLickManager(
   log: KernelHostLogger
 ): Promise<LickManager> {
   // 6. Register session-costs provider for the `cost` shell command.
-  const { registerSessionCostsProvider } = await import(
+  const { registerSessionBudgetProvider, registerSessionCostsProvider } = await import(
     '../shell/supplemental-commands/cost-command.js'
   );
   registerSessionCostsProvider((scope) => orchestrator.getSessionCostsForCommand(scope));
+  const { refreshBudgetWindow } = await import('../providers/budget-usage-source.js');
+  registerSessionBudgetProvider(() => refreshBudgetWindow());
 
   // 7. LickManager init + lick→cone routing.
   const { getLickManager } = await import('../scoops/lick-manager.js');

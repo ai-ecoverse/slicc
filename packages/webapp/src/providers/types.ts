@@ -7,6 +7,7 @@ import type {
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
 } from '@earendil-works/pi-ai';
+import type { ProviderBudgetWindow } from './provider-budget.js';
 
 /**
  * Opens a browser window/flow for the given authorize URL and returns the
@@ -324,6 +325,20 @@ export interface ProviderConfig {
   onValidateToken?: () => Promise<OAuthTokenValidation>;
   /** Return a valid access token, renewing only when it is expired or near expiry. */
   getValidAccessToken?: () => Promise<string>;
+  /**
+   * Optional: report the provider's rolling budget window — how much of a
+   * shared allowance this account has consumed, rather than what this session
+   * cost. Providers that meter per token omit it, and every cost surface keeps
+   * its `$` headline.
+   *
+   * Contract (the cache in `budget-window-cache.ts` retries the two cases on
+   * different clocks, so the distinction is load-bearing):
+   * - **`null`** — this provider has no budget concept, or its proxy does not
+   *   implement the endpoint. Probed again in half an hour.
+   * - **THROW** — the call itself failed (offline, 5xx, expired token). Retried
+   *   in five minutes, and the previous reading stays on screen meanwhile.
+   */
+  getBudgetUsage?: () => Promise<ProviderBudgetWindow | null>;
   /**
    * Optional: fetch and cache the provider's dynamic model list (and persist it
    * so cold consumers — e.g. the cloud cone's kernel worker reading localStorage

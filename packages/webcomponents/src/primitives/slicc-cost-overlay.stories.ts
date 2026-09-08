@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import './slicc-floatbar.js';
 import './slicc-cost-overlay.js';
+import type { CostOverlayBudget } from './slicc-cost-overlay.js';
 import type { SliccFloatbar } from './slicc-floatbar.js';
 
 const meta: Meta = {
@@ -144,6 +145,130 @@ export const HundredTwentyTwoAgents: Story = {
     el.scoops = liveScaleScoops();
     el.open = true;
     wrapper.appendChild(el);
+    return wrapper;
+  },
+};
+
+const budgetModels = () => [
+  { model: 'claude-opus-4-6', cost: 20.34, turns: 36, tokens: 5_400_000 },
+  { model: 'claude-sonnet-4-6', cost: 6.85, turns: 28, tokens: 1_900_000 },
+  { model: 'claude-haiku-4-5', cost: 1.87, turns: 41, tokens: 840_000 },
+];
+
+const budgetScoops = () => [
+  { name: 'sliccy', model: 'claude-opus-4-6', cost: 17.2, type: 'cone' as const },
+  { name: 'loose-ends', model: 'claude-sonnet-4-6', cost: 5.4, type: 'scoop' as const },
+  { name: 'review', model: 'claude-sonnet-4-6', cost: 3.62, type: 'scoop' as const },
+  { name: 'agent-memory-curator', model: 'claude-haiku-4-5', cost: 2.84, type: 'scoop' as const },
+];
+
+function budgetCard(budget: CostOverlayBudget): HTMLElement {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:relative;display:inline-block;margin:16px 0 0 100px;';
+  const el = document.createElement('slicc-cost-overlay');
+  el.models = budgetModels();
+  el.scoops = budgetScoops();
+  el.budget = budget;
+  el.total = 29.06;
+  el.open = true;
+  wrapper.appendChild(el);
+  return wrapper;
+}
+
+/**
+ * Budget mode, mid-window. The rolling window leads the card with the percent
+ * USED and a meter; BY MODEL / BY AGENT are unchanged below it, and the total
+ * row is relabelled "This session" — under a shared allowance those dollars
+ * are one session's share, not the total that decides whether work continues.
+ */
+export const BudgetStandalone: Story = {
+  render: () => budgetCard({ percent: 9.5, status: 'ok', resets: 'resets Sun 14 Sep' }),
+};
+
+/** Amber from 80% — the window, not the spend, is what changed color. */
+export const BudgetNearLimit: Story = {
+  render: () => budgetCard({ percent: 92, status: 'ok', resets: 'resets in 18h' }),
+};
+
+/**
+ * The provider is refusing calls. The rate-limited chip carries a word and a
+ * glyph, not just the rose bar: `--waffle`/`--rose` alone would not clear
+ * contrast on this surface.
+ */
+export const BudgetRateLimited: Story = {
+  render: () => budgetCard({ percent: 96, status: 'rate-limited', resets: 'resets in 18h' }),
+};
+
+/** An overrun window: the bar clamps at 100%, the figure reports 104%. */
+export const BudgetOverrun: Story = {
+  render: () => budgetCard({ percent: 104, status: 'rate-limited', resets: 'resets Mon 09:00' }),
+};
+
+/**
+ * The same session, both billing modes, side by side — metered on the left
+ * (today's card, unchanged) and budget on the right.
+ */
+export const DollarVsBudget: Story = {
+  render: () => {
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;gap:64px;padding:16px 24px 220px;align-items:flex-start;';
+
+    const column = (title: string, note: string, card: HTMLElement) => {
+      const col = document.createElement('div');
+      col.style.cssText = 'display:flex;flex-direction:column;gap:6px;max-width:340px;';
+      const h3 = document.createElement('h3');
+      h3.style.cssText = 'font:600 12px/1 var(--ui,system-ui);margin:0;color:var(--ink,#111);';
+      h3.textContent = title;
+      const p = document.createElement('p');
+      p.style.cssText = 'font:11px/1.4 var(--ui,system-ui);color:var(--txt-2,#666);margin:0;';
+      p.textContent = note;
+      col.append(h3, p, card);
+      return col;
+    };
+
+    const metered = document.createElement('div');
+    metered.style.cssText = 'position:relative;display:inline-block;';
+    const meteredCard = document.createElement('slicc-cost-overlay');
+    meteredCard.models = budgetModels();
+    meteredCard.scoops = budgetScoops();
+    meteredCard.total = 29.06;
+    meteredCard.open = true;
+    metered.appendChild(meteredCard);
+
+    const budget = document.createElement('div');
+    budget.style.cssText = 'position:relative;display:inline-block;';
+    const budgetEl = document.createElement('slicc-cost-overlay');
+    budgetEl.models = budgetModels();
+    budgetEl.scoops = budgetScoops();
+    budgetEl.total = 29.06;
+    budgetEl.budget = { percent: 9.5, status: 'ok', resets: 'resets Sun 14 Sep' };
+    budgetEl.open = true;
+    budget.appendChild(budgetEl);
+
+    root.append(
+      column('Metered', 'Dollars are the whole story; "Total" is the total.', metered),
+      column('Budget', 'The window leads; the same dollars survive as "This session".', budget)
+    );
+    return root;
+  },
+};
+
+/** Floatbar in budget mode with its card open — hover the % to reveal it. */
+export const FloatbarWithBudgetOverlay: Story = {
+  render: () => {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex;justify-content:flex-end;padding:16px 24px 320px;';
+
+    const fb = document.createElement('slicc-floatbar') as SliccFloatbar;
+    fb.label = 'npx';
+    fb.connection = 'live';
+    fb.floatKind = 'npx';
+    fb.trayRole = 'leader';
+    fb.spent = '29.06';
+    fb.budget = { percent: 63.2, status: 'ok', resets: 'resets in 3d' };
+    fb.costModels = budgetModels();
+    fb.costScoops = budgetScoops();
+    wrapper.appendChild(fb);
     return wrapper;
   },
 };

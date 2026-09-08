@@ -6,6 +6,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import type { MonitorSection } from '@slicc/webcomponents';
+import type { SessionBudgetWindow } from '../../../src/kernel/messages.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { MonitorHistory } from '../../../src/ui/wc/monitor-history.js';
 import {
@@ -13,6 +14,7 @@ import {
   buildVitals,
   fetchMonitorData,
   type MonitorDeps,
+  type MonitorSessionStats,
 } from '../../../src/ui/wc/wc-monitor.js';
 import { CONE_COLOR, scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
 
@@ -630,5 +632,183 @@ describe('buildAlerts', () => {
       ],
     });
     expect(alerts).toEqual([]);
+  });
+});
+
+describe('budget-mode cost surfaces', () => {
+  const NOW = Date.parse('2026-09-08T12:00:00.000Z');
+  const RESETS_IN_18H = new Date(NOW + 18 * 60 * 60 * 1000).toISOString();
+
+  const budget = (over: Partial<SessionBudgetWindow> = {}): SessionBudgetWindow => ({
+    percent: 9.5,
+    status: 'ok',
+    window: 'weekly',
+    resetsAt: RESETS_IN_18H,
+    providerId: 'adobe',
+    ...over,
+  });
+
+  const stats = (over: Partial<MonitorSessionStats> = {}): MonitorSessionStats => ({
+    totalCost: 29.06,
+    burnRate: 1.4,
+    models: [{ model: 'claude-opus-5', cost: 20.34 }],
+    scoops: [],
+    ...over,
+  });
+
+  const vitalsFor = (b?: SessionBudgetWindow) =>
+    buildVitals({
+      stats: stats(b ? { budget: b } : {}),
+      workingUnits: 1,
+      totalUnits: 2,
+      liveProcesses: 3,
+      terminated: 9,
+      now: NOW,
+    });
+
+  describe('vitals', () => {
+    it('makes the WINDOW the hero and demotes burn rate to a tile', () => {
+      const vitals = vitalsFor(budget());
+      const hero = vitals.find((vital) => vital.hero);
+      expect(hero).toMatchObject({ id: 'budget', value: '9.5', unit: '% used', ratio: 0.095 });
+      expect(hero?.foot).toBe('resets in 18h · $29.06 this session');
+      // Demoted, not deleted — a runaway scoop is still readable.
+      const burn = vitals.find((vital) => vital.id === 'burn');
+      expect(burn).toMatchObject({ hero: false, value: '$1.40' });
+      // Exactly one hero: the 48px figure only works if it is unique.
+      expect(vitals.filter((vital) => vital.hero)).toHaveLength(1);
+    });
+
+    it('keeps the row at four tiles by yielding the live-process tile', () => {
+      // The grid is four fixed columns; a fifth tile wraps at hero width. Live
+      // processes is the one vital the process table below repeats verbatim.
+      const metered = vitalsFor();
+      expect(metered.map((vital) => vital.id)).toEqual(['burn', 'load', 'processes']);
+      const budgeted = vitalsFor(budget());
+      expect(budgeted.map((vital) => vital.id)).toEqual(['budget', 'burn', 'load']);
+      expect(budgeted).toHaveLength(metered.length + 1 - 1);
+    });
+
+    it('escalates the hero accent as the window fills', () => {
+      const accentAt = (percent: number, status: 'ok' | 'rate-limited' = 'ok') =>
+        vitalsFor(budget({ percent, status }))[0].accent;
+      expect(accentAt(9.5)).toBe('green');
+      expect(accentAt(80)).toBe('amber');
+      expect(accentAt(95)).toBe('rose');
+      // A refusing provider is critical whatever the percent claims.
+      expect(accentAt(12, 'rate-limited')).toBe('rose');
+    });
+
+    it('clamps the meter at an overrun but keeps the figure honest', () => {
+      const [hero] = vitalsFor(budget({ percent: 104 }));
+      expect(hero.value).toBe('104');
+      expect(hero.ratio).toBe(1);
+    });
+
+    it('names the refusal ahead of the reset in the small print', () => {
+      const [hero] = vitalsFor(budget({ percent: 96, status: 'rate-limited' }));
+      expect(hero.foot).toBe('rate-limited · resets in 18h · $29.06 this session');
+    });
+
+    it('leaves every tile alone on a metered provider', () => {
+      const hero = vitalsFor().find((vital) => vital.hero);
+      expect(hero).toMatchObject({ id: 'burn', value: '$1.40', unit: '/hour' });
+    });
+  });
+
+  describe('cost group', () => {
+    const costSection = async (b?: SessionBudgetWindow) => {
+      const sections = await fetchSections(
+        makeDeps({ getSessionStats: async () => stats(b ? { budget: b } : {}) })
+      );
+      const cost = sections.find((section) => section.id === 'cost');
+      if (!cost) throw new Error('cost section missing');
+      return cost;
+    };
+
+    it('is named by the window, with the dollars behind it', async () => {
+      const cost = await costSection(budget());
+      expect(cost.meta).toBe('9.5% of weekly budget · $29.06 across 1 models');
+      expect(cost.status).toBe('active');
+      expect(cost.rows[0]).toMatchObject({ name: 'Weekly budget', meta: '9.5% used' });
+      expect(cost.rows[0].badges?.[0]).toMatch(/^resets in/);
+      // Per-model dollars keep their rows, below the window.
+      expect(cost.rows[1]).toMatchObject({ name: 'claude-opus-5', meta: '$20.3400' });
+    });
+
+    it('turns the group red when the provider is refusing calls', async () => {
+      const cost = await costSection(budget({ percent: 96, status: 'rate-limited' }));
+      expect(cost.status).toBe('error');
+      expect(cost.meta).toContain('rate-limited');
+      expect(cost.rows[0].meta).toBe('rate-limited · 96% used');
+    });
+
+    it('warns from the warn threshold', async () => {
+      const cost = await costSection(budget({ percent: 92 }));
+      expect(cost.status).toBe('warn');
+    });
+
+    it('reports only dollars on a metered provider', async () => {
+      const cost = await costSection();
+      expect(cost.meta).toBe('$29.06 across 1 models');
+      expect(cost.status).toBeUndefined();
+      expect(cost.rows[0]).toMatchObject({ name: 'claude-opus-5' });
+    });
+  });
+
+  describe('attention feed', () => {
+    const alertsFor = (b?: SessionBudgetWindow) =>
+      buildAlerts({
+        tray: { role: 'standalone', state: 'inactive' },
+        followers: [],
+        mounts: [],
+        oauthProviders: [],
+        budget: b,
+        now: NOW,
+      });
+
+    it('says nothing about a healthy window — the hero already reports it', () => {
+      expect(alertsFor(budget())).toEqual([]);
+      expect(alertsFor()).toEqual([]);
+    });
+
+    it('warns past the warn threshold, naming the reset as the age', () => {
+      const [alert] = alertsFor(budget({ percent: 92 }));
+      expect(alert).toMatchObject({
+        id: 'budget:near-limit',
+        severity: 'warn',
+        title: '92% of the weekly budget used',
+        age: 'resets in 18h',
+      });
+    });
+
+    it('errors past the critical threshold', () => {
+      expect(alertsFor(budget({ percent: 96 }))[0].severity).toBe('error');
+    });
+
+    it('reports a refusal as its own fact, not as a high number', () => {
+      // The percent a provider reports lags its refusal: a rate-limited window
+      // at 40% still stops work, and a quiet one at 92% does not.
+      const [alert] = alertsFor(budget({ percent: 40, status: 'rate-limited' }));
+      expect(alert).toMatchObject({
+        id: 'budget:rate-limited',
+        severity: 'error',
+        title: 'weekly budget is rate-limited',
+      });
+      expect(alert.detail).toContain('refusing calls');
+    });
+
+    it('sorts a refused window above a stalled follower', () => {
+      const alerts = buildAlerts({
+        tray: { role: 'standalone', state: 'inactive' },
+        followers: [],
+        mounts: [{ targetPath: '/mnt/photos', valid: false } as never],
+        oauthProviders: [],
+        budget: budget({ percent: 96, status: 'rate-limited' }),
+        now: NOW,
+      });
+      expect(alerts[0].severity).toBe('error');
+      expect(alerts[0].id).toBe('budget:rate-limited');
+    });
   });
 });

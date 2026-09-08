@@ -133,6 +133,11 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **Provider composition** (`docs/webapp-details.md`): pi-ai auto-discovered +
   `src/providers/built-in/` + `providers/`, merged pi-ai → `modelOverrides` → `getModelIds()`;
   build filter in `packages/dev-tools/providers.build.json`.
+- **Budget-mode cost surfaces** (`docs/webapp-details.md`): a provider on a rolling allowance
+  implements `getBudgetUsage()` and every cost surface headlines percent **USED** of the window
+  instead of `$`. `null` = no budget (30-min re-probe), THROW = failed call (5-min retry); the
+  facade attaches a cached snapshot and never awaits the network past a session's first pull.
+  No hook → today's `$` headline, untouched. `cost --json` is `{budget, scoops}`.
 
 ## VFS API Patterns
 

@@ -241,6 +241,31 @@ export interface SessionStatsMsg {
     type: 'cone' | 'scoop';
     source: 'live' | 'dropped' | 'frozen';
   }>;
+  /**
+   * The provider's rolling budget window, when it bills against one. Present
+   * only for a provider that reports `/v1/usage`; its absence is what keeps
+   * every `$` surface on its existing headline.
+   */
+  budget?: SessionBudgetWindow;
+}
+
+/**
+ * A rolling provider allowance as it crosses the kernel wire.
+ *
+ * `resetsAt` stays an ISO instant here — the UI formats it into copy at the
+ * edge, because a string like "resets in 18h" computed in the worker would be
+ * stale by the time the panel rendered it.
+ */
+export interface SessionBudgetWindow {
+  /** Percent of the allowance CONSUMED. Not clamped — an overrun is a fact. */
+  percent: number;
+  status: 'ok' | 'rate-limited';
+  /** Window name (`weekly`). */
+  window: string;
+  /** ISO-8601 instant the window turns over, when the provider names one. */
+  resetsAt?: string;
+  /** Provider the reading came from. */
+  providerId?: string;
 }
 
 export interface ClearChatMsg {

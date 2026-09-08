@@ -1,5 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import type { MonitorModel, MonitorSeries, MonitorVital, SliccMonitor } from './slicc-monitor.js';
+import type {
+  MonitorModel,
+  MonitorRow,
+  MonitorSection,
+  MonitorSeries,
+  MonitorVital,
+  SliccMonitor,
+} from './slicc-monitor.js';
 import './slicc-monitor.js';
 
 interface MonitorArgs {
@@ -589,4 +596,231 @@ export const ContextDistribution: Story = {
 /** Just the process table, at the size a busy session reaches. */
 export const ProcessTable: Story = {
   args: { model: { updated: 'Streaming', processes: processes() } },
+};
+
+// ---------------------------------------------------------------------------
+// Budget-mode cost surfaces
+//
+// Some providers do not meter per token: they hand out a rolling allowance —
+// Adobe's LLM proxy reports one 7-day window — and the number that decides
+// whether work continues this afternoon is how much of THAT is gone. Session
+// dollars stay true and stay on the panel, demoted out of the hero slot: a
+// family-priced model can bill $0.00 while the shared window burns down, so a
+// `$` hero would report "nothing is happening" during the hour that ends the
+// week's work.
+//
+// The convention, matching the provider's own `/v1/usage` payload, is percent
+// USED — never remaining. One direction on every surface.
+// ---------------------------------------------------------------------------
+
+/** The budget window as the panel's hero tile. `resets` copy is host-formatted. */
+function budgetHero(
+  percent: number,
+  opts: { accent: MonitorVital['accent']; foot: string }
+): MonitorVital {
+  return {
+    id: 'budget',
+    label: 'Weekly budget',
+    // A decimal below 10 and a whole number above it: 9.5 is the difference
+    // between "nothing yet" and "the morning cost a tenth of the week"; 63.2
+    // vs 63 is noise on a number that moves in whole units.
+    value: percent < 10 ? String(Number(percent.toFixed(1))) : String(Math.round(percent)),
+    unit: '% used',
+    hero: true,
+    // The bar clamps where the figure does not — an overrun window still
+    // reports 104%.
+    ratio: Math.min(1, percent / 100),
+    accent: opts.accent,
+    foot: opts.foot,
+  };
+}
+
+/**
+ * Vitals in budget mode: the window leads, burn rate keeps its sparkline as an
+ * ordinary tile. Demoted, not deleted — "$1.40/hour" is still the fastest way
+ * to see that a runaway scoop is eating the allowance.
+ *
+ * The row stays FOUR tiles wide. The grid is four fixed columns (`1.6fr 1fr
+ * 1fr 1fr`), so a fifth tile wraps onto a second row at hero width and the
+ * panel stops fitting without scrolling. Live processes is the tile that
+ * yields: it is the only vital repeated verbatim by a tier below (the process
+ * table's own row count), so losing it costs the panel nothing that is not
+ * still on screen.
+ */
+function budgetVitals(hero: MonitorVital): MonitorModel['vitals'] {
+  const rest = (vitals() ?? []).filter((vital) => vital.id !== 'processes');
+  const burn = rest.find((vital) => vital.id === 'burn');
+  if (burn) {
+    burn.hero = false;
+    burn.accent = 'rose';
+    burn.foot = '$29.06 this session';
+  }
+  return [hero, ...rest];
+}
+
+/** The cost group, headed by the window rather than by the dollar sum. */
+function budgetCostSection(meta: string, row: MonitorRow): MonitorSection {
+  const cost = (healthySections() ?? []).find((section) => section.id === 'cost');
+  if (!cost) throw new Error('cost section missing from healthySections()');
+  return {
+    ...cost,
+    meta,
+    status: row.status ?? 'active',
+    rows: [row, ...cost.rows],
+  };
+}
+
+function budgetSections(meta: string, row: MonitorRow): MonitorModel['sections'] {
+  return (healthySections() ?? []).map((section) =>
+    section.id === 'cost' ? budgetCostSection(meta, row) : section
+  );
+}
+
+const BUDGET_OK: MonitorModel = {
+  updated: 'Streaming · updated 2s ago',
+  vitals: budgetVitals(
+    budgetHero(9.5, { accent: 'green', foot: 'resets Sun 14 Sep · $29.06 this session' })
+  ),
+  alerts: [],
+  sections: budgetSections('9.5% of weekly budget · $29.06 across 4 models', {
+    name: 'Weekly budget',
+    sublabel: 'Adobe LLM proxy · rolling 7 days',
+    meta: '9.5% used',
+    badges: ['resets Sun 14 Sep'],
+    status: 'active',
+  }),
+  processes: processes(),
+};
+
+const BUDGET_NEAR_LIMIT: MonitorModel = {
+  updated: 'Streaming · updated 2s ago',
+  vitals: budgetVitals(
+    budgetHero(92, { accent: 'amber', foot: 'resets in 18h · $204.11 this session' })
+  ),
+  alerts: [
+    {
+      id: 'budget:weekly',
+      severity: 'warn',
+      icon: 'gauge',
+      title: '92% of the weekly budget used',
+      detail: 'Long runs may not finish before the window resets.',
+      age: 'resets in 18h',
+    },
+  ],
+  sections: budgetSections('92% of weekly budget · $204.11 across 4 models', {
+    name: 'Weekly budget',
+    sublabel: 'Adobe LLM proxy · rolling 7 days',
+    meta: '92% used',
+    badges: ['resets in 18h'],
+    status: 'warn',
+  }),
+  processes: processes(),
+};
+
+const BUDGET_RATE_LIMITED: MonitorModel = {
+  updated: 'Streaming · updated 2s ago',
+  vitals: budgetVitals(
+    budgetHero(96, { accent: 'rose', foot: 'rate-limited · resets in 18h · $204.11 this session' })
+  ),
+  alerts: [
+    {
+      id: 'budget:weekly',
+      severity: 'error',
+      icon: 'octagon-alert',
+      title: 'Weekly budget is rate-limited',
+      detail: 'The provider is refusing calls until the window resets. Queued work will fail.',
+      age: 'resets in 18h',
+    },
+  ],
+  sections: budgetSections('rate-limited · 96% of weekly budget used', {
+    name: 'Weekly budget',
+    sublabel: 'Adobe LLM proxy · rolling 7 days',
+    meta: 'rate-limited · 96% used',
+    badges: ['resets in 18h'],
+    status: 'error',
+  }),
+  processes: processes(),
+};
+
+/**
+ * A budget provider, mid-window. The hero is the allowance, not the spend:
+ * `9.5% used`, with the reset and the session dollars in the foot. Burn rate
+ * keeps its sparkline one tile over, and the Cost group leads with the window
+ * before its per-model dollars.
+ */
+export const BudgetMode: Story = {
+  args: { model: BUDGET_OK },
+};
+
+/**
+ * 92% through the window. Amber from 80% — carried by the meter, the alert
+ * copy AND the group's status word, never by color alone (`--amber` is 2.09:1
+ * on this surface).
+ */
+export const BudgetNearLimit: Story = {
+  args: { model: BUDGET_NEAR_LIMIT },
+};
+
+/**
+ * The provider has started refusing calls. This is a different fact from a
+ * high number — the reported percent lags the refusal, which is why 96% is
+ * rose here and 92% was amber above — so it earns an error in the attention
+ * feed rather than a warmer tint on the tile.
+ */
+export const BudgetRateLimited: Story = {
+  args: { model: BUDGET_RATE_LIMITED },
+};
+
+/**
+ * The two billing modes stacked, vitals only — the contrast the change is
+ * about.
+ *
+ * Top: a metered provider, unchanged, headlining `$1.40/hour`. Bottom: the
+ * same session on a budget provider, headlining `9.5% used` with burn rate
+ * demoted to an ordinary tile. Same tiles, same grid; only which one is 48px
+ * changes.
+ */
+export const HeadlineContrast: Story = {
+  render: () => {
+    const stage = document.createElement('main');
+    stage.style.cssText =
+      'width:100%;min-height:100vh;padding:24px;box-sizing:border-box;background:var(--bg);' +
+      'display:flex;flex-direction:column;gap:20px;';
+
+    const block = (title: string, note: string, model: MonitorModel) => {
+      const wrap = document.createElement('section');
+      wrap.style.cssText = 'width:min(1120px,100%);margin:0 auto;';
+      const heading = document.createElement('h3');
+      heading.style.cssText =
+        'font:600 12px/1 var(--ui,system-ui);margin:0 0 4px;color:var(--ink,#111);';
+      heading.textContent = title;
+      const p = document.createElement('p');
+      p.style.cssText =
+        'font:11px/1.4 var(--ui,system-ui);color:var(--txt-2,#666);margin:0 0 10px;';
+      p.textContent = note;
+      const frame = document.createElement('div');
+      frame.style.cssText =
+        'border:1px solid var(--line);border-radius:16px;overflow:hidden;' +
+        'box-shadow:var(--shadow-pane);box-sizing:border-box;';
+      const monitor = document.createElement('slicc-monitor') as SliccMonitor;
+      monitor.model = model;
+      frame.appendChild(monitor);
+      wrap.append(heading, p, frame);
+      return wrap;
+    };
+
+    stage.append(
+      block(
+        'Metered provider — today, unchanged',
+        'Per-token pricing: burn rate is the hero, session spend is its foot.',
+        { updated: 'Streaming · updated 2s ago', vitals: vitals(), alerts: [] }
+      ),
+      block(
+        'Budget provider — percent USED leads',
+        'A shared rolling window. Dollars can read $0.00 on family pricing while the allowance burns down, so the window is the hero and burn rate becomes an ordinary tile.',
+        { updated: 'Streaming · updated 2s ago', vitals: BUDGET_OK.vitals, alerts: [] }
+      )
+    );
+    return stage;
+  },
 };

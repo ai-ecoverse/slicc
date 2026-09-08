@@ -171,6 +171,42 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - Parse with `isFeatureEnabled`/`coerceFeatureFlagValue` (trimmed, case-insensitive `on`/`true`/`1`). With `overridableFloats`, precedence is local → remote → bundled. `experimental-settings` is worker-controlled (`userToggleable: false`).
 - `setupFeatureFlagsForPage` loads the isolated cache synchronously, then non-blocking `/api/flags?float=<float>` refresh; later config needs reload.
 
+## Budget-mode cost surfaces (`/v1/usage`)
+
+A provider that bills against a **rolling allowance** rather than per token makes session
+dollars the wrong headline: a family-priced model can bill $0.00 while the shared window burns
+down. Adobe's LLM proxy is the first case, reporting one 7-day window over `GET /v1/usage`
+(OpenCode Go's public shape, same IMS token as `/v1/messages`).
+
+- **Provider hook** — `ProviderConfig.getBudgetUsage?()` (`providers/types.ts`). Its contract is
+  a three-way answer, and the distinction is load-bearing for the cache: `null` = "this provider
+  has no budget concept / the proxy lacks the endpoint" (re-probed in 30 min), **throw** = "the
+  call failed" (retried in 5 min, previous reading stays on screen), a window = a reading.
+  Adobe's implementation is `providers/adobe-usage.ts` (pure + injectable `fetch`, so it is
+  testable — `providers/adobe.ts` itself cannot be imported under vitest); a 404/501 is an
+  answer, every other non-OK status is a failure.
+- **Cache** — `providers/budget-window-cache.ts`: success 60 s, failure 5 min, unsupported
+  30 min, one shared in-flight probe, keyed by provider id so a switched account never inherits
+  the previous one's allowance. `providers/budget-usage-source.ts` is the singleton over it.
+- **Wire** — `SessionStatsMsg.budget` (`kernel/messages.ts`), attached by `facade.ts` from the
+  SYNCHRONOUS snapshot; the refresh is fired and forgotten because the handler sits on the
+  request loop. The one exception is a session's FIRST pull, which waits up to
+  `FIRST_BUDGET_PROBE_MS` (2.5 s, under the panel's 5 s stats timeout) so a budget provider's
+  pill leads with its window instead of showing `$/h` and then flipping.
+- **Surfaces** — `ui/wc/wc-monitor.ts` (budget hero, demoted burn tile, Cost group named by the
+  window, warn/refusal alerts), `ui/wc/wc-live.ts` (floatbar `budget` property), and the `cost`
+  command via `registerSessionBudgetProvider` (registered beside the costs provider in
+  `orchestrator.ts` and `kernel/host.ts`).
+- **Conventions** (shared with `@slicc/webcomponents` — see `docs/webcomponents-details.md`):
+  percent **USED**, never remaining; the bar clamps at 100% where the figure does not;
+  `rate-limited` is critical whatever the percent says; reset copy is relative and locale-free
+  (`resets in 18h`), formatted at the reading edge from the ISO `resetsAt` on the wire.
+  `providers/provider-budget.ts` holds the parser, the thresholds and the copy — deliberately
+  duplicating the webcomponents formatter so the shell keeps a DOM-free copy, with
+  `tests/providers/provider-budget.test.ts` pinning the two together.
+- **`cost --json` is an envelope**: `{ "budget": <window|null>, "scoops": [ … ] }`, and it is now
+  parseable in the no-data case too (it used to answer with prose).
+
 ## Context Compaction
 
 - Path: `packages/webapp/src/core/context-compaction.ts`. `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus reserve (200K fallback when absent/zero). Cone memory appends to `/workspace/CLAUDE.md`; agentic budget covers the whole file, legacy restructuring only `## Auto-extracted`. `agentic-memory` on → compaction builds no memory (#2003); the curator owns it.

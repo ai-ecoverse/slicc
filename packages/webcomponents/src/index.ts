@@ -187,6 +187,20 @@ export {
   panelMetaOf,
   SliccPanel,
 } from './panel/slicc-panel.js';
+export {
+  BUDGET_CRITICAL_PERCENT,
+  BUDGET_WARN_PERCENT,
+  type BudgetLevel,
+  type BudgetStatus,
+  type BudgetUsage,
+  budgetHue,
+  budgetLevel,
+  budgetRatio,
+  budgetTipFragments,
+  budgetWindowLabel,
+  formatBudgetFigure,
+  formatBudgetPercent,
+} from './primitives/budget-usage.js';
 export type {
   FloatbarConnection,
   FloatbarFloatKind,
@@ -204,6 +218,7 @@ export {
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccBlobChip } from './primitives/slicc-blob-chip.js';
 export {
+  type CostOverlayBudget,
   type CostOverlayModel,
   type CostOverlayScoop,
   SliccCostOverlay,

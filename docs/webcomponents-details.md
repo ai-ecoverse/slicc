@@ -434,6 +434,54 @@ Non-obvious rules:
   spread alone leaves the nested array shared, so a caller splicing
   `monitor.model` markers would mutate component state.
 
+## Budget-mode cost surfaces (`budget-usage.ts`)
+
+Some providers do not meter per token: they hand out a rolling allowance —
+Adobe's LLM proxy reports one 7-day window over `GET /v1/usage` — and the only
+number that decides whether work continues is how much of THAT is gone. Session
+dollars stay true and stay on the surface, demoted: a family-priced model can
+bill $0.00 while the shared window burns down, so a `$` headline reports
+"nothing is happening" during the hour that ends the week.
+
+`primitives/budget-usage.ts` is the shared vocabulary — `BudgetUsage`
+(`percent`, `status`, `window`, `resets`), `budgetLevel()`, `budgetRatio()`,
+`formatBudgetFigure()`, `budgetTipFragments()`, `budgetHue()` — consumed by
+`<slicc-floatbar>` (`budget-percent` / `-status` / `-window` / `-resets`
+attributes, or the `budget` property) and `<slicc-cost-overlay>` (`budget`
+property). Both read the SAME module so a pill and its hover card can never
+disagree about what `9.5%` means.
+
+Rules that are load-bearing:
+
+- **Percent USED, never remaining**, matching the provider payload. One
+  direction on every surface: a rising number is a worsening one. A panel
+  headlining `9.5%` next to a pill headlining `90.5%` for the same instant is a
+  bug report waiting to be filed.
+- **No clock in the components.** `resets` is copy the HOST already formatted
+  (`resets Sun 14 Sep`), like `MonitorAlert.age`. A component that derives
+  "in 6d" from a timestamp renders differently every hour and cannot be
+  screenshotted or asserted.
+- **The bar clamps; the figure does not.** A provider reporting 104% has said
+  something true, and rounding it to 100 hides an overrun.
+- **`rate-limited` is critical whatever the percent says** — the reported
+  percent lags the refusal — and is carried by a WORD plus a glyph (the
+  floatbar swaps its gauge for an alert octagon, the overlay shows a chip):
+  `--waffle` is 2.09:1 on these surfaces, so tint alone would not clear
+  contrast.
+- **Thresholds live in one place:** `BUDGET_WARN_PERCENT` (80, amber) and
+  `BUDGET_CRITICAL_PERCENT` (95, rose). Below warn the floatbar segment stays
+  ink — a green number on every pill all week trains the eye to ignore the one
+  segment that has to be believed at 96%.
+- **Absence is the metered path.** No `budget-percent` / no `budget` object
+  means the `$/h` headline and the `Total` row render exactly as before; under
+  a budget the overlay's total row is relabelled `This session`.
+- **The monitor needs no new type.** A budget hero is an ordinary
+  `MonitorVital` (`value` + `unit: '% used'` + `ratio` + `foot`), which is why
+  the panel's budget stories are model-only. Budget mode keeps FOUR vitals
+  tiles — the grid is four fixed columns, so a fifth wraps at hero width — and
+  the tile that yields is Live processes, the one vital the process table below
+  already repeats.
+
 ## Compaction marker (`<slicc-compaction-marker>`)
 
 The transcript seam for one context-compaction round: a hairline rule broken by

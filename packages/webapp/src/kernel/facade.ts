@@ -16,6 +16,7 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
+import { getBudgetWindowSnapshot, refreshBudgetWindow } from '../providers/budget-usage-source.js';
 import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -60,6 +61,7 @@ import type {
   ScoopMessagesReplacedMsg,
   ScoopModelSelection,
   ScoopStatusMsg,
+  SessionBudgetWindow,
   SetScoopModelMsg,
   SetThinkingLevelMsg,
   SprinkleLickOrigin,
@@ -72,6 +74,13 @@ import { createOffscreenChromeRuntimeTransport } from './transport-chrome-runtim
 import type { KernelFacade, KernelTransport } from './types.js';
 
 const log = createLogger('kernel-bridge');
+
+/**
+ * How long the FIRST session-stats reply of a session waits on the budget
+ * probe. Under the panel's own 5s stats timeout with room to spare: a slow
+ * proxy costs one late counter, never a missing one.
+ */
+const FIRST_BUDGET_PROBE_MS = 2_500;
 
 interface FacadeLickManager {
   setForwarder(forwarder: ((event: ForwardedLickEvent) => void) | null): void;
@@ -1276,7 +1285,18 @@ export class Bridge implements KernelFacade {
     this.emit({ type: 'sudo-approval', requestId, decision });
   }
 
-  private handleRequestSessionStats(requestId: string): void {
+  /**
+   * Session stats: cost, burn rate, context fills — and the provider's rolling
+   * budget window when it bills against one.
+   *
+   * The budget is read from a CACHED snapshot and its refresh is fired and
+   * forgotten, because this handler sits on the request loop and a provider's
+   * network must never delay a counter. The one exception is the very first
+   * pull of a session: with nothing cached yet, the reply waits briefly for
+   * the probe so a budget provider's pill leads with its window instead of
+   * showing `$/h` for the first fifteen seconds and then flipping.
+   */
+  private async handleRequestSessionStats(requestId: string): Promise<void> {
     let totalCost = 0;
     let burnRate = 0;
     let fills: Array<{ jid: string; fill: number }> = [];
@@ -1310,7 +1330,38 @@ export class Bridge implements KernelFacade {
     } catch {
       // Stats are decorative — never fail the request loop over them.
     }
-    this.emit({ type: 'session-stats', requestId, totalCost, burnRate, fills, models, scoops });
+    const budget = await this.resolveBudgetWindow();
+    this.emit({
+      type: 'session-stats',
+      requestId,
+      totalCost,
+      burnRate,
+      fills,
+      models,
+      scoops,
+      ...(budget ? { budget } : {}),
+    });
+  }
+
+  /** True until the first budget probe of this session has been awaited. */
+  private budgetProbePending = true;
+
+  /**
+   * The window to report: the cached snapshot, or — on the first pull only —
+   * the probe itself, capped so a hung proxy cannot outlast the panel's own
+   * 5s stats timeout.
+   */
+  private async resolveBudgetWindow(): Promise<SessionBudgetWindow | undefined> {
+    if (this.budgetProbePending) {
+      this.budgetProbePending = false;
+      const first = await Promise.race([
+        refreshBudgetWindow().catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), FIRST_BUDGET_PROBE_MS)),
+      ]);
+      return first ?? undefined;
+    }
+    void refreshBudgetWindow().catch(() => null);
+    return getBudgetWindowSnapshot() ?? undefined;
   }
 
   private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {
@@ -1606,7 +1657,7 @@ export class Bridge implements KernelFacade {
         break;
 
       case 'request-session-stats':
-        this.handleRequestSessionStats(msg.requestId);
+        void this.handleRequestSessionStats(msg.requestId);
         break;
 
       case 'request-sudo-approval':

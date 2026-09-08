@@ -13,6 +13,7 @@ import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import type { RemoteTerminalView } from '../../kernel/remote-terminal-view.js';
 import { type SpawnedKernelHost, spawnKernelWorker } from '../../kernel/spawn.js';
+import { formatBudgetResets } from '../../providers/provider-budget.js';
 import { SessionStore as UiSessionStore } from '../../scoops/chat-session-store.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
@@ -634,9 +635,22 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
       const fb = wiring.refs.floatbar as HTMLElement & {
         costModels?: unknown;
         costScoops?: unknown;
+        budget?: unknown;
       };
       if (stats.models) fb.costModels = stats.models;
       if (stats.scoops) fb.costScoops = stats.scoops;
+      // A provider on a rolling allowance headlines the WINDOW instead of the
+      // rate; `spent` above stays set, demoted to the hover card and the tip.
+      // The reset is formatted here, at the edge — a string computed in the
+      // worker would be stale by the time the pill rendered it.
+      fb.budget = stats.budget
+        ? {
+            percent: stats.budget.percent,
+            status: stats.budget.status,
+            window: stats.budget.window,
+            resets: formatBudgetResets(stats.budget.resetsAt),
+          }
+        : null;
       wiring.fills.clear();
       for (const f of stats.fills) wiring.fills.set(f.jid, f.fill);
       // Through the ONE publisher, not a second projection of the same records:

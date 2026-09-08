@@ -1,5 +1,14 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
+import {
+  type BudgetUsage,
+  budgetHue,
+  budgetLevel,
+  budgetRatio,
+  budgetWindowLabel,
+  formatBudgetFigure,
+} from './budget-usage.js';
 
 export interface CostOverlayModel {
   model: string;
@@ -8,6 +17,15 @@ export interface CostOverlayModel {
   /** Total tokens (input + output + cache). Displayed as K/M shorthand. */
   tokens?: number;
 }
+
+/**
+ * The rolling provider budget this session draws on, when there is one.
+ *
+ * Re-exported shape, not a second vocabulary: {@link BudgetUsage} is what the
+ * floatbar hands down on hover, so the card and the pill can never disagree
+ * about what `9.5%` means.
+ */
+export type CostOverlayBudget = BudgetUsage;
 
 export interface CostOverlayScoop {
   name: string;
@@ -115,6 +133,71 @@ const STYLE = `
   border-bottom: none;
 }
 
+/* The budget block leads the card and owns the only figure in it. What
+   follows is a per-model / per-agent breakdown of the DOLLARS, which on a
+   shared allowance is detail: a family-priced model can bill $0.00 while the
+   window burns down. */
+.budget {
+  gap: 6px;
+}
+.budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.budget-figure {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--budget-hue, var(--ink));
+}
+.budget-used {
+  font-size: 11px;
+  color: var(--txt-2);
+}
+.budget-meter {
+  display: block;
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--budget-hue, var(--ink)) 16%, var(--canvas));
+  overflow: hidden;
+}
+.budget-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--budget-hue, var(--ink));
+}
+.budget-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--txt-2);
+  font-size: 11px;
+}
+/* Refusal is carried by a WORD and a glyph, never by the bar color alone —
+   --waffle is 2.09:1 on this surface. */
+.budget-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--rose) 14%, transparent);
+  color: var(--rose);
+  font-weight: 600;
+}
+.budget-flag svg {
+  display: block;
+  width: 11px;
+  height: 11px;
+}
+
 .section-title {
   font-size: 9px;
   text-transform: uppercase;
@@ -206,8 +289,12 @@ const SHEET = sheet(STYLE);
  * @property models - array of {@link CostOverlayModel} — per-model costs
  * @property scoops - array of {@link CostOverlayScoop} — per-scoop costs
  * @property total - optional cumulative total overriding the per-model sum
+ * @property budget - optional {@link CostOverlayBudget}; when set, the card
+ *   leads with the rolling window (percent USED + meter) and the dollar total
+ *   is relabelled "This session" — see {@link BudgetUsage}
  * @property open - boolean; reflects to/from the `open` attribute
  * @csspart bucket - an aggregate row for lower-cost agents
+ * @csspart budget - the leading budget block (present only in budget mode)
  */
 export class SliccCostOverlay extends HTMLElement {
   static readonly observedAttributes = ['open'];
@@ -216,6 +303,7 @@ export class SliccCostOverlay extends HTMLElement {
   #models: CostOverlayModel[] = [];
   #scoops: CostOverlayScoop[] = [];
   #total: number | null = null;
+  #budget: CostOverlayBudget | null = null;
 
   constructor() {
     super();
@@ -270,8 +358,75 @@ export class SliccCostOverlay extends HTMLElement {
     if (this.isConnected) this.#render();
   }
 
+  /**
+   * The rolling provider budget, or `null` on a metered provider. Setting it
+   * is what puts the card in budget mode; a percent that is not a finite
+   * number is treated as no budget at all rather than drawn as `NaN%`.
+   */
+  get budget(): CostOverlayBudget | null {
+    return this.#budget;
+  }
+
+  set budget(value: CostOverlayBudget | null) {
+    this.#budget = value && Number.isFinite(value.percent) ? value : null;
+    if (this.isConnected) this.#render();
+  }
+
+  /**
+   * The leading budget block: the figure, a meter, and the window's own small
+   * print. The bar clamps at 100%; the figure does NOT — a provider reporting
+   * 104% has said something true, and rounding it away hides an overrun.
+   */
+  #budgetSection(budget: CostOverlayBudget): HTMLElement {
+    const level = budgetLevel(budget);
+    const hue = budgetHue(level);
+    const rateLimited = budget.status === 'rate-limited';
+    return h(
+      'div',
+      {
+        class: 'section budget',
+        part: 'budget',
+        'data-budget-level': level,
+        'data-budget-status': budget.status ?? 'ok',
+        style: `--budget-hue:${hue}`,
+      },
+      h('div', { class: 'section-title' }, budgetWindowLabel(budget).toUpperCase()),
+      h(
+        'div',
+        { class: 'budget-head' },
+        h('span', { class: 'budget-figure' }, formatBudgetFigure(budget.percent)),
+        h('span', { class: 'budget-used' }, 'used')
+      ),
+      h(
+        'span',
+        { class: 'budget-meter' },
+        h('span', {
+          class: 'budget-meter__fill',
+          style: `width:${(budgetRatio(budget.percent) * 100).toFixed(1)}%`,
+        })
+      ),
+      h(
+        'div',
+        { class: 'budget-foot' },
+        h('span', { class: 'budget-resets' }, budget.resets ?? ''),
+        rateLimited
+          ? h(
+              'span',
+              { class: 'budget-flag' },
+              iconEl('octagon-alert', { size: 11 }),
+              'rate-limited'
+            )
+          : false
+      )
+    );
+  }
+
   #render(): void {
     const sections: Node[] = [];
+
+    // BUDGET block — first, because on a budget provider it is the answer to
+    // the question the card was opened to ask.
+    if (this.#budget) sections.push(this.#budgetSection(this.#budget));
 
     // BY MODEL section
     if (this.#models.length > 0) {
@@ -332,7 +487,9 @@ export class SliccCostOverlay extends HTMLElement {
       h(
         'div',
         { class: 'total-row' },
-        h('span', { class: 'total-label' }, 'Total'),
+        // "Total" is a lie under a budget block: the window above it is the
+        // total that matters, and this row is one session's dollars.
+        h('span', { class: 'total-label' }, this.#budget ? 'This session' : 'Total'),
         h('span', { class: 'total-cost' }, `$${total.toFixed(2)}`)
       )
     );

@@ -950,6 +950,64 @@ describe('Bridge handlePanelMessage', () => {
     expect(reply.payload.scoops).toEqual([]);
   });
 
+  it('carries the provider budget window on the stats reply', async () => {
+    const { clearBudgetWindowCache, refreshBudgetWindow } = await import(
+      '../../src/providers/budget-usage-source.js'
+    );
+    const providers = await import('../../src/providers/index.js');
+    const accounts = await import('../../src/providers/account-store.js');
+    clearBudgetWindowCache();
+    const provider = vi.spyOn(accounts, 'getSelectedProvider').mockReturnValue('adobe');
+    const spy = vi.spyOn(providers, 'getRegisteredProviderConfig').mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getBudgetUsage: async () => ({
+        percent: 9.5,
+        status: 'ok' as const,
+        window: 'weekly',
+        resetsAt: '2026-09-14T00:00:00.000Z',
+      }),
+    });
+
+    // The reply reads a CACHED snapshot — the request loop never waits on a
+    // provider's network past the first pull of a session — so warm it the way
+    // the 15s poll does before asserting.
+    await refreshBudgetWindow();
+    simulatePanelMessage({ type: 'request-session-stats', requestId: 'st-budget' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const reply = sentMessages.find(
+      (m: any) => m?.payload?.type === 'session-stats' && m.payload.requestId === 'st-budget'
+    ) as any;
+    expect(reply.payload.budget).toMatchObject({
+      percent: 9.5,
+      status: 'ok',
+      window: 'weekly',
+      resetsAt: '2026-09-14T00:00:00.000Z',
+    });
+    spy.mockRestore();
+    provider.mockRestore();
+    clearBudgetWindowCache();
+  });
+
+  it('omits the budget entirely for a provider that reports none', async () => {
+    // Absence is what keeps every metered surface on its `$` headline.
+    const { clearBudgetWindowCache } = await import('../../src/providers/budget-usage-source.js');
+    clearBudgetWindowCache();
+
+    simulatePanelMessage({ type: 'request-session-stats', requestId: 'st-nobudget' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const reply = sentMessages.find(
+      (m: any) => m?.payload?.type === 'session-stats' && m.payload.requestId === 'st-nobudget'
+    ) as any;
+    expect(reply.payload.budget).toBeUndefined();
+    expect('budget' in reply.payload).toBe(false);
+  });
+
   it('dispatches cone-create through the extracted handler', async () => {
     simulatePanelMessage({ type: 'cone-create', name: 'sliccy' });
     await new Promise((r) => setTimeout(r, 10));

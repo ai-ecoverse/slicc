@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/nav/slicc-nav.js';
+import type { SliccCostOverlay } from '../../src/primitives/slicc-cost-overlay.js';
 import { SliccFloatbar } from '../../src/primitives/slicc-floatbar.js';
 import type { SliccFollowerHud } from '../../src/primitives/slicc-follower-hud.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
@@ -695,5 +696,133 @@ describe('slicc-floatbar', () => {
       el.followers = rows();
       expect(el.shadowRoot?.querySelector('.tip')?.textContent).toContain('2 followers');
     });
+  });
+});
+
+describe('slicc-floatbar budget mode', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  const mount = (): SliccFloatbar => {
+    const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+    document.body.appendChild(el);
+    return el;
+  };
+
+  it('keeps the $/h headline when no budget is reported', () => {
+    const el = mount();
+    el.rate = '1.40';
+    expect(el.budget).toBeNull();
+    const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+    expect(spent.classList.contains('spent--budget')).toBe(false);
+    expect(spent.querySelector('.amount')?.textContent).toBe('$1.40/h');
+  });
+
+  it('replaces the headline with percent USED once a percent arrives', () => {
+    const el = mount();
+    el.rate = '1.40';
+    el.budgetPercent = 9.5;
+    const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+    expect(spent.classList.contains('spent--budget')).toBe(true);
+    expect(spent.querySelector('.amount')?.textContent).toBe('9.5%');
+    expect(spent.textContent).not.toContain('$');
+    expect(spent.getAttribute('part')?.split(' ')).toEqual(['spent', 'rate', 'budget']);
+  });
+
+  it('reflects budget attributes to the property bag and back', () => {
+    const el = mount();
+    el.budget = {
+      percent: 63.2,
+      status: 'rate-limited',
+      window: 'monthly',
+      resets: 'resets in 3d',
+    };
+    expect(el.getAttribute('budget-percent')).toBe('63.2');
+    expect(el.getAttribute('budget-status')).toBe('rate-limited');
+    expect(el.getAttribute('budget-window')).toBe('monthly');
+    expect(el.getAttribute('budget-resets')).toBe('resets in 3d');
+    expect(el.budget).toEqual({
+      percent: 63.2,
+      status: 'rate-limited',
+      window: 'monthly',
+      resets: 'resets in 3d',
+    });
+
+    el.budget = null;
+    expect(el.hasAttribute('budget-percent')).toBe(false);
+    expect(el.hasAttribute('budget-status')).toBe(false);
+    expect(el.budget).toBeNull();
+    expect((el.shadowRoot?.querySelector('.spent') as HTMLElement).classList).not.toContain(
+      'spent--budget'
+    );
+  });
+
+  it('ignores a non-numeric percent rather than rendering NaN%', () => {
+    const el = mount();
+    el.setAttribute('budget-percent', 'soon');
+    expect(el.budgetPercent).toBeNull();
+    expect(el.shadowRoot?.querySelector('.spent')?.textContent).toContain('$');
+  });
+
+  it('escalates ok → warn → critical as the window fills', () => {
+    const el = mount();
+    const level = () => (el.shadowRoot?.querySelector('.spent') as HTMLElement).dataset.budgetLevel;
+
+    el.budgetPercent = 9.5;
+    expect(level()).toBe('ok');
+    el.budgetPercent = 80;
+    expect(level()).toBe('warn');
+    el.budgetPercent = 95;
+    expect(level()).toBe('critical');
+  });
+
+  it('goes critical on a rate-limited window whatever the percent says', () => {
+    const el = mount();
+    el.budget = { percent: 12, status: 'rate-limited' };
+    const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+    expect(spent.dataset.budgetLevel).toBe('critical');
+    expect(spent.dataset.budgetStatus).toBe('rate-limited');
+  });
+
+  it('reports the overrun figure while the level stays critical', () => {
+    const el = mount();
+    el.budgetPercent = 104;
+    const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+    expect(spent.querySelector('.amount')?.textContent).toBe('104%');
+    expect(spent.dataset.budgetLevel).toBe('critical');
+  });
+
+  it('names the window and the refusal in the segment accessible label', () => {
+    const el = mount();
+    el.budget = { percent: 96, status: 'rate-limited', resets: 'resets in 18h' };
+    expect(el.shadowRoot?.querySelector('.spent')?.getAttribute('aria-label')).toBe(
+      '96% of weekly budget used · rate-limited · resets in 18h'
+    );
+  });
+
+  it('swaps the rate for the window in the collapsed-view tip, demoting spend', () => {
+    const el = mount();
+    el.rate = '1.40';
+    el.spent = '29.06';
+    el.budget = { percent: 9.5, resets: 'resets Sun 14 Sep' };
+    const tip = el.shadowRoot?.querySelector('.tip')?.textContent ?? '';
+    expect(tip).toContain('9.5% of weekly budget used');
+    expect(tip).toContain('resets Sun 14 Sep');
+    expect(tip).toContain('$29.06 this session');
+    expect(tip).not.toContain('$1.40/h');
+  });
+
+  it('hands the window down to the cost overlay on hover', () => {
+    const el = mount();
+    el.budget = { percent: 9.5, resets: 'resets Sun 14 Sep' };
+    (el.shadowRoot?.querySelector('.spent') as HTMLElement).dispatchEvent(
+      new MouseEvent('mouseenter')
+    );
+    const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay') as SliccCostOverlay;
+    expect(overlay).not.toBeNull();
+    expect(overlay.budget?.percent).toBe(9.5);
+    expect(overlay.shadowRoot?.querySelector('.budget')).not.toBeNull();
   });
 });

@@ -267,7 +267,9 @@ lick or `scoop_unmute` summaries), not because output files stopped changing.
 
 ## Inspecting delegation cost
 
-Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts.
+Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts as `{"budget": <window|null>, "scoops": [ ... ]}` — read the rows from `.scoops`.
+
+On a provider billing against a rolling allowance (rather than per token), `cost` leads with that budget: percent USED of the window and when it resets. That number, not the dollar total, is what says whether long runs will finish — the allowance is shared, so it can be most of the way gone before this session has cost a cent.
 
 Use `cost --all` only when you need the historical picture: it adds dropped scoops from the current runtime and frozen sessions recorded in `/sessions/index.json`. Combine it with `--json` for structured historical output. Legacy frozen sessions that predate cost persistence are retained with unknown cost rather than reported as zero.
 
