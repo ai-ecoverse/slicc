@@ -131,6 +131,17 @@ if ! BRIDGE_PORT="$(canonicalize_port "$BRIDGE_PORT_INPUT")"; then
 fi
 WRANGLER_PORT="${WRANGLER_PORT:-8787}"
 
+# Effective leader UI origin.
+# Default: the production hosted webapp (https://www.sliccy.ai) — no wrangler
+# needed, OAuth and IMS relays work out of the box.
+# Override: set WORKER_BASE_URL=http://localhost:8787 (or any wrangler URL) to
+# develop against a local worker build instead.
+EFFECTIVE_WORKER_BASE_URL="${WORKER_BASE_URL:-}"
+USE_HOSTED_ORIGIN=1
+if [ -n "$EFFECTIVE_WORKER_BASE_URL" ]; then
+	USE_HOSTED_ORIGIN=0
+fi
+
 # ── 1. Guard the bridge port ─────────────────────────────────────────
 if is_protected_port "$BRIDGE_PORT"; then
 	echo "❌  Bridge port :$BRIDGE_PORT is reserved for Chrome/Electron CDP and cannot be reaped" >&2
@@ -221,64 +232,71 @@ fi
 FRESH_PROFILE="$(mktemp -d)"
 echo "✔  Fresh profile: $FRESH_PROFILE"
 
-# ── 4. Wrangler config + leader UI build ─────────────────────────────
-# The local wrangler serves the SPA but is NOT the real OAuth relay.
-# Override GITHUB_CLIENT_ID → staging so the webapp picks up the correct
-# client ID, and TRAY_WORKER_BASE_URL_OVERRIDE → staging relay so the
-# runtime-config response points trayWorkerBaseUrl at the real relay
-# (not at the wrangler's own localhost origin).
+# ── 4. Leader UI origin ──────────────────────────────────────────────
 STAGING_WORKER="https://slicc-tray-hub-staging.minivelos.workers.dev"
 STAGING_GH_CLIENT_ID="Ov23liUe1b3b6GDjPGz4"
 
-# Build the leader UI (dist/ui) if missing — wrangler serves dist/ui via the
-# ASSETS binding with SPA fallback; when dist/ui/index.html is absent every
-# route 404s and the leader never loads. Build on demand (fast no-op when
-# present), hard-failing if the build does not produce it.
-if [ -f "${REPO_ROOT}/dist/ui/index.html" ]; then
-	echo "✔  Leader UI present (dist/ui/index.html)"
-else
-	echo "🏗  Building leader UI (npm run build -w @slicc/webapp)…"
-	npm run build -w @slicc/webapp
-	if [ ! -f "${REPO_ROOT}/dist/ui/index.html" ]; then
-		echo "❌  Leader UI build did not produce ${REPO_ROOT}/dist/ui/index.html"
-		exit 1
-	fi
-	echo "✔  Leader UI built (dist/ui/index.html)"
-fi
-
-
-# ── 4b. Reuse-or-start wrangler (UI / leader origin on :8787) ────────
 STARTED_WRANGLER=0
 WRANGLER_PID=""
-if wrangler_up; then
-	echo "✔  Reusing existing wrangler on :${WRANGLER_PORT} (not started by us)"
+
+if [ "$USE_HOSTED_ORIGIN" -eq 1 ]; then
+	# ── Default: use the production hosted webapp ─────────────────────
+	# https://www.sliccy.ai is the UI origin; the local node-server is only
+	# the CDP/API bridge. No wrangler needed. OAuth, IMS, and all provider
+	# relays work out of the box.
+	EFFECTIVE_WORKER_BASE_URL="https://www.sliccy.ai"
+	echo "✔  Using hosted origin: $EFFECTIVE_WORKER_BASE_URL"
 else
-	echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
-	npx wrangler dev \
-		--config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
-		--port "$WRANGLER_PORT" --ip 127.0.0.1 \
-		--var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" \
-		--var "TRAY_WORKER_BASE_URL_OVERRIDE:${STAGING_WORKER}" &
-	WRANGLER_PID=$!
-	STARTED_WRANGLER=1
-	for i in $(seq 1 30); do
-		if wrangler_up; then
-			echo "✔  Wrangler ready on :${WRANGLER_PORT}"
-			break
-		fi
-		if ! kill -0 "$WRANGLER_PID" 2>/dev/null; then
-			echo "❌  Wrangler exited before binding :${WRANGLER_PORT}"
-			echo "    If something else already holds that port, it is not the SLICC"
-			echo "    worker (/status did not identify it) — stop it or set WRANGLER_PORT."
+	# ── Opt-in: local wrangler dev server ────────────────────────────
+	# Use WORKER_BASE_URL=http://localhost:8787 to test a local worker build.
+	# The local wrangler serves the SPA but is NOT the real OAuth relay —
+	# IMS and GitHub OAuth will not work correctly from localhost origins.
+	echo "🌐  Using local worker origin: $EFFECTIVE_WORKER_BASE_URL"
+
+	# Build the leader UI — wrangler serves dist/ui via the ASSETS binding;
+	# when dist/ui/index.html is absent every route 404s.
+	if [ -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+		echo "✔  Leader UI present (dist/ui/index.html)"
+	else
+		echo "🏗  Building leader UI (npm run build -w @slicc/webapp)…"
+		npm run build -w @slicc/webapp
+		if [ ! -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+			echo "❌  Leader UI build did not produce ${REPO_ROOT}/dist/ui/index.html"
 			exit 1
 		fi
-		[ "$i" -eq 30 ] && {
-			echo "❌  Wrangler failed to start"
-			kill "$WRANGLER_PID" 2>/dev/null || true
-			exit 1
-		}
-		sleep 1
-	done
+		echo "✔  Leader UI built (dist/ui/index.html)"
+	fi
+
+	if wrangler_up; then
+		echo "✔  Reusing existing wrangler on :${WRANGLER_PORT} (not started by us)"
+	else
+		echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
+		npx wrangler dev \
+			--config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
+			--port "$WRANGLER_PORT" --ip 127.0.0.1 \
+			--var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" \
+			--var "TRAY_WORKER_BASE_URL_OVERRIDE:${STAGING_WORKER}" &
+		WRANGLER_PID=$!
+		STARTED_WRANGLER=1
+		for i in $(seq 1 30); do
+			if wrangler_up; then
+				echo "✔  Wrangler ready on :${WRANGLER_PORT}"
+				break
+			fi
+			if ! kill -0 "$WRANGLER_PID" 2>/dev/null; then
+				echo "❌  Wrangler exited before binding :${WRANGLER_PORT}"
+				echo "    If something else already holds that port, it is not the SLICC"
+				echo "    worker (/status did not identify it) — stop it or set WRANGLER_PORT."
+				exit 1
+			fi
+			[ "$i" -eq 30 ] && {
+				echo "❌  Wrangler failed to start"
+				kill "$WRANGLER_PID" 2>/dev/null || true
+				exit 1
+			}
+			sleep 1
+		done
+	fi
 fi
 
 # ── 5. Cleanup trap (kills ONLY our own processes) ───────────────────
@@ -301,11 +319,20 @@ trap cleanup EXIT INT TERM
 # ── 6. Start node-server thin-bridge ─────────────────────────────────
 echo "🔗  Starting thin-bridge on :${BRIDGE_PORT}…"
 echo ""
+# BRIDGE_DEV_ALLOWED_ORIGINS: add the wrangler origin when using a local worker
+# so the node-server accepts cross-origin /api requests from it. Empty string
+# for the hosted-origin mode — the node-server treats that as an empty set,
+# and https://www.sliccy.ai is already in the hard-coded BRIDGE_ALLOWED_ORIGINS.
+if [ "$USE_HOSTED_ORIGIN" -eq 0 ]; then
+	BRIDGE_DEV_ALLOWED_ORIGINS_VAL="$EFFECTIVE_WORKER_BASE_URL"
+else
+	BRIDGE_DEV_ALLOWED_ORIGINS_VAL=""
+fi
 CHROME_PATH="$CHROME_BIN" \
-	WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
+	WORKER_BASE_URL="$EFFECTIVE_WORKER_BASE_URL" \
 	SLICC_TRAY_WORKER_BASE_URL="${SLICC_TRAY_WORKER_BASE_URL:-https://slicc-tray-hub-staging.minivelos.workers.dev}" \
 	SLICC_CDP_LAUNCH_TIMEOUT_MS=30000 \
-	BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
+	BRIDGE_DEV_ALLOWED_ORIGINS="$BRIDGE_DEV_ALLOWED_ORIGINS_VAL" \
 	SLICC_USER_DATA_DIR="$FRESH_PROFILE" \
 	PORT="$BRIDGE_PORT" \
 	node "${REPO_ROOT}/dist/node-server/index.js" "$@" &

@@ -27,21 +27,28 @@ belong to the developer's production SLICC. Never bind, reap, or kill either
 port. The smoke-test lane uses bridge `:5715`; its Chrome CDP port is
 auto-resolved.
 
+### Default mode — hosted origin (recommended)
+
+Chrome opens `https://www.sliccy.ai` with a `?bridge=ws://localhost:5715/cdp`
+parameter that routes it back to the local node-server. No wrangler needed.
+OAuth, IMS (Adobe), and all provider relays work out of the box because they
+are hosted on the production origin.
+
 ```bash
 # 1. Record production listeners before doing anything else.
 PROD_BRIDGE_PIDS=$(lsof -nP -tiTCP:5710 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
 PROD_CDP_PIDS=$(lsof -nP -tiTCP:9222 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
 printf 'production preflight: :5710=%s :9222=%s\n' "${PROD_BRIDGE_PIDS:-none}" "${PROD_CDP_PIDS:-none}"
 
-# 2. Build the latest code (cherry regenerates worker bridge assets).
+# 2. Build only node-server (no webapp build required — UI loads from sliccy.ai).
 npm install
-npm run build -w @ai-ecoverse/cherry -w @slicc/webapp -w @slicc/node-server
+npm run build -w @slicc/node-server
 
-# 3. Launch — wrangler :8787, isolated bridge :5715, ephemeral profile.
+# 3. Launch — hosted origin, isolated bridge :5715, ephemeral profile.
 #    CHROME_PATH is optional; default is a labeled Chrome for Testing clone.
 export SLICC_HARNESS_LOG=/tmp/slicc-dev-harness-5715.log
 CHROME_PATH="/Applications/Google Chrome Canary.app" \
-  PORT=5715 WRANGLER_PORT=8787 \
+  PORT=5715 \
   nohup npm run dev:standalone:fresh > "$SLICC_HARNESS_LOG" 2>&1 &
 
 # 4. Wait for boot and export the auto-resolved CDP port from this lane's log.
@@ -55,6 +62,35 @@ POST_BRIDGE_PIDS=$(lsof -nP -tiTCP:5710 -sTCP:LISTEN 2>/dev/null | sort -n | pas
 POST_CDP_PIDS=$(lsof -nP -tiTCP:9222 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
 test "$POST_BRIDGE_PIDS" = "$PROD_BRIDGE_PIDS" && test "$POST_CDP_PIDS" = "$PROD_CDP_PIDS"
 ```
+
+The browser URL will be:
+
+```text
+https://www.sliccy.ai/?bridge=ws%3A%2F%2Flocalhost%3A5715%2Fcdp&bridgeToken=<token>…
+```
+
+`bridge=` connects the hosted UI back to the local node-server; `bridgeToken=`
+gates the bridge WebSocket. The UI is always served from `sliccy.ai` — the
+local process is only the CDP/API relay.
+
+### Alternate mode — local wrangler dev server
+
+Only needed when developing the Cloudflare worker itself. Set
+`WORKER_BASE_URL` to point at your local wrangler instance. **OAuth and IMS
+(Adobe) will not work from `localhost` origins** — use the hosted-origin mode
+for any provider login testing.
+
+```bash
+export SLICC_HARNESS_LOG=/tmp/slicc-dev-harness-5715.log
+CHROME_PATH="/Applications/Google Chrome Canary.app" \
+  PORT=5715 WORKER_BASE_URL=http://localhost:8787 \
+  nohup npm run dev:standalone:fresh > "$SLICC_HARNESS_LOG" 2>&1 &
+```
+
+This also starts wrangler on `:8787` (or reuses an existing one). A full
+build (`npm run build -w @ai-ecoverse/cherry -w @slicc/webapp -w
+@slicc/node-server`) is required beforehand so wrangler has `dist/ui/` to
+serve.
 
 Attach the console watcher before testing — a clean log at the end is part
 of the pass criteria. Reset the log first (it appends, so a stale error

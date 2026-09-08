@@ -135,34 +135,56 @@ const ADOBE_MODELS_KEY = 'slicc-adobe-models';
 function persistAdobeModels(models: EnrichedAdobeModel[]): void {
   try {
     localStorage.setItem(ADOBE_MODELS_KEY, JSON.stringify(models));
-  } catch {}
+  } catch {
+    // Intentionally swallowed: localStorage throws in private-browsing or
+    // when storage quota is full. The model list is always available from
+    // the in-memory cache; persistence is best-effort.
+  }
 }
 
 /**
- * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
- * Caches per endpoint so switching proxy URLs fetches fresh config.
- * Falls back to build-time adobeConfig values on failure.
+ * Attempt a single /v1/config fetch. Returns the parsed config on success,
+ * or `null` on any network or non-ok response (never throws).
  */
-async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
-  const cached = proxyConfigCache.get(proxyEndpoint);
-  if (cached) return cached;
+async function attemptFetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig | null> {
   try {
     const res = await fetch(`${proxyEndpoint}/v1/config`, {
       headers: { [SLICC_VERSION_HEADER]: __SLICC_VERSION__ },
     });
-    if (res.ok) {
-      const config = (await res.json()) as ProxyConfig;
-      proxyConfigCache.set(proxyEndpoint, config);
-      return config;
-    }
-    console.warn(
-      `[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`
-    );
+    if (res.ok) return (await res.json()) as ProxyConfig;
+    console.warn(`[adobe] Proxy /v1/config returned ${res.status}`);
+    return null;
   } catch (err) {
     console.warn(
       '[adobe] Failed to fetch proxy config:',
       err instanceof Error ? err.message : String(err)
     );
+    return null;
+  }
+}
+
+/**
+ * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
+ * Caches per endpoint so switching proxy URLs fetches fresh config.
+ * Retries once after a short delay to handle the transient Chrome SW
+ * initialisation race (the very first cross-origin fetch through a
+ * freshly-registered service worker can fail with ERR_FAILED before the SW
+ * has resolved the bridge config from the page's client URL).
+ * Falls back to build-time adobeConfig values when both attempts fail.
+ */
+async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
+  const cached = proxyConfigCache.get(proxyEndpoint);
+  if (cached) return cached;
+  let config = await attemptFetchProxyConfig(proxyEndpoint);
+  if (!config) {
+    // One retry after a short pause — enough for the SW to settle without
+    // making a real proxy outage noticeably slower to report.
+    await new Promise<void>((r) => setTimeout(r, 600));
+    config = await attemptFetchProxyConfig(proxyEndpoint);
+  }
+  if (config) {
+    proxyConfigCache.set(proxyEndpoint, config);
+    return config;
   }
   // ponytail: failures are intentionally NOT cached — a transient proxy blip
   // must not poison the session-level Map and block every subsequent retry.
@@ -462,7 +484,10 @@ export const config: ProviderConfig = {
         const models = JSON.parse(persisted) as EnrichedAdobeModel[];
         if (models.length) return models;
       }
-    } catch {}
+    } catch {
+      // Intentionally swallowed: stale/corrupt localStorage data — fall through
+      // to the default model list.
+    }
     // Default before any config is fetched
     return [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }];
   },
@@ -1003,12 +1028,19 @@ async function pumpAdobeStream(
         ...model,
         baseUrl: `${getProxyEndpoint()}/v1`,
         api: 'openai-completions' as Api,
+        // SAFETY: `compat` is a pi-ai internal field on OpenAI-completions models;
+        // it is not in the public Model<Api> type but IS present at runtime. We
+        // spread it to inherit existing compat flags before overriding Adobe ones.
         compat: {
           ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
           supportsStore: false,
           supportsDeveloperRole: false,
         },
       };
+      // SAFETY: proxyModel is structurally identical to Model<'openai-completions'>;
+      // we rebuilt it with the correct `api` literal and proxy `baseUrl`. The
+      // options cast is also safe: the caller always passes openai-shaped options
+      // to an openai-routed model, so narrowing to OpenAICompletionsOptions holds.
       const inner = streamOpenAICompletions(
         proxyModel as unknown as Model<'openai-completions'>,
         context,
@@ -1024,6 +1056,10 @@ async function pumpAdobeStream(
         baseUrl: getProxyEndpoint(),
         api: 'anthropic-messages' as Api,
       };
+      // SAFETY: proxyModel is structurally identical to Model<'anthropic-messages'>;
+      // we rebuilt it with the correct `api` literal and proxy `baseUrl`. The
+      // options cast is safe: the agent layer only sends anthropic-shaped options
+      // to an anthropic-routed model, so narrowing to AnthropicOptions holds.
       const inner = streamAnthropic(
         proxyModel as unknown as Model<'anthropic-messages'>,
         context,
@@ -1038,9 +1074,6 @@ async function pumpAdobeStream(
             ),
             'streamAdobe[anthropic]'
           )
-          // Same cross-vocabulary cast as the openai branch above: `options`
-          // arrives as the pi-ai-wide union; the agent layer only sends
-          // anthropic-shaped options to an anthropic-routed model.
         ) as unknown as AnthropicOptions
       );
       for await (const event of inner) stream.push(event);
@@ -1048,6 +1081,9 @@ async function pumpAdobeStream(
     stream.end();
   } catch (error) {
     logStreamError(error);
+    // SAFETY: makeErrorOutput returns a synthetic event that is structurally
+    // compatible with AssistantMessageEvent; the stream push only type-checks
+    // against the concrete event variant.
     stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
     stream.end();
   }
@@ -1075,12 +1111,17 @@ async function pumpSimpleAdobeStream(
         ...model,
         baseUrl: `${getProxyEndpoint()}/v1`,
         api: 'openai-completions' as Api,
+        // SAFETY: `compat` is a pi-ai internal field present at runtime on
+        // openai-completions models but absent from the public Model<Api> type.
         compat: {
           ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
           supportsStore: false,
           supportsDeveloperRole: false,
         },
       };
+      // SAFETY: proxyModel is structurally Model<'openai-completions'> with
+      // corrected api literal and proxy baseUrl. Options narrowing is safe:
+      // this branch is only taken for openai-shaped options.
       const inner = streamSimpleOpenAICompletions(
         proxyModel as unknown as Model<'openai-completions'>,
         context,
@@ -1096,6 +1137,9 @@ async function pumpSimpleAdobeStream(
         baseUrl: getProxyEndpoint(),
         api: 'anthropic-messages' as Api,
       };
+      // SAFETY: proxyModel is structurally Model<'anthropic-messages'> with
+      // corrected api literal and proxy baseUrl. Options narrowing is safe:
+      // this branch is only taken for anthropic-shaped options.
       const inner = streamSimpleAnthropic(
         proxyModel as unknown as Model<'anthropic-messages'>,
         context,
@@ -1118,6 +1162,8 @@ async function pumpSimpleAdobeStream(
     stream.end();
   } catch (error) {
     logStreamError(error);
+    // SAFETY: makeErrorOutput returns a synthetic event compatible with
+    // AssistantMessageEvent at runtime.
     stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
     stream.end();
   }
@@ -1156,8 +1202,14 @@ function buildPiAiModelMap(): Map<string, Model<Api>> {
   const modelMap = new Map<string, Model<Api>>();
   for (const provider of getProviders()) {
     try {
-      for (const m of getModels(provider) as unknown as Model<Api>[]) modelMap.set(m.id, m);
-    } catch {}
+      // SAFETY: getModels returns an untyped array; all registered provider
+      // models satisfy the Model<Api> structural shape at runtime.
+      const providerModels = getModels(provider) as unknown as Model<Api>[];
+      for (const m of providerModels) modelMap.set(m.id, m);
+    } catch {
+      // Intentionally swallowed: some providers may fail getModels if they are
+      // still loading or unregistered. Best-effort map build.
+    }
   }
   return modelMap;
 }
@@ -1177,6 +1229,9 @@ function buildAdobeModel(
   // known model in the same family (e.g. sonnet-4-6 for sonnet-5-0)
   // so the cost counter stays functional until pi-ai is bumped.
   const cost = findFamilyCost(pm.id, modelMap);
+  // SAFETY: the object literal above satisfies the structural shape of
+  // Model<Api>; the `as Api` tag ensures the discriminant matches the
+  // concrete model variant returned to callers.
   return {
     id: pm.id,
     name: pm.name ?? pm.id,
@@ -1243,6 +1298,8 @@ const modelsCache = new Map<string, Model<Api>[]>();
 /** Anthropic-registry models tagged as Adobe — the best-effort fallback when
  * the proxy `/v1/models` fetch fails. Intentionally NOT cached by callers. */
 function adobeAnthropicFallbackModels(): Model<Api>[] {
+  // SAFETY: getModels returns an untyped array at this pi-ai version;
+  // 'anthropic' models are structurally Model<Api> at runtime.
   const anthropicModels = getModels('anthropic') as unknown as Model<Api>[];
   return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
 }
@@ -1264,14 +1321,20 @@ export async function getAdobeModels(accessToken?: string): Promise<Model<Api>[]
 // ── Registration ────────────────────────────────────────────────────
 
 export function register(): void {
+  // pi-ai's StreamFunction<Api> type parameter is invariant, so provider-scoped
+  // stream functions require a cast to satisfy the generic slot.
   registerApiProvider({
     api: 'adobe-anthropic' as Api,
+    // SAFETY: streamAdobe matches the StreamFunction<Api> shape at runtime.
     stream: streamAdobe as unknown as StreamFunction<Api>,
+    // SAFETY: streamSimpleAdobe matches StreamFunction<Api, SimpleStreamOptions>.
     streamSimple: streamSimpleAdobe as unknown as StreamFunction<Api, SimpleStreamOptions>,
   });
   registerApiProvider({
     api: 'adobe-openai' as Api,
+    // SAFETY: streamAdobe matches the StreamFunction<Api> shape at runtime.
     stream: streamAdobe as unknown as StreamFunction<Api>,
+    // SAFETY: streamSimpleAdobe matches StreamFunction<Api, SimpleStreamOptions>.
     streamSimple: streamSimpleAdobe as unknown as StreamFunction<Api, SimpleStreamOptions>,
   });
 }
