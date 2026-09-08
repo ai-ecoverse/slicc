@@ -96,6 +96,13 @@ PKCE verifier to `https://openrouter.ai/api/v1/auth/keys`. The response is a
 permanent OpenRouter API key, not a short-lived access token, so it has no
 refresh flow or expiry.
 
+`packages/webapp/providers/openrouter-free.ts` reuses the same PKCE exchange
+(with `providerId: 'openrouter-free'`) but exposes only currently free models
+that accept text+image, emit text, and advertise `tools` / `temperature` /
+`top_p`. The free catalog is filtered from the shared `/api/v1/models` cache
+in `openrouter-models.ts`; OpenRouter's website-only `min_tool_success_rate`
+filter is not available on that endpoint and is omitted.
+
 ## Running a one-off interception from the shell
 
 ```bash

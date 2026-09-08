@@ -1,10 +1,9 @@
-import { OPENROUTER_MODELS } from '@earendil-works/pi-ai/providers/openrouter.models';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   fetchModels: vi.fn(),
   getApiKeyForProvider: vi.fn<() => string | null>(() => 'stored-oauth-key'),
-  getCatalog: vi.fn<() => unknown[]>(() => []),
+  getFreeCatalog: vi.fn<() => unknown[]>(() => []),
   loginIntercepted: vi.fn(),
   registerApiProvider: vi.fn(),
   saveOAuthAccount: vi.fn(),
@@ -29,8 +28,6 @@ vi.mock('../../src/ui/provider-settings.js', async (importOriginal) => ({
   saveOAuthAccount: mocks.saveOAuthAccount,
 }));
 
-// Keep the discovery assertion focused on the OpenRouter override. Loading every
-// unrelated provider here instruments their unexercised implementations.
 vi.mock('../../src/providers/built-in/azure-ai-foundry.js', () => ({ config: undefined }));
 vi.mock('../../src/providers/built-in/azure-openai.js', () => ({ config: undefined }));
 vi.mock('../../src/providers/built-in/bedrock-camp.js', () => ({ config: undefined }));
@@ -40,6 +37,7 @@ vi.mock('../../providers/cerebras.js', () => ({ config: undefined }));
 vi.mock('../../providers/github-copilot.js', () => ({ config: undefined }));
 vi.mock('../../providers/github.js', () => ({ config: undefined }));
 vi.mock('../../providers/openai-codex.js', () => ({ config: undefined }));
+vi.mock('../../providers/openrouter.js', () => ({ config: undefined }));
 vi.mock('../../providers/xai-grok-errors.js', () => ({ config: undefined }));
 vi.mock('../../providers/xai-grok-models.js', () => ({ config: undefined }));
 vi.mock('../../providers/xai-grok-sanitize.js', () => ({ config: undefined }));
@@ -47,12 +45,10 @@ vi.mock('../../providers/xai-grok.js', () => ({ config: undefined }));
 
 vi.mock('../../providers/openrouter-models.js', () => ({
   config: undefined,
+  FREE_ROUTER_FALLBACK: { id: 'openrouter/free', name: 'Free Models Router' },
   fetchModels: mocks.fetchModels,
-  getCatalog: mocks.getCatalog,
-  getFreeCatalog: () => [],
+  getFreeCatalog: mocks.getFreeCatalog,
 }));
-
-vi.mock('../../providers/openrouter-free.js', () => ({ config: undefined }));
 
 vi.mock('../../providers/openrouter-oauth.js', () => ({
   config: undefined,
@@ -60,39 +56,36 @@ vi.mock('../../providers/openrouter-oauth.js', () => ({
 }));
 
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
-import { config, register } from '../../providers/openrouter.js';
+import { config, register } from '../../providers/openrouter-free.js';
 import { getProviderConfig } from '../../src/providers/account-store.js';
-import { registerProviders } from '../../src/providers/index.js';
+import { registerProviderConfig, unregisterProviderConfig } from '../../src/providers/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiKeyForProvider.mockReturnValue('stored-oauth-key');
-  mocks.getCatalog.mockReturnValue([]);
+  mocks.getFreeCatalog.mockReturnValue([]);
 });
 
-describe('OpenRouter provider config', () => {
-  it('declares PKCE OAuth UI settings and a seeded default model', () => {
+describe('OpenRouter (Free) provider config', () => {
+  it('declares PKCE OAuth UI settings and the free-router default', () => {
     expect(config).toMatchObject({
-      id: 'openrouter',
-      name: 'OpenRouter',
+      id: 'openrouter-free',
+      name: 'OpenRouter (Free)',
       isOAuth: true,
       requiresApiKey: false,
       requiresBaseUrl: false,
-      defaultModelId: 'anthropic/claude-sonnet-4.6',
+      defaultModelId: 'openrouter/free',
       oauthTokenDomains: ['openrouter.ai', '*.openrouter.ai'],
     });
-    expect(config.description).toContain('PKCE');
-    expect(Object.hasOwn(OPENROUTER_MODELS, config.defaultModelId!)).toBe(true);
+    expect(config.description).toMatch(/free/i);
   });
 
-  it('delegates synchronous model discovery to the catalog module', () => {
-    const catalog = [
-      { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', api: 'openai' },
-    ];
-    mocks.getCatalog.mockReturnValue(catalog);
+  it('delegates synchronous model discovery to the free catalog', () => {
+    const catalog = [{ id: 'openrouter/free', name: 'Free Models Router', api: 'openai' }];
+    mocks.getFreeCatalog.mockReturnValue(catalog);
 
     expect(config.getModelIds!()).toEqual(catalog);
-    expect(mocks.getCatalog).toHaveBeenCalledOnce();
+    expect(mocks.getFreeCatalog).toHaveBeenCalledOnce();
   });
 
   it('exposes model refresh for hosted account prewarming', async () => {
@@ -100,15 +93,19 @@ describe('OpenRouter provider config', () => {
     expect(mocks.fetchModels).toHaveBeenCalledOnce();
   });
 
-  it('is auto-discovered and overrides the pi-ai fallback config', async () => {
-    await registerProviders();
-    expect(getProviderConfig('openrouter').isOAuth).toBe(true);
-    expect(getProviderConfig('openrouter').requiresApiKey).toBe(false);
+  it('registers as an OAuth provider config when added to the runtime registry', () => {
+    registerProviderConfig(config);
+    try {
+      expect(getProviderConfig('openrouter-free').isOAuth).toBe(true);
+      expect(getProviderConfig('openrouter-free').requiresApiKey).toBe(false);
+    } finally {
+      unregisterProviderConfig('openrouter-free');
+    }
   });
 });
 
-describe('OpenRouter OAuth hooks', () => {
-  it('refreshes and caches models after token storage and before success', async () => {
+describe('OpenRouter (Free) OAuth hooks', () => {
+  it('logs in under openrouter-free and refreshes before success', async () => {
     const order: string[] = [];
     const launcher = vi.fn();
     const options = { forceReauth: true };
@@ -124,52 +121,52 @@ describe('OpenRouter OAuth hooks', () => {
 
     await config.onOAuthLoginIntercepted!(launcher, () => order.push('success'), options);
 
-    expect(mocks.loginIntercepted).toHaveBeenCalledWith(launcher, expect.any(Function), options);
+    expect(mocks.loginIntercepted).toHaveBeenCalledWith(launcher, expect.any(Function), {
+      ...options,
+      providerId: 'openrouter-free',
+    });
     expect(order).toEqual(['login', 'stored', 'refresh', 'success']);
   });
 
   it('reports OAuth success when the best-effort model refresh rejects', async () => {
-    const launcher = vi.fn();
     const onSuccess = vi.fn();
     mocks.loginIntercepted.mockResolvedValue(undefined);
     mocks.fetchModels.mockRejectedValue(new Error('catalog unavailable'));
 
-    await expect(config.onOAuthLoginIntercepted!(launcher, onSuccess)).resolves.toBeUndefined();
-
-    expect(mocks.fetchModels).toHaveBeenCalledOnce();
+    await expect(config.onOAuthLoginIntercepted!(vi.fn(), onSuccess)).resolves.toBeUndefined();
     expect(onSuccess).toHaveBeenCalledOnce();
   });
 
   it('clears the stored OAuth token on logout', async () => {
     await config.onOAuthLogout!();
     expect(mocks.saveOAuthAccount).toHaveBeenCalledWith({
-      providerId: 'openrouter',
+      providerId: 'openrouter-free',
       accessToken: '',
     });
   });
 });
 
-describe('OpenRouter stream registration', () => {
+describe('OpenRouter (Free) stream registration', () => {
   function registeredProvider() {
     register();
     return mocks.registerApiProvider.mock.calls[0][0];
   }
 
   const model = {
-    id: 'anthropic/claude-sonnet-4.6',
-    provider: 'openrouter',
-    api: 'openrouter-openai',
+    id: 'openrouter/free',
+    provider: 'openrouter-free',
+    api: 'openrouter-free-openai',
   } as Model<Api>;
   const context = { messages: [] } as unknown as Context;
 
-  it('registers the synthetic OpenRouter API with both stream functions', () => {
+  it('registers the synthetic Free API with both stream functions', () => {
     const provider = registeredProvider();
-    expect(provider.api).toBe('openrouter-openai');
+    expect(provider.api).toBe('openrouter-free-openai');
     expect(provider.stream).toBeTypeOf('function');
     expect(provider.streamSimple).toBeTypeOf('function');
   });
 
-  it('delegates streaming with the stored key, base URL, and attribution headers', () => {
+  it('delegates streaming with the stored free-provider key and attribution', () => {
     const provider = registeredProvider();
     provider.stream(
       model as never,
@@ -180,6 +177,7 @@ describe('OpenRouter stream registration', () => {
       } as never
     );
 
+    expect(mocks.getApiKeyForProvider).toHaveBeenCalledWith('openrouter-free');
     expect(mocks.streamOpenAICompletions).toHaveBeenCalledWith(
       expect.objectContaining({
         id: model.id,
@@ -191,27 +189,6 @@ describe('OpenRouter stream registration', () => {
         apiKey: 'stored-oauth-key',
         headers: {
           'X-Custom': 'kept',
-          'HTTP-Referer': 'https://sliccy.ai',
-          'X-Title': 'SLICC',
-        },
-      })
-    );
-  });
-
-  it('preserves a caller/env-resolved key for simple streaming when no OAuth key is stored', () => {
-    mocks.getApiKeyForProvider.mockReturnValue(null);
-    const provider = registeredProvider();
-    provider.streamSimple(model as never, context as never, { apiKey: 'env-key' } as never);
-
-    expect(mocks.streamSimpleOpenAICompletions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        api: 'openai-completions',
-        baseUrl: 'https://openrouter.ai/api/v1',
-      }),
-      context,
-      expect.objectContaining({
-        apiKey: 'env-key',
-        headers: {
           'HTTP-Referer': 'https://sliccy.ai',
           'X-Title': 'SLICC',
         },

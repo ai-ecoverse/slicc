@@ -14,6 +14,12 @@ const FILTER_STORAGE_KEY = 'slicc.openrouter.modelFilter';
 const FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_PATTERNS = ['*'] as const;
 
+/** Per-token pricing strings returned by OpenRouter (`"0"` = free). */
+export interface OpenRouterPricing {
+  prompt?: string;
+  completion?: string;
+}
+
 /** Raw model returned by OpenRouter's /api/v1/models endpoint. */
 export interface OpenRouterModel {
   id: string;
@@ -30,6 +36,7 @@ export interface OpenRouterModel {
     is_moderated?: boolean;
   };
   supported_parameters?: string[];
+  pricing?: OpenRouterPricing;
 }
 
 /** Common shape shared by live entries and pi-ai's static seed models. */
@@ -44,7 +51,28 @@ export interface OpenRouterCatalogModel {
   maxTokens?: number;
   reasoning?: boolean;
   input?: readonly string[];
+  pricing?: OpenRouterPricing;
 }
+
+/** Capabilities required by the OpenRouter (Free) provider (API-enforceable). */
+export const FREE_AGENT_REQUIRED_PARAMS = ['tools', 'temperature', 'top_p'] as const;
+
+/** Cold-start fallback when neither live nor seed catalogs expose a free agent model. */
+export const FREE_ROUTER_FALLBACK: OpenRouterCatalogModel = {
+  id: 'openrouter/free',
+  name: 'Free Models Router',
+  context_length: 200_000,
+  architecture: {
+    modality: 'text+image->text',
+    input_modalities: ['text', 'image'],
+    output_modalities: ['text'],
+  },
+  top_provider: { max_completion_tokens: 16_384 },
+  supported_parameters: [...FREE_AGENT_REQUIRED_PARAMS, 'tool_choice'],
+  pricing: { prompt: '0', completion: '0' },
+};
+
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 
 export type OpenRouterModelMetadata = { id: string; name: string } & ModelMetadata;
 
@@ -136,10 +164,63 @@ export function toModelMetadata(model: OpenRouterCatalogModel): OpenRouterModelM
   };
 }
 
+function catalogSource(): readonly OpenRouterCatalogModel[] {
+  const cached = loadCache();
+  return liveCatalog ?? (cached.length > 0 ? cached : Object.values(OPENROUTER_MODELS));
+}
+
+/** True when OpenRouter reports zero prompt+completion pricing, or the id is a free variant. */
+export function isOpenRouterFreePriced(model: OpenRouterCatalogModel): boolean {
+  const pricing = model.pricing;
+  if (pricing) {
+    return Number(pricing.prompt ?? NaN) === 0 && Number(pricing.completion ?? NaN) === 0;
+  }
+  // Seed entries rarely carry pricing — treat OpenRouter's free-variant ids as free.
+  return model.id === 'openrouter/free' || model.id.endsWith(':free');
+}
+
+function hasAll(values: readonly string[] | undefined, required: readonly string[]): boolean {
+  if (!values) return false;
+  const set = new Set(values);
+  return required.every((item) => set.has(item));
+}
+
+/**
+ * Free multimodal tool-calling models suitable for a SLICC agent loop.
+ *
+ * Mirrors the OpenRouter UI filter of free + text/image input + text output +
+ * tools/temperature/top_p. `min_tool_success_rate` is website-only and is not
+ * available on `/api/v1/models`, so it is intentionally omitted.
+ */
+export function isFreeAgentCapableModel(model: OpenRouterCatalogModel): boolean {
+  if (!isOpenRouterFreePriced(model)) return false;
+  const inputs = model.architecture?.input_modalities ?? model.input ?? [];
+  const outputs = model.architecture?.output_modalities ?? ['text'];
+  return (
+    hasAll(inputs, ['text', 'image']) &&
+    hasAll(outputs, ['text']) &&
+    hasAll(model.supported_parameters, FREE_AGENT_REQUIRED_PARAMS)
+  );
+}
+
+function withFreeCost(metadata: OpenRouterModelMetadata): OpenRouterModelMetadata {
+  return { ...metadata, cost: { ...ZERO_COST } };
+}
+
 /** Synchronous catalog reader for ProviderConfig.getModelIds(). */
 export function getCatalog(): OpenRouterModelMetadata[] {
-  const cached = loadCache();
-  const source: readonly OpenRouterCatalogModel[] =
-    liveCatalog ?? (cached.length > 0 ? cached : Object.values(OPENROUTER_MODELS));
-  return filterModels(source, loadFilterPatterns()).map(toModelMetadata);
+  return filterModels(catalogSource(), loadFilterPatterns()).map(toModelMetadata);
+}
+
+/**
+ * Synchronous free-agent catalog for the OpenRouter (Free) provider.
+ * Falls back to `openrouter/free` when the live/seed catalog has no matches.
+ */
+export function getFreeCatalog(): OpenRouterModelMetadata[] {
+  const matched = catalogSource()
+    .filter(isFreeAgentCapableModel)
+    .map(toModelMetadata)
+    .map(withFreeCost);
+  if (matched.length > 0) return matched;
+  return [withFreeCost(toModelMetadata(FREE_ROUTER_FALLBACK))];
 }

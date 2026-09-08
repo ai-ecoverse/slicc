@@ -256,6 +256,7 @@ To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your ow
 - AWS Bedrock (because enterprise)
 - AWS Bedrock CAMP (this is Adobe-internal. Did I say "because enterprise" already?)
 - Anthropic
+- OpenRouter and OpenRouter (Free) — PKCE login; Free keeps only currently free vision+tools models from the live catalog
 
 The other providers are in YMMV territory. Please file an issue if you find them working or broken.
 
