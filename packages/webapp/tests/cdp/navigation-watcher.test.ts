@@ -376,6 +376,48 @@ describe('NavigationWatcher', () => {
     );
   });
 
+  it('does not claim a foreign session whose event lands before its own attach response', async () => {
+    // BrowserAPI attaches to the same tab while the watcher's attach is in
+    // flight, and Chrome reports the foreign session FIRST. Ownership must
+    // come from the watcher's own response, never from "first event wins".
+    await watcher.start();
+    const realSend = transport.send.bind(transport);
+    let answer: ((v: { sessionId: string }) => void) | null = null;
+    transport.send = async (method, params, sessionId) => {
+      if (method === 'Target.attachToTarget') {
+        return new Promise((r) => {
+          answer = r;
+        });
+      }
+      return realSend(method, params, sessionId);
+    };
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-1', type: 'page', attached: false, url: 'https://ex.com/' },
+    });
+    await tick();
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-browser-api',
+      targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
+    });
+    await tick();
+    transport.sentCommands.length = 0;
+
+    // Own event arrives, then the response names it.
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-own',
+      targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
+    });
+    await tick();
+    answer!({ sessionId: 'sess-own' });
+    await tick();
+
+    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-browser-api')).toHaveLength(
+      0
+    );
+    expect(transport.sentCommands.filter((c) => c.sessionId === 'sess-own')).toHaveLength(3);
+  });
+
   it('attaches to preexisting unattached targets and enables domains on them', async () => {
     transport.targetInfos = [
       { targetId: 'tab-pre', type: 'page', attached: false, url: 'https://ex.com/' },

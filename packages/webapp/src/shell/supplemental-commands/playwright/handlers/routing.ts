@@ -126,6 +126,16 @@ async function enableFetchInterception(
         sessionId,
         listeners: [['Fetch.requestPaused', handler]],
         enable: (t, s) => t.send('Fetch.enable', { patterns: FETCH_PATTERNS }, s),
+        // Re-enabling failed twice after a session reset: the mocks are NOT
+        // active, so stop advertising them — the next `route` re-initializes.
+        onDisarmed: (error) => {
+          state.routeCleanup.delete(targetId);
+          state.routes.delete(targetId);
+          log.warn('route capture disarmed after a session reset; re-run route', {
+            targetId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
       });
     } catch (err) {
       // `Fetch.enable` already landed. Leaving it on with nobody listening

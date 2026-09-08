@@ -58,6 +58,13 @@ export interface TabCaptureOptions {
    * swallowed: a tab that closed under us must not reject anything here.
    */
   enable?: (transport: CDPTransport, sessionId: string) => Promise<unknown>;
+  /**
+   * Called once when re-enabling the domain on a replacement session failed
+   * twice. The binding has already torn itself down (listeners removed, no
+   * further replacements followed) so the owner can drop its registration
+   * instead of reporting a capture that is silently inactive.
+   */
+  onDisarmed?: (error: unknown) => void;
 }
 
 export interface TabCaptureBinding {
@@ -68,6 +75,8 @@ export interface TabCaptureBinding {
   readonly sessionId: string;
   /** Transport the listeners are currently registered on. */
   readonly transport: CDPTransport;
+  /** False once re-enabling failed and the binding tore itself down. */
+  readonly armed: boolean;
   /** Remove the listeners and stop following session replacements. */
   stop(): void;
 }
@@ -86,9 +95,10 @@ export function onSessionReplaced(
  * CDP domains — bound to whatever session the tab has, across replacements.
  */
 export function bindTabCapture(opts: TabCaptureOptions): TabCaptureBinding {
-  const { browser, targetId, listeners, enable } = opts;
+  const { browser, targetId, listeners, enable, onDisarmed } = opts;
   let activeTransport = opts.transport;
   let activeSessionId = opts.sessionId;
+  let armed = true;
 
   const arm = (transport: CDPTransport): void => {
     for (const [event, listener] of listeners) {
@@ -102,18 +112,37 @@ export function bindTabCapture(opts: TabCaptureOptions): TabCaptureBinding {
 
   arm(activeTransport);
 
+  // Re-enable on the replacement session: once, then one retry. A capture
+  // whose domain could not be re-enabled must not look armed — `route` would
+  // report a mock that lets every request through — so on the second failure
+  // the binding tears itself down and tells its owner.
+  const reenable = async (transport: CDPTransport, sessionId: string): Promise<void> => {
+    if (!enable) return;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await enable(transport, sessionId);
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+      // The replacement may have been superseded meanwhile; stop retrying then.
+      if (sessionId !== activeSessionId || !armed) return;
+    }
+    if (sessionId !== activeSessionId || !armed) return;
+    armed = false;
+    unsubscribeReplaced();
+    disarm(activeTransport);
+    onDisarmed?.(lastError);
+  };
+
   const unsubscribeReplaced = onSessionReplaced(browser, targetId, (newSessionId, newTransport) => {
+    if (!armed) return;
     if (newTransport !== activeTransport) disarm(activeTransport);
     activeTransport = newTransport;
     activeSessionId = newSessionId;
     arm(activeTransport);
-    if (!enable) return;
-    try {
-      void Promise.resolve(enable(activeTransport, activeSessionId)).catch(() => undefined);
-    } catch {
-      // A synchronous throw from a duck-typed transport must not break the
-      // rebind — the listeners are already re-armed at this point.
-    }
+    void reenable(activeTransport, activeSessionId);
   });
 
   return {
@@ -123,7 +152,11 @@ export function bindTabCapture(opts: TabCaptureOptions): TabCaptureBinding {
     get transport(): CDPTransport {
       return activeTransport;
     },
+    get armed(): boolean {
+      return armed;
+    },
     stop(): void {
+      armed = false;
       unsubscribeReplaced();
       disarm(activeTransport);
     },

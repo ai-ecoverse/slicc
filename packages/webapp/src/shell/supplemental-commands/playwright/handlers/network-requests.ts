@@ -177,6 +177,11 @@ function ensureCapturing(
       ['Network.loadingFinished', onLoadingFinished],
     ],
     enable: (t, s) => t.send('Network.enable', {}, s),
+    // Re-enabling failed twice after a session reset: the next `requests`
+    // call must re-subscribe instead of reading a capture that went deaf.
+    onDisarmed: () => {
+      state.networkCleanup.delete(targetId);
+    },
   });
 
   state.networkCleanup.set(targetId, () => binding.stop());

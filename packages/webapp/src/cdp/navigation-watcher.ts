@@ -207,7 +207,21 @@ export class NavigationWatcher {
    * before it answers the command, so a pending target id is what identifies
    * that first event as ours.
    */
-  private readonly pendingAttachTargetIds = new Set<string>();
+  /**
+   * Targets with one of this watcher's `Target.attachToTarget` requests in
+   * flight, each with the session ids `Target.attachedToTarget` reported for
+   * that target meanwhile. Ownership is decided by the RESPONSE's session id,
+   * never by "first event for the target": a `BrowserAPI` attach to the same
+   * tab can land its event first, and claiming it would enable domains on a
+   * foreign session while our own real session stays unarmed.
+   */
+  private readonly pendingAttaches = new Map<string, Set<string>>();
+  /**
+   * Targets whose attach was answered WITHOUT a session id (a transport shim
+   * that does not echo one). Falls back to claiming the next
+   * `Target.attachedToTarget` for the target, as before.
+   */
+  private readonly unidentifiedAttaches = new Set<string>();
   /** Session ids Chrome bound to this watcher's own attach requests. */
   private readonly ownSessionIds = new Set<string>();
 
@@ -218,12 +232,10 @@ export class NavigationWatcher {
     const params = raw as TargetDetachedFromTargetParams;
     const sessionId = params.sessionId;
     if (!sessionId) return;
-    const state = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
     this.ownSessionIds.delete(sessionId);
-    // Release the target so a later `Target.targetCreated` for it can be
-    // attached again rather than being mistaken for a foreign session.
-    if (state) this.pendingAttachTargetIds.delete(state.targetId);
+    // A session that went away cannot be the answer to an unanswered attach.
+    for (const seen of this.pendingAttaches.values()) seen.delete(sessionId);
   };
   private readonly onTargetInfoChanged: CDPEventListener = (raw) => {
     const params = raw as TargetInfoChangedParams;
@@ -451,7 +463,7 @@ export class NavigationWatcher {
    * listeners does not bring them back. Without this the watcher sits at
    * `started = true` holding sessions Chrome has already discarded, handoff /
    * ARD discovery stops after the first reset, and a leftover entry in
-   * `pendingAttachTargetIds` can make a later foreign `BrowserAPI` session look
+   * `pendingAttaches` can make a later foreign `BrowserAPI` session look
    * watcher-owned (which re-enables `Page`/`Network` on it and re-opens the
    * event-amplification leak).
    *
@@ -479,7 +491,8 @@ export class NavigationWatcher {
   /** Drop everything that lived on the connection that just went away. */
   private clearConnectionScopedState(): void {
     this.sessions.clear();
-    this.pendingAttachTargetIds.clear();
+    this.pendingAttaches.clear();
+    this.unidentifiedAttaches.clear();
     this.ownSessionIds.clear();
   }
 
@@ -559,7 +572,7 @@ export class NavigationWatcher {
    * `Page`/`Network` on it — and only on it.
    *
    * `Target.attachedToTarget` normally arrives before the command response, so
-   * ownership is claimed first by target id (`pendingAttachTargetIds`) and then,
+   * ownership is decided by the attach RESPONSE's session id (`pendingAttaches` buffers events seen meanwhile) and then,
    * once the response lands, by session id (`ownSessionIds`).
    *
    * NOTE: SLICC's own leader tab is attached like any other page target. There
@@ -572,19 +585,34 @@ export class NavigationWatcher {
    * exactly the licks we want. Deliberately left unfiltered.
    */
   private async requestAttach(targetId: string, failureMessage: string): Promise<void> {
-    this.pendingAttachTargetIds.add(targetId);
+    const seen = new Set<string>();
+    this.pendingAttaches.set(targetId, seen);
     try {
       const result = (await this.transport.send('Target.attachToTarget', {
         targetId,
         flatten: true,
       })) as { sessionId?: string } | undefined;
       const sessionId = result?.sessionId;
+      if (this.pendingAttaches.get(targetId) !== seen) return; // reset meanwhile
+      this.pendingAttaches.delete(targetId);
       if (typeof sessionId === 'string' && sessionId.length > 0) {
         this.ownSessionIds.add(sessionId);
-        this.pendingAttachTargetIds.delete(targetId);
+        // Its event may already have arrived while the response was pending;
+        // arm it now. Any other session seen meanwhile was somebody else's.
+        if (seen.has(sessionId)) await this.enableOwnSession(sessionId);
+        return;
+      }
+      // No session id to correlate with: the first session reported for the
+      // target is the best available guess (pre-existing behaviour).
+      const first = seen.values().next().value;
+      if (first) {
+        this.ownSessionIds.add(first);
+        await this.enableOwnSession(first);
+      } else {
+        this.unidentifiedAttaches.add(targetId);
       }
     } catch (err) {
-      this.pendingAttachTargetIds.delete(targetId);
+      if (this.pendingAttaches.get(targetId) === seen) this.pendingAttaches.delete(targetId);
       log.debug(failureMessage, {
         targetId,
         error: err instanceof Error ? err.message : String(err),
@@ -592,41 +620,8 @@ export class NavigationWatcher {
     }
   }
 
-  /**
-   * Decide whether an attached session belongs to this watcher. A pending
-   * target id is consumed on the first matching session so a second, foreign
-   * attach to the same tab is not claimed as well.
-   */
-  private claimOwnSession(sessionId: string, targetId: string): boolean {
-    if (this.ownSessionIds.has(sessionId)) return true;
-    if (!this.pendingAttachTargetIds.has(targetId)) return false;
-    this.pendingAttachTargetIds.delete(targetId);
-    this.ownSessionIds.add(sessionId);
-    return true;
-  }
-
-  private async handleAttachedToTarget(params: TargetAttachedToTargetParams): Promise<void> {
-    const sessionId = params.sessionId;
-    const info = params.targetInfo;
-    if (!sessionId || !info || info.type !== 'page' || typeof info.targetId !== 'string') return;
-
-    this.sessions.set(sessionId, {
-      targetId: info.targetId,
-      rootFrameId: null,
-      title: info.title,
-      url: info.url,
-    });
-
-    // Enable the domains only on sessions this watcher asked for. `BrowserAPI`
-    // mints a fresh session per tab switch for `playwright-cli` and never
-    // detaches it; enabling `Page`/`Network` on those too made Chrome fan every
-    // event out once more per leaked session (measured: +16 inbound events per
-    // navigation per leaked session with the watcher versus +9 without —
-    // issue #2417). Foreign sessions stay in `this.sessions`, so a navigate
-    // lick still rides on them when their owner has `Network` enabled; we just
-    // stop adding to the amplification ourselves.
-    if (!this.claimOwnSession(sessionId, info.targetId)) return;
-
+  /** Enable the domains this watcher needs on one of ITS sessions. */
+  private async enableOwnSession(sessionId: string): Promise<void> {
     try {
       await this.transport.send('Page.enable', {}, sessionId);
       await this.transport.send('Network.enable', {}, sessionId);
@@ -645,6 +640,42 @@ export class NavigationWatcher {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  private async handleAttachedToTarget(params: TargetAttachedToTargetParams): Promise<void> {
+    const sessionId = params.sessionId;
+    const info = params.targetInfo;
+    if (!sessionId || !info || info.type !== 'page' || typeof info.targetId !== 'string') return;
+
+    this.sessions.set(sessionId, {
+      targetId: info.targetId,
+      rootFrameId: null,
+      title: info.title,
+      url: info.url,
+    });
+
+    // Enable the domains only on sessions this watcher asked for. `BrowserAPI`
+    // keeps its own session per tab for `playwright-cli`; enabling
+    // `Page`/`Network` on those too made Chrome fan every event out once more
+    // per session (issue #2417). Foreign sessions stay in `this.sessions`, so
+    // a navigate lick still rides on them when their owner has `Network`
+    // enabled; we just stop adding to the amplification ourselves.
+    if (this.ownSessionIds.has(sessionId)) {
+      await this.enableOwnSession(sessionId);
+      return;
+    }
+    // Our attach for this target is still unanswered: remember the session and
+    // let the response decide whose it is.
+    const seen = this.pendingAttaches.get(info.targetId);
+    if (seen) {
+      seen.add(sessionId);
+      return;
+    }
+    // Answered without a session id: claim the first session reported since.
+    if (this.unidentifiedAttaches.delete(info.targetId)) {
+      this.ownSessionIds.add(sessionId);
+      await this.enableOwnSession(sessionId);
     }
   }
 }

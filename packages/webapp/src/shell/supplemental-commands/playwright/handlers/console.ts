@@ -93,6 +93,11 @@ function ensureCapturing(
     sessionId,
     listeners: [['Runtime.consoleAPICalled', handler]],
     enable: (t, s) => t.send('Runtime.enable', {}, s),
+    // Re-enabling failed twice after a session reset: the next `console`
+    // call must re-subscribe instead of reading a capture that went deaf.
+    onDisarmed: () => {
+      state.consoleCleanup.delete(targetId);
+    },
   });
 
   state.consoleCleanup.set(targetId, () => binding.stop());

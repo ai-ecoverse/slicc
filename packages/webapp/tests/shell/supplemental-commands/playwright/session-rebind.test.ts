@@ -211,24 +211,59 @@ describe('bindTabCapture', () => {
     expect(t.count('Runtime.consoleAPICalled')).toBe(0);
   });
 
-  it('keeps the listeners armed when re-enabling the domain fails', () => {
+  it('keeps the listeners armed when the retry of re-enabling succeeds', async () => {
     const t = makeTransport();
     const { browser, replace } = makeBrowser();
-
-    bindTabCapture({
+    let calls = 0;
+    const onDisarmed = vi.fn();
+    const binding = bindTabCapture({
       browser,
       targetId: 'tab-1',
       transport: t.transport,
       sessionId: 'sess-1',
       listeners: [['Runtime.consoleAPICalled', vi.fn()]],
-      enable: () => Promise.reject(new Error('tab closed')),
+      enable: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('transient');
+      },
+      onDisarmed,
     });
 
-    expect(() => replace('sess-2', t.transport, 'tab-1')).not.toThrow();
+    replace('sess-2', t.transport, 'tab-1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(calls).toBe(2);
+    expect(binding.armed).toBe(true);
     expect(t.count('Runtime.consoleAPICalled')).toBe(1);
+    expect(onDisarmed).not.toHaveBeenCalled();
   });
 
-  it('survives an enable() that throws synchronously', () => {
+  it('disarms and reports when re-enabling keeps failing — a deaf capture must not look armed', async () => {
+    const t = makeTransport();
+    const { browser, replace } = makeBrowser();
+    const onDisarmed = vi.fn();
+    const binding = bindTabCapture({
+      browser,
+      targetId: 'tab-1',
+      transport: t.transport,
+      sessionId: 'sess-1',
+      listeners: [['Runtime.consoleAPICalled', vi.fn()]],
+      enable: async () => {
+        throw new Error('Fetch.enable rejected by the reset');
+      },
+      onDisarmed,
+    });
+
+    replace('sess-2', t.transport, 'tab-1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(binding.armed).toBe(false);
+    expect(t.count('Runtime.consoleAPICalled')).toBe(0);
+    expect(onDisarmed).toHaveBeenCalledTimes(1);
+    expect(String(onDisarmed.mock.calls[0][0])).toMatch(/rejected by the reset/);
+  });
+
+  it('survives an enable() that throws synchronously', async () => {
     const t = makeTransport();
     const { browser, replace } = makeBrowser();
 
@@ -245,6 +280,9 @@ describe('bindTabCapture', () => {
 
     expect(() => replace('sess-2', t.transport, 'tab-1')).not.toThrow();
     expect(binding.sessionId).toBe('sess-2');
-    expect(t.count('Runtime.consoleAPICalled')).toBe(1);
+    // Two synchronous throws count as two failed attempts: disarmed, not deaf.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(binding.armed).toBe(false);
+    expect(t.count('Runtime.consoleAPICalled')).toBe(0);
   });
 });
