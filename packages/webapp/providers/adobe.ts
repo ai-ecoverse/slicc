@@ -612,9 +612,22 @@ export const config: ProviderConfig = {
     const account = getAdobeAccount();
     if (account?.accessToken) {
       try {
-        const lastConfig = proxyConfigCache.values().next().value ?? {};
-        const clientId = lastConfig.clientId || adobeConfig.clientId;
-        const imsEnv = resolveImsEnvironment(lastConfig);
+        // Revocation must be aimed at the IMS env/client the token was minted
+        // for. Reading the first value out of `proxyConfigCache` returned
+        // whichever endpoint was fetched first this session — the stale one
+        // after a proxy switch, and nothing at all on a cold page (e.g. after a
+        // reload), which then fell back to the PRODUCTION IMS host. For an
+        // account on `stg1` that POSTed `/ims/revoke` to an IMS which never
+        // minted the token, so IMS refused it (warning only) and the access
+        // token stayed valid upstream while logout looked successful (#2939
+        // sibling). Resolve the account's OWN endpoint instead — fetching
+        // `/v1/config` when the cache is cold — and prefer the token's own
+        // `client_id` claim, which is the client the revoke is about (mirrors
+        // `validateAdobeToken`).
+        const proxyConfig = await resolveValidationConfig();
+        const clientId =
+          readTokenClientId(account.accessToken) || proxyConfig.clientId || adobeConfig.clientId;
+        const imsEnv = resolveImsEnvironment(proxyConfig);
         if (clientId) {
           const revRes = await fetch(`${imsHost(imsEnv)}/ims/revoke`, {
             method: 'POST',
