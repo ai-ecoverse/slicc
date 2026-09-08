@@ -34,6 +34,13 @@ parameter that routes it back to the local node-server. No wrangler needed.
 OAuth, IMS (Adobe), and all provider relays work out of the box because they
 are hosted on the production origin.
 
+> **Important:** in this mode the browser loads the **deployed production
+> webapp** from `sliccy.ai`, not your local checkout. Changes to
+> `packages/webapp/` are not exercised. Use this mode for:
+> smoke-testing the node-server bridge, provider login flows, tray and
+> scoops features, and CDP automation. Use the local-wrangler mode below
+> when you need to verify a webapp change end-to-end before deploying.
+
 ```bash
 # 1. Record production listeners before doing anything else.
 PROD_BRIDGE_PIDS=$(lsof -nP -tiTCP:5710 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
@@ -75,10 +82,14 @@ local process is only the CDP/API relay.
 
 ### Alternate mode — local wrangler dev server
 
-Only needed when developing the Cloudflare worker itself. Set
-`WORKER_BASE_URL` to point at your local wrangler instance. **OAuth and IMS
-(Adobe) will not work from `localhost` origins** — use the hosted-origin mode
-for any provider login testing.
+Use when you need to test a local **webapp** or **worker** change before
+deploying. Set `WORKER_BASE_URL` to a loopback URL; the port is derived from
+the URL automatically. **OAuth and IMS (Adobe) will not work from `localhost`
+origins** — use the hosted-origin mode for any provider login testing.
+
+For explicit non-loopback staging/alternate origins (e.g.
+`WORKER_BASE_URL=https://slicc-staging.example.workers.dev`), the script uses
+that URL directly without starting wrangler.
 
 ```bash
 export SLICC_HARNESS_LOG=/tmp/slicc-dev-harness-5715.log

@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-# dev:standalone:fresh — launch the two-service standalone harness
-# (wrangler UI + node-server thin-bridge) with a brand-new Chrome for
-# Testing profile. Fails fast when its bridge port is occupied and uses an
-# ephemeral profile so the session starts clean without disturbing concurrent
-# harnesses. Set SLICC_FRESH_REAP=1 to explicitly reap the bridge holder.
+# dev:standalone:fresh — launch the node-server thin-bridge with a brand-new
+# Chrome profile pointing at the leader UI origin. Fails fast when its bridge
+# port is occupied. Set SLICC_FRESH_REAP=1 to explicitly reap the holder.
+#
+# Default (recommended): UI loads from https://www.sliccy.ai — no wrangler
+# or webapp build needed. OAuth / IMS / GitHub relays work out of the box.
+#
+# Local-worker mode (worker development only): set WORKER_BASE_URL to a
+# loopback URL (e.g. http://localhost:8787). Wrangler is started at that
+# port and the webapp is served locally. OAuth will NOT work from localhost.
 #
 # Usage:
 #   npm run dev:standalone:fresh
-#   PORT=5720 npm run dev:standalone:fresh   # override bridge port
+#   PORT=5720 npm run dev:standalone:fresh
 #   CHROME_PATH="/Applications/Google Chrome Canary.app" npm run dev:standalone:fresh
-#                                            # launch your own browser instead
-#                                            # of Chrome for Testing
+#   WORKER_BASE_URL=http://localhost:8787 npm run dev:standalone:fresh  # local worker
 #
-# Prerequisites:
-#   - npm run build  (or at least webapp + node-server)
-#   - npx playwright install chromium
+# Prerequisites (hosted-origin default):
+#   - npm run build -w @slicc/node-server
+#   - npx playwright install chromium  (or set CHROME_PATH)
+#
+# Additional prerequisites for local-worker mode:
+#   - npm run build  (full build — webapp + node-server)
+#   - npx playwright install chromium  (or set CHROME_PATH)
 set -euo pipefail
 
 # Documented production bridge: valid when free, never eligible for automated reaping.
@@ -131,15 +139,39 @@ if ! BRIDGE_PORT="$(canonicalize_port "$BRIDGE_PORT_INPUT")"; then
 fi
 WRANGLER_PORT="${WRANGLER_PORT:-8787}"
 
-# Effective leader UI origin.
-# Default: the production hosted webapp (https://www.sliccy.ai) — no wrangler
-# needed, OAuth and IMS relays work out of the box.
-# Override: set WORKER_BASE_URL=http://localhost:8787 (or any wrangler URL) to
-# develop against a local worker build instead.
-EFFECTIVE_WORKER_BASE_URL="${WORKER_BASE_URL:-}"
-USE_HOSTED_ORIGIN=1
-if [ -n "$EFFECTIVE_WORKER_BASE_URL" ]; then
-	USE_HOSTED_ORIGIN=0
+# ── Classify the leader UI origin ────────────────────────────────────
+# Unset WORKER_BASE_URL → hosted origin (https://www.sliccy.ai), no wrangler.
+# Loopback WORKER_BASE_URL → local wrangler; wrangler port derived from URL.
+# Non-loopback WORKER_BASE_URL (staging, another hosted origin) → use directly,
+#   no wrangler started.
+url_host() { printf '%s' "$1" | sed -nE 's|^https?://([^/:]+).*|\1|p'; }
+url_port() { printf '%s' "$1" | sed -nE 's|^https?://[^/:]+:([0-9]+).*|\1|p'; }
+is_loopback_host() {
+	case "${1:-}" in localhost|127.0.0.1|"[::1]") return 0;; *) return 1;; esac
+}
+
+USE_LOCAL_WRANGLER=0
+if [ -z "${WORKER_BASE_URL:-}" ]; then
+	EFFECTIVE_WORKER_BASE_URL="https://www.sliccy.ai"
+elif is_loopback_host "$(url_host "$WORKER_BASE_URL")"; then
+	EFFECTIVE_WORKER_BASE_URL="$WORKER_BASE_URL"
+	USE_LOCAL_WRANGLER=1
+	# Derive the wrangler port from the URL; fail fast on a mismatch with an
+	# explicit WRANGLER_PORT override so the opened URL always matches what
+	# was started.
+	URL_PORT="$(url_port "$WORKER_BASE_URL")"
+	if [ -n "$URL_PORT" ]; then
+		if [ "${WRANGLER_PORT}" != "8787" ] && [ "$URL_PORT" != "$WRANGLER_PORT" ]; then
+			echo "❌  WORKER_BASE_URL port ($URL_PORT) conflicts with WRANGLER_PORT ($WRANGLER_PORT)" >&2
+			echo "    Either omit WRANGLER_PORT or set it to $URL_PORT." >&2
+			exit 1
+		fi
+		WRANGLER_PORT="$URL_PORT"
+	fi
+else
+	# Explicit non-loopback origin (staging, another hosted env, etc.) —
+	# use directly without starting wrangler.
+	EFFECTIVE_WORKER_BASE_URL="$WORKER_BASE_URL"
 fi
 
 # ── 1. Guard the bridge port ─────────────────────────────────────────
@@ -239,22 +271,11 @@ STAGING_GH_CLIENT_ID="Ov23liUe1b3b6GDjPGz4"
 STARTED_WRANGLER=0
 WRANGLER_PID=""
 
-if [ "$USE_HOSTED_ORIGIN" -eq 1 ]; then
-	# ── Default: use the production hosted webapp ─────────────────────
-	# https://www.sliccy.ai is the UI origin; the local node-server is only
-	# the CDP/API bridge. No wrangler needed. OAuth, IMS, and all provider
-	# relays work out of the box.
-	EFFECTIVE_WORKER_BASE_URL="https://www.sliccy.ai"
-	echo "✔  Using hosted origin: $EFFECTIVE_WORKER_BASE_URL"
-else
-	# ── Opt-in: local wrangler dev server ────────────────────────────
-	# Use WORKER_BASE_URL=http://localhost:8787 to test a local worker build.
-	# The local wrangler serves the SPA but is NOT the real OAuth relay —
-	# IMS and GitHub OAuth will not work correctly from localhost origins.
-	echo "🌐  Using local worker origin: $EFFECTIVE_WORKER_BASE_URL"
-
+if [ "$USE_LOCAL_WRANGLER" -eq 1 ]; then
+	# ── Local wrangler mode ──────────────────────────────────────────
 	# Build the leader UI — wrangler serves dist/ui via the ASSETS binding;
 	# when dist/ui/index.html is absent every route 404s.
+	echo "🌐  Using local wrangler origin: $EFFECTIVE_WORKER_BASE_URL (wrangler :${WRANGLER_PORT})"
 	if [ -f "${REPO_ROOT}/dist/ui/index.html" ]; then
 		echo "✔  Leader UI present (dist/ui/index.html)"
 	else
@@ -266,7 +287,6 @@ else
 		fi
 		echo "✔  Leader UI built (dist/ui/index.html)"
 	fi
-
 	if wrangler_up; then
 		echo "✔  Reusing existing wrangler on :${WRANGLER_PORT} (not started by us)"
 	else
@@ -297,6 +317,11 @@ else
 			sleep 1
 		done
 	fi
+else
+	# ── Hosted or explicit remote origin ───────────────────────────────
+	# UI loads from the remote origin; node-server is only the bridge.
+	# No wrangler, no local webapp build.
+	echo "✔  Using remote origin (no wrangler): $EFFECTIVE_WORKER_BASE_URL"
 fi
 
 # ── 5. Cleanup trap (kills ONLY our own processes) ───────────────────
@@ -323,7 +348,7 @@ echo ""
 # so the node-server accepts cross-origin /api requests from it. Empty string
 # for the hosted-origin mode — the node-server treats that as an empty set,
 # and https://www.sliccy.ai is already in the hard-coded BRIDGE_ALLOWED_ORIGINS.
-if [ "$USE_HOSTED_ORIGIN" -eq 0 ]; then
+if [ "$USE_LOCAL_WRANGLER" -eq 1 ]; then
 	BRIDGE_DEV_ALLOWED_ORIGINS_VAL="$EFFECTIVE_WORKER_BASE_URL"
 else
 	BRIDGE_DEV_ALLOWED_ORIGINS_VAL=""
