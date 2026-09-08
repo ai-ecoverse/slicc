@@ -180,6 +180,10 @@ on a Developer ID appex unless a profile for _that_ bundle id is embedded.
   `getModelIds`, not just Adobe. `findFamilyCost` inheritance is gated to Anthropic-API-routed
   models (`pm.api !== 'openai'`) so OpenAI-routed providers (local-llm, azure-openai) don't
   inherit Anthropic pricing for a Claude-style id; check that guard survives refactors.
+- OpenRouter (Free) (`providers/openrouter-free.ts`): catalog filter must reject any nonzero
+  pricing dimension (not just prompt/completion), and stream functions must refuse model IDs
+  absent from the current `getFreeCatalog()` so a stale cone selection cannot bill after a
+  reprice.
 - A pi-ai bump that adds new models — check if the new model's `thinkingLevelMap`, `cost`,
   and `reasoning` are correct. Also check for breaking API changes (e.g. function signature
   changes like `buildBaseOptions`).

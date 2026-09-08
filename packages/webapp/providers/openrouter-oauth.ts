@@ -85,12 +85,17 @@ export async function exchangeCodeForKey(
   return key;
 }
 
+export type OpenRouterLoginOptions = OAuthLoginOptions & {
+  /** Account/provider id to store the permanent key under (default: `openrouter`). */
+  providerId?: string;
+};
+
 export async function loginIntercepted(
   launcher: InterceptingOAuthLauncher,
   onSuccess: () => void,
-  options?: OAuthLoginOptions
+  options?: OpenRouterLoginOptions
 ): Promise<void> {
-  void options;
+  const providerId = options?.providerId ?? 'openrouter';
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await deriveCodeChallenge(codeVerifier);
   const captured = await launcher({
@@ -104,7 +109,7 @@ export async function loginIntercepted(
   // OpenRouter exchanges the OAuth code for a permanent API key, which has no
   // OAuth scope concept, so scopes intentionally remain unknown.
   await saveOAuthAccount({
-    providerId: 'openrouter',
+    providerId,
     accessToken: key,
     tokenExpiresAt: Number.MAX_SAFE_INTEGER,
     baseUrl: OPENROUTER_API_BASE_URL,

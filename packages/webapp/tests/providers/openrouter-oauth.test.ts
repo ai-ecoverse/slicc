@@ -119,6 +119,23 @@ describe('loginIntercepted', () => {
     expect(onSuccess).toHaveBeenCalledOnce();
   });
 
+  it('stores the permanent key under an alternate provider id when requested', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ key: 'sk-or-v1-free' }), { status: 200 }))
+    );
+    const launcher = vi.fn(async () => `${OPENROUTER_CALLBACK_URL}?code=oauth-code`);
+
+    await loginIntercepted(launcher, vi.fn(), { providerId: 'openrouter-free' });
+
+    expect(saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openrouter-free',
+        accessToken: 'sk-or-v1-free',
+      })
+    );
+  });
+
   it('does not exchange or save when the launcher is cancelled', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

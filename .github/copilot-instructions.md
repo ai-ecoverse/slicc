@@ -23,16 +23,17 @@ Validate CDP target + port before trusting them; handle disconnects.
 
 ## 5. Native / macOS permissions
 
-Native protected-resource access needs entitlements/usage descriptions, TCC checks,
-graceful denial. A File Provider appex must embed+sign every `@rpath` framework it
-links (host `Resources/` is invisible) and declare its transport's network entitlements.
-No `keychain-access-groups` on the macOS File Provider: that restricted entitlement needs
-an appex-specific Developer ID profile, else AMFI refuses launch (extensionKit error 2).
+Protected-resource access needs entitlements/usage descriptions, TCC checks,
+graceful denial. File Provider appexes must embed+sign every `@rpath` framework
+(host `Resources/` invisible) and declare transport network entitlements. No
+`keychain-access-groups` on the macOS File Provider — that restricted entitlement
+needs an appex-specific Developer ID profile, else AMFI refuses launch (error 2).
 
 ## 6. Model metadata / provider pipeline
 
-When model IDs or provider metadata change, verify reasoning, input, cost,
-thinking levels through discovery, enrichment, account storage, API effort mapping.
+Model ID/metadata changes: verify reasoning, input, cost, thinking through
+discovery→enrichment→storage→API. OpenRouter (Free): all pricing dims zero;
+stream refuses IDs not in the live free catalog.
 
 ## 7. Test coverage
 

@@ -106,7 +106,9 @@ Invariants a reviewer must catch; mechanism in the linked docs.
   sudo-fs Proxy advertises `MONKEYPATCH_UNSAFE_FS`; reassigning a gated method OOMs the worker.
 - **Provider quirks** (`docs/pitfalls.md`): attach the Adobe proxy's `X-Session-Id` at the call
   site (`ensureSessionIdHeader` is defense-in-depth). Claude Bedrock capability shims belong in
-  `providers/claude-model-version.ts`, never the call site.
+  `providers/claude-model-version.ts`, never the call site. OpenRouter (Free)
+  (`providers/openrouter-free.ts`) filters the shared OpenRouter catalog to currently free
+  vision+tools models — see `docs/oauth-intercept.md`.
 
 ## Key Conventions
 

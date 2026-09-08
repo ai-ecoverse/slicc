@@ -1,9 +1,14 @@
 import { OPENROUTER_MODELS } from '@earendil-works/pi-ai/providers/openrouter.models';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  FREE_ROUTER_FALLBACK,
   fetchModels,
   filterModels,
   getCatalog,
+  getFreeCatalog,
+  isFreeAgentCapableModel,
+  isModelInFreeCatalog,
+  isOpenRouterFreePriced,
   loadCache,
   loadFilterPatterns,
   type OpenRouterModel,
@@ -32,6 +37,26 @@ const liveModel: OpenRouterModel = {
   architecture: { input_modalities: ['text', 'image'] },
   top_provider: { max_completion_tokens: 32_000 },
   supported_parameters: ['tools', 'include_reasoning'],
+};
+
+const freeAgentModel: OpenRouterModel = {
+  id: 'vendor/free-vision:free',
+  name: 'Free Vision',
+  context_length: 128_000,
+  architecture: {
+    input_modalities: ['text', 'image'],
+    output_modalities: ['text'],
+  },
+  top_provider: { max_completion_tokens: 8_192 },
+  supported_parameters: ['tools', 'temperature', 'top_p', 'tool_choice'],
+  pricing: { prompt: '0', completion: '0' },
+};
+
+const paidVisionModel: OpenRouterModel = {
+  ...freeAgentModel,
+  id: 'vendor/paid-vision',
+  name: 'Paid Vision',
+  pricing: { prompt: '0.000001', completion: '0.000002' },
 };
 
 beforeEach(() => {
@@ -95,6 +120,86 @@ describe('OpenRouter mapping', () => {
       reasoning: false,
       input: ['text'],
     });
+  });
+});
+
+describe('OpenRouter free-agent filter', () => {
+  it('treats zero pricing and :free ids as free', () => {
+    expect(isOpenRouterFreePriced(freeAgentModel)).toBe(true);
+    expect(isOpenRouterFreePriced(paidVisionModel)).toBe(false);
+    expect(isOpenRouterFreePriced({ id: 'openrouter/free', name: 'Router' })).toBe(true);
+    expect(isOpenRouterFreePriced({ id: 'vendor/model:free', name: 'Tagged' })).toBe(true);
+    expect(isOpenRouterFreePriced({ id: 'vendor/model', name: 'Unknown' })).toBe(false);
+  });
+
+  it('rejects zero token prices when image or request charges are nonzero', () => {
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', image: '0.0001' },
+      })
+    ).toBe(false);
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', request: '0.01' },
+      })
+    ).toBe(false);
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', image: '0', request: '0', discount: 0 },
+      })
+    ).toBe(true);
+  });
+
+  it('requires free pricing, vision input, text output, and tool params', () => {
+    expect(isFreeAgentCapableModel(freeAgentModel)).toBe(true);
+    expect(isFreeAgentCapableModel(paidVisionModel)).toBe(false);
+    expect(
+      isFreeAgentCapableModel({
+        ...freeAgentModel,
+        architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+      })
+    ).toBe(false);
+    expect(
+      isFreeAgentCapableModel({
+        ...freeAgentModel,
+        architecture: { input_modalities: ['text', 'image'], output_modalities: ['audio'] },
+      })
+    ).toBe(false);
+    expect(
+      isFreeAgentCapableModel({
+        ...freeAgentModel,
+        supported_parameters: ['temperature', 'top_p'],
+      })
+    ).toBe(false);
+  });
+
+  it('returns only free agent models from the live cache with zero cost', () => {
+    saveCache([liveModel, freeAgentModel, paidVisionModel]);
+    expect(getFreeCatalog()).toEqual([
+      {
+        ...toModelMetadata(freeAgentModel),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+  });
+
+  it('falls back to the free router when nothing matches', () => {
+    saveCache([liveModel, paidVisionModel]);
+    expect(getFreeCatalog()).toEqual([
+      {
+        ...toModelMetadata(FREE_ROUTER_FALLBACK),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+  });
+
+  it('reports membership via isModelInFreeCatalog', () => {
+    saveCache([freeAgentModel]);
+    expect(isModelInFreeCatalog(freeAgentModel.id)).toBe(true);
+    expect(isModelInFreeCatalog('vendor/paid-elsewhere')).toBe(false);
   });
 });
 

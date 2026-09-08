@@ -1811,13 +1811,16 @@ When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
    Verify the inherited costs are reasonable. Once pi-ai is bumped, the real
    costs take over. **Cross-provider guard:** the `getProviderModels` branch is
    shared by _every_ provider that defines `getModelIds` (github, openrouter,
-   xai-grok, cerebras, local-llm, azure-openai, …), so inheritance is gated to
-   Anthropic-API-routed models (`pm.api !== 'openai'`). Adobe's Claude models
-   are anthropic-routed and still inherit; OpenAI-routed providers keep
-   `buildProviderRoutedModel`'s $0 default even for a Claude-style id — this
-   stops a local or free model literally named like a Claude family id (e.g. a
-   `local-llm` model called `claude-sonnet-6`) from inheriting real Anthropic
-   pricing. Reported cost (layer 2/3) still wins over the fallback either way.
+   openrouter-free, xai-grok, cerebras, local-llm, azure-openai, …), so
+   inheritance is gated to Anthropic-API-routed models (`pm.api !== 'openai'`).
+   Adobe's Claude models are anthropic-routed and still inherit; OpenAI-routed
+   providers keep `buildProviderRoutedModel`'s $0 default even for a Claude-style
+   id — this stops a local or free model literally named like a Claude family id
+   (e.g. a `local-llm` model called `claude-sonnet-6`) from inheriting real
+   Anthropic pricing. Reported cost (layer 2/3) still wins over the fallback
+   either way. OpenRouter (Free) additionally forces `$0` cost on its filtered
+catalog (`getFreeCatalog`) so picker totals stay free even if a seed entry
+   lacks pricing metadata.
 
 ## Thinking effort pipeline
 
