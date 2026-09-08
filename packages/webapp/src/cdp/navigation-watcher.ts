@@ -176,6 +176,11 @@ export interface NavigationWatcherOptions {
    * `KernelWorkerInitMsg.appPageUrl`, which the page sends at spawn — the
    * worker's own `self.location.href` is the worker SCRIPT url).
    *
+   * Consulted when the watcher decides whether to attach (target discovered,
+   * start-up enumeration, someone else's attach). A target skipped by it is
+   * re-tested on `Target.targetInfoChanged`, so a tab that later leaves the app
+   * URL is picked up rather than staying unwatched for good.
+   *
    * Absent → every page target is watched, which is the pre-#2417-follow-up
    * behaviour.
    */
@@ -277,6 +282,13 @@ export class NavigationWatcher {
   /** Tabs to ignore entirely — SLICC's own leader tab. Default: ignore nothing. */
   private readonly isOwnTab: (targetInfo: NavigationTargetInfo) => boolean;
   /**
+   * Page targets skipped as our own tab. Kept so that a tab which later leaves
+   * the app URL (a second SLICC tab the user navigates to a handoff page) is
+   * adopted on the `Target.targetInfoChanged` that reports the move, instead of
+   * staying unwatched for the rest of its life.
+   */
+  private readonly skippedOwnTargetIds = new Set<string>();
+  /**
    * Origins whose well-known locations have already been probed this session.
    * A site can advertise on every navigation, so we probe each origin at most
    * once (marked synchronously before the async probe to close the rapid-
@@ -317,6 +329,10 @@ export class NavigationWatcher {
         if (typeof info.title === 'string') state.title = info.title;
         if (typeof info.url === 'string') state.url = info.url;
       }
+    }
+    if (this.skippedOwnTargetIds.has(info.targetId) && !this.isOwnTabSafe(info)) {
+      this.skippedOwnTargetIds.delete(info.targetId);
+      void this.requestAttach(info.targetId, 'Failed to attach to a tab that left the app URL');
     }
   };
   private readonly onTargetCreated: CDPEventListener = (raw) => {
@@ -566,6 +582,10 @@ export class NavigationWatcher {
     this.sessions.clear();
     this.pendingAttachTargetIds.clear();
     this.ownSessionIds.clear();
+    // The re-enumeration on the replacement connection decides afresh which
+    // targets are ours, so carrying skip decisions across a reset would only
+    // let a stale one adopt a target twice.
+    this.skippedOwnTargetIds.clear();
   }
 
   /**
@@ -649,9 +669,20 @@ export class NavigationWatcher {
    * one unfiltered tab.
    */
   private skipOwnTab(targetInfo: NavigationTargetInfo, phase: string): boolean {
-    let own = false;
+    if (!this.isOwnTabSafe(targetInfo)) return false;
+    if (targetInfo.targetId) this.skippedOwnTargetIds.add(targetInfo.targetId);
+    log.debug('Skipping SLICC app tab', {
+      targetId: targetInfo.targetId,
+      url: targetInfo.url,
+      phase,
+    });
+    return true;
+  }
+
+  /** {@link NavigationWatcherOptions.isOwnTab}, with a throw read as `false`. */
+  private isOwnTabSafe(targetInfo: NavigationTargetInfo): boolean {
     try {
-      own = this.isOwnTab(targetInfo);
+      return this.isOwnTab(targetInfo);
     } catch (err) {
       log.debug('isOwnTab predicate threw; treating target as foreign', {
         targetId: targetInfo.targetId,
@@ -659,13 +690,6 @@ export class NavigationWatcher {
       });
       return false;
     }
-    if (!own) return false;
-    log.debug('Skipping SLICC app tab', {
-      targetId: targetInfo.targetId,
-      url: targetInfo.url,
-      phase,
-    });
-    return true;
   }
 
   /**

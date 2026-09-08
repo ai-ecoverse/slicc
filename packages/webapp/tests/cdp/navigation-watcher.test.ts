@@ -1264,6 +1264,54 @@ describe('NavigationWatcher own-tab exclusion', () => {
     );
   });
 
+  it('adopts a skipped tab once it navigates away from the app URL', async () => {
+    // A SECOND tab the user opened on the app URL and then pointed at a handoff
+    // page. Skipping it forever would drop exactly the lick we want.
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-2', type: 'page', attached: false, url: APP_URL },
+    });
+    await tick();
+    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
+
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-2', type: 'page', attached: false, url: HANDOFF_URL },
+    });
+    await tick();
+
+    const attached = transport.sentCommands
+      .filter((c) => c.method === 'Target.attachToTarget')
+      .map((c) => (c.params as { targetId?: string } | undefined)?.targetId);
+    expect(attached).toEqual(['tab-2']);
+
+    // ...and only once: a second info change must not re-request the attach.
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-2', type: 'page', attached: true, url: HANDOFF_URL },
+    });
+    await tick();
+    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toHaveLength(
+      1
+    );
+  });
+
+  it('does not adopt a skipped tab that only changed its query string', async () => {
+    const watcher = makeWatcher(ownTabOptions());
+    await watcher.start();
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
+    });
+    await tick();
+    transport.emit('Target.targetInfoChanged', {
+      targetInfo: { targetId: 'tab-leader', type: 'page', url: 'https://www.sliccy.ai/?ui=wc' },
+    });
+    await tick();
+
+    expect(transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget')).toEqual([]);
+  });
+
   it('keeps skipping the leader tab after an upstream reset re-enumerates targets', async () => {
     transport.targetInfos = [
       { targetId: 'tab-leader', type: 'page', attached: false, url: APP_URL },
