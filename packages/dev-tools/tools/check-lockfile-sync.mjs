@@ -52,6 +52,13 @@ export function exactVersion(spec) {
  * Prefers the package-local `<dir>/node_modules/<dep>` copy, then the hoisted
  * root one, mirroring npm's own resolution: with two workspaces on different
  * versions only one of them can be hoisted.
+ *
+ * Deliberately does NOT fall back to an arbitrary nested copy the way
+ * `patch-reconcile/lib.mjs` → `lockedVersion()` does. That helper answers "what
+ * version of this package is installed anywhere", for a patch that may be
+ * applied to a transitive dependency. This one answers "what will THIS package
+ * resolve to", and any other location is not that package's copy — reporting it
+ * as missing is the honest answer, and still fails.
  */
 export function resolvedVersion(lock, dir, dep) {
   const packages = lock?.packages ?? {};
