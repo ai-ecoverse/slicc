@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
+import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
   deleteServer,
@@ -15,6 +16,22 @@ import {
   writeServersFile,
 } from '../../../src/shell/mcp/store.js';
 import type { McpServerEntry } from '../../../src/shell/mcp/types.js';
+
+function faultingMcpFs(code: 'ENOENT' | 'EIO' | 'EACCES') {
+  const writes: string[] = [];
+  return {
+    writes,
+    fs: {
+      async readFile(): Promise<string> {
+        throw new FsError(code, `${code} reading MCP registry`, MCP_STORE_PATH);
+      },
+      async writeFile(_path: string, content: string | Uint8Array): Promise<void> {
+        writes.push(typeof content === 'string' ? content : 'binary');
+      },
+      async mkdir(): Promise<void> {},
+    },
+  };
+}
 
 describe('mcp store', () => {
   beforeEach(async () => {
@@ -188,5 +205,50 @@ describe('mcp store', () => {
     await setServer('no-auth', { url: 'https://b.example' });
     const all = await readMcpAuthEntries();
     expect(all.map((e) => e.name)).toEqual(['with-auth']);
+  });
+});
+
+describe('mcp store read-modify-write faults', () => {
+  it('readServersFile treats ENOENT as empty and does not write', async () => {
+    const { fs, writes } = faultingMcpFs('ENOENT');
+    await expect(readServersFile(fs)).resolves.toEqual({ version: 1, servers: {} });
+    expect(writes).toEqual([]);
+  });
+
+  it('readServersFile treats invalid JSON as empty', async () => {
+    const writes: string[] = [];
+    const fs = {
+      async readFile(): Promise<string> {
+        return 'not json at all';
+      },
+      async writeFile(_path: string, content: string | Uint8Array): Promise<void> {
+        writes.push(typeof content === 'string' ? content : 'binary');
+      },
+      async mkdir(): Promise<void> {},
+    };
+    await expect(readServersFile(fs)).resolves.toEqual({ version: 1, servers: {} });
+    expect(writes).toEqual([]);
+  });
+
+  it('setServer from ENOENT writes the new entry onto an empty registry', async () => {
+    const { fs, writes } = faultingMcpFs('ENOENT');
+    await setServer('foo', { url: 'https://foo.example' }, fs);
+    expect(writes).toHaveLength(1);
+    const payload = JSON.parse(writes[0]) as { servers: Record<string, { url: string }> };
+    expect(payload.servers.foo.url).toBe('https://foo.example');
+  });
+
+  it('setServer propagates a non-ENOENT FsError and does not truncate the registry', async () => {
+    const { fs, writes } = faultingMcpFs('EIO');
+    await expect(setServer('foo', { url: 'https://foo.example' }, fs)).rejects.toThrow(
+      'EIO reading MCP registry'
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it('deleteServer propagates a non-ENOENT FsError and does not truncate the registry', async () => {
+    const { fs, writes } = faultingMcpFs('EACCES');
+    await expect(deleteServer('foo', fs)).rejects.toThrow('EACCES reading MCP registry');
+    expect(writes).toEqual([]);
   });
 });

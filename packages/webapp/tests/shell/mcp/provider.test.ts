@@ -27,6 +27,7 @@ vi.mock('../../../src/providers/oauth-service.js', async (importOriginal) => {
   };
 });
 
+import { FsError } from '../../../src/fs/types.js';
 import {
   getRegisteredProviderConfig,
   unregisterProviderConfig,
@@ -55,7 +56,7 @@ function makeFakeFsModule(storeJson: string | null) {
   const fakeFs = {
     readFile: async (path: string) => {
       if (path !== '/workspace/.mcp/servers.json' || storeJson === null) {
-        throw new Error('ENOENT');
+        throw new FsError('ENOENT', 'missing MCP registry', path);
       }
       return storeJson;
     },

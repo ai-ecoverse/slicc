@@ -91,7 +91,12 @@ function normalize(raw: unknown): PluginsFile {
   return { version, plugins };
 }
 
-/** Read the entire `plugins.json`. Returns an empty file if missing/invalid. */
+/**
+ * Read the entire `plugins.json`. A missing file or malformed JSON is empty
+ * (nothing durable to lose). Any other read fault propagates — treating EIO /
+ * EACCES / transient OPFS as empty would let `setInstalledPlugin` /
+ * `deleteInstalledPlugin` rewrite the registry from a truncated base.
+ */
 export async function readPluginsFile(injectedFs?: MinimalFs | null): Promise<PluginsFile> {
   try {
     const fs = await openFs(injectedFs);
@@ -104,8 +109,7 @@ export async function readPluginsFile(injectedFs?: MinimalFs | null): Promise<Pl
     }
   } catch (err) {
     if (err instanceof FsError && err.code === 'ENOENT') return emptyFile();
-    // Unreadable registry — treat as empty rather than blocking the shell.
-    return emptyFile();
+    throw err;
   }
 }
 

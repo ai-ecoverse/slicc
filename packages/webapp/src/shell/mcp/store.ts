@@ -113,7 +113,13 @@ function normalize(raw: unknown): McpServersFile {
   return { version, servers };
 }
 
-/** Read the entire `servers.json`. Returns an empty file if missing/invalid. */
+/**
+ * Read the entire `servers.json`. A missing file or malformed JSON is empty
+ * (nothing durable to lose). Any other read fault propagates — treating EIO /
+ * EACCES / transient OPFS as empty would let `setServer` / `deleteServer`
+ * rewrite the registry from a truncated base and drop every other server
+ * (including its OAuth auth block).
+ */
 export async function readServersFile(injectedFs?: MinimalFs | null): Promise<McpServersFile> {
   try {
     const fs = await openFs(injectedFs);
@@ -128,10 +134,7 @@ export async function readServersFile(injectedFs?: MinimalFs | null): Promise<Mc
     }
   } catch (err) {
     if (err instanceof FsError && err.code === 'ENOENT') return emptyFile();
-    log.warn('Failed to read servers.json', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return emptyFile();
+    throw err;
   }
 }
 
