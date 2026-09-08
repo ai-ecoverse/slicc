@@ -116,7 +116,9 @@ describe('process substitution: cone/scoop equivalence', () => {
 
   it('diff exercises the SECOND descriptor, not just /dev/fd/63', async () => {
     // A fix that only materializes the first fd passes a one-substitution test.
-    const scoop = await h.scoop.executeCommand('diff <(echo alpha) <(echo beta)');
+    // `-u` so the headers name both fds: no-flag `diff` is POSIX normal format
+    // (just-bash#413 / #2950) and does not print filenames.
+    const scoop = await h.scoop.executeCommand('diff -u <(echo alpha) <(echo beta)');
     expect(scoop.stdout).toContain('--- /dev/fd/63');
     expect(scoop.stdout).toContain('+++ /dev/fd/62');
     expect(scoop.stdout).toContain('-alpha');
