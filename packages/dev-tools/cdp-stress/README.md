@@ -23,6 +23,12 @@ SLICC_TEST_CDP_STRESS=1 npx vitest run packages/webapp/tests/cdp/cdp-stress.gate
 Without `SLICC_TEST_CDP_STRESS=1` (or on a machine with no Chrome) the whole
 suite skips, so `npm run test` is unaffected.
 
+They launch real Chromes and are sensitive to what else is on the machine: a
+`Chrome exited ... before reporting CDP port` failure, or a `CDP WebSocket
+connection failed` storm in `fanout`, is load, not a regression. Check for
+other Chromes (`pgrep -f 'Google Chrome for Testing'`) and re-run the affected
+gate alone (`-t abandoned`) before believing it.
+
 ## Exploration
 
 Every scenario is also runnable standalone and prints JSON:
@@ -64,6 +70,7 @@ Environment knobs:
   the transport with counters (sends by method, inbound events by method, burst
   window), optional `NavigationWatcher`.
 - `scenarios/` — one file per failure mode, each exporting `run()`:
+
   | scenario           | failure mode                                                      |
   | ------------------ | ----------------------------------------------------------------- |
   | `session-leak`     | every tab switch mints a session that is never detached           |
@@ -73,6 +80,17 @@ Environment knobs:
   | `fanout`           | cross-tab throughput + lock waits (`--poison` adds a hung `goto`) |
   | `abandoned`        | a caller that gives up still holds the lock                       |
   | `own-tab`          | SLICC's own tab's `/cdp` socket is reported back to it            |
+
+  `abandoned` runs three ways, so the two ways a caller can give up are
+  measured side by side: `orphaned` (the caller just stops awaiting — all
+  `background_after` could do before cooperative cancellation), `signal` (the
+  caller aborts the `AbortSignal` it passed to `withTab`, which is what
+  `playwright-cli` now threads the bash tool's abort into), and
+  `signal-unresponsive`, which pins the documented limit — against a URL that
+  never answers, the command is parked inside the `Page.navigate` round trip,
+  and CDP has no cancel verb, so the abort stops the next step but not that
+  one.
+
 - `run-all.ts` — runs everything and writes `<out>/<timestamp>.json` +
   `<out>/latest.json`.
 

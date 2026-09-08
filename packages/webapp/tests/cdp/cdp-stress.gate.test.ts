@@ -14,6 +14,12 @@
  * that can actually produce frames, which a shared runner does not reliably
  * have. Run it locally when touching `cdp/`.
  *
+ * They are also sensitive to what else is on the machine. A `Chrome exited ...
+ * before reporting CDP port` failure, or a `CDP WebSocket connection failed`
+ * storm in `fanout`, is load rather than a regression — check for other
+ * Chromes (`pgrep -f 'Google Chrome for Testing'`) and re-run the affected
+ * gate alone (`-t abandoned`) before believing it.
+ *
  * Locally:  SLICC_TEST_CDP_STRESS=1 npx vitest run packages/webapp/tests/cdp/cdp-stress.gate.test.ts
  */
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -62,6 +68,14 @@ const MAX_BRIDGE_WAIT_TOTAL_MS = 5000;
 
 /** `goto` must wait for the target tab's own load (the slow asset is 3s). */
 const MIN_TARGET_LOAD_MS = 2500;
+
+/**
+ * How long a signalled abandon may take to give the tab back. Generous next
+ * to the 30 s `Page.loadEventFired` bound it replaces — the point is orders of
+ * magnitude, not milliseconds — but well under the 8 s per-command CDP
+ * timeout, so an abort that merely raced the timeout cannot pass.
+ */
+const ABORT_SETTLE_BUDGET_MS = 3000;
 
 const SESSION_LEAK_TABS = 4;
 const SESSION_LEAK_ROUNDS = 12;
@@ -165,10 +179,33 @@ describeStress('cdp bridge stress gates', () => {
   });
 
   it('abandoned: giving up on a goto frees the lock and rejects nothing', {
-    timeout: 240_000,
+    timeout: 600_000,
   }, async () => {
     const r = await runAbandoned();
-    expect(r.victimCommandWaitedMs).toBeLessThan(1000);
-    expect(r.unhandledRejections).toEqual([]);
+    for (const v of [r.orphaned, r.signal, r.signalUnresponsive]) {
+      // However the caller gives up, a sibling tab is unaffected and nothing
+      // surfaces as an unhandled rejection.
+      expect(v.victimCommandWaitedMs, `${v.variant}: victim tab`).toBeLessThan(1000);
+      expect(v.unhandledRejections, `${v.variant}: unhandled`).toEqual([]);
+    }
+
+    // Signalled: the load wait rejects at once, so the abandoned tab is free
+    // again in milliseconds rather than at the end of the 30s load bound.
+    expect(r.signal.abandonedGotoFinalOutcome).toBe('aborted');
+    expect(r.signal.abandonedGotoSettledMs).toBeLessThan(ABORT_SETTLE_BUDGET_MS);
+    expect(r.signal.followUpOnHungTabMs).toBeLessThan(ABORT_SETTLE_BUDGET_MS);
+    expect(r.signal.followUpOnHungTabOk).toBe(true);
+
+    // Orphaned: no way to tell the bridge the caller stopped caring, so the
+    // hold runs out the full bound. This is the comparison the fix is against.
+    expect(r.orphaned.abandonedGotoSettledMs).toBeGreaterThan(ABORT_SETTLE_BUDGET_MS);
+
+    // The documented LIMIT: a request already on the wire cannot be cancelled,
+    // so an unresponsive URL comes back only when its `Page.navigate` round
+    // trip settles — bounded by the per-command CDP timeout, NOT by the 30s
+    // load bound the load wait would otherwise have added on top.
+    expect(r.signalUnresponsive.stuckIn).toBe('page-navigate-round-trip');
+    expect(r.cdpTimeoutMs).toBe(CDP_TIMEOUT_MS);
+    expect(r.signalUnresponsive.abandonedGotoSettledMs).toBeLessThan(CDP_TIMEOUT_MS * 2);
   });
 });

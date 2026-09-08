@@ -112,10 +112,14 @@ export async function startSite(): Promise<SiteHandle> {
     };
     if (u.pathname === '/hang') return; // never respond
     if (u.pathname === '/slow-asset') {
-      setTimeout(() => {
+      // `unref`: a scenario may ask for a delay measured in minutes to model a
+      // `load` that never fires. A ref'd timer would then keep the harness
+      // process alive for that long after the run printed its result.
+      const timer = setTimeout(() => {
         res.writeHead(200, { 'content-type': 'image/gif' });
         res.end(Buffer.from(TRANSPARENT_GIF, 'base64'));
       }, delay);
+      timer.unref?.();
       return;
     }
     const html = HTML_ROUTES.get(u.pathname);
@@ -147,6 +151,9 @@ export async function startSite(): Promise<SiteHandle> {
     close: () => {
       for (const ws of sockets) ws.terminate();
       wss.close();
+      // `/hang` deliberately never answers, so its socket would otherwise keep
+      // the server (and the process) open long past the scenario.
+      server.closeAllConnections();
       server.close();
     },
     hits,
