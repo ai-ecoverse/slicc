@@ -65,10 +65,15 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     # Only Renovate's own branch PRs (head in this repo → secrets + push work)
-    # that carry the patched-dependency label.
+    # that carry the patched-dependency label. Gate on the PR AUTHOR
+    # (pull_request.user.login), NOT github.actor, matching the three sibling
+    # reconcile workflows: on a `labeled` event the actor is the human who added
+    # the label, and on a `synchronize` pushed by renovate-lockfile-reconcile.yml
+    # it is that workflow's token owner. An actor gate skipped both — which is
+    # why #2957 was never re-examined after its lockfile was repaired.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor == 'renovate[bot]' &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
       contains(github.event.pull_request.labels.*.name, 'patched-dependency')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

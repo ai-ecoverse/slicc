@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkPatches,
   checkRenovateSync,
+  declaredVersion,
   lockedVersion,
   orphanedPatches,
   parsePatchFilename,
@@ -201,5 +202,66 @@ describe('checkRenovateSync', () => {
     expect(checkRenovateSync({ manifest: { '//': 'c' }, renovate: { packageRules: [] } })).toEqual(
       []
     );
+  });
+});
+
+// A Renovate PR that bumped a patched dep but shipped no lockfile: package.json
+// says 3.0.2, the lockfile still says 3.0.1 — which matches the patch. Reading
+// the lockfile alone concluded "nothing to reconcile" on #2957.
+const stalePackageFiles = [
+  { dir: 'packages/webapp', manifest: { dependencies: { 'just-bash': '3.0.2' } } },
+];
+
+describe('declaredVersion', () => {
+  it('finds an exact pin in any package file section', () => {
+    expect(declaredVersion(stalePackageFiles, 'just-bash')).toBe('3.0.2');
+    expect(
+      declaredVersion([{ dir: '', manifest: { devDependencies: { tsx: '4.0.0' } } }], 'tsx')
+    ).toBe('4.0.0');
+  });
+
+  it('ignores ranges and unknown packages', () => {
+    expect(
+      declaredVersion([{ dir: '', manifest: { dependencies: { a: '^1.0.0' } } }], 'a')
+    ).toBeNull();
+    expect(declaredVersion(stalePackageFiles, 'missing')).toBeNull();
+    expect(declaredVersion(undefined, 'just-bash')).toBeNull();
+  });
+});
+
+describe('stale lockfile (package.json disagrees with package-lock.json)', () => {
+  it('checkPatches reports both the stale lockfile and the orphan it was hiding', () => {
+    const r = checkPatches({
+      patchFiles: ['just-bash+3.0.1.patch'],
+      manifest,
+      lock,
+      packageFiles: stalePackageFiles,
+    });
+    expect(r.problems.some((p) => p.includes('The lockfile is stale'))).toBe(true);
+    expect(r.problems.some((p) => p.includes('ORPHANED'))).toBe(true);
+  });
+
+  it('orphanedPatches resolves the bump from package.json', () => {
+    const orphans = orphanedPatches({
+      patchFiles: ['just-bash+3.0.1.patch'],
+      manifest,
+      lock,
+      packageFiles: stalePackageFiles,
+    });
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].installedVersion).toBe('3.0.2');
+  });
+
+  it('is quiet when package.json and the lockfile agree', () => {
+    const agreeing = [
+      { dir: 'packages/webapp', manifest: { dependencies: { 'just-bash': '3.0.1' } } },
+    ];
+    const r = checkPatches({
+      patchFiles: ['just-bash+3.0.1.patch'],
+      manifest,
+      lock,
+      packageFiles: agreeing,
+    });
+    expect(r.problems).toEqual([]);
   });
 });

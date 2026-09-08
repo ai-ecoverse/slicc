@@ -29,9 +29,11 @@ the npm package name:
 [`packages/dev-tools/patch-reconcile/check-patches.mjs`](../packages/dev-tools/patch-reconcile/check-patches.mjs)
 runs as part of `npm run lint` / `lint:ci` (so it gates every PR). It fails when
 a patch is undocumented, out of sync with `patches.json`, **orphaned** (the patch
-version no longer matches `package-lock.json`), or when the Renovate
-`patched dependencies` rule's `matchPackageNames` doesn't match the manifest
-exactly. It reads only the lockfile, `patches/`, and `renovate.json`, so it needs
+version no longer matches the installed version), when `package.json` and
+`package-lock.json` disagree about a patched package (a stale lockfile would
+otherwise hide the orphan — see PR #2957 and `npm run lint:lockfile`), or when
+the Renovate `patched dependencies` rule's `matchPackageNames` doesn't match the
+manifest exactly. It reads only the lockfile, `patches/`, and `renovate.json`, so it needs
 no install. This is the deterministic backstop: an orphaned or mis-routed patch
 cannot merge silently.
 

@@ -1,0 +1,135 @@
+name: Renovate Lockfile Reconcile
+
+# Renovate's Mend-hosted lockfile artifact update intermittently drops the
+# lockfile: the PR lands with a `package.json` bump and a stale
+# `package-lock.json`, `npm ci` dies with EUSAGE ("lock file's lucide@1.38.0
+# does not satisfy lucide@1.39.0"), and EVERY job — lint, typecheck,
+# node-matrix, webapp, e2e, extension, worker, bundle-size — goes red at
+# install time. PRs #2848, #2882, #2903, #2922, #2957 and #2979 all shipped
+# that way and were repaired by hand with a plain `npm install`.
+#
+# `skipInstalls: false` (PR #2926) was supposed to be the fix and was not:
+# #2957 and #2979 were both created after it merged and still carried no
+# lockfile. Renovate reports nothing (no "Artifact update problem" block in the
+# PR body, no Dependency Dashboard warning) and Mend's run logs are not visible
+# to us, so this workflow deliberately does not try to explain WHY the artifact
+# update failed — it just repairs the result deterministically.
+#
+# Cheap by construction: `npm run lint:lockfile`
+# (packages/dev-tools/tools/check-lockfile-sync.mjs) reads only the manifests
+# and the lockfile, so the healthy majority of Renovate PRs costs seconds and
+# never gets a commit pushed to it. Only a genuine mismatch triggers the
+# install. Because it also runs on `synchronize`, a partially-updated lockfile
+# gets the same repair.
+#
+# The same guard runs in `npm run lint` / `lint:ci`, so a stale lockfile that
+# somehow survives this workflow still fails CI with a readable message instead
+# of an npm install stack trace.
+#
+# Trade-off: `npm install` may re-resolve floating TRANSITIVE ranges. Every
+# direct dependency is exact-pinned (renovate.json `rangeStrategy: "pin"`), so
+# the blast radius is small, and it is exactly the operation a human performs
+# on these PRs today. The commit is restricted to `package-lock.json`.
+#
+# Required repository secret:
+#   BOT_PAT  Fine-grained PAT (contents + pull-requests write). The lockfile
+#            commit is pushed with BOT_PAT — NOT GITHUB_TOKEN — so the PR's
+#            `synchronize` event fires and the full check suite re-runs on it.
+#            GitHub's anti-recursion guard suppresses workflow runs for
+#            GITHUB_TOKEN-authored pushes. Same identity requirement as the
+#            other renovate-*-reconcile workflows.
+#
+# The commit is authored as github-actions[bot], which renovate.json lists in
+# `gitIgnoredAuthors`, so Renovate does not treat it as a foreign edit and
+# automerge still fires once the PR is green.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: renovate-lockfile-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the lockfile commit to the PR branch
+  pull-requests: write # comment the outcome on the PR
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Only Renovate's own branch PRs in this repo (head here → secrets + push
+    # work). Gate on the PR AUTHOR, not github.actor: on a `synchronize` from
+    # another reconcile workflow the actor is that bot, and this repair has to
+    # run on those pushes too. Unlike its siblings there is no label clause —
+    # any Renovate PR can lose its lockfile.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # BOT_PAT (not GITHUB_TOKEN) so the push fires `synchronize` and CI
+          # re-runs on the repaired commit — see the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # No install needed — the guard reads the manifests and the lockfile.
+      - name: Detect a stale lockfile
+        id: detect
+        run: |
+          if npm run --silent lint:lockfile; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "Lockfile is in sync — nothing to reconcile." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            {
+              echo '### Stale lockfile detected'
+              echo '```'
+              npm run --silent lint:lockfile 2>&1 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # `--ignore-scripts`: the root postinstall runs patch-package, which with
+      # --error-on-fail exits non-zero on a patch orphaned by this very bump
+      # (renovate-patch-reconcile.yml owns that repair). The lockfile does not
+      # depend on lifecycle scripts.
+      - name: Regenerate the lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Push the lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "npm install produced no lockfile change — the mismatch is not a stale lockfile." >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only the lockfile: Renovate owns the package.json bump, and an
+          # install can touch other generated files.
+          git add package-lock.json
+          git commit -m "fix(deps): sync package-lock.json (renovate-lockfile-reconcile)"
+          git push
+
+      # The guard has to pass on the pushed result, or the PR is still red for
+      # a reason this workflow cannot fix.
+      - name: Verify the lockfile is in sync
+        if: steps.detect.outputs.stale == 'true'
+        run: npm run lint:lockfile
+
+      - name: Comment the outcome
+        if: steps.detect.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🔒 Renovate shipped this bump without a matching \`package-lock.json\` (every job would fail at \`npm ci\` with EUSAGE), so I ran \`npm install\` and pushed the lockfile. See \`.github/workflows/renovate-lockfile-reconcile.yml\`."

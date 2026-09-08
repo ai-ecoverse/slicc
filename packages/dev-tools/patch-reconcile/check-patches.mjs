@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readPackageFiles } from '../tools/check-lockfile-sync.mjs';
 import { checkPatches, checkRenovateSync } from './lib.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -42,7 +43,13 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 const lock = JSON.parse(readFileSync(lockPath, 'utf-8'));
 const renovate = existsSync(renovatePath) ? JSON.parse(readFileSync(renovatePath, 'utf-8')) : null;
 
-const { problems, notes, checked } = checkPatches({ patchFiles, manifest, lock });
+// package.json is read alongside the lockfile so a Renovate PR that bumped a
+// patched dep without updating the lockfile can't hide the orphan (see #2957).
+const packageFiles = readPackageFiles(
+  repoRoot,
+  JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8'))
+);
+const { problems, notes, checked } = checkPatches({ patchFiles, manifest, lock, packageFiles });
 // Keep the Renovate "patched dependencies" rule in lockstep with the manifest
 // so a new patch can't silently bypass the group/label/no-automerge routing.
 problems.push(...checkRenovateSync({ manifest, renovate }));
