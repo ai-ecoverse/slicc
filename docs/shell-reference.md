@@ -1760,9 +1760,19 @@ Two more Node stdin idioms are served on top of the same buffer:
 
 ```typescript
 console.log(...args); // stdout (space-separated)
-console.info(...args); // stdout
+console.info(...args); // stdout (alias of log)
+console.debug(...args); // stdout (alias of log)
+console.dirxml(...args); // stdout (alias of log)
+console.table(...args); // stdout (alias of log)
+console.dir(obj); // stdout inspected object
 console.warn(...args); // stderr
 console.error(...args); // stderr
+console.assert(cond, ...args); // no-op if truthy; stderr "Assertion failed" if falsy (does not throw)
+console.trace(...args); // stderr with Trace: + stack
+console.group / groupCollapsed / groupEnd; // indent subsequent lines
+console.time / timeEnd / timeLog; // labeled timers
+console.count / countReset; // labeled counters
+console.clear(); // no-op
 ```
 
 #### fs (VirtualFS bridge)
