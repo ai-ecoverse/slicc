@@ -119,6 +119,8 @@ Primitives live in `cdp/command-abort.ts` — its own module because `har-record
 
 **A request already on the wire is not cancellable** — CDP has no cancel verb. The in-flight round trip still completes (or hits its own timeout) and may still have been applied to the page; what abort guarantees is that nothing after it starts and the tab's lock comes back as soon as it returns. `CommandAbortedError.step` says so; the `abandoned` stress scenario measures both halves.
 
+`curlwright` is the other command on this path: `runPageFetch` takes the hold with the signal, and `runCurlwright` tests `ctx.signal` BEFORE `classifyFetchError` (whose `/aborted/i` branch would otherwise report a cancelled run as curl's exit 28, a timeout) and again before rendering, so no `-o` / `-D` file lands for a response whose caller has left. It exits 130 like `playwright-cli`, deliberately outside curl's vocabulary.
+
 **Side effects that OUTLIVE the command need their own boundary.** `record` mints a recorder session on purpose so an LRU eviction cannot end a recording mid-flight, which puts the recorder's round trips outside the handle; it uses `throwIfCallerGaveUp` (`playwright/state.ts` — a plain `Error`, because `cdp/` is above the shell layer), passes the signal into `HarRecorder.startRecording`, and closes the tab it opened when it unwinds. `teleport` checks immediately before arming a watcher that polls on after the command returns.
 
 ## Sudo (agent action approvals)
