@@ -427,7 +427,9 @@ describe('playwright-cli open', () => {
   it('--foreground raises the new tab via Page.bringToFront', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
-    expect(browser.withTab).toHaveBeenCalledWith('tab-new', expect.any(Function));
+    expect(browser.withTab).toHaveBeenCalledWith('tab-new', expect.any(Function), {
+      signal: undefined,
+    });
     expect(browser.getTransport().send).toHaveBeenCalledWith('Page.bringToFront', {}, 'session-1');
   });
 
@@ -494,7 +496,9 @@ describe('playwright-cli goto', () => {
     const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated to https://other.com');
-    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function), {
+      signal: undefined,
+    });
     expect(browser.navigate).toHaveBeenCalledWith('https://other.com');
   });
 
@@ -607,7 +611,9 @@ describe('playwright-cli snapshot', () => {
     const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
-    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function), {
+      signal: undefined,
+    });
   });
 
   it('rejects invalid tab ID when attachToPage fails', async () => {
@@ -2290,6 +2296,32 @@ describe('playwright-cli record and stop-recording', () => {
     expect(browser.createPage).toHaveBeenCalledWith('about:blank');
   });
 
+  it('record stops at its next step when the caller gives up, and takes its tab with it', async () => {
+    const controller = new AbortController();
+    // The give-up lands while the tab is being created — the step after it
+    // must not run, and the tab this command opened must not be left behind.
+    (browser.createPage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      controller.abort();
+      return 'rec-tab-1';
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(
+      ['record', 'https://example.com'],
+      createCommandContext({
+        fs: {} as import('just-bash').IFileSystem,
+        cwd: '/',
+        env: new Map<string, string>(),
+        stdin: EMPTY_BYTES,
+        signal: controller.signal,
+      })
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain('aborted while');
+    expect(browser.closePage).toHaveBeenCalledWith('rec-tab-1');
+  });
+
   it('stop-recording requires a recordingId', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['stop-recording'], mockCtx);
@@ -2611,6 +2643,30 @@ describe('playwright-cli teleport subcommand', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--start');
     expect(result.stderr).toContain('--return');
+  });
+
+  it('does not arm a watcher for a caller that gave up', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login\\.example', '--return=app\\.example'],
+      createCommandContext({
+        fs: {} as import('just-bash').IFileSystem,
+        cwd: '/',
+        env: new Map<string, string>(),
+        stdin: EMPTY_BYTES,
+        signal: controller.signal,
+      })
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain('about to arm a teleport watcher on tab tab-1');
+    // A watcher polls until the auth round trip returns, so arming one here
+    // would leave a loop running for a command nobody is waiting on.
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatchers.size).toBe(0);
   });
 
   it('arms teleport watcher with --start and --return', async () => {
@@ -6347,5 +6403,137 @@ describe('playwright-cli argv validation (#2405)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown frame ID "nope"');
     expect(browser.evaluate).not.toHaveBeenCalled();
+  });
+});
+
+describe('playwright-cli cooperative cancellation', () => {
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    fs = createMockFS();
+  });
+
+  /** A command context carrying just-bash's abort signal, like a real run. */
+  function ctxWithSignal(signal: AbortSignal): ResolvedCommandContext {
+    return createCommandContext({
+      fs: {} as import('just-bash').IFileSystem,
+      cwd: '/',
+      env: new Map<string, string>(),
+      stdin: EMPTY_BYTES,
+      signal,
+    });
+  }
+
+  it('threads the run signal into every tab hold a handler takes', async () => {
+    const controller = new AbortController();
+    const browser = createMockBrowser();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    await cmd.execute(
+      ['goto', 'https://example.com', '--tab=tab-1'],
+      ctxWithSignal(controller.signal)
+    );
+
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function), {
+      signal: controller.signal,
+    });
+  });
+
+  it('reports a goto aborted mid-flight as a failure naming the step', async () => {
+    const controller = new AbortController();
+    // The bridge's own abort shape: rejects with a CommandAbortedError whose
+    // message names the wait it stopped at.
+    const aborted = Object.assign(
+      new Error(
+        'Browser command aborted while waiting for https://slow.example to fire its load event.'
+      ),
+      { name: 'CommandAbortedError' }
+    );
+    const browser = createMockBrowser({
+      withTab: vi.fn().mockImplementation(async () => {
+        controller.abort();
+        throw aborted;
+      }),
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(
+      ['goto', 'https://slow.example', '--tab=tab-1'],
+      ctxWithSignal(controller.signal)
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('playwright-cli goto:');
+    expect(result.stderr).toContain('waiting for https://slow.example to fire its load event');
+  });
+
+  it('never reports success for a handler that finished under a fired signal', async () => {
+    const controller = new AbortController();
+    const browser = createMockBrowser();
+    (browser.navigate as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      controller.abort();
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(
+      ['goto', 'https://example.com', '--tab=tab-1'],
+      ctxWithSignal(controller.signal)
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stdout).not.toContain('Navigated to');
+    expect(result.stderr).toContain('the caller stopped waiting for it');
+  });
+
+  it('leaves an ordinary failure alone while the signal is unfired', async () => {
+    const controller = new AbortController();
+    const browser = createMockBrowser({
+      withTab: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(
+      ['goto', 'https://example.com', '--tab=tab-1'],
+      ctxWithSignal(controller.signal)
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Error: boom');
+  });
+
+  it('runs unchanged when the context carries no signal at all', async () => {
+    const browser = createMockBrowser();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+
+    const result = await cmd.execute(['goto', 'https://example.com', '--tab=tab-1'], mockCtx);
+
+    expect(result.exitCode).toBe(0);
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function), {
+      signal: undefined,
+    });
+  });
+});
+
+/**
+ * Every tab hold a handler takes must go through the ctx-bound `onTab`, which
+ * is what carries the run's abort into the bridge. A handler reaching for
+ * `browser.withTab` directly silently opts out of cancellation, so the seam is
+ * guarded here rather than left to review.
+ */
+describe('playwright handlers take holds through the bound onTab', () => {
+  it('has no direct browser.withTab call left in the handler tree', async () => {
+    const { readdir, readFile } = await import('node:fs/promises');
+    const dir = new URL(
+      '../../../src/shell/supplemental-commands/playwright/handlers/',
+      import.meta.url
+    );
+    const offenders: string[] = [];
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.ts')) continue;
+      const src = await readFile(new URL(name, dir), 'utf8');
+      if (src.includes('browser.withTab(')) offenders.push(name);
+    }
+    expect(offenders).toEqual([]);
   });
 });

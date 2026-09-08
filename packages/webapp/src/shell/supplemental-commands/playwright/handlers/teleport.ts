@@ -5,7 +5,7 @@
 
 import { CHERRY_RUNTIME_TAG } from '@slicc/shared-ts';
 import { createLogger } from '../../../../base/logger.js';
-import { requireTab } from '../state.js';
+import { requireTab, throwIfCallerGaveUp } from '../state.js';
 import {
   armTeleportWatcher,
   cleanupTeleportWatcher,
@@ -90,7 +90,13 @@ function cherryRuntimeRejection(runtimeId: string): string | null {
 }
 
 /** `teleport --start <regex> --return <regex> [...]`: arm a watcher on a tab. */
-async function teleportArm({ browser, state, flags }: PlaywrightHandlerCtx): Promise<CmdResult> {
+async function teleportArm({
+  browser,
+  state,
+  flags,
+  onTab,
+  signal,
+}: PlaywrightHandlerCtx): Promise<CmdResult> {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -132,9 +138,7 @@ async function teleportArm({ browser, state, flags }: PlaywrightHandlerCtx): Pro
   // Capture the leader's current URL before the SSO redirect for post-teleport navigation
   let leaderUrl: string | undefined;
   try {
-    const raw = await browser.withTab(tab.targetId, (page) =>
-      page.evaluate('window.location.href')
-    );
+    const raw = await onTab(tab.targetId, (page) => page.evaluate('window.location.href'));
     leaderUrl = typeof raw === 'string' ? raw : String(raw);
   } catch {
     /* best-effort */
@@ -153,6 +157,10 @@ async function teleportArm({ browser, state, flags }: PlaywrightHandlerCtx): Pro
     runtimeId: runtimeId ?? 'auto',
     leaderUrl,
   });
+  // The watcher outlives this command by design (it polls until the auth round
+  // trip returns), so arming one for a caller that already gave up would leave
+  // a poll loop nobody can see running. Last boundary before that side effect.
+  throwIfCallerGaveUp(signal, `about to arm a teleport watcher on tab ${tab.targetId}`);
   armTeleportWatcher(
     browser,
     state,

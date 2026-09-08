@@ -49,6 +49,7 @@ export const mousemoveHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  onTab,
 }) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'mousemove requires <x> <y>\n', exitCode: 1 };
@@ -60,7 +61,7 @@ export const mousemoveHandler: PlaywrightHandler = async ({
   if (isNaN(x) || isNaN(y)) {
     return { stdout: '', stderr: 'x and y must be numbers\n', exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x, y, button: 'none', modifiers: 0 },
@@ -76,13 +77,14 @@ export const mousedownHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
@@ -92,13 +94,19 @@ export const mousedownHandler: PlaywrightHandler = async ({
   return { stdout: `Mouse button ${button} pressed\n`, stderr: '', exitCode: 0 };
 };
 
-export const mouseupHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const mouseupHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
@@ -113,6 +121,7 @@ export const mousewheelHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  onTab,
 }) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'mousewheel requires <dx> <dy>\n', exitCode: 1 };
@@ -125,7 +134,7 @@ export const mousewheelHandler: PlaywrightHandler = async ({
     return { stdout: '', stderr: 'dx and dy must be numbers\n', exitCode: 1 };
   }
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseWheel', deltaX: dx, deltaY: dy, x: pos.x, y: pos.y, modifiers: 0 },
@@ -135,7 +144,14 @@ export const mousewheelHandler: PlaywrightHandler = async ({
   return { stdout: `Mouse wheel scrolled (dx=${dx}, dy=${dy})\n`, stderr: '', exitCode: 0 };
 };
 
-export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, positional, flags }) => {
+export const dropHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'drop requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -187,7 +203,7 @@ export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     return this.tagName;
   }`;
 
-  const output = await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  const output = await onTab(tab.targetId, async ({ sessionId, transport }) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');

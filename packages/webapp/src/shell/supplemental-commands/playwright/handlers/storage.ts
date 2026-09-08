@@ -20,12 +20,12 @@ function createStorageHandlers(
   del: PlaywrightHandler;
   clear: PlaywrightHandler;
 } {
-  const list: PlaywrightHandler = async ({ browser, flags }) => {
+  const list: PlaywrightHandler = async ({ browser, flags, onTab }) => {
     const tab = requireTab(flags);
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    const output = await browser.withTab(tab.targetId, async (page) => {
+    const output = await onTab(tab.targetId, async (page) => {
       const raw = (await page.evaluate(`JSON.stringify(Object.entries(${storageObj}))`)) as string;
       const entries = JSON.parse(raw) as [string, string][];
       if (entries.length === 0) {
@@ -37,7 +37,7 @@ function createStorageHandlers(
     return { stdout: output + '\n', stderr: '', exitCode: 0 };
   };
 
-  const get: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  const get: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
     if (positional.length === 0) {
       return { stdout: '', stderr: `${cmdPrefix}-get requires a key\n`, exitCode: 1 };
     }
@@ -45,7 +45,7 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    const output = await browser.withTab(tab.targetId, async (page) => {
+    const output = await onTab(tab.targetId, async (page) => {
       const val = await page.evaluate(`${storageObj}.getItem(${JSON.stringify(positional[0])})`);
       if (val === null) {
         throw new Error(`Key "${positional[0]}" not found in ${storageObj}`);
@@ -55,7 +55,7 @@ function createStorageHandlers(
     return { stdout: output + '\n', stderr: '', exitCode: 0 };
   };
 
-  const set: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  const set: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
     if (positional.length < 2) {
       return {
         stdout: '',
@@ -67,7 +67,7 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async (page) => {
+    await onTab(tab.targetId, async (page) => {
       await page.evaluate(
         `${storageObj}.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
       );
@@ -75,7 +75,7 @@ function createStorageHandlers(
     return { stdout: `${storageObj} "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
   };
 
-  const del: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  const del: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
     if (positional.length === 0) {
       return { stdout: '', stderr: `${cmdPrefix}-delete requires a key\n`, exitCode: 1 };
     }
@@ -83,18 +83,18 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async (page) => {
+    await onTab(tab.targetId, async (page) => {
       await page.evaluate(`${storageObj}.removeItem(${JSON.stringify(positional[0])})`);
     });
     return { stdout: `${storageObj} "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
   };
 
-  const clear: PlaywrightHandler = async ({ browser, flags }) => {
+  const clear: PlaywrightHandler = async ({ browser, flags, onTab }) => {
     const tab = requireTab(flags);
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async (page) => {
+    await onTab(tab.targetId, async (page) => {
       await page.evaluate(`${storageObj}.clear()`);
     });
     return { stdout: `${storageObj} cleared\n`, stderr: '', exitCode: 0 };

@@ -123,7 +123,13 @@ function findMatcher(
   return (line) => line.toLowerCase().includes(needle);
 }
 
-export const findHandlerImpl: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const findHandlerImpl: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -142,7 +148,7 @@ export const findHandlerImpl: PlaywrightHandler = async ({ browser, state, posit
     return { stdout: '', stderr: matches.error, exitCode: 1 };
   }
 
-  const snapshotText = await browser.withTab(tab.targetId, async (page) => {
+  const snapshotText = await onTab(tab.targetId, async (page) => {
     const { output } = await takeSnapshot(page, state, tab.targetId, {});
     return output;
   });

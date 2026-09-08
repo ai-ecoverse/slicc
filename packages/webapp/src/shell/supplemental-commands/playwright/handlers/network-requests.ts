@@ -248,12 +248,12 @@ function findEntry(
 // requests
 // ---------------------------------------------------------------------------
 
-export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags }) => {
+export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -299,12 +299,13 @@ export const requestHandler: PlaywrightHandler = async ({
   positional,
   flags,
   fs,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -364,12 +365,13 @@ export const requestHeadersHandler: PlaywrightHandler = async ({
   positional,
   flags,
   fs,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -403,12 +405,13 @@ export const requestBodyHandler: PlaywrightHandler = async ({
   positional,
   flags,
   fs,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -443,12 +446,13 @@ export const responseHeadersHandler: PlaywrightHandler = async ({
   positional,
   flags,
   fs,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -486,12 +490,13 @@ export const responseBodyHandler: PlaywrightHandler = async ({
   positional,
   flags,
   fs,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });

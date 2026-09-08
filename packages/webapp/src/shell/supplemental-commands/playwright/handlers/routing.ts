@@ -98,10 +98,11 @@ async function handleRequestPaused(
 /** Enable CDP Fetch domain interception for a tab and register the event handler. */
 async function enableFetchInterception(
   browser: BrowserAPI,
+  onTab: PlaywrightHandlerCtx['onTab'],
   state: PlaywrightState,
   targetId: string
 ): Promise<void> {
-  await browser.withTab(targetId, async ({ sessionId, transport }) => {
+  await onTab(targetId, async ({ sessionId, transport }) => {
     await transport.send('Fetch.enable', { patterns: FETCH_PATTERNS }, sessionId);
 
     // The interception is pinned to a session id; the bridge replaces that
@@ -140,7 +141,13 @@ async function enableFetchInterception(
   });
 }
 
-export const routeHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const routeHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'route requires a URL pattern\n', exitCode: 1 };
   }
@@ -177,7 +184,7 @@ export const routeHandler: PlaywrightHandler = async ({ browser, state, position
 
   if (!state.routeCleanup.has(tab.targetId)) {
     if (!state.routes.has(tab.targetId)) state.routes.set(tab.targetId, []);
-    await enableFetchInterception(browser, state, tab.targetId);
+    await enableFetchInterception(browser, onTab, state, tab.targetId);
   }
 
   const routes = state.routes.get(tab.targetId) ?? [];

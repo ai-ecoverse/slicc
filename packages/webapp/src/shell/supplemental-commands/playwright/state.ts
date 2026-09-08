@@ -37,7 +37,11 @@ interface PlaywrightFrameInfo {
 interface PlaywrightBrowserAPI {
   listPages(): Promise<PlaywrightPageInfo[]>;
   listAllTargets?: () => Promise<PlaywrightPageInfo[]>;
-  withTab<T>(targetId: string, fn: (tab: PlaywrightTabHandle) => Promise<T>): Promise<T>;
+  withTab<T>(
+    targetId: string,
+    fn: (tab: PlaywrightTabHandle) => Promise<T>,
+    opts?: { signal?: AbortSignal | undefined }
+  ): Promise<T>;
 }
 
 /** The page half of the same duck type: one tab, bound to its CDP session. */
@@ -316,6 +320,20 @@ export function parseFlags(args: string[]): {
     else if (val !== undefined) flags[canonicalKey] = String(val);
   }
   return { positional: parsed.positionals, flags };
+}
+
+/**
+ * Stop a handler at a step boundary when its caller has given up.
+ *
+ * For the handful of steps a handler owns that the bridge cannot see — the
+ * side effects that deliberately OUTLIVE the command, like arming a teleport
+ * watcher or starting a recorder on its own session. The thrown error is
+ * plain: `cdp/` sits ABOVE this layer, so `CommandAbortedError` is not
+ * importable here. The dispatcher already turns any throw under a fired
+ * signal into the exit-130 aborted result carrying this message.
+ */
+export function throwIfCallerGaveUp(signal: AbortSignal | undefined, step: string): void {
+  if (signal?.aborted) throw new Error(`aborted while ${step}`);
 }
 
 /** Parse and validate the --tab <targetId> flag. Returns targetId or error message. */

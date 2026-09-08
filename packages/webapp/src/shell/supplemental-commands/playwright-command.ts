@@ -149,6 +149,68 @@ async function commandErrorResult(
 }
 
 /**
+ * Exit code for a command the caller abandoned. 130 is the shell's
+ * "terminated by SIGINT", which is what an abandoned command is: nobody is
+ * waiting for it any more. Never 0 — a cancelled `goto` that reported success
+ * would tell the agent the page had loaded.
+ */
+const ABORTED_EXIT_CODE = 130;
+
+/**
+ * Result for an invocation whose abort signal fired.
+ *
+ * `err` carries the step the bridge stopped at (`CommandAbortedError` from
+ * `cdp/command-abort.ts`, reached structurally — the shell layer sits BELOW
+ * cdp in the layer stack and must not import from it). A handler that returned
+ * normally after the signal fired still lands here: whatever it produced is
+ * for a caller that is already gone, and reporting it as success would be a
+ * lie about a command that may have stopped half-way.
+ */
+function abortedResult(name: string, subcommand: string, err: unknown): CmdResult {
+  const detail =
+    err === undefined
+      ? 'aborted: the caller stopped waiting for it'
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  return {
+    stdout: '',
+    stderr: `${name} ${subcommand}: ${detail}\n`,
+    exitCode: ABORTED_EXIT_CODE,
+  };
+}
+
+/**
+ * Look up and run one subcommand, mapping both failure shapes to a result:
+ * an ordinary error, and an invocation the caller abandoned (see
+ * {@link abortedResult}).
+ */
+async function runSubcommand(
+  name: string,
+  subcommand: string,
+  handlerCtx: PlaywrightHandlerCtx
+): Promise<CmdResult> {
+  const handler = playwrightHandlers.get(subcommand);
+  if (!handler) {
+    return {
+      stdout: '',
+      stderr: `Unknown command: ${subcommand}\nRun "playwright-cli help" for usage.\n`,
+      exitCode: 1,
+    };
+  }
+  const { signal } = handlerCtx;
+  try {
+    const result = await handler(handlerCtx);
+    // A handler that finished under a fired signal still counts as abandoned.
+    return signal?.aborted ? abortedResult(name, subcommand, undefined) : result;
+  } catch (err) {
+    return signal?.aborted
+      ? abortedResult(name, subcommand, err)
+      : await commandErrorResult(handlerCtx.browser, handlerCtx.flags, err);
+  }
+}
+
+/**
  * Parse a subcommand's argv, answering `--help` and rejecting arguments the
  * subcommand does not support before any handler runs.
  *
@@ -250,28 +312,19 @@ export function createPlaywrightCommand(
     const contendedTargetId = flags['tab'] ?? null;
     const lockStatsBefore = tabLockStatsSnapshot(browser, contendedTargetId);
 
-    let result: CmdResult;
-    const handler = playwrightHandlers.get(subcommand);
-    if (!handler) {
-      result = {
-        stdout: '',
-        stderr: `Unknown command: ${subcommand}\nRun "playwright-cli help" for usage.\n`,
-        exitCode: 1,
-      };
-    } else {
-      try {
-        result = await handler({
-          browser,
-          fs,
-          state,
-          positional,
-          flags,
-          scratchDir: scratchDir(ctx.env),
-        });
-      } catch (err) {
-        result = await commandErrorResult(browser, flags, err);
-      }
-    }
+    const result = await runSubcommand(name, subcommand, {
+      browser,
+      fs,
+      state,
+      positional,
+      flags,
+      scratchDir: scratchDir(ctx.env),
+      // Every tab hold a handler takes inherits this invocation's abort, so
+      // an abandoned command stops at the bridge's next cancellation boundary
+      // instead of running to completion for a caller that is gone.
+      onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: ctx.signal }),
+      signal: ctx.signal,
+    });
 
     // Post-command: session logging + auto-snapshot
     const targetId = flags['tab'] ?? null;

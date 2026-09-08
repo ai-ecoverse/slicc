@@ -74,7 +74,7 @@ function resolveOutputPath(
   return { path: filename ?? output };
 }
 
-export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
+export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, flags, onTab }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'eval requires an expression\n', exitCode: 1 };
   }
@@ -87,7 +87,7 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const expression = positional.join(' ');
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const frame = await resolveFrame(page, flags);
     const evaluate = frame
       ? (source: string) => page.evaluateInFrame(frame.frameId, source, { world: 'main' })
@@ -105,7 +105,13 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
   return { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
 };
 
-export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
+export const evalFileHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'eval-file requires a file path\n', exitCode: 1 };
   }
@@ -133,7 +139,7 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
     };
   }
 
-  const fileOutput = await browser.withTab(tab.targetId, async (page) => {
+  const fileOutput = await onTab(tab.targetId, async (page) => {
     const frame = await resolveFrame(page, flags);
     const evaluate = frame
       ? (source: string) => page.evaluateInFrame(frame.frameId, source, { world: 'main' })

@@ -10,6 +10,7 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  onTab,
 }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'generate-locator requires a ref (e.g. e5)\n', exitCode: 1 };
@@ -42,7 +43,7 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
   }
 
   let locator = '';
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('DOM.enable', {}, sessionId);
     const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);
     const obj = resolveResult['object'] as { objectId?: string } | undefined;
@@ -101,6 +102,7 @@ export const highlightHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -110,7 +112,7 @@ export const highlightHandler: PlaywrightHandler = async ({
 
   if (hide && !positional[0]) {
     // Remove all highlights
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send(
         'Runtime.evaluate',
         {
@@ -147,7 +149,7 @@ export const highlightHandler: PlaywrightHandler = async ({
 
   const backendNodeId = snapshot.refToBackendNodeId.get(ref);
 
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     if (backendNodeId) {
       await transport.send('DOM.enable', {}, sessionId);
       const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);

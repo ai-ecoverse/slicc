@@ -98,7 +98,13 @@ function ensureCapturing(
   state.consoleCleanup.set(targetId, () => binding.stop());
 }
 
-export const consoleHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const consoleHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
@@ -116,7 +122,7 @@ export const consoleHandler: PlaywrightHandler = async ({ browser, state, positi
 
   // Only enable Runtime domain and subscribe if not already capturing for this tab.
   if (!state.consoleCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Runtime.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
