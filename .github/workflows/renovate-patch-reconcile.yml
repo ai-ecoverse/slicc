@@ -53,8 +53,14 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 concurrency:
+  # NOT cancel-in-progress: Claude pushes its reconcile commit from inside the
+  # step below, and that push is a `synchronize` this workflow now runs on
+  # (PR-author gate). Cancelling would kill the reconcile run mid-flight —
+  # between Claude's push and the "Verify reconciliation" fast-fail. The
+  # successor run instead queues, re-detects, finds no orphan and exits before
+  # Claude, so the cost of queueing is one cheap detect step.
   group: renovate-patch-reconcile-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write # push the reconciliation commit to the PR branch

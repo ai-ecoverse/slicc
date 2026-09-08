@@ -48,6 +48,11 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
+  # The repair push below is itself a `synchronize`, so it starts a successor
+  # run in this group that cancels the run that pushed it. Everything that has
+  # to happen — verify, comment — therefore happens BEFORE the push, and the
+  # push is the last step. (The successor run re-runs the guard on the pushed
+  # result and no-ops, which is the post-push verification.)
   group: renovate-lockfile-reconcile-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
@@ -105,26 +110,17 @@ jobs:
         if: steps.detect.outputs.stale == 'true'
         run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Push the lockfile
+      # The regenerated tree has to satisfy the guard, or the PR is still red for
+      # a reason this workflow cannot fix. Checked before the push, because the
+      # push cancels this run (see the concurrency note).
+      - name: Verify the regenerated lockfile
         if: steps.detect.outputs.stale == 'true'
         run: |
           if git diff --quiet -- package-lock.json; then
             echo "npm install produced no lockfile change — the mismatch is not a stale lockfile." >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Only the lockfile: Renovate owns the package.json bump, and an
-          # install can touch other generated files.
-          git add package-lock.json
-          git commit -m "fix(deps): sync package-lock.json (renovate-lockfile-reconcile)"
-          git push
-
-      # The guard has to pass on the pushed result, or the PR is still red for
-      # a reason this workflow cannot fix.
-      - name: Verify the lockfile is in sync
-        if: steps.detect.outputs.stale == 'true'
-        run: npm run lint:lockfile
+          npm run lint:lockfile
 
       - name: Comment the outcome
         if: steps.detect.outputs.stale == 'true'
@@ -132,4 +128,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh pr comment "${{ github.event.pull_request.number }}" --body \
-            "🔒 Renovate shipped this bump without a matching \`package-lock.json\` (every job would fail at \`npm ci\` with EUSAGE), so I ran \`npm install\` and pushed the lockfile. See \`.github/workflows/renovate-lockfile-reconcile.yml\`."
+            "🔒 Renovate shipped this bump without a matching \`package-lock.json\` (every job would fail at \`npm ci\` with EUSAGE), so I ran \`npm install\` and am pushing the lockfile. See \`.github/workflows/renovate-lockfile-reconcile.yml\`."
+
+      # Last step: this push fires the PR's `synchronize`, which re-runs the
+      # full check suite on the repaired commit and cancels this run.
+      - name: Push the lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only the lockfile: Renovate owns the package.json bump, and an
+          # install can touch other generated files.
+          git add package-lock.json
+          git commit -m "fix(deps): sync package-lock.json (renovate-lockfile-reconcile)"
+          git push
