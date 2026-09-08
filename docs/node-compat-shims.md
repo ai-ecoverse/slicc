@@ -233,6 +233,29 @@ and `WriteStream` are inert stubs provided for Node API-shape compatibility.
 `URL`, `URLSearchParams` (re-exported globals), `fileURLToPath(url)`,
 `pathToFileURL(path)`.
 
+### `module`
+
+Partial Node `module` builtin so `require('module')` / `require('node:module')`
+and `import { createRequire } from 'node:module'` succeed. Enough of the
+surface for resolution-oriented consumers (meow, cosmiconfig, resolve-from,
+stylelint, import-meta-resolve):
+
+| API                       | Notes                                                                                                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createRequire(filename)` | Returns a `require` resolved relative to `filename` (absolute path, `file:` URL, or `URL`)                                                                                                   |
+| `require.resolve(id)`     | Resolves without loading; `options.paths` is honoured. Node builtins (including unavailable ones) return the specifier. Bare packages walk nearest `node_modules` over the loaded CJS graph. |
+| `builtinModules`          | Frozen list of unprefixed Node built-in names                                                                                                                                                |
+| `isBuiltin(name)`         | True for bare or `node:`-prefixed built-ins                                                                                                                                                  |
+| `_nodeModulePaths(from)`  | POSIX ancestor walk; skips a directory named `node_modules`                                                                                                                                  |
+| `findPnpApi`              | **Absent** (undefined), so Yarn PnP probes fall through                                                                                                                                      |
+
+`filename` must be an absolute path, a `file:` URL string, or a `URL` object —
+the same three Node accepts. Relative `require()` from the created function
+looks up the already-loaded CJS graph (VFS `require()` already works).
+
+**Not available:** `Module._compile` / `_load` / `_resolveFilename`,
+`syncBuiltinESMExports`, `register`, Source Map helpers.
+
 ### `zlib`
 
 Backed by `pako` (pure JS):

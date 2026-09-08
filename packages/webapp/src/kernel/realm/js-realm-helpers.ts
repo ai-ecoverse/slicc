@@ -24,6 +24,18 @@ export { createNodeChildProcess } from './helpers/node-child-process.js';
 export type { NodeCrypto, NodeHash } from './helpers/node-crypto.js';
 export { nodeCrypto } from './helpers/node-crypto.js';
 export { nodeEvents } from './helpers/node-events.js';
+export type {
+  NodeModuleApi,
+  NodeModuleHost,
+  NodeModuleInstance,
+  NodeRequireFunction,
+} from './helpers/node-module.js';
+export {
+  createNodeModule,
+  isPathSpecifier,
+  pickBarePackage,
+  pickExistingCandidate,
+} from './helpers/node-module.js';
 export type { NodeOs } from './helpers/node-os.js';
 export { createNodeOs, DEFAULT_HOME, nodeOs } from './helpers/node-os.js';
 export type { NodePath, NodePathParsed } from './helpers/node-path.js';
