@@ -4,6 +4,9 @@
  * Reuses OpenRouter PKCE login and OpenAI-compatible streaming; the catalog is
  * filtered from the shared `/api/v1/models` cache to models that are free,
  * accept text+image, emit text, and advertise tools/temperature/top_p.
+ *
+ * Stream functions re-check {@link isModelInFreeCatalog} so a cone that kept a
+ * previously free model cannot call OpenRouter after that model is repriced.
  */
 
 import type {
@@ -15,6 +18,7 @@ import type {
   SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import {
+  createAssistantMessageEventStream,
   registerApiProvider,
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
@@ -26,7 +30,12 @@ import type {
   ProviderConfig,
 } from '../src/providers/types.js';
 import { saveOAuthAccount } from '../src/ui/provider-settings.js';
-import { FREE_ROUTER_FALLBACK, fetchModels, getFreeCatalog } from './openrouter-models.js';
+import {
+  FREE_ROUTER_FALLBACK,
+  fetchModels,
+  getFreeCatalog,
+  isModelInFreeCatalog,
+} from './openrouter-models.js';
 import { loginIntercepted } from './openrouter-oauth.js';
 
 const PROVIDER_ID = 'openrouter-free';
@@ -50,27 +59,72 @@ function withAttribution(headers?: ProviderHeaders): ProviderHeaders {
   return { ...(headers ?? {}), ...ATTRIBUTION_HEADERS };
 }
 
+function makeErrorOutput(model: Model<Api>, error: unknown) {
+  return {
+    type: 'error' as const,
+    reason: 'error' as const,
+    error: {
+      role: 'assistant' as const,
+      content: [],
+      api: OPENROUTER_FREE_API,
+      provider: PROVIDER_ID,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'error' as const,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      timestamp: Date.now(),
+    },
+  };
+}
+
+function refuseNonFreeModel(model: Model<Api>) {
+  const stream = createAssistantMessageEventStream();
+  const error = new Error(
+    `OpenRouter (Free) refused "${model.id}" — it is not in the current free catalog. Choose another free model or refresh the catalog.`
+  );
+  queueMicrotask(() => {
+    stream.push(makeErrorOutput(model, error) as never);
+    stream.end();
+  });
+  return stream;
+}
+
 const streamOpenRouterFree = (
   model: Model<Api>,
   context: Context,
   options: ProviderStreamOptions = {}
-) =>
-  streamOpenAICompletions(asOpenRouterModel(model), context, {
+) => {
+  if (!isModelInFreeCatalog(model.id)) {
+    return refuseNonFreeModel(model);
+  }
+  return streamOpenAICompletions(asOpenRouterModel(model), context, {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),
   });
+};
 
 const streamSimpleOpenRouterFree = (
   model: Model<Api>,
   context: Context,
   options: SimpleStreamOptions = {}
-) =>
-  streamSimpleOpenAICompletions(asOpenRouterModel(model), context, {
+) => {
+  if (!isModelInFreeCatalog(model.id)) {
+    return refuseNonFreeModel(model);
+  }
+  return streamSimpleOpenAICompletions(asOpenRouterModel(model), context, {
     ...options,
     apiKey: getApiKeyForProvider(PROVIDER_ID) ?? options.apiKey,
     headers: withAttribution(options.headers),
   });
+};
 
 export const config: ProviderConfig = {
   id: PROVIDER_ID,

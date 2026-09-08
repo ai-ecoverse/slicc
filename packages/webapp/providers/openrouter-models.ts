@@ -18,6 +18,15 @@ const DEFAULT_PATTERNS = ['*'] as const;
 export interface OpenRouterPricing {
   prompt?: string;
   completion?: string;
+  request?: string;
+  image?: string;
+  web_search?: string;
+  internal_reasoning?: string;
+  audio?: string;
+  /** Nested / non-charge fields — ignored by the free-price check. */
+  discount?: number | string;
+  overrides?: unknown;
+  [key: string]: unknown;
 }
 
 /** Raw model returned by OpenRouter's /api/v1/models endpoint. */
@@ -169,11 +178,22 @@ function catalogSource(): readonly OpenRouterCatalogModel[] {
   return liveCatalog ?? (cached.length > 0 ? cached : Object.values(OPENROUTER_MODELS));
 }
 
-/** True when OpenRouter reports zero prompt+completion pricing, or the id is a free variant. */
+/** True when every present numeric OpenRouter pricing dimension is zero, or the id is a free variant. */
 export function isOpenRouterFreePriced(model: OpenRouterCatalogModel): boolean {
   const pricing = model.pricing;
   if (pricing) {
-    return Number(pricing.prompt ?? NaN) === 0 && Number(pricing.completion ?? NaN) === 0;
+    // prompt + completion must be explicitly present and zero (NaN if omitted).
+    if (!(Number(pricing.prompt ?? NaN) === 0 && Number(pricing.completion ?? NaN) === 0)) {
+      return false;
+    }
+    // Reject any other charged dimension OpenRouter may advertise (image, request, …).
+    for (const [key, value] of Object.entries(pricing)) {
+      if (key === 'discount' || key === 'overrides') continue;
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'object') continue;
+      if (Number(value) !== 0) return false;
+    }
+    return true;
   }
   // Seed entries rarely carry pricing — treat OpenRouter's free-variant ids as free.
   return model.id === 'openrouter/free' || model.id.endsWith(':free');
@@ -223,4 +243,9 @@ export function getFreeCatalog(): OpenRouterModelMetadata[] {
     .map(withFreeCost);
   if (matched.length > 0) return matched;
   return [withFreeCost(toModelMetadata(FREE_ROUTER_FALLBACK))];
+}
+
+/** Whether `modelId` is currently offered by {@link getFreeCatalog}. */
+export function isModelInFreeCatalog(modelId: string): boolean {
+  return getFreeCatalog().some((entry) => entry.id === modelId);
 }

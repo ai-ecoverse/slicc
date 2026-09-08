@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  createAssistantMessageEventStream: vi.fn(() => {
+    const stream = {
+      push: vi.fn(),
+      end: vi.fn(),
+      [Symbol.asyncIterator]: async function* () {
+        /* empty refuse stream for tests */
+      },
+    };
+    return stream;
+  }),
   fetchModels: vi.fn(),
   getApiKeyForProvider: vi.fn<() => string | null>(() => 'stored-oauth-key'),
   getFreeCatalog: vi.fn<() => unknown[]>(() => []),
+  isModelInFreeCatalog: vi.fn<(id: string) => boolean>(() => true),
   loginIntercepted: vi.fn(),
   registerApiProvider: vi.fn(),
   saveOAuthAccount: vi.fn(),
@@ -13,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai/compat')>()),
+  createAssistantMessageEventStream: mocks.createAssistantMessageEventStream,
   registerApiProvider: mocks.registerApiProvider,
   streamOpenAICompletions: mocks.streamOpenAICompletions,
   streamSimpleOpenAICompletions: mocks.streamSimpleOpenAICompletions,
@@ -48,6 +60,7 @@ vi.mock('../../providers/openrouter-models.js', () => ({
   FREE_ROUTER_FALLBACK: { id: 'openrouter/free', name: 'Free Models Router' },
   fetchModels: mocks.fetchModels,
   getFreeCatalog: mocks.getFreeCatalog,
+  isModelInFreeCatalog: mocks.isModelInFreeCatalog,
 }));
 
 vi.mock('../../providers/openrouter-oauth.js', () => ({
@@ -64,6 +77,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiKeyForProvider.mockReturnValue('stored-oauth-key');
   mocks.getFreeCatalog.mockReturnValue([]);
+  mocks.isModelInFreeCatalog.mockReturnValue(true);
+  mocks.createAssistantMessageEventStream.mockImplementation(() => {
+    const stream = {
+      push: vi.fn(),
+      end: vi.fn(),
+      [Symbol.asyncIterator]: async function* () {
+        /* empty refuse stream for tests */
+      },
+    };
+    return stream;
+  });
 });
 
 describe('OpenRouter (Free) provider config', () => {
@@ -194,5 +218,35 @@ describe('OpenRouter (Free) stream registration', () => {
         },
       })
     );
+  });
+
+  it('refuses models absent from the current free catalog without calling OpenRouter', async () => {
+    mocks.isModelInFreeCatalog.mockReturnValue(false);
+    const refuseStream = {
+      push: vi.fn(),
+      end: vi.fn(),
+      [Symbol.asyncIterator]: async function* () {
+        /* empty */
+      },
+    };
+    mocks.createAssistantMessageEventStream.mockReturnValue(refuseStream);
+
+    const provider = registeredProvider();
+    provider.stream(model as never, context as never, {} as never);
+
+    expect(mocks.streamOpenAICompletions).not.toHaveBeenCalled();
+    expect(mocks.createAssistantMessageEventStream).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(refuseStream.push).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          error: expect.objectContaining({
+            stopReason: 'error',
+            errorMessage: expect.stringMatching(/not in the current free catalog/i),
+          }),
+        })
+      );
+      expect(refuseStream.end).toHaveBeenCalledOnce();
+    });
   });
 });

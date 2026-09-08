@@ -7,6 +7,7 @@ import {
   getCatalog,
   getFreeCatalog,
   isFreeAgentCapableModel,
+  isModelInFreeCatalog,
   isOpenRouterFreePriced,
   loadCache,
   loadFilterPatterns,
@@ -131,6 +132,27 @@ describe('OpenRouter free-agent filter', () => {
     expect(isOpenRouterFreePriced({ id: 'vendor/model', name: 'Unknown' })).toBe(false);
   });
 
+  it('rejects zero token prices when image or request charges are nonzero', () => {
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', image: '0.0001' },
+      })
+    ).toBe(false);
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', request: '0.01' },
+      })
+    ).toBe(false);
+    expect(
+      isOpenRouterFreePriced({
+        ...freeAgentModel,
+        pricing: { prompt: '0', completion: '0', image: '0', request: '0', discount: 0 },
+      })
+    ).toBe(true);
+  });
+
   it('requires free pricing, vision input, text output, and tool params', () => {
     expect(isFreeAgentCapableModel(freeAgentModel)).toBe(true);
     expect(isFreeAgentCapableModel(paidVisionModel)).toBe(false);
@@ -172,6 +194,12 @@ describe('OpenRouter free-agent filter', () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ]);
+  });
+
+  it('reports membership via isModelInFreeCatalog', () => {
+    saveCache([freeAgentModel]);
+    expect(isModelInFreeCatalog(freeAgentModel.id)).toBe(true);
+    expect(isModelInFreeCatalog('vendor/paid-elsewhere')).toBe(false);
   });
 });
 
