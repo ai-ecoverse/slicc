@@ -11,6 +11,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readPackageFiles } from '../tools/check-lockfile-sync.mjs';
 import { orphanedPatches } from './lib.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -24,7 +25,14 @@ const patchFiles = existsSync(patchesDir)
 const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf-8')) : {};
 const lock = JSON.parse(readFileSync(lockPath, 'utf-8'));
 
-const orphans = orphanedPatches({ patchFiles, manifest, lock });
+// Resolve the bumped version from package.json too: on a Renovate PR whose
+// lockfile never landed, the lockfile alone still reads the patched version
+// and this workflow would decide there is nothing to reconcile (#2957).
+const packageFiles = readPackageFiles(
+  repoRoot,
+  JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8'))
+);
+const orphans = orphanedPatches({ patchFiles, manifest, lock, packageFiles });
 
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(orphans, null, 2));

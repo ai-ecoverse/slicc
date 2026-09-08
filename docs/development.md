@@ -131,18 +131,47 @@ npm view <dep> version
 
 ### Lockfile artifact updates
 
-`renovate.json` sets `skipInstalls: false`. Mend-hosted Renovate otherwise
-defaults to `npm install --package-lock-only`, and npm's arborist then fails
-with `EMISSINGTARGET` on this workspace: a `link: true` entry such as
-`node_modules/@slicc/webapp` → `packages/webapp` is rewritten without the
-matching `packages/webapp` key. The lockfile on `main` is valid; only the
-lockfile-only rewrite is broken. That left PRs #2848, #2882, #2903, #2831,
-and #2922 with a `package.json` bump and a stale lockfile (`npm ci` red
-everywhere). A full `npm install` (what `skipInstalls: false` runs; scripts
-still ignored) produces the lockfile that CI can consume.
+Renovate's Mend-hosted lockfile artifact update intermittently drops the
+lockfile: the PR carries a `package.json` bump and a stale
+`package-lock.json`, so `npm ci` fails with `EUSAGE` ("lock file's
+lucide@1.38.0 does not satisfy lucide@1.39.0") and **every** job goes red at
+install time. PRs #2848, #2882, #2903, #2831, #2922, #2957 and #2979 all
+shipped that way; all of them were repaired by a plain `npm install` and
+nothing else (the lucide ones especially look like an icon-API break and are
+not).
 
-Do not re-enable skipInstalls without a reproduction that the lockfile-only
-path no longer throws `EMISSINGTARGET` on a workspace bump.
+`renovate.json` sets `skipInstalls: false` (PR #2926) to make Renovate run a
+full `npm install` instead of the `--package-lock-only` rewrite, which throws
+arborist `EMISSINGTARGET` on this workspace (a `link: true` entry such as
+`node_modules/@slicc/webapp` → `packages/webapp` is rewritten without the
+matching `packages/webapp` key). **That was not sufficient**: #2957 and #2979
+were both created after it merged and still arrived without a lockfile, and
+Renovate reported nothing — no "Artifact update problem" block in the PR body,
+no Dependency Dashboard warning. Whether Mend pins `skipInstalls` globally or
+the full install is itself failing in their sandbox is not observable from
+this side (their run logs are behind developer.mend.io auth), so the repair
+lives in this repo instead. Keep `skipInstalls: false` — it is the documented
+workaround for this npm bug class ([renovate#34940](https://github.com/renovatebot/renovate/discussions/34940))
+— but do not treat it as the guarantee.
+
+The guarantee is a pair:
+
+- `npm run lint:lockfile`
+  ([`check-lockfile-sync.mjs`](../packages/dev-tools/tools/check-lockfile-sync.mjs))
+  compares every exact pin in the root and workspace `package.json` files
+  against `package-lock.json` and fails with a readable message instead of an
+  `npm ci` stack. It reads no `node_modules`, so it runs in `npm run lint`.
+- [`.github/workflows/renovate-lockfile-reconcile.yml`](../.github/workflows/renovate-lockfile-reconcile.yml)
+  runs that guard on every Renovate PR and, only when it trips, runs
+  `npm install --ignore-scripts` and pushes `package-lock.json` (nothing else)
+  to the PR branch.
+
+A stale lockfile also used to blind the patch machinery: `lint:patches` and
+`reconcile-context.mjs` resolved the installed version from the lockfile only,
+so on #2957 `@zenfs/core` still read 2.6.5 — matching its patch — and the
+reconcile workflow logged "No orphaned patches" on a bump that had orphaned
+one. Both now read `package.json` alongside the lockfile and report the
+disagreement.
 
 ### Companion reconcile workflows
 
@@ -153,13 +182,14 @@ foreign edit):
 
 | Workflow                           | Label                | What it does                                                            |
 | ---------------------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `renovate-lockfile-reconcile.yml`  | _(none — all PRs)_   | Runs `npm install` and pushes `package-lock.json` when it is stale      |
 | `renovate-format-reconcile.yml`    | `formatter-bump`     | Runs biome + prettier after a formatter bump                            |
 | `renovate-patch-reconcile.yml`     | `patched-dependency` | Regenerates or removes an orphaned `patch-package` patch                |
 | `renovate-swift-pin-reconcile.yml` | `swift-pin`          | Syncs GitHub SPM pins across `Package.swift` and xcodegen `project.yml` |
 | `renovate-skill-pin-reconcile.yml` | `skill-pin`          | Syncs agent-skill `ipk add` pins (e.g. v86) with `package.json`         |
 
-`npm run lint:patches` and `npm run lint:swift-pins` are the CI backstops for
-patches and SPM dual-pins. The v86 skill pin's CI backstop is the live canary
+`npm run lint:lockfile`, `npm run lint:patches` and `npm run lint:swift-pins`
+are the CI backstops for the lockfile, patches, and SPM dual-pins. The v86 skill pin's CI backstop is the live canary
 in `v86-wasm-live.test.ts` (it asserts the skill install line matches the npm
 pin).
 

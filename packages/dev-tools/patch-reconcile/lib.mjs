@@ -41,6 +41,47 @@ export function lockedVersion(lock, pkg) {
   return null;
 }
 
+/**
+ * Exact version a package file declares for `pkg`, or `null` if none does.
+ *
+ * `packageFiles` is the `[{ dir, manifest }]` shape from
+ * `packages/dev-tools/tools/check-lockfile-sync.mjs`. This exists because the
+ * lockfile alone lies on a Renovate PR that shipped without one: #2957 bumped
+ * `@zenfs/core` to 2.6.6 in packages/webapp/package.json, the lockfile still
+ * said 2.6.5 — which matched the patch — and both this guard and the reconcile
+ * workflow concluded "no orphaned patches" on a bump that had orphaned one.
+ */
+export function declaredVersion(packageFiles, pkg) {
+  for (const { manifest } of packageFiles ?? []) {
+    for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      const spec = manifest?.[section]?.[pkg];
+      if (spec != null && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z-.]+)?$/.test(spec)) return spec;
+    }
+  }
+  return null;
+}
+
+/**
+ * The version a patched package will actually be installed at, plus the
+ * stale-lockfile problem when `package.json` and the lockfile disagree.
+ * `package.json` wins: it is what the PR changed, and `npm ci` will refuse the
+ * tree anyway until the lockfile catches up.
+ */
+function installedVersion({ lock, packageFiles, pkg }) {
+  const locked = lockedVersion(lock, pkg);
+  const declared = declaredVersion(packageFiles, pkg);
+  if (declared != null && locked != null && declared !== locked) {
+    return {
+      version: declared,
+      problem:
+        `"${pkg}": package.json declares ${declared} but package-lock.json has ${locked}. ` +
+        'The lockfile is stale, so the orphaned-patch check cannot be trusted (see #2957). ' +
+        'Run `npm install` and commit package-lock.json — `npm run lint:lockfile` covers this.',
+    };
+  }
+  return { version: declared ?? locked, problem: null };
+}
+
 /** Manifest entries are real packages; skip the leading `//` comment key. */
 function manifestPackages(manifest) {
   return Object.keys(manifest ?? {}).filter((k) => k !== '//');
@@ -100,12 +141,14 @@ export function checkRenovateSync({ manifest, renovate }) {
  *   - a patch file with no `patches.json` entry (undocumented patch),
  *   - a manifest `patchedVersion` that disagrees with the patch filename,
  *   - a patch whose package is absent from the lockfile,
- *   - an ORPHANED patch — lockfile version moved past the patch version
- *     (the Renovate-bump tripwire).
+ *   - an ORPHANED patch — the installed version moved past the patch version
+ *     (the Renovate-bump tripwire),
+ *   - a stale lockfile, which would otherwise hide the orphan (pass
+ *     `packageFiles` to enable that check).
  * `notes` are non-blocking (e.g. a manifest entry whose patch file is absent,
  * which is fine while a patch lands in a separate PR or was just removed).
  */
-export function checkPatches({ patchFiles, manifest, lock }) {
+export function checkPatches({ patchFiles, manifest, lock, packageFiles }) {
   const problems = [];
   const notes = [];
   const checked = [];
@@ -128,7 +171,8 @@ export function checkPatches({ patchFiles, manifest, lock }) {
       );
     }
 
-    const locked = lockedVersion(lock, pkg);
+    const { version: locked, problem: stale } = installedVersion({ lock, packageFiles, pkg });
+    if (stale) problems.push(`${file}: ${stale}`);
     if (locked == null) {
       problems.push(`${file}: "${pkg}" is not in package-lock.json (node_modules/${pkg}).`);
     } else if (locked !== version) {
@@ -160,13 +204,13 @@ export function checkPatches({ patchFiles, manifest, lock }) {
  * The workflow runs this after `npm ci` (so the lockfile reflects the bumped
  * version) to tell Claude exactly which patch to regenerate-or-remove and how.
  */
-export function orphanedPatches({ patchFiles, manifest, lock }) {
+export function orphanedPatches({ patchFiles, manifest, lock, packageFiles }) {
   const out = [];
   for (const file of patchFiles) {
     const parsed = parsePatchFilename(file);
     if (!parsed) continue;
     const { pkg, version } = parsed;
-    const locked = lockedVersion(lock, pkg);
+    const { version: locked } = installedVersion({ lock, packageFiles, pkg });
     if (locked != null && locked !== version) {
       const entry = manifest?.[pkg] ?? {};
       out.push({
