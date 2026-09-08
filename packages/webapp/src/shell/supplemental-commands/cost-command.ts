@@ -1,5 +1,10 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import {
+  formatBudgetPercent,
+  formatBudgetResets,
+  type ProviderBudgetWindow,
+} from '../../providers/provider-budget.js';
 import type { FrozenSessionIndexEntry } from '../../transcript/frozen-archive-format.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
@@ -44,10 +49,25 @@ export interface ScoopCostData {
 
 type SessionCostsProvider = (scope: SessionCostScope) => ScoopCostData[] | Promise<ScoopCostData[]>;
 
+/**
+ * Reports the provider's rolling budget window, or `null` on a provider that
+ * meters per token. Registered alongside {@link registerSessionCostsProvider};
+ * an unregistered source simply means no budget line, never an error.
+ */
+export type SessionBudgetProvider = () =>
+  | ProviderBudgetWindow
+  | null
+  | Promise<ProviderBudgetWindow | null>;
+
 let sessionCostsProvider: SessionCostsProvider | null = null;
+let sessionBudgetProvider: SessionBudgetProvider | null = null;
 
 export function registerSessionCostsProvider(fn: SessionCostsProvider): void {
   sessionCostsProvider = fn;
+}
+
+export function registerSessionBudgetProvider(fn: SessionBudgetProvider): void {
+  sessionBudgetProvider = fn;
 }
 
 function finiteNumber(value: unknown): number {
@@ -87,9 +107,10 @@ export function frozenSessionToCostData(entry: FrozenSessionIndexEntry): ScoopCo
   };
 }
 
-/** @internal Reset provider — exposed for tests only. */
+/** @internal Reset providers — exposed for tests only. */
 export function _resetSessionCostsProvider(): void {
   sessionCostsProvider = null;
+  sessionBudgetProvider = null;
 }
 
 function helpText(): string {
@@ -97,10 +118,16 @@ function helpText(): string {
 
 Usage: cost [options]
 
+On a provider that bills against a rolling allowance (rather than per token),
+the report leads with that budget — percent USED of the window, and when it
+resets. Session dollars stay below it.
+
 Options:
   --all        Include dropped scoops and frozen sessions
   --json       Output as JSON (for programmatic use)
   -h, --help   Show this help message
+
+JSON shape: { "budget": <window|null>, "scoops": [ ... ] }
 `;
 }
 
@@ -126,6 +153,40 @@ function fmtHourlyRate(cost: number, activeTimeMs?: number): string {
 function truncModel(model: string, maxLen: number): string {
   if (model.length <= maxLen) return model;
   return model.slice(0, maxLen - 3) + '...';
+}
+
+/** Width of the meter drawn beside the budget figure. */
+const BUDGET_BAR_WIDTH = 24;
+
+/**
+ * The budget headline: a figure, a bar, and the reset.
+ *
+ * Leads the report because on a rolling allowance it is the number that
+ * decides whether the next turn runs — the dollars below it are one session's
+ * share of a shared window, and can read $0.00 on family pricing while the
+ * allowance burns down. The bar clamps at full where the figure does not: a
+ * provider reporting 104% has said something true.
+ */
+function formatBudget(budget: ProviderBudgetWindow, now = Date.now()): string {
+  const ratio = Math.max(0, Math.min(1, budget.percent / 100));
+  const filled = Math.round(ratio * BUDGET_BAR_WIDTH);
+  const bar = '█'.repeat(filled) + '░'.repeat(BUDGET_BAR_WIDTH - filled);
+  const heading = `${budget.window[0]?.toUpperCase() ?? ''}${budget.window.slice(1)} budget`;
+  const detail = [
+    budget.status === 'rate-limited' ? 'RATE-LIMITED' : '',
+    formatBudgetResets(budget.resetsAt, now) ?? '',
+    budget.providerId ?? '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const lines = [
+    `${heading}: ${formatBudgetPercent(budget.percent)}% used`,
+    `  ${bar}${detail ? `  ${detail}` : ''}`,
+  ];
+  if (budget.status === 'rate-limited') {
+    lines.push('  The provider is refusing calls until the window resets.');
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 function formatTable(data: ScoopCostData[]): string {
@@ -229,15 +290,36 @@ export function createCostCommand(): Command {
 
     const scope: SessionCostScope = parsed.bools.has('--all') ? 'all' : 'live';
     const data = await sessionCostsProvider(scope);
-
-    if (data.length === 0) {
-      return { stdout: 'No session cost data yet.\n', stderr: '', exitCode: 0 };
-    }
+    // A budget source that fails is a missing headline, never a failed report:
+    // the dollar breakdown below it is still true and still worth printing.
+    const budget = sessionBudgetProvider
+      ? await Promise.resolve(sessionBudgetProvider()).catch(() => null)
+      : null;
 
     if (parsed.bools.has('--json')) {
-      return { stdout: JSON.stringify(data, null, 2) + '\n', stderr: '', exitCode: 0 };
+      return {
+        stdout: `${JSON.stringify({ budget, scoops: data }, null, 2)}\n`,
+        stderr: '',
+        exitCode: 0,
+      };
     }
 
-    return { stdout: formatTable(data), stderr: '', exitCode: 0 };
+    const head = budget ? formatBudget(budget) : '';
+    if (data.length === 0) {
+      // A budget provider with no turns yet still has a window worth showing —
+      // it is a SHARED allowance, so it can be half spent before this session
+      // has cost a cent.
+      return {
+        stdout: head ? `${head}\nNo session cost data yet.\n` : 'No session cost data yet.\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+
+    return {
+      stdout: head ? `${head}\n${formatTable(data)}` : formatTable(data),
+      stderr: '',
+      exitCode: 0,
+    };
   });
 }

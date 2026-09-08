@@ -21,6 +21,7 @@ import type { ProcessManager } from '../kernel/process-manager.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import {
   frozenSessionToCostData,
+  registerSessionBudgetProvider,
   registerSessionCostsProvider,
   type ScoopCostData,
   type SessionCostScope,
@@ -655,6 +656,13 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Register session costs provider for the `cost` shell command
     registerSessionCostsProvider((scope) => this.getSessionCostsForCommand(scope));
+    // …and the rolling-budget headline beside it. Cached and never awaited on
+    // the hot path (see budget-window-cache.ts), so a provider without a usage
+    // endpoint costs one probe every half hour.
+    registerSessionBudgetProvider(async () => {
+      const { refreshBudgetWindow } = await import('../providers/budget-usage-source.js');
+      return refreshBudgetWindow();
+    });
 
     // Register the worker-side transcript export service so
     // getTranscriptExportService() works from any worker-side caller.

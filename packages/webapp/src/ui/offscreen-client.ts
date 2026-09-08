@@ -30,6 +30,7 @@ import type {
   ScoopSnapshotConfig,
   ScoopStatusMsg,
   ScoopTranscriptMsg,
+  SessionBudgetWindow,
   SessionStatsMsg,
   SetScoopModelAckMsg,
   SetThinkingLevelAckMsg,
@@ -121,6 +122,8 @@ export interface SessionStats {
     type: 'cone' | 'scoop';
     source: 'live' | 'dropped' | 'frozen';
   }>;
+  /** The provider's rolling budget window, when it bills against one. */
+  budget?: SessionBudgetWindow;
 }
 
 /**

@@ -48,8 +48,10 @@ import {
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
 import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
+import { fetchAdobeUsage } from '../src/providers/adobe-usage.js';
 import { findFamilyCost } from '../src/providers/family-cost.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type {
@@ -425,6 +427,8 @@ export const config: ProviderConfig = {
     'api.aem.live',
   ],
 
+  getBudgetUsage,
+
   getModelIds: () => {
     // Merge each model with cached /v1/models metadata; the entry itself fills
     // any gaps. The Haiku `compat` workaround and the cache-vs-entry precedence
@@ -666,6 +670,32 @@ async function getValidAccessToken(): Promise<string> {
   if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) return refreshedAccount.accessToken;
 
   throw new Error('Adobe session expired — please log in again');
+}
+
+/**
+ * The proxy's rolling weekly budget, or `null` when this deployment does not
+ * report one.
+ *
+ * Adobe bills against a shared 7-day allowance rather than per token, which
+ * is why the cost surfaces headline the window here and the session's dollars
+ * become the footnote: a family-priced model can report $0.00 while the
+ * allowance burns down.
+ *
+ * Never logs in and never renews interactively — a decorative counter must not
+ * pop an auth window. A missing or expired token is simply "no window".
+ */
+async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
+  const account = getAdobeAccount();
+  if (!account?.accessToken || isTokenExpired()) return null;
+  let endpoint: string;
+  try {
+    endpoint = getProxyEndpoint();
+  } catch {
+    // No proxy configured is "no window", not a failed call: retrying it every
+    // five minutes would never succeed.
+    return null;
+  }
+  return fetchAdobeUsage(endpoint, account.accessToken, fetch);
 }
 
 function isTokenExpired(): boolean {

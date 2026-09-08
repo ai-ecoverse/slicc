@@ -13,11 +13,20 @@ import type {
   MonitorMeterMarker,
   MonitorModel,
   MonitorProcessRow,
+  MonitorRow,
   MonitorSection,
   MonitorStatus,
   MonitorVital,
 } from '@slicc/webcomponents';
 import type { MountTableEntry } from '../../fs/mount-table-store.js';
+import type { SessionBudgetWindow } from '../../kernel/messages.js';
+import {
+  BUDGET_CRITICAL_PERCENT,
+  BUDGET_WARN_PERCENT,
+  budgetLevel,
+  formatBudgetPercent,
+  formatBudgetResets,
+} from '../../providers/provider-budget.js';
 import type { CronTaskEntry, WebhookEntry } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import type { ConnectedFollowerInfo } from '../../shell/supplemental-commands/host-command.js';
@@ -102,6 +111,12 @@ export interface MonitorSessionStats {
   models: { model: string; cost: number }[];
   scoops: { name: string; cost: number }[];
   fills?: { jid: string; fill: number }[];
+  /**
+   * The provider's rolling allowance, when it bills against one. Its presence
+   * is what moves the panel's hero from spend to window; a metered provider
+   * reports none and every tile stays exactly as it was.
+   */
+  budget?: SessionBudgetWindow;
 }
 
 export interface MonitorDeps {
@@ -350,23 +365,66 @@ function buildAutomationsSection(
   };
 }
 
-function buildCostSection(stats: MonitorSessionStats | null): MonitorSection {
+/** The group's own status: a refused window is a failing cost group. */
+function budgetSectionStatus(budget: SessionBudgetWindow): MonitorStatus {
+  const level = budgetLevel({ percent: budget.percent, status: budget.status });
+  if (level === 'critical') return 'error';
+  return level === 'warn' ? 'warn' : 'active';
+}
+
+/**
+ * The window as the Cost group's leading row, ahead of the per-model dollars.
+ *
+ * It carries the reset in a badge rather than in `meta`, so the row's right
+ * edge keeps reporting the one number the group is now named after.
+ */
+function budgetRow(budget: SessionBudgetWindow, now: number): MonitorRow {
+  const figure = `${formatBudgetPercent(budget.percent)}% used`;
+  const resets = formatBudgetResets(budget.resetsAt, now);
+  return {
+    name: `${budget.window[0]?.toUpperCase() ?? ''}${budget.window.slice(1)} budget`,
+    sublabel: budget.providerId ? `${budget.providerId} · rolling window` : 'rolling window',
+    meta: budget.status === 'rate-limited' ? `rate-limited · ${figure}` : figure,
+    badges: resets ? [resets] : undefined,
+    status: budgetSectionStatus(budget),
+  };
+}
+
+function buildCostSection(stats: MonitorSessionStats | null, now: number): MonitorSection {
+  const budget = stats?.budget;
+  const models = stats?.models ?? [];
+  const spend = stats ? `$${stats.totalCost.toFixed(2)} across ${models.length} models` : '';
+  // Under a budget the group is named by the window: the dollar sum is one
+  // session's share of a shared allowance, not the figure that decides whether
+  // the next turn runs.
+  const meta = budget
+    ? [
+        budget.status === 'rate-limited' ? 'rate-limited' : '',
+        `${formatBudgetPercent(budget.percent)}% of ${budget.window} budget`,
+        spend,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : stats
+      ? spend
+      : 'no spend yet';
   return {
     id: 'cost',
     label: 'Cost',
     icon: 'receipt',
-    count: stats?.models.length ?? 0,
-    meta: stats
-      ? `$${stats.totalCost.toFixed(2)} across ${stats.models.length} models`
-      : 'no spend yet',
+    count: models.length,
+    meta,
     accent: 'rose',
+    status: budget ? budgetSectionStatus(budget) : undefined,
     emptyText: 'Model usage will be summarized after the first turn.',
-    rows:
-      stats?.models.map((model) => ({
+    rows: [
+      ...(budget ? [budgetRow(budget, now)] : []),
+      ...models.map((model) => ({
         name: model.model,
         meta: `$${model.cost.toFixed(4)}`,
         status: 'idle' as MonitorStatus,
-      })) ?? [],
+      })),
+    ],
   };
 }
 
@@ -387,8 +445,15 @@ export function buildAlerts(input: {
   followers: ConnectedFollowerInfo[];
   mounts: MountMonitorRow[];
   oauthProviders: OAuthProviderEntry[];
+  /** The provider's rolling window, when it bills against one. */
+  budget?: SessionBudgetWindow;
+  /** Clock for the reset copy. Injected so tests are deterministic. */
+  now?: number;
 }): MonitorAlert[] {
   const alerts: MonitorAlert[] = [];
+
+  const budgetAlert = buildBudgetAlert(input.budget, input.now ?? Date.now());
+  if (budgetAlert) alerts.push(budgetAlert);
 
   for (const provider of input.oauthProviders) {
     if (provider.valid !== false) continue;
@@ -443,6 +508,48 @@ export function buildAlerts(input: {
   return alerts.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1));
 }
 
+/**
+ * The window, when it has become something to act on.
+ *
+ * A refusing provider is an ERROR and a nearly-spent window is a warning, and
+ * they are different facts rather than two points on one scale: the percent a
+ * provider reports lags its own refusal, so a rate-limited window at 40% still
+ * stops work while a quiet one at 92% does not. Below the warn threshold the
+ * window is not an alert at all — the hero tile is already reporting it, and a
+ * feed that lists healthy things teaches the reader to skip it.
+ */
+function buildBudgetAlert(
+  budget: SessionBudgetWindow | undefined,
+  now: number
+): MonitorAlert | null {
+  if (!budget) return null;
+  const level = budgetLevel({ percent: budget.percent, status: budget.status });
+  if (level === 'ok') return null;
+  const age = formatBudgetResets(budget.resetsAt, now);
+  const figure = `${formatBudgetPercent(budget.percent)}%`;
+  if (budget.status === 'rate-limited') {
+    return {
+      id: 'budget:rate-limited',
+      severity: 'error',
+      icon: 'octagon-alert',
+      title: `${budget.window} budget is rate-limited`,
+      detail: `The provider is refusing calls until the window resets. ${figure} of the allowance is used.`,
+      age,
+    };
+  }
+  const critical = budget.percent >= BUDGET_CRITICAL_PERCENT;
+  return {
+    id: 'budget:near-limit',
+    severity: critical ? 'error' : 'warn',
+    icon: 'gauge',
+    title: `${figure} of the ${budget.window} budget used`,
+    detail: critical
+      ? `Past ${BUDGET_CRITICAL_PERCENT}% of the allowance — calls may start being refused.`
+      : `Past ${BUDGET_WARN_PERCENT}% of the allowance. Long runs may not finish before it resets.`,
+    age,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Vitals
 // ---------------------------------------------------------------------------
@@ -472,12 +579,15 @@ export function buildVitals(input: {
    * {@link buildContextMarkers}), so the meter never under-reports.
    */
   units?: readonly RegisteredScoop[];
+  /** Clock for the budget's reset copy. Injected so tests are deterministic. */
+  now?: number;
 }): MonitorVital[] {
   const { stats, workingUnits, totalUnits, liveProcesses, terminated, history } = input;
   const window = history?.windowLabel();
   const burnRate = stats?.burnRate ?? 0;
   const fills = stats?.fills ?? [];
   const peakFill = fills.reduce((max, f) => Math.max(max, f.fill), 0);
+  const budget = stats?.budget;
 
   const vitals: MonitorVital[] = [
     {
@@ -485,7 +595,11 @@ export function buildVitals(input: {
       label: 'Burn rate',
       value: formatRate(burnRate),
       unit: '/hour',
-      hero: true,
+      // Demoted, not deleted, under a budget: "$1.40/hour" is still the
+      // fastest way to see a runaway scoop eating the allowance — it just
+      // stops being the number the panel leads with.
+      hero: !budget,
+      accent: budget ? 'rose' : undefined,
       series: history?.series('burnRate'),
       foot: [stats ? `$${stats.totalCost.toFixed(2)} this session` : 'no spend yet', window]
         .filter(Boolean)
@@ -500,7 +614,14 @@ export function buildVitals(input: {
       series: history?.series('workingUnits'),
       foot: window ?? undefined,
     },
-    {
+  ];
+
+  // The row is four fixed columns (`1.6fr 1fr 1fr 1fr`), so a fifth tile wraps
+  // at hero width and the panel stops fitting without scrolling. Live
+  // processes is the tile that yields to the budget hero: it is the only vital
+  // the process table below repeats verbatim, so nothing leaves the screen.
+  if (!budget) {
+    vitals.push({
       id: 'processes',
       label: 'Live processes',
       value: String(liveProcesses),
@@ -511,8 +632,8 @@ export function buildVitals(input: {
         terminated > 0
           ? `${terminated.toLocaleString()} exited this session`
           : (window ?? undefined),
-    },
-  ];
+    });
+  }
 
   // Only a real reading gets a meter. With no `fills` the honest thing is to
   // show no tile, not a 0% bar that reads as "context is empty".
@@ -529,7 +650,41 @@ export function buildVitals(input: {
     });
   }
 
-  return vitals;
+  return budget ? [buildBudgetVital(budget, stats, input.now ?? Date.now()), ...vitals] : vitals;
+}
+
+/**
+ * The rolling window as the panel's hero: percent USED, a meter, and the
+ * reset plus the session's dollars in the small print.
+ *
+ * Percent used rather than remaining — the provider's own convention, and the
+ * one every other surface follows, so a rising number always means the same
+ * thing. The meter clamps at 100% where the figure does not: a provider
+ * reporting 104% has said something true, and rounding it away hides an
+ * overrun.
+ */
+function buildBudgetVital(
+  budget: SessionBudgetWindow,
+  stats: MonitorSessionStats | null,
+  now: number
+): MonitorVital {
+  const level = budgetLevel({ percent: budget.percent, status: budget.status });
+  return {
+    id: 'budget',
+    label: `${budget.window[0]?.toUpperCase() ?? ''}${budget.window.slice(1)} budget`,
+    value: formatBudgetPercent(budget.percent),
+    unit: '% used',
+    hero: true,
+    ratio: Math.min(1, Math.max(0, budget.percent / 100)),
+    accent: level === 'critical' ? 'rose' : level === 'warn' ? 'amber' : 'green',
+    foot: [
+      budget.status === 'rate-limited' ? 'rate-limited' : '',
+      formatBudgetResets(budget.resetsAt, now) ?? '',
+      stats ? `$${stats.totalCost.toFixed(2)} this session` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  };
 }
 
 /**
@@ -645,8 +800,16 @@ export async function fetchMonitorData(
       terminated,
       history,
       units: scoops,
+      now,
     }),
-    alerts: buildAlerts({ tray, followers, mounts, oauthProviders }),
+    alerts: buildAlerts({
+      tray,
+      followers,
+      mounts,
+      oauthProviders,
+      budget: sessionStats?.budget,
+      now,
+    }),
     sections: [
       buildTraySection(tray),
       buildFollowersSection(followers),
@@ -654,7 +817,7 @@ export async function fetchMonitorData(
       buildMountsSection(mounts),
       buildIntegrationsSection(mcpEntries, oauthProviders),
       buildAutomationsSection(cronTasks, webhooks),
-      buildCostSection(sessionStats),
+      buildCostSection(sessionStats, now),
     ],
     processes: {
       rows: processes.map((proc) => toProcessRow(proc, now)),
