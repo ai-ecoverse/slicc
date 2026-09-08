@@ -83,10 +83,45 @@ describe('resolveBridgeConfig', () => {
   });
 
   it('returns null when the bridge URL cannot derive an api base', () => {
-    // Bare hostname → URL parser fails → deriveBridgeApiBaseUrl → null.
+    // 'not-a-url' fails the ws:// scheme test in parseBridgeLaunchParams → null.
     expect(
       resolveBridgeConfig(null, 'https://www.sliccy.ai/?bridge=not-a-url&bridgeToken=t')
     ).toBeNull();
+  });
+
+  it('rejects a non-loopback bridge host (#2963 — SW parser must apply the #2939 loopback guard)', () => {
+    // The `bridge` query param is attacker-suppliable on a hosted-origin page,
+    // and `apiBaseUrl` is derived straight from its host. Without the loopback
+    // guard on THIS fallback path, an intercepted fetch would be forwarded to
+    // `{attacker}/api/fetch-proxy` with the bridge token attached. Mirrors the
+    // page-realm `parseBridgeLaunchParams` refusal (same host list).
+    for (const host of [
+      'attacker.example',
+      'bridge.example',
+      '169.254.169.254',
+      '10.0.0.5',
+      'localhost.attacker.example',
+      '127.0.0.1.attacker.example',
+    ]) {
+      const clientUrl = `https://www.sliccy.ai/?bridge=${encodeURIComponent(
+        `wss://${host}/cdp`
+      )}&bridgeToken=deadbeef`;
+      expect(resolveBridgeConfig(null, clientUrl), host).toBeNull();
+    }
+  });
+
+  it('accepts every loopback spelling a launcher may emit on the fallback path', () => {
+    // Must keep matching `isLoopbackHostname` — the servers legitimately launch
+    // with IPv6 and 127.0.0.0/8 bridge hosts, not just `localhost`.
+    for (const host of ['localhost', '127.0.0.1', '127.0.0.2', '[::1]']) {
+      const clientUrl = `https://www.sliccy.ai/?bridge=${encodeURIComponent(
+        `ws://${host}:5710/cdp`
+      )}&bridgeToken=x`;
+      expect(resolveBridgeConfig(null, clientUrl), host).toEqual({
+        apiBaseUrl: `http://${host}:5710`,
+        token: 'x',
+      });
+    }
   });
 });
 
@@ -139,6 +174,30 @@ describe('resolveBridgeFromClientUrls', () => {
 
   it('returns null when given an empty candidate list and no cache', () => {
     expect(resolveBridgeFromClientUrls(null, [])).toBeNull();
+  });
+
+  it('skips a non-loopback candidate on the window-enumeration fallback (#2963)', () => {
+    // The `readWindowClientUrls()` fallback (kernel-worker-originated fetch /
+    // post-eviction cache miss) must NOT resolve a bridge from a crafted
+    // hosted-origin window URL naming a remote host — that is the exact path
+    // #2939's page-realm guard did not cover.
+    expect(
+      resolveBridgeFromClientUrls(null, [
+        'http://localhost:5710/kernel-worker.js',
+        'https://www.sliccy.ai/?bridge=wss://attacker.example/cdp&bridgeToken=deadbeef',
+      ])
+    ).toBeNull();
+  });
+
+  it('prefers a later loopback candidate over an earlier non-loopback one', () => {
+    // A non-loopback candidate is treated as "no bridge here" and skipped, so
+    // the scan continues to the genuine loopback leader instead of latching the
+    // attacker origin.
+    const out = resolveBridgeFromClientUrls(null, [
+      'https://www.sliccy.ai/?bridge=wss://attacker.example/cdp&bridgeToken=evil',
+      'https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=good',
+    ]);
+    expect(out).toEqual({ apiBaseUrl: 'http://localhost:5710', token: 'good' });
   });
 });
 

