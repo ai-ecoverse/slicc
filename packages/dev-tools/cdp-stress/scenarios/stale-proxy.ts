@@ -47,7 +47,7 @@ export async function run(opts: { policies?: ProxyPolicy[] } = {}): Promise<Stal
       const tab = await st.browser.createPage(`${site.url}/page/one`);
       const other = await st.browser.createPage(`${site.url}/page/two`);
       await new Promise((r) => setTimeout(r, 300));
-      const title = () => st.browser.withTab(tab, () => st.browser.evaluate('document.title'));
+      const title = () => st.browser.withTab(tab, (page) => page.evaluate('document.title'));
       const before = await timed(title);
       proxy.dropChromeLeg();
       await new Promise((r) => setTimeout(r, SETTLE_AFTER_DROP_MS));
@@ -57,7 +57,7 @@ export async function run(opts: { policies?: ProxyPolicy[] } = {}): Promise<Stal
       const afterDrop2 = await timed(title);
       // Workaround 1: touch another tab then come back (forces re-attach).
       const otherTab = await timed(() =>
-        st.browser.withTab(other, () => st.browser.evaluate('document.title'))
+        st.browser.withTab(other, (page) => page.evaluate('document.title'))
       );
       const backAgain = await timed(title);
       // Workaround 2: the page-side BrowserAPI's refresh loop calls

@@ -100,10 +100,15 @@ function mkBrowser(): BrowserAPI {
       .mockResolvedValue([
         { targetId: 'tab-1', title: 'T', url: 'https://x.com', type: 'page', attached: false },
       ]),
-    attachToPage: vi.fn().mockResolvedValue(undefined),
-    evaluate: vi.fn().mockResolvedValue('42'),
-    sendCDP: vi.fn().mockResolvedValue({}),
-    withTab: async (_t: string, fn: (s: string) => Promise<unknown>) => fn('sess'),
+    withTab: async (targetId: string, fn: (tab: unknown) => Promise<unknown>) =>
+      fn({
+        targetId,
+        sessionId: 'sess',
+        transport: { send: vi.fn(), on: vi.fn(), off: vi.fn() },
+        send: vi.fn().mockResolvedValue({}),
+        evaluate: vi.fn().mockResolvedValue('42'),
+        getFrameTree: vi.fn().mockResolvedValue([]),
+      }),
     getTransport: () => ({ send: vi.fn(), on: vi.fn(), off: vi.fn() }),
   } as unknown as BrowserAPI;
 }

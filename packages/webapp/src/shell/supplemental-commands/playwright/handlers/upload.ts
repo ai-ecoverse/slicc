@@ -93,8 +93,7 @@ export const uploadHandler: PlaywrightHandler = async ({
 
   if (targetRef) {
     const backendNodeId = snapshot!.refToBackendNodeId.get(targetRef)!;
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('DOM.enable', {}, sessionId);
       const { object } = (await transport.send(
         'DOM.resolveNode',
@@ -137,7 +136,7 @@ export const uploadHandler: PlaywrightHandler = async ({
       }
     });
   } else {
-    await browser.withTab(tab.targetId, async (sessionId) => {
+    await browser.withTab(tab.targetId, async ({ sessionId }) => {
       const filesJson = JSON.stringify(files);
       const script = `(function() {
         var el = document.activeElement;

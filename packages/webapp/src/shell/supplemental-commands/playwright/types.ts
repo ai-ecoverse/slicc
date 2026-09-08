@@ -13,11 +13,21 @@ import type { createServeCommand } from '../serve-command.js';
 
 /** The cdp BrowserAPI, named without a cdp import (see layer note above). */
 export type BrowserAPI = NonNullable<Parameters<typeof createServeCommand>[0]>;
+
+/**
+ * The cdp `TabHandle` — the session-explicit page API `withTab` hands its
+ * callback. Derived from `withTab`'s own signature rather than imported from
+ * `cdp/`, for the same layer reason as {@link BrowserAPI}. Every page
+ * operation a handler performs goes through one of these; nothing reads a
+ * bridge-wide "current tab" cursor, which is what lets commands on different
+ * tabs run concurrently.
+ */
+export type TabHandle = Parameters<Parameters<BrowserAPI['withTab']>[1]>[0];
 type HarRecorder = ReturnType<BrowserAPI['createHarRecorder']>;
 
 /** cdp PageInfo / FrameInfo, derived the same layer-safe way. */
 export type PageInfo = Awaited<ReturnType<BrowserAPI['listPages']>>[number];
-export type FrameInfo = Awaited<ReturnType<BrowserAPI['getFrameTree']>>[number];
+export type FrameInfo = Awaited<ReturnType<TabHandle['getFrameTree']>>[number];
 
 /** Runtime float kind; mirrors scoops/tray-leader without importing up-stack. */
 export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
@@ -73,8 +83,8 @@ export interface TeleportWatcher {
   timeoutTimer?: ReturnType<typeof setTimeout>;
   /** CDP event listener cleanup function. */
   cleanupListener?: () => void;
-  /** Cleanup function for the follower storage replay script. */
-  removeFollowerStorageScript?: (() => Promise<void>) | null;
+  /** The follower's installed storage-replay init script, for later removal. */
+  followerStorageScript?: import('./teleport-storage.js').TeleportStorageScript | null;
   /** Dedup key for callback/error diagnostics while polling the follower. */
   lastFollowerDiagnosticKey?: string;
   /** Last follower URL observed during teleport polling. */

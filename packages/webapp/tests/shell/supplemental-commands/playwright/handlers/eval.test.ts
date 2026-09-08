@@ -7,8 +7,8 @@ describe('evalHandler frame targeting', () => {
   it('evaluates user expressions in the validated frame main world', async () => {
     const evaluate = vi.fn(async () => 'main-result');
     const evaluateInFrame = vi.fn(async () => 'frame-result');
-    const browser = {
-      withTab: async <T>(_targetId: string, fn: () => Promise<T>) => fn(),
+    const page = {
+      targetId: 'tab-1',
       getFrameTree: vi.fn(async () => [
         { frameId: 'main', url: 'https://example.com', name: '' },
         {
@@ -20,6 +20,9 @@ describe('evalHandler frame targeting', () => {
       ]),
       evaluate,
       evaluateInFrame,
+    };
+    const browser = {
+      withTab: async <T>(_targetId: string, fn: (tab: typeof page) => Promise<T>) => fn(page),
     } as unknown as BrowserAPI;
 
     const result = await evalHandler(

@@ -116,9 +116,15 @@ describe('delegated OAuth routing', () => {
       // Mirrors the real `BrowserAPI.withTab` (attach, then run): the login
       // driver holds this tab for minutes and polls it, so every attach is
       // serialized rather than swapping the shared client's session directly.
-      withTab: vi.fn(async (_targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      withTab: vi.fn(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
         await browserAPI.attachToPage();
-        return await fn('session-1');
+        return await fn({
+          targetId,
+          sessionId: 'session-1',
+          transport: browserAPI.getTransport(),
+          send: browserAPI.sendCDP,
+          evaluate: browserAPI.evaluate,
+        });
       }),
     };
     const manager = createManager({ browserAPI: browserAPI as never });

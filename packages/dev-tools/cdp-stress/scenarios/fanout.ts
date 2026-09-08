@@ -1,16 +1,18 @@
 /**
  * Scenario 5 — fan-out stress (the #2411 incident shape).
  * D drivers each own 2 tabs and loop: goto → snapshot → screenshot → title
- * check. Everything funnels through the single global tab lock. Reports lock
- * wait, per-op latency, wrong-tab results, and error kinds.
+ * check. Reports lock wait (split per-tab vs bridge-wide), per-op latency,
+ * wrong-tab results, and error kinds.
  *
  * `poison: true` adds one driver that navigates to a URL that never loads: its
- * `navigate()` holds the global lock until the load-event timeout. `wallMs`
+ * `navigate()` holds its OWN tab until the load-event timeout. `wallMs`
  * includes that driver; `driversWallMs` stops when the last REAL driver
  * finishes, which is what "unpoisoned drivers unaffected" is measured on.
  *
- * Post-fix expectation: per-tab locking, so cumulative lock wait collapses and
- * the poisoned run's `driversWallMs` matches the clean run's.
+ * Expectation: locking is per tab and only per tab, so both `tabWaitMs` and
+ * `bridgeWaitMs` stay near zero across distinct tabs, wall-clock scales with
+ * ops rather than with fan-out, and the poisoned run's `driversWallMs` matches
+ * the clean run's.
  */
 import { launchChrome } from '../chrome.js';
 import { startSite } from '../site.js';
@@ -80,9 +82,9 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
 
     /** Charge the lock wait accrued while `fn` ran to the goto histogram. */
     // Per-tab lock wait (a sibling driving the SAME tab). Bridge-wide waits
-    // are reported separately in `lock.bridgeWaitMs`: with an ambient session
-    // cursor, CDP round trips still take turns on the bridge, while page
-    // loads and waits overlap across tabs.
+    // are reported separately in `lock.bridgeWaitMs`: with session-explicit
+    // handlers the only bridge-wide work left in a command's path is moving
+    // the cursor on attach, so that number should stay near zero too.
     const tabWait = (): number => {
       const stats = b.getTabLockStats();
       return stats.tabWaitMs ?? stats.totalWaitMs;
@@ -119,23 +121,27 @@ export async function run(opts: FanoutOptions = {}): Promise<FanoutResult> {
           const name = `d${d}-t${ti}-i${k}`;
           await rec('goto', () =>
             lockWaitSample(() =>
-              b.withTab(tab, () => b.navigate(`${site.url}/page/${name}?items=${ITEMS_PER_PAGE}`))
+              b.withTab(tab, (page) =>
+                page.navigate(`${site.url}/page/${name}?items=${ITEMS_PER_PAGE}`)
+              )
             )
           );
-          await rec('snapshot', () => b.withTab(tab, () => b.getAccessibilityTree()));
+          await rec('snapshot', () => b.withTab(tab, (page) => page.getAccessibilityTree()));
           if (opts.screenshot !== false) {
             await rec('screenshot', () =>
-              b.withTab(tab, () => b.screenshot({ foregroundFallback: false }))
+              b.withTab(tab, (page) => page.screenshot({ foregroundFallback: false }))
             );
           }
-          const got = await rec('title', () => b.withTab(tab, () => b.evaluate('document.title')));
+          const got = await rec('title', () =>
+            b.withTab(tab, (page) => page.evaluate('document.title'))
+          );
           if (got !== undefined && got !== name) wrongTab += 1;
         }
       }
     };
     const poisonDriver = async () => {
       const tab = await b.createPage('about:blank');
-      await rec('goto', () => b.withTab(tab, () => b.navigate(`${site.url}/hang`)));
+      await rec('goto', () => b.withTab(tab, (page) => page.navigate(`${site.url}/hang`)));
     };
 
     const wall0 = Date.now();

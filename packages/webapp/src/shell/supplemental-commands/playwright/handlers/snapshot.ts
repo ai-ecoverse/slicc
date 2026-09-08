@@ -12,17 +12,11 @@ import {
   requireTab,
   resolveFrame,
 } from '../state.js';
-import type {
-  PlaywrightHandler,
-  PlaywrightHandlerCtx,
-  PlaywrightState,
-  TabSnapshot,
-} from '../types.js';
+import type { PlaywrightHandler, PlaywrightState, TabHandle, TabSnapshot } from '../types.js';
 
 // Named via the handler context rather than imported from `cdp/` so this
 // module stays inside the shell layer (see layer-stack import direction).
-type BrowserAPI = PlaywrightHandlerCtx['browser'];
-type FrameInfo = Awaited<ReturnType<BrowserAPI['getFrameTree']>>[number];
+type FrameInfo = Awaited<ReturnType<TabHandle['getFrameTree']>>[number];
 
 type ScreenshotClip = { x: number; y: number; width: number; height: number; scale?: number };
 
@@ -38,12 +32,12 @@ function loadSnapshotFeatures(): Promise<typeof import('./snapshot-features.js')
 }
 
 async function takeFrameSnapshot(
-  browser: BrowserAPI,
+  page: TabHandle,
   state: PlaywrightState,
   targetId: string,
   frame: FrameInfo
 ): Promise<string> {
-  const tree = await browser.getAccessibilityTreeForFrame(frame.frameId);
+  const tree = await page.getAccessibilityTreeForFrame(frame.frameId);
   const refToSelector = new Map<string, string>();
   const refToBackendNodeId = new Map<string, number>();
   const refToFrameId = new Map<string, string>();
@@ -65,38 +59,32 @@ async function takeFrameSnapshot(
 
 /** Resolve a clip rect from a ref via its backendNodeId (preferred, reliable). */
 async function clipFromBackendNode(
-  browser: BrowserAPI,
+  page: TabHandle,
   backendNodeId: number
 ): Promise<ScreenshotClip | undefined> {
-  const transport = browser.getTransport();
-  const sessionId = browser.getSessionId();
-  await transport.send('DOM.enable', {}, sessionId!);
-  await transport.send('Runtime.enable', {}, sessionId!);
-  const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
+  await page.send('DOM.enable');
+  await page.send('Runtime.enable');
+  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
   const obj = resolveResult['object'] as { objectId?: string } | undefined;
   if (!obj?.objectId) return undefined;
-  const boxResult = await transport.send(
-    'Runtime.callFunctionOn',
-    {
-      objectId: obj.objectId,
-      functionDeclaration: `function() {
+  const boxResult = await page.send('Runtime.callFunctionOn', {
+    objectId: obj.objectId,
+    functionDeclaration: `function() {
         this.scrollIntoView({ block: 'center' });
         const r = this.getBoundingClientRect();
         return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
       }`,
-      returnByValue: true,
-    },
-    sessionId!
-  );
+    returnByValue: true,
+  });
   return (boxResult['result'] as { value?: ScreenshotClip })?.value;
 }
 
 /** Resolve a clip rect from a ref via its CSS selector (fallback). */
 async function clipFromSelector(
-  browser: BrowserAPI,
+  page: TabHandle,
   selector: string
 ): Promise<ScreenshotClip | undefined> {
-  const rectJson = await browser.evaluate(
+  const rectJson = await page.evaluate(
     `(function() {
       const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
       if (!el) return null;
@@ -110,19 +98,19 @@ async function clipFromSelector(
 
 /** Resolve the bounding box to clip a screenshot to, for a ref like `e5`. */
 async function resolveElementClip(
-  browser: BrowserAPI,
+  page: TabHandle,
   snapshot: TabSnapshot,
   ref: string
 ): Promise<ScreenshotClip | undefined> {
   const backendNodeId = snapshot.refToBackendNodeId.get(ref);
   if (backendNodeId) {
-    return clipFromBackendNode(browser, backendNodeId);
+    return clipFromBackendNode(page, backendNodeId);
   }
   const selector = snapshot.refToSelector.get(ref);
   if (!selector) {
     throw new Error(`Unknown ref "${ref}"`);
   }
-  return clipFromSelector(browser, selector);
+  return clipFromSelector(page, selector);
 }
 
 export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
@@ -150,15 +138,15 @@ export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, f
       exitCode: 1,
     };
   }
-  let output = await browser.withTab(tab.targetId, async () => {
-    const frame = await resolveFrame(browser, flags);
-    if (frame) return takeFrameSnapshot(browser, state, tab.targetId, frame);
-    const { snapshot, output: text } = await takeSnapshot(browser, state, tab.targetId, {
+  let output = await browser.withTab(tab.targetId, async (page) => {
+    const frame = await resolveFrame(page, flags);
+    if (frame) return takeFrameSnapshot(page, state, tab.targetId, frame);
+    const { snapshot, output: text } = await takeSnapshot(page, state, tab.targetId, {
       noIframes,
     });
     if (!boxes) return text;
     const { annotateBoxes } = await loadSnapshotFeatures();
-    return annotateBoxes(browser, snapshot.refToBackendNodeId, text);
+    return annotateBoxes(page, snapshot.refToBackendNodeId, text);
   });
   if (depth !== undefined) {
     const { limitSnapshotDepth } = await loadSnapshotFeatures();
@@ -186,8 +174,8 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  const output = await browser.withTab(tab.targetId, async () => {
-    const frames = await browser.getFrameTree();
+  const output = await browser.withTab(tab.targetId, async (page) => {
+    const frames = await page.getFrameTree();
     const lines = frames.map((f) => {
       const type = f.parentFrameId ? 'child' : 'main';
       const parent = f.parentFrameId ? ` parentFrameId=${f.parentFrameId}` : '';
@@ -206,8 +194,7 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratc
     flags['filename'] || `${scratchDir}/page-${filenameSafeTimestamp(new Date())}.pdf`;
 
   try {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       const result = await transport.send('Page.printToPDF', {}, sessionId);
       const data = (result as { data: string }).data;
       const bytes = base64ToBytes(data);
@@ -236,7 +223,7 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratc
 
 /** Resolve a positional element ref to a clip, or a caller-facing error. */
 async function resolveRefClipOrError(
-  browser: BrowserAPI,
+  page: TabHandle,
   state: PlaywrightState,
   targetId: string,
   ref: string
@@ -245,7 +232,7 @@ async function resolveRefClipOrError(
   if (!snapshot) {
     throw new Error('No snapshot available. Run "snapshot" first.');
   }
-  const clip = await resolveElementClip(browser, snapshot, ref);
+  const clip = await resolveElementClip(page, snapshot, ref);
   if (!clip || clip.width <= 0 || clip.height <= 0) {
     return {
       error:
@@ -303,13 +290,13 @@ export const screenshotHandler: PlaywrightHandler = async ({
       exitCode: 1,
     };
   }
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     // Ref-based screenshot: the requested element's crop or a loud failure.
     // Silently substituting the full viewport corrupts downstream visual
     // comparisons with a 0 exit code — worse than any error.
     let clip: ScreenshotClip | undefined;
     if (positional[0]?.startsWith('e')) {
-      const resolved = await resolveRefClipOrError(browser, state, tab.targetId, positional[0]);
+      const resolved = await resolveRefClipOrError(page, state, tab.targetId, positional[0]);
       if ('error' in resolved) return resolved;
       clip = resolved.clip;
     }
@@ -317,12 +304,12 @@ export const screenshotHandler: PlaywrightHandler = async ({
     const fullPage = flags['fullPage'] === 'true' || flags['full-page'] === 'true';
     if (flags['hires'] === 'true') {
       const { hiresClip } = await loadSnapshotFeatures();
-      clip = await hiresClip(browser, clip, fullPage);
+      clip = await hiresClip(page, clip, fullPage);
     }
 
     const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
     const format = screenshotFormat(flags);
-    const base64 = await browser.screenshot({
+    const base64 = await page.screenshot({
       format,
       fullPage,
       ...(clip ? { clip } : {}),

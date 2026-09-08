@@ -87,11 +87,11 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const expression = positional.join(' ');
-  const output = await browser.withTab(tab.targetId, async () => {
-    const frame = await resolveFrame(browser, flags);
+  const output = await browser.withTab(tab.targetId, async (page) => {
+    const frame = await resolveFrame(page, flags);
     const evaluate = frame
-      ? (source: string) => browser.evaluateInFrame(frame.frameId, source, { world: 'main' })
-      : (source: string) => browser.evaluate(source);
+      ? (source: string) => page.evaluateInFrame(frame.frameId, source, { world: 'main' })
+      : (source: string) => page.evaluate(source);
     const evalResult = await evaluateWithTopLevelAwait(evaluate, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
@@ -133,11 +133,11 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
     };
   }
 
-  const fileOutput = await browser.withTab(tab.targetId, async () => {
-    const frame = await resolveFrame(browser, flags);
+  const fileOutput = await browser.withTab(tab.targetId, async (page) => {
+    const frame = await resolveFrame(page, flags);
     const evaluate = frame
-      ? (source: string) => browser.evaluateInFrame(frame.frameId, source, { world: 'main' })
-      : (source: string) => browser.evaluate(source);
+      ? (source: string) => page.evaluateInFrame(frame.frameId, source, { world: 'main' })
+      : (source: string) => page.evaluate(source);
     const fileEvalResult = await evaluateWithTopLevelAwait(evaluate, scriptContent);
     return typeof fileEvalResult === 'string'
       ? fileEvalResult

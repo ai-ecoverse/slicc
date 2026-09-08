@@ -65,10 +65,16 @@ function makeFakeBrowser() {
      * Overlay code must reach the cursor ONLY through these — a bare attach
      * from a UI timer can land inside a running agent command (issue #2417).
      */
-    withTab: vi.fn(async (id: string, fn: (sessionId: string) => Promise<unknown>) => {
+    withTab: vi.fn(async (id: string, fn: (tab: unknown) => Promise<unknown>) => {
       locked += 1;
       try {
-        return await fn(await api.attachToPage(id));
+        const sessionId = await api.attachToPage(id);
+        return await fn({
+          targetId: id,
+          sessionId,
+          screenshot: api.screenshot,
+          bringToFront: api.bringToFront,
+        });
       } finally {
         locked -= 1;
       }
@@ -77,9 +83,7 @@ function makeFakeBrowser() {
       await api.withTab(id, async () => undefined);
     }),
     bringTabToFront: vi.fn(async (id: string) => {
-      await api.withTab(id, async () => {
-        await api.bringToFront();
-      });
+      await api.withTab(id, async () => api.bringToFront());
     }),
   };
   return api;

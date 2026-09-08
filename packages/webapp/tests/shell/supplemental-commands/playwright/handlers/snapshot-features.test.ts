@@ -63,29 +63,41 @@ function makeBrowser(opts?: {
   const screenshot = vi.fn(async () => btoa('img'));
   const evaluate = vi.fn(async () => opts?.evaluateResult ?? null);
   const createPage = vi.fn(async () => TAB);
-  const setViewportOverride = vi.fn(async () => undefined);
+  const setViewportOverride = vi.fn(
+    async (_targetId: string, _w: number, _h: number, _opts?: unknown) => undefined
+  );
   const navigate = vi.fn(async () => undefined);
   const transportSend = vi.fn(
     async (method: string, params?: Record<string, unknown>) =>
       (opts?.transportSend?.(method, params) as Record<string, unknown>) ?? {}
   );
   let tabLockHeldFor: string | null = null;
+  const page = {
+    targetId: TAB,
+    sessionId: 'session-1',
+    transport: { send: transportSend },
+    send: (method: string, params?: Record<string, unknown>) =>
+      params === undefined ? transportSend(method) : transportSend(method, params),
+    screenshot,
+    evaluate,
+    navigate,
+    // `page.setViewportOverride(w, h, opts)`; the spy keeps the targetId in
+    // front so the existing assertions read the same.
+    setViewportOverride: (width: number, height: number, options?: unknown) =>
+      setViewportOverride(TAB, width, height, options),
+  };
   const browser = {
-    withTab: async <T>(t: string, fn: (sessionId: string) => Promise<T>) => {
+    withTab: async <T>(t: string, fn: (tab: typeof page) => Promise<T>) => {
       tabLockHeldFor = t;
+      page.targetId = t;
       try {
-        return await fn('session-1');
+        return await fn(page);
       } finally {
         tabLockHeldFor = null;
       }
     },
     getTransport: () => ({ send: transportSend }),
-    getSessionId: () => 'session-1',
-    screenshot,
-    evaluate,
     createPage,
-    setViewportOverride,
-    navigate,
   } as unknown as BrowserAPI;
   return {
     browser,
@@ -167,11 +179,8 @@ describe('snapshot --boxes', () => {
     expect(result.stdout).toContain('[ref=e2] [box=10,20,120,40]');
     // e1 did not resolve — its line stays unannotated rather than lying.
     expect(result.stdout).toContain('[ref=e1]\n');
-    expect(transportSend).toHaveBeenCalledWith(
-      'DOM.resolveNode',
-      { backendNodeId: 102 },
-      'session-1'
-    );
+    // Through the handle: the session is bound, not a third argument.
+    expect(transportSend).toHaveBeenCalledWith('DOM.resolveNode', { backendNodeId: 102 });
   });
 
   it('rejects --boxes with --frame', async () => {

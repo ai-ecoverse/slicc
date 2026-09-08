@@ -39,9 +39,9 @@ export async function autoSaveSnapshot(
   state: PlaywrightState
 ): Promise<string | null> {
   try {
-    return await browser.withTab(targetId, async () => {
+    return await browser.withTab(targetId, async (page) => {
       const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } =
-        await buildSnapshot(browser);
+        await buildSnapshot(page);
 
       const snapshot: TabSnapshot = {
         url,

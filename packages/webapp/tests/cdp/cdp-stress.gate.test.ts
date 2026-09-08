@@ -10,11 +10,9 @@
  * GATING. Like the `iframe integration` suite in
  * tests/shell/supplemental-commands/playwright-command.test.ts, this needs a
  * real Chrome, so it is opt-in. Unlike that suite it deliberately does NOT
- * enable itself on `CI`: on today's `main` these gates FAIL by design — they
- * describe the bridge's behaviour AFTER the per-tab session registry and
- * per-tab locking land (that diagnosis' Phase 1/2). Once the fixes are in,
- * flip this on by adding `Boolean(process.env['CI'])` to `stressEnabled`
- * below, the same shape the iframe suite uses.
+ * enable itself on `CI`: a fan-out run needs 17 live tabs and a compositor
+ * that can actually produce frames, which a shared runner does not reliably
+ * have. Run it locally when touching `cdp/`.
  *
  * Locally:  SLICC_TEST_CDP_STRESS=1 npx vitest run packages/webapp/tests/cdp/cdp-stress.gate.test.ts
  */
@@ -40,13 +38,23 @@ const NO_TIMEOUT_MS = 5000;
 
 /**
  * Bounds for the "distinct tabs do not wait on each other" gate. These are
- * PER-TAB lock waits (a sibling driving the same tab). Bridge-wide waits are
- * still expected: with the ambient session cursor, CDP round trips take turns
- * on the bridge while page loads and waits overlap — so the throughput gate
- * below (wall-clock scaling with ops) is what bounds them.
+ * PER-TAB lock waits (a sibling driving the same tab).
  */
 const MAX_TAB_WAIT_P95_MS = 250;
 const MAX_TAB_WAIT_TOTAL_MS = 2000;
+
+/**
+ * Bound on BRIDGE-WIDE waiting across the whole fan-out.
+ *
+ * Session-explicit handlers left exactly one bridge-wide step in a command's
+ * path — attaching, which moves the cursor and (for a tray target) swaps the
+ * transport. That is a handful of round trips for the first touch of each tab
+ * and a synchronous cursor move afterwards, so the cumulative wait across 16
+ * tabs × 4 iterations × 4 ops is small and does NOT scale with fan-out. Before
+ * this, a command body held the bridge end to end and the same run accumulated
+ * tens of seconds here.
+ */
+const MAX_BRIDGE_WAIT_TOTAL_MS = 2000;
 
 /** `goto` must wait for the target tab's own load (the slow asset is 3s). */
 const MIN_TARGET_LOAD_MS = 2500;
@@ -129,6 +137,9 @@ describeStress('cdp bridge stress gates', () => {
     expect(eight.lock.tabWaitMs ?? eight.lock.totalWaitMs).toBeLessThanOrEqual(
       MAX_TAB_WAIT_TOTAL_MS
     );
+    // Distinct tabs no longer take turns on the bridge either: a command body
+    // holds nothing bridge-wide, so only the attaches can queue here.
+    expect(eight.lock.bridgeWaitMs ?? 0).toBeLessThanOrEqual(MAX_BRIDGE_WAIT_TOTAL_MS);
     const scaledBudget = 1.5 * one.driversWallMs * (eight.ops / one.ops);
     expect(eight.driversWallMs).toBeLessThanOrEqual(scaledBudget);
   });

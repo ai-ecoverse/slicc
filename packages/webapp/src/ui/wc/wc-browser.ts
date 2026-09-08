@@ -187,8 +187,8 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
         // `withTab` rather than a bare attach: the loop walks every tab, so
         // without the locks it would move the session cursor out from under
         // whatever command the agent is running.
-        const shot = await browser.withTab(p.targetId, () =>
-          browser.screenshot({
+        const shot = await browser.withTab(p.targetId, (page) =>
+          page.screenshot({
             format: 'jpeg',
             quality: 72,
             // Cards are `minmax(220px, 1fr)` and stretch well past that in a

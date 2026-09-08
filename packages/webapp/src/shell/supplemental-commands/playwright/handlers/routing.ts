@@ -101,9 +101,7 @@ async function enableFetchInterception(
   state: PlaywrightState,
   targetId: string
 ): Promise<void> {
-  await browser.withTab(targetId, async (sessionId) => {
-    const transport = browser.getTransport();
-
+  await browser.withTab(targetId, async ({ sessionId, transport }) => {
     await transport.send('Fetch.enable', { patterns: FETCH_PATTERNS }, sessionId);
 
     // The interception is pinned to a session id; the bridge replaces that

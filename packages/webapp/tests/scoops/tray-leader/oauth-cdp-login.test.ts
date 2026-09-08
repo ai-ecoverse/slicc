@@ -33,10 +33,15 @@ function createBrowser(opts: { href?: string } = {}) {
     // login driver must go through this rather than a bare `attachToPage`,
     // because attaching swaps the shared client's session out from under any
     // concurrent operation.
-    withTab: vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+    withTab: vi.fn(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
       await browser.attachToPage();
-      void targetId;
-      return await fn('session-1');
+      return await fn({
+        targetId,
+        sessionId: 'session-1',
+        transport,
+        send: browser.sendCDP,
+        evaluate: browser.evaluate,
+      });
     }),
   };
   const emit = (event: string, params: Record<string, unknown>) => {
@@ -124,7 +129,7 @@ describe('runDelegatedCdpLogin', () => {
       runtimeId: 'runtime-1',
       authorizeUrl: AUTHORIZE,
     });
-    await vi.waitFor(() => expect(fake.getTransport).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fake.withTab).toHaveBeenCalled());
 
     expect(fake.createRemotePage).toHaveBeenCalledWith('runtime-1', AUTHORIZE);
     // A main-frame commit at the callback settles it — this fires before the
@@ -144,7 +149,7 @@ describe('runDelegatedCdpLogin', () => {
       authorizeUrl: AUTHORIZE,
       timeoutMs: 5_000,
     });
-    await vi.waitUntil(() => fake.getTransport.mock.calls.length > 0, { timeout: 2000 });
+    await vi.waitUntil(() => fake.withTab.mock.calls.length > 0, { timeout: 2000 });
     emit('Page.frameNavigated', {
       frame: { url: `${REDIRECT}?code=nope`, parentId: 'parent-frame' },
     });

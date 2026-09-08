@@ -1133,26 +1133,22 @@ async function dispatchBrowser(
       const height = args[2] as number;
       // Recorded per target so BrowserAPI re-applies it on every fresh attach —
       // parity with the playwright-cli `resize` handler.
-      return browser.withTab(targetId, async () => {
-        await browser.setViewportOverride(targetId, width, height);
-      });
+      return browser.withTab(targetId, (page) => page.setViewportOverride(width, height));
     }
     case 'navigateTab': {
       const targetId = args[0] as string;
       const url = args[1] as string;
-      return browser.withTab(targetId, async () => {
-        await browser.navigate(url);
-      });
+      return browser.withTab(targetId, (page) => page.navigate(url));
     }
     case 'screenshotTab': {
       const targetId = args[0] as string;
       const screenshotOpts = args[1] as { fullPage?: boolean } | undefined;
-      return browser.withTab(targetId, async () => {
+      return browser.withTab(targetId, async (page) => {
         // Mirrors Playwright's own screenshot semantics: a background tab's
         // renderer is suspended, so `Page.captureScreenshot` can come back
         // blank until the target is brought to the front (PR #361 precedent).
-        await browser.bringToFront();
-        return browser.screenshot(screenshotOpts);
+        await page.bringToFront();
+        return page.screenshot(screenshotOpts);
       });
     }
     case 'waitForLoadState': {
@@ -1295,8 +1291,8 @@ async function evalInTab(
   code: string,
   awaitPromise: boolean
 ): Promise<unknown> {
-  return browser.withTab(targetId, async () => {
-    const value = await browser.evaluate(code, { awaitPromise, returnByValue: true });
+  return browser.withTab(targetId, async (page) => {
+    const value = await page.evaluate(code, { awaitPromise, returnByValue: true });
     return unwrapEvalResult(value);
   });
 }
@@ -1393,7 +1389,7 @@ async function waitForLoadState(
     // satisfied post-navigate.
     return;
   }
-  return browser.withTab(targetId, async () => {
+  return browser.withTab(targetId, async (page) => {
     const maxAttempts = 20;
     const pollIntervalMs = 250;
     // Real Playwright networkidle waits for a quiet period AFTER activity,
@@ -1405,7 +1401,7 @@ async function waitForLoadState(
     // than trusting an immediate, possibly-premature empty read.
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      const idle = await browser.evaluate(
+      const idle = await page.evaluate(
         `(function(){
           try {
             var entries = performance.getEntriesByType('resource');
@@ -1432,11 +1428,11 @@ async function getCookie(
   targetId: string,
   name: string
 ): Promise<string | null> {
-  return browser.withTab(targetId, async () => {
+  return browser.withTab(targetId, async (page) => {
     // `Network.getCookies` (no `urls`) returns cookies visible to
     // the attached page — same surface `playwright cookie-get`
     // uses, so standalone + extension behave identically.
-    const result = await browser.sendCDP('Network.getCookies');
+    const result = await page.send('Network.getCookies');
     const cookies = (result['cookies'] as Array<{ name?: string; value?: string }>) ?? [];
     const hit = cookies.find((c) => c.name === name);
     return hit && typeof hit.value === 'string' ? hit.value : null;
@@ -1453,8 +1449,8 @@ async function getLocalStorage(
   // requires a frame ID and security origin lookup we'd otherwise
   // have to plumb, and the evaluate path matches `playwright
   // eval` semantics.
-  return browser.withTab(targetId, async () => {
-    const raw = await browser.evaluate(
+  return browser.withTab(targetId, async (page) => {
+    const raw = await page.evaluate(
       `(function(){try{var v=window.localStorage.getItem(${JSON.stringify(key)});return v===null?null:String(v);}catch(e){return null;}})()`,
       { returnByValue: true }
     );

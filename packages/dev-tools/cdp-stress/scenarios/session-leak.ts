@@ -76,12 +76,12 @@ export async function run(opts: SessionLeakOptions = {}): Promise<SessionLeakRes
     const sessionsPerNav: number[] = [];
     for (let r = 0; r < rounds; r++) {
       for (let t = 0; t < tabs; t++) {
-        await st.browser.withTab(ids[t] as string, () => st.browser.evaluate('document.title'));
+        await st.browser.withTab(ids[t] as string, (page) => page.evaluate('document.title'));
       }
       // Probe: navigate tab 0 and count inbound events caused by that one nav.
       const before = st.counters.eventsIn;
-      await st.browser.withTab(ids[0] as string, () =>
-        st.browser.navigate(`${site.url}/page/probe-${r}`)
+      await st.browser.withTab(ids[0] as string, (page) =>
+        page.navigate(`${site.url}/page/probe-${r}`)
       );
       await new Promise((res) => setTimeout(res, 150));
       eventsPerNav.push(st.counters.eventsIn - before);

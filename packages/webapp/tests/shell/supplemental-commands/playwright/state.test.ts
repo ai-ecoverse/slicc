@@ -86,17 +86,15 @@ describe('playwright state helpers', () => {
 
 describe('playwright browser helpers', () => {
   it('reads the current page location from evaluate JSON', async () => {
-    const browser = {
+    const tab = {
       evaluate: vi
         .fn()
         .mockResolvedValue(
           JSON.stringify({ href: 'https://ex.test/p', hostname: 'ex.test', pathname: '/p' })
         ),
       getFrameTree: vi.fn(),
-      listPages: vi.fn(),
-      withTab: vi.fn(),
     };
-    await expect(getCurrentPageLocation(browser)).resolves.toEqual({
+    await expect(getCurrentPageLocation(tab)).resolves.toEqual({
       href: 'https://ex.test/p',
       hostname: 'ex.test',
       pathname: '/p',
@@ -108,15 +106,13 @@ describe('playwright browser helpers', () => {
       { frameId: 'main', url: 'https://a', name: '' },
       { frameId: 'child', parentFrameId: 'main', url: 'https://b', name: 'f' },
     ];
-    const browser = {
+    const tab = {
       evaluate: vi.fn(),
       getFrameTree: vi.fn().mockResolvedValue(frames),
-      listPages: vi.fn(),
-      withTab: vi.fn(),
     };
-    await expect(resolveFrame(browser, {})).resolves.toBeNull();
-    await expect(resolveFrame(browser, { frame: 'child' })).resolves.toEqual(frames[1]);
-    await expect(resolveFrame(browser, { frame: 'missing', tab: 't1' })).rejects.toThrow(
+    await expect(resolveFrame(tab, {})).resolves.toBeNull();
+    await expect(resolveFrame(tab, { frame: 'child' })).resolves.toEqual(frames[1]);
+    await expect(resolveFrame(tab, { frame: 'missing', tab: 't1' })).rejects.toThrow(
       /Unknown frame ID "missing" for tab t1/
     );
   });
@@ -124,8 +120,6 @@ describe('playwright browser helpers', () => {
   it('lists local pages when listAllTargets is absent', async () => {
     const pages = [{ targetId: 't1', title: 'One', url: 'https://a' }];
     const browser = {
-      evaluate: vi.fn(),
-      getFrameTree: vi.fn(),
       listPages: vi.fn().mockResolvedValue(pages),
       withTab: vi.fn(),
     };
@@ -136,8 +130,6 @@ describe('playwright browser helpers', () => {
   it('returns listAllTargets pages when no tray is configured', async () => {
     const pages = [{ targetId: 't1', title: 'One', url: 'https://a' }];
     const browser = {
-      evaluate: vi.fn(),
-      getFrameTree: vi.fn(),
       listPages: vi.fn(),
       listAllTargets: vi.fn().mockResolvedValue(pages),
       withTab: vi.fn(),
@@ -146,11 +138,13 @@ describe('playwright browser helpers', () => {
   });
 
   it('explains when a frame ID was used as --tab', async () => {
-    const browser = {
+    const tab = {
       evaluate: async () => undefined as unknown,
       getFrameTree: async () => [{ frameId: 'frame-1', url: 'https://a', name: '' }],
+    };
+    const browser = {
       listPages: async () => [{ targetId: 'tab-1', title: 'T', url: 'https://a' }],
-      withTab: async <T>(_id: string, fn: () => Promise<T>): Promise<T> => fn(),
+      withTab: async <T>(_id: string, fn: (t: typeof tab) => Promise<T>): Promise<T> => fn(tab),
     };
     await expect(
       frameIdUsedAsTabError(browser, 'frame-1', new Error('No target with given id found'))

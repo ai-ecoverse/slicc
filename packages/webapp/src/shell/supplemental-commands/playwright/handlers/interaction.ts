@@ -10,11 +10,7 @@ import {
   READ_INPUT_VALUE_FUNCTION,
   requireTab,
 } from '../state.js';
-import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
-
-// Named via the handler context rather than imported from `cdp/` so this
-// module stays inside the shell layer (see layer-stack import direction).
-type BrowserAPI = PlaywrightHandlerCtx['browser'];
+import type { PlaywrightHandler, TabHandle } from '../types.js';
 
 /** Parse --modifiers flag (comma-separated) into a CDP bitmask. Alt=1, Control=2, Meta=4, Shift=8. */
 function parseModifiersBitmask(modifiersFlag: string | undefined): number {
@@ -27,93 +23,78 @@ function parseModifiersBitmask(modifiersFlag: string | undefined): number {
 }
 
 /** Send Enter keyDown+keyUp via CDP (used by --submit on type/fill). */
-async function sendEnterKey(browser: BrowserAPI, sessionId: string): Promise<void> {
-  const transport = browser.getTransport();
-  await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' }, sessionId);
-  await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' }, sessionId);
+async function sendEnterKey(page: TabHandle): Promise<void> {
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' });
 }
 
 /** Verify the filled value and apply React native-setter fallback if needed (backendNodeId path). */
 async function verifyFillAndApplyFallback(
-  browser: BrowserAPI,
+  page: TabHandle,
   objectId: string,
   fillText: string
 ): Promise<void> {
-  const transport = browser.getTransport();
-  const sessionId = browser.getSessionId();
-  const readResult = await transport.send(
-    'Runtime.callFunctionOn',
-    { objectId, functionDeclaration: READ_INPUT_VALUE_FUNCTION, returnByValue: true },
-    sessionId!
-  );
+  const readResult = await page.send('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration: READ_INPUT_VALUE_FUNCTION,
+    returnByValue: true,
+  });
   const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
   if (currentValue !== fillText) {
-    await transport.send(
-      'Runtime.callFunctionOn',
-      {
-        objectId,
-        functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
-        arguments: [{ value: fillText }],
-        returnByValue: true,
-      },
-      sessionId!
-    );
+    await page.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
+      arguments: [{ value: fillText }],
+      returnByValue: true,
+    });
   }
 }
 
 /** Fill via backendNodeId: click to focus, clear, insertText, verify+fallback. */
 async function fillByBackendNodeId(
-  browser: BrowserAPI,
+  page: TabHandle,
   backendNodeId: number,
   fillText: string
 ): Promise<void> {
-  await browser.clickByBackendNodeId(backendNodeId);
-  const transport = browser.getTransport();
-  const sessionId = browser.getSessionId();
-  await transport.send('DOM.enable', {}, sessionId!);
-  await transport.send('Runtime.enable', {}, sessionId!);
-  const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
+  await page.clickByBackendNodeId(backendNodeId);
+  await page.send('DOM.enable');
+  await page.send('Runtime.enable');
+  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
   const obj = resolveResult['object'] as { objectId?: string } | undefined;
   if (obj?.objectId) {
-    await transport.send(
-      'Runtime.callFunctionOn',
-      {
-        objectId: obj.objectId,
-        functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-        returnByValue: true,
-      },
-      sessionId!
-    );
+    await page.send('Runtime.callFunctionOn', {
+      objectId: obj.objectId,
+      functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
+      returnByValue: true,
+    });
   }
   // Single Input.insertText frame so the per-frame whole-token
   // unmask gate in the node-server CDP proxy can replace a
   // masked secret with its real value (a per-character
   // Input.dispatchKeyEvent loop fragments the token).
-  await browser.insertText(fillText);
+  await page.insertText(fillText);
   if (obj?.objectId) {
-    await verifyFillAndApplyFallback(browser, obj.objectId, fillText);
+    await verifyFillAndApplyFallback(page, obj.objectId, fillText);
   }
 }
 
 /** Fill via CSS selector fallback: click, clear, insertText, verify+fallback. */
 async function fillBySelectorFallback(
-  browser: BrowserAPI,
+  page: TabHandle,
   selector: string,
   fillText: string
 ): Promise<void> {
-  // ponytail: uses browser.evaluate/click (session acquired internally) rather than explicit
-  // transport.send. Pre-existing pattern from fillHandler — behavior is correct.
-  await browser.click(selector);
-  await browser.evaluate(
+  await page.click(selector);
+  await page.evaluate(
     `(function() {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (el) { return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el); }
       return false;
     })()`
   );
-  await browser.insertText(fillText);
+  await page.insertText(fillText);
   const firstSel = selector.split(',')[0].trim();
-  const currentValue = (await browser.evaluate(
+  const currentValue = (await page.evaluate(
     `(function() {
       const el = document.querySelector(${JSON.stringify(firstSel)});
       if (!el) return '';
@@ -121,7 +102,7 @@ async function fillBySelectorFallback(
     })()`
   )) as string;
   if (currentValue !== fillText) {
-    await browser.evaluate(
+    await page.evaluate(
       `(function() {
         const el = document.querySelector(${JSON.stringify(firstSel)});
         if (!el) return;
@@ -141,7 +122,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
   }
   const ref = positional[0];
   const modifiers = parseModifiersBitmask(flags['modifiers']);
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -154,7 +135,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         frameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -170,7 +151,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
     // Prefer backendNodeId for reliable clicking
     const backendNodeId = snapshot.refToBackendNodeId.get(ref);
     if (backendNodeId) {
-      await browser.clickByBackendNodeId(backendNodeId, modifiers);
+      await page.clickByBackendNodeId(backendNodeId, modifiers);
       state.snapshots.delete(tab.targetId);
       return `Clicked ${ref}`;
     }
@@ -182,7 +163,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
         `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`
       );
     }
-    await browser.click(selector, modifiers);
+    await page.click(selector, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Clicked ${ref}`;
   });
@@ -198,9 +179,9 @@ export const typeHandler: PlaywrightHandler = async ({ browser, positional, flag
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const text = positional.join(' ');
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    await browser.type(text);
-    if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.type(text);
+    if (flags['submit'] === 'true') await sendEnterKey(page);
   });
   return { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
 };
@@ -215,7 +196,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
   }
   const ref = positional[0];
   const fillText = positional.slice(1).join(' ');
-  const output = await browser.withTab(tab.targetId, async (sessionId) => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -228,7 +209,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         fillFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -242,16 +223,16 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
                 })()`
       );
       state.snapshots.delete(tab.targetId);
-      if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
+      if (flags['submit'] === 'true') await sendEnterKey(page);
       return `Filled ${ref} with: ${fillText} (in iframe)`;
     }
 
     // Prefer backendNodeId for reliable element targeting
     const backendNodeId = snapshot.refToBackendNodeId.get(ref);
     if (backendNodeId) {
-      await fillByBackendNodeId(browser, backendNodeId, fillText);
+      await fillByBackendNodeId(page, backendNodeId, fillText);
       state.snapshots.delete(tab.targetId);
-      if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
+      if (flags['submit'] === 'true') await sendEnterKey(page);
       return `Filled ${ref} with: ${fillText}`;
     }
 
@@ -264,9 +245,9 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
     // unmask gate in the node-server CDP proxy can replace a
     // masked secret with its real value (a per-character
     // Input.dispatchKeyEvent loop fragments the token).
-    await fillBySelectorFallback(browser, selector, fillText);
+    await fillBySelectorFallback(page, selector, fillText);
     state.snapshots.delete(tab.targetId);
-    if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
+    if (flags['submit'] === 'true') await sendEnterKey(page);
     return `Filled ${ref} with: ${fillText}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
@@ -281,8 +262,7 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
     await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
   });
@@ -298,8 +278,7 @@ export const keydownHandler: PlaywrightHandler = async ({ browser, positional, f
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
   });
   return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
@@ -314,8 +293,7 @@ export const keyupHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
   });
   return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
@@ -332,7 +310,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
   const ref = positional[0];
   const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
   const modifiers = parseModifiersBitmask(flags['modifiers']);
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -345,7 +323,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         dblFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -362,7 +340,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    await browser.dblclickByBackendNodeId(backendNodeId, button, modifiers);
+    await page.dblclickByBackendNodeId(backendNodeId, button, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Double-clicked ${ref}`;
   });
@@ -378,7 +356,7 @@ export const hoverHandler: PlaywrightHandler = async ({ browser, state, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -391,7 +369,7 @@ export const hoverHandler: PlaywrightHandler = async ({ browser, state, position
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         hoverFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -407,7 +385,7 @@ export const hoverHandler: PlaywrightHandler = async ({ browser, state, position
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    await browser.hoverByBackendNodeId(backendNodeId);
+    await page.hoverByBackendNodeId(backendNodeId);
     return `Hovered ${ref}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
@@ -423,7 +401,7 @@ export const selectHandler: PlaywrightHandler = async ({ browser, state, positio
   }
   const ref = positional[0];
   const value = positional.slice(1).join(' ');
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -436,7 +414,7 @@ export const selectHandler: PlaywrightHandler = async ({ browser, state, positio
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         selectFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -453,7 +431,7 @@ export const selectHandler: PlaywrightHandler = async ({ browser, state, positio
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    await browser.selectByBackendNodeId(backendNodeId, value);
+    await page.selectByBackendNodeId(backendNodeId, value);
     state.snapshots.delete(tab.targetId);
     return `Selected "${value}" on ${ref}`;
   });
@@ -469,7 +447,7 @@ export const checkHandler: PlaywrightHandler = async ({ browser, state, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -482,7 +460,7 @@ export const checkHandler: PlaywrightHandler = async ({ browser, state, position
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         checkFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -502,7 +480,7 @@ export const checkHandler: PlaywrightHandler = async ({ browser, state, position
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    const action = await browser.setCheckedByBackendNodeId(backendNodeId, true);
+    const action = await page.setCheckedByBackendNodeId(backendNodeId, true);
     if (action === 'toggled') state.snapshots.delete(tab.targetId);
     return action === 'already' ? `${ref} already checked` : `Checked ${ref}`;
   });
@@ -518,7 +496,7 @@ export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positi
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -531,7 +509,7 @@ export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positi
       const selector = snapshot.refToSelector.get(ref);
       if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
       const firstSelector = selector.split(',')[0].trim();
-      await browser.evaluateInFrame(
+      await page.evaluateInFrame(
         uncheckFrameId,
         `(function() {
                   var el = document.querySelector(${JSON.stringify(firstSelector)});
@@ -551,7 +529,7 @@ export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positi
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    const action = await browser.setCheckedByBackendNodeId(backendNodeId, false);
+    const action = await page.setCheckedByBackendNodeId(backendNodeId, false);
     if (action === 'toggled') state.snapshots.delete(tab.targetId);
     return action === 'already' ? `${ref} already unchecked` : `Unchecked ${ref}`;
   });
@@ -568,7 +546,7 @@ export const dragHandler: PlaywrightHandler = async ({ browser, state, positiona
   }
   const startRef = positional[0];
   const endRef = positional[1];
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -581,7 +559,7 @@ export const dragHandler: PlaywrightHandler = async ({ browser, state, positiona
     if (!endNode) {
       throw new Error(`Unknown ref "${endRef}"`);
     }
-    await browser.dragByBackendNodeIds(startNode, endNode);
+    await page.dragByBackendNodeIds(startNode, endNode);
     state.snapshots.delete(tab.targetId);
     return `Dragged ${startRef} to ${endRef}`;
   });

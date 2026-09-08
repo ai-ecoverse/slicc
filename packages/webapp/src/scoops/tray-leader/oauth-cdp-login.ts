@@ -139,15 +139,14 @@ export function liftNonceFromState(rawUrl: string): string {
 /**
  * Read the tab's current URL, or null when it cannot be read right now.
  *
- * Goes through `withTab`: attaching swaps the shared CDP client's session, so
- * a bare `attachToPage` on a 500 ms timer would keep retargeting any
- * concurrent operation's transport at the OAuth tab. A tab mid-navigation or
- * already gone simply yields null — the caller's timeout owns the terminal
- * case.
+ * Goes through `withTab` and evaluates on the handle it hands out, so this
+ * 500 ms timer names the OAuth tab's own session instead of whatever the
+ * bridge last pointed at. A tab mid-navigation or already gone simply yields
+ * null — the caller's timeout owns the terminal case.
  */
 async function readCurrentHref(browser: BrowserAPI, targetId: string): Promise<string | null> {
   try {
-    const raw = await browser.withTab(targetId, () => browser.evaluate('window.location.href'));
+    const raw = await browser.withTab(targetId, (page) => page.evaluate('window.location.href'));
     return typeof raw === 'string' ? raw : null;
   } catch {
     return null;
@@ -187,17 +186,17 @@ export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise
 
     void (async () => {
       try {
-        // Every attach here goes through `withTab`. Attaching replaces the
-        // shared CDP client's session, so a bare `attachToPage` — especially
-        // one on a 500 ms timer, running for up to two minutes while a human
-        // signs in — can retarget a concurrent operation's transport at the
-        // OAuth tab mid-command.
-        await browser.withTab(targetId, async () => {
-          await browser.sendCDP('Page.enable');
+        // `Page.enable` and the event subscription both name THIS tab's
+        // session and transport. The transport matters: for a follower target
+        // the session lives on that runtime's remote transport, and the
+        // bridge's current client can be pointing at any other tab by the
+        // time this listener fires.
+        const transport = await browser.withTab(targetId, async (page) => {
+          await page.send('Page.enable');
+          return page.transport;
         });
 
         // Primary signal: navigation commit, before the page's own script runs.
-        const transport = browser.getTransport();
         const onNavigated = (params: CDPPayload): void => {
           const frame = navigatedFrameFrom(params);
           if (!frame?.url || frame.parentId) return; // main frame only

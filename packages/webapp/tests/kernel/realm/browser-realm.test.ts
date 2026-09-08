@@ -120,29 +120,30 @@ function makeMockBrowser(state: MockBrowserState): BrowserAPI {
       state.pages.push({ targetId: id, url: url ?? 'about:blank', title: '' });
       return id;
     },
-    async withTab<T>(targetId: string, fn: () => Promise<T>): Promise<T> {
+    // Page operations arrive on the handle `withTab` hands out.
+    async withTab<T>(targetId: string, fn: (tab: unknown) => Promise<T>): Promise<T> {
       state.attachedTargets.push(targetId);
-      return fn();
-    },
-    async evaluate(expression: string): Promise<unknown> {
-      // Match the localStorage getter shape first so the helper code
-      // path works without per-test stubbing.
-      const ls = /window\.localStorage\.getItem\(("[^"]*")\)/.exec(expression);
-      if (ls) {
-        const key = JSON.parse(ls[1]) as string;
-        const value = state.localStorageStore.get(key);
-        return value ?? null;
-      }
-      if (state.evalResults.has(expression)) return state.evalResults.get(expression);
-      return undefined;
-    },
-    async sendCDP(method: string): Promise<Record<string, unknown>> {
-      if (method === 'Network.getCookies') {
-        return { cookies: state.cookies.slice() };
-      }
-      throw new Error(`mock sendCDP: unhandled method ${method}`);
+      return fn({ targetId, sessionId: 'sess-1', evaluate, send: sendCDP });
     },
   };
+  async function evaluate(expression: string): Promise<unknown> {
+    // Match the localStorage getter shape first so the helper code path works
+    // without per-test stubbing.
+    const ls = /window\.localStorage\.getItem\(("[^"]*")\)/.exec(expression);
+    if (ls) {
+      const key = JSON.parse(ls[1]) as string;
+      const value = state.localStorageStore.get(key);
+      return value ?? null;
+    }
+    if (state.evalResults.has(expression)) return state.evalResults.get(expression);
+    return undefined;
+  }
+  async function sendCDP(method: string): Promise<Record<string, unknown>> {
+    if (method === 'Network.getCookies') {
+      return { cookies: state.cookies.slice() };
+    }
+    throw new Error(`mock send: unhandled method ${method}`);
+  }
   return api as unknown as BrowserAPI;
 }
 

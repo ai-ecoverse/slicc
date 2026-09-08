@@ -113,13 +113,28 @@ export function withSessionReplaced(browser: BrowserAPI): SessionReplacedFn {
 export interface MockBrowser {
   browser: BrowserAPI;
   transport: MockTransport;
+  /**
+   * The handle's session-scoped `send` spy (`page.send(...)`). Still named
+   * `sendCDP` because that is the CDP verb it stands for; the ambient
+   * `BrowserAPI.sendCDP` it replaced is gone.
+   */
   sendCDP: ReturnType<typeof vi.fn>;
+  /** The handle `withTab` hands its callback. */
+  page: MockTabPage;
+}
+
+/** The mock {@link TabPage}: one tab, bound to one session and transport. */
+export interface MockTabPage {
+  targetId: string;
+  sessionId: string;
+  transport: CDPTransport;
+  send: ReturnType<typeof vi.fn>;
 }
 
 /**
- * Build a mock {@link BrowserAPI}. `withTab` invokes its callback with
- * `sessionId`; `getTransport` returns the shared mock transport; `sendCDP`
- * is a spy backed by `sendCdpImpl`.
+ * Build a mock {@link BrowserAPI}. `withTab` invokes its callback with a
+ * {@link MockTabPage} carrying the session, the shared mock transport, and a
+ * `send` spy backed by `sendCdpImpl`.
  */
 export function createMockBrowser(opts?: {
   sessionId?: string;
@@ -132,12 +147,20 @@ export function createMockBrowser(opts?: {
     async (method: string, params?: Record<string, unknown>) =>
       (opts?.sendCdpImpl?.(method, params) as Record<string, unknown> | undefined) ?? {}
   );
+  const page: MockTabPage = {
+    targetId: 'tab-1',
+    sessionId,
+    transport: transport.transport,
+    send: sendCDP,
+  };
   const browser = {
-    withTab: async <T>(_targetId: string, fn: (sessionId: string) => Promise<T>) => fn(sessionId),
+    withTab: async <T>(targetId: string, fn: (tab: MockTabPage) => Promise<T>) => {
+      page.targetId = targetId;
+      return fn(page);
+    },
     getTransport: () => transport.transport,
-    sendCDP,
   } as unknown as BrowserAPI;
-  return { browser, transport, sendCDP };
+  return { browser, transport, sendCDP, page };
 }
 
 /** Assemble a {@link PlaywrightHandlerCtx} from the mock pieces. */
