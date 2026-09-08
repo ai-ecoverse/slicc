@@ -18,6 +18,8 @@ import {
   countTeleportStorageEntries,
   EMPTY_TELEPORT_STORAGE,
   installTeleportStorageInitScript,
+  removeTeleportStorageScript,
+  type TeleportStorageScript,
 } from '../../shell/supplemental-commands/playwright/teleport-storage.js';
 import type { TeleportStorageSnapshot } from '../../shell/supplemental-commands/playwright/types.js';
 
@@ -84,42 +86,46 @@ async function captureSourceState(
   sourceTargetId: string,
   urlOverride: string | undefined
 ): Promise<SourceCapture> {
-  await browser.attachToPage(sourceTargetId);
-  let url = urlOverride;
-  if (!url) {
-    const raw = await browser.evaluate('window.location.href');
-    url = typeof raw === 'string' ? raw : String(raw);
-  }
-  if (!url || url === 'about:blank') {
-    throw new Error(`source tab ${sourceTargetId} has no usable URL`);
-  }
-  // Hard stop, not just a UI filter: SLICC's own app shell carries
-  // `bridgeToken` in its URL, so teleporting it would copy a capability for
-  // this machine's CDP bridge into another browser. Enforced here because
-  // every path — both rails and the tray router — funnels through this
-  // capture.
-  if (isSliccAppUrl(url, { selfOrigins: selfUiOrigins() })) {
-    throw new Error('refusing to teleport SLICC’s own app tab (it carries a bridge capability)');
-  }
+  // One hold on the source tab for the whole capture, every command naming
+  // its session — a URL read and a cookie read that could land on different
+  // tabs is the bug this replaced.
+  return browser.withTab(sourceTargetId, async (page) => {
+    let url = urlOverride;
+    if (!url) {
+      const raw = await page.evaluate('window.location.href');
+      url = typeof raw === 'string' ? raw : String(raw);
+    }
+    if (!url || url === 'about:blank') {
+      throw new Error(`source tab ${sourceTargetId} has no usable URL`);
+    }
+    // Hard stop, not just a UI filter: SLICC's own app shell carries
+    // `bridgeToken` in its URL, so teleporting it would copy a capability for
+    // this machine's CDP bridge into another browser. Enforced here because
+    // every path — both rails and the tray router — funnels through this
+    // capture.
+    if (isSliccAppUrl(url, { selfOrigins: selfUiOrigins() })) {
+      throw new Error('refusing to teleport SLICC’s own app tab (it carries a bridge capability)');
+    }
 
-  let cookies: CookieTeleportCookie[] = [];
-  let cookiesCaptured = false;
-  try {
-    const cookieResult = await browser.sendCDP('Network.getCookies', {});
-    cookies = cookiesFromCdpResult(cookieResult['cookies']);
-    cookiesCaptured = true;
-  } catch (err) {
-    log.warn('Could not capture source cookies', { error: String(err) });
-  }
+    let cookies: CookieTeleportCookie[] = [];
+    let cookiesCaptured = false;
+    try {
+      const cookieResult = await page.send('Network.getCookies', {});
+      cookies = cookiesFromCdpResult(cookieResult['cookies']);
+      cookiesCaptured = true;
+    } catch (err) {
+      log.warn('Could not capture source cookies', { error: String(err) });
+    }
 
-  let storage = EMPTY_TELEPORT_STORAGE;
-  try {
-    storage = await captureTeleportStorageSnapshot(browser, 'leader');
-  } catch (err) {
-    log.warn('Could not capture source storage', { error: String(err) });
-  }
+    let storage = EMPTY_TELEPORT_STORAGE;
+    try {
+      storage = await captureTeleportStorageSnapshot(page, 'leader');
+    } catch (err) {
+      log.warn('Could not capture source storage', { error: String(err) });
+    }
 
-  return { url, cookies, cookiesCaptured, storage };
+    return { url, cookies, cookiesCaptured, storage };
+  });
 }
 
 async function openDestinationTab(
@@ -138,12 +144,19 @@ async function openDestinationTab(
  * to load (the script is origin-guarded and once-only, so a short linger is
  * safe). Detached on purpose: the teleport result must not wait on it.
  */
-function scheduleInitScriptRemoval(remove: (() => Promise<void>) | null): void {
-  if (!remove) return;
+function scheduleInitScriptRemoval(
+  browser: BrowserAPI,
+  script: TeleportStorageScript | null
+): void {
+  if (!script) return;
   const timer = setTimeout(() => {
-    remove().catch((err) => {
-      log.warn('Deferred init-script removal failed', { error: String(err) });
-    });
+    // Re-enters the tab: by now the `withTab` body that installed the script
+    // has long returned, so there is no lock to deadlock against.
+    browser
+      .withTab(script.targetId, (page) => removeTeleportStorageScript(page, script, 'follower'))
+      .catch((err) => {
+        log.warn('Deferred init-script removal failed', { error: String(err) });
+      });
   }, INIT_SCRIPT_LINGER_MS);
   // Node-style timers keep the process alive; in workers this is a no-op.
   (timer as { unref?: () => void }).unref?.();
@@ -165,33 +178,34 @@ async function runTabTeleport(
 
   const destTargetId = await openDestinationTab(browser, spec.destination);
   onDestinationCreated(destTargetId);
-  await browser.attachToPage(destTargetId);
-  await browser.sendCDP('Page.enable');
 
-  let cookiesInjected = true;
-  if (source.cookies.length > 0) {
-    try {
-      await browser.sendCDP('Network.setCookies', { cookies: source.cookies });
-    } catch (err) {
-      cookiesInjected = false;
-      log.warn('Destination rejected cookie injection', { error: String(err) });
+  // One hold on the destination tab: enable, inject, install, navigate, front.
+  const { cookiesInjected, initScript } = await browser.withTab(destTargetId, async (page) => {
+    await page.send('Page.enable');
+
+    let injected = true;
+    if (source.cookies.length > 0) {
+      try {
+        await page.send('Network.setCookies', { cookies: source.cookies });
+      } catch (err) {
+        injected = false;
+        log.warn('Destination rejected cookie injection', { error: String(err) });
+      }
     }
-  }
 
-  const removeInitScript = await installTeleportStorageInitScript(
-    browser,
-    source.storage,
-    destTargetId,
-    'follower'
-  );
+    const script = await installTeleportStorageInitScript(page, source.storage, 'follower');
 
-  await browser.sendCDP('Page.navigate', { url: source.url });
-  try {
-    await browser.bringToFront();
-  } catch (err) {
-    log.warn('Could not foreground destination tab', { error: String(err) });
-  }
-  scheduleInitScriptRemoval(removeInitScript);
+    // Raw `Page.navigate`: this teleport leaves the tab open for the human
+    // rather than waiting out the load.
+    await page.send('Page.navigate', { url: source.url });
+    try {
+      await page.bringToFront();
+    } catch (err) {
+      log.warn('Could not foreground destination tab', { error: String(err) });
+    }
+    return { cookiesInjected: injected, initScript: script };
+  });
+  scheduleInitScriptRemoval(browser, initScript);
 
   const degraded = sourceStateEmpty
     ? 'no-source-state'

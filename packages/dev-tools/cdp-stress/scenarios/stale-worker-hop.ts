@@ -35,7 +35,7 @@ export async function run(): Promise<StaleWorkerHopResult> {
     const st = await buildStack(proxy.url);
     const tab = await st.browser.createPage(`${site.url}/page/one`);
     await new Promise((r) => setTimeout(r, 300));
-    const title = () => st.browser.withTab(tab, () => st.browser.evaluate('document.title'));
+    const title = () => st.browser.withTab(tab, (page) => page.evaluate('document.title'));
     const before = await timed(title);
     proxy.killClient();
     await new Promise((r) => setTimeout(r, 200));
@@ -51,7 +51,7 @@ export async function run(): Promise<StaleWorkerHopResult> {
     const newTab = await st.browser.createPage(`${site.url}/page/fresh`);
     await new Promise((r) => setTimeout(r, 300));
     const onNewTab = await timed(() =>
-      st.browser.withTab(newTab, () => st.browser.evaluate('document.title'))
+      st.browser.withTab(newTab, (page) => page.evaluate('document.title'))
     );
     const backOnOld = await timed(title);
     st.stop();

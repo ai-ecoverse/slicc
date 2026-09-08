@@ -18,6 +18,7 @@ import {
   installTeleportStorageInitScript,
   logFollowerTeleportDiagnosticsOnce,
   removeFollowerTeleportStorageScript,
+  removeTeleportStorageScript,
   shouldCaptureTeleportDiagnostics,
   tryGetTeleportUrlOrigin,
 } from './teleport-storage.js';
@@ -33,11 +34,23 @@ import type {
  * Duck type for the CDP surface teleport needs — avoids shell → cdp layer back-edges
  * (`docs/review-patterns.md` § Layer-stack import direction). Callers pass the real
  * `BrowserAPI`; this module only uses the methods below.
+ *
+ * Every page command names its session: the watcher runs for minutes across
+ * two tabs (leader and follower), so borrowing a bridge-wide "current tab"
+ * cursor was exactly how a concurrent command got retargeted mid-flight.
  */
 interface TeleportBrowserAPI {
-  attachToPage(targetId: string): Promise<string>;
+  withTab<T>(targetId: string, fn: (tab: TeleportTab) => Promise<T>): Promise<T>;
+  createRemotePage(runtimeId: string, url: string): Promise<string>;
+  closePage(targetId: string): Promise<void>;
+}
+
+/** The page half: one tab, bound to its CDP session. */
+interface TeleportTab {
+  readonly targetId: string;
   evaluate(expression: string): Promise<unknown>;
-  sendCDP(
+  navigate(url: string): Promise<void>;
+  send(
     method: string,
     params?: {
       cookies?: CookieTeleportCookie[];
@@ -46,9 +59,6 @@ interface TeleportBrowserAPI {
       identifier?: string;
     }
   ): Promise<{ cookies?: CookieTeleportCookie[]; identifier?: unknown }>;
-  createRemotePage(runtimeId: string, url: string): Promise<string>;
-  closePage(targetId: string): Promise<void>;
-  navigate(url: string): Promise<void>;
 }
 
 interface NetworkGetCookiesResponse {
@@ -106,12 +116,13 @@ export async function handleTeleportTimeout(
 
   if (watcher.followerTargetId) {
     try {
-      await browser.attachToPage(watcher.followerTargetId);
-      await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'timeout');
+      await browser.withTab(watcher.followerTargetId, (page) =>
+        logFollowerTeleportDiagnosticsOnce(page, watcher, 'timeout')
+      );
     } catch (err) {
       log.warn('Could not attach to follower for timeout diagnostics', { error: String(err) });
     }
-    await removeFollowerTeleportStorageScript(watcher, 'timeout');
+    await removeFollowerTeleportStorageScript(browser, watcher, 'timeout');
   }
 
   cleanupTeleportWatcher(watcher);
@@ -211,8 +222,9 @@ export function armTeleportWatcher(
       if (!targetId) return;
 
       try {
-        await browser.attachToPage(targetId);
-        const raw = await browser.evaluate('window.location.href');
+        const raw = await browser.withTab(targetId, (page) =>
+          page.evaluate('window.location.href')
+        );
         const href = typeof raw === 'string' ? raw : String(raw);
         log.debug('Polling leader tab URL', { targetId, href, startPattern: startPattern.source });
         if (startPattern.test(href)) {
@@ -254,8 +266,9 @@ async function pollFollowerForReturn(
 ): Promise<void> {
   if (watcher.phase !== 'waitingForAuth' && watcher.phase !== 'waitingForReturn') return;
   try {
-    await browser.attachToPage(followerTargetId);
-    const raw = await browser.evaluate('window.location.href');
+    const raw = await browser.withTab(followerTargetId, (page) =>
+      page.evaluate('window.location.href')
+    );
     const href = typeof raw === 'string' ? raw : String(raw);
     if (!href) return;
     if (watcher.lastFollowerUrl !== href) {
@@ -287,7 +300,9 @@ async function pollFollowerForReturn(
       returnPattern: watcher.returnPattern.source,
     });
     if (shouldCaptureTeleportDiagnostics(href)) {
-      await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
+      await browser.withTab(followerTargetId, (page) =>
+        logFollowerTeleportDiagnosticsOnce(page, watcher, 'waiting-for-return')
+      );
     }
     if (watcher.returnPattern.test(href)) {
       log.info('Follower return pattern matched after auth');
@@ -326,13 +341,14 @@ async function triggerTeleport(
   }
 
   try {
-    // 1. Capture cookies from leader tab (before switching transport)
+    // 1. Capture cookies + storage from the leader tab, naming its session.
+    const leaderTargetId = watcher.leaderTargetId;
+    if (!leaderTargetId) throw new Error('teleport has no leader tab to capture from');
     let leaderCookies: CookieTeleportCookie[] = [];
     let leaderStorage = EMPTY_TELEPORT_STORAGE;
     try {
-      const cookieResult = (await browser.sendCDP(
-        'Network.getCookies',
-        {}
+      const cookieResult = (await browser.withTab(leaderTargetId, (page) =>
+        page.send('Network.getCookies', {})
       )) as NetworkGetCookiesResponse;
       leaderCookies = cookiesFromCdpResult(cookieResult.cookies);
       log.info('Captured leader cookies for follower', { count: leaderCookies.length });
@@ -340,7 +356,9 @@ async function triggerTeleport(
       log.warn('Could not capture leader cookies', { error: String(err) });
     }
     try {
-      leaderStorage = await captureTeleportStorageSnapshot(browser, 'leader');
+      leaderStorage = await browser.withTab(leaderTargetId, (page) =>
+        captureTeleportStorageSnapshot(page, 'leader')
+      );
       log.info('Captured leader storage for follower', {
         totalEntries: countTeleportStorageEntries(leaderStorage),
         localStorageCount: Object.keys(leaderStorage.localStorage).length,
@@ -378,41 +396,39 @@ async function triggerTeleport(
     log.info('Opened follower tab for teleport');
     log.debug('Opened follower tab for teleport details', { followerTargetId });
 
-    // 4. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
-    await browser.attachToPage(followerTargetId);
-    log.info('Attached to follower tab for teleport');
-    log.debug('Attached to follower tab for teleport details', { followerTargetId });
-
-    // Enable Page events on the follower
-    await browser.sendCDP('Page.enable');
-
-    // 5. Inject leader cookies into follower before navigating
-    if (leaderCookies.length > 0) {
-      try {
-        await browser.sendCDP('Network.setCookies', { cookies: leaderCookies });
-        log.info('Injected leader cookies into follower', { count: leaderCookies.length });
-      } catch (err) {
-        log.warn('Could not inject leader cookies into follower', { error: String(err) });
-      }
-    }
-
-    // 6. Navigate follower directly to the intercepted auth/IdP URL so the human
-    // can continue the in-progress flow without re-entering the earlier step.
+    // 4-6. Everything on the follower runs under ONE hold on its tab: enable
+    // Page events, inject the leader's cookies, install the storage replay
+    // script, then navigate to the intercepted auth/IdP URL so the human can
+    // continue the in-progress flow without re-entering the earlier step.
     const followerUrl = triggerUrl;
-    watcher.removeFollowerStorageScript = await installTeleportStorageInitScript(
-      browser,
-      leaderStorage,
-      followerTargetId,
-      'follower'
-    );
-    log.info('Navigating follower to intercepted auth URL');
-    log.debug('Navigating follower to intercepted auth URL details', {
-      url: followerUrl,
-      originalLeaderUrl: watcher.originalLeaderUrl,
-      triggerUrl,
-      storageOrigin: leaderStorage.origin || '(unknown)',
+    await browser.withTab(followerTargetId, async (page) => {
+      await page.send('Page.enable');
+
+      if (leaderCookies.length > 0) {
+        try {
+          await page.send('Network.setCookies', { cookies: leaderCookies });
+          log.info('Injected leader cookies into follower', { count: leaderCookies.length });
+        } catch (err) {
+          log.warn('Could not inject leader cookies into follower', { error: String(err) });
+        }
+      }
+
+      watcher.followerStorageScript = await installTeleportStorageInitScript(
+        page,
+        leaderStorage,
+        'follower'
+      );
+      log.info('Navigating follower to intercepted auth URL');
+      log.debug('Navigating follower to intercepted auth URL details', {
+        url: followerUrl,
+        originalLeaderUrl: watcher.originalLeaderUrl,
+        triggerUrl,
+        storageOrigin: leaderStorage.origin || '(unknown)',
+      });
+      // Raw `Page.navigate`, not `navigate()`: the human drives the rest of
+      // the auth flow, so waiting for a load event here would be wrong.
+      await page.send('Page.navigate', { url: followerUrl });
     });
-    await browser.sendCDP('Page.navigate', { url: followerUrl });
 
     // 4. Start timeout timer
     log.info('Starting teleport timeout timer', { timeoutMs: watcher.timeoutMs });
@@ -443,7 +459,7 @@ async function triggerTeleport(
     }, 1000);
   } catch (err) {
     log.error('Teleport trigger failed', { error: String(err) });
-    await removeFollowerTeleportStorageScript(watcher, 'trigger-error');
+    await removeFollowerTeleportStorageScript(browser, watcher, 'trigger-error');
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
@@ -462,55 +478,67 @@ async function captureFollowerAuthState(
   log.info('Waiting for redirect chain to settle (2s)');
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
-  // 2. Attach to follower and capture final URL + cookies
-  await browser.attachToPage(watcher.followerTargetId!);
-  let finalUrl: string | undefined;
-  try {
-    const raw = await browser.evaluate('window.location.href');
-    finalUrl = typeof raw === 'string' ? raw : String(raw);
-    log.debug('Captured final URL from follower', { finalUrl });
-  } catch (err) {
-    log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
-  }
+  // 2. Everything read from the follower runs under ONE hold on its tab, so a
+  // sibling command cannot land between the URL read and the cookie capture.
+  const followerTargetId = watcher.followerTargetId!;
+  const script = watcher.followerStorageScript ?? null;
+  watcher.followerStorageScript = null;
+  const { cookies, followerStorage, finalUrl } = await browser.withTab(
+    followerTargetId,
+    async (page) => {
+      let url: string | undefined;
+      try {
+        const raw = await page.evaluate('window.location.href');
+        url = typeof raw === 'string' ? raw : String(raw);
+        log.debug('Captured final URL from follower', { finalUrl: url });
+      } catch (err) {
+        log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
+      }
 
-  // Log follower page content for debugging auth flow errors
-  try {
-    const bodyText = await browser.evaluate(
-      'document.body?.innerText?.substring(0, 500) || "(empty)"'
-    );
-    log.debug('Follower page content at capture time', { bodyText });
-  } catch (err) {
-    log.warn('Could not read follower page content', { error: String(err) });
-  }
+      // Log follower page content for debugging auth flow errors
+      try {
+        const bodyText = await page.evaluate(
+          'document.body?.innerText?.substring(0, 500) || "(empty)"'
+        );
+        log.debug('Follower page content at capture time', { bodyText });
+      } catch (err) {
+        log.warn('Could not read follower page content', { error: String(err) });
+      }
 
-  const cookieResult = (await browser.sendCDP('Network.getCookies')) as NetworkGetCookiesResponse;
-  const cookies = cookiesFromCdpResult(cookieResult.cookies);
-  const domainSummary = cookies.length > 0 ? formatCookieDomainSummary(cookies) : 'none';
-  log.info('Captured cookies from follower', { count: cookies.length });
-  log.debug('Captured cookies from follower details', {
-    count: cookies.length,
-    domains: domainSummary,
-  });
+      const cookieResult = (await page.send('Network.getCookies')) as NetworkGetCookiesResponse;
+      const captured = cookiesFromCdpResult(cookieResult.cookies);
+      const domainSummary = captured.length > 0 ? formatCookieDomainSummary(captured) : 'none';
+      log.info('Captured cookies from follower', { count: captured.length });
+      log.debug('Captured cookies from follower details', {
+        count: captured.length,
+        domains: domainSummary,
+      });
 
-  let followerStorage = EMPTY_TELEPORT_STORAGE;
-  try {
-    followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
-    log.info('Captured follower storage for leader', {
-      totalEntries: countTeleportStorageEntries(followerStorage),
-      localStorageCount: Object.keys(followerStorage.localStorage).length,
-      sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
-    });
-    log.debug('Captured follower storage for leader details', {
-      origin: followerStorage.origin || '(unknown)',
-      localStorageCount: Object.keys(followerStorage.localStorage).length,
-      sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
-    });
-  } catch (err) {
-    log.warn('Could not capture follower storage', { error: String(err) });
-  }
+      let storage = EMPTY_TELEPORT_STORAGE;
+      try {
+        storage = await captureTeleportStorageSnapshot(page, 'follower');
+        log.info('Captured follower storage for leader', {
+          totalEntries: countTeleportStorageEntries(storage),
+          localStorageCount: Object.keys(storage.localStorage).length,
+          sessionStorageCount: Object.keys(storage.sessionStorage).length,
+        });
+        log.debug('Captured follower storage for leader details', {
+          origin: storage.origin || '(unknown)',
+          localStorageCount: Object.keys(storage.localStorage).length,
+          sessionStorageCount: Object.keys(storage.sessionStorage).length,
+        });
+      } catch (err) {
+        log.warn('Could not capture follower storage', { error: String(err) });
+      }
 
-  await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
-  await removeFollowerTeleportStorageScript(watcher, 'capture');
+      await logFollowerTeleportDiagnosticsOnce(page, watcher, 'capture');
+      // Removed through the handle we already hold: the per-tab lock is not
+      // reentrant, so the re-attaching form would deadlock here.
+      await removeTeleportStorageScript(page, script, 'follower');
+
+      return { cookies: captured, followerStorage: storage, finalUrl: url };
+    }
+  );
 
   // 3. Close follower tab
   try {
@@ -531,17 +559,16 @@ async function captureFollowerAuthState(
  * directly, then land. Falls back to an init-script replay if direct apply fails.
  */
 async function hydrateLeaderOriginThenLand(
-  browser: TeleportBrowserAPI,
-  leaderTargetId: string,
+  page: TeleportTab,
   followerStorage: TeleportStorageSnapshot,
   hydrationUrl: string,
   landingUrl: string | undefined
 ): Promise<void> {
   try {
-    await browser.navigate(hydrationUrl);
-    await applyTeleportStorageSnapshot(browser, followerStorage, 'leader');
+    await page.navigate(hydrationUrl);
+    await applyTeleportStorageSnapshot(page, followerStorage, 'leader');
     if (landingUrl && landingUrl !== hydrationUrl) {
-      await browser.navigate(landingUrl);
+      await page.navigate(landingUrl);
     }
   } catch (err) {
     log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
@@ -552,18 +579,13 @@ async function hydrateLeaderOriginThenLand(
       landingUrl,
       error: String(err),
     });
-    const removeLeaderStorageScript = await installTeleportStorageInitScript(
-      browser,
-      followerStorage,
-      leaderTargetId,
-      'leader'
-    );
+    const leaderScript = await installTeleportStorageInitScript(page, followerStorage, 'leader');
     try {
       if (landingUrl) {
-        await browser.navigate(landingUrl);
+        await page.navigate(landingUrl);
       }
     } finally {
-      await removeLeaderStorageScript?.();
+      await removeTeleportStorageScript(page, leaderScript, 'leader');
     }
   }
 }
@@ -573,19 +595,14 @@ async function hydrateLeaderOriginThenLand(
  * leader to the landing URL with the script installed through the load.
  */
 async function replayLeaderStorageThenLand(
-  browser: TeleportBrowserAPI,
+  page: TeleportTab,
   watcher: TeleportWatcher,
   followerStorage: TeleportStorageSnapshot,
   landingUrl: string | undefined,
   finalUrl: string | undefined
 ): Promise<void> {
-  const leaderTargetId = watcher.leaderTargetId!;
-  const removeLeaderStorageScript = await installTeleportStorageInitScript(
-    browser,
-    followerStorage,
-    leaderTargetId,
-    'leader'
-  );
+  const leaderTargetId = page.targetId;
+  const leaderScript = await installTeleportStorageInitScript(page, followerStorage, 'leader');
   // Keep the replay script installed through the actual navigation/load so auth-state
   // restoration is not a best-effort race against navigation returning.
   try {
@@ -602,10 +619,10 @@ async function replayLeaderStorageThenLand(
         storageOrigin: followerStorage.origin || '(unknown)',
         storageEntries: countTeleportStorageEntries(followerStorage),
       });
-      await browser.navigate(landingUrl);
+      await page.navigate(landingUrl);
     }
   } finally {
-    await removeLeaderStorageScript?.();
+    await removeTeleportStorageScript(page, leaderScript, 'leader');
   }
 }
 
@@ -641,39 +658,37 @@ async function injectAuthStateIntoLeader(
     return landingUrl;
   }
 
-  await browser.attachToPage(leaderTargetId);
-  if (cookies.length > 0) {
-    await browser.sendCDP('Network.setCookies', { cookies });
-    log.info('Injected cookies into leader tab', { count: cookies.length });
-    log.debug('Injected cookies into leader tab details', {
-      count: cookies.length,
-      leaderTargetId,
-    });
-  }
+  // One hold on the leader tab for the whole injection: cookies, storage
+  // hydration and the landing navigation must not be interleaved with another
+  // driver's command on this tab.
+  await browser.withTab(leaderTargetId, async (page) => {
+    if (cookies.length > 0) {
+      await page.send('Network.setCookies', { cookies });
+      log.info('Injected cookies into leader tab', { count: cookies.length });
+      log.debug('Injected cookies into leader tab details', {
+        count: cookies.length,
+        leaderTargetId,
+      });
+    }
 
-  if (shouldHydrateLeaderOrigin && hydrationUrl) {
-    log.info('Hydrating leader storage origin before landing', {
-      storageEntries: countTeleportStorageEntries(followerStorage),
-    });
-    log.debug('Hydrating leader storage origin before landing details', {
-      hydrationUrl,
-      landingUrl,
-      originalLeaderUrl: watcher.originalLeaderUrl,
-      finalUrl,
-      leaderTargetId,
-      storageOrigin: leaderStorageOrigin,
-      storageEntries: countTeleportStorageEntries(followerStorage),
-    });
-    await hydrateLeaderOriginThenLand(
-      browser,
-      leaderTargetId,
-      followerStorage,
-      hydrationUrl,
-      landingUrl
-    );
-  } else {
-    await replayLeaderStorageThenLand(browser, watcher, followerStorage, landingUrl, finalUrl);
-  }
+    if (shouldHydrateLeaderOrigin && hydrationUrl) {
+      log.info('Hydrating leader storage origin before landing', {
+        storageEntries: countTeleportStorageEntries(followerStorage),
+      });
+      log.debug('Hydrating leader storage origin before landing details', {
+        hydrationUrl,
+        landingUrl,
+        originalLeaderUrl: watcher.originalLeaderUrl,
+        finalUrl,
+        leaderTargetId,
+        storageOrigin: leaderStorageOrigin,
+        storageEntries: countTeleportStorageEntries(followerStorage),
+      });
+      await hydrateLeaderOriginThenLand(page, followerStorage, hydrationUrl, landingUrl);
+    } else {
+      await replayLeaderStorageThenLand(page, watcher, followerStorage, landingUrl, finalUrl);
+    }
+  });
 
   return landingUrl;
 }
@@ -735,7 +750,7 @@ async function captureCookiesAndComplete(
     watcher.resolveBlock?.(resultMsg);
   } catch (err) {
     log.error('Teleport auth-state capture failed', { error: String(err) });
-    await removeFollowerTeleportStorageScript(watcher, 'capture-error');
+    await removeFollowerTeleportStorageScript(browser, watcher, 'capture-error');
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));

@@ -21,39 +21,44 @@ function createFakeBrowser(options: FakeBrowserOptions = {}) {
   };
   const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
   let attached = '';
-  const browser = {
-    attachToPage: vi.fn(async (targetId: string) => {
-      attached = targetId;
-    }),
-    evaluate: vi.fn(async (script: string) => {
-      if (script === 'window.location.href') return sourceUrl;
-      if (options.failStorageCapture) throw new Error('no storage access');
-      return JSON.stringify({
-        origin: storage.origin,
-        localStorage: storage.localStorage,
-        sessionStorage: {},
-      });
-    }),
-    sendCDP: vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      calls.push({ method, params });
-      if (method === 'Network.getCookies') {
-        if (options.failGetCookies) throw new Error('Network domain unavailable');
-        return { cookies };
-      }
-      if (method === 'Network.setCookies' && options.failSetCookies) {
-        throw new Error('cookie injection refused');
-      }
-      if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'script-1' };
-      if (method === 'Page.navigate') {
-        if (options.hangNavigate) return new Promise<never>(() => {});
-        return {};
-      }
+  const evaluate = vi.fn(async (script: string) => {
+    if (script === 'window.location.href') return sourceUrl;
+    if (options.failStorageCapture) throw new Error('no storage access');
+    return JSON.stringify({
+      origin: storage.origin,
+      localStorage: storage.localStorage,
+      sessionStorage: {},
+    });
+  });
+  const sendCDP = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    calls.push({ method, params });
+    if (method === 'Network.getCookies') {
+      if (options.failGetCookies) throw new Error('Network domain unavailable');
+      return { cookies };
+    }
+    if (method === 'Network.setCookies' && options.failSetCookies) {
+      throw new Error('cookie injection refused');
+    }
+    if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'script-1' };
+    if (method === 'Page.navigate') {
+      if (options.hangNavigate) return new Promise<never>(() => {});
       return {};
+    }
+    return {};
+  });
+  const bringToFront = vi.fn(async () => {});
+  const browser = {
+    evaluate,
+    sendCDP,
+    bringToFront,
+    // Every page operation arrives on the handle, bound to one tab.
+    withTab: vi.fn(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
+      attached = targetId;
+      return fn({ targetId, sessionId: 'sess-1', evaluate, send: sendCDP, bringToFront });
     }),
     createPage: vi.fn(async () => 'local-new-tab'),
     createRemotePage: vi.fn(async (_runtimeId: string) => 'remote-new-tab'),
     closePage: vi.fn(async () => {}),
-    bringToFront: vi.fn(async () => {}),
     get attachedTarget() {
       return attached;
     },

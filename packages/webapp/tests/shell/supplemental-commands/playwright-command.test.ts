@@ -40,8 +40,14 @@ function withTrayConfigured(): () => void {
   };
 }
 
-/** Minimal mock BrowserAPI. */
-function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
+/**
+ * Minimal mock BrowserAPI.
+ *
+ * Page operations are session-explicit now, so the spies live on the object
+ * AND are what the {@link TabHandle} handed to a `withTab` callback delegates
+ * to — one spy per operation, asserted as `browser.evaluate` either way.
+ */
+function createMockBrowser(overrides: Record<string, unknown> = {}): MockBrowser {
   const browser = {
     listPages: vi.fn().mockResolvedValue([
       {
@@ -65,7 +71,12 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     setCheckedByBackendNodeId: vi.fn().mockResolvedValue('toggled' as const),
     dragByBackendNodeIds: vi.fn().mockResolvedValue(undefined),
     closePage: vi.fn().mockResolvedValue(undefined),
-    sendCDP: vi.fn().mockResolvedValue({}),
+    // Models the real `page.send(method, params)`: a session-scoped send down
+    // the tab's own transport. Kept under the historical `sendCDP` name so a
+    // test can assert either the spy or the transport it lands on.
+    sendCDP: vi.fn(async (method: string, params?: Record<string, unknown>) =>
+      browser.getTransport().send(method, params ?? {}, 'session-1')
+    ),
     type: vi.fn().mockResolvedValue(undefined),
     insertText: vi.fn().mockResolvedValue(undefined),
     getAccessibilityTree: vi.fn().mockResolvedValue({
@@ -119,12 +130,59 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     }),
     withTab: vi
       .fn()
-      .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) => {
-        return fn('session-1');
+      .mockImplementation(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
+        return fn(mockTabHandle(browser, targetId));
       }),
     ...overrides,
-  } as unknown as BrowserAPI;
+  } as unknown as MockBrowser;
   return browser;
+}
+
+/**
+ * The mock: a real `BrowserAPI` shape plus the loose spy bag the tests reach
+ * into for page operations that now live on the {@link TabHandle}.
+ */
+type MockBrowser = BrowserAPI & { [method: string]: ReturnType<typeof vi.fn> };
+
+/**
+ * A {@link TabHandle} that forwards to the mock browser's own spies, so a
+ * handler calling `page.evaluate(...)` is still asserted as
+ * `expect(browser.evaluate)`.
+ */
+function mockTabHandle(browser: MockBrowser, targetId: string): unknown {
+  const call = (name: string): ((...a: unknown[]) => unknown) =>
+    (browser[name] as unknown as ((...a: unknown[]) => unknown) | undefined) ?? (() => ({}));
+  return {
+    targetId,
+    sessionId: 'session-1',
+    get transport() {
+      return browser.getTransport();
+    },
+    // Arity-preserving, so `expect(browser.sendCDP).toHaveBeenCalledWith('X')`
+    // still matches a `page.send('X')` with no params.
+    send: (method: string, params?: unknown) =>
+      params === undefined ? call('sendCDP')(method) : call('sendCDP')(method, params),
+    bringToFront: () => browser.getTransport().send('Page.bringToFront', {}, 'session-1'),
+    setViewportOverride: (width: number, height: number, options?: unknown) =>
+      call('setViewportOverride')(targetId, width, height, options),
+    navigate: (...a: unknown[]) => call('navigate')(...a),
+    screenshot: (...a: unknown[]) => call('screenshot')(...a),
+    evaluate: (...a: unknown[]) => call('evaluate')(...a),
+    evaluateInFrame: (...a: unknown[]) => call('evaluateInFrame')(...a),
+    click: (...a: unknown[]) => call('click')(...a),
+    type: (...a: unknown[]) => call('type')(...a),
+    insertText: (...a: unknown[]) => call('insertText')(...a),
+    waitForSelector: (...a: unknown[]) => call('waitForSelector')(...a),
+    getFrameTree: (...a: unknown[]) => call('getFrameTree')(...a),
+    getAccessibilityTree: (...a: unknown[]) => call('getAccessibilityTree')(...a),
+    getAccessibilityTreeForFrame: (...a: unknown[]) => call('getAccessibilityTreeForFrame')(...a),
+    clickByBackendNodeId: (...a: unknown[]) => call('clickByBackendNodeId')(...a),
+    dblclickByBackendNodeId: (...a: unknown[]) => call('dblclickByBackendNodeId')(...a),
+    hoverByBackendNodeId: (...a: unknown[]) => call('hoverByBackendNodeId')(...a),
+    selectByBackendNodeId: (...a: unknown[]) => call('selectByBackendNodeId')(...a),
+    setCheckedByBackendNodeId: (...a: unknown[]) => call('setCheckedByBackendNodeId')(...a),
+    dragByBackendNodeIds: (...a: unknown[]) => call('dragByBackendNodeIds')(...a),
+  };
 }
 
 function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> } {
@@ -549,7 +607,7 @@ describe('playwright-cli snapshot', () => {
     const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
-    expect(browser.attachToPage).toHaveBeenCalledWith('tab-1');
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
   });
 
   it('rejects invalid tab ID when attachToPage fails', async () => {
@@ -2260,13 +2318,14 @@ describe('playwright-cli unknown command', () => {
 
 describe('playwright-cli frame ID targeting errors', () => {
   it('explains that a frame ID passed to --tab belongs in --frame', async () => {
-    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+    let browser: MockBrowser;
+    const withTab = vi.fn(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
       if (targetId === 'frame-1') {
         throw new Error('CDP error: No target with given id found (-32602)');
       }
-      return fn('session-1');
+      return fn(mockTabHandle(browser, targetId));
     });
-    const browser = createMockBrowser({
+    browser = createMockBrowser({
       listAllTargets: vi
         .fn()
         .mockResolvedValue([{ targetId: 'tab-1', title: 'Page', url: 'https://example.com' }]),
@@ -2279,7 +2338,7 @@ describe('playwright-cli frame ID targeting errors', () => {
           name: '',
         },
       ]),
-      withTab: withTab as BrowserAPI['withTab'],
+      withTab: withTab as unknown as BrowserAPI['withTab'],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser, createMockFS());
 
@@ -2294,14 +2353,15 @@ describe('playwright-cli frame ID targeting errors', () => {
 
   it('finds frame IDs owned by remote follower targets from panel RPC', async () => {
     let activeTargetId = '';
-    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+    let browser: MockBrowser;
+    const withTab = vi.fn(async (targetId: string, fn: (tab: unknown) => Promise<unknown>) => {
       if (targetId === 'remote-frame') {
         throw new Error('CDP error: No target with given id found (-32602)');
       }
       activeTargetId = targetId;
-      return fn('session-1');
+      return fn(mockTabHandle(browser, targetId));
     });
-    const browser = createMockBrowser({
+    browser = createMockBrowser({
       listAllTargets: vi
         .fn()
         .mockResolvedValue([{ targetId: 'local-tab', title: 'Local', url: 'https://local.test' }]),
@@ -2318,7 +2378,7 @@ describe('playwright-cli frame ID targeting errors', () => {
             ]
           : [{ frameId: 'local-main', url: 'https://local.test', name: '' }]
       ),
-      withTab: withTab as BrowserAPI['withTab'],
+      withTab: withTab as unknown as BrowserAPI['withTab'],
     });
     const rpcCall = vi.fn().mockResolvedValue({
       targets: [
@@ -4215,10 +4275,10 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
   async function waitForFixtureLoaded(targetId: string): Promise<void> {
     const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
     let lastObserved = 'no probe result yet';
-    await browser.withTab(targetId, async () => {
+    await browser.withTab(targetId, async (page) => {
       while (Date.now() < deadline) {
         try {
-          const raw = await browser.evaluate(FIXTURE_READY_PROBE);
+          const raw = await page.evaluate(FIXTURE_READY_PROBE);
           lastObserved = String(raw);
           if (fixtureIsLoaded(JSON.parse(lastObserved) as FixtureProbe)) return;
         } catch (err) {
@@ -4299,8 +4359,8 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       browser as BrowserAPI,
       mockFs as VirtualFS
     );
-    const frameId = await browser.withTab(targetId, async () => {
-      const frames = await browser.getFrameTree();
+    const frameId = await browser.withTab(targetId, async (page) => {
+      const frames = await page.getFrameTree();
       return frames.find((frame) => frame.parentFrameId)?.frameId;
     });
     expect(frameId).toBeDefined();
@@ -4371,11 +4431,11 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(fillResult.stdout).toContain('Filled');
 
     // Verify value via evaluateInFrame
-    await browser.withTab(targetId, async () => {
-      const frames = await browser.getFrameTree();
+    await browser.withTab(targetId, async (page) => {
+      const frames = await page.getFrameTree();
       const childFrame = frames.find((f) => f.parentFrameId);
       expect(childFrame).toBeDefined();
-      const value = await browser.evaluateInFrame(
+      const value = await page.evaluateInFrame(
         childFrame!.frameId,
         `document.getElementById('frame-input').value`
       );
@@ -4389,10 +4449,10 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
 
     const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/upload.html`);
     const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
-    await browser.withTab(targetId, async () => {
+    await browser.withTab(targetId, async (page) => {
       while (Date.now() < deadline) {
         try {
-          const ready = await browser.evaluate(
+          const ready = await page.evaluate(
             `document.readyState === 'complete' && Boolean(document.getElementById('f'))`
           );
           if (ready === true || ready === 'true') return;
@@ -4451,10 +4511,10 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
 
     const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/drop.html`);
     const deadline = Date.now() + FIXTURE_LOAD_TIMEOUT_MS;
-    await browser.withTab(targetId, async () => {
+    await browser.withTab(targetId, async (page) => {
       while (Date.now() < deadline) {
         try {
-          const ready = await browser.evaluate(
+          const ready = await page.evaluate(
             `document.readyState === 'complete' && Boolean(document.getElementById('zone'))`
           );
           if (ready === true || ready === 'true') return;
@@ -5165,14 +5225,7 @@ describe('playwright-cli console', () => {
         }),
       off: vi.fn(),
     };
-    browser = createMockBrowser({
-      getTransport: vi.fn().mockReturnValue(mockTransport),
-      withTab: vi
-        .fn()
-        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
-          fn('session-1')
-        ),
-    });
+    browser = createMockBrowser({ getTransport: vi.fn().mockReturnValue(mockTransport) });
     fs = createMockFS();
   });
 
@@ -5277,14 +5330,7 @@ describe('playwright-cli requests', () => {
         }),
       off: vi.fn(),
     };
-    browser = createMockBrowser({
-      getTransport: vi.fn().mockReturnValue(mockTransport),
-      withTab: vi
-        .fn()
-        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
-          fn('session-1')
-        ),
-    });
+    browser = createMockBrowser({ getTransport: vi.fn().mockReturnValue(mockTransport) });
     fs = createMockFS();
   });
 
@@ -5693,14 +5739,7 @@ describe('playwright-cli route / route-list / unroute', () => {
       }),
       off: vi.fn(),
     };
-    browser = createMockBrowser({
-      getTransport: vi.fn().mockReturnValue(mockTransport),
-      withTab: vi
-        .fn()
-        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
-          fn('session-1')
-        ),
-    });
+    browser = createMockBrowser({ getTransport: vi.fn().mockReturnValue(mockTransport) });
     fs = createMockFS();
   });
 

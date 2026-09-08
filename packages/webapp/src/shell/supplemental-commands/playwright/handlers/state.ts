@@ -26,14 +26,14 @@ export const stateSaveHandler: PlaywrightHandler = async ({ browser, fs, positio
   let localStorageItems: Array<{ name: string; value: string }> = [];
   let origin = '';
 
-  // Get cookies (context-level, works outside of a tab session)
-  const cookieResult = await browser.sendCDP('Network.getCookies');
-  cookies = (cookieResult as { cookies: unknown[] }).cookies ?? [];
+  // Cookies are context-level but `Network.getCookies` is still a
+  // session-scoped command, so it rides the tab's own handle like everything
+  // else — there is no bridge-wide "current session" to borrow any more.
+  await browser.withTab(tab.targetId, async (page) => {
+    const cookieResult = await page.send('Network.getCookies');
+    cookies = (cookieResult as { cookies: unknown[] }).cookies ?? [];
 
-  // Get origin and localStorage (requires the tab context)
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
-
+    const { sessionId, transport } = page;
     const urlResult = await transport.send(
       'Runtime.evaluate',
       { expression: 'location.origin', returnByValue: true },
@@ -91,17 +91,17 @@ export const stateLoadHandler: PlaywrightHandler = async ({ browser, fs, positio
     };
   }
 
-  // Restore cookies (context-level)
-  if (storageState.cookies?.length) {
-    await browser.sendCDP('Network.setCookies', { cookies: storageState.cookies });
-  }
-
-  // Restore localStorage (requires tab context)
+  // Cookies are context-level, localStorage is per origin — both go through
+  // the tab's own session handle.
   let skippedOrigins: Array<{ origin: string }> = [];
-  if (storageState.origins?.length) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+  if (storageState.cookies?.length || storageState.origins?.length) {
+    await browser.withTab(tab.targetId, async (page) => {
+      if (storageState.cookies?.length) {
+        await page.send('Network.setCookies', { cookies: storageState.cookies });
+      }
+      if (!storageState.origins?.length) return;
 
+      const { sessionId, transport } = page;
       const originResult = await transport.send(
         'Runtime.evaluate',
         { expression: 'location.origin', returnByValue: true },

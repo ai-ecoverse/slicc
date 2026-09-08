@@ -11,6 +11,7 @@ import {
   EMPTY_TELEPORT_STORAGE,
   formatCookieDomainSummary,
   installTeleportStorageInitScript,
+  removeTeleportStorageScript,
   shouldCaptureTeleportDiagnostics,
   tryGetTeleportUrlOrigin,
 } from '../../../../src/shell/supplemental-commands/playwright/teleport-storage.js';
@@ -89,76 +90,71 @@ describe('teleport-storage pure helpers', () => {
 
 describe('teleport-storage browser helpers', () => {
   it('parses a storage snapshot from evaluate JSON', async () => {
-    const browser = {
+    const page = {
+      targetId: 'target-1',
       evaluate: vi.fn().mockResolvedValue(JSON.stringify(sampleSnapshot)),
-      sendCDP: vi.fn(),
-      attachToPage: vi.fn(),
+      send: vi.fn(),
     };
-    await expect(captureTeleportStorageSnapshot(browser, 'leader')).resolves.toEqual(
-      sampleSnapshot
-    );
+    await expect(captureTeleportStorageSnapshot(page, 'leader')).resolves.toEqual(sampleSnapshot);
   });
 
   it('returns empty storage when evaluate is non-string or unparseable', async () => {
-    const browser = {
+    const page = {
+      targetId: 'target-1',
       evaluate: vi.fn().mockResolvedValue(42),
-      sendCDP: vi.fn(),
-      attachToPage: vi.fn(),
+      send: vi.fn(),
     };
-    await expect(captureTeleportStorageSnapshot(browser, 'follower')).resolves.toEqual(
+    await expect(captureTeleportStorageSnapshot(page, 'follower')).resolves.toEqual(
       EMPTY_TELEPORT_STORAGE
     );
 
-    browser.evaluate.mockResolvedValue('{not-json');
-    await expect(captureTeleportStorageSnapshot(browser, 'follower')).resolves.toEqual(
+    page.evaluate.mockResolvedValue('{not-json');
+    await expect(captureTeleportStorageSnapshot(page, 'follower')).resolves.toEqual(
       EMPTY_TELEPORT_STORAGE
     );
   });
 
   it('skips apply and init when the snapshot has no entries', async () => {
-    const browser = {
+    const page = {
+      targetId: 'target-1',
       evaluate: vi.fn(),
-      sendCDP: vi.fn(),
-      attachToPage: vi.fn(),
+      send: vi.fn(),
     };
-    await applyTeleportStorageSnapshot(browser, EMPTY_TELEPORT_STORAGE, 'leader');
+    await applyTeleportStorageSnapshot(page, EMPTY_TELEPORT_STORAGE, 'leader');
     await expect(
-      installTeleportStorageInitScript(browser, EMPTY_TELEPORT_STORAGE, 't1', 'leader')
+      installTeleportStorageInitScript(page, EMPTY_TELEPORT_STORAGE, 'leader')
     ).resolves.toBeNull();
-    expect(browser.evaluate).not.toHaveBeenCalled();
-    expect(browser.sendCDP).not.toHaveBeenCalled();
+    expect(page.evaluate).not.toHaveBeenCalled();
+    expect(page.send).not.toHaveBeenCalled();
   });
 
   it('applies storage and installs a removable init script', async () => {
-    const browser = {
+    const page = {
+      targetId: 'target-1',
       evaluate: vi.fn().mockResolvedValue('{"ok":true}'),
-      sendCDP: vi.fn().mockResolvedValue({ identifier: 'script-1' }),
-      attachToPage: vi.fn().mockResolvedValue('session'),
+      send: vi.fn().mockResolvedValue({ identifier: 'script-1' }),
     };
 
-    await applyTeleportStorageSnapshot(browser, sampleSnapshot, 'follower');
-    expect(browser.evaluate).toHaveBeenCalledOnce();
+    await applyTeleportStorageSnapshot(page, sampleSnapshot, 'follower');
+    expect(page.evaluate).toHaveBeenCalledOnce();
 
-    const remove = await installTeleportStorageInitScript(
-      browser,
-      sampleSnapshot,
-      'target-1',
-      'follower'
-    );
-    expect(browser.sendCDP).toHaveBeenCalledWith('Page.addScriptToEvaluateOnNewDocument', {
+    const script = await installTeleportStorageInitScript(page, sampleSnapshot, 'follower');
+    expect(page.send).toHaveBeenCalledWith('Page.addScriptToEvaluateOnNewDocument', {
       source: expect.stringContaining('https://example.com'),
     });
-    expect(remove).toBeTypeOf('function');
+    // The registration names its own tab, so a caller holding no handle can
+    // still re-enter that tab to remove it.
+    expect(script).toEqual({ identifier: 'script-1', targetId: 'target-1' });
 
-    await remove?.();
-    expect(browser.attachToPage).toHaveBeenCalledWith('target-1');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Page.removeScriptToEvaluateOnNewDocument', {
+    await removeTeleportStorageScript(page, script, 'follower');
+    expect(page.send).toHaveBeenCalledWith('Page.removeScriptToEvaluateOnNewDocument', {
       identifier: 'script-1',
     });
   });
 
   it('captures page diagnostics from evaluate JSON', async () => {
-    const browser = {
+    const page = {
+      targetId: 'target-1',
       evaluate: vi.fn().mockResolvedValue(
         JSON.stringify({
           url: 'https://example.com/callback',
@@ -166,10 +162,9 @@ describe('teleport-storage browser helpers', () => {
           bodySnippet: 'ok',
         })
       ),
-      sendCDP: vi.fn(),
-      attachToPage: vi.fn(),
+      send: vi.fn(),
     };
-    await expect(captureTeleportPageDiagnostics(browser)).resolves.toEqual({
+    await expect(captureTeleportPageDiagnostics(page)).resolves.toEqual({
       url: 'https://example.com/callback',
       title: 'Done',
       bodySnippet: 'ok',

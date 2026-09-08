@@ -13,10 +13,10 @@
  *
  * Works across transports — the WebSocket-backed `CDPClient` (CLI /
  * Electron / kernel-worker) and the `chrome.runtime` Port-backed
- * `ExtensionBridgeTransport` (thin extension) both qualify. The bridge
- * only consumes the `CDPTransport` surface exposed by
- * `BrowserAPI.getTransport()` and serializes per-tab CDP traffic via
- * `BrowserAPI.withTab(...)`.
+ * `ExtensionBridgeTransport` (thin extension) both qualify. Per-tab CDP
+ * traffic goes through `BrowserAPI.withTab(...)`, and every command names
+ * that tab's session through the `TabHandle` it hands out; only the global
+ * `Runtime.bindingCalled` subscription uses `BrowserAPI.getTransport()`.
  */
 
 import { createLogger } from '../base/logger.js';
@@ -99,16 +99,16 @@ export class CdpWsPageBridge implements WsPageBridge {
     // Attach the global binding listener lazily so a bridge with no
     // installs holds no transport subscriptions.
     this.ensureBindingListener();
-    const result = await this.browser.withTab(targetId, async () => {
-      await this.browser.sendCDP('Runtime.enable');
-      await this.browser.sendCDP('Runtime.addBinding', { name: BINDING_NAME });
-      const r = await this.browser.sendCDP('Page.addScriptToEvaluateOnNewDocument', {
+    const result = await this.browser.withTab(targetId, async (page) => {
+      await page.send('Runtime.enable');
+      await page.send('Runtime.addBinding', { name: BINDING_NAME });
+      const r = await page.send('Page.addScriptToEvaluateOnNewDocument', {
         source: WS_ROUTER_SOURCE,
       });
       // Run the router in the current document too — the
       // `addScriptToEvaluateOnNewDocument` registration only fires
       // on subsequent navigations.
-      await this.browser.sendCDP('Runtime.evaluate', {
+      await page.send('Runtime.evaluate', {
         expression: WS_ROUTER_SOURCE,
         returnByValue: true,
       });
@@ -138,7 +138,7 @@ export class CdpWsPageBridge implements WsPageBridge {
     urlMatch: string | null | undefined,
     filter: WsSelector | null | undefined
   ): Promise<void> {
-    await this.browser.withTab(targetId, async () => {
+    await this.browser.withTab(targetId, async (page) => {
       // Tri-state: `undefined` is omitted from the patch (router keeps
       // the field), an explicit `null` is forwarded so the router can
       // `delete` the field, and any value sets it. Without the explicit
@@ -150,14 +150,14 @@ export class CdpWsPageBridge implements WsPageBridge {
       if (filter === null) patch.filter = null;
       else if (filter !== undefined) patch.filter = filter;
       const expr = `window.__sliccWsRouter && window.__sliccWsRouter.update(${JSON.stringify(subId)}, ${JSON.stringify(patch)})`;
-      await this.browser.sendCDP('Runtime.evaluate', { expression: expr, returnByValue: true });
+      await page.send('Runtime.evaluate', { expression: expr, returnByValue: true });
     });
   }
 
   async unregisterSelector(targetId: string, subId: string): Promise<void> {
-    await this.browser.withTab(targetId, async () => {
+    await this.browser.withTab(targetId, async (page) => {
       const expr = `window.__sliccWsRouter && window.__sliccWsRouter.unregister(${JSON.stringify(subId)})`;
-      await this.browser.sendCDP('Runtime.evaluate', { expression: expr, returnByValue: true });
+      await page.send('Runtime.evaluate', { expression: expr, returnByValue: true });
     });
   }
 
@@ -193,9 +193,9 @@ export class CdpWsPageBridge implements WsPageBridge {
     method: 'register' | 'update' | 'unregister',
     arg: unknown
   ): Promise<void> {
-    await this.browser.withTab(targetId, async () => {
+    await this.browser.withTab(targetId, async (page) => {
       const expr = `window.__sliccWsRouter && window.__sliccWsRouter.${method}(${JSON.stringify(arg)})`;
-      await this.browser.sendCDP('Runtime.evaluate', { expression: expr, returnByValue: true });
+      await page.send('Runtime.evaluate', { expression: expr, returnByValue: true });
     });
   }
 }

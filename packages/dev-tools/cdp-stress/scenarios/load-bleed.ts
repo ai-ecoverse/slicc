@@ -42,21 +42,21 @@ export async function run(): Promise<LoadBleedResult> {
         const b = await st.browser.createPage(`${site.url}/reloader?every=300`);
         await new Promise((r) => setTimeout(r, 300));
         // A sibling driver touched tab B once — leaks a Page-enabled session.
-        await st.browser.withTab(b, () => st.browser.evaluate('1'));
+        await st.browser.withTab(b, (page) => page.evaluate('1'));
       }
       const loadsBefore = st.counters.eventsByMethod.get('Page.loadEventFired') ?? 0;
       const t0 = Date.now();
       let err: string | null = null;
       try {
-        await st.browser.withTab(a, () =>
-          st.browser.navigate(`${site.url}/page/slow?subdelay=${SLOW_ASSET_MS}`)
+        await st.browser.withTab(a, (page) =>
+          page.navigate(`${site.url}/page/slow?subdelay=${SLOW_ASSET_MS}`)
         );
       } catch (e) {
         err = e instanceof Error ? e.message : String(e);
       }
       const elapsedMs = Date.now() - t0;
-      const seen = await st.browser.withTab(a, () =>
-        st.browser.evaluate(
+      const seen = await st.browser.withTab(a, (page) =>
+        page.evaluate(
           'JSON.stringify({title: document.title, readyState: document.readyState, href: location.href})'
         )
       );

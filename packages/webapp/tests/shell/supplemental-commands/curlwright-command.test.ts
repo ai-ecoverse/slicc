@@ -37,17 +37,21 @@ function harness(
   };
   const run = (source: string): Promise<unknown> =>
     new Function('fetch', `return ${source};`)(fakeFetch) as Promise<unknown>;
-  const browser = {
-    listAllTargets: vi.fn(async () => pages),
-    listPages: vi.fn(async () => pages),
-    withTab: async <T>(targetId: string, fn: () => Promise<T>): Promise<T> => {
-      captured.targetId = targetId;
-      return fn();
-    },
+  const page = {
+    targetId: '',
     evaluate: (source: string) => run(source),
     evaluateInFrame: (frameId: string, source: string) => {
       captured.frameId = frameId;
       return run(source);
+    },
+  };
+  const browser = {
+    listAllTargets: vi.fn(async () => pages),
+    listPages: vi.fn(async () => pages),
+    withTab: async <T>(targetId: string, fn: (tab: typeof page) => Promise<T>): Promise<T> => {
+      captured.targetId = targetId;
+      page.targetId = targetId;
+      return fn(page);
     },
   } as unknown as BrowserAPI;
   return { browser, captured };

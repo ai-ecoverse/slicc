@@ -6,14 +6,14 @@
 import { normalizeAccessibilityText } from '../../../base/normalize-accessibility-text.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import { listAllTargetsWithRemote } from './state.js';
-import type { PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } from './types.js';
+import type { PlaywrightHandlerCtx, PlaywrightState, TabHandle, TabSnapshot } from './types.js';
 
 // BrowserAPI / PageInfo / AccessibilityNode are named via PlaywrightHandlerCtx
 // (same shell layer) rather than imported from `cdp/`, so this module stays
 // inside the shell layer (see layer-stack import direction).
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
 type PageInfo = Awaited<ReturnType<BrowserAPI['listPages']>>[number];
-type AccessibilityNode = Awaited<ReturnType<BrowserAPI['getAccessibilityTree']>>;
+type AccessibilityNode = Awaited<ReturnType<TabHandle['getAccessibilityTree']>>;
 
 export function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -206,7 +206,7 @@ function findMatchingChildFrame(
 
 /** Render a child frame's accessibility tree and merge its refs into the parent maps. */
 async function renderChildFrame(
-  browser: BrowserAPI,
+  page: TabHandle,
   frameId: string,
   indent: string,
   framePrefix: string,
@@ -215,7 +215,7 @@ async function renderChildFrame(
   refToFrameId: Map<string, string>
 ): Promise<string[]> {
   try {
-    const frameTree = await browser.getAccessibilityTreeForFrame(frameId);
+    const frameTree = await page.getAccessibilityTreeForFrame(frameId);
     const frameRefToSelector = new Map<string, string>();
     const frameRefToBackendNodeId = new Map<string, number>();
     const frameLines = renderNode(
@@ -243,16 +243,16 @@ async function renderChildFrame(
 
 /** Stitch child-iframe accessibility content under each iframe placeholder line. */
 async function stitchIframeContent(
-  browser: BrowserAPI,
+  page: TabHandle,
   content: string,
   baseUrl: string,
   refToSelector: Map<string, string>,
   refToBackendNodeId: Map<string, number>,
   refToFrameId: Map<string, string>
 ): Promise<string> {
-  if (typeof browser.getFrameTree !== 'function') return content;
+  if (typeof page.getFrameTree !== 'function') return content;
   try {
-    const frames = await browser.getFrameTree();
+    const frames = await page.getFrameTree();
     const childFrames = frames.filter((f) => f.parentFrameId);
     if (childFrames.length === 0) return content;
 
@@ -281,7 +281,7 @@ async function stitchIframeContent(
       frameIndex++;
       stitchedLines.push(
         ...(await renderChildFrame(
-          browser,
+          page,
           matchedFrame.frameId,
           iframeMatch[1] + '  ',
           `f${frameIndex}`,
@@ -299,12 +299,12 @@ async function stitchIframeContent(
 }
 
 /**
- * Build the accessibility snapshot data for the current tab (must be attached).
- * Returns raw snapshot fields without touching `state` — callers decide whether
- * to persist to memory and/or write to a file.
+ * Build the accessibility snapshot data for one tab, from its own session
+ * handle. Returns raw snapshot fields without touching `state` — callers decide
+ * whether to persist to memory and/or write to a file.
  */
 export async function buildSnapshot(
-  browser: BrowserAPI,
+  page: TabHandle,
   options?: { noIframes?: boolean }
 ): Promise<{
   url: string;
@@ -314,11 +314,11 @@ export async function buildSnapshot(
   refToBackendNodeId: Map<string, number>;
   refToFrameId: Map<string, string>;
 }> {
-  const pageInfo = await browser.evaluate(
+  const pageInfo = await page.evaluate(
     `JSON.stringify({ url: location.href, title: document.title })`
   );
   const { url, title } = JSON.parse(pageInfo as string);
-  const tree = await browser.getAccessibilityTree();
+  const tree = await page.getAccessibilityTree();
   const refToSelector = new Map<string, string>();
   const refToBackendNodeId = new Map<string, number>();
   const refToFrameId = new Map<string, string>();
@@ -328,7 +328,7 @@ export async function buildSnapshot(
 
   if (!options?.noIframes) {
     content = await stitchIframeContent(
-      browser,
+      page,
       content,
       url,
       refToSelector,
@@ -341,14 +341,13 @@ export async function buildSnapshot(
 }
 
 export async function takeSnapshot(
-  browser: BrowserAPI,
+  page: TabHandle,
   state: PlaywrightState,
   targetId: string,
   options?: { noIframes?: boolean }
 ): Promise<{ snapshot: TabSnapshot; output: string }> {
-  await browser.attachToPage(targetId);
   const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } = await buildSnapshot(
-    browser,
+    page,
     options
   );
 

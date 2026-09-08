@@ -36,7 +36,7 @@ export async function run(): Promise<AbandonedResult> {
     await new Promise((r) => setTimeout(r, 300));
     // Driver A: goto /hang, caller abandons after 2s (like background_after).
     const gotoPromise = b
-      .withTab(hung, () => b.navigate(`${site.url}/hang`))
+      .withTab(hung, (page) => page.navigate(`${site.url}/hang`))
       .catch((e: unknown) => errKind(e));
     const callerGaveUp = await Promise.race([
       gotoPromise,
@@ -48,7 +48,7 @@ export async function run(): Promise<AbandonedResult> {
     const t0 = Date.now();
     let victimResult: unknown;
     try {
-      victimResult = await b.withTab(victim, () => b.evaluate('document.title'));
+      victimResult = await b.withTab(victim, (page) => page.evaluate('document.title'));
     } catch (e) {
       victimResult = errKind(e);
     }

@@ -180,9 +180,9 @@ describe('PreviewBridgeCdpTransport', () => {
       });
       const api = new BrowserAPI(transport);
       await api.connect();
-      await api.attachToPage('preview-target');
+      const page = await api.withTab('preview-target', async (tab) => tab);
 
-      const snapshot = api.getAccessibilityTreeForFrame('preview-frame');
+      const snapshot = page.getAccessibilityTreeForFrame('preview-frame');
       await vi.waitFor(() => {
         expect(sent.some((message) => message.type === 'bridge.cdp.request')).toBe(true);
       });

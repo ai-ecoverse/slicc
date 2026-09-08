@@ -18,8 +18,7 @@ export const networkStateSetHandler: PlaywrightHandler = async ({ browser, flags
       exitCode: 1,
     };
   }
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Network.enable', {}, sessionId);
     await transport.send(
       'Network.emulateNetworkConditions',

@@ -60,8 +60,7 @@ export const mousemoveHandler: PlaywrightHandler = async ({
   if (isNaN(x) || isNaN(y)) {
     return { stdout: '', stderr: 'x and y must be numbers\n', exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x, y, button: 'none', modifiers: 0 },
@@ -83,8 +82,7 @@ export const mousedownHandler: PlaywrightHandler = async ({
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
@@ -100,8 +98,7 @@ export const mouseupHandler: PlaywrightHandler = async ({ browser, state, positi
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
@@ -128,8 +125,7 @@ export const mousewheelHandler: PlaywrightHandler = async ({
     return { stdout: '', stderr: 'dx and dy must be numbers\n', exitCode: 1 };
   }
   const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseWheel', deltaX: dx, deltaY: dy, x: pos.x, y: pos.y, modifiers: 0 },
@@ -191,13 +187,11 @@ export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     return this.tagName;
   }`;
 
-  const output = await browser.withTab(tab.targetId, async (sessionId) => {
+  const output = await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
     }
-
-    const transport = browser.getTransport();
 
     // Prefer backendNodeId for stable targeting (same pattern as click, upload)
     const backendNodeId = snapshot.refToBackendNodeId.get(ref);

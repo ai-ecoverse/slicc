@@ -11,18 +11,12 @@ export const dialogAcceptHandler: PlaywrightHandler = async ({ browser, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const promptText = positional.length > 0 ? positional.join(' ') : undefined;
-  await browser.withTab(tab.targetId, async () => {
-    const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Page.enable', {}, sessionId!);
-    await transport.send(
-      'Page.handleJavaScriptDialog',
-      {
-        accept: true,
-        ...(promptText !== undefined ? { promptText } : {}),
-      },
-      sessionId!
-    );
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.send('Page.enable');
+    await page.send('Page.handleJavaScriptDialog', {
+      accept: true,
+      ...(promptText !== undefined ? { promptText } : {}),
+    });
   });
   return {
     stdout: `Accepted dialog${promptText ? ` with "${promptText}"` : ''}\n`,
@@ -36,11 +30,9 @@ export const dialogDismissHandler: PlaywrightHandler = async ({ browser, flags }
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async () => {
-    const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Page.enable', {}, sessionId!);
-    await transport.send('Page.handleJavaScriptDialog', { accept: false }, sessionId!);
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.send('Page.enable');
+    await page.send('Page.handleJavaScriptDialog', { accept: false });
   });
   return { stdout: 'Dismissed dialog\n', stderr: '', exitCode: 0 };
 };

@@ -132,8 +132,9 @@ async function teleportArm({ browser, state, flags }: PlaywrightHandlerCtx): Pro
   // Capture the leader's current URL before the SSO redirect for post-teleport navigation
   let leaderUrl: string | undefined;
   try {
-    await browser.attachToPage(tab.targetId);
-    const raw = await browser.evaluate('window.location.href');
+    const raw = await browser.withTab(tab.targetId, (page) =>
+      page.evaluate('window.location.href')
+    );
     leaderUrl = typeof raw === 'string' ? raw : String(raw);
   } catch {
     /* best-effort */

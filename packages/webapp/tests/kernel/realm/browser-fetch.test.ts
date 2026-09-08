@@ -518,14 +518,17 @@ describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
       body: { ok: true, channel: 'C123' },
     };
     const browser = {
-      async withTab<T>(_targetId: string, fn: () => Promise<T>): Promise<T> {
-        return fn();
-      },
-      async evaluate(expression: string): Promise<unknown> {
-        captured.push(expression);
-        // Return the structured-clone shape browser.fetch promises;
-        // unwrapEvalResult passes objects through untouched.
-        return cannedResponse;
+      async withTab<T>(targetId: string, fn: (tab: unknown) => Promise<T>): Promise<T> {
+        return fn({
+          targetId,
+          sessionId: 'sess-1',
+          async evaluate(expression: string): Promise<unknown> {
+            captured.push(expression);
+            // Return the structured-clone shape browser.fetch promises;
+            // unwrapEvalResult passes objects through untouched.
+            return cannedResponse;
+          },
+        });
       },
     } as unknown as BrowserAPI;
 

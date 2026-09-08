@@ -128,9 +128,9 @@ describe('CherryHostTransport', () => {
   it('evaluates a frame in the Cherry host page main world', async () => {
     await connectHelper(h);
     const api = new BrowserAPI(h.transport);
-    await api.attachToPage('cherry-target');
+    const page = await api.withTab('cherry-target', async (tab) => tab);
 
-    const evaluation = api.evaluateInFrame('cherry-frame', 'window.appState', { world: 'main' });
+    const evaluation = page.evaluateInFrame('cherry-frame', 'window.appState', { world: 'main' });
     await vi.waitFor(() => {
       expect(
         h.posted.find((m) => m.kind === 'cdp.request' && m.method === 'Runtime.evaluate')
@@ -153,9 +153,9 @@ describe('CherryHostTransport', () => {
   it('gets a frame snapshot through the synthetic Cherry isolated world', async () => {
     await connectHelper(h);
     const api = new BrowserAPI(h.transport);
-    await api.attachToPage('cherry-target');
+    const page = await api.withTab('cherry-target', async (tab) => tab);
 
-    const snapshot = api.getAccessibilityTreeForFrame('cherry-frame');
+    const snapshot = page.getAccessibilityTreeForFrame('cherry-frame');
     await vi.waitFor(() => {
       expect(h.posted.some((m) => m.kind === 'cdp.request')).toBe(true);
     });

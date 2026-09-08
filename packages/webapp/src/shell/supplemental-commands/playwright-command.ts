@@ -87,9 +87,10 @@ function knownFlagSpecForWalk(spec: KnownFlagSpec): KnownFlagSpec {
 
 /**
  * Lock wait accumulated while one command ran before its stderr carries a
- * contention note. Waiting comes in two flavours now that the bridge locks per
- * tab: another caller driving the SAME tab, or another caller driving another
- * tab and holding the bridge. The note names which one, so a fanned-out agent
+ * contention note. Waiting comes in two flavours: another caller driving the
+ * SAME tab, or a bridge-wide wait — which now only happens behind the few
+ * genuinely global operations (attaching, `Page.bringToFront`), not behind
+ * another tab's command body. The note names which one, so a fanned-out agent
  * can back off deliberately — give this tab a rest, or reduce fan-out — instead
  * of guessing why calls are slow (or detached past `background_after`).
  */
@@ -132,7 +133,8 @@ function withContentionNote(
   const note =
     `note: browser bridge contended — lock waits totaled ${waited}s while this command ran, ` +
     `${where} (queue depth ${after.queueDepth}). Commands on the same tab serialize; ` +
-    'different tabs share the bridge — stagger concurrent callers or reduce fan-out.\n';
+    'commands on different tabs run in parallel — stagger callers on THIS tab, or give ' +
+    'each caller its own tab.\n';
   return { ...result, stderr: result.stderr + note };
 }
 

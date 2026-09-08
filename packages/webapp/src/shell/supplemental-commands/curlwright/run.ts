@@ -96,9 +96,9 @@ async function runPageFetch(
   fetchOptions: BrowserFetchOptions
 ): Promise<BrowserFetchResult> {
   const script = await buildBrowserFetchScript(url, fetchOptions);
-  const raw = await browser.withTab(targetId, async () => {
-    if (!frameId) return browser.evaluate(script);
-    return browser.evaluateInFrame(frameId, script, { world: 'main' });
+  const raw = await browser.withTab(targetId, async (page) => {
+    if (!frameId) return page.evaluate(script);
+    return page.evaluateInFrame(frameId, script, { world: 'main' });
   });
   return raw as BrowserFetchResult;
 }

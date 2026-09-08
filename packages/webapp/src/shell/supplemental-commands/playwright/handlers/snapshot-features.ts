@@ -10,9 +10,7 @@
 
 import { takeSnapshot } from '../snapshot.js';
 import { parsePageJson, requireTab } from '../state.js';
-import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
-
-type BrowserAPI = PlaywrightHandlerCtx['browser'];
+import type { PlaywrightHandler, TabHandle } from '../types.js';
 
 /**
  * Keep only snapshot node lines above `depth` nesting levels (2-space indent
@@ -48,34 +46,28 @@ export function limitSnapshotDepth(text: string, depth: number): string {
  * frame's coordinate space. A ref whose node is gone stays unannotated.
  */
 export async function annotateBoxes(
-  browser: BrowserAPI,
+  page: TabHandle,
   refToBackendNodeId: Map<string, number>,
   text: string
 ): Promise<string> {
-  const transport = browser.getTransport();
-  const sessionId = browser.getSessionId();
-  await transport.send('DOM.enable', {}, sessionId!);
-  await transport.send('Runtime.enable', {}, sessionId!);
+  await page.send('DOM.enable');
+  await page.send('Runtime.enable');
 
   const boxes: Record<string, number[]> = {};
   for (const [ref, backendNodeId] of refToBackendNodeId) {
     if (ref.startsWith('f')) continue;
     try {
-      const resolved = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
+      const resolved = await page.send('DOM.resolveNode', { backendNodeId });
       const objectId = (resolved['object'] as { objectId?: string } | undefined)?.objectId;
       if (!objectId) continue;
-      const rect = await transport.send(
-        'Runtime.callFunctionOn',
-        {
-          objectId,
-          functionDeclaration: `function() {
+      const rect = await page.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function() {
             const r = this.getBoundingClientRect();
             return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
           }`,
-          returnByValue: true,
-        },
-        sessionId!
-      );
+        returnByValue: true,
+      });
       const value = (rect['result'] as { value?: number[] } | undefined)?.value;
       if (value) boxes[ref] = value;
     } catch {
@@ -94,12 +86,12 @@ type ScreenshotClip = { x: number; y: number; width: number; height: number; sca
  * device pixel ratio (CDP's clip.scale), instead of the CSS-pixel default.
  */
 export async function hiresClip(
-  browser: BrowserAPI,
+  page: TabHandle,
   clip: ScreenshotClip | undefined,
   fullPage: boolean
 ): Promise<ScreenshotClip> {
   const dims = parsePageJson<{ dpr: number; w: number; h: number; sh: number }>(
-    await browser.evaluate(
+    await page.evaluate(
       `JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight, sh: document.documentElement.scrollHeight })`
     ),
     '--hires viewport dimensions'
@@ -150,8 +142,8 @@ export const findHandlerImpl: PlaywrightHandler = async ({ browser, state, posit
     return { stdout: '', stderr: matches.error, exitCode: 1 };
   }
 
-  const snapshotText = await browser.withTab(tab.targetId, async () => {
-    const { output } = await takeSnapshot(browser, state, tab.targetId, {});
+  const snapshotText = await browser.withTab(tab.targetId, async (page) => {
+    const { output } = await takeSnapshot(page, state, tab.targetId, {});
     return output;
   });
   const lines = snapshotText.split('\n');

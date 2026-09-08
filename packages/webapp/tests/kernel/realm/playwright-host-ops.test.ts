@@ -110,41 +110,48 @@ function makeMockBrowser(state: MockBrowserState): BrowserAPI {
     async closePage(targetId: string): Promise<void> {
       state.closedTargets.push(targetId);
     },
-    async withTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+    // Page operations arrive on the handle `withTab` hands out.
+    async withTab<T>(targetId: string, fn: (tab: unknown) => Promise<T>): Promise<T> {
       state.attachedTargets.push(targetId);
-      return fn('sess-1');
-    },
-    async navigate(url: string): Promise<void> {
-      const targetId = state.attachedTargets[state.attachedTargets.length - 1];
-      state.navigatedTargets.push({ targetId, url });
-    },
-    async screenshot(options?: Record<string, unknown>): Promise<string> {
-      state.screenshotOptions.push(options);
-      return 'base64-png-data';
-    },
-    async bringToFront(): Promise<void> {
-      state.bringToFrontCallCount++;
-    },
-    async evaluate(): Promise<unknown> {
-      const idx = state.evaluateCallCount++;
-      return state.evaluateSequence[Math.min(idx, state.evaluateSequence.length - 1)];
-    },
-    async sendCDP(
-      method: string,
-      params: Record<string, unknown> = {}
-    ): Promise<Record<string, unknown>> {
-      state.viewportCalls.push({ method, params });
-      return {};
-    },
-    // Mirror the real BrowserAPI.setViewportOverride: send the emulation
-    // override and record it per target.
-    async setViewportOverride(_targetId: string, width: number, height: number): Promise<void> {
-      state.viewportCalls.push({
-        method: 'Emulation.setDeviceMetricsOverride',
-        params: { width, height, deviceScaleFactor: 1, mobile: false },
-      });
+      return fn(makeTab(targetId));
     },
   };
+  /** The mock `TabPage`: the page half of the API, bound to one tab. */
+  function makeTab(targetId: string): unknown {
+    return {
+      targetId,
+      sessionId: 'sess-1',
+      async navigate(url: string): Promise<void> {
+        state.navigatedTargets.push({ targetId, url });
+      },
+      async screenshot(options?: Record<string, unknown>): Promise<string> {
+        state.screenshotOptions.push(options);
+        return 'base64-png-data';
+      },
+      async bringToFront(): Promise<void> {
+        state.bringToFrontCallCount++;
+      },
+      async evaluate(): Promise<unknown> {
+        const idx = state.evaluateCallCount++;
+        return state.evaluateSequence[Math.min(idx, state.evaluateSequence.length - 1)];
+      },
+      async send(
+        method: string,
+        params: Record<string, unknown> = {}
+      ): Promise<Record<string, unknown>> {
+        state.viewportCalls.push({ method, params });
+        return {};
+      },
+      // Mirror the real TabHandle.setViewportOverride: send the emulation
+      // override, which the bridge records per target.
+      async setViewportOverride(width: number, height: number): Promise<void> {
+        state.viewportCalls.push({
+          method: 'Emulation.setDeviceMetricsOverride',
+          params: { width, height, deviceScaleFactor: 1, mobile: false },
+        });
+      },
+    };
+  }
   return api as unknown as BrowserAPI;
 }
 

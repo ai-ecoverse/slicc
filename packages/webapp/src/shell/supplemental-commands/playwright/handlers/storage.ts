@@ -25,10 +25,8 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    const output = await browser.withTab(tab.targetId, async () => {
-      const raw = (await browser.evaluate(
-        `JSON.stringify(Object.entries(${storageObj}))`
-      )) as string;
+    const output = await browser.withTab(tab.targetId, async (page) => {
+      const raw = (await page.evaluate(`JSON.stringify(Object.entries(${storageObj}))`)) as string;
       const entries = JSON.parse(raw) as [string, string][];
       if (entries.length === 0) {
         return `No ${storageObj} entries`;
@@ -47,8 +45,8 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    const output = await browser.withTab(tab.targetId, async () => {
-      const val = await browser.evaluate(`${storageObj}.getItem(${JSON.stringify(positional[0])})`);
+    const output = await browser.withTab(tab.targetId, async (page) => {
+      const val = await page.evaluate(`${storageObj}.getItem(${JSON.stringify(positional[0])})`);
       if (val === null) {
         throw new Error(`Key "${positional[0]}" not found in ${storageObj}`);
       }
@@ -69,8 +67,8 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async () => {
-      await browser.evaluate(
+    await browser.withTab(tab.targetId, async (page) => {
+      await page.evaluate(
         `${storageObj}.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
       );
     });
@@ -85,8 +83,8 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async () => {
-      await browser.evaluate(`${storageObj}.removeItem(${JSON.stringify(positional[0])})`);
+    await browser.withTab(tab.targetId, async (page) => {
+      await page.evaluate(`${storageObj}.removeItem(${JSON.stringify(positional[0])})`);
     });
     return { stdout: `${storageObj} "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
   };
@@ -96,8 +94,8 @@ function createStorageHandlers(
     if ('error' in tab) {
       return { stdout: '', stderr: tab.error, exitCode: 1 };
     }
-    await browser.withTab(tab.targetId, async () => {
-      await browser.evaluate(`${storageObj}.clear()`);
+    await browser.withTab(tab.targetId, async (page) => {
+      await page.evaluate(`${storageObj}.clear()`);
     });
     return { stdout: `${storageObj} cleared\n`, stderr: '', exitCode: 0 };
   };

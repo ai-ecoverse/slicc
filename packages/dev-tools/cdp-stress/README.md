@@ -12,8 +12,9 @@ launcher, override with `CHROME_BIN`) and `npm install` in the repo.
 
 The pass criteria live in
 [`packages/webapp/tests/cdp/cdp-stress.gate.test.ts`](../../webapp/tests/cdp/cdp-stress.gate.test.ts).
-They are opt-in, like the `iframe integration` suite, and are **expected to fail
-until the per-tab session registry and per-tab locking land**:
+They are opt-in, like the `iframe integration` suite — a fan-out run needs 17
+live tabs and a compositor that can actually produce frames, so run them
+locally when touching `cdp/`:
 
 ```bash
 SLICC_TEST_CDP_STRESS=1 npx vitest run packages/webapp/tests/cdp/cdp-stress.gate.test.ts
@@ -63,15 +64,15 @@ Environment knobs:
   the transport with counters (sends by method, inbound events by method, burst
   window), optional `NavigationWatcher`.
 - `scenarios/` — one file per failure mode, each exporting `run()`:
-  | scenario           | failure mode                                                                |
-  | ------------------ | --------------------------------------------------------------------------- |
-  | `session-leak`     | every tab switch mints a session that is never detached                     |
-  | `load-bleed`       | `goto` resolves on a sibling tab's `Page.loadEventFired`                    |
-  | `stale-proxy`      | a Chrome-leg drop wipes sessions with no client-side signal                 |
-  | `stale-worker-hop` | client-leg drop across the `WorkerCdpProxy` hop                             |
-  | `fanout`           | one global tab lock serializes every driver (`--poison` adds a hung `goto`) |
-  | `abandoned`        | a caller that gives up still holds the lock                                 |
-  | `own-tab`          | SLICC's own tab's `/cdp` socket is reported back to it                      |
+  | scenario           | failure mode                                                      |
+  | ------------------ | ----------------------------------------------------------------- |
+  | `session-leak`     | every tab switch mints a session that is never detached           |
+  | `load-bleed`       | `goto` resolves on a sibling tab's `Page.loadEventFired`          |
+  | `stale-proxy`      | a Chrome-leg drop wipes sessions with no client-side signal       |
+  | `stale-worker-hop` | client-leg drop across the `WorkerCdpProxy` hop                   |
+  | `fanout`           | cross-tab throughput + lock waits (`--poison` adds a hung `goto`) |
+  | `abandoned`        | a caller that gives up still holds the lock                       |
+  | `own-tab`          | SLICC's own tab's `/cdp` socket is reported back to it            |
 - `run-all.ts` — runs everything and writes `<out>/<timestamp>.json` +
   `<out>/latest.json`.
 

@@ -42,8 +42,7 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
   }
 
   let locator = '';
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('DOM.enable', {}, sessionId);
     const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);
     const obj = resolveResult['object'] as { objectId?: string } | undefined;
@@ -111,8 +110,7 @@ export const highlightHandler: PlaywrightHandler = async ({
 
   if (hide && !positional[0]) {
     // Remove all highlights
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send(
         'Runtime.evaluate',
         {
@@ -149,9 +147,7 @@ export const highlightHandler: PlaywrightHandler = async ({
 
   const backendNodeId = snapshot.refToBackendNodeId.get(ref);
 
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
-
+  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
     if (backendNodeId) {
       await transport.send('DOM.enable', {}, sessionId);
       const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId);

@@ -62,10 +62,12 @@ function makeBrowser() {
     dragByBackendNodeIds: vi.fn(async () => undefined),
     setCheckedByBackendNodeId: vi.fn(async (): Promise<'toggled' | 'already'> => 'toggled'),
   };
-  const browser = {
-    withTab: async <T>(_t: string, fn: (sessionId: string) => Promise<T>) => fn('session-1'),
-    getTransport: () => ({ send }),
-    getSessionId: () => 'session-1',
+  // Page operations live on the handle `withTab` hands out.
+  const page = {
+    targetId: TAB,
+    sessionId: 'session-1',
+    transport: { send },
+    send: (method: string, params?: Record<string, unknown>) => send(method, params),
     click: spies.click,
     type: spies.type,
     insertText: spies.insertText,
@@ -77,6 +79,10 @@ function makeBrowser() {
     selectByBackendNodeId: spies.selectByBackendNodeId,
     dragByBackendNodeIds: spies.dragByBackendNodeIds,
     setCheckedByBackendNodeId: spies.setCheckedByBackendNodeId,
+  };
+  const browser = {
+    withTab: async <T>(_t: string, fn: (tab: typeof page) => Promise<T>) => fn(page),
+    getTransport: () => ({ send }),
   } as unknown as BrowserAPI;
   return { browser, spies };
 }
@@ -194,16 +200,14 @@ describe('keyboard + type handlers', () => {
     );
     expect(result.stdout).toBe('Typed: hello world\n');
     expect(spies.type).toHaveBeenCalledWith('hello world');
-    expect(spies.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyDown', key: 'Enter' },
-      'session-1'
-    );
-    expect(spies.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: 'Enter' },
-      'session-1'
-    );
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+    });
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+    });
   });
 
   it('press dispatches keyDown + keyUp', async () => {
@@ -243,20 +247,17 @@ describe('fillHandler', () => {
     // fallback fires with the target value.
     expect(spies.send).toHaveBeenCalledWith(
       'Runtime.callFunctionOn',
-      expect.objectContaining({ arguments: [{ value: 'secret value' }] }),
-      'session-1'
+      expect.objectContaining({ arguments: [{ value: 'secret value' }] })
     );
     // --submit dispatches Enter keyDown + keyUp.
-    expect(spies.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyDown', key: 'Enter' },
-      'session-1'
-    );
-    expect(spies.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: 'Enter' },
-      'session-1'
-    );
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+    });
+    expect(spies.send).toHaveBeenCalledWith('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+    });
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 

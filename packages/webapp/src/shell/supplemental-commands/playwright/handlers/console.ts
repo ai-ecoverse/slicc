@@ -116,8 +116,7 @@ export const consoleHandler: PlaywrightHandler = async ({ browser, state, positi
 
   // Only enable Runtime domain and subscribe if not already capturing for this tab.
   if (!state.consoleCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Runtime.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });

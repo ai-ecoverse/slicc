@@ -18,10 +18,7 @@ export const gotoHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async () => {
-    await browser.navigate(positional[0]);
-    return true;
-  });
+  await browser.withTab(tab.targetId, (page) => page.navigate(positional[0]));
   state.snapshots.delete(tab.targetId);
 
   // Arm teleport watcher if --teleport-start and --teleport-return are set
@@ -107,8 +104,8 @@ export const goBackHandler: PlaywrightHandler = async ({ browser, state, flags }
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async () => {
-    await browser.evaluate('history.back()');
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.evaluate('history.back()');
   });
   state.snapshots.delete(tab.targetId);
   return { stdout: 'Navigated back\n', stderr: '', exitCode: 0 };
@@ -119,8 +116,8 @@ export const goForwardHandler: PlaywrightHandler = async ({ browser, state, flag
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async () => {
-    await browser.evaluate('history.forward()');
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.evaluate('history.forward()');
   });
   state.snapshots.delete(tab.targetId);
   return { stdout: 'Navigated forward\n', stderr: '', exitCode: 0 };
@@ -131,8 +128,8 @@ export const reloadHandler: PlaywrightHandler = async ({ browser, flags }) => {
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async () => {
-    await browser.sendCDP('Page.reload');
+  await browser.withTab(tab.targetId, async (page) => {
+    await page.send('Page.reload');
   });
   return { stdout: 'Reloaded\n', stderr: '', exitCode: 0 };
 };

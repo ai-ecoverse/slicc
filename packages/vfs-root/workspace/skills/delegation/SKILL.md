@@ -299,15 +299,14 @@ Browser-tab handling rules (track your IDs, never close tabs you didn't open, ha
 
 ### Browser-driving scoops: one tab per scoop
 
-All scoops share ONE browser. `playwright-cli` orders commands on the same tab
-with a per-tab lock and serializes command bodies across tabs with a bridge-wide
-lock; page loads and waits release the bridge, so one scoop's slow or hung
-navigation no longer stalls the others, but short commands on different tabs
-still take turns. Fan-out is safe; it just does not multiply browser throughput.
+All scoops share ONE browser, but `playwright-cli` locks **per tab**: commands
+on different tabs run in parallel, and commands on the same tab serialize. One
+scoop's slow or hung navigation stalls only its own tab. Fan-out across tabs
+genuinely multiplies browser throughput.
 
 - **Give every browser-driving scoop its own tab; no fan-out cap is needed
-  for correctness.** Browser scoops fan out like any other work, but expect
-  their short commands to interleave on the bridge rather than speed up.
+  for correctness.** Browser scoops fan out like any other work, and commands
+  on distinct tabs really do run side by side.
 - **Two scoops on the SAME tab still queue.** If a slice needs a shared tab,
   hand it to one scoop rather than splitting it.
 - A hung navigation stalls only its own tab, so one stuck scoop no longer
@@ -317,7 +316,8 @@ still take turns. Fan-out is safe; it just does not multiply browser throughput.
   **bridge-wide**), that is back-off guidance: instruct the scoop to stagger or
   move to its own tab, never to re-run the command — it already ran; it was
   just slow to get the lock. A bridge-wide wait points at the few genuinely
-  global operations (`tab-select`, `--foreground`), not at your tab.
+  global operations (`tab-select`, `--foreground`, attaching to a tab), not at
+  your tab.
 - Scoops doing CPU/VFS/network work (curl, file edits, analysis) fan out
   freely, as before.
 

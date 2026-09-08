@@ -43,16 +43,30 @@ function makeBrowser(opts?: {
   const getAccessibilityTreeForFrame = vi.fn(async () =>
     opts?.frameTree ? opts.frameTree : { role: 'RootWebArea', name: '' }
   );
-  const browser = {
-    withTab: async <T>(_t: string, fn: (sessionId: string) => Promise<T>) => fn('session-1'),
-    getTransport: () => ({ send }),
-    getSessionId: () => 'session-1',
+  // The handle `withTab` hands out: one tab, bound to one session.
+  const page = {
+    targetId: TAB,
+    sessionId: 'session-1',
+    transport: { send },
+    send: (method: string, params?: Record<string, unknown>) => send(method, params),
     screenshot,
     evaluate,
     getFrameTree,
     getAccessibilityTreeForFrame,
+  };
+  const browser = {
+    withTab: async <T>(_t: string, fn: (tab: typeof page) => Promise<T>) => fn(page),
+    getTransport: () => ({ send }),
   } as unknown as BrowserAPI;
-  return { browser, send, screenshot, evaluate, getFrameTree, getAccessibilityTreeForFrame };
+  return {
+    browser,
+    page,
+    send,
+    screenshot,
+    evaluate,
+    getFrameTree,
+    getAccessibilityTreeForFrame,
+  };
 }
 
 function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
@@ -78,7 +92,7 @@ describe('buildSnapshot', () => {
       name: 'Frame Content',
       children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
     }));
-    const browser = {
+    const page = {
       evaluate: vi.fn(async () =>
         JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
       ),
@@ -95,9 +109,9 @@ describe('buildSnapshot', () => {
         { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
       ]),
       getAccessibilityTreeForFrame,
-    } as unknown as BrowserAPI;
+    };
 
-    const result = await buildSnapshot(browser);
+    const result = await buildSnapshot(page as never);
 
     expect(result.text).toContain(
       `  - link "iframe docs" [ref=e1]: "${frameUrl}"\n` +

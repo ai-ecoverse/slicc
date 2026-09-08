@@ -35,11 +35,15 @@ interface PlaywrightFrameInfo {
 }
 
 interface PlaywrightBrowserAPI {
-  evaluate(expression: string): Promise<unknown>;
-  getFrameTree(): Promise<PlaywrightFrameInfo[]>;
   listPages(): Promise<PlaywrightPageInfo[]>;
   listAllTargets?: () => Promise<PlaywrightPageInfo[]>;
-  withTab<T>(targetId: string, fn: () => Promise<T>): Promise<T>;
+  withTab<T>(targetId: string, fn: (tab: PlaywrightTabHandle) => Promise<T>): Promise<T>;
+}
+
+/** The page half of the same duck type: one tab, bound to its CDP session. */
+interface PlaywrightTabHandle {
+  evaluate(expression: string): Promise<unknown>;
+  getFrameTree(): Promise<PlaywrightFrameInfo[]>;
 }
 
 const sharedStateByBrowser = new WeakMap<object, WeakMap<VirtualFS, PlaywrightState>>();
@@ -211,9 +215,9 @@ export function parsePageJson<T>(raw: unknown, what: string): T {
 }
 
 export async function getCurrentPageLocation(
-  browser: PlaywrightBrowserAPI
+  tab: PlaywrightTabHandle
 ): Promise<{ href: string; hostname: string; pathname: string }> {
-  const raw = await browser.evaluate(
+  const raw = await tab.evaluate(
     `JSON.stringify({ href: location.href, hostname: location.hostname, pathname: location.pathname })`
   );
   try {
@@ -327,15 +331,15 @@ export function requireTab(
   return { targetId: tabId };
 }
 
-/** Resolve and validate an optional --frame ID against the currently attached tab. */
+/** Resolve and validate an optional --frame ID against the tab being driven. */
 export async function resolveFrame(
-  browser: PlaywrightBrowserAPI,
+  tab: PlaywrightTabHandle,
   flags: Record<string, string>
 ): Promise<PlaywrightFrameInfo | null> {
   const frameId = flags['frame'];
   if (!frameId) return null;
 
-  const frame = (await browser.getFrameTree()).find((candidate) => candidate.frameId === frameId);
+  const frame = (await tab.getFrameTree()).find((candidate) => candidate.frameId === frameId);
   if (frame) return frame;
 
   const targetId = flags['tab'] ?? '<targetId>';
@@ -401,7 +405,7 @@ export async function frameIdUsedAsTabError(
 
   for (const page of await listTargetsForFrameSearch(browser)) {
     try {
-      const frames = await browser.withTab(page.targetId, async () => browser.getFrameTree());
+      const frames = await browser.withTab(page.targetId, (tab) => tab.getFrameTree());
       if (frames.some((frame) => frame.frameId === targetId)) {
         return `"${targetId}" is a frame ID, not a tab target ID. Use --tab=${page.targetId} --frame=${targetId}; run 'playwright-cli frames --tab=${page.targetId}' to list frame IDs.`;
       }

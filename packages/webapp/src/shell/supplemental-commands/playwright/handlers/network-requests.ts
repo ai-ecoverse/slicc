@@ -253,8 +253,7 @@ export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -305,8 +304,7 @@ export const requestHandler: PlaywrightHandler = async ({
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -371,8 +369,7 @@ export const requestHeadersHandler: PlaywrightHandler = async ({
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -411,8 +408,7 @@ export const requestBodyHandler: PlaywrightHandler = async ({
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -452,8 +448,7 @@ export const responseHeadersHandler: PlaywrightHandler = async ({
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });
@@ -496,8 +491,7 @@ export const responseBodyHandler: PlaywrightHandler = async ({
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
   if (!state.networkCleanup.has(tab.targetId)) {
-    await browser.withTab(tab.targetId, async (sessionId) => {
-      const transport = browser.getTransport();
+    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
       await transport.send('Network.enable', {}, sessionId);
       ensureCapturing(browser, state, transport, tab.targetId, sessionId);
     });

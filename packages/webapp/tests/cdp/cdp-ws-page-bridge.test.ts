@@ -59,13 +59,21 @@ class FakeTransport implements CDPTransport {
 function makeFakeBrowser(transport: FakeTransport): BrowserAPI {
   return {
     getTransport: () => transport,
-    async withTab<T>(_targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
-      return fn('session-fake');
-    },
-    async sendCDP(method: string, params: Record<string, unknown> = {}) {
-      return (
-        transport.send as (m: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>
-      )(method, params, 'session-fake');
+    async withTab<T>(targetId: string, fn: (tab: unknown) => Promise<T>): Promise<T> {
+      return fn({
+        targetId,
+        sessionId: 'session-fake',
+        transport,
+        async send(method: string, params: Record<string, unknown> = {}) {
+          return (
+            transport.send as (
+              m: string,
+              p?: Record<string, unknown>,
+              s?: string
+            ) => Promise<unknown>
+          )(method, params, 'session-fake');
+        },
+      });
     },
   } as unknown as BrowserAPI;
 }

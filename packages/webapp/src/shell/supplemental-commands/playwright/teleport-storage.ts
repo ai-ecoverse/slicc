@@ -11,16 +11,34 @@ const log = createLogger('playwright-teleport');
 /**
  * Duck type for the CDP surface teleport-storage needs — avoids a shell → cdp
  * layer back-edge (`docs/review-patterns.md` § Layer-stack import direction).
- * Callers pass the real `BrowserAPI`; this module only uses evaluate / sendCDP /
- * attachToPage.
+ * Callers pass the real `TabHandle` from `withTab`, so every command below
+ * names the session it runs on instead of borrowing a bridge-wide cursor.
  */
-interface TeleportStorageBrowserAPI {
+export interface TeleportStorageTab {
+  readonly targetId: string;
   evaluate(expression: string): Promise<unknown>;
-  sendCDP(
+  send(
     method: string,
     params?: { source?: string; identifier?: string }
   ): Promise<{ identifier?: unknown }>;
-  attachToPage(targetId: string): Promise<string>;
+}
+
+/** The `withTab` half of the same duck type, for callers holding no handle. */
+export interface TeleportStorageBrowser {
+  withTab<T>(targetId: string, fn: (tab: TeleportStorageTab) => Promise<T>): Promise<T>;
+}
+
+/**
+ * An installed `Page.addScriptToEvaluateOnNewDocument` registration.
+ *
+ * Carries its own `targetId` so a caller that is NOT inside the tab's
+ * `withTab` body (the timeout handler, an error path) can re-enter it to
+ * remove the script — the per-tab lock is not reentrant, so a caller that IS
+ * inside one must pass its handle instead.
+ */
+export interface TeleportStorageScript {
+  identifier: string;
+  targetId: string;
 }
 
 export const EMPTY_TELEPORT_STORAGE: TeleportStorageSnapshot = {
@@ -77,10 +95,10 @@ export function chooseTeleportLeaderLandingUrl(
 }
 
 export async function captureTeleportStorageSnapshot(
-  browser: TeleportStorageBrowserAPI,
+  page: TeleportStorageTab,
   label: 'leader' | 'follower'
 ): Promise<TeleportStorageSnapshot> {
-  const raw = await browser.evaluate(`(() => {
+  const raw = await page.evaluate(`(() => {
     const collect = (storage) => {
       const items = {};
       for (let i = 0; i < storage.length; i++) {
@@ -159,14 +177,14 @@ export function buildTeleportStorageApplyScript(snapshot: TeleportStorageSnapsho
 }
 
 export async function applyTeleportStorageSnapshot(
-  browser: TeleportStorageBrowserAPI,
+  page: TeleportStorageTab,
   snapshot: TeleportStorageSnapshot,
   target: 'leader' | 'follower'
 ): Promise<void> {
   const totalEntries = countTeleportStorageEntries(snapshot);
   if (totalEntries === 0) return;
 
-  const raw = await browser.evaluate(buildTeleportStorageApplyScript(snapshot));
+  const raw = await page.evaluate(buildTeleportStorageApplyScript(snapshot));
   log.info('Applied teleport storage snapshot on current page', {
     target,
     totalEntries,
@@ -181,15 +199,14 @@ export async function applyTeleportStorageSnapshot(
 }
 
 export async function installTeleportStorageInitScript(
-  browser: TeleportStorageBrowserAPI,
+  page: TeleportStorageTab,
   snapshot: TeleportStorageSnapshot,
-  targetId: string,
   target: 'leader' | 'follower'
-): Promise<(() => Promise<void>) | null> {
+): Promise<TeleportStorageScript | null> {
   const totalEntries = countTeleportStorageEntries(snapshot);
   if (totalEntries === 0) return null;
 
-  const result = await browser.sendCDP('Page.addScriptToEvaluateOnNewDocument', {
+  const result = await page.send('Page.addScriptToEvaluateOnNewDocument', {
     source: buildTeleportStorageInitScript(snapshot),
   });
   const identifier = typeof result['identifier'] === 'string' ? result['identifier'] : null;
@@ -208,20 +225,29 @@ export async function installTeleportStorageInitScript(
   });
 
   if (!identifier) return null;
-  return async () => {
-    try {
-      await browser.attachToPage(targetId);
-      await browser.sendCDP('Page.removeScriptToEvaluateOnNewDocument', { identifier });
-    } catch (err) {
-      log.warn('Failed to remove teleport storage init script', { target, error: String(err) });
-    }
-  };
+  return { identifier, targetId: page.targetId };
+}
+
+/** Remove an installed init script through a handle the caller already holds. */
+export async function removeTeleportStorageScript(
+  page: TeleportStorageTab,
+  script: TeleportStorageScript | null,
+  target: 'leader' | 'follower'
+): Promise<void> {
+  if (!script) return;
+  try {
+    await page.send('Page.removeScriptToEvaluateOnNewDocument', {
+      identifier: script.identifier,
+    });
+  } catch (err) {
+    log.warn('Failed to remove teleport storage init script', { target, error: String(err) });
+  }
 }
 
 export async function captureTeleportPageDiagnostics(
-  browser: TeleportStorageBrowserAPI
+  page: TeleportStorageTab
 ): Promise<TeleportPageDiagnostics> {
-  const raw = await browser.evaluate(`(() => JSON.stringify({
+  const raw = await page.evaluate(`(() => JSON.stringify({
     url: window.location.href,
     title: document.title || '',
     bodySnippet: document.body?.innerText?.replace(/\\s+/g, ' ').trim().slice(0, 500) || '(empty)',
@@ -251,12 +277,12 @@ export function shouldCaptureTeleportDiagnostics(href: string): boolean {
 }
 
 export async function logFollowerTeleportDiagnosticsOnce(
-  browser: TeleportStorageBrowserAPI,
+  page: TeleportStorageTab,
   watcher: TeleportWatcher,
   reason: string
 ): Promise<void> {
   try {
-    const diagnostics = await captureTeleportPageDiagnostics(browser);
+    const diagnostics = await captureTeleportPageDiagnostics(page);
     const key = `${reason}:${diagnostics.url}:${diagnostics.title}`;
     if (watcher.lastFollowerDiagnosticKey === key) return;
     watcher.lastFollowerDiagnosticKey = key;
@@ -271,15 +297,25 @@ export async function logFollowerTeleportDiagnosticsOnce(
   }
 }
 
+/**
+ * Remove the follower's init script, re-entering its tab to do so.
+ *
+ * Must NOT be called from inside that tab's own `withTab` body — the per-tab
+ * lock is not reentrant. Every caller here is on an error / timeout path that
+ * holds no handle.
+ */
 export async function removeFollowerTeleportStorageScript(
+  browser: TeleportStorageBrowser,
   watcher: TeleportWatcher,
   reason: string
 ): Promise<void> {
-  const remove = watcher.removeFollowerStorageScript;
-  if (!remove) return;
-  watcher.removeFollowerStorageScript = null;
+  const script = watcher.followerStorageScript;
+  if (!script) return;
+  watcher.followerStorageScript = null;
   try {
-    await remove();
+    await browser.withTab(script.targetId, (page) =>
+      removeTeleportStorageScript(page, script, 'follower')
+    );
     log.info('Removed follower teleport storage init script', { reason });
   } catch (err) {
     log.warn('Failed to remove follower teleport storage init script', {
