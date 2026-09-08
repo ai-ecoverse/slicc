@@ -14,7 +14,13 @@
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
-export const stateSaveHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
+export const stateSaveHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  positional,
+  flags,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -29,7 +35,7 @@ export const stateSaveHandler: PlaywrightHandler = async ({ browser, fs, positio
   // Cookies are context-level but `Network.getCookies` is still a
   // session-scoped command, so it rides the tab's own handle like everything
   // else — there is no bridge-wide "current session" to borrow any more.
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     const cookieResult = await page.send('Network.getCookies');
     cookies = (cookieResult as { cookies: unknown[] }).cookies ?? [];
 
@@ -64,7 +70,13 @@ export const stateSaveHandler: PlaywrightHandler = async ({ browser, fs, positio
   return { stdout: `Saved storage state to ${savePath}\n`, stderr: '', exitCode: 0 };
 };
 
-export const stateLoadHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
+export const stateLoadHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'state-load requires a filename\n', exitCode: 1 };
   }
@@ -95,7 +107,7 @@ export const stateLoadHandler: PlaywrightHandler = async ({ browser, fs, positio
   // the tab's own session handle.
   let skippedOrigins: Array<{ origin: string }> = [];
   if (storageState.cookies?.length || storageState.origins?.length) {
-    await browser.withTab(tab.targetId, async (page) => {
+    await onTab(tab.targetId, async (page) => {
       if (storageState.cookies?.length) {
         await page.send('Network.setCookies', { cookies: storageState.cookies });
       }

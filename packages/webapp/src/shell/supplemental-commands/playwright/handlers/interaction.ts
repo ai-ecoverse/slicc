@@ -112,7 +112,13 @@ async function fillBySelectorFallback(
   }
 }
 
-export const clickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const clickHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'click requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -122,7 +128,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
   }
   const ref = positional[0];
   const modifiers = parseModifiersBitmask(flags['modifiers']);
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -170,7 +176,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const typeHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const typeHandler: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'type requires text\n', exitCode: 1 };
   }
@@ -179,14 +185,20 @@ export const typeHandler: PlaywrightHandler = async ({ browser, positional, flag
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const text = positional.join(' ');
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.type(text);
     if (flags['submit'] === 'true') await sendEnterKey(page);
   });
   return { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
 };
 
-export const fillHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const fillHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'fill requires <ref> <text>\n', exitCode: 1 };
   }
@@ -196,7 +208,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
   }
   const ref = positional[0];
   const fillText = positional.slice(1).join(' ');
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -253,7 +265,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const pressHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const pressHandler: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'press requires a key name\n', exitCode: 1 };
   }
@@ -262,14 +274,14 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
     await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
   });
   return { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
 };
 
-export const keydownHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const keydownHandler: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'keydown requires a key name\n', exitCode: 1 };
   }
@@ -278,13 +290,13 @@ export const keydownHandler: PlaywrightHandler = async ({ browser, positional, f
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
   });
   return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
 };
 
-export const keyupHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const keyupHandler: PlaywrightHandler = async ({ browser, positional, flags, onTab }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'keyup requires a key name\n', exitCode: 1 };
   }
@@ -293,13 +305,19 @@ export const keyupHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
   });
   return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
 };
 
-export const dblclickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const dblclickHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'dblclick requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -310,7 +328,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
   const ref = positional[0];
   const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
   const modifiers = parseModifiersBitmask(flags['modifiers']);
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -347,7 +365,13 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const hoverHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const hoverHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'hover requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -356,7 +380,7 @@ export const hoverHandler: PlaywrightHandler = async ({ browser, state, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -391,7 +415,13 @@ export const hoverHandler: PlaywrightHandler = async ({ browser, state, position
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const selectHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const selectHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'select requires <ref> <value>\n', exitCode: 1 };
   }
@@ -401,7 +431,7 @@ export const selectHandler: PlaywrightHandler = async ({ browser, state, positio
   }
   const ref = positional[0];
   const value = positional.slice(1).join(' ');
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -438,7 +468,13 @@ export const selectHandler: PlaywrightHandler = async ({ browser, state, positio
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const checkHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const checkHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'check requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -447,7 +483,7 @@ export const checkHandler: PlaywrightHandler = async ({ browser, state, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -487,7 +523,13 @@ export const checkHandler: PlaywrightHandler = async ({ browser, state, position
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const uncheckHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'uncheck requires a ref (e.g. e5)\n', exitCode: 1 };
   }
@@ -496,7 +538,7 @@ export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positi
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -536,7 +578,13 @@ export const uncheckHandler: PlaywrightHandler = async ({ browser, state, positi
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const dragHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const dragHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'drag requires <startRef> <endRef>\n', exitCode: 1 };
   }
@@ -546,7 +594,7 @@ export const dragHandler: PlaywrightHandler = async ({ browser, state, positiona
   }
   const startRef = positional[0];
   const endRef = positional[1];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');

@@ -71,14 +71,14 @@ function toDeleteCookiesCdpParams(params: NetworkDeleteCookiesParams) {
   };
 }
 
-export const cookieListHandler: PlaywrightHandler = async ({ browser, flags }) => {
+export const cookieListHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const domain = flags['domain'];
   const path = flags['path'];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const cdpCookies = (await page.send('Network.getCookies')) as NetworkGetCookiesResponse;
     const cookies = cookiesFromCdpResponse(cdpCookies);
     const filtered =
@@ -98,7 +98,12 @@ export const cookieListHandler: PlaywrightHandler = async ({ browser, flags }) =
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const cookieGetHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const cookieGetHandler: PlaywrightHandler = async ({
+  browser,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'cookie-get requires a cookie name\n', exitCode: 1 };
   }
@@ -107,7 +112,7 @@ export const cookieGetHandler: PlaywrightHandler = async ({ browser, positional,
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const cookieName = positional[0];
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const cdpGetCookies = (await page.send('Network.getCookies')) as NetworkGetCookiesResponse;
     const cookies = cookiesFromCdpResponse(cdpGetCookies);
     const matched = cookies.filter((c) => c.name === cookieName);
@@ -120,7 +125,12 @@ export const cookieGetHandler: PlaywrightHandler = async ({ browser, positional,
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const cookieSetHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const cookieSetHandler: PlaywrightHandler = async ({
+  browser,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'cookie-set requires <name> <value>\n', exitCode: 1 };
   }
@@ -128,7 +138,7 @@ export const cookieSetHandler: PlaywrightHandler = async ({ browser, positional,
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     const pageLocation = await getCurrentPageLocation(page);
     const params: NetworkSetCookieParams = {
       name: positional[0],
@@ -148,7 +158,12 @@ export const cookieSetHandler: PlaywrightHandler = async ({ browser, positional,
   return { stdout: `Cookie "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
 };
 
-export const cookieDeleteHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const cookieDeleteHandler: PlaywrightHandler = async ({
+  browser,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'cookie-delete requires a cookie name\n', exitCode: 1 };
   }
@@ -156,7 +171,7 @@ export const cookieDeleteHandler: PlaywrightHandler = async ({ browser, position
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     const delParams: NetworkDeleteCookiesParams = { name: positional[0] };
     if (flags['domain']) delParams.domain = flags['domain'];
     if (flags['path']) delParams.path = flags['path'];
@@ -169,12 +184,12 @@ export const cookieDeleteHandler: PlaywrightHandler = async ({ browser, position
   return { stdout: `Cookie "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
 };
 
-export const cookieClearHandler: PlaywrightHandler = async ({ browser, flags }) => {
+export const cookieClearHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.send('Network.clearBrowserCookies');
   });
   return { stdout: 'All cookies cleared\n', stderr: '', exitCode: 0 };

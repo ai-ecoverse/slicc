@@ -171,9 +171,11 @@ export function createHandlerCtx(opts?: {
   positional?: string[];
   flags?: Record<string, string>;
   scratchDir?: string;
+  signal?: AbortSignal;
 }): PlaywrightHandlerCtx {
+  const browser = opts?.browser ?? createMockBrowser().browser;
   return {
-    browser: opts?.browser ?? createMockBrowser().browser,
+    browser,
     fs: (opts?.fs ?? {}) as VirtualFS,
     state: opts?.state ?? createPlaywrightState(),
     positional: opts?.positional ?? [],
@@ -181,6 +183,10 @@ export function createHandlerCtx(opts?: {
     // Defaults to the shared root so existing cases keep asserting the paths
     // they always did; the per-unit behaviour is covered explicitly.
     scratchDir: opts?.scratchDir ?? '/tmp',
+    // Same binding the dispatcher does, so a handler under test takes its
+    // holds through the same seam it does in production.
+    onTab: (targetId, fn) => browser.withTab(targetId, fn, { signal: opts?.signal }),
+    ...(opts?.signal ? { signal: opts.signal } : {}),
   };
 }
 

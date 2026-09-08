@@ -250,6 +250,9 @@ export function summarize(xs: number[]): Summary {
 
 export function errKind(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
+  // Before the timeout checks: the abort message names the step it stopped
+  // at, and some of those steps are themselves waits ("waiting for … load").
+  if (e instanceof Error && e.name === 'CommandAbortedError') return 'aborted';
   if (m.includes('Session with given id not found')) return 'session-not-found';
   if (m.includes('No session with given id')) return 'session-not-found';
   if (m.includes('timed out') || m.includes('Timed out')) return 'timeout';

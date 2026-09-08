@@ -84,7 +84,14 @@ function armTeleportFromFlags(
   return null;
 }
 
-export const openHandler: PlaywrightHandler = async ({ browser, fs, state, positional, flags }) => {
+export const openHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   const url = positional[0] || 'about:blank';
   const runtimeFlag = flags['runtime'];
   const mobile = flags['mobile'] === 'true';
@@ -110,7 +117,7 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   if (mobile) {
     // One withTab hold for both: the emulation override and the first
     // navigation must land on the same session, in that order.
-    await browser.withTab(targetId, async (page) => {
+    await onTab(targetId, async (page) => {
       await page.setViewportOverride(MOBILE_VIEWPORT.width, MOBILE_VIEWPORT.height, {
         deviceScaleFactor: MOBILE_VIEWPORT.deviceScaleFactor,
         mobile: true,
@@ -126,7 +133,7 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   // hits real Chrome. Best-effort — a foreground failure never fails the open.
   if (flags['foreground'] === 'true' || flags['fg'] === 'true') {
     try {
-      await browser.withTab(targetId, (page) => page.bringToFront());
+      await onTab(targetId, (page) => page.bringToFront());
     } catch (err) {
       log.debug('open/tab-new --foreground bringToFront failed', {
         targetId,
@@ -218,7 +225,12 @@ export const tabCloseHandler: PlaywrightHandler = async ({ browser, state, flags
   return { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
 };
 
-export const tabSelectHandler: PlaywrightHandler = async ({ browser, state, positional }) => {
+export const tabSelectHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'tab-select requires a tab index\n', exitCode: 1 };
   }
@@ -241,11 +253,17 @@ export const tabSelectHandler: PlaywrightHandler = async ({ browser, state, posi
   const targetId = pages[index - 1].targetId;
   // Through the handle, not a raw send: raising a window is browser-global
   // state and `bringToFront` is what takes the bridge-wide lock for it.
-  await browser.withTab(targetId, (page) => page.bringToFront());
+  await onTab(targetId, (page) => page.bringToFront());
   return { stdout: `Selected tab ${index} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
 };
 
-export const resizeHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const resizeHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'resize requires <width> <height>\n', exitCode: 1 };
   }
@@ -264,7 +282,7 @@ export const resizeHandler: PlaywrightHandler = async ({ browser, state, positio
   }
   // Recorded per target so BrowserAPI re-applies it on every fresh attach —
   // a sibling driver switching tabs must not reset this tab's viewport.
-  await browser.withTab(tab.targetId, (page) => page.setViewportOverride(w, h));
+  await onTab(tab.targetId, (page) => page.setViewportOverride(w, h));
   state.snapshots.delete(tab.targetId);
   return { stdout: `Resized viewport to ${w}x${h}\n`, stderr: '', exitCode: 0 };
 };

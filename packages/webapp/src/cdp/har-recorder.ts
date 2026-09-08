@@ -8,6 +8,7 @@
 
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { throwIfAborted } from './command-abort.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPEventListener } from './types.js';
 
@@ -204,14 +205,27 @@ export class HarRecorder {
    * @param filterCode - Optional JS code for filter function: `(entry) => false | true | object`
    * @returns Recording ID
    */
-  async startRecording(targetId: string, sessionId: string, filterCode?: string): Promise<string> {
+  async startRecording(
+    targetId: string,
+    sessionId: string,
+    filterCode?: string,
+    signal?: AbortSignal
+  ): Promise<string> {
     const recordingId = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // Enable Network domain
+    // `signal` is the recording caller's cancellation: `playwright-cli record`
+    // drives its own session (deliberately outside the bridge's registry, so
+    // the recording outlives the command), which puts these sends outside the
+    // accounted-transport boundary. Checked between them for the same reason
+    // that boundary exists — a caller that gave up should not go on arming a
+    // recording nobody asked to keep.
+    throwIfAborted(signal, `about to enable Network on tab ${targetId}`);
     await this.client.send('Network.enable', {}, sessionId);
+    throwIfAborted(signal, `about to enable Page on tab ${targetId}`);
     await this.client.send('Page.enable', {}, sessionId);
 
     // Get current URL
+    throwIfAborted(signal, `about to read the URL of tab ${targetId}`);
     const pageInfo = (await this.client.send(
       'Runtime.evaluate',
       {

@@ -10,7 +10,14 @@ import type { PlaywrightHandler } from '../types.js';
 
 const log = createLogger('playwright');
 
-export const gotoHandler: PlaywrightHandler = async ({ browser, fs, state, positional, flags }) => {
+export const gotoHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+  onTab,
+}) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'goto requires a URL\n', exitCode: 1 };
   }
@@ -18,7 +25,7 @@ export const gotoHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, (page) => page.navigate(positional[0]));
+  await onTab(tab.targetId, (page) => page.navigate(positional[0]));
   state.snapshots.delete(tab.targetId);
 
   // Arm teleport watcher if --teleport-start and --teleport-return are set
@@ -99,36 +106,36 @@ export const gotoHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   return { stdout: `Navigated to ${positional[0]}\n`, stderr: '', exitCode: 0 };
 };
 
-export const goBackHandler: PlaywrightHandler = async ({ browser, state, flags }) => {
+export const goBackHandler: PlaywrightHandler = async ({ browser, state, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.evaluate('history.back()');
   });
   state.snapshots.delete(tab.targetId);
   return { stdout: 'Navigated back\n', stderr: '', exitCode: 0 };
 };
 
-export const goForwardHandler: PlaywrightHandler = async ({ browser, state, flags }) => {
+export const goForwardHandler: PlaywrightHandler = async ({ browser, state, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.evaluate('history.forward()');
   });
   state.snapshots.delete(tab.targetId);
   return { stdout: 'Navigated forward\n', stderr: '', exitCode: 0 };
 };
 
-export const reloadHandler: PlaywrightHandler = async ({ browser, flags }) => {
+export const reloadHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.send('Page.reload');
   });
   return { stdout: 'Reloaded\n', stderr: '', exitCode: 0 };

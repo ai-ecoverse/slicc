@@ -198,6 +198,24 @@ and queue depth; the note says whether the wait was on **this tab** or
 each one its own tab, never re-run the command; it already ran, it was just
 slow to get the lock.
 
+**Giving up cancels the command.** When your `bash` call stops waiting — the
+turn is cancelled, `timeout` fires, or someone runs `kill <pid>` — the
+playwright-cli command is cancelled too instead of running on for a caller that
+is gone: a queued command drops out of the tab's queue without taking the lock,
+a `goto` waiting on a load event and a `waitForSelector` poll stop at once, and
+a multi-step command stops before its next CDP round trip. Such a command exits
+**130** with a stderr line naming the step it stopped at, never 0.
+
+Two consequences for you:
+
+- A cancelled command may have **half-landed**. The CDP request already on the
+  wire cannot be recalled, so keys may be typed or a click delivered before the
+  stop. `snapshot` the tab and continue from what you see rather than blindly
+  re-running — same rule as a mid-command session reset.
+- `background_after` alone does **not** cancel; it detaches, and the command
+  keeps running as a background job (that is what makes a long `goto` usable).
+  Use `timeout` or `kill <pid>` when you actually want it stopped.
+
 **Stale session.** The bridge re-attaches automatically after a Chrome reset;
 there is no need to reload the tab or open a new one. Two error shapes:
 
@@ -361,7 +379,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
   the flag was honoured — nothing is silently dropped.
 - Use `keydown`/`keyup` for holding modifier keys (e.g. Shift+click: `keydown Shift`, `click`, `keyup Shift`).
 - Use `requests` + `response-body` to inspect XHR/fetch responses; `route` to mock or block them.
-- **Calling the app's own backend? Use `curlwright`, not `eval-file`.** It is curl's flags run by a `fetch()` inside the tab, so cookies, origin and session come along: `curlwright -s -X POST https://app.example.com/api/items -H 'X-CSRF-Token: abc' -d '{"name":"x"}' --tab=<id>`. `-o <file>` writes a **byte-exact** body, which `eval-file` cannot do at all — that is the only way to pull a binary response out of a page. Without `--tab` it uses the tab already on that origin. `curlwright --help` for the flag list.
+- **Calling the app's own backend? Use `curlwright`, not `eval-file`.** It is curl's flags run by a `fetch()` inside the tab, so cookies, origin and session come along: `curlwright -s -X POST https://app.example.com/api/items -H 'X-CSRF-Token: abc' -d '{"name":"x"}' --tab=<id>`. `-o <file>` writes a **byte-exact** body, which `eval-file` cannot do at all — that is the only way to pull a binary response out of a page. Without `--tab` it uses the tab already on that origin. `curlwright --help` for the flag list. It cancels the same way playwright-cli does — giving up exits **130** and writes no `-o` file for a response nobody is reading — but the in-page `fetch` is bounded by `-m`, not by the cancellation, so a cancelled request may still have reached the server.
 - `state-save` / `state-load` persist auth state (cookies + localStorage) across sessions.
 - `pdf` saves a print-layout PDF; not available in extension mode.
 - `upload` injects VFS files as **raw bytes** (a UTF-8 text round-trip would replace every byte ≥ 0x80 with `EF BF BD`). A leading `eN` / `fNeN` token is a snapshot ref, never a filename — run `snapshot` first; without a ref, focus the file input first. To upload a file named `e2`, pass `./e2` or an absolute path.

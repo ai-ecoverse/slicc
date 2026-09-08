@@ -764,3 +764,140 @@ describe('curlwright — tab selection', () => {
     expect(result.stderr).toContain('no open tabs');
   });
 });
+
+describe('curlwright cooperative cancellation', () => {
+  /** A context carrying just-bash's abort signal, like a real run. */
+  const ctxWith = (fs: Partial<IFileSystem>, signal: AbortSignal) =>
+    mockCommandContext({ fs, overrides: { signal } });
+
+  it('passes the run signal into the tab hold', async () => {
+    const holds: unknown[] = [];
+    const { browser } = harness(() => jsonResponse({ ok: true }));
+    const inner = browser.withTab.bind(browser);
+    (browser as { withTab: unknown }).withTab = async (
+      targetId: string,
+      fn: (tab: unknown) => Promise<unknown>,
+      opts?: unknown
+    ) => {
+      holds.push(opts);
+      return inner(targetId, fn as never);
+    };
+    const controller = new AbortController();
+    const { fs } = fsStub();
+
+    await createCurlwrightCommand(browser).execute(
+      ['-s', 'https://app.example.com/a'],
+      ctxWith(fs, controller.signal)
+    );
+
+    expect(holds).toEqual([{ signal: controller.signal }]);
+  });
+
+  it("exits 130 — not curl's 28 — when the caller gives up mid-request", async () => {
+    const controller = new AbortController();
+    const { browser } = harness(() => {
+      controller.abort();
+      // What the bridge raises once the signal has fired. Its message says
+      // "aborted", which is exactly what must NOT be read as a timeout.
+      throw Object.assign(
+        new Error('Browser command aborted while about to send Runtime.evaluate'),
+        {
+          name: 'CommandAbortedError',
+        }
+      );
+    });
+    const { fs } = fsStub();
+
+    const result = await createCurlwrightCommand(browser).execute(
+      ['https://app.example.com/a'],
+      ctxWith(fs, controller.signal)
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain('aborted while requesting https://app.example.com/a');
+    // Cancelled is not "the server was slow" — an agent must not retry it.
+    expect(result.stderr).not.toContain('Operation timed out');
+  });
+
+  it('still maps a genuine page-side timeout to curl exit 28', async () => {
+    // The abort branch must not swallow the timeout it sits in front of.
+    const controller = new AbortController();
+    const { browser } = harness(
+      () =>
+        new Promise<Response>((_resolve, reject) =>
+          reject(new DOMException('signal timed out', 'TimeoutError'))
+        )
+    );
+    const { fs } = fsStub();
+
+    const result = await createCurlwrightCommand(browser).execute(
+      ['https://app.example.com/a'],
+      ctxWith(fs, controller.signal)
+    );
+
+    expect(result.exitCode).toBe(28);
+    expect(result.stderr).toContain('Operation timed out');
+  });
+
+  it('writes no -o file for a response that arrived after its caller left', async () => {
+    const controller = new AbortController();
+    // The fetch SUCCEEDS, but the caller gave up while it was in flight.
+    const { browser } = harness(() => {
+      controller.abort();
+      return jsonResponse({ ok: true });
+    });
+    const { fs, written } = fsStub();
+
+    const result = await createCurlwrightCommand(browser).execute(
+      ['https://app.example.com/a', '-o', '/tmp/out.json'],
+      ctxWith(fs, controller.signal)
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('aborted while rendering the response');
+    // The whole point: no side effect lands for a run nobody is reading.
+    expect(written['/tmp/out.json']).toBeUndefined();
+  });
+
+  it('keeps -v traces and honours -s on the abort message', async () => {
+    const controller = new AbortController();
+    const { browser } = harness(() => {
+      controller.abort();
+      return jsonResponse({ ok: true });
+    });
+    const { fs } = fsStub();
+
+    const verbose = await createCurlwrightCommand(browser).execute(
+      ['-v', 'https://app.example.com/a'],
+      ctxWith(fs, controller.signal)
+    );
+    expect(verbose.stderr).toContain('> GET');
+    expect(verbose.stderr).toContain('aborted while');
+
+    const controller2 = new AbortController();
+    const { browser: browser2 } = harness(() => {
+      controller2.abort();
+      return jsonResponse({ ok: true });
+    });
+    const silent = await createCurlwrightCommand(browser2).execute(
+      ['-s', 'https://app.example.com/a'],
+      ctxWith(fs, controller2.signal)
+    );
+    expect(silent.exitCode).toBe(130);
+    expect(silent.stderr).toBe('');
+  });
+
+  it('runs unchanged when the context carries no signal', async () => {
+    const { browser } = harness(() => jsonResponse({ ok: true }));
+    const { fs } = fsStub();
+
+    const result = await createCurlwrightCommand(browser).execute(
+      ['-s', 'https://app.example.com/a'],
+      mockCommandContext({ fs })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('{"ok":true}');
+  });
+});

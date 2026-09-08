@@ -5,13 +5,18 @@
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
-export const dialogAcceptHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const dialogAcceptHandler: PlaywrightHandler = async ({
+  browser,
+  positional,
+  flags,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const promptText = positional.length > 0 ? positional.join(' ') : undefined;
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.send('Page.enable');
     await page.send('Page.handleJavaScriptDialog', {
       accept: true,
@@ -25,12 +30,12 @@ export const dialogAcceptHandler: PlaywrightHandler = async ({ browser, position
   };
 };
 
-export const dialogDismissHandler: PlaywrightHandler = async ({ browser, flags }) => {
+export const dialogDismissHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  await browser.withTab(tab.targetId, async (page) => {
+  await onTab(tab.targetId, async (page) => {
     await page.send('Page.enable');
     await page.send('Page.handleJavaScriptDialog', { accept: false });
   });

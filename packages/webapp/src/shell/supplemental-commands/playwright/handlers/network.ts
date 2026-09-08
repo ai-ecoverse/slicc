@@ -5,7 +5,12 @@
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
-export const networkStateSetHandler: PlaywrightHandler = async ({ browser, flags, positional }) => {
+export const networkStateSetHandler: PlaywrightHandler = async ({
+  browser,
+  flags,
+  positional,
+  onTab,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -18,7 +23,7 @@ export const networkStateSetHandler: PlaywrightHandler = async ({ browser, flags
       exitCode: 1,
     };
   }
-  await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+  await onTab(tab.targetId, async ({ sessionId, transport }) => {
     await transport.send('Network.enable', {}, sessionId);
     await transport.send(
       'Network.emulateNetworkConditions',

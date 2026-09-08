@@ -113,7 +113,7 @@ async function resolveElementClip(
   return clipFromSelector(page, selector);
 }
 
-export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
+export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
@@ -138,7 +138,7 @@ export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, f
       exitCode: 1,
     };
   }
-  let output = await browser.withTab(tab.targetId, async (page) => {
+  let output = await onTab(tab.targetId, async (page) => {
     const frame = await resolveFrame(page, flags);
     if (frame) return takeFrameSnapshot(page, state, tab.targetId, frame);
     const { snapshot, output: text } = await takeSnapshot(page, state, tab.targetId, {
@@ -169,12 +169,12 @@ export const findHandler: PlaywrightHandler = async (ctx) => {
   return findHandlerImpl(ctx);
 };
 
-export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
+export const framesHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     const frames = await page.getFrameTree();
     const lines = frames.map((f) => {
       const type = f.parentFrameId ? 'child' : 'main';
@@ -186,7 +186,7 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratchDir }) => {
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratchDir, onTab }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
@@ -194,7 +194,7 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratc
     flags['filename'] || `${scratchDir}/page-${filenameSafeTimestamp(new Date())}.pdf`;
 
   try {
-    await browser.withTab(tab.targetId, async ({ sessionId, transport }) => {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
       const result = await transport.send('Page.printToPDF', {}, sessionId);
       const data = (result as { data: string }).data;
       const bytes = base64ToBytes(data);
@@ -267,6 +267,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
   positional,
   flags,
   scratchDir,
+  onTab,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
@@ -290,7 +291,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
       exitCode: 1,
     };
   }
-  const output = await browser.withTab(tab.targetId, async (page) => {
+  const output = await onTab(tab.targetId, async (page) => {
     // Ref-based screenshot: the requested element's crop or a loud failure.
     // Silently substituting the full viewport corrupts downstream visual
     // comparisons with a 0 exit code — worse than any error.

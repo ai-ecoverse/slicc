@@ -52,6 +52,33 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 /** curl's exit code for a failed local write. */
 const CURL_WRITE_ERROR = 23;
 
+/**
+ * Exit code for a run the caller abandoned — 130, the shell's "terminated by
+ * SIGINT", not one of curl's.
+ *
+ * Deliberately outside curl's vocabulary: nothing curl models happened. It is
+ * the same code `playwright-cli` uses for the same event, which is what an
+ * agent reading either command's exit status has to recognise. Never 0 — a
+ * cancelled request that reported success would tell the agent it had the
+ * response body.
+ */
+const ABORTED_EXIT_CODE = 130;
+
+/**
+ * Result for a run whose abort signal fired.
+ *
+ * `-v` traces still print (they describe what DID happen), and the reason
+ * follows curl's `-s` / `-S` rules like any other message.
+ */
+function abandoned(step: string, trace: string, opts: CurlwrightOptions): CmdResult {
+  const quiet = opts.silent && !opts.showError;
+  return {
+    stdout: '',
+    stderr: trace + (quiet ? '' : `curlwright: aborted while ${step}\n`),
+    exitCode: ABORTED_EXIT_CODE,
+  };
+}
+
 /** Accumulates the two stderr streams so `-s` can drop only one of them. */
 interface Streams {
   stdout: string;
@@ -77,6 +104,12 @@ function classifyFetchError(err: unknown): {
 } {
   const raw = err instanceof Error ? err.message : String(err);
   if (/TimeoutError|signal timed out|aborted/i.test(raw)) {
+    // NOTE: `CommandAbortedError` also says "aborted", and it must never land
+    // here — nothing timed out, the caller left. `runCurlwright` tests
+    // `ctx.signal` BEFORE classifying, so this branch only ever sees a
+    // page-side timeout. Reporting 28 for a cancelled run would read to an
+    // agent as a slow server worth retrying.
+
     const errorMsg = 'Operation timed out';
     return { message: `curlwright: (28) ${errorMsg}`, errorMsg, exitCode: 28 };
   }
@@ -93,13 +126,23 @@ async function runPageFetch(
   targetId: string,
   frameId: string | null,
   url: string,
-  fetchOptions: BrowserFetchOptions
+  fetchOptions: BrowserFetchOptions,
+  signal: AbortSignal | undefined
 ): Promise<BrowserFetchResult> {
   const script = await buildBrowserFetchScript(url, fetchOptions);
-  const raw = await browser.withTab(targetId, async (page) => {
-    if (!frameId) return page.evaluate(script);
-    return page.evaluateInFrame(frameId, script, { world: 'main' });
-  });
+  // The hold carries the run's abort, so an abandoned `curlwright` drops out
+  // of the tab's queue instead of waiting its turn, and stops before the next
+  // CDP round trip. The in-page `fetch` itself rides ONE `Runtime.evaluate`,
+  // which cannot be recalled once it is on the wire — that request is bounded
+  // by `fetchOptions.timeoutMs`, not by this signal.
+  const raw = await browser.withTab(
+    targetId,
+    async (page) => {
+      if (!frameId) return page.evaluate(script);
+      return page.evaluateInFrame(frameId, script, { world: 'main' });
+    },
+    { signal }
+  );
   return raw as BrowserFetchResult;
 }
 
@@ -306,6 +349,7 @@ export async function runCurlwright(
   if (!browser) {
     return fail('curlwright: browser APIs are unavailable in this environment', 1);
   }
+  if (ctx.signal?.aborted) return abandoned('about to pick a tab', '', opts);
   const tab = await resolveCurlwrightTab(browser, request.url, opts.tab);
   if ('message' in tab) return fail(tab.message, 2);
 
@@ -318,9 +362,13 @@ export async function runCurlwright(
       tab.targetId,
       opts.frame,
       request.url,
-      request.fetchOptions
+      request.fetchOptions,
+      ctx.signal
     );
   } catch (err) {
+    // Checked BEFORE classifying: the bridge's abort error also says
+    // "aborted", and curl's exit 28 would call a cancelled run a timeout.
+    if (ctx.signal?.aborted) return abandoned(`requesting ${request.url}`, trace, opts);
     const classified = classifyFetchError(err);
     const streams: Streams = { stdout: '', trace, messages: `${classified.message}\n` };
     appendWriteOut(
@@ -340,6 +388,12 @@ export async function runCurlwright(
       exitCode: classified.exitCode,
     };
   }
+  // A response that arrived after its caller left is not a success: rendering
+  // it would write `-o`/`-D` files and a `--write-out` line for a run whose
+  // output is already discarded. Same rule the playwright-cli dispatcher
+  // applies to a handler that finished under a fired signal.
+  if (ctx.signal?.aborted)
+    return abandoned(`rendering the response from ${request.url}`, trace, opts);
   const rendered = await renderOutcome(ctx, opts, request, result, Date.now() - startedAt);
   return { ...rendered, stderr: trace + rendered.stderr };
 }

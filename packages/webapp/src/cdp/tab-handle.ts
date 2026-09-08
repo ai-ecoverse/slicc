@@ -19,9 +19,10 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { abortableDelay, abortWaiter, throwIfAborted } from './command-abort.js';
 import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
-import { waitForEvent } from './pending-request-table.js';
+import { type AbortWaiter, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {
   AccessibilityNode,
@@ -131,7 +132,8 @@ export function onceForSession(
   transport: CDPTransport,
   event: string,
   sessionId: string,
-  timeoutMs: number
+  timeoutMs: number,
+  abort?: AbortWaiter
 ): Promise<CdpPayload> {
   return waitForEvent<CdpPayload>(
     (deliver) => {
@@ -144,7 +146,8 @@ export function onceForSession(
       return () => transport.off(event, listener);
     },
     timeoutMs,
-    `Timed out waiting for event: ${event}`
+    `Timed out waiting for event: ${event}`,
+    abort
   );
 }
 
@@ -199,7 +202,19 @@ export class TabHandle {
      * The channel {@link sessionId} lives on — the accounted facade, so raw
      * sends made through it count toward the replay guard.
      */
-    readonly transport: CDPTransport
+    readonly transport: CDPTransport,
+    /**
+     * Cooperative cancellation for the command this handle was minted for —
+     * the `signal` its `withTab` caller passed. PRIVATE on purpose: it is the
+     * handle's own business, and {@link TabPage} maps over public members, so
+     * keeping it private leaves the duck-typed doubles in tests and the shell
+     * layer unchanged.
+     *
+     * Every page operation funnels through {@link send}, so parking it here
+     * covers the whole surface at one seam. See `CommandAbortedError` for
+     * where cancellation lands and what it cannot cancel.
+     */
+    private readonly signal?: AbortSignal | undefined
   ) {}
 
   /**
@@ -207,6 +222,12 @@ export class TabHandle {
    * The raw escape hatch behind every method below.
    */
   send(method: string, params: CdpPayload = {}): Promise<CdpPayload> {
+    // The cancellation boundary BETWEEN round trips, and the reason it is here
+    // rather than in each method: a multi-step operation (`evaluate` enables
+    // `Runtime` then evaluates, `type` sends a pair of events per key) stops at
+    // its next step once its caller has given up. The request already on the
+    // wire is not cancellable — CDP has no verb for it.
+    throwIfAborted(this.signal, `about to send ${method}`);
     return this.transport.send(method, params, this.sessionId);
   }
 
@@ -232,7 +253,10 @@ export class TabHandle {
       this.transport,
       'Page.loadEventFired',
       this.sessionId,
-      NAVIGATE_LOAD_TIMEOUT_MS
+      NAVIGATE_LOAD_TIMEOUT_MS,
+      // A caller that gave up gets the wait rejected now, rather than paying
+      // the full 30 s bound for a page nobody is going to read.
+      abortWaiter(this.signal, `waiting for ${url} to fire its load event`)
     );
     // Observe it before `Page.navigate` can throw: an unobserved rejection
     // from the timeout would surface as an unhandled promise rejection long
@@ -561,13 +585,17 @@ export class TabHandle {
     const timeout = options?.timeout ?? 30000;
     const interval = options?.interval ?? 100;
     const start = Date.now();
+    const step = `polling for selector ${selector}`;
 
     while (Date.now() - start < timeout) {
+      throwIfAborted(this.signal, step);
       const found = await this.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`);
       if (found) return;
       // A poll interval is this tab waiting on the page. Nothing bridge-wide
-      // is held across it, so sibling tabs run at full speed meanwhile.
-      await new Promise<void>((r) => setTimeout(r, interval));
+      // is held across it, so sibling tabs run at full speed meanwhile — and
+      // an abandoned wait stops sleeping instead of re-probing a page nobody
+      // is reading.
+      await abortableDelay(interval, this.signal, step);
     }
 
     throw new Error(`waitForSelector timed out after ${timeout}ms: ${selector}`);

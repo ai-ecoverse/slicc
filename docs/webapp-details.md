@@ -107,6 +107,22 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - `cherry-host-transport.ts` extends `SyntheticCdpTransport` for the embedded follower iframe (`?cherry=1`). **`resolveParentOrigin()` prefers `location.ancestorOrigins[0]` (unforgeable); `document.referrer` alone breaks when Referer is stripped or in HTTP-in-HTTPS dev embeds.**
 - `cherry-host-protocol.ts` canonical cherry envelope + three-factor `acceptEnvelope` gate (origin allowlist + `MessageEvent.source` identity + per-mount `channelId` nonce). `packages/cherry/src/protocol.ts` is a structural mirror; keep in sync.
 
+### Cancelling an abandoned browser command (issue #2417 follow-up)
+
+`browser.withTab(targetId, fn, { signal })` makes a hold **abandonable**, so a `playwright-cli` command whose caller gave up (turn cancelled, `bash` `timeout`, `kill <pid>`) stops instead of running on. `playwright-command.ts` binds just-bash's `CommandContext.signal` into `PlaywrightHandlerCtx.onTab`, so every handler hold carries it without repeating it at ~60 call sites; `ctx.signal` is there for the steps a handler owns that the bridge cannot see. An aborted command exits **130** with the step it stopped at on stderr — never 0.
+
+Primitives live in `cdp/command-abort.ts` — its own module because `har-recorder.ts` needs them and `browser-api.ts` imports the recorder, so keeping them in `browser-api.ts` would make the two circular. Cancellation is cooperative and lands at three kinds of boundary:
+
+1. **Queued for the tab lock** — `acquireTabLock` rejects the queued caller at once. Its slot is chained to the predecessor (`prev.then(drop)`) rather than released early, or the next caller would drive the tab alongside the one still holding it.
+2. **The attach handshake** — `attachLocalTarget` / `attachRemoteTarget` use raw `transport.send`, outside the handle's own boundary, so they gate explicitly and `attemptOnTab` re-checks before invoking the body. Without this an abort landing mid-attach still paid for `Target.attachToTarget` → `Page.enable` → viewport restore, each able to burn a transport timeout with the tab lock held.
+3. **Inside the handle** — the signal is a private field on `TabHandle`, so `send()` checks before every session-scoped round trip (a multi-step operation stops at its next step), `navigate`'s `Page.loadEventFired` wait takes an `AbortWaiter` (`pending-request-table.ts`), and `waitForSelector`'s poll sleep rejects the moment it fires. One seam covers the whole page API, which is exactly what the session-explicit handle bought.
+
+**A request already on the wire is not cancellable** — CDP has no cancel verb. The in-flight round trip still completes (or hits its own timeout) and may still have been applied to the page; what abort guarantees is that nothing after it starts and the tab's lock comes back as soon as it returns. `CommandAbortedError.step` says so; the `abandoned` stress scenario measures both halves.
+
+`curlwright` is the other command on this path: `runPageFetch` takes the hold with the signal, and `runCurlwright` tests `ctx.signal` BEFORE `classifyFetchError` (whose `/aborted/i` branch would otherwise report a cancelled run as curl's exit 28, a timeout) and again before rendering, so no `-o` / `-D` file lands for a response whose caller has left. It exits 130 like `playwright-cli`, deliberately outside curl's vocabulary.
+
+**Side effects that OUTLIVE the command need their own boundary.** `record` mints a recorder session on purpose so an LRU eviction cannot end a recording mid-flight, which puts the recorder's round trips outside the handle; it uses `throwIfCallerGaveUp` (`playwright/state.ts` — a plain `Error`, because `cdp/` is above the shell layer), passes the signal into `HarRecorder.startRecording`, and closes the tab it opened when it unwinds. `teleport` checks immediately before arming a watcher that polls on after the command returns.
+
 ## Sudo (agent action approvals)
 
 - Paths: `base/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate), `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).

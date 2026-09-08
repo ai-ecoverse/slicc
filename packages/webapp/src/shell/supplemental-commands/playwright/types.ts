@@ -249,6 +249,28 @@ export interface PlaywrightHandlerCtx {
    * (#2267). An explicit `--filename` still wins.
    */
   scratchDir: string;
+  /**
+   * `browser.withTab` with this invocation's {@link signal} already bound —
+   * the way a handler takes a tab hold.
+   *
+   * Bound once by the dispatcher rather than repeated at each of the ~60 call
+   * sites so a new handler cannot forget it: a hold taken without the signal
+   * keeps its tab locked and a CDP command in flight after the caller gave
+   * up, and lands its side effects on a page nobody is reading any more.
+   * `browser.withTab` stays reachable for holds that must OUTLIVE the command
+   * (the post-command auto-snapshot).
+   */
+  onTab: <T>(targetId: string, fn: (tab: TabHandle) => Promise<T>) => Promise<T>;
+  /**
+   * Cooperative cancellation for this invocation, straight from just-bash's
+   * `CommandContext.signal` — it fires when the agent's `bash` tool gives up
+   * (turn cancelled, `timeout` reached, `kill <pid>`).
+   *
+   * {@link onTab} already carries it into the bridge, and the {@link TabHandle}
+   * it hands back carries it into every page operation.
+   * Read it directly only when a handler owns a step the bridge cannot see.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 export type PlaywrightHandler = (ctx: PlaywrightHandlerCtx) => Promise<CmdResult>;

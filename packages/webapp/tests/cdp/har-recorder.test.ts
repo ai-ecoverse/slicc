@@ -114,6 +114,35 @@ describe('HarRecorder', () => {
       });
     });
 
+    it('stops between its setup round trips when the caller gives up', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      // `record` drives its own session, outside the bridge's registry and so
+      // outside the accounted-send boundary — the signal is the only thing
+      // that can stop it.
+      await expect(
+        recorder.startRecording('target-1', 'session-1', undefined, controller.signal)
+      ).rejects.toThrow(/about to enable Network on tab target-1/);
+      expect(transport.getSentCommands()).toEqual([]);
+    });
+
+    it('records normally when the signal never fires', async () => {
+      const controller = new AbortController();
+      const recordingId = await recorder.startRecording(
+        'target-1',
+        'session-1',
+        undefined,
+        controller.signal
+      );
+      expect(recordingId).toMatch(/^rec-/);
+      expect(transport.getSentCommands()).toContainEqual({
+        method: 'Network.enable',
+        params: {},
+        sessionId: 'session-1',
+      });
+    });
+
     it('creates recordings directory', async () => {
       const recordingId = await recorder.startRecording('target-1', 'session-1');
 
