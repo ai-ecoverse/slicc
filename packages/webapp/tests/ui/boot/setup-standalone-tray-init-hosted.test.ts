@@ -100,4 +100,31 @@ describe('runHostedBootstrap — thin-bridge routing', () => {
 
     fetchSpy.mockRestore();
   });
+
+  it('announces warmed hosted accounts so the mounted model picker refreshes', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('tok');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: 'x' }],
+        }),
+        { status: 200 }
+      )
+    );
+    const onAccountsChanged = vi.fn();
+    window.addEventListener('slicc:accounts-changed', onAccountsChanged);
+
+    try {
+      const done = runHostedBootstrap({ log });
+      await vi.advanceTimersByTimeAsync(5500);
+      await done;
+
+      expect(onAccountsChanged).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('slicc:accounts-changed', onAccountsChanged);
+      fetchSpy.mockRestore();
+    }
+  });
 });

@@ -63,6 +63,11 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
       previouslyManaged: () => prevManaged,
     });
     localStorage.setItem('slicc_cloud_managed', JSON.stringify(accounts.map((a) => a.providerId)));
+    // The nav is already mounted by the time this delayed bootstrap pre-warms
+    // dynamic provider catalogs. Same-document localStorage writes do not emit
+    // a storage event, so announce the completed reconciliation explicitly;
+    // the picker and tray listeners can now rebuild from the warmed catalog.
+    window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
     log.info('hosted-leader: cone config applied', { count: accounts.length });
   } catch (err) {
     log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {

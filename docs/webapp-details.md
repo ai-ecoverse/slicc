@@ -171,7 +171,7 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - **URL state**: `ctx` (active context, pushed), `at` (scroll pos, debounced replace), `ws` (open workspace surface). No global manager; the host only routes.
 - **Cherry `?cherry=1`** (`main-cherry.ts`): builds `CherryHostTransport` against `window.parent`, reads `joinUrl` from handshake, wraps `BrowserAPI`. Origin detection: see CDP section.
 - **Cherry `?cherry=1&ui-only=1`** (extension side panel): suppresses CDP target advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel). Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
-- **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles accounts from `/api/hosted-bootstrap`, removing only providers tracked in `localStorage['slicc_cloud_managed']` — never user-added ones. `?connect=1` is a login-only surface (`ui/connect-surface.ts`) with no kernel.
+- **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles accounts from `/api/hosted-bootstrap`, removing only providers tracked in `localStorage['slicc_cloud_managed']` — never user-added ones. Hosted bootstrap pre-warms dynamic provider catalogs before applying those accounts, then dispatches `slicc:accounts-changed` so the already-mounted model picker and tray rebuild from the warmed catalog; same-document storage writes do not emit `storage`. `?connect=1` is a login-only surface (`ui/connect-surface.ts`) with no kernel.
 
 ## Markdown media in messages
 
