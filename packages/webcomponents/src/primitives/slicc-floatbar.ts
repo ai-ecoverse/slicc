@@ -1,6 +1,13 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import {
+  type BudgetStatus,
+  type BudgetUsage,
+  budgetLevel,
+  budgetTipFragments,
+  formatBudgetFigure,
+} from './budget-usage.js';
 import type { CostOverlayModel, CostOverlayScoop, SliccCostOverlay } from './slicc-cost-overlay.js';
 import './slicc-cost-overlay.js';
 import type { FollowerHudRow, SliccFollowerHud } from './slicc-follower-hud.js';
@@ -187,6 +194,26 @@ const STYLE = `
   height: 12px;
 }
 
+/* Budget mode: this segment is the pill's HEADLINE, not an aside, so it
+   carries ink weight instead of the muted --txt-2 the rest of the pill uses,
+   and takes the level color as the reading worsens. An ok level stays ink: a
+   green number on every pill all week trains the eye to ignore the segment,
+   which is exactly the segment that has to be believed at 96%. */
+.spent--budget {
+  font-weight: 600;
+  color: var(--ink);
+}
+.spent--budget[data-budget-level='warn'] {
+  color: var(--waffle);
+}
+.spent--budget[data-budget-level='critical'] {
+  color: var(--rose);
+  background: color-mix(in srgb, var(--rose) 12%, transparent);
+  border-radius: 9999px;
+  padding: 2px 7px;
+  margin: 0 -2px;
+}
+
 /* Hover/focus tip surfacing the collapsed label + rate + connection state.
    Hidden in the wide pill (the full label already shows everything); each
    progressively collapsed form reveals it with a dark tooltip surface.
@@ -265,6 +292,14 @@ const SHEET = sheet(STYLE);
  * @attr rate - hourly cost, a number or numeric string (e.g. `23.1`); renders a
  *   coin-icon + formatted `$23.10/h` cost segment after a thin divider
  * @attr spent - cumulative cost shown in the cost overlay's total row
+ * @attr budget-percent - percent of a rolling provider budget USED (`9.5`).
+ *   Its presence switches the cost segment from `$/h` to a gauge-icon `9.5%`
+ *   headline — see {@link BudgetUsage} for why percent used and not remaining
+ * @attr budget-status - `ok` | `rate-limited`; a refusing provider paints rose
+ *   whatever the percent says
+ * @attr budget-window - window name used in copy (default `weekly`)
+ * @attr budget-resets - reset copy, ALREADY FORMATTED by the host
+ *   (`resets Sun 14 Sep`); this component owns no clock
  * @attr follower-count - READ-ONLY; reflected from the `followers` property
  * @property followers - {@link FollowerHudRow}[]; renders the followers segment
  *   and feeds `<slicc-follower-hud>` on hover/focus
@@ -292,6 +327,10 @@ export class SliccFloatbar extends HTMLElement {
     'tray-role',
     'rate',
     'spent',
+    'budget-percent',
+    'budget-status',
+    'budget-window',
+    'budget-resets',
   ];
 
   readonly #root: ShadowRoot;
@@ -436,6 +475,78 @@ export class SliccFloatbar extends HTMLElement {
     else this.setAttribute('rate', String(value));
   }
 
+  /**
+   * Percent of the provider's rolling budget consumed, or `null` when this
+   * provider bills per token. Setting it is what puts the pill in budget mode.
+   */
+  get budgetPercent(): number | null {
+    const raw = this.getAttribute('budget-percent');
+    if (raw == null || raw.trim() === '') return null;
+    const n = Number.parseFloat(raw.replace(/%$/, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  set budgetPercent(value: string | number | null) {
+    if (value == null) this.removeAttribute('budget-percent');
+    else this.setAttribute('budget-percent', String(value));
+  }
+
+  /** Provider status for the window. Anything unrecognized reads as `ok`. */
+  get budgetStatus(): BudgetStatus {
+    return this.getAttribute('budget-status') === 'rate-limited' ? 'rate-limited' : 'ok';
+  }
+
+  set budgetStatus(value: BudgetStatus | null) {
+    if (value == null || value === 'ok') this.removeAttribute('budget-status');
+    else this.setAttribute('budget-status', value);
+  }
+
+  /** Window name used in copy (`weekly`), or `null` for the default. */
+  get budgetWindow(): string | null {
+    return this.getAttribute('budget-window');
+  }
+
+  set budgetWindow(value: string | null) {
+    if (value == null) this.removeAttribute('budget-window');
+    else this.setAttribute('budget-window', value);
+  }
+
+  /** Host-formatted reset copy (`resets Sun 14 Sep`). */
+  get budgetResets(): string | null {
+    return this.getAttribute('budget-resets');
+  }
+
+  set budgetResets(value: string | null) {
+    if (value == null) this.removeAttribute('budget-resets');
+    else this.setAttribute('budget-resets', value);
+  }
+
+  /**
+   * The whole window in one assignment, and the single answer to "is this
+   * pill in budget mode" — `null` whenever no percent has been reported, so
+   * a provider without a usage endpoint keeps the `$` headline untouched.
+   */
+  get budget(): BudgetUsage | null {
+    const percent = this.budgetPercent;
+    if (percent == null) return null;
+    const usage: BudgetUsage = { percent, status: this.budgetStatus };
+    const window = this.budgetWindow;
+    if (window) usage.window = window;
+    const resets = this.budgetResets;
+    if (resets) usage.resets = resets;
+    return usage;
+  }
+
+  set budget(value: BudgetUsage | null) {
+    this.budgetPercent = value ? value.percent : null;
+    this.budgetStatus = value?.status ?? null;
+    this.budgetWindow = value?.window ?? null;
+    this.budgetResets = value?.resets ?? null;
+    // No overlay push here: each attribute write re-renders, and a rebuild
+    // drops any open card — `#showOverlay` reads `this.budget` when it builds
+    // the next one.
+  }
+
   get costModels(): CostOverlayModel[] {
     return this.#costModels;
   }
@@ -486,9 +597,44 @@ export class SliccFloatbar extends HTMLElement {
     if (followers > 0) {
       parts.push(`${followers} ${followers === 1 ? 'follower' : 'followers'}`);
     }
-    parts.push(formatRate(this.rate));
-    parts.push('recency-weighted session avg');
+    // In budget mode the window replaces the rate as the thing the tip is
+    // for. Session dollars stay, demoted to the tail: on a shared allowance
+    // they answer "what did I spend", never "can I keep working".
+    const budget = this.budget;
+    if (budget) {
+      parts.push(...budgetTipFragments(budget));
+      const spent = formatSpent(this.spent);
+      if (spent) parts.push(`${spent} this session`);
+    } else {
+      parts.push(formatRate(this.rate));
+      parts.push('recency-weighted session avg');
+    }
     return parts.join(' · ');
+  }
+
+  /**
+   * The cost segment in budget mode: a gauge and the percent USED.
+   *
+   * A `rate-limited` window swaps the gauge for an alert octagon, because a
+   * provider that has started refusing calls is a different fact from a high
+   * number — the percent it reports can lag the refusal, and "96%" and "the
+   * next call will fail" should not look alike.
+   */
+  #budgetSegment(budget: BudgetUsage): HTMLElement {
+    const level = budgetLevel(budget);
+    const icon = budget.status === 'rate-limited' ? 'octagon-alert' : 'gauge';
+    return h(
+      'span',
+      {
+        class: 'spent spent--budget',
+        part: 'spent rate budget',
+        'data-budget-level': level,
+        'data-budget-status': budget.status ?? 'ok',
+        'aria-label': budgetTipFragments(budget).join(' · '),
+      },
+      iconEl(icon, { size: 12 }),
+      h('span', { class: 'amount' }, formatBudgetFigure(budget.percent))
+    );
   }
 
   #beaconEl(status: FloatbarStatus): HTMLElement {
@@ -557,12 +703,15 @@ export class SliccFloatbar extends HTMLElement {
     }
 
     nodes.push(h('span', { class: 'sep sep--spent', part: 'sep' }));
-    const spentEl = h(
-      'span',
-      { class: 'spent', part: 'spent rate' },
-      iconEl('circle-dollar-sign', { size: 12 }),
-      h('span', { class: 'amount' }, formatRate(this.rate))
-    );
+    const budget = this.budget;
+    const spentEl = budget
+      ? this.#budgetSegment(budget)
+      : h(
+          'span',
+          { class: 'spent', part: 'spent rate' },
+          iconEl('circle-dollar-sign', { size: 12 }),
+          h('span', { class: 'amount' }, formatRate(this.rate))
+        );
     spentEl.addEventListener('mouseenter', () => this.#showOverlay());
     spentEl.addEventListener('mouseleave', () => this.#scheduleHide());
     nodes.push(spentEl);
@@ -655,6 +804,7 @@ export class SliccFloatbar extends HTMLElement {
       overlay.models = this.#costModels;
       overlay.scoops = this.#costScoops;
       overlay.total = parseSpent(this.spent);
+      overlay.budget = this.budget;
       overlay.addEventListener('mouseenter', () => this.#showOverlay());
       overlay.addEventListener('mouseleave', () => this.#scheduleHide());
       this.#root.appendChild(overlay);

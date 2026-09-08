@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  type CostOverlayBudget,
   type CostOverlayModel,
   type CostOverlayScoop,
   SliccCostOverlay,
@@ -304,5 +305,92 @@ describe('slicc-cost-overlay', () => {
       expect(cs.position).toBe('absolute');
       expect(cs.zIndex).toBe('100');
     });
+  });
+});
+
+describe('slicc-cost-overlay budget mode', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  const models: CostOverlayModel[] = [
+    { model: 'claude-opus-4-6', cost: 20.34, turns: 36, tokens: 5_400_000 },
+    { model: 'claude-sonnet-4-6', cost: 8.72, turns: 28, tokens: 1_900_000 },
+  ];
+
+  const mount = (budget: CostOverlayBudget | null): SliccCostOverlay => {
+    const el = document.createElement('slicc-cost-overlay');
+    el.models = models;
+    el.total = 29.06;
+    el.budget = budget;
+    el.open = true;
+    document.body.appendChild(el);
+    return el;
+  };
+
+  it('renders no budget block on a metered provider', () => {
+    const el = mount(null);
+    expect(el.shadowRoot?.querySelector('.budget')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.total-label')?.textContent).toBe('Total');
+  });
+
+  it('leads the card with the window and demotes the dollar total', () => {
+    const el = mount({ percent: 9.5, status: 'ok', resets: 'resets Sun 14 Sep' });
+    const sections = [...(el.shadowRoot?.querySelectorAll('.section') ?? [])];
+    expect(sections[0]?.classList.contains('budget')).toBe(true);
+    expect(el.shadowRoot?.querySelector('.section-title')?.textContent).toBe('WEEKLY BUDGET');
+    expect(el.shadowRoot?.querySelector('.budget-figure')?.textContent).toBe('9.5%');
+    expect(el.shadowRoot?.querySelector('.budget-used')?.textContent).toBe('used');
+    expect(el.shadowRoot?.querySelector('.budget-resets')?.textContent).toBe('resets Sun 14 Sep');
+    // The dollars survive — as one session's share, not as "the total".
+    expect(el.shadowRoot?.querySelector('.total-label')?.textContent).toBe('This session');
+    expect(el.shadowRoot?.querySelector('.total-cost')?.textContent).toBe('$29.06');
+  });
+
+  it('fills the meter to the reported percent', () => {
+    const el = mount({ percent: 63.2 });
+    const fill = el.shadowRoot?.querySelector('.budget-meter__fill') as HTMLElement;
+    expect(fill.style.width).toBe('63.2%');
+  });
+
+  it('clamps the bar at an overrun but keeps the figure honest', () => {
+    const el = mount({ percent: 104, status: 'rate-limited' });
+    const fill = el.shadowRoot?.querySelector('.budget-meter__fill') as HTMLElement;
+    expect(fill.style.width).toBe('100%');
+    expect(el.shadowRoot?.querySelector('.budget-figure')?.textContent).toBe('104%');
+  });
+
+  it('carries a rate-limited window as a word, not only as a color', () => {
+    const el = mount({ percent: 96, status: 'rate-limited', resets: 'resets in 18h' });
+    const block = el.shadowRoot?.querySelector('.budget') as HTMLElement;
+    expect(block.dataset.budgetLevel).toBe('critical');
+    expect(block.dataset.budgetStatus).toBe('rate-limited');
+    const flag = el.shadowRoot?.querySelector('.budget-flag');
+    expect(flag?.textContent).toContain('rate-limited');
+    expect(flag?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('shows no refusal chip on a healthy window', () => {
+    const el = mount({ percent: 9.5, status: 'ok' });
+    expect(el.shadowRoot?.querySelector('.budget-flag')).toBeNull();
+  });
+
+  it('names a custom window in the section title', () => {
+    const el = mount({ percent: 40, window: 'monthly' });
+    expect(el.shadowRoot?.querySelector('.section-title')?.textContent).toBe('MONTHLY BUDGET');
+  });
+
+  it('treats a non-finite percent as no budget at all', () => {
+    const el = mount({ percent: Number.NaN });
+    expect(el.budget).toBeNull();
+    expect(el.shadowRoot?.querySelector('.budget')).toBeNull();
+  });
+
+  it('re-renders when the window is cleared', () => {
+    const el = mount({ percent: 9.5 });
+    el.budget = null;
+    expect(el.shadowRoot?.querySelector('.budget')).toBeNull();
+    expect(el.shadowRoot?.querySelector('.total-label')?.textContent).toBe('Total');
   });
 });
