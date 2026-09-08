@@ -92,7 +92,10 @@ export function filenameToPath(filename: unknown): string {
 /**
  * Candidate absolute paths Node's CJS loader would try for `specifier`
  * resolved from `fromDir`. Exact `.js`/`.json`/`.cjs`/`.mjs` specifiers skip
- * extension probing.
+ * extension probing. `.mjs` is in the skip regex so `require('./x.mjs')` is
+ * not rewritten, but is never *emitted* as a candidate — Node's CJS
+ * `LOAD_AS_FILE`/`LOAD_INDEX` set is `.js`/`.json`/`.node`, and require-of-ESM
+ * throws in Node anyway.
  */
 export function resolveFileCandidates(fromDir: string, specifier: string): string[] {
   const base = specifier.startsWith('/')
@@ -116,6 +119,24 @@ export function pickExistingCandidate(
 ): string | undefined {
   for (const candidate of resolveFileCandidates(fromDir, specifier)) {
     if (exists(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Nearest-`node_modules` walk for a bare specifier, over files already in the
+ * loaded CJS graph. Used when `createRequire(filename)` has a synthetic
+ * `filename` with no `graph.edges` entry (resolve-from / cosmiconfig /
+ * `require.resolve(id, { paths })`).
+ */
+export function pickBarePackage(
+  fromDir: string,
+  specifier: string,
+  exists: (path: string) => boolean
+): string | undefined {
+  for (const nm of nodeModulePaths(fromDir)) {
+    const hit = pickExistingCandidate(nm, specifier, exists);
+    if (hit) return hit;
   }
   return undefined;
 }

@@ -25,11 +25,12 @@ import {
   nodeUrl,
   nodeUtil,
   nodeZlib,
+  pickBarePackage,
   pickExistingCandidate,
   pool,
   time,
 } from './js-realm-helpers.js';
-import { NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
+import { isNodeBuiltin, NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
 import { createPlaywrightShim } from './playwright-shim.js';
 import { dirnameOf, NodeExitError } from './realm-node-shims.js';
 import type { RealmRpcClient } from './realm-rpc.js';
@@ -284,18 +285,24 @@ export function createModuleSystem(opts: {
   }
 
   /**
-   * Resolve `specifier` as if required from `fromPath`. Builtins, the
-   * host-resolved edge map for that file, and a runtime relative/absolute
-   * lookup against the already-loaded graph (so `createRequire(filename)`
-   * can load a sibling that a static `require()` already pulled in).
+   * Resolve `specifier` as if required from `fromPath`. Node builtins
+   * (including unavailable ones) return the specifier without loading —
+   * Node's `require.resolve('net')` does the same. Then the host-resolved
+   * edge map, a runtime relative/absolute lookup, and a nearest-node_modules
+   * walk over the already-loaded graph (so `createRequire(filename)` with a
+   * synthetic filename can still resolve a bare package that a static
+   * `require()` already pulled in).
    */
   function resolveFromParent(fromPath: string, specifier: string): string {
-    const builtin = resolveBuiltin(specifier);
-    if (builtin.hit) return specifier;
+    if (isNodeBuiltin(specifier)) return specifier;
     const edged = graph.edges[fromPath]?.[specifier];
     if (edged) return edged;
+    const fromDir = dirnameOf(fromPath);
     if (isPathSpecifier(specifier)) {
-      const resolved = pickExistingCandidate(dirnameOf(fromPath), specifier, graphHas);
+      const resolved = pickExistingCandidate(fromDir, specifier, graphHas);
+      if (resolved) return resolved;
+    } else {
+      const resolved = pickBarePackage(fromDir, specifier, graphHas);
       if (resolved) return resolved;
     }
     const deferred = graph.edgeErrors?.[fromPath]?.[specifier];

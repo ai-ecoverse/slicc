@@ -12,6 +12,7 @@ import {
   filenameToPath,
   isBuiltinName,
   nodeModulePaths,
+  pickBarePackage,
   pickExistingCandidate,
   resolveFileCandidates,
 } from '../../../../src/kernel/realm/helpers/node-module.js';
@@ -103,6 +104,32 @@ describe('resolveFileCandidates / pickExistingCandidate', () => {
     expect(
       pickExistingCandidate('/workspace/pkg', './missing', (p) => files.has(p))
     ).toBeUndefined();
+  });
+});
+
+describe('pickBarePackage', () => {
+  it('walks nearest node_modules and prefers the closer copy', () => {
+    const files = new Set([
+      '/workspace/node_modules/foo/index.js',
+      '/workspace/a/node_modules/foo/index.js',
+    ]);
+    expect(pickBarePackage('/workspace/a/lib', 'foo', (p) => files.has(p))).toBe(
+      '/workspace/a/node_modules/foo/index.js'
+    );
+    expect(pickBarePackage('/workspace/other', 'foo', (p) => files.has(p))).toBe(
+      '/workspace/node_modules/foo/index.js'
+    );
+  });
+
+  it('resolves a scoped package and a deep subpath', () => {
+    const files = new Set(['/workspace/node_modules/@scope/pkg/lib/main.js']);
+    expect(pickBarePackage('/workspace', '@scope/pkg/lib/main.js', (p) => files.has(p))).toBe(
+      '/workspace/node_modules/@scope/pkg/lib/main.js'
+    );
+  });
+
+  it('returns undefined when the package is not in the graph', () => {
+    expect(pickBarePackage('/workspace', 'missing', () => false)).toBeUndefined();
   });
 });
 

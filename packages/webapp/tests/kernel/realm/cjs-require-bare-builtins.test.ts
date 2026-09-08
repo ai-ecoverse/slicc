@@ -859,6 +859,47 @@ describe('node:module shim', () => {
     expect(out.stdout.trim()).toBe('true false');
   });
 
+  it('createRequire from a synthetic filename resolves a bare package already in the graph', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/node_modules/foo/package.json': JSON.stringify({
+          name: 'foo',
+          version: '1.0.0',
+          main: 'index.js',
+        }),
+        '/workspace/node_modules/foo/index.js': "module.exports = 'from-foo';",
+      },
+    });
+    const out = await runCode(
+      `require('foo');
+       const { createRequire } = require('module');
+       const req = createRequire('/workspace/other/noop.js');
+       console.log(req.resolve('foo'), req('foo'));
+       console.log(req.resolve('foo', { paths: ['/workspace/other'] }));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      '/workspace/node_modules/foo/index.js from-foo',
+      '/workspace/node_modules/foo/index.js',
+    ]);
+  });
+
+  it('createRequire().resolve returns unavailable builtins without loading them', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { createRequire } = require('module');
+       const req = createRequire('/workspace/noop.js');
+       console.log(req.resolve('net'), req.resolve('node:net'));
+       try { req('net'); console.log('LOADED'); }
+       catch (e) { console.log(/not available in the browser/.test(e.message)); }`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['net node:net', 'true']);
+  });
+
   it('ESM named import { createRequire } from node:module works', async () => {
     const ctx = makeCtx();
     const out = await runCode(

@@ -33,6 +33,7 @@ export type {
 export {
   createNodeModule,
   isPathSpecifier,
+  pickBarePackage,
   pickExistingCandidate,
 } from './helpers/node-module.js';
 export type { NodeOs } from './helpers/node-os.js';
