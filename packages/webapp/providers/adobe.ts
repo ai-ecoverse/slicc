@@ -49,6 +49,7 @@ import {
 } from '../src/providers/adobe-model-metadata.js';
 import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
 import { fetchAdobeUsage } from '../src/providers/adobe-usage.js';
+import { clearBudgetWindowCache } from '../src/providers/budget-usage-source.js';
 import { findFamilyCost } from '../src/providers/family-cost.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
@@ -566,6 +567,9 @@ export const config: ProviderConfig = {
       // proxy endpoint changes from taking effect.
       baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
     });
+    // A signed-out probe is remembered on the failure clock; drop it so the
+    // budget appears with this session rather than minutes into it.
+    clearBudgetWindowCache();
 
     // Fetch the full model list now that we're authenticated.
     // This populates modelsCache so getModelIds() returns all available models.
@@ -610,6 +614,8 @@ export const config: ProviderConfig = {
       }
     }
     await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
+    // The window belonged to the account that just left.
+    clearBudgetWindowCache();
   },
 
   // Note: getOAuthLogoutUrl is intentionally absent for Adobe IMS. The IMS
@@ -685,8 +691,6 @@ async function getValidAccessToken(): Promise<string> {
  * pop an auth window. A missing or expired token is simply "no window".
  */
 async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
-  const account = getAdobeAccount();
-  if (!account?.accessToken || isTokenExpired()) return null;
   let endpoint: string;
   try {
     endpoint = getProxyEndpoint();
@@ -695,7 +699,21 @@ async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
     // five minutes would never succeed.
     return null;
   }
-  return fetchAdobeUsage(endpoint, account.accessToken, fetch);
+  const account = getAdobeAccount();
+  if (!account?.accessToken || isTokenExpired()) {
+    // THROWN, not `null`: being signed out is transient in a way a missing
+    // endpoint is not. Returning `null` would file the account under "this
+    // provider has no budget" for half an hour, so signing back in would keep
+    // showing dollars long after the session was valid again. This costs no
+    // network — the check is local — and lands on the short retry clock.
+    throw new Error('Adobe budget: not signed in');
+  }
+  return fetchAdobeUsage(endpoint, account.accessToken, fetch, {
+    // Every Adobe-bound call carries `X-Session-Id` from its CALL SITE, with
+    // its own purpose anchor, so the proxy can group this recurring probe
+    // apart from the LLM traffic instead of hashing it into an opaque id.
+    headers: { 'X-Session-Id': getDailyAdobeUuid(ADOBE_USAGE_ANCHOR) },
+  });
 }
 
 function isTokenExpired(): boolean {
@@ -922,6 +940,13 @@ function withSliccVersionHeader<T extends { headers?: ProviderHeaders }>(options
  * rotation cadence, no per-user info encoded.
  */
 const ADOBE_PROVIDER_FALLBACK_ANCHOR = 'adobe-provider-fallback';
+
+/**
+ * Anchor for the `/v1/usage` budget probe. Its own value (not the fallback
+ * sentinel): the probe is a legitimate, recurring, non-LLM call, and grouping
+ * it with "the dev forgot the wrapper" traffic would misreport both.
+ */
+const ADOBE_USAGE_ANCHOR = 'adobe-usage-probe';
 
 /** Dedup developer warnings per call site so hot paths don't spam the console. */
 const warnedCallSites = new Set<string>();

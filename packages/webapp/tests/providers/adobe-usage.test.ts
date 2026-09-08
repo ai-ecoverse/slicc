@@ -49,6 +49,21 @@ describe('fetchAdobeUsage', () => {
     await expect(fetchAdobeUsage('https://p', 't', respond(503))).rejects.toThrow('503');
   });
 
+  it("carries the call site's session id, and never lets it shadow the credential", async () => {
+    // Every Adobe-bound call attaches `X-Session-Id` at its call site so the
+    // proxy can group this recurring probe apart from LLM traffic.
+    const fetchImpl = respond(200, OK_BODY);
+    await fetchAdobeUsage('https://p', 'ims-token', fetchImpl, {
+      headers: { 'X-Session-Id': 'anchor-uuid', Authorization: 'Bearer spoofed' },
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://p/v1/usage',
+      expect.objectContaining({
+        headers: { 'X-Session-Id': 'anchor-uuid', Authorization: 'Bearer ims-token' },
+      })
+    );
+  });
+
   it('propagates a transport failure rather than swallowing it', async () => {
     const fetchImpl: UsageFetch = vi.fn(async () => {
       throw new Error('network down');
@@ -65,7 +80,9 @@ describe('fetchAdobeUsage', () => {
           reject(new Error('aborted'));
         });
       });
-    await expect(fetchAdobeUsage('https://p', 't', fetchImpl, 5)).rejects.toThrow('aborted');
+    await expect(fetchAdobeUsage('https://p', 't', fetchImpl, { timeoutMs: 5 })).rejects.toThrow(
+      'aborted'
+    );
     expect(aborted).toBe(true);
   });
 });

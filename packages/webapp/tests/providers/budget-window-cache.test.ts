@@ -137,6 +137,31 @@ describe('BudgetWindowCache', () => {
     expect(h.resolve).toHaveBeenCalledTimes(2);
   });
 
+  it('does NOT share an in-flight probe across an account switch', async () => {
+    // The pending probe belongs to provider A; a caller now asking about B
+    // must not be answered with A's allowance, and B must be probed itself.
+    let providerId = 'adobe';
+    const h = harness({ providerId: () => providerId });
+    let releaseA: (w: ProviderBudgetWindow) => void = () => {};
+    h.resolve.mockReturnValueOnce(
+      new Promise<ProviderBudgetWindow>((resolve) => {
+        releaseA = resolve;
+      })
+    );
+    const first = h.cache.refresh();
+
+    providerId = 'anthropic';
+    h.resolve.mockResolvedValueOnce(null);
+    const second = h.cache.refresh();
+    expect(h.resolve).toHaveBeenCalledTimes(2);
+    await expect(second).resolves.toBeNull();
+
+    releaseA(window(63));
+    await first;
+    // A's late answer is dropped rather than written over B's reading.
+    expect(h.cache.snapshot()).toBeNull();
+  });
+
   it('forces a fetch inside the TTL when asked', async () => {
     const h = harness();
     h.resolve.mockResolvedValue(window(9.5));

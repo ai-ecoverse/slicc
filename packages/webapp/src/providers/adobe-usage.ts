@@ -29,6 +29,10 @@ const USAGE_TIMEOUT_MS = 8_000;
 /**
  * Fetch the proxy's budget window.
  *
+ * `opts.headers` carries the call site's `X-Session-Id` (a webapp-wide Adobe
+ * invariant), so the probe is attributable rather than hashed into an opaque
+ * id by the proxy.
+ *
  * Returns `null` for "this proxy has no such window" — a 404/501 from a
  * deployment that predates the endpoint, or a 200 carrying nothing parseable.
  * THROWS for a call that failed (network error, 401, 5xx): the two get
@@ -39,13 +43,17 @@ export async function fetchAdobeUsage(
   proxyEndpoint: string,
   accessToken: string,
   fetchImpl: UsageFetch,
-  timeoutMs: number = USAGE_TIMEOUT_MS
+  opts: { headers?: Record<string, string>; timeoutMs?: number } = {}
 ): Promise<ProviderBudgetWindow | null> {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), opts.timeoutMs ?? USAGE_TIMEOUT_MS)
+    : null;
   try {
     const res = await fetchImpl(`${proxyEndpoint.replace(/\/$/, '')}/v1/usage`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      // Caller headers first: the call site owns `X-Session-Id`, and the
+      // credential is this function's own business, so it wins the collision.
+      headers: { ...opts.headers, Authorization: `Bearer ${accessToken}` },
       ...(controller ? { signal: controller.signal } : {}),
     });
     // 404/501 is the endpoint saying it does not exist — an answer, not a

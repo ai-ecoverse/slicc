@@ -50,6 +50,7 @@ export class BudgetWindowCache {
   #entry: CacheEntry | null = null;
   #entryProviderId: string | null = null;
   #inFlight: Promise<ProviderBudgetWindow | null> | null = null;
+  #inFlightProviderId: string | null = null;
 
   constructor(
     private readonly resolve: BudgetWindowResolver,
@@ -91,8 +92,12 @@ export class BudgetWindowCache {
    */
   async refresh(opts: { force?: boolean } = {}): Promise<ProviderBudgetWindow | null> {
     if (!opts.force && !this.isStale()) return this.snapshot();
-    if (this.#inFlight !== null) return this.#inFlight;
     const providerId = this.providerId();
+    // Share a probe only with callers asking about the SAME account. An
+    // account switched mid-probe would otherwise be answered with the previous
+    // provider's allowance, and would not be probed itself until that one
+    // settled and something asked again.
+    if (this.#inFlight !== null && this.#inFlightProviderId === providerId) return this.#inFlight;
     this.#inFlight = this.resolve()
       .then((window) => {
         const stamped = window ? { ...window, at: this.now() } : null;
@@ -107,17 +112,30 @@ export class BudgetWindowCache {
         return previous;
       })
       .finally(() => {
-        this.#inFlight = null;
+        // Only retire the probe that is still the current one: a switch mid-
+        // flight starts a second, and the first to settle must not clear it.
+        if (this.#inFlightProviderId === providerId) {
+          this.#inFlight = null;
+          this.#inFlightProviderId = null;
+        }
       });
+    this.#inFlightProviderId = providerId;
     return this.#inFlight;
   }
 
   #record(providerId: string, outcome: ProbeOutcome, window: ProviderBudgetWindow | null): void {
+    // A probe that started before an account switch is answering about an
+    // account nobody is asking about any more; its result is dropped rather
+    // than written over the current one's.
+    if (providerId !== this.providerId()) return;
     this.#entryProviderId = providerId;
     this.#entry = { outcome, window, at: this.now() };
   }
 
-  /** Forget everything. */
+  /**
+   * Forget the reading. Called when credentials change — a login must not
+   * wait out the retry clock of the probe that ran while it was logged out.
+   */
   clear(): void {
     this.#entry = null;
     this.#entryProviderId = null;

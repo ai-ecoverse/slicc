@@ -1098,6 +1098,10 @@ export class OffscreenClient implements KernelClientFacade {
             fills: m.fills,
             models: m.models ?? [],
             scoops: m.scoops ?? [],
+            // Absent stays absent: a metered provider must reach the floatbar
+            // and the monitor with NO budget key at all, which is what keeps
+            // their `$` headline.
+            ...(m.budget ? { budget: m.budget } : {}),
           });
         }
         break;
