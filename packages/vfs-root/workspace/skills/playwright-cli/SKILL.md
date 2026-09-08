@@ -186,17 +186,17 @@ A `resize` sticks to its tab: the viewport override is re-applied automatically
 whenever the tab is re-attached, so another driver switching tabs cannot reset
 it.
 
-All playwright-cli commands share one browser. Two locks apply: a **per-tab**
-lock orders commands on the same tab, and a **bridge-wide** lock serializes
-command bodies across tabs — except that page loads and waits (`goto`,
-`waitForSelector`-style polling) release the bridge while they wait. So a slow
-or hung navigation on one tab does not block other tabs, but short commands on
-different tabs still take turns rather than run side by side. When callers queue up, commands may
-emit a `note: browser bridge contended — ...` line on stderr with the total
-lock wait and queue depth; the note now says whether the wait was on **this
-tab** or **bridge-wide**. Either way it is back-off guidance — stagger callers
-or give each one its own tab, never re-run the command; it already ran, it was
-just slow to get the lock.
+All playwright-cli commands share one browser, and locking is **per tab**:
+commands on different tabs run in parallel; commands on the same tab serialize.
+A slow or hung navigation stalls only its own tab. A few genuinely global
+operations (`tab-select`, `--foreground`, and the attach that points the bridge
+at a tab) still take a bridge-wide lock, but they are short and never wrap a
+page wait. When callers queue up, commands may emit a
+`note: browser bridge contended — ...` line on stderr with the total lock wait
+and queue depth; the note says whether the wait was on **this tab** or
+**bridge-wide**. Either way it is back-off guidance — stagger callers or give
+each one its own tab, never re-run the command; it already ran, it was just
+slow to get the lock.
 
 **Stale session.** The bridge re-attaches automatically after a Chrome reset;
 there is no need to reload the tab or open a new one. Two error shapes:
