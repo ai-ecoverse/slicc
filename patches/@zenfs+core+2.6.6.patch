@@ -89,13 +89,13 @@ index ac8b186..e20f4ec 100644
          /**
           * @internal
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index e978bba..0e00a9e 100644
+index 989b33f..203d023 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
-@@ -76,6 +76,27 @@ export class VCache {
-      */
-     ref(path, inode) {
+@@ -79,6 +79,30 @@ export class VCache {
          let node = this.byIno.get(inode.ino);
+         if (node && node.inode.nlink === node.paths.size && !node.paths.has(path))
+             err(`vcache.ref: vnode for ${this.fs.label || this.fs.uuid}:${inode.ino} has an nlink of ${node.inode.nlink} but referenced by more paths [#314]`);
 +        // PATCH(#2146, #2034): never coalesce DIFFERENT paths onto one vnode
 +        // unless they are a genuine hardlink. Hardlinks share a real ino, a
 +        // mode, AND carry nlink > 1; anything else with a matching ino is a
@@ -106,6 +106,9 @@ index e978bba..0e00a9e 100644
 +        // same bytes (#2034): the second open found the first file's vnode
 +        // and its cached regions, while sequential reads evicted the vnode
 +        // between calls and never collided.
++        // 2.6.6 (zen-fs/core#314) only logs the nlink/path mismatch above;
++        // it still returns the shared vnode, so the refuse-to-coalesce
++        // guard stays until upstream actually isolates non-hardlink paths.
 +        if (node && !node.paths.has(path)
 +            && (inode.ino === 0
 +                || inode.nlink <= 1
