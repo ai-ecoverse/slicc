@@ -51,10 +51,10 @@
       ]
     },
     "chrome-extension": {
-      "lines": 85,
-      "statements": 84,
-      "functions": 76,
-      "branches": 73,
+      "lines": 88,
+      "statements": 86,
+      "functions": 80,
+      "branches": 76,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
