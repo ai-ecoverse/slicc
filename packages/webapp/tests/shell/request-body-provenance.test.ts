@@ -87,6 +87,27 @@ describe('parkReadBytes', () => {
   it('does not report a string it never parked', () => {
     expect(lookupReadBytes('never read')).toBeNull();
   });
+
+  it('stops resolving a string two reads decoded from different bytes', () => {
+    // A latin1 file holding `E9` and a UTF-8 file holding `C3 A9` both read as
+    // "é". Neither can claim a body typed as "é", so the string goes quiet.
+    parkReadBytes('é', new Uint8Array([0xe9]));
+    parkReadBytes('é', utf8('é'));
+    expect(lookupReadBytes('é')).toBeNull();
+  });
+
+  it('keeps resolving when the same file is read twice', () => {
+    parkReadBytes('é', utf8('é'));
+    parkReadBytes('é', utf8('é'));
+    expect(Array.from(lookupReadBytes('é') as Uint8Array)).toEqual(Array.from(utf8('é')));
+  });
+
+  it('stays quiet for a poisoned string even if a third read follows', () => {
+    parkReadBytes('é', new Uint8Array([0xe9]));
+    parkReadBytes('é', utf8('é'));
+    parkReadBytes('é', new Uint8Array([0xe9]));
+    expect(lookupReadBytes('é')).toBeNull();
+  });
 });
 
 describe('resolveExactRequestBody', () => {

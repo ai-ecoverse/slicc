@@ -27,10 +27,10 @@ let realChrome: unknown;
 const PAYLOAD = '{"body":"plan → build — ship ✓ café"}';
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-/** The bytes the mocked proxy hop was asked to send. */
-async function sentBytes(): Promise<Uint8Array> {
-  expect(proxyFetch).toHaveBeenCalledTimes(1);
-  const init = proxyFetch.mock.calls[0][1] as RequestInit;
+/** The bytes the mocked proxy hop was asked to send on its `index`-th call. */
+async function sentBytes(index = 0): Promise<Uint8Array> {
+  expect(proxyFetch.mock.calls.length).toBeGreaterThan(index);
+  const init = proxyFetch.mock.calls[index][1] as RequestInit;
   return new Uint8Array(await new Response(init.body).arrayBuffer());
 }
 
@@ -44,11 +44,10 @@ function c1Chars(bytes: Uint8Array): number {
   return count;
 }
 
-async function post(args: string): Promise<void> {
-  const shell = new AlmostBashShellHeadless({ fs });
-  const result = await shell.executeCommand(
-    `curl -s -X POST ${args} https://api.example.com/repos/o/r/issues/46`
-  );
+const URL = 'https://api.example.com/repos/o/r/issues/46';
+
+async function post(args: string, shell = new AlmostBashShellHeadless({ fs })): Promise<void> {
+  const result = await shell.executeCommand(`curl -s -X POST ${args} ${URL}`);
   expect(result.stderr).toBe('');
   expect(result.exitCode).toBe(0);
 }
@@ -114,6 +113,36 @@ describe('curl request bodies keep their bytes', () => {
   it('inline -d with non-ASCII text', async () => {
     await post(`-H 'Content-Type: application/json' -d '${PAYLOAD}'`);
     expect(await sentBytes()).toEqual(utf8(PAYLOAD));
+  });
+
+  it('a read in an EARLIER command never answers for a later inline body', async () => {
+    // The read and the request have to belong to one command for the read's
+    // bytes to count. A latin1 file holding `E9` reads as "é"; an unrelated
+    // `-d 'é'` in a later command means the TEXT, so it must go out as UTF-8
+    // `C3 A9` rather than the earlier file's byte.
+    const shell = new AlmostBashShellHeadless({ fs });
+    await fs.writeFile('/workspace/legacy.txt', new Uint8Array([0xe9]));
+    await post("-H 'Content-Type: application/json' --data-binary @/workspace/legacy.txt", shell);
+    expect(await sentBytes(0)).toEqual(new Uint8Array([0xe9]));
+    await post(`-H 'Content-Type: application/json' -d 'é'`, shell);
+    expect(await sentBytes(1)).toEqual(utf8('é'));
+  });
+
+  it('two files that read as the same string each still send their own bytes', async () => {
+    // A latin1 `E9` file and a UTF-8 `C3 A9` file both read as "é". Each
+    // request must carry the bytes of the file IT named. (Reads that collide
+    // while a request is in flight instead stop resolving — see
+    // `request-body-provenance.test.ts`.)
+    await fs.writeFile('/workspace/latin1.txt', new Uint8Array([0xe9]));
+    await fs.writeFile('/workspace/utf8.txt', utf8('é'));
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand(
+      `curl -s -X POST -H 'Content-Type: application/json' --data-binary @/workspace/latin1.txt ${URL} ` +
+        `&& curl -s -X POST -H 'Content-Type: application/json' --data-binary @/workspace/utf8.txt ${URL}`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await sentBytes(0)).toEqual(new Uint8Array([0xe9]));
+    expect(await sentBytes(1)).toEqual(utf8('é'));
   });
 
   it('-T @file upload keeps its bytes', async () => {

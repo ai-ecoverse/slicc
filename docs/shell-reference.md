@@ -2341,12 +2341,21 @@ onto one byte per character under `application/octet-stream` (`→` → `92`). S
 `readFile` parks the exact bytes it decoded under the string it returned
 (`shell/request-body-provenance.ts` — the request-side sibling of
 `binary-cache.ts`, bounded at 8 MiB total with a 10 s TTL), and
-`resolveExactRequestBody` swaps them back in at the fetch boundary. A hit is
-proof rather than a guess, because the key is the string itself; a miss (a body
-assembled from several `-d` parts, a `-F` multipart, a read past the budget)
-falls back to the Content-Type convention above. Provenance is per-realm, so
-the worker→page hop resolves the body BEFORE the panel-RPC call, in the realm
-that holds the bytes.
+`resolveExactRequestBody` swaps them back in at the fetch boundary. A miss (a
+body assembled from several `-d` parts, a `-F` multipart, a read past the
+budget) falls back to the Content-Type convention above.
+
+The string alone is **not** proof that a body came from the read that parked it
+— an inline `curl -d 'é'` is the same string as a latin1 read of the byte `E9`
+— so two guards scope a lookup. `AlmostBashShellHeadless.runCommand` resets the
+table before each command line, and a `curl` reads its `@file` and issues its
+request inside one command, so an earlier read (or another shell's) can never
+answer for a later body. And when two reads of DIFFERENT bytes decode to the
+same string, that string stops resolving for the rest of the command rather
+than letting either claim it. What is left is a body prepared after the command
+that read it (`curl -d @f &`), which falls back to the Content-Type convention.
+Provenance is per-realm, so the worker→page hop resolves the body BEFORE the
+panel-RPC call, in the realm that holds the bytes.
 
 The defaults above hold on **both** paths. The realm's `serializeRequestInit`
 has to decide them itself rather than leaning on the host adapter: text still

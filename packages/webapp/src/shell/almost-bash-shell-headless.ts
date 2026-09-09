@@ -75,6 +75,7 @@ import {
   wrapTimeoutForProgress,
 } from './progress/index.js';
 import { createProxiedFetch } from './proxied-fetch.js';
+import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { enforceCommandSudo } from './sudo/command-guard.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
@@ -975,6 +976,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   ): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
+
+    // A file read answers for a request body only inside the command that read
+    // it (`curl -d @file` reads and fetches in one command). Dropping the
+    // previous command's reads here is what keeps the string key from matching
+    // an unrelated later body — see `request-body-provenance.ts`.
+    clearReadByteProvenance();
 
     // Wait for the constructor's `.jsh` registration before the first command.
     //
