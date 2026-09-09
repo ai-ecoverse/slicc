@@ -59,11 +59,13 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: () => [],
   createBashTool: () => ({ name: 'bash' }),
+  createRequestSecretTool: () => ({ name: 'request_secret' }),
 }));
 
 vi.mock('../../src/shell/almost-bash-shell-headless.js', () => ({
   AlmostBashShellHeadless: vi.fn(function () {
-    return {};
+    // `setMaskedEnvVar` is how `request_secret` publishes a mask as `$NAME`.
+    return { setMaskedEnvVar: vi.fn() };
   }),
 }));
 

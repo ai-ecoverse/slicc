@@ -129,11 +129,14 @@ export type SliccAddDetail =
   // content; it is absent only for the synthetic quick-action row itself.
   | { kind: 'upload'; name: string; size: number; file?: File }
   | { kind: 'capture'; mode: 'photo' | 'screenshot'; label: string }
+  // The secret action carries NO value: the host opens its own trusted entry
+  // surface, and the credential never travels through this component.
+  | { kind: 'secret'; label: string }
   | { kind: string; id: string; label: string };
 
 /** Quick-action rows (always synthesized, never supplied by the data source). */
 interface QuickAction {
-  kind: 'upload' | 'capture';
+  kind: 'upload' | 'capture' | 'secret';
   mode?: 'photo' | 'screenshot';
   icon: string;
   label: string;
@@ -204,14 +207,36 @@ const QUICK_ACTIONS: QuickAction[] = [
 ];
 
 /**
+ * The secret quick-action, appended AFTER the upload / capture rows and only
+ * when the host opts in via `secret-action`. Kept out of {@link QUICK_ACTIONS}
+ * because it is the one action the component cannot service on its own — the
+ * host must own a credential store and a trusted entry surface.
+ */
+const SECRET_ACTION: QuickAction = {
+  kind: 'secret',
+  icon: 'key-round',
+  label: 'Share secret securely',
+  sub: 'The agent only sees a masked value',
+  quick: true,
+};
+
+/** The `slicc-add` detail one quick-action row stands for. */
+function quickDetail(action: QuickAction): SliccAddDetail {
+  if (action.kind === 'upload') return { kind: 'upload', name: '', size: 0 };
+  if (action.kind === 'secret') return { kind: 'secret', label: action.label };
+  return { kind: 'capture', mode: action.mode ?? 'photo', label: action.label };
+}
+
+/**
  * `<slicc-add-menu>` — the prototype's composer "add to prompt" menu. A trigger
  * whose glyph swaps between the lucide `plus` (closed) and `x` (open) — with the
  * prototype's quarter-turn rotate riding on the swap — slides in a search box;
  * the matching results pop upward out of the footer band into an
  * absolutely-positioned panel so the surrounding layout never reflows. Quick
  * actions (upload / photo / screenshot, rendered with the lucide `upload` /
- * `image` / `monitor` glyphs) sit above Files / Skills / Conversations sections,
- * all keyboard navigable. Files can also be added by drag-and-drop onto the wrap.
+ * `image` / `monitor` glyphs, plus an opt-in "Share secret securely" row under
+ * them) sit above Files / Skills / Conversations sections, all keyboard
+ * navigable. Files can also be added by drag-and-drop onto the wrap.
  *
  * All glyphs are lucide `<svg>`s via the shared `iconEl` helper — never emoji
  * or bespoke unicode symbols. The trigger spin holds a static end state under
@@ -235,6 +260,12 @@ const QUICK_ACTIONS: QuickAction[] = [
  *   dragged anywhere on the owning document opens the menu, activates the drop
  *   zone, and lands its drop as `slicc-add` upload events. Absent (the default),
  *   only the wrap-scoped drop zone is active and no document listeners exist.
+ * @attr secret-action - OPT-IN: append a "Share secret securely" row below the
+ *   upload / capture actions. Off by default because the component cannot
+ *   service it alone: selecting it emits `slicc-add` with `{ kind: 'secret' }`
+ *   and the HOST must open its own trusted entry surface and own the credential
+ *   store. A float with no reachable secret store (a follower, Cherry) leaves it
+ *   unset so the menu never offers an action that would dead-end.
  * @attr no-camera - OPT-IN: hide the "Take a photo" (camera / getUserMedia)
  *   quick-action. For hosts where camera capture can't work (e.g. a Chrome
  *   extension side-panel iframe, where the getUserMedia permission prompt is
@@ -249,7 +280,7 @@ const QUICK_ACTIONS: QuickAction[] = [
  *   selection of a row, a capture quick-action, or a file upload / drop
  */
 export class SliccAddMenu extends HTMLElement {
-  static readonly observedAttributes = ['theme', 'global-drop', 'no-camera'];
+  static readonly observedAttributes = ['theme', 'global-drop', 'no-camera', 'secret-action'];
 
   #root: ShadowRoot;
 
@@ -403,15 +434,20 @@ export class SliccAddMenu extends HTMLElement {
     // `theme` only flips CSS custom-property scopes; no re-render required.
     // `global-drop` toggles the document-level drop listeners on/off.
     if (name === 'global-drop') this.#syncGlobalDrop();
-    // `no-camera` changes which quick-actions render — repaint if open.
-    else if (name === 'no-camera' && this.#open) void this.#renderBody();
+    // `no-camera` / `secret-action` change which quick-actions render — repaint
+    // if open.
+    else if ((name === 'no-camera' || name === 'secret-action') && this.#open)
+      void this.#renderBody();
   }
 
   /** Quick-actions offered for the current attributes: `no-camera` drops the
-   *  camera-based "Take a photo" action (upload + screenshot are unaffected). */
+   *  camera-based "Take a photo" action (upload + screenshot are unaffected),
+   *  and `secret-action` appends the secret row after them. */
   #quickActions(): QuickAction[] {
-    if (!this.hasAttribute('no-camera')) return QUICK_ACTIONS;
-    return QUICK_ACTIONS.filter((a) => !(a.kind === 'capture' && a.mode === 'photo'));
+    const base = this.hasAttribute('no-camera')
+      ? QUICK_ACTIONS.filter((a) => !(a.kind === 'capture' && a.mode === 'photo'))
+      : QUICK_ACTIONS;
+    return this.hasAttribute('secret-action') ? [...base, SECRET_ACTION] : base;
   }
 
   // ----- Public injectable API ---------------------------------------------
@@ -611,7 +647,7 @@ export class SliccAddMenu extends HTMLElement {
     const quickActions = this.#quickActions();
     if (!q) {
       for (const a of quickActions) items.push({ type: 'quick', data: a });
-    } else if ('upload take a photo screenshot'.includes(q)) {
+    } else if ('upload take a photo screenshot share secret securely'.includes(q)) {
       for (const a of quickActions) {
         if (a.label.toLowerCase().includes(q)) items.push({ type: 'quick', data: a });
       }
@@ -645,11 +681,7 @@ export class SliccAddMenu extends HTMLElement {
         prevQuick = false;
       } else if (it.type === 'quick') {
         const i = this.#items.length;
-        this.#items.push(
-          it.data.kind === 'upload'
-            ? { kind: 'upload', name: '', size: 0 }
-            : { kind: 'capture', mode: it.data.mode ?? 'photo', label: it.data.label }
-        );
+        this.#items.push(quickDetail(it.data));
         const tx = h('span', { class: 'tx' }, h('div', { class: 'lb' }, it.data.label));
         if (it.data.sub) tx.append(h('div', { class: 'sb' }, it.data.sub));
         nodes.push(

@@ -9,6 +9,8 @@ interface AddMenuArgs {
   query?: string;
   /** Inject a custom results dataset in place of the built-in demo data. */
   results?: SliccAddSection[];
+  /** Opt into the "Share secret securely" quick action. */
+  secretAction?: boolean;
 }
 
 /** A small custom dataset demonstrating the injectable `results` property. */
@@ -37,13 +39,14 @@ const CUSTOM_RESULTS: SliccAddSection[] = [
  * Mount inside a faux composer footer band so the upward-popping results panel
  * has room to overlay content above it (matching the prototype context).
  */
-function buildAddMenu({ open, query, results }: AddMenuArgs): HTMLElement {
+function buildAddMenu({ open, query, results, secretAction }: AddMenuArgs): HTMLElement {
   const frame = document.createElement('div');
   frame.style.cssText =
     'width:420px;padding:14px;background:var(--canvas);border:1px solid var(--line);border-radius:14px;font-family:var(--ui);margin-top:320px;';
 
   const el = document.createElement('slicc-add-menu') as SliccAddMenu;
   if (results) el.results = results;
+  if (secretAction) el.setAttribute('secret-action', '');
   frame.appendChild(el);
 
   // Open / pre-search after the element has connected and rendered its shadow.
@@ -101,6 +104,17 @@ export const QuickActions: Story = { args: { query: 'take' } };
 
 /** Open with a host-injected `results` dataset replacing the built-in demo data. */
 export const OpenWithResults: Story = { args: { open: true, results: CUSTOM_RESULTS } };
+
+/**
+ * `secret-action` opt-in: "Share secret securely" (lucide `key-round`) sits
+ * BELOW the upload and capture rows. Selecting it emits `slicc-add` with
+ * `{ kind: 'secret' }` and nothing else — the credential is typed into the
+ * host's own trusted surface, never into this menu.
+ */
+export const SecretAction: Story = { args: { open: true, secretAction: true } };
+
+/** The secret row surfaced by search — typing "secret" finds it. */
+export const SecretActionSearch: Story = { args: { query: 'secret', secretAction: true } };
 
 /**
  * The trigger glyph swap, side by side: closed renders the lucide `plus`, open

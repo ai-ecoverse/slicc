@@ -159,6 +159,30 @@ describe('AlmostBashShellHeadless + secret set — masked-env injection (LLM-con
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  // `setMaskedEnvVar` is the seam the `request_secret` tool uses: the human types
+  // the secret in a page-realm dialog (the worker never sees the plaintext), and
+  // only the mask is handed to the shell so `$NAME` resolves for the agent.
+  it('publishes a mask through setMaskedEnvVar without any secret command', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    shell.setMaskedEnvVar('UI_TOKEN', 'mskd-ui');
+
+    const echoRes = await shell.executeCommand('echo $UI_TOKEN');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe('mskd-ui');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reapplies the mask after the bash.exec env snapshot would drop it', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    // First exec establishes an env snapshot that predates the write.
+    await shell.executeCommand('echo warm');
+    shell.setMaskedEnvVar('UI_TOKEN', 'mskd-ui');
+
+    expect((await shell.executeCommand('echo $UI_TOKEN')).stdout.trim()).toBe('mskd-ui');
+    // The snapshot returned by the previous exec must not clobber it either.
+    expect((await shell.executeCommand('echo $UI_TOKEN')).stdout.trim()).toBe('mskd-ui');
+  });
+
   it('errors when both arg and stdin are provided', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
     const res = await shell.executeCommand('echo stdin-v | secret set K arg-v --domain api.x.com');

@@ -37,6 +37,7 @@ import './nav/slicc-nav.js';
 import './overlay/slicc-camera-dialog.js';
 import './overlay/slicc-dialog.js';
 import './overlay/slicc-permissions.js';
+import './overlay/slicc-secret-dialog.js';
 import './overlay/slicc-tooltip.js';
 import './panel/slicc-layout.js';
 import './panel/slicc-panel.js';

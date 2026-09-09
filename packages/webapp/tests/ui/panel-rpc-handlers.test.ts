@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setSecretRequestSurface } from '../../src/base/secret-request-registry.js';
 import { loadAndClearPendingHandle } from '../../src/fs/mount-picker-popup.js';
 import { getSharedHidRegistry } from '../../src/kernel/hid-device-registry.js';
 import { getSharedSerialRegistry } from '../../src/kernel/serial-port-registry.js';
@@ -559,6 +560,46 @@ describe('createStandalonePanelRpcHandlers — secrets-bridge', () => {
     const handlers = createStandalonePanelRpcHandlers({});
     const result = await handlers['secrets-bridge']!({ type: 'secrets.session.list' });
     expect(result).toEqual({ response: undefined });
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — secret-request', () => {
+  afterEach(() => setSecretRequestSurface(null));
+
+  it('answers "unavailable" instead of rejecting when no surface is installed', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    // A float that cannot collect a secret is an ANSWER the worker-side tool
+    // reports to the user, not a transport failure it should retry.
+    await expect(handlers['secret-request']!({ name: 'T', reason: 'why' })).resolves.toEqual({
+      stored: false,
+      reason: 'unavailable',
+    });
+  });
+
+  it('forwards the request to the installed surface and returns its outcome verbatim', async () => {
+    const outcome = {
+      stored: true as const,
+      name: 'GITHUB_TOKEN',
+      maskedValue: 'ghp_MASKED',
+      domains: ['api.github.com'],
+      persisted: false,
+    };
+    const surface = vi.fn().mockResolvedValue(outcome);
+    setSecretRequestSurface(surface);
+
+    const handlers = createStandalonePanelRpcHandlers({});
+    const request = { name: 'GITHUB_TOKEN', reason: 'push', domains: ['api.github.com'] };
+    await expect(handlers['secret-request']!(request)).resolves.toEqual(outcome);
+    expect(surface).toHaveBeenCalledWith(request);
+  });
+
+  it('resolves the surface per call, so one installed after boot is still found', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    setSecretRequestSurface(async () => ({ stored: false, reason: 'cancelled' }));
+    await expect(handlers['secret-request']!({})).resolves.toEqual({
+      stored: false,
+      reason: 'cancelled',
+    });
   });
 });
 

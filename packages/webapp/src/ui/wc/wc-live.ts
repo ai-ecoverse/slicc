@@ -917,6 +917,17 @@ function wireWcPermissionsSurface(
       installMountPendingConsumer({ runShell: makeDropMountRunner(boot, client) });
     })
     .catch((err) => log.warn('WC permissions surface wiring failed', err));
+
+  // The secret-entry surface rides the same boot stage for the same reason: it
+  // is the leader's one gesture-and-trust entry point for a credential, and the
+  // `request_secret` tool reaches it (directly in this realm, over the
+  // `secret-request` panel-RPC op from the kernel worker) through the registry
+  // this installs. A cherry follower installs nothing — no local secret store.
+  if ((options.standalone?.runtimeMode ?? 'standalone') !== 'cherry') {
+    void import('./wc-secret-request.js')
+      .then(({ installSecretRequestSurface }) => installSecretRequestSurface())
+      .catch((err) => log.warn('WC secret request surface wiring failed', err));
+  }
 }
 
 /**

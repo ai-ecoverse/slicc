@@ -585,6 +585,14 @@ export interface WireWcAttachDeps {
    * (getDisplayMedia) and upload are unaffected.
    */
   noCamera?: boolean;
+  /**
+   * Offer the "Share secret securely" quick-action. Set by floats that can
+   * reach a secret store (the leader); left unset by a follower, whose menu
+   * then never shows an action that would dead-end. Selecting it opens the
+   * trusted secret dialog — the value goes straight to the store, and only the
+   * masked stand-in is mentioned in the draft.
+   */
+  secretEntry?: boolean;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
@@ -769,11 +777,44 @@ async function stageVfsFile(
   stage.add(await referenceVfsFile(id, name, openReader));
 }
 
-/** Append a skill mention to the composer's draft. */
-function insertSkillMention(label: string, inputCard: WireWcAttachDeps['inputCard']): void {
+/** Append text to the composer's draft, spacing it off whatever is there. */
+function appendToDraft(text: string, inputCard: WireWcAttachDeps['inputCard']): void {
   const current = inputCard.value ?? inputCard.getAttribute('value') ?? '';
   const sep = current && !current.endsWith(' ') ? ' ' : '';
-  inputCard.setAttribute('value', `${current}${sep}Use the "${label}" skill: `);
+  inputCard.setAttribute('value', `${current}${sep}${text}`);
+}
+
+/** Append a skill mention to the composer's draft. */
+function insertSkillMention(label: string, inputCard: WireWcAttachDeps['inputCard']): void {
+  appendToDraft(`Use the "${label}" skill: `, inputCard);
+}
+
+/**
+ * Open the trusted secret dialog and tell the agent about the result IN THE
+ * DRAFT — the name, the masked stand-in, and the scope, never the value.
+ *
+ * The mention rides the next submit rather than being sent on its own, so the
+ * user can say what the credential is for in the same turn. A dismissal leaves
+ * the draft untouched: nothing was stored, so there is nothing to mention.
+ *
+ * No `$NAME` is published here, unlike the `request_secret` tool path. The
+ * composer has no handle on the running shell — masked env vars are loaded when a
+ * shell initialises — so the draft carries the mask itself, plus `secret get` as
+ * the way to look it up again. The proxy still unmasks it at the boundary either
+ * way; only the shell variable is missing.
+ */
+async function stageSecret(deps: WireWcAttachDeps): Promise<void> {
+  const { requestSecretFromUser } = await import('./wc-secret-request.js');
+  const outcome = await requestSecretFromUser();
+  if (!outcome.stored) return;
+  const scope = outcome.domains.join(', ');
+  const lifetime = outcome.persisted ? 'saved' : 'this session only';
+  appendToDraft(
+    outcome.maskedValue
+      ? `I stored the secret ${outcome.name} (masked value ${outcome.maskedValue}, scope: ${scope}, ${lifetime}). Use the masked value — SLICC swaps in the real one at the network boundary. `
+      : `I stored the secret ${outcome.name} (scope: ${scope}, ${lifetime}). Run \`secret get ${outcome.name}\` for its masked value. `,
+    deps.inputCard
+  );
 }
 
 /** A user cancelling / denying a capture picker (getDisplayMedia's share dialog
@@ -796,6 +837,8 @@ async function handleAdd(
   } else if (detail.kind === 'file' && typeof detail.id === 'string' && deps.openReader) {
     // VFS file picks only exist when the float has a reader (leader, not follower).
     await stageVfsFile(detail.id, deps.openReader, stage, deps.log);
+  } else if (detail.kind === 'secret') {
+    await stageSecret(deps);
   } else if (detail.kind === 'skill' && typeof detail.label === 'string') {
     insertSkillMention(detail.label, deps.inputCard);
   } else if (detail.kind === 'conversation' && typeof detail.id === 'string') {
@@ -843,6 +886,10 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
     // Hide the camera "Take a photo" action where getUserMedia can't be granted
     // (extension side-panel follower). Screenshot + upload stay.
     if (deps.noCamera) menu.setAttribute('no-camera', '');
+    // Opt into the secret row only where a secret store is reachable — the
+    // action is off by default in the component precisely so a follower never
+    // offers a prompt whose write would have nowhere to land.
+    if (deps.secretEntry) menu.setAttribute('secret-action', '');
   }
 
   inputCard.addEventListener('slicc-add', (event) => {

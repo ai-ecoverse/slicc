@@ -10,6 +10,7 @@
  * to be read alongside the retry loop.
  */
 
+import { providerLabel } from '../../base/provider-labels.js';
 import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -17,7 +18,7 @@ import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.
 import { resolveModelSelectionForScoop } from '../../providers/account-store.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
-import { createBashTool, createFileTools } from '../../tools/index.js';
+import { createBashTool, createFileTools, createRequestSecretTool } from '../../tools/index.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { ScoopContextCallbacks } from '../scoop-context.js';
@@ -26,6 +27,7 @@ import {
   type ScoopManagementToolsConfig,
 } from '../scoop-management-tools.js';
 import type { RegisteredScoop } from '../types.js';
+import { resolveScoopModel } from './model-resolution.js';
 
 const log = createLogger('scoop-context');
 
@@ -153,6 +155,18 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
       },
     }),
     ...scoopManagementTools,
+    // Asking a human for a credential. The tool never receives the value — the
+    // page's entry surface stores it and reports back a mask — so the shell-env
+    // hook below can only ever publish a masked stand-in, exactly like
+    // `secret set`.
+    createRequestSecretTool({
+      requester: scoop.assistantLabel || scoop.name,
+      setEnv: (name, maskedValue) => deps.shell.setMaskedEnvVar(name, maskedValue),
+      // THIS unit's provider, resolved per call. A background scoop can run on a
+      // provider the page's selected model knows nothing about, and the dialog
+      // promises the credential is unreadable by whoever is actually serving it.
+      getProvider: () => providerLabel(resolveScoopModel(scoop).provider),
+    }),
   ];
 
   if (scoop.config?.structuredOutputSchema) {

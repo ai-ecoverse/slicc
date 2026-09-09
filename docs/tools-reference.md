@@ -347,6 +347,35 @@ rg "createBashTool" /workspace/src --type ts
 
 ---
 
+### request_secret
+
+Ask the human for a credential the agent needs but must never read. Opens the
+secret-entry dialog in the page's trusted layer (name prefilled, the agent's
+`reason` shown verbatim, domain scope and a persist checkbox under "Additional
+options"). Resolves when the human submits or dismisses it; a 5-minute budget
+applies when the call has to cross panel-RPC to reach the page realm.
+
+**File**: `packages/webapp/src/tools/request-secret-tool.ts`
+
+| Property   | Value                                                                     |
+| ---------- | ------------------------------------------------------------------------- |
+| **Name**   | `request_secret`                                                          |
+| **Input**  | `{ name: string, reason: string, domains?: string[], persist?: boolean }` |
+| **Output** | `{ content: "Stored secret \"NAME\". Masked value: ..." }`                |
+
+The result carries only the **masked** value, its scope, and whether it was
+persisted — never the real value, in any field. The mask is also published as
+`$NAME` in the agent's shell (POSIX-named secrets only, see
+[`docs/secrets.md`](./secrets.md)), so the agent can use the credential through
+the fetch proxy without knowing it.
+
+A dismissal, or a float with no entry surface, returns `isError: true` so the
+agent stops rather than proceeding with a value it invented. `domains` defaults
+to what the human types in the dialog; a request with no domains still cannot be
+saved without one — every secret is domain-scoped.
+
+---
+
 ## Scoop Management Tools (Multi-Scoop)
 
 These tools are MCP-style tools for messaging and scoop management.
@@ -559,6 +588,7 @@ Hidden from the chat UI via `hidden-tools.ts`.
 | read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
+| **request_secret**       | ✓    | ✓              | Human types the value; the agent only ever receives the mask          |
 | **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
 | **list_scoops**          | ✓    | grant          | `canManageChildren` — lists the caller's subtree                      |
 | **scoop_scoop**          | ✓    | grant          | `canCreateChildren` — roots, and children given nested delegation     |

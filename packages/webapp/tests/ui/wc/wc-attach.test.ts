@@ -9,6 +9,17 @@ import 'fake-indexeddb/auto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
+// The secret action opens the trusted entry surface through a dynamic import;
+// mock it so this suite asserts the ROUTING (menu opt-in, draft mention) without
+// mounting a real dialog. The surface itself is covered by
+// `tests/ui/wc/wc-secret-request.test.ts`.
+const { mockRequestSecretFromUser } = vi.hoisted(() => ({
+  mockRequestSecretFromUser: vi.fn(),
+}));
+vi.mock('../../../src/ui/wc/wc-secret-request.js', () => ({
+  requestSecretFromUser: mockRequestSecretFromUser,
+}));
+
 installWcDomStubs();
 
 import { VirtualFS } from '../../../src/fs/index.js';
@@ -250,6 +261,21 @@ describe('wireWcAttach add-menu source (follower vs leader)', () => {
     wireWcAttach({ inputCard, freezer, log });
     expect(menu.results).toEqual([]);
     expect(menu.provider == null).toBe(true);
+  });
+
+  it('offers the secret action only where a secret store is reachable', () => {
+    const follower = makeCard();
+    wireWcAttach({ inputCard: follower.inputCard, freezer: follower.freezer, log });
+    expect(follower.menu.hasAttribute('secret-action')).toBe(false);
+
+    const leader = makeCard();
+    wireWcAttach({
+      inputCard: leader.inputCard,
+      freezer: leader.freezer,
+      secretEntry: true,
+      log,
+    });
+    expect(leader.menu.hasAttribute('secret-action')).toBe(true);
   });
 
   it('wires a live provider (leaving results unset) when a VFS reader IS supplied (leader)', async () => {
@@ -517,6 +543,54 @@ describe('wireWcAttach action routing', () => {
     await vi.waitFor(() => {
       expect(inputCard.getAttribute('value')).toBe('please Use the "sprinkles" skill: ');
     });
+  });
+
+  it('mentions a stored secret by name and MASK in the draft, never its value', async () => {
+    const { inputCard } = await setup();
+    mockRequestSecretFromUser.mockResolvedValue({
+      stored: true,
+      name: 'STAGING_TOKEN',
+      maskedValue: 'stg_MASKED123',
+      domains: ['api.staging.example.com'],
+      persisted: false,
+    });
+    inputCard.setAttribute('value', 'deploy this');
+    emitAdd(inputCard, { kind: 'secret', label: 'Share secret securely' });
+
+    await vi.waitFor(() => {
+      const draft = inputCard.getAttribute('value') ?? '';
+      expect(draft).toContain('deploy this ');
+      expect(draft).toContain('STAGING_TOKEN');
+      expect(draft).toContain('stg_MASKED123');
+      expect(draft).toContain('api.staging.example.com');
+      expect(draft).toContain('this session only');
+    });
+  });
+
+  it('points at `secret get` when the store reported no mask', async () => {
+    const { inputCard } = await setup();
+    mockRequestSecretFromUser.mockResolvedValue({
+      stored: true,
+      name: 'STAGING_TOKEN',
+      maskedValue: null,
+      domains: ['*'],
+      persisted: true,
+    });
+    emitAdd(inputCard, { kind: 'secret', label: 'Share secret securely' });
+
+    await vi.waitFor(() => {
+      expect(inputCard.getAttribute('value')).toContain('secret get STAGING_TOKEN');
+    });
+  });
+
+  it('leaves the draft untouched when the secret prompt is dismissed', async () => {
+    const { inputCard } = await setup();
+    mockRequestSecretFromUser.mockResolvedValue({ stored: false, reason: 'cancelled' });
+    inputCard.setAttribute('value', 'unchanged');
+    emitAdd(inputCard, { kind: 'secret', label: 'Share secret securely' });
+
+    await vi.waitFor(() => expect(mockRequestSecretFromUser).toHaveBeenCalled());
+    expect(inputCard.getAttribute('value')).toBe('unchanged');
   });
 
   it('routes a conversation pick through the freezer-card-select path', async () => {

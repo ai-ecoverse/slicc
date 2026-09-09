@@ -24,11 +24,13 @@ const mocks = vi.hoisted(() => {
       { name: 'edit_file' },
     ]),
     createBashTool: vi.fn(() => ({ name: 'bash' })),
+    createRequestSecretTool: vi.fn((_deps: unknown) => ({ name: 'request_secret' })),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
     AlmostBashShellHeadless: vi.fn(function () {
       // `dispose` is real on the shell and `ScoopContext.dispose()` calls it, so
       // the stub needs it for any test that exercises teardown.
-      return { dispose: vi.fn() };
+      // `setMaskedEnvVar` is how `request_secret` publishes a mask as `$NAME`.
+      return { dispose: vi.fn(), setMaskedEnvVar: vi.fn() };
     }),
     getApiKey: vi.fn(() => 'test-api-key'),
     getSelectedProvider: vi.fn(() => 'anthropic'),
@@ -53,6 +55,7 @@ vi.mock('../../src/core/index.js', () => ({
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: mocks.createFileTools,
   createBashTool: mocks.createBashTool,
+  createRequestSecretTool: mocks.createRequestSecretTool,
 }));
 
 vi.mock('../../src/shell/almost-bash-shell-headless.js', () => ({
@@ -134,9 +137,35 @@ describe('ScoopContext active tool surface', () => {
     const toolNames = mocks.agentCtorCalls[0].initialState.tools.map(
       (tool: { name: string }) => tool.name
     );
-    expect(toolNames).toEqual(['read_file', 'write_file', 'edit_file', 'bash', 'send_message']);
+    expect(toolNames).toEqual([
+      'read_file',
+      'write_file',
+      'edit_file',
+      'bash',
+      'send_message',
+      'request_secret',
+    ]);
     expect(toolNames).not.toContain('grep');
     expect(toolNames).not.toContain('find');
+  });
+
+  // The tool asks a human for a credential; the masked value it gets back has to
+  // land in the SAME shell the agent's `bash` runs in, or `$NAME` never resolves.
+  it('wires request_secret to the scoop shell env with the unit label as requester', async () => {
+    const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
+
+    await ctx.init();
+
+    const deps = mocks.createRequestSecretTool.mock.calls[0]?.[0] as unknown as {
+      requester?: string;
+      setEnv?: (name: string, value: string) => void;
+    };
+    expect(deps.requester).toBe(testScoop.assistantLabel);
+    const shell = mocks.AlmostBashShellHeadless.mock.results[0]?.value as unknown as {
+      setMaskedEnvVar: ReturnType<typeof vi.fn>;
+    };
+    deps.setEnv?.('GITHUB_TOKEN', 'ghp_MASKED');
+    expect(shell.setMaskedEnvVar).toHaveBeenCalledWith('GITHUB_TOKEN', 'ghp_MASKED');
   });
 
   // Regression for PR #1166 (P1): the agent's bash-tool shell must be built

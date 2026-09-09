@@ -57,6 +57,9 @@ export function wireWcComposer(deps: {
         composer: refs.composer,
         openReader,
         openWriter: deps.openWriter,
+        // The leader can reach a secret store, so it offers the composer's
+        // "Share secret securely" action.
+        secretEntry: true,
         listConversations: async () => {
           const { readSessionsIndex } = await import('../session-freezer.js');
           const entries = await readSessionsIndex(await openReader());
