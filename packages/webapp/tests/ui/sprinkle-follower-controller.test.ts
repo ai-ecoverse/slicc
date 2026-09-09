@@ -772,6 +772,21 @@ describe('SprinkleFollowerController', () => {
       expect(removeSprinkle).not.toHaveBeenCalled();
     });
 
+    it('does not re-run addSprinkle on reload (keeps parked/minimized placement)', async () => {
+      sync.contentByName.set('dash', '<div>v1</div>');
+      await controller.updateAvailable([
+        makeSprinkle('dash', { open: true, title: 'Dash', icon: 'gauge' }),
+      ]);
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      addSprinkle.mockClear();
+
+      sync.contentByName.set('dash', '<div>v2</div>');
+      await controller.handleSprinkleReloaded('dash');
+
+      expect(addSprinkle).not.toHaveBeenCalled();
+      expect(removeSprinkle).not.toHaveBeenCalled();
+    });
+
     it('no-ops for a sprinkle that is not open', async () => {
       await controller.handleSprinkleReloaded('nonexistent');
 

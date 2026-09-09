@@ -170,7 +170,7 @@ will not be listed — write to `/shared/sprinkles/<name>/<name>.shtml`. (`open
 ### Updating a sprinkle (when you receive follow-up instructions)
 
 1. Edit `/shared/sprinkles/<name>/<name>.shtml` with the requested changes.
-2. Reload: `sprinkle close <name> && sprinkle open <name>`.
+2. Reload: `sprinkle reload <name>` — keeps the panel in place and sized. Do not `close`+`open` unless the sprinkle is actually closed; `open` on an already-open sprinkle is a no-op.
 3. Do NOT finish — stay ready for more instructions.
 
 ### Handling lick events (when the cone forwards a user interaction)
@@ -250,7 +250,7 @@ Feed the EXISTING scoop that owns it. Do NOT create a new scoop:
 ```
 feed_scoop("giro-winners", "Modify YOUR sprinkle 'giro-winners' at /shared/sprinkles/giro-winners/giro-winners.shtml:
 Add an 'Add Previous Year' button with onclick=\"slicc.lick({action: 'add-year'})\"
-Then reload: sprinkle close giro-winners && sprinkle open giro-winners
+Then reload: sprinkle reload giro-winners
 Stay ready for more work.")
 ```
 

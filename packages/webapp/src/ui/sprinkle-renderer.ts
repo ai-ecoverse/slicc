@@ -30,6 +30,87 @@ export function isFullDocument(content: string): boolean {
   return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
 }
 
+/**
+ * CSS that fills the sprinkle panel. `height: 100%` is load-bearing:
+ * Chromium sizes the iframe browsing context from specified CSS width/height,
+ * not the used flex size. `flex: 1` alone leaves `window.innerHeight` at 0
+ * after a same-container rebuild (`sprinkle reload`) because no later resize
+ * arrives to correct it (#2942).
+ */
+export function fullDocIframeStyle(nested: boolean): string {
+  return (
+    'width: 100%; height: 100%; flex: 1; border: none; min-height: 0;' +
+    (nested ? ' transform: translateZ(0);' : '')
+  );
+}
+
+/**
+ * If `container` already has a client box, pin the iframe to that box so
+ * Chromium initializes the nested browsing context at a real size instead
+ * of 0×0. Used on reload: the host panel is already laid out, and inserting
+ * a replacement iframe does not produce the layout pass `open` does.
+ * Returns whether a pin was applied — restore percentage sizing after load
+ * via {@link restoreFullDocIframeFlex} so later panel resizes still flow.
+ */
+export function pinFullDocIframeToHost(iframe: HTMLIFrameElement, container: HTMLElement): boolean {
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  if (width <= 0 || height <= 0) return false;
+  iframe.style.width = `${width}px`;
+  iframe.style.height = `${height}px`;
+  return true;
+}
+
+/** Restore percentage sizing after a host-box pin so the iframe tracks resizes. */
+export function restoreFullDocIframeFlex(iframe: HTMLIFrameElement): void {
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+}
+
+/** Inject the bridge/theme/bundle tags into a full HTML document. */
+function injectFullDocAssets(content: string, injection: string): string {
+  const headMatch = content.match(/<head\b[^>]*>/i);
+  if (headMatch) {
+    const insertPos = headMatch.index! + headMatch[0].length;
+    return content.slice(0, insertPos) + injection + content.slice(insertPos);
+  }
+  const scriptMatch = content.match(/<script\b/i);
+  if (scriptMatch) {
+    return content.slice(0, scriptMatch.index!) + injection + content.slice(scriptMatch.index!);
+  }
+  const htmlMatch = content.match(/<html\b[^>]*>/i);
+  if (htmlMatch) {
+    const insertPos = htmlMatch.index! + htmlMatch[0].length;
+    return content.slice(0, insertPos) + injection + content.slice(insertPos);
+  }
+  return injection + content;
+}
+
+function waitForIframeLoad(iframe: HTMLIFrameElement, onLoad: () => void): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('full-doc iframe load timed out'));
+    }, 5000);
+    iframe.addEventListener(
+      'load',
+      () => {
+        clearTimeout(timer);
+        onLoad();
+        resolve();
+      },
+      { once: true }
+    );
+    iframe.addEventListener(
+      'error',
+      () => {
+        clearTimeout(timer);
+        reject(new Error('full-doc iframe failed to load'));
+      },
+      { once: true }
+    );
+  });
+}
+
 /** Named fields on sprinkle iframe → parent postMessage payloads. */
 interface SprinkleInboundMessage {
   type: string;
@@ -702,29 +783,7 @@ export class SprinkleRenderer {
     // before any content paints. Runs synchronously inside the iframe.
     const themeBootstrap = `<script>(function(){try{if(${isThemeLight() ? 'true' : 'false'})document.documentElement.classList.add('theme-light');}catch(e){}})();</script>`;
     const injection = themeBootstrap + bridgeScript + themeTag + editorTag + diffTag + lucideTag;
-
-    // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
-    let modified: string;
-    const headMatch = content.match(/<head\b[^>]*>/i);
-    if (headMatch) {
-      const insertPos = headMatch.index! + headMatch[0].length;
-      modified = content.slice(0, insertPos) + injection + content.slice(insertPos);
-    } else {
-      const scriptMatch = content.match(/<script\b/i);
-      if (scriptMatch) {
-        modified =
-          content.slice(0, scriptMatch.index!) + injection + content.slice(scriptMatch.index!);
-      } else {
-        // Fallback: inject right after <html> or at the start
-        const htmlMatch = content.match(/<html\b[^>]*>/i);
-        if (htmlMatch) {
-          const insertPos = htmlMatch.index! + htmlMatch[0].length;
-          modified = content.slice(0, insertPos) + injection + content.slice(insertPos);
-        } else {
-          modified = injection + content;
-        }
-      }
-    }
+    const modified = injectFullDocAssets(content, injection);
 
     const iframe = document.createElement('iframe');
     // SECURITY NOTE (#1717): `allow-scripts allow-same-origin` together make
@@ -758,13 +817,17 @@ export class SprinkleRenderer {
     // initiate navigation" block without it. Scoped to cherry only — it does
     // NOT grant `allow-top-navigation`, so the sprinkle still can't replace
     // the whole window/host page.
-    const sandboxTokens = isNestedInAnotherFrame()
+    const nested = isNestedInAnotherFrame();
+    const sandboxTokens = nested
       ? 'allow-scripts allow-same-origin allow-popups'
       : 'allow-scripts allow-same-origin';
     iframe.setAttribute('sandbox', sandboxTokens);
-    iframe.style.cssText =
-      'width: 100%; flex: 1; border: none; min-height: 0;' +
-      (isNestedInAnotherFrame() ? ' transform: translateZ(0);' : '');
+    iframe.style.cssText = fullDocIframeStyle(nested);
+    // Pin to the host's current box *before* srcdoc so the browsing context
+    // is not created at 0×0. First open (host still 0 mid-transition) skips
+    // the pin and keeps percentage sizing; reload of an already-sized panel
+    // is the case this exists for (#2942).
+    const pinnedToHost = pinFullDocIframeToHost(iframe, this.container);
     iframe.srcdoc = modified;
     this.iframe = iframe;
 
@@ -784,38 +847,23 @@ export class SprinkleRenderer {
     this.messageHandler = createIframeMessageListener(iframe, handlers);
     window.addEventListener('message', this.messageHandler);
 
-    // Wait for iframe to load
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('full-doc iframe load timed out'));
-      }, 5000);
-      iframe.addEventListener(
-        'load',
-        () => {
-          clearTimeout(timer);
-          // Register with theme broadcaster so prefers-color-scheme changes flip CSS vars live
-          registerSprinkleWindow(iframe.contentWindow);
-          // Send init message with name and saved state
-          const savedState = this.bridge.getState();
-          iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-init', name: sprinkleName, savedState },
-            '*'
-          );
-          if (isNestedInAnotherFrame()) nudgeIframeRepaint(iframe);
-          resolve();
-        },
-        { once: true }
+    const loaded = waitForIframeLoad(iframe, () => {
+      // Register with theme broadcaster so prefers-color-scheme changes flip CSS vars live
+      registerSprinkleWindow(iframe.contentWindow);
+      const savedState = this.bridge.getState();
+      iframe.contentWindow?.postMessage(
+        { type: 'sprinkle-init', name: sprinkleName, savedState },
+        '*'
       );
-      iframe.addEventListener(
-        'error',
-        () => {
-          clearTimeout(timer);
-          reject(new Error('full-doc iframe failed to load'));
-        },
-        { once: true }
-      );
-      this.container.appendChild(iframe);
+      // Force a layout read while the pin (or the used 100% box) is in
+      // effect, then restore percentage sizing so later panel resizes
+      // still flow into the frame.
+      void iframe.getBoundingClientRect();
+      if (pinnedToHost) restoreFullDocIframeFlex(iframe);
+      if (nested) nudgeIframeRepaint(iframe);
     });
+    this.container.appendChild(iframe);
+    await loaded;
 
     // The sprinkle's `<slicc-surface>` host stays mounted and toggles
     // `display:none`/`display:flex` on tab switches instead of destroying the
@@ -837,7 +885,7 @@ export class SprinkleRenderer {
     // re-triggers another nudge forever. Actually unobserve for the duration
     // of the nudge and re-observe once it settles, so the nudge's own
     // display flicker never reaches this callback.
-    if (isNestedInAnotherFrame() && typeof IntersectionObserver !== 'undefined') {
+    if (nested && typeof IntersectionObserver !== 'undefined') {
       let skipNextVisible = false;
       const observer = new IntersectionObserver((entries) => {
         const entry = entries[entries.length - 1];

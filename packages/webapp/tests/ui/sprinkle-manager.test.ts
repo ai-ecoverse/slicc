@@ -1245,6 +1245,20 @@ describe('SprinkleManager', () => {
       expect(mgr.opened()).toContain('dash');
     });
 
+    it('does not re-run addSprinkle on reload (keeps parked/minimized placement)', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      addSprinkle.mockClear();
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v2</div>');
+      await mgr.reload('dash');
+
+      expect(addSprinkle).not.toHaveBeenCalled();
+      expect(mgr.opened()).toContain('dash');
+    });
+
     it('no-ops for a sprinkle that is not open', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
       await mgr.refresh();

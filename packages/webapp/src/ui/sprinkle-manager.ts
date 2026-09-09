@@ -531,6 +531,10 @@ export class SprinkleManager implements SprinkleManagerHandle {
     entry.renderer?.dispose();
     this.bridge.removeSprinkle(name);
 
+    // Stay in the existing container/placement. Re-running addSprinkle here
+    // would place a minimized or background sprinkle and steal focus
+    // (#2942 review). The replacement iframe is sized from this host box
+    // in SprinkleRenderer, which is what close+open was accidentally doing.
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(entry.container, api);
     await renderer.render(content, name);

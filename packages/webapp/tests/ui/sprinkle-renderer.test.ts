@@ -1,7 +1,13 @@
 import { JSDOM } from 'jsdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SprinkleBridge, type SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
-import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
+import {
+  fullDocIframeStyle,
+  isFullDocument,
+  pinFullDocIframeToHost,
+  restoreFullDocIframeFlex,
+  SprinkleRenderer,
+} from '../../src/ui/sprinkle-renderer.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
   // Device namespaces (hid/serial/usb/_device) are irrelevant to renderer tests.
@@ -241,6 +247,11 @@ describe('full document rendering', () => {
   let dom: JSDOM;
   let container: HTMLElement;
 
+  function sizeHost(el: HTMLElement, width: number, height: number): void {
+    Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => height });
+  }
+
   beforeEach(() => {
     dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
       runScripts: 'dangerously',
@@ -263,6 +274,84 @@ describe('full document rendering', () => {
     expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
     // Should NOT have a .sprinkle-content wrapper
     expect(container.querySelector('.sprinkle-content')).toBeNull();
+  });
+
+  it('specifies height: 100% so Chromium gets a definite viewport, not just flex', () => {
+    expect(fullDocIframeStyle(false)).toContain('width: 100%');
+    expect(fullDocIframeStyle(false)).toContain('height: 100%');
+    expect(fullDocIframeStyle(false)).toContain('flex: 1');
+    expect(fullDocIframeStyle(false)).not.toContain('translateZ');
+    expect(fullDocIframeStyle(true)).toContain('transform: translateZ(0)');
+  });
+
+  it('pins a sized host box and restores percentage sizing after load', () => {
+    const iframe = dom.window.document.createElement('iframe');
+    iframe.style.cssText = fullDocIframeStyle(false);
+    sizeHost(container, 1072, 1020);
+
+    expect(pinFullDocIframeToHost(iframe, container)).toBe(true);
+    expect(iframe.style.width).toBe('1072px');
+    expect(iframe.style.height).toBe('1020px');
+
+    restoreFullDocIframeFlex(iframe);
+    expect(iframe.style.width).toBe('100%');
+    expect(iframe.style.height).toBe('100%');
+  });
+
+  it('does not pin when the host is 0×0 (first open, mid-transition)', () => {
+    const iframe = dom.window.document.createElement('iframe');
+    iframe.style.cssText = fullDocIframeStyle(false);
+
+    expect(pinFullDocIframeToHost(iframe, container)).toBe(false);
+    expect(iframe.style.width).toBe('100%');
+    expect(iframe.style.height).toBe('100%');
+  });
+
+  it('pins a sized host on insert, then restores flex after load (#2942 reload)', async () => {
+    sizeHost(container, 1072, 1020);
+    const widthsOnInsert: string[] = [];
+    const heightsOnInsert: string[] = [];
+    const appendChild = container.appendChild.bind(container);
+    vi.spyOn(container, 'appendChild').mockImplementation((node) => {
+      const iframe = node as HTMLIFrameElement;
+      widthsOnInsert.push(iframe.style.width);
+      heightsOnInsert.push(iframe.style.height);
+      return appendChild(node);
+    });
+
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head></head><body>reload</body></html>',
+      'full-doc'
+    );
+
+    expect(widthsOnInsert).toEqual(['1072px']);
+    expect(heightsOnInsert).toEqual(['1020px']);
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe.style.width).toBe('100%');
+    expect(iframe.style.height).toBe('100%');
+  });
+
+  it('re-pins a sized host when the same container is re-rendered (reload)', async () => {
+    sizeHost(container, 1072, 1020);
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>v1</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const widthsOnInsert: string[] = [];
+    const appendChild = container.appendChild.bind(container);
+    vi.spyOn(container, 'appendChild').mockImplementation((node) => {
+      widthsOnInsert.push((node as HTMLIFrameElement).style.width);
+      return appendChild(node);
+    });
+
+    await renderer.render('<!DOCTYPE html><html><head></head><body>v2</body></html>', 'full-doc');
+
+    expect(widthsOnInsert).toEqual(['1072px']);
+    expect(container.querySelector('iframe')?.style.width).toBe('100%');
+    expect(container.querySelector('iframe')?.style.height).toBe('100%');
   });
 
   it('the in-iframe usb shim exposes every method the page-side API has', async () => {
