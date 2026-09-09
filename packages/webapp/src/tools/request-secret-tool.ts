@@ -42,6 +42,13 @@ export interface RequestSecretToolDeps {
   setEnv?: (name: string, value: string) => void;
   /** Label shown as "who is asking" in the dialog. System-derived. */
   requester?: string;
+  /**
+   * The provider serving THIS unit, named in the dialog as the party that cannot
+   * read the value. Read per call, not captured: a unit's model can be switched
+   * mid-session, and the dialog must name whoever is actually about to receive
+   * the mask.
+   */
+  getProvider?: () => string | undefined;
   /** Panel-RPC seam (tests). Defaults to the realm's client, if any. */
   callPanelRpc?: (request: SecretRequest) => Promise<SecretRequestOutcome>;
 }
@@ -71,6 +78,21 @@ async function defaultPanelRpcBridge(): Promise<
   if (!client) return null;
   return (request) =>
     client.call('secret-request', request, { timeoutMs: SECRET_REQUEST_TIMEOUT_MS });
+}
+
+/**
+ * This unit's provider, or `undefined`. Never fatal: the dialog falls back to
+ * generic wording, and a resolver that throws must not cost the human a prompt.
+ */
+function readProvider(deps: RequestSecretToolDeps): string | undefined {
+  try {
+    return deps.getProvider?.() || undefined;
+  } catch (err) {
+    log.warn('could not resolve this unit’s provider for the secret prompt', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 /** Parse the model's `domains` argument; a non-array or empty list means "unset". */
@@ -177,6 +199,7 @@ export function createRequestSecretTool(deps: RequestSecretToolDeps = {}): ToolD
         domains: readDomains(input.domains),
         persist: input.persist === true,
         requester: deps.requester,
+        provider: readProvider(deps),
       };
 
       let outcome: SecretRequestOutcome;

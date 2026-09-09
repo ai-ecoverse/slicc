@@ -29,6 +29,13 @@ export interface SecretRequest {
   requester?: string;
   /** Start with "keep after this session ends" checked. */
   persist?: boolean;
+  /**
+   * The model provider serving the ASKING unit, named in the dialog as the party
+   * that cannot read the value. Carried on the request because a background scoop
+   * can run on a provider the page's selected model knows nothing about, and a
+   * promise naming the wrong company is worse than a vague one.
+   */
+  provider?: string;
 }
 
 /** A stored secret, described WITHOUT its value. */

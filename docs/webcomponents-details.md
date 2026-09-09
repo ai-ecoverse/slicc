@@ -517,30 +517,40 @@ load-bearing.
 
 - **The value never becomes state anything else can read.** It lives only in the
   input, is never reflected to an attribute or a property, and is cleared on
-  every close (including a reopen of the same instance). Callers get it exactly
-  once, in the `secret-submit` detail. The host that receives it — the webapp's
-  `wc-secret-request.ts` — is the only module in the app that holds a plaintext
-  credential, and it hands onward only the mask.
+  every close (including a reopen of the same instance). It reaches the host by
+  exactly two private routes: the `submitHandler` argument and the promise
+  `open()` returns. The bubbling, composed `slicc-secret-submit` event carries a
+  value-free summary (`name`, `domains`, `persist`) — that event leaves the
+  component and anything in the page can hear it, so the detail is built without
+  the credential rather than trusted not to be read. The host that receives the
+  plaintext — the webapp's `wc-secret-request.ts` — is the only module in the app
+  that holds one, and it hands onward only the mask.
 - **The store's verdict decides whether the dialog closes.** The host sets
   `submitHandler`; returning a string keeps the dialog open, with the typed value
   intact, and shows that string as the error. A Keychain timeout must not read as
-  "saved", and it must not cost the human their typing either.
+  "saved", and it must not cost the human their typing either. While that write is
+  in flight the dialog cannot be dismissed — Cancel is disabled and Escape / ✕ are
+  refused — because the write cannot be recalled, and answering "cancelled" over a
+  secret that then lands would be a lie.
 - **`persistent`, deliberately.** Backdrop-click-to-dismiss is right for a
   chooser and wrong here: a stray click on a half-typed credential is unrecoverable
   work. Escape and Cancel still close it.
 - **Password by default, reveal is opt-in.** The toggle exists because a
   mistyped secret fails later, opaquely, in a fetch the human never sees.
-  "Additional options" hides the domain rows and the persist checkbox — both
-  have safe defaults (the requester's suggested scope, session-only) so the
-  common path is name + value + Enter.
+  "Additional options" holds the domain rows and the persist checkbox, and `open()`
+  expands it every time: the scope is the entire security claim, so it is reviewed
+  rather than collapsed. There is no default scope either — with nothing suggested
+  the first row starts empty and submission is blocked until it is filled in,
+  because a wildcard the human never chose is a wildcard they never read.
 - **One row per domain, with − / + trailing each row.** A comma-separated field
   reads as one value and a scope is a list; the row a human edits is the row
   whose buttons they click. The last row's − stays disabled, because the stores
   reject a secret with no scope, so the UI never offers the state that fails.
 - **The description names the provider.** "Secure secrets cannot be read by
-  Anthropic" is checkable in a way that "the agent" is not; `wc-secret-request.ts`
-  derives the label from the selected model, and the component falls back to
-  "the model" when nothing is named.
+  Anthropic" is checkable in a way that "the agent" is not. For an agent request
+  the label comes from the ASKING unit's model (a background scoop can run on a
+  different provider than the page's selection); the composer path falls back to
+  the selected provider, and the component to "the model" when nothing is named.
 
 Validation is split by consequence: an empty field, a bad name charset, or a
 missing scope block submission; a non-POSIX name (no `$NAME` in the shell) or a

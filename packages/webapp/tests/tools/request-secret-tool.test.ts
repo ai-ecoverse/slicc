@@ -63,6 +63,37 @@ describe('request_secret', () => {
     expect(result.content).toContain('this session only');
   });
 
+  // The dialog promises the credential is unreadable by a NAMED provider. That
+  // name has to come from the unit that is asking — a scoop can run on a provider
+  // the page's selected model knows nothing about — and it is read per call,
+  // because a unit's model can be switched mid-session.
+  it('names the asking unit’s provider, resolved on every call', async () => {
+    const surface = vi.fn().mockResolvedValue(STORED);
+    setSecretRequestSurface(surface);
+    const providers = ['Anthropic', 'OpenAI'];
+    const tool = createRequestSecretTool({ getProvider: () => providers.shift() });
+
+    await tool.execute({ name: 'A', reason: 'why' });
+    await tool.execute({ name: 'B', reason: 'why' });
+
+    expect(surface.mock.calls[0]?.[0]).toMatchObject({ provider: 'Anthropic' });
+    expect(surface.mock.calls[1]?.[0]).toMatchObject({ provider: 'OpenAI' });
+  });
+
+  it('still prompts when the provider cannot be resolved', async () => {
+    const surface = vi.fn().mockResolvedValue(STORED);
+    setSecretRequestSurface(surface);
+    const tool = createRequestSecretTool({
+      getProvider: () => {
+        throw new Error('no model selected');
+      },
+    });
+
+    const result = await tool.execute({ name: 'GITHUB_TOKEN', reason: 'why' });
+    expect(result.isError).toBeFalsy();
+    expect(surface.mock.calls[0]?.[0]).toMatchObject({ provider: undefined });
+  });
+
   it('never reports a real value — the surface has no channel to return one', async () => {
     setSecretRequestSurface(async () => STORED);
     const tool = createRequestSecretTool();

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type SecretDialogSubmitDetail,
+  type SecretDialogSubmitSummary,
   SliccSecretDialog,
 } from '../../src/overlay/slicc-secret-dialog.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
@@ -89,11 +90,22 @@ describe('slicc-secret-dialog', () => {
     expect(valueInput(el).type).toBe('password');
   });
 
-  it('defaults the scope to a single wildcard row and warns what it means', async () => {
+  // A default scope is a scope nobody read. With nothing suggested the human has
+  // to name one, and the drawer holding it is never collapsed out of sight.
+  it('starts with one empty scope row, visible, and no wildcard default', async () => {
     const el = mount();
     void el.open();
     await flush();
-    expect(domainInputs(el).map((i) => i.value)).toEqual(['*']);
+    expect(domainInputs(el).map((i) => i.value)).toEqual(['']);
+    expect(visibleHints(el)).not.toContain('any domain');
+    expect((el.querySelector('details') as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it('warns only once a wildcard is typed deliberately', () => {
+    const el = mount();
+    void el.open();
+    domainInput(el).value = '*';
+    domainInput(el).dispatchEvent(new Event('input'));
     expect(visibleHints(el)).toContain('any domain');
   });
 
@@ -167,14 +179,14 @@ describe('slicc-secret-dialog', () => {
     expect(valueInput(el).value).toBe('');
   });
 
-  it('emits a composed, bubbling slicc-secret-submit', async () => {
+  it('emits a composed, bubbling slicc-secret-submit that carries no value', async () => {
     const el = mount();
-    const seen: SecretDialogSubmitDetail[] = [];
+    const seen: SecretDialogSubmitSummary[] = [];
     // Listened for on `document`, not the element: that only passes if the event
     // is composed AND bubbling, which is the contract under test.
     document.addEventListener(
       'slicc-secret-submit',
-      (e) => seen.push((e as CustomEvent<SecretDialogSubmitDetail>).detail),
+      (e) => seen.push((e as CustomEvent<SecretDialogSubmitSummary>).detail),
       { once: true }
     );
     const pending = el.open();
@@ -183,8 +195,15 @@ describe('slicc-secret-dialog', () => {
     await pending;
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].name).toBe('GITHUB_TOKEN');
-    expect(seen[0].persist).toBe(false);
+    // Exact equality, not a property check: this event escapes the component into
+    // the page, so ANY extra key on it would be a leak. The credential must not be
+    // reachable from the detail under any name.
+    expect(seen[0]).toEqual({
+      name: 'GITHUB_TOKEN',
+      domains: ['api.github.com', '*.github.com'],
+      persist: false,
+    } satisfies SecretDialogSubmitSummary);
+    expect(JSON.stringify(seen[0])).not.toContain('ghp_realtoken');
   });
 
   it('resolves null and emits slicc-secret-cancel on Cancel', async () => {
@@ -303,6 +322,32 @@ describe('slicc-secret-dialog', () => {
     expect(innerDialog(el).hasAttribute('open')).toBe(false);
   });
 
+  // A store write cannot be recalled, so "cancelled" must not be answerable over
+  // one that is still in flight — it would report no secret where one landed.
+  it('refuses every dismissal while the store write is pending', async () => {
+    const el = mount();
+    let release: (v: null) => void = () => {};
+    el.submitHandler = () => new Promise<null>((r) => (release = r));
+    const pending = el.open();
+    fill(el);
+    saveBtn(el).click();
+    await flush();
+
+    expect(saveBtn(el).disabled).toBe(true);
+    expect(cancelBtn(el).disabled).toBe(true);
+    cancelBtn(el).click();
+    innerDialog(el).dispatchEvent(
+      new CustomEvent('slicc-dialog-close', { detail: { reason: 'escape' }, bubbles: true })
+    );
+    await flush();
+    expect(innerDialog(el).hasAttribute('open')).toBe(true);
+
+    release(null);
+    // The submit path, not the dismissal, is what resolves it — with the detail.
+    await expect(pending).resolves.toMatchObject({ name: 'GITHUB_TOKEN' });
+    expect(cancelBtn(el).disabled).toBe(false);
+  });
+
   it('submits on Enter in the value field', async () => {
     const el = mount();
     const pending = el.open();
@@ -359,11 +404,12 @@ describe('slicc-secret-dialog', () => {
     expect(persistBox(el).checked).toBe(true);
     expect(innerDialog(el).getAttribute('heading')).toBe('Give me a token');
 
-    // Removal falls back to the documented defaults, not to an empty dialog.
+    // Removal falls back to the documented defaults: an EMPTY scope row (there is
+    // no default scope) and a session-only secret.
     el.removeAttribute('domain');
     el.persistDefault = false;
     el.heading = null;
-    expect(domainInput(el).value).toBe('*');
+    expect(domainInput(el).value).toBe('');
     expect(persistBox(el).checked).toBe(false);
     expect(innerDialog(el).getAttribute('heading')).toBe('Share a secret securely');
   });

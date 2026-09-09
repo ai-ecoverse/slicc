@@ -796,6 +796,12 @@ function insertSkillMention(label: string, inputCard: WireWcAttachDeps['inputCar
  * The mention rides the next submit rather than being sent on its own, so the
  * user can say what the credential is for in the same turn. A dismissal leaves
  * the draft untouched: nothing was stored, so there is nothing to mention.
+ *
+ * No `$NAME` is published here, unlike the `request_secret` tool path. The
+ * composer has no handle on the running shell — masked env vars are loaded when a
+ * shell initialises — so the draft carries the mask itself, plus `secret get` as
+ * the way to look it up again. The proxy still unmasks it at the boundary either
+ * way; only the shell variable is missing.
  */
 async function stageSecret(deps: WireWcAttachDeps): Promise<void> {
   const { requestSecretFromUser } = await import('./wc-secret-request.js');

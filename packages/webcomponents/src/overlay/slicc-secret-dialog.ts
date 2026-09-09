@@ -4,23 +4,39 @@ import { iconEl } from '../internal/icons.js';
 // Composed by tag — owns its registration.
 import './slicc-dialog.js';
 
-/** What the human typed, once every field validates. */
-export interface SecretDialogSubmitDetail {
+/**
+ * What was submitted, WITHOUT the credential. This is the shape that travels on
+ * the composed `slicc-secret-submit` event, so it must stay value-free: the
+ * event crosses into the page, where any panel or sprinkle can listen for it.
+ */
+export interface SecretDialogSubmitSummary {
   /** Secret name (the store key; `$NAME` in the shell when POSIX-shaped). */
   name: string;
-  /** The real credential. Never reflected to an attribute, never logged. */
-  value: string;
   /** Host/domain glob patterns the value may be unmasked for. */
   domains: string[];
   /** true → write to the persisted store; false → session-only, in-memory. */
   persist: boolean;
 }
 
+/**
+ * What the human typed, once every field validates — the summary plus the
+ * credential. Reaches only the two private paths: {@link
+ * SliccSecretDialog.submitHandler} and the promise `open()` returns. It is
+ * deliberately NOT what the DOM event carries.
+ */
+export interface SecretDialogSubmitDetail extends SecretDialogSubmitSummary {
+  /** The real credential. Never reflected to an attribute, never logged. */
+  value: string;
+}
+
 /** Prefill + framing for one open() call. */
 export interface SecretDialogRequest {
   /** Suggested secret name (the agent's proposal, or a remembered one). */
   name?: string;
-  /** Suggested domain allowlist. Defaults to {@link ANY_DOMAIN}. */
+  /**
+   * Suggested domain allowlist. With none, the human types one — there is no
+   * default scope, because a wildcard nobody chose is a wildcard nobody read.
+   */
   domains?: string[];
   /** Why the value is being asked for — shown verbatim under the heading. */
   reason?: string;
@@ -392,11 +408,10 @@ export class SliccSecretDialog extends HTMLElement {
     this.#setRevealed(false);
     this.#error.textContent = '';
     this.#setBusy(false);
-    // A suggested scope is the interesting part of an agent request — open the
-    // drawer so the human reviews what they are about to allow, instead of
-    // trusting a collapsed default they never saw.
-    const scope = this.#domainValues();
-    this.#options.open = !!req.domains?.length || scope.join(',') !== ANY_DOMAIN;
+    // The scope is the whole security claim, so it is never collapsed out of
+    // sight: the drawer opens whenever the human still has to supply or review
+    // one, which — with no default scope — is every time.
+    this.#options.open = true;
     this.#syncHints();
     this.#dialog.show?.();
     requestAnimationFrame(() => (this.#name.value ? this.#value : this.#name).focus());
@@ -416,6 +431,10 @@ export class SliccSecretDialog extends HTMLElement {
     this.#busy = busy;
     this.#save.disabled = busy;
     this.#save.textContent = busy ? 'Storing…' : 'Store secret';
+    // Cancel goes with it: the write is already in flight and cannot be recalled,
+    // so a "cancelled" answer over a secret that then lands is a lie. `#finish`
+    // enforces the same rule for Escape and ✕, which have no button to disable.
+    this.#cancel.disabled = busy;
   }
 
   #setRevealed(revealed: boolean): void {
@@ -448,9 +467,16 @@ export class SliccSecretDialog extends HTMLElement {
     return Array.from(this.#domainRows.querySelectorAll<HTMLInputElement>('[part="domain"]'));
   }
 
-  /** Rebuild the rows to match `domains`, keeping at least one (the wildcard). */
+  /**
+   * Rebuild the rows to match `domains`, always keeping one.
+   *
+   * With nothing suggested that row starts EMPTY rather than `*`: a scope is the
+   * only thing standing between a credential and any host the agent names, so it
+   * is typed deliberately, never inherited from a default. Submission is blocked
+   * until it is filled in.
+   */
   #setDomains(domains: string[]): void {
-    const list = domains.length > 0 ? domains : [ANY_DOMAIN];
+    const list = domains.length > 0 ? domains : [''];
     this.#domainRows.replaceChildren(...list.map((domain) => this.#domainRow(domain)));
     this.#syncDomainRows();
   }
@@ -552,9 +578,15 @@ export class SliccSecretDialog extends HTMLElement {
       }
       this.#setBusy(false);
     }
+    // Value-free BY CONSTRUCTION, not by convention: this event is composed and
+    // bubbling, so it leaves the component and reaches anything in the page that
+    // listens — including panel or sprinkle code the agent wrote. The credential
+    // travels only on `submitHandler` and the `open()` promise, both of which the
+    // host wires up in its own realm.
+    const { name, domains, persist } = collected;
     this.dispatchEvent(
-      new CustomEvent<SecretDialogSubmitDetail>('slicc-secret-submit', {
-        detail: collected,
+      new CustomEvent<SecretDialogSubmitSummary>('slicc-secret-submit', {
+        detail: { name, domains, persist },
         bubbles: true,
         composed: true,
       })
@@ -563,6 +595,11 @@ export class SliccSecretDialog extends HTMLElement {
   }
 
   #finish(detail: SecretDialogSubmitDetail | null): void {
+    // A dismissal DURING the write is refused rather than raced: the store call
+    // cannot be recalled, so answering "cancelled" here could leave a stored
+    // secret behind a cancelled outcome. The submit path resolves it either way —
+    // with the store's error, or with the detail on success.
+    if (this.#busy && !detail) return;
     const resolve = this.#resolve;
     this.#resolve = null;
     this.#dialog.hide?.();
@@ -768,7 +805,7 @@ declare global {
     'slicc-secret-dialog': SliccSecretDialog;
   }
   interface HTMLElementEventMap {
-    'slicc-secret-submit': CustomEvent<SecretDialogSubmitDetail>;
+    'slicc-secret-submit': CustomEvent<SecretDialogSubmitSummary>;
     'slicc-secret-cancel': CustomEvent<void>;
   }
 }

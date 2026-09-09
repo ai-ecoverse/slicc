@@ -87,11 +87,13 @@ The swift-server also supports `--env-file` for loading additional secrets from 
 
 ### Option 3: the composer (UI)
 
-**Share secret securely** in the composer's `+` menu (below file upload and screen sharing) opens a secret-entry dialog: name, value (masked as you type, with a reveal toggle), and an **Additional options** drawer holding one row per allowed domain (− / + to edit the list) and a **Keep after this session** checkbox. Unchecked — the default — the secret is session-only; checked, it persists to `.env`/Keychain/`chrome.storage.local` like `--persist`.
+**Share secret securely** in the composer's `+` menu (below file upload and screen sharing) opens a secret-entry dialog: name, value (masked as you type, with a reveal toggle), and an **Additional options** drawer — open from the start — holding one row per allowed domain (− / + to edit the list) and a **Keep after this session** checkbox. There is no default scope: at least one domain must be typed, so a credential is never stored against a wildcard nobody read. Unchecked — the default — the secret is session-only; checked, it persists to `.env`/Keychain/`chrome.storage.local` like `--persist`.
 
 The agent can also ask for one: the `request_secret` tool ([tools reference](tools-reference.md)) opens the same dialog with the agent's stated reason, so a credential request is always answered by a human at a real browser prompt rather than by the agent typing a value it read somewhere. Declining is a normal outcome and is reported back as an error so the agent stops instead of guessing.
 
-Either way the typed value goes straight from the dialog to the trusted-realm store; the agent's realm receives only `{ name, maskedValue, domains, persisted }` and the masked value is published as `$NAME` in the agent shell (subject to the POSIX-name rule above). The dialog mounts into the **trusted layer**, above every panel and sprinkle, so page content can neither cover it nor forge a look-alike "enter your API key" form.
+Either way the typed value goes straight from the dialog to the trusted-realm store; the agent's realm receives only `{ name, maskedValue, domains, persisted }`. The two paths differ in what reaches the shell: `request_secret` publishes the mask as `$NAME` in the requesting unit's shell (subject to the POSIX-name rule above), while the composer path puts the mask in the draft and points at `secret get <name>`, because the composer has no handle on a running shell. The proxy unmasks at the network boundary in both cases.
+
+The dialog mounts into the **trusted layer**, above every panel and sprinkle, so page content can neither cover it nor forge a look-alike "enter your API key" form. A float with no trusted layer refuses to prompt at all and reports the request as unavailable — `secret set` and the settings UI remain the way in.
 
 ## The `secret` shell command
 

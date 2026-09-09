@@ -20,15 +20,20 @@
  *
  * `trusted-layer.ts` exists because a main-realm panel can draw a convincing
  * fake "enter your API key" form. This dialog is exactly that form, so it mounts
- * through `mountTrusted` and paints above every panel. A float that has no
- * trusted layer (a bare fixture, a test harness) falls back to `document.body`
- * with a warning rather than refusing to collect a secret the user asked to
- * share — the fallback is visually spoofable, which is why it is loud.
+ * through `mountTrusted` and paints above every panel.
+ *
+ * A float with no trusted layer FAILS CLOSED: it reports `unavailable` and never
+ * shows the form. Mounting into `document.body` instead would ask for a
+ * credential on a surface a panel can cover or impersonate, and a console warning
+ * is addressed to an operator while the risk lands on whoever is typing. "No
+ * prompt" is a recoverable state — `secret set` and the settings UI still work —
+ * whereas a credential entered into spoofable chrome is not.
  */
 
 import type { SecretDialogRequest, SliccSecretDialog } from '@slicc/webcomponents';
 
 import { createLogger } from '../../base/logger.js';
+import { providerLabel } from '../../base/provider-labels.js';
 import type { SecretRequest, SecretRequestOutcome } from '../../base/secret-request-registry.js';
 import { setSecretRequestSurface } from '../../base/secret-request-registry.js';
 import { resolveSecretTopology } from '../../core/secret-topology.js';
@@ -49,44 +54,34 @@ export interface SecretRequestSurfaceDeps {
   createDialog?: () => SliccSecretDialog;
 }
 
-/** Mount the dialog into the trusted layer, or loudly into the body. */
-function mountDialog(element: HTMLElement): void {
+/** Mount into the trusted layer, or refuse: `false` means nothing was mounted. */
+function mountDialog(element: HTMLElement): boolean {
   try {
     mountTrusted(element, document);
-  } catch {
-    log.warn(
-      'no trusted layer in this float — the secret dialog mounted into document.body and is ' +
-        'occludable by a panel (see trusted-layer.ts)'
+    return true;
+  } catch (err) {
+    log.error(
+      'no trusted layer in this float — refusing to collect a secret on spoofable chrome; ' +
+        'use `secret set` or the settings UI instead (see trusted-layer.ts)',
+      { error: err instanceof Error ? err.message : String(err) }
     );
-    document.body.append(element);
+    return false;
   }
 }
 
 /**
- * The provider the credential is being kept FROM, named in the dialog. Derived
- * from the selected model rather than passed in, so the promise on screen tracks
- * whoever is actually serving this session. Best-effort: an unreadable selection
- * falls back to the component's generic wording.
+ * The page's selected provider — the FALLBACK label, used only when the caller
+ * named none (the composer action, where the human is asking on their own
+ * behalf). Best-effort: an unreadable selection leaves the component's generic
+ * wording in place.
  */
-function providerLabel(): string | undefined {
+function selectedProviderLabel(): string | undefined {
   try {
-    const id = getSelectedProvider();
-    return id ? (PROVIDER_LABELS[id] ?? id) : undefined;
+    return providerLabel(getSelectedProvider());
   } catch {
     return undefined;
   }
 }
-
-/** Display names for the provider ids that have one worth spelling out. */
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  adobe: 'Adobe',
-  github: 'GitHub',
-  bedrock: 'AWS Bedrock',
-  azure: 'Azure',
-};
 
 /** Translate the registry's request into the component's prefill shape. */
 function toDialogRequest(request: SecretRequest): SecretDialogRequest {
@@ -96,7 +91,9 @@ function toDialogRequest(request: SecretRequest): SecretDialogRequest {
     reason: request.reason,
     requester: request.requester,
     persist: request.persist,
-    provider: providerLabel(),
+    // The asking unit's own provider when it named one; the page's selection is
+    // only the fallback, because a background scoop can run on a different one.
+    provider: request.provider ?? selectedProviderLabel(),
   };
 }
 
@@ -107,7 +104,8 @@ function toDialogRequest(request: SecretRequest): SecretDialogRequest {
  *
  * A failed store keeps the dialog open with the value intact (the component's
  * `submitHandler` contract), so a stalled Keychain costs a click rather than a
- * re-paste from the password manager.
+ * re-paste from the password manager. A float with no trusted layer resolves
+ * `{ stored: false, reason: 'unavailable' }` without ever showing the form.
  */
 export async function requestSecretFromUser(
   request: SecretRequest = {},
@@ -116,7 +114,8 @@ export async function requestSecretFromUser(
   const backend = deps.backend ?? createDefaultSecretBackend(resolveSecretTopology());
   const dialog =
     deps.createDialog?.() ?? (document.createElement('slicc-secret-dialog') as SliccSecretDialog);
-  (deps.mount ?? mountDialog)(dialog);
+  if (deps.mount) deps.mount(dialog);
+  else if (!mountDialog(dialog)) return { stored: false, reason: 'unavailable' };
 
   // Filled by the submit handler so the resolved outcome can describe what
   // actually landed (the human may have edited the name or the scope). Held in a

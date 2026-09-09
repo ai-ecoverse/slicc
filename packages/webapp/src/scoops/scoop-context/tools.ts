@@ -10,6 +10,7 @@
  * to be read alongside the retry loop.
  */
 
+import { providerLabel } from '../../base/provider-labels.js';
 import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -26,6 +27,7 @@ import {
   type ScoopManagementToolsConfig,
 } from '../scoop-management-tools.js';
 import type { RegisteredScoop } from '../types.js';
+import { resolveScoopModel } from './model-resolution.js';
 
 const log = createLogger('scoop-context');
 
@@ -160,6 +162,10 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
     createRequestSecretTool({
       requester: scoop.assistantLabel || scoop.name,
       setEnv: (name, maskedValue) => deps.shell.setMaskedEnvVar(name, maskedValue),
+      // THIS unit's provider, resolved per call. A background scoop can run on a
+      // provider the page's selected model knows nothing about, and the dialog
+      // promises the credential is unreadable by whoever is actually serving it.
+      getProvider: () => providerLabel(resolveScoopModel(scoop).provider),
     }),
   ];
 

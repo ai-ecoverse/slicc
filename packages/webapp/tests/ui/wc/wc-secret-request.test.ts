@@ -141,7 +141,7 @@ describe('requestSecretFromUser', () => {
     });
   });
 
-  it('names the current provider, so the promise on screen is about a real one', async () => {
+  it('falls back to the page provider when the caller named none', async () => {
     const { backend } = fakeBackend();
     const dialog = stubDialog(TYPED);
     await requestSecretFromUser(
@@ -150,6 +150,19 @@ describe('requestSecretFromUser', () => {
     );
 
     expect((dialog.lastRequest as { provider?: string }).provider).toBe('Anthropic');
+  });
+
+  // A background scoop can run on a provider the page's selection knows nothing
+  // about; naming the wrong company is worse than naming none.
+  it('prefers the asking unit’s provider over the page selection', async () => {
+    const { backend } = fakeBackend();
+    const dialog = stubDialog(TYPED);
+    await requestSecretFromUser(
+      { provider: 'OpenAI' },
+      { backend, mount: (el) => document.body.append(el), createDialog: () => dialog as never }
+    );
+
+    expect((dialog.lastRequest as { provider?: string }).provider).toBe('OpenAI');
   });
 
   it('reports a dismissal as cancelled and writes nothing', async () => {
@@ -218,18 +231,23 @@ describe('requestSecretFromUser', () => {
     expect(mountedIn).toBe(layer);
   });
 
-  it('falls back to the body — loudly — when the float has no trusted layer', async () => {
-    const { backend } = fakeBackend();
+  // Fail closed: `document.body` is coverable and impersonable by any panel, so a
+  // float without the trusted layer must not ask for a credential at all.
+  it('refuses to prompt at all when the float has no trusted layer', async () => {
+    const { backend, calls } = fakeBackend();
     const dialog = stubDialog(TYPED);
-    let mountedIn: Element | null = null;
-    dialog.open = async () => {
-      mountedIn = dialog.parentElement;
-      await dialog.submitHandler?.(TYPED);
-      return TYPED;
-    };
+    const opened = vi.fn(async () => TYPED);
+    dialog.open = opened;
 
-    await requestSecretFromUser({}, { backend, createDialog: () => dialog as never });
-    expect(mountedIn).toBe(document.body);
+    const outcome = await requestSecretFromUser(
+      {},
+      { backend, createDialog: () => dialog as never }
+    );
+
+    expect(outcome).toEqual({ stored: false, reason: 'unavailable' });
+    expect(opened).not.toHaveBeenCalled();
+    expect(calls.session).toEqual([]);
+    expect(dialog.isConnected).toBe(false);
   });
 
   it('removes the dialog once the flow ends, so no value lingers in the DOM', async () => {

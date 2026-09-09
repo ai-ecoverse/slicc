@@ -91,7 +91,7 @@ function storyHost(options: StoryOptions = {}): HTMLElement {
   return root;
 }
 
-/** Default: password-masked value, options collapsed, wildcard scope. */
+/** Default: password-masked value, an empty scope row waiting to be filled in. */
 export const Default: Story = {
   render: () => storyHost(),
 };
@@ -102,8 +102,8 @@ export const DefaultDark: Story = {
 };
 
 /**
- * Additional options expanded — one row per domain with the − / + pair that
- * edits the list, plus the session/saved choice.
+ * The options drawer, which `open()` always expands — one row per domain with the
+ * − / + pair that edits the list, plus the session/saved choice.
  */
 export const OptionsExpanded: Story = {
   render: () =>
@@ -113,20 +113,15 @@ export const OptionsExpanded: Story = {
     }),
 };
 
-/** The wildcard default calls itself out: the value could go anywhere. */
+/** A wildcard, once someone types one, calls itself out: the value could go anywhere. */
 export const WildcardScope: Story = {
-  render: () =>
-    storyHost({
-      after: (dialog) => {
-        dialog.querySelector('details')?.setAttribute('open', '');
-      },
-    }),
+  render: () => storyHost({ request: { domains: ['*'] }, provider: 'Anthropic' }),
 };
 
 /**
  * The agent's `request_secret` shape: a suggested name, a narrow suggested
- * scope, and the reason it is asking. A suggested scope opens the drawer so the
- * human reviews what they are allowing before they paste anything.
+ * scope, and the reason it is asking. The scope is on screen from the start, so
+ * the human reviews what they are allowing before they paste anything.
  */
 export const AgentRequest: Story = {
   render: () =>
