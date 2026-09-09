@@ -531,16 +531,10 @@ export class SprinkleManager implements SprinkleManagerHandle {
     entry.renderer?.dispose();
     this.bridge.removeSprinkle(name);
 
-    // Re-run the layout attach `open` does so the replacement iframe is
-    // inserted into a sized containing block. Disposing the old renderer
-    // leaves `entry.container` in place but does not re-place it, which
-    // is why `reload` used to leave a 0×0 viewport while close+open did
-    // not (#2942).
-    this.callbacks.addSprinkle(name, sprinkle.title, entry.container, undefined, {
-      icon: sprinkle.icon,
-      attention: this.attentionOnly.has(name),
-    });
-
+    // Stay in the existing container/placement. Re-running addSprinkle here
+    // would place a minimized or background sprinkle and steal focus
+    // (#2942 review). The replacement iframe is sized from this host box
+    // in SprinkleRenderer, which is what close+open was accidentally doing.
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(entry.container, api);
     await renderer.render(content, name);
