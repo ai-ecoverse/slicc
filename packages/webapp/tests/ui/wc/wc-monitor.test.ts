@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -638,6 +638,11 @@ describe('buildAlerts', () => {
 describe('budget-mode cost surfaces', () => {
   const NOW = Date.parse('2026-09-08T12:00:00.000Z');
   const RESETS_IN_18H = new Date(NOW + 18 * 60 * 60 * 1000).toISOString();
+
+  // fetchMonitorData formats the reset badge against Date.now(); pin it to NOW
+  // so the 18h-ahead fixture stays in the future no matter the wall clock.
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(NOW));
+  afterEach(() => vi.restoreAllMocks());
 
   const budget = (over: Partial<SessionBudgetWindow> = {}): SessionBudgetWindow => ({
     percent: 9.5,
