@@ -366,7 +366,10 @@ a host has to know:
   trigger with one dot in `--ink` (it stands for several agents, so it carries no
   single hue). The count also reaches the screen reader through both aria labels.
 
-The webapp derives the count in `work-unit/client/unread.ts` — see
+The component dots whatever segment carries a count; deciding WHICH agents can
+have one is the host's call. The webapp derives the count in
+`work-unit/client/unread.ts` and hands it to cones only — a scoop's turns are its
+cone's work, not news the user is expected to read — see
 [`work-unit-client.md`](work-unit-client.md).
 
 ## Tablist arrows vs a host keyboard

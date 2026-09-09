@@ -271,8 +271,16 @@ protocol does not settle approvals, it only agrees on who owns whom.
 
 Multiple cones made the strip a place you leave things running, so a tab has to
 be able to say it has news. `UnreadLedger.sync(units, selectedId)` folds a roster
-plus the selection into per-unit counts, which `toTabDescriptors` puts on the
+plus the selection into per-cone counts, which `toTabDescriptors` puts on the
 descriptor as `unread`.
+
+**Cones only.** A scoop finishing a turn is the cone's own work progressing, not
+a message addressed to the user — and since users never talk to a scoop
+(`isReadOnlyUnit`), there is no reply waiting behind such a dot. One ask can fan
+out to a dozen scoops running several turns each, which dotted most of the strip
+for something nobody asked to read. The ledger skips a non-root unit before it
+records any baseline for it, and `toTabDescriptors` refuses to paint one even for
+a caller that hands over its own map.
 
 **The signal is the roster, not a message stream** — which is what lets both
 sides share it. A leader could count `turn_end` per unit, but a follower

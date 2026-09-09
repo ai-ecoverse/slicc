@@ -22,12 +22,19 @@
  * Selection is the read receipt: the selected unit is always at zero, so the
  * count clears the moment the user looks. Nothing here persists — unread is
  * per-page-session by design, the way an unseen streamed reply is.
+ *
+ * **Only cones are counted.** A scoop's turns are the cone's own work, not news
+ * addressed to the user: a single ask can fan out to a dozen scoops that each
+ * finish several turns, which dotted most of the strip for something nobody
+ * asked to read — and users never talk to a scoop, so there is no reply waiting
+ * behind that dot. The cone that owns the work still reports when its turn ends.
  */
 
+import { isRootSummary } from './presentation.js';
 import type { WorkUnitId, WorkUnitPresentationState, WorkUnitSummary } from './types.js';
 
-/** What the ledger needs of a unit: who it is, what it is doing, what it finished. */
-type LedgerUnit = Pick<WorkUnitSummary, 'id' | 'state' | 'turns'>;
+/** What the ledger needs of a unit: who it is, what it is, what it finished. */
+type LedgerUnit = Pick<WorkUnitSummary, 'id' | 'role' | 'state' | 'turns'>;
 
 export class UnreadLedger {
   readonly #counts = new Map<WorkUnitId, number>();
@@ -35,8 +42,8 @@ export class UnreadLedger {
   readonly #lastTurns = new Map<WorkUnitId, number>();
 
   /**
-   * Fold a roster and the current selection into unread counts, and return
-   * them for the strip.
+   * Fold a roster and the current selection into unread counts for its CONES,
+   * and return them for the strip.
    *
    * Called from the strip publisher, so it runs on every roster push, every
    * status change and every selection change — the three events that can move
@@ -47,6 +54,9 @@ export class UnreadLedger {
   sync(units: readonly LedgerUnit[], selectedId?: WorkUnitId | null): ReadonlyMap<string, number> {
     const present = new Set<WorkUnitId>();
     for (const unit of units) {
+      // A scoop is never news (see the header): skipping it before the baseline
+      // is recorded also keeps its transitions out of the maps entirely.
+      if (!isRootSummary(unit)) continue;
       present.add(unit.id);
       const finished = this.#turnsFinished(unit);
       if (finished > 0 && unit.id !== selectedId) {
@@ -56,9 +66,9 @@ export class UnreadLedger {
     // Selection is the read receipt, applied after the increments: a turn that
     // ends on the unit the user is watching is already read.
     if (selectedId) this.#counts.delete(selectedId);
-    // A unit the roster dropped is gone for good (a dropped cone, a scoop that
-    // finished); keeping its count would leak the map across a long session and
-    // resurrect a stale dot if the id ever came back.
+    // A cone the roster dropped is gone for good; keeping its count would leak
+    // the map across a long session and resurrect a stale dot if the id ever
+    // came back.
     for (const id of [...this.#counts.keys()]) if (!present.has(id)) this.#counts.delete(id);
     for (const id of [...this.#lastState.keys()]) if (!present.has(id)) this.#lastState.delete(id);
     for (const id of [...this.#lastTurns.keys()]) if (!present.has(id)) this.#lastTurns.delete(id);
