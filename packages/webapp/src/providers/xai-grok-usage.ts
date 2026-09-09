@@ -95,26 +95,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * `USAGE_PERIOD_TYPE_WEEKLY` → `weekly`.
- *
- * The enum is spelled out in full by the JSON transcoding. Unknown members are
- * lowercased rather than rejected, so a future `USAGE_PERIOD_TYPE_DAILY` reads
- * as `daily` without a code change; a type we cannot name at all falls back to
- * `billing`, which is true of every window this route reports.
- */
-function periodName(type: unknown): string {
-  if (typeof type !== 'string') return 'billing';
-  const suffix = type.replace(/^USAGE_PERIOD_TYPE_/, '').toLowerCase();
-  return suffix && suffix !== 'unspecified' ? suffix : 'billing';
-}
-
-/** An instant we can actually render, or nothing. Never a half-parsed date. */
-function isoInstant(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value) return undefined;
-  return Number.isFinite(Date.parse(value)) ? value : undefined;
-}
-
-/**
  * Parse a `?format=credits` body into a window, or `null` when it carries
  * none.
  *
@@ -131,17 +111,27 @@ export function parseXaiUsage(payload: unknown): ProviderBudgetWindow | null {
   const percent = Math.min(MAX_PERCENT, Math.max(0, raw));
 
   const period = isRecord(config.currentPeriod) ? config.currentPeriod : {};
+  // `USAGE_PERIOD_TYPE_WEEKLY` → `weekly`. The enum is spelled out in full by
+  // the JSON transcoding. Unknown members are lowercased rather than rejected,
+  // so a future `..._DAILY` reads as `daily` without a code change; a type we
+  // cannot name falls back to `billing`, true of every window this route
+  // reports.
+  const type = period.type;
+  const named =
+    typeof type === 'string' ? type.replace('USAGE_PERIOD_TYPE_', '').toLowerCase() : '';
   // `currentPeriod.end` is the credits window; `billingPeriodEnd` is the same
   // instant in the payloads we have seen, and the fallback for one where the
-  // period block is absent.
-  const resetsAt = isoInstant(period.end) ?? isoInstant(config.billingPeriodEnd);
+  // period block is absent. Anything we cannot turn into an instant is dropped
+  // rather than rendered half-parsed.
+  const end = period.end ?? config.billingPeriodEnd;
+  const resetsAt = typeof end === 'string' && Number.isFinite(Date.parse(end)) ? end : undefined;
   return {
     percent,
     // The route reports consumption, never refusal — there is no
     // `rate-limited` signal in the payload to map. A window at or past its
     // critical threshold is what the surfaces tint on.
     status: 'ok',
-    window: periodName(period.type),
+    window: named && named !== 'unspecified' ? named : 'billing',
     ...(resetsAt ? { resetsAt } : {}),
   };
 }
@@ -164,36 +154,35 @@ export async function fetchXaiGrokUsage(
   fetchImpl: XaiUsageFetch,
   opts: { timeoutMs?: number } = {}
 ): Promise<ProviderBudgetWindow | null> {
-  const controller = typeof AbortController === 'function' ? new AbortController() : null;
-  const timer = controller
-    ? setTimeout(() => controller.abort(), opts.timeoutMs ?? USAGE_TIMEOUT_MS)
-    : null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? USAGE_TIMEOUT_MS);
   try {
     const res = await fetchImpl(XAI_USAGE_URL, {
       headers: { Authorization: `Bearer ${accessToken}` },
-      ...(controller ? { signal: controller.signal } : {}),
+      signal: controller.signal,
     });
+    const { status } = res;
     // 404/501 is the route saying it does not exist — an answer, not a
     // failure, and the likeliest way an undocumented endpoint retires.
-    if (res.status === 404 || res.status === 501) return null;
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(
-        `xAI Grok usage: re-login required (${res.status}) — run \`oauth-token --renew xai-grok\``
-      );
+    if (status === 404 || status === 501) return null;
+    if (!res.ok) {
+      // 401/403 is the one failure a user can act on, so it says so; the rest
+      // are the cache's business, not the reader's.
+      const why = status === 401 || status === 403 ? 're-login required' : 'failed';
+      throw new Error(`xAI Grok usage: ${why} (${status})`);
     }
-    if (!res.ok) throw new Error(`xAI Grok usage returned ${res.status}`);
     const body = await res.text();
     // Cap before parsing, not after: the point is to never hand an unbounded
-    // third-party string to `JSON.parse`.
+    // third-party string to `JSON.parse`. A 200 that is oversized or is not
+    // JSON at all is an interstitial or a login wall, not an outage — "no
+    // window" backs the probe off instead of spinning the retry clock.
     if (body.length > MAX_BODY_BYTES) return null;
     try {
       return parseXaiUsage(JSON.parse(body));
     } catch {
-      // A 200 that is not JSON is an interstitial or a login wall, not an
-      // outage. Treat it as "no window" so the probe backs off.
       return null;
     }
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
