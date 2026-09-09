@@ -638,6 +638,13 @@ describe('buildAlerts', () => {
 describe('budget-mode cost surfaces', () => {
   const NOW = Date.parse('2026-09-08T12:00:00.000Z');
   const RESETS_IN_18H = new Date(NOW + 18 * 60 * 60 * 1000).toISOString();
+  // fetchMonitorData formats `resetsAt` against Date.now(); without this freeze
+  // the 18h window (2026-09-09T06:00Z) reads as "resetting now" once that
+  // instant is in the past.
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  });
+  afterEach(() => vi.restoreAllMocks());
 
   const budget = (over: Partial<SessionBudgetWindow> = {}): SessionBudgetWindow => ({
     percent: 9.5,
