@@ -205,6 +205,30 @@ function parseRpcError(text: string, expectedId: number): McpRpcError | undefine
   }
 }
 
+/**
+ * True when a `server/discover` rejection means "this server wants the legacy
+ * `initialize` handshake first" rather than a genuine failure.
+ *
+ * Two shapes qualify:
+ * - `-32601` Method not found — the server has no `server/discover` route.
+ * - `-32000` + HTTP 400 + a missing-session message — servers built on
+ *   Cloudflare's `agents` SDK reject any non-initialization request that
+ *   carries no `Mcp-Session-Id`. `-32000` is the JSON-RPC catch-all, so the
+ *   message and status are both required to keep the signal narrow.
+ */
+function isLegacyHandshakeSignal(err: unknown, rpcError: McpRpcError | undefined): boolean {
+  if (!rpcError) return false;
+  const httpStatus = err instanceof McpHttpError ? err.status : undefined;
+  if (rpcError.code === -32601) {
+    return httpStatus === 400 || err instanceof McpRpcFailure;
+  }
+  return (
+    rpcError.code === -32000 &&
+    httpStatus === 400 &&
+    rpcError.message.toLowerCase().includes('mcp-session-id')
+  );
+}
+
 function advertisedVersions(error: McpRpcError): string[] {
   if (!error.data || typeof error.data !== 'object') return [];
   const supported = (error.data as { supported?: unknown }).supported;
@@ -287,12 +311,9 @@ export class McpClient {
         }
         return this.discoverModern(retryVersion);
       }
-      const isValidatedLegacySignal =
-        rpcError?.code === -32601 &&
-        ((err instanceof McpHttpError && err.status === 400) || err instanceof McpRpcFailure);
-      if (isValidatedLegacySignal) {
+      if (isLegacyHandshakeSignal(err, rpcError)) {
         log.debug('server/discover identified a legacy server; using initialize', {
-          error: err.message,
+          error: err instanceof Error ? err.message : String(err),
         });
         return this.initializeLegacy();
       }

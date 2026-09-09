@@ -214,6 +214,49 @@ describe('McpClient: protocol negotiation', () => {
     expect(c.getSessionId()).toBe('legacy-session');
   });
 
+  it('falls back to legacy initialize when discovery is rejected for a missing session id', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? {
+            status: 400,
+            statusText: 'Bad Request',
+            body: jsonRpcError(sent.id, -32000, 'Bad Request: Mcp-Session-Id header is required'),
+          }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'minted-session' },
+            body: jsonRpc(sent.id, { protocolVersion: '2025-06-18' }),
+          };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await c.initialize();
+
+    expect(calls.map((call) => JSON.parse(call.init!.body!).method)).toEqual([
+      'server/discover',
+      'initialize',
+    ]);
+    expect(JSON.parse(calls[1].init!.body!).params.protocolVersion).toBe('2025-06-18');
+    expect(calls[1].init!.headers!['Mcp-Session-Id']).toBeUndefined();
+    expect(c.getNegotiatedProtocolVersion()).toBe('2025-06-18');
+    expect(c.getSessionId()).toBe('minted-session');
+  });
+
+  it('does not fall back on an unrelated -32000 server error', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number };
+      return {
+        status: 400,
+        statusText: 'Bad Request',
+        body: jsonRpcError(sent.id, -32000, 'Bad Request: malformed params'),
+      };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/MCP HTTP 400/);
+    expect(calls).toHaveLength(1);
+  });
+
   it('falls back on a validated HTTP 200 method-not-found response', async () => {
     const { fetchImpl, calls } = stubFetch((_url, init) => {
       const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
