@@ -772,6 +772,26 @@ describe('SprinkleFollowerController', () => {
       expect(removeSprinkle).not.toHaveBeenCalled();
     });
 
+    it('re-runs addSprinkle on the same container so reload keeps a sized host (#2942)', async () => {
+      sync.contentByName.set('dash', '<div>v1</div>');
+      await controller.updateAvailable([
+        makeSprinkle('dash', { open: true, title: 'Dash', icon: 'gauge' }),
+      ]);
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      const openedContainer = addSprinkle.mock.calls[0]?.[2];
+      addSprinkle.mockClear();
+
+      sync.contentByName.set('dash', '<div>v2</div>');
+      await controller.handleSprinkleReloaded('dash');
+
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      expect(addSprinkle.mock.calls[0]?.[0]).toBe('dash');
+      expect(addSprinkle.mock.calls[0]?.[1]).toBe('Dash');
+      expect(addSprinkle.mock.calls[0]?.[2]).toBe(openedContainer);
+      expect(addSprinkle.mock.calls[0]?.[4]).toEqual({ icon: 'gauge' });
+      expect(removeSprinkle).not.toHaveBeenCalled();
+    });
+
     it('no-ops for a sprinkle that is not open', async () => {
       await controller.handleSprinkleReloaded('nonexistent');
 

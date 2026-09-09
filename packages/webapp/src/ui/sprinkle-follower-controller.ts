@@ -79,6 +79,8 @@ export interface SprinkleFollowerControllerOptions {
 interface OpenEntry {
   renderer: SprinkleRenderer;
   container: HTMLElement;
+  title: string;
+  icon?: string;
 }
 
 type UpdateCallback = (data: unknown) => void;
@@ -268,6 +270,13 @@ export class SprinkleFollowerController {
       });
     }
 
+    // Same layout re-attach as SprinkleManager.reload — the container stays
+    // in the map but Chromium will size a replacement iframe at 0×0 unless
+    // the host re-places it (#2942).
+    this.addSprinkle(sprinkleName, entry.title, entry.container, this.zone, {
+      icon: entry.icon,
+    });
+
     const api = this.createBridge(sprinkleName);
     const renderer = new SprinkleRenderer(entry.container, api);
     try {
@@ -404,7 +413,12 @@ export class SprinkleFollowerController {
     // synchronous block. Updates arriving from this point flow through the
     // live `handleSprinkleUpdate` → `pushUpdate` path with no risk of
     // interleaving the buffered replay against them.
-    this.open.set(name, { renderer, container });
+    this.open.set(name, {
+      renderer,
+      container,
+      title: summary.title,
+      icon: summary.icon,
+    });
     this.opening.delete(name);
     renderer.activateBridgeLifecycle();
     // The document exists now — report before draining buffered updates so

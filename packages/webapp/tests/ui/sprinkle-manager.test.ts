@@ -1245,6 +1245,23 @@ describe('SprinkleManager', () => {
       expect(mgr.opened()).toContain('dash');
     });
 
+    it('re-runs addSprinkle on the same container so reload keeps a sized host (#2942)', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      const openedContainer = addSprinkle.mock.calls[0]?.[2];
+      addSprinkle.mockClear();
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v2</div>');
+      await mgr.reload('dash');
+
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      expect(addSprinkle.mock.calls[0]?.[0]).toBe('dash');
+      expect(addSprinkle.mock.calls[0]?.[2]).toBe(openedContainer);
+      expect(mgr.opened()).toContain('dash');
+    });
+
     it('no-ops for a sprinkle that is not open', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
       await mgr.refresh();
