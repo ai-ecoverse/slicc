@@ -717,6 +717,15 @@ describe('budget-mode cost surfaces', () => {
   });
 
   describe('cost group', () => {
+    /**
+     * `buildSections` stamps itself from `Date.now()` — it has no clock seam
+     * the way `buildVitals` / `buildAlerts` do — so a window under it has to
+     * reset relative to the REAL clock. Pinned to `NOW`, the badge turned into
+     * "resetting now" the day after this suite was written.
+     */
+    const liveWindow = (over: Partial<SessionBudgetWindow> = {}) =>
+      budget({ resetsAt: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), ...over });
+
     const costSection = async (b?: SessionBudgetWindow) => {
       const sections = await fetchSections(
         makeDeps({ getSessionStats: async () => stats(b ? { budget: b } : {}) })
@@ -727,7 +736,7 @@ describe('budget-mode cost surfaces', () => {
     };
 
     it('is named by the window, with the dollars behind it', async () => {
-      const cost = await costSection(budget());
+      const cost = await costSection(liveWindow());
       expect(cost.meta).toBe('9.5% of weekly budget · $29.06 across 1 models');
       expect(cost.status).toBe('active');
       expect(cost.rows[0]).toMatchObject({ name: 'Weekly budget', meta: '9.5% used' });
@@ -737,14 +746,14 @@ describe('budget-mode cost surfaces', () => {
     });
 
     it('turns the group red when the provider is refusing calls', async () => {
-      const cost = await costSection(budget({ percent: 96, status: 'rate-limited' }));
+      const cost = await costSection(liveWindow({ percent: 96, status: 'rate-limited' }));
       expect(cost.status).toBe('error');
       expect(cost.meta).toContain('rate-limited');
       expect(cost.rows[0].meta).toBe('rate-limited · 96% used');
     });
 
     it('warns from the warn threshold', async () => {
-      const cost = await costSection(budget({ percent: 92 }));
+      const cost = await costSection(liveWindow({ percent: 92 }));
       expect(cost.status).toBe('warn');
     });
 
