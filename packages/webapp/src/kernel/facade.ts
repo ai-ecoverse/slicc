@@ -16,10 +16,12 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
+import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
 import { getBudgetWindowSnapshot, refreshBudgetWindow } from '../providers/budget-usage-source.js';
 import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
+import { CompactionRowTracker } from '../scoops/compaction-rows.js';
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
@@ -33,6 +35,7 @@ import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import type { ConversationMarker } from '../work-unit/conversation/types.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
@@ -137,6 +140,12 @@ interface BufferedChatMessage {
   isStreaming?: boolean;
   model?: string;
   usage?: ChatMessage['usage'];
+  /**
+   * Compaction-marker row: bookkeeping about the conversation rather than a
+   * message in it. Carried so the row survives the round trip through the UI
+   * store — the view renders on this field alone (`messageEls`).
+   */
+  compaction?: ChatMessage['compaction'];
 }
 
 export class Bridge implements KernelFacade {
@@ -169,6 +178,16 @@ export class Bridge implements KernelFacade {
   private readonly conesBeingCreated = new Map<string, Promise<void>>();
   /** Current assistant message ID per scoop */
   private currentMessageId = new Map<string, string>();
+  /**
+   * Compaction-row bookkeeping for the DURABLE copy of each round's marker
+   * ({@link recordCompactionRow}). A separate instance from the panel's, on
+   * purpose: the two consumers see the same phases but keep their own row
+   * ids, and a kernel that reused a panel's id would be trusting a realm it
+   * cannot see restart.
+   */
+  private readonly compactionRows = new CompactionRowTracker(
+    (scoopJid) => `compaction-${scoopJid}-${uid()}`
+  );
   /** Panel-facing scoop state and projection. */
   private readonly scoopPresentation = new ScoopPresentation();
   /** Post-transport agent-event translation and fan-out. */
@@ -335,6 +354,11 @@ export class Bridge implements KernelFacade {
           ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
           ...(detail.roundId ? { roundId: detail.roundId } : {}),
         });
+        // The panel renders the row from the emission above; this DURABLY
+        // records the same round, because a compaction marker exists nowhere
+        // in Pi's history and a reload would otherwise erase the seam it
+        // announces (#2843).
+        void bridge.recordCompactionRow(scoopJid, state, detail);
       },
 
       onError: (scoopJid, error) => {
@@ -941,7 +965,30 @@ export class Bridge implements KernelFacade {
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
       source: sourceLabelFor(scoop),
     });
-    return toBufferedChatMessages(chatMessages);
+    // Pi's history holds no compaction rows — it cannot, they are bookkeeping
+    // about it — so the canonical record's markers are folded back in here.
+    // Without this a rebuild from live agent state (every boot seed) would be
+    // the transcript MINUS its seams, and persist that over the UI store.
+    const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
+    return toBufferedChatMessages(
+      interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+    );
+  }
+
+  /**
+   * A unit's stored {@link ConversationMarker}s, or `undefined` when there is
+   * no canonical store, no record, or nothing annotated. Never throws — the
+   * store's reads already answer instead of failing, and a missing marker
+   * costs a seam, not a transcript.
+   */
+  private async loadConversationMarkers(
+    scoop: RegisteredScoop
+  ): Promise<ConversationMarker[] | undefined> {
+    const store = this.orchestrator?.getConversationStore?.();
+    if (!store) return undefined;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const record = await store.load(conversationKeyFor(scoop));
+    return record?.markers;
   }
 
   /**
@@ -1459,6 +1506,67 @@ export class Bridge implements KernelFacade {
     }
 
     empty();
+  }
+
+  /**
+   * Record one compaction phase durably: as a marker on the unit's canonical
+   * record, and as a row in the unit's message buffer + UI store.
+   *
+   * Both writes are needed and neither is redundant. The buffer is what the
+   * panel replays from for the rest of this session (and what `persistScoop`
+   * writes to `browser-coding-agent`); the canonical marker is what survives
+   * the compaction ITSELF — `syncAgentMessages` replaces the record's entries
+   * wholesale on the next turn, and every boot re-seeds the buffer from Pi's
+   * history, which never held the row (#2843).
+   *
+   * The phase→row decision comes from the same {@link CompactionRowTracker}
+   * the panel uses, so the persisted seam and the rendered one cannot drift.
+   */
+  private async recordCompactionRow(
+    scoopJid: string,
+    state: CompactionState,
+    detail: CompactionStateDetail
+  ): Promise<void> {
+    const action = this.compactionRows.apply(scoopJid, state, detail);
+    if (!action) return;
+    const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) return;
+    const buf = this.getBuffer(scoopJid);
+    if (action.kind === 'retract') {
+      // Spliced in place: `getBuffer` handed this array out by reference, and
+      // swapping in a copy would leave a holder appending to a detached one.
+      const at = buf.findIndex((m) => m.id === action.messageId);
+      if (at >= 0) buf.splice(at, 1);
+    } else {
+      const existing = buf.find((m) => m.id === action.messageId);
+      if (existing) existing.compaction = action.marker;
+      else {
+        buf.push({
+          id: action.messageId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          compaction: action.marker,
+        });
+      }
+    }
+    this.persistScoop(scoopJid);
+    const store = this.orchestrator?.getConversationStore?.();
+    if (!store) return;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const key = conversationKeyFor(scoop);
+    if (action.kind === 'retract') {
+      await store.deleteMarker(key, action.messageId);
+      return;
+    }
+    await store.putMarker(key, {
+      id: action.messageId,
+      kind: 'compaction',
+      // Stamped per phase so a settled marker sorts AFTER the summary message
+      // the round just wrote — which is where the seam belongs.
+      timestamp: Date.now(),
+      compaction: action.marker,
+    });
   }
 
   /**
@@ -2243,5 +2351,6 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
     model: m.model,
     usage: m.usage,
     isStreaming: false,
+    compaction: m.compaction,
   }));
 }

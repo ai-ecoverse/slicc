@@ -1249,6 +1249,12 @@ export interface ScoopMessagesReplacedMsg {
     isStreaming?: boolean;
     model?: string;
     usage?: ChatMessage['usage'];
+    /**
+     * Compaction-marker row (#2843): the replay's record of a compaction
+     * round. On the wire because a replay is the ONLY way the row reaches a
+     * remounted panel or a follower — no agent event replays it.
+     */
+    compaction?: ChatMessage['compaction'];
   }>;
   /**
    * Ids of the messages still pending in the orchestrator's queue for this

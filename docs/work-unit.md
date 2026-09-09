@@ -191,7 +191,7 @@ a **derivation**, never a parallel write.
 | `types.ts`     | `ConversationEntry` (`user` / `assistant` / `tool-call` / `tool-result` / `external-event` / `child-result`), the record, its version |
 | `key.ts`       | identity — `<workspaceId>::<workUnitId>`, workspace root × jid                                                                        |
 | `entries.ts`   | ingest from Pi messages (live path) and from a chat transcript (migration only)                                                       |
-| `derive.ts`    | `toAgentMessages` (Pi), `toChatMessages` (UI), `toTranscriptText` (tray / archives), `toChildResultSummary`                           |
+| `derive.ts`    | `toAgentMessages` (Pi), `toChatMessages` (UI), `toTranscriptText` (tray / archives), `toChildResultSummary`, `interleaveMarkers`      |
 | `store.ts`     | the `slicc-work-units` IndexedDB store + the migration cursor                                                                         |
 | `migration.ts` | the versioned, resumable pass over the legacy stores                                                                                  |
 
@@ -208,6 +208,22 @@ entries with ascending `seq` and never edits one. Compaction (and
 divergence, is applied as a replace, and is counted on `rewrites`.
 Interleaving the two would splice a pre-compaction conversation into a
 post-compaction one.
+
+**Markers are not entries.** A compaction row (`<slicc-compaction-marker>`,
+the iOS `CompactionMarkerRow`) records something that happened TO the
+conversation, so it lives in `record.markers`, outside the entry
+reconciliation — an entry would be erased by the very compaction it announces,
+and Pi must never be shown a row saying its own context was summarized. The
+kernel writes one per round (`Bridge.recordCompactionRow`, keyed by the row id
+so the terminal phase settles it in place and a `discarded` round deletes it);
+`toChatMessages` folds them back by `timestamp` alone, because no entry
+survives a rewrite to anchor to. The rendering side is unchanged: the row is a
+`ChatMessage` carrying `compaction`, and `messageEls` keys on that field.
+
+The phase→row decision itself belongs to `scoops/compaction-rows.ts`
+(`CompactionRowTracker`), driven by BOTH the panel (which renders the row) and
+the kernel (which persists it), so a reload cannot show a different seam than
+the live thread did.
 
 **Two origins, because you cannot invent Pi messages.** A record built from
 `agent-sessions` (`origin: 'agent-history'`) derives faithfully to both Pi

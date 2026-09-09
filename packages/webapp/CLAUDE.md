@@ -54,7 +54,10 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **Cone and scoop are roles over one `WorkUnit`** (`docs/work-unit.md`):
   `RegisteredScoop.parentJid` required — `null` is THE root test (`isRootUnit`); no role field.
   The CONVERSATION is the one canonical append-only record (history/UI/transcripts DERIVE from
-  it); never make a canonical read fatal or delete a still-written legacy record. **Users never
+  it); never make a canonical read fatal or delete a still-written legacy record. A transcript row
+  that annotates the conversation instead of belonging to it (the compaction seam) is a
+  `record.markers` entry, NEVER a `ConversationEntry` — compaction replaces entries wholesale and
+  would erase the row announcing it. **Users never
   talk to a scoop**: a selected scoop is READ-ONLY (`isReadOnlyUnit`); asks go to the OWNING
   cone. Layout from `workspaceFor` ALONE (never hardcode `/workspace`); memory per cone.
   Privileged-float detection via `CapabilityBroker`, not `isExtensionRealm`, in scoops.

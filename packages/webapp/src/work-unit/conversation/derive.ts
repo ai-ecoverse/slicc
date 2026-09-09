@@ -14,7 +14,7 @@
 
 import type { AgentMessage } from '../../core/index.js';
 import type { ChatMessage } from '../../scoops/chat-types.js';
-import type { ConversationEntry, WorkUnitConversationRecord } from './types.js';
+import type { ConversationEntry, ConversationMarker, WorkUnitConversationRecord } from './types.js';
 import { isReadableRecord } from './types.js';
 
 /**
@@ -47,6 +47,10 @@ export function toAgentMessages(record: WorkUnitConversationRecord | null): Agen
  * pi-ai types out of every caller's eager closure.
  *
  * For a `ui-projection` record the stored chat messages ARE the projection.
+ *
+ * Either way the record's {@link ConversationMarker}s are folded back in
+ * ({@link interleaveMarkers}) — they are transcript rows no message list can
+ * carry, so this is the only place they can rejoin the thread.
  */
 export async function toChatMessages(
   record: WorkUnitConversationRecord | null,
@@ -59,12 +63,74 @@ export async function toChatMessages(
       if (entry.kind === 'tool-call') continue;
       if (entry.chat) out.push(entry.chat);
     }
-    return out;
+    return interleaveMarkers(out, record.markers);
   }
   const messages = toAgentMessages(record);
   if (messages.length === 0) return [];
   const { agentMessagesToChatMessages } = await import('../../scoops/agent-message-to-chat.js');
-  return agentMessagesToChatMessages(messages, options);
+  return interleaveMarkers(agentMessagesToChatMessages(messages, options), record.markers);
+}
+
+/**
+ * Fold marker rows into a projected transcript, ordered by `timestamp`.
+ *
+ * A marker goes BEFORE the first message stamped later than it, and at the
+ * end when there is none — the position a compaction seam belongs in, since
+ * the round is recorded after the summary message it produced. `discarded`
+ * markers are dropped: a retracted round must not be announced by a reload
+ * even if a crash left its marker behind.
+ *
+ * Pure and total: no markers returns the input array itself.
+ */
+export function interleaveMarkers(
+  messages: ChatMessage[],
+  markers: readonly ConversationMarker[] | undefined
+): ChatMessage[] {
+  const live = (markers ?? []).filter((m) => m.compaction.state !== 'discarded');
+  if (live.length === 0) return messages;
+  const sorted = [...live].sort((a, b) => a.timestamp - b.timestamp);
+  const out: ChatMessage[] = [];
+  let next = 0;
+  for (const message of messages) {
+    const at = messageTime(message);
+    while (next < sorted.length && sorted[next].timestamp <= at) {
+      out.push(markerRow(sorted[next++]));
+    }
+    out.push(message);
+  }
+  while (next < sorted.length) out.push(markerRow(sorted[next++]));
+  return out;
+}
+
+/**
+ * Epoch ms of a projected message, for comparison against a marker.
+ *
+ * The earliest `agent-sessions` writes stamped messages with ISO STRINGS and
+ * those profiles are still out there, so a raw `<=` would compare a number
+ * against a string and quietly answer `false` for every message. Anything
+ * unstampable sorts BEFORE every marker, which puts the seams at the end of a
+ * transcript that cannot place them — the honest fallback, since a compaction
+ * is the most recent thing that happened to it.
+ */
+function messageTime(message: ChatMessage): number {
+  const raw: unknown = message.timestamp;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+/** A marker as the row the chat view renders (`messageEls` keys on `compaction`). */
+function markerRow(marker: ConversationMarker): ChatMessage {
+  return {
+    id: marker.id,
+    role: 'assistant',
+    content: '',
+    timestamp: marker.timestamp,
+    compaction: marker.compaction,
+  };
 }
 
 /**

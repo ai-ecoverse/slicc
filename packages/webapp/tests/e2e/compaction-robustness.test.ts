@@ -99,6 +99,24 @@ test.describe('compaction robustness', () => {
     await expect(
       page.locator('slicc-agent-message', { hasText: 'compacting history' })
     ).toHaveCount(0);
+
+    // …and the seam SURVIVES a reload. The row lives in no message list — Pi's
+    // history cannot hold bookkeeping about itself — so a reload used to
+    // rebuild the transcript minus its seams and persist that over the UI
+    // store. The canonical record's `markers` are what carry it back.
+    // Twice, because the two boots fail differently. The first reload replays
+    // the row the kernel buffered before the tab went away; the second sees a
+    // kernel whose boot seed has already REBUILT the UI store from Pi's
+    // history, which is where an unrecorded seam is lost for good.
+    for (const pass of [1, 2]) {
+      await gotoLeader(page);
+      await waitForSW(page);
+      await page.waitForSelector('slicc-input-card');
+      const replayed = page.locator('slicc-chat-thread slicc-compaction-marker');
+      await expect(replayed, `seam survived reload ${pass}`).toHaveCount(1, { timeout: 30_000 });
+      await expect(replayed).toHaveAttribute('state', 'summarized');
+      await expect(replayed).toHaveAttribute('trigger', 'threshold');
+    }
   });
 
   test('summary-call failure degrades to naive drop; the turn still completes (#1985)', async ({

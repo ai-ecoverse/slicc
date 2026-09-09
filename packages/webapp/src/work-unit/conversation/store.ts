@@ -30,6 +30,11 @@
  * entries do not extend the stored prefix. That is detected, counted on
  * `rewrites`, and applied as a replace; silently interleaving the two would
  * splice a pre-compaction conversation into a post-compaction one.
+ *
+ * `markers` sit OUTSIDE that reconciliation ({@link putMarker}): they
+ * annotate the conversation rather than belonging to it, so an entry replace
+ * leaves them standing — which is the only way a compaction marker can
+ * survive the compaction that produced it.
  */
 
 import type { AgentMessage } from '../../core/index.js';
@@ -37,6 +42,7 @@ import { createLogger } from '../../core/index.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
   ConversationEntry,
+  ConversationMarker,
   ConversationOrigin,
   LegacyConversationKeys,
   WorkUnitConversationRecord,
@@ -49,6 +55,14 @@ export const CONVERSATION_DB_NAME = 'slicc-work-units';
 const DB_VERSION = 1;
 const CONVERSATIONS_STORE = 'conversations';
 const MIGRATIONS_STORE = 'migrations';
+
+/**
+ * How many {@link ConversationMarker}s one record keeps. A marker is tiny and
+ * a session compacts a handful of times, so the cap exists only so a runaway
+ * compaction loop cannot grow the record without bound. Oldest go first — the
+ * seams a user can still scroll to are the recent ones.
+ */
+const MAX_MARKERS = 64;
 
 /** Resumable cursor of a versioned migration into the canonical store. */
 export interface ConversationMigrationState {
@@ -259,6 +273,61 @@ export class WorkUnitConversationStore {
         error: errorText(err),
       });
       return null;
+    }
+  }
+
+  /**
+   * Upsert one {@link ConversationMarker} on a unit's record, keyed by `id`
+   * so a round's terminal phase settles the row its opening phase created.
+   *
+   * Returns `true` when the record was written. `false` covers every reason
+   * not to, and none of them is an error worth surfacing: the same
+   * never-overwrite guards {@link syncAgentMessages} applies, plus an ABSENT
+   * record — a marker annotates a conversation, and there is nothing to
+   * annotate before the conversation itself is stored.
+   */
+  async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
+    return this.withRecord(key, (record) => {
+      const kept = (record.markers ?? []).filter((m) => m.id !== marker.id);
+      kept.push(marker);
+      kept.sort((a, b) => a.timestamp - b.timestamp);
+      return { ...record, markers: kept.slice(-MAX_MARKERS) };
+    });
+  }
+
+  /**
+   * Retract a marker — a compaction round that kept nothing must stop
+   * claiming it happened (#2843). A no-op when the marker is already gone.
+   */
+  async deleteMarker(key: string, markerId: string): Promise<boolean> {
+    return this.withRecord(key, (record) => {
+      const kept = (record.markers ?? []).filter((m) => m.id !== markerId);
+      if (kept.length === (record.markers?.length ?? 0)) return null;
+      return { ...record, markers: kept };
+    });
+  }
+
+  /**
+   * Read-modify-write one record under the write guards. `mutate` returning
+   * `null` means "nothing to change", which writes nothing at all.
+   */
+  private async withRecord(
+    key: string,
+    mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
+  ): Promise<boolean> {
+    try {
+      const current = await this.read(key);
+      // `absent` joins `incompatible` / `error` here rather than creating a
+      // record: an annotation with no conversation under it would derive to a
+      // transcript that is nothing but seams.
+      if (current.status !== 'ok') return false;
+      const next = mutate(current.record);
+      if (!next) return false;
+      await this.save({ ...next, updatedAt: Date.now() });
+      return true;
+    } catch (err) {
+      log.warn('Conversation marker write failed', { key, error: errorText(err) });
+      return false;
     }
   }
 
