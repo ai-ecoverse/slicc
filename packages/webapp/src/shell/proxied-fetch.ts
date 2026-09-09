@@ -33,6 +33,7 @@ import {
   encodeForbiddenRequestHeaders as _encodeForbiddenRequestHeaders,
   headersToRecord as _headersToRecord,
 } from './proxy-headers.js';
+import { lookupReadBytes } from './request-body-provenance.js';
 
 /**
  * Ceiling on a proxied REQUEST body. Exported so the CapabilityBroker's REST
@@ -267,6 +268,22 @@ async function withProgressEnd<T>(
 }
 
 /**
+ * A string body that is exactly what a VFS read returned is sent as the bytes
+ * that read saw, whatever the Content-Type says. `curl -d @file` can only hand
+ * just-bash's string-typed `SecureFetchOptions.body` a decoded string, and no
+ * Content-Type rule recovers the file's bytes from it: a payload that is not
+ * valid UTF-8 goes out double-encoded under a text Content-Type, and valid
+ * UTF-8 collapses onto one byte per character under a binary one. See
+ * `request-body-provenance.ts` for how the read's bytes get here.
+ */
+export function resolveExactRequestBody(
+  body: SecureFetchRequestBody | undefined
+): SecureFetchRequestBody | undefined {
+  if (typeof body !== 'string' || body === '') return body;
+  return lookupReadBytes(body) ?? body;
+}
+
+/**
  * Bodies that are NOT text-shaped (multipart form payloads, git packfiles,
  * application/octet-stream, etc.) reach this layer either as a `Uint8Array`
  * (the jsh `fetch` adapter — never a JS string, so native `fetch` cannot
@@ -279,9 +296,10 @@ async function withProgressEnd<T>(
  * `Uint8Array` bodies in a Blob unconditionally, so the binary survives.
  */
 export function prepareRequestBody(
-  body: SecureFetchRequestBody | undefined,
+  rawBody: SecureFetchRequestBody | undefined,
   headers?: Record<string, string>
 ): BodyInit | undefined {
+  const body = resolveExactRequestBody(rawBody);
   if (body == null || body === '') return undefined;
   // Already bytes: the caller resolved the encoding itself (jsh fetch and
   // the CapabilityBroker adapters). Wrap as Blob unconditionally — native
@@ -631,6 +649,13 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
       // page-side collector encodes forbidden headers exactly once and
       // prepares the body via the same `prepareRequestBody` contract.
       const plainHeaders = headersToRecord(options?.headers) ?? {};
+      // Byte provenance is per-realm, and `prepareRequestBody` runs on the
+      // PAGE side of this hop, so resolve the read's bytes here — in the realm
+      // that holds them — rather than forwarding a string the page cannot
+      // recover them from.
+      const exactBody = resolveExactRequestBody(
+        options?.body as SecureFetchRequestBody | undefined
+      );
       // The page realm collects the chunks; the worker only sees the whole
       // body, so this path reports an indeterminate in-flight unit.
       progress?.start(url, undefined);
@@ -641,7 +666,7 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
             url,
             method,
             headers: plainHeaders,
-            body: options?.body as string | Uint8Array | undefined,
+            body: exactBody,
           },
           // Generous timeout — multi-MB wasm / package downloads outlast the
           // panel-RPC default 15s.
