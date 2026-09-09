@@ -298,6 +298,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildPermissionRequestHandler(options),
     ...buildProxiedFetchHandler(),
     ...buildSudoRequestHandler(),
+    ...buildSecretRequestHandler(),
     ...buildSecretsBridgeHandler(),
     ...buildMountBridgeHandler(),
     ...buildThemeHandler(),
@@ -359,6 +360,27 @@ function buildSudoRequestHandler() {
     'sudo-request': async ({ request, mode }) => {
       const { resolveSudoApprovalInPage } = await import('../sudo/page-approval-service.js');
       return resolveSudoApprovalInPage(request, mode ?? 'resolve');
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/**
+ * `secret-request`: raise the page's secret-entry dialog for a worker-realm
+ * caller (today the `request_secret` tool) and return the VALUE-FREE outcome.
+ *
+ * The registry is consulted per call rather than captured: the surface is
+ * installed during leader boot, so a tool constructed earlier still resolves it.
+ * An absent surface resolves `{ stored: false, reason: 'unavailable' }` instead
+ * of rejecting — "this float cannot collect a secret" is an answer the caller
+ * reports to the user, not a transport failure.
+ */
+function buildSecretRequestHandler() {
+  return {
+    'secret-request': async (payload) => {
+      const { getSecretRequestSurface } = await import('../base/secret-request-registry.js');
+      const surface = getSecretRequestSurface();
+      if (!surface) return { stored: false, reason: 'unavailable' };
+      return surface(payload);
     },
   } satisfies Partial<PanelRpcHandlers>;
 }

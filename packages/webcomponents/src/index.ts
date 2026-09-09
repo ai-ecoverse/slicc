@@ -126,6 +126,12 @@ export {
   SliccPermissions,
   type UsbPermissionProvider,
 } from './overlay/slicc-permissions.js';
+export {
+  type SecretDialogRequest,
+  type SecretDialogSubmitDetail,
+  type SecretDialogSubmitHandler,
+  SliccSecretDialog,
+} from './overlay/slicc-secret-dialog.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { liveArrangement } from './panel/center-ops.js';
 export {

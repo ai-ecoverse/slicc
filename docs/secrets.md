@@ -85,6 +85,14 @@ security add-generic-password \
 
 The swift-server also supports `--env-file` for loading additional secrets from a `.env` file alongside Keychain secrets.
 
+### Option 3: the composer (UI)
+
+**Share secret securely** in the composer's `+` menu (below file upload and screen sharing) opens a secret-entry dialog: name, value (masked as you type, with a reveal toggle), and an **Additional options** drawer holding one row per allowed domain (− / + to edit the list) and a **Keep after this session** checkbox. Unchecked — the default — the secret is session-only; checked, it persists to `.env`/Keychain/`chrome.storage.local` like `--persist`.
+
+The agent can also ask for one: the `request_secret` tool ([tools reference](tools-reference.md)) opens the same dialog with the agent's stated reason, so a credential request is always answered by a human at a real browser prompt rather than by the agent typing a value it read somewhere. Declining is a normal outcome and is reported back as an error so the agent stops instead of guessing.
+
+Either way the typed value goes straight from the dialog to the trusted-realm store; the agent's realm receives only `{ name, maskedValue, domains, persisted }` and the masked value is published as `$NAME` in the agent shell (subject to the POSIX-name rule above). The dialog mounts into the **trusted layer**, above every panel and sprinkle, so page content can neither cover it nor forge a look-alike "enter your API key" form.
+
 ## The `secret` shell command
 
 Inside the SLICC shell, the `secret` command manages secrets:

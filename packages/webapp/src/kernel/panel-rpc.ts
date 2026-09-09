@@ -44,6 +44,7 @@ import type {
   OAuthExtraDomainsStore,
   SignAndForwardReply,
 } from '@slicc/shared-ts';
+import type { SecretRequest, SecretRequestOutcome } from '../base/secret-request-registry.js';
 import type {
   DockTreeSpecLike,
   DockZoneName,
@@ -683,6 +684,22 @@ export type PanelRpcRequest =
       };
     }
   | {
+      // Ask a human for a credential through the page's secret-entry surface
+      // (`ui/wc/wc-secret-request.ts`), which the kernel-worker realm cannot
+      // raise itself (no DOM, no trusted layer). Mirrors `permission-request`:
+      // the worker sends the framing, the page owns the dialog.
+      //
+      // The plaintext NEVER crosses back over this bridge — the page writes it
+      // straight to the secret store and the result carries only the name, the
+      // masked stand-in, and the confirmed scope. That is what makes this op
+      // safe to expose to an agent-invoked tool.
+      //
+      // Payload and result are the registry's own types, referenced rather than
+      // restated, so a field cannot exist on one side of this boundary only.
+      op: 'secret-request';
+      payload: SecretRequest;
+    }
+  | {
       op: 'theme-apply';
       payload: { themeJson?: string; action: 'apply' | 'reset' };
     }
@@ -878,6 +895,8 @@ export interface PanelRpcResults {
     body: ArrayBuffer;
   };
   'permission-request': { grants: PermissionRpcGrant[] };
+  // Value-free by construction: see the `secret-request` op comment.
+  'secret-request': SecretRequestOutcome;
   'sudo-request': { decision: SudoDecision; handled?: boolean };
   'secrets-bridge': { response: unknown };
   'mount-sign-and-forward': { response: SignAndForwardReply };

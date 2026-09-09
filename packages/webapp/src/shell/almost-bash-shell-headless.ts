@@ -739,6 +739,23 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return { ...this.lastEnv };
   }
 
+  /**
+   * Publish a masked secret value as `$name` for the rest of the session.
+   *
+   * The same write `secret set` performs through its internal `setEnv` hook,
+   * exposed for callers OUTSIDE a `bash.exec()` — the `request_secret` tool,
+   * whose secret is stored by the page while no command is running. Queued as
+   * well as applied because the next `exec` overwrites `lastEnv` with its own
+   * snapshot, which does not know about this write.
+   *
+   * Masked values only: a real credential in the shell env is exactly what the
+   * masking pipeline exists to prevent.
+   */
+  setMaskedEnvVar(name: string, maskedValue: string): void {
+    this.pendingEnvWrites.set(name, maskedValue);
+    this.lastEnv[name] = maskedValue;
+  }
+
   /** Merge per-request overrides into a persistent terminal shell. */
   applySessionOverrides(options: { cwd?: string; env?: Record<string, string> }): void {
     if (options.cwd !== undefined) {

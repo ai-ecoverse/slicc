@@ -188,6 +188,71 @@ describe('slicc-add-menu', () => {
     expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).not.toContain('Take a photo');
   });
 
+  it('omits the secret action unless the host opts in with secret-action', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).not.toContain(
+      'Share secret securely'
+    );
+  });
+
+  it('secret-action appends the secret row BELOW upload + capture', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels.indexOf('Share secret securely')).toBeGreaterThan(
+      labels.indexOf('Take a screenshot')
+    );
+  });
+
+  it('secret-action set while open repaints the secret row in', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    el.setAttribute('secret-action', '');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain(
+      'Share secret securely'
+    );
+  });
+
+  it('emits a value-free { kind: "secret" } detail when the secret row is chosen', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    const seen: SliccAddDetail[] = [];
+    el.addEventListener('slicc-add', (e) => seen.push(e.detail));
+    const row = rows(el).find(
+      (r) => r.querySelector('.lb')?.textContent === 'Share secret securely'
+    );
+    row?.click();
+
+    expect(seen).toEqual([{ kind: 'secret', label: 'Share secret securely' }]);
+    // The menu closes; the credential is typed into the HOST's surface.
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('surfaces the secret row for a "secret" search query', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    typeSearch(el, 'secret');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain(
+      'Share secret securely'
+    );
+  });
+
   it('filters results by the search query across sections', async () => {
     const el = mount();
     el.open();

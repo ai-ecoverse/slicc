@@ -509,6 +509,45 @@ a chip. Three design points, all load-bearing.
   The `summarizing` breath is a CSS animation, not a rAF loop: no frame budget,
   and it pauses with the tab on its own.
 
+## Secret entry (`<slicc-secret-dialog>`)
+
+One component serves both ways a credential arrives: the composer's `+` menu
+("Share secret securely") and the agent's `request_secret` tool. Four points are
+load-bearing.
+
+- **The value never becomes state anything else can read.** It lives only in the
+  input, is never reflected to an attribute or a property, and is cleared on
+  every close (including a reopen of the same instance). Callers get it exactly
+  once, in the `secret-submit` detail. The host that receives it — the webapp's
+  `wc-secret-request.ts` — is the only module in the app that holds a plaintext
+  credential, and it hands onward only the mask.
+- **The store's verdict decides whether the dialog closes.** The host sets
+  `submitHandler`; returning a string keeps the dialog open, with the typed value
+  intact, and shows that string as the error. A Keychain timeout must not read as
+  "saved", and it must not cost the human their typing either.
+- **`persistent`, deliberately.** Backdrop-click-to-dismiss is right for a
+  chooser and wrong here: a stray click on a half-typed credential is unrecoverable
+  work. Escape and Cancel still close it.
+- **Password by default, reveal is opt-in.** The toggle exists because a
+  mistyped secret fails later, opaquely, in a fetch the human never sees.
+  "Additional options" hides the domain rows and the persist checkbox — both
+  have safe defaults (the requester's suggested scope, session-only) so the
+  common path is name + value + Enter.
+- **One row per domain, with − / + trailing each row.** A comma-separated field
+  reads as one value and a scope is a list; the row a human edits is the row
+  whose buttons they click. The last row's − stays disabled, because the stores
+  reject a secret with no scope, so the UI never offers the state that fails.
+- **The description names the provider.** "Secure secrets cannot be read by
+  Anthropic" is checkable in a way that "the agent" is not; `wc-secret-request.ts`
+  derives the label from the selected model, and the component falls back to
+  "the model" when nothing is named.
+
+Validation is split by consequence: an empty field, a bad name charset, or a
+missing scope block submission; a non-POSIX name (no `$NAME` in the shell) or a
+wildcard scope only warn. A **multi-line paste** gets its own warning because the
+single-line input joins the breaks itself — silently mangling a PEM key the
+line-oriented stores would reject anyway (see [`docs/secrets.md`](secrets.md)).
+
 ## Slotted containment + chat-prose wrapping
 
 Extended reference for two related Conventions bullets in the package guide.

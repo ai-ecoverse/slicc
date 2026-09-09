@@ -11,7 +11,7 @@ src/
   primitives/    token-only leaves (logo, tag, icon-button, send-button, eyes, …)
   pill/ add-menu/  shadow-DOM elements lifted verbatim from the prototype
   chat/          message/card/dip composites + verbatim pure modules
-  overlay/       slicc-dialog (modal shell) + viewport overlays
+  overlay/       slicc-dialog (modal shell), slicc-secret-dialog + viewport overlays
   composer/ switcher/ workbench/ dock/ freezer/ nav/ shell/ memory/ showcase/
 ```
 
