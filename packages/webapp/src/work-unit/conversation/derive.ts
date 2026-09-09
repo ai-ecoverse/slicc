@@ -13,9 +13,18 @@
  */
 
 import type { AgentMessage } from '../../core/index.js';
-import type { ChatMessage } from '../../scoops/chat-types.js';
+import type { ChatMessage, CompactionMarkerState } from '../../scoops/chat-types.js';
 import type { ConversationEntry, ConversationMarker, WorkUnitConversationRecord } from './types.js';
 import { isReadableRecord } from './types.js';
+
+/**
+ * Marker states a reload may put back on the transcript: the two that mean the
+ * round finished and kept something. See {@link interleaveMarkers}.
+ */
+const RESTORABLE_STATES: ReadonlySet<CompactionMarkerState> = new Set<CompactionMarkerState>([
+  'summarized',
+  'fallback',
+]);
 
 /**
  * Pi history. Lossless for an `agent-history` record: the verbatim messages
@@ -76,9 +85,13 @@ export async function toChatMessages(
  *
  * A marker goes BEFORE the first message stamped later than it, and at the
  * end when there is none — the position a compaction seam belongs in, since
- * the round is recorded after the summary message it produced. `discarded`
- * markers are dropped: a retracted round must not be announced by a reload
- * even if a crash left its marker behind.
+ * the round is recorded after the summary message it produced.
+ *
+ * Only a SETTLED seam is restored ({@link RESTORABLE_STATES}). A `discarded`
+ * round must not be announced by a reload, and neither must an in-flight one:
+ * the phase stream does not replay, so a `summarizing` marker left behind by a
+ * tab that reloaded mid-round has nothing left to settle it and would breathe
+ * "compacting history…" forever.
  *
  * Pure and total: no markers returns the input array itself.
  */
@@ -86,7 +99,7 @@ export function interleaveMarkers(
   messages: ChatMessage[],
   markers: readonly ConversationMarker[] | undefined
 ): ChatMessage[] {
-  const live = (markers ?? []).filter((m) => m.compaction.state !== 'discarded');
+  const live = (markers ?? []).filter((m) => RESTORABLE_STATES.has(m.compaction.state));
   if (live.length === 0) return messages;
   const sorted = [...live].sort((a, b) => a.timestamp - b.timestamp);
   const out: ChatMessage[] = [];

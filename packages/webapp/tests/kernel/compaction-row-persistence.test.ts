@@ -6,6 +6,10 @@
  * tests pin the three writes that make a seam survive a reload: the message
  * buffer, the `browser-coding-agent` store, and the canonical record's
  * `markers`, plus the rebuild that folds a stored marker back in.
+ *
+ * They also pin WHEN: only a round that settled is written down, under an id
+ * the wire carries, and a marker the record could not take yet is retried at
+ * the end of the turn.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -121,40 +125,61 @@ describe('kernel compaction-row persistence', () => {
     callbacks = Bridge.createCallbacks(bridge);
   });
 
-  it('records an opening round as a marker and a row', async () => {
+  // An in-flight round is not a fact about the conversation yet. Writing it
+  // down is what left a reloaded tab breathing "compacting history…" forever:
+  // the phase stream does not replay, so nothing alive could ever settle it.
+  it('writes nothing durable for a round that has only started', async () => {
     phase('summarizing', { transcriptPath: '/sessions/cone/before.md' });
-    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalled());
+    await vi.waitFor(() => expect(sentMessages.length).toBeGreaterThan(0));
+
+    expect(conversationStore.putMarker).not.toHaveBeenCalled();
+    expect(persisted().filter((m) => m.compaction)).toEqual([]);
+  });
+
+  it('records the round once it settles, as a marker and a row', async () => {
+    phase('summarizing', { transcriptPath: '/sessions/cone/before.md' });
+    phase('idle', { transcriptPath: '/sessions/cone/before.md' });
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
 
     expect(conversationStore.markers).toEqual([
       expect.objectContaining({
         kind: 'compaction',
         compaction: {
           trigger: 'idle',
-          state: 'summarizing',
+          state: 'summarized',
           transcriptPath: '/sessions/cone/before.md',
         },
       }),
     ]);
     // The same row is in the buffer the panel replays from, and in the UI
     // store a reload reads.
-    expect(persisted().at(-1)).toMatchObject({
-      role: 'assistant',
-      content: '',
-      compaction: { state: 'summarizing' },
-    });
-  });
-
-  it('settles the round in place rather than stacking a second seam', async () => {
-    phase('summarizing');
-    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
-    phase('idle');
-    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(2));
-
-    expect(conversationStore.markers).toHaveLength(1);
-    expect(conversationStore.markers[0].compaction.state).toBe('summarized');
     const rows = persisted().filter((m) => m.compaction);
     expect(rows).toHaveLength(1);
-    expect(rows[0].compaction?.state).toBe('summarized');
+    expect(rows[0]).toMatchObject({
+      role: 'assistant',
+      content: '',
+      compaction: { state: 'summarized' },
+    });
+    // One row, under the id the panel was told to render — see the wire test
+    // below.
+    expect(rows[0].id).toBe(conversationStore.markers[0].id);
+  });
+
+  // The row id is minted ONCE, by the kernel, and rides the wire so the panel
+  // renders the row this kernel persists. Two id spaces for one round meant a
+  // terminal phase targeting a row no replay contained (#2843).
+  it('emits the row id it will persist under', async () => {
+    phase('summarizing');
+    phase('idle');
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
+
+    const emitted = sentMessages
+      .map((m) => (m as { payload: { type: string; rowId?: string } }).payload)
+      .filter((p) => p.type === 'compaction-state');
+    expect(emitted.map((p) => p.rowId)).toEqual([
+      conversationStore.markers[0].id,
+      conversationStore.markers[0].id,
+    ]);
   });
 
   it('retracts a round that kept nothing, from the record AND the buffer', async () => {
@@ -163,9 +188,8 @@ describe('kernel compaction-row persistence', () => {
     // but the retracted row could not show the write either way.
     callbacks.onResponse?.('cone_1', 'shipped', false);
     phase('summarizing', { roundId: 'idle-1' });
-    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
     phase('idle', { roundId: 'idle-1' });
-    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
     phase('cancelled', { roundId: 'idle-1' });
     await vi.waitFor(() => expect(conversationStore.deleteMarker).toHaveBeenCalled());
 
@@ -180,6 +204,44 @@ describe('kernel compaction-row persistence', () => {
 
     expect(conversationStore.putMarker).not.toHaveBeenCalled();
     expect(conversationStore.deleteMarker).not.toHaveBeenCalled();
+  });
+
+  // A cone can compact before its conversation is ever checkpointed — one
+  // oversized opening prompt does it — and a marker has nothing to annotate
+  // until the record exists. Losing it there meant the next boot rebuilt the
+  // transcript without its seam, which is the bug this whole change is about.
+  it('holds a marker the record cannot take yet and writes it at the end of the turn', async () => {
+    conversationStore.putMarker.mockResolvedValueOnce(false);
+
+    phase('summarizing');
+    phase('idle');
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
+    expect(conversationStore.markers).toEqual([]);
+
+    callbacks.onResponseDone?.('cone_1');
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(2));
+
+    expect(conversationStore.markers).toEqual([
+      expect.objectContaining({ compaction: expect.objectContaining({ state: 'summarized' }) }),
+    ]);
+  });
+
+  it('stops holding a marker whose round is taken back', async () => {
+    conversationStore.putMarker.mockResolvedValueOnce(false);
+
+    phase('summarizing', { roundId: 'idle-1' });
+    phase('idle', { roundId: 'idle-1' });
+    await vi.waitFor(() => expect(conversationStore.putMarker).toHaveBeenCalledTimes(1));
+    phase('cancelled', { roundId: 'idle-1' });
+    await vi.waitFor(() => expect(conversationStore.deleteMarker).toHaveBeenCalled());
+
+    callbacks.onResponseDone?.('cone_1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The retraction settled it: nothing is retried, so a discarded round
+    // cannot reappear one turn later.
+    expect(conversationStore.putMarker).toHaveBeenCalledTimes(1);
+    expect(conversationStore.markers).toEqual([]);
   });
 
   it('folds a stored marker back into a rebuild from live agent state', async () => {
@@ -217,10 +279,11 @@ describe('kernel compaction-row persistence', () => {
     const plainCallbacks = Bridge.createCallbacks(plain);
 
     plainCallbacks.onCompactionStateChange?.('cone_1', 'summarizing', { trigger: 'threshold' });
+    plainCallbacks.onCompactionStateChange?.('cone_1', 'idle', { trigger: 'threshold' });
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
 
     // The row still reaches the UI store — only the canonical annotation is
     // skipped, and nothing throws.
-    expect(persisted().at(-1)?.compaction).toMatchObject({ state: 'summarizing' });
+    expect(persisted().at(-1)?.compaction).toMatchObject({ state: 'summarized' });
   });
 });

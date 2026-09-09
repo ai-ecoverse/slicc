@@ -35,6 +35,12 @@
  * annotate the conversation rather than belonging to it, so an entry replace
  * leaves them standing — which is the only way a compaction marker can
  * survive the compaction that produced it.
+ *
+ * Every read-modify-write path here is SERIALIZED per key ({@link serialize}).
+ * A compaction settles its marker at the same moment the round's caller
+ * persists the freshly compacted history, and both paths read the record and
+ * then save a whole copy; overlapping reads would let the later save drop the
+ * marker or reinstate the pre-compaction entries.
  */
 
 import type { AgentMessage } from '../../core/index.js';
@@ -108,6 +114,12 @@ export interface ConversationIdentity {
 export class WorkUnitConversationStore {
   private dbPromise: Promise<IDBDatabase> | null = null;
   private readonly dbName: string;
+  /**
+   * Tail of the in-flight write chain per canonical key — see
+   * {@link serialize}. Empty in the common case: an entry is dropped as soon
+   * as its chain drains.
+   */
+  private readonly writeChains = new Map<string, Promise<unknown>>();
 
   /** `dbName` is injectable so tests get one database per suite. */
   constructor(options: { dbName?: string } = {}) {
@@ -251,6 +263,15 @@ export class WorkUnitConversationStore {
   ): Promise<WorkUnitConversationRecord | null> {
     const now = options.now ?? Date.now();
     const next = entriesFromAgentMessages(messages);
+    return this.serialize(identity.key, () => this.ingestEntries(identity, next, options, now));
+  }
+
+  private async ingestEntries(
+    identity: ConversationIdentity,
+    next: ConversationEntry[],
+    options: { createdAt?: number },
+    now: number
+  ): Promise<WorkUnitConversationRecord | null> {
     try {
       const current = await this.read(identity.key);
       if (current.status === 'incompatible' || current.status === 'error') {
@@ -284,7 +305,10 @@ export class WorkUnitConversationStore {
    * not to, and none of them is an error worth surfacing: the same
    * never-overwrite guards {@link syncAgentMessages} applies, plus an ABSENT
    * record — a marker annotates a conversation, and there is nothing to
-   * annotate before the conversation itself is stored.
+   * annotate before the conversation itself is stored. `false` is the caller's
+   * cue to hold the marker and retry once history has been written
+   * (`Bridge.flushPendingMarkers`), which is how a cone that compacts before
+   * its first checkpoint still keeps its seam.
    */
   async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
     return this.withRecord(key, (record) => {
@@ -311,7 +335,14 @@ export class WorkUnitConversationStore {
    * Read-modify-write one record under the write guards. `mutate` returning
    * `null` means "nothing to change", which writes nothing at all.
    */
-  private async withRecord(
+  private withRecord(
+    key: string,
+    mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
+  ): Promise<boolean> {
+    return this.serialize(key, () => this.mutateRecord(key, mutate));
+  }
+
+  private async mutateRecord(
     key: string,
     mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
   ): Promise<boolean> {
@@ -329,6 +360,33 @@ export class WorkUnitConversationStore {
       log.warn('Conversation marker write failed', { key, error: errorText(err) });
       return false;
     }
+  }
+
+  /**
+   * Run `op` after every write already queued for `key` has finished.
+   *
+   * IndexedDB gives each transaction its own consistency, not each
+   * read-modify-write: two callers that read the same record and then save a
+   * whole copy both succeed, and the second silently discards whatever the
+   * first added. That is exactly the shape of a compaction — its marker
+   * settles while the round's caller persists the compacted history — so
+   * every RMW path here queues per key instead.
+   *
+   * A rejected op does not break the chain (`then(op, op)`), and the entry is
+   * dropped once it is the tail, so the map cannot grow with idle keys.
+   */
+  private serialize<T>(key: string, op: () => Promise<T>): Promise<T> {
+    const prior = this.writeChains.get(key) ?? Promise.resolve();
+    const run = prior.then(op, op);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.writeChains.set(key, settled);
+    void settled.then(() => {
+      if (this.writeChains.get(key) === settled) this.writeChains.delete(key);
+    });
+    return run;
   }
 
   /** Read the cursor of a versioned migration, or `null` if it never ran. */

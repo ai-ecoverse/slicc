@@ -13,6 +13,10 @@
  * (`ui/offscreen-client.ts`) and the kernel persists it (`kernel/facade.ts`),
  * and a second opinion on either side would mean a transcript whose seams
  * change when you reload it.
+ *
+ * The kernel runs first and MINTS the row id; the panel adopts it off the wire
+ * (`CompactionStateMsg.rowId`). Two id spaces for one round would mean the
+ * panel's terminal phase targeting a row no replay contains.
  */
 
 import type { CompactionState, CompactionStateDetail } from '../core/context-compaction.js';
@@ -68,14 +72,24 @@ export class CompactionRowTracker {
   /** `mintId` is injectable so tests (and two floats) can be deterministic. */
   constructor(private readonly mintId: (unitId: string) => string) {}
 
-  /** Decide what one phase does to `unitId`'s transcript. */
+  /**
+   * Decide what one phase does to `unitId`'s transcript.
+   *
+   * `rowId` is the id the round already has somewhere else — the kernel mints
+   * it, the panel receives it on the wire. Supplying it does two things: a
+   * round this tracker never saw OPEN can still be settled (the panel mounted
+   * mid-round), and both sides name the same row, so the terminal phase
+   * updates the replayed seam instead of appending a second one. A row this
+   * tracker is already tracking wins, because that is the row it is showing.
+   */
   apply(
     unitId: string,
     state: CompactionState,
-    detail: CompactionStateDetail
+    detail: CompactionStateDetail,
+    rowId?: string
   ): CompactionRowAction | null {
     if (state === 'extracting-memory') return null;
-    const existing = this.open.get(unitId) ?? this.lateRetraction(unitId, state, detail);
+    const existing = this.open.get(unitId) ?? this.lateRetraction(unitId, state, detail) ?? rowId;
     // A terminal phase with no open row is a round whose opening phase never
     // reached this consumer (it started before the tab attached, or against a
     // unit that was not selected). There is nothing to settle or retract.

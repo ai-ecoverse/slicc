@@ -291,6 +291,48 @@ describe('WorkUnitConversationStore', () => {
       readSpy.mockRestore();
       expect((await store.load(identity.key))?.markers).toBeUndefined();
     });
+
+    // The real sequence of an adopted idle compaction: the round settles its
+    // marker while its caller persists the freshly compacted history. Both
+    // read the record and then save a whole copy, so without a per-key queue
+    // the later save wins outright — dropping the marker, or reinstating the
+    // pre-compaction entries it just replaced.
+    it('does not lose either write when a marker and a history sync overlap', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages(), { now: 1000 });
+      const compacted = [
+        { role: 'user', content: [{ type: 'text', text: 'summary of earlier work' }] },
+      ] as unknown as AgentMessage[];
+
+      // Started in the same tick, deliberately un-awaited between.
+      const written = store.putMarker(
+        identity.key,
+        marker({ compaction: { trigger: 'idle', state: 'summarized' } })
+      );
+      const synced = store.syncAgentMessages(identity, compacted, { now: 2000 });
+      expect(await Promise.all([written, synced])).toEqual([true, expect.anything()]);
+
+      const record = await store.load(identity.key);
+      expect(record?.entries).toHaveLength(1);
+      expect(record?.markers).toHaveLength(1);
+    });
+
+    it('keeps every marker when a burst of rounds settles at once', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+
+      await Promise.all(
+        [1, 2, 3, 4, 5].map((i) =>
+          store.putMarker(identity.key, marker({ id: `m${i}`, timestamp: 1000 + i }))
+        )
+      );
+
+      expect((await store.load(identity.key))?.markers?.map((m) => m.id)).toEqual([
+        'm1',
+        'm2',
+        'm3',
+        'm4',
+        'm5',
+      ]);
+    });
   });
 
   it('rekey is a no-op when keys match or the source is absent', async () => {

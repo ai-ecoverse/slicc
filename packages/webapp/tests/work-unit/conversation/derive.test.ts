@@ -158,6 +158,25 @@ describe('interleaveMarkers', () => {
     expect(out.map((m) => m.id)).toEqual(['m10']);
   });
 
+  // A tab that reloaded mid-round would otherwise restore a seam that nothing
+  // alive can settle: the compaction phase stream does not replay, so the row
+  // would breathe "compacting history…" for the rest of the conversation.
+  it('drops an in-flight marker — a reload has nothing left to settle it', () => {
+    const out = interleaveMarkers(
+      [chat(10)],
+      [marker({ timestamp: 5, compaction: { trigger: 'idle', state: 'summarizing' } })]
+    );
+    expect(out.map((m) => m.id)).toEqual(['m10']);
+  });
+
+  it('restores a degraded round: fallback is a finished round too', () => {
+    const out = interleaveMarkers(
+      [chat(10)],
+      [marker({ timestamp: 5, compaction: { trigger: 'overflow', state: 'fallback' } })]
+    );
+    expect(out.map((m) => m.id)).toEqual(['compaction-1', 'm10']);
+  });
+
   it('places a marker against an ISO-string timestamp from an old profile', () => {
     const iso = {
       id: 'old',

@@ -207,7 +207,9 @@ export class OffscreenClient implements KernelClientFacade {
    *
    * The kernel drives an identical tracker to PERSIST the same row, so the
    * verdict this panel renders and the one a reload restores come from one
-   * reducer rather than two readings of the phase stream.
+   * reducer rather than two readings of the phase stream. The kernel's id
+   * wins (`CompactionStateMsg.rowId`); this tracker only mints one for a
+   * kernel too old to send it.
    */
   private readonly compactionRows = new CompactionRowTracker(
     (scoopJid) => `compaction-${scoopJid}-${uid()}`
@@ -1380,12 +1382,13 @@ export class OffscreenClient implements KernelClientFacade {
   private renderCompactionNotice(
     scoopJid: string,
     state: CompactionState,
-    detail: CompactionNoticeDetail
+    detail: CompactionNoticeDetail,
+    rowId?: string
   ): void {
     // The tracker runs BEFORE the selection check so a round that spans a
     // scoop switch still closes its own id out; the row itself belongs to the
     // selected thread only.
-    const action = this.compactionRows.apply(scoopJid, state, detail);
+    const action = this.compactionRows.apply(scoopJid, state, detail, rowId);
     if (!action) return;
     if (scoopJid !== this.selectedScoopJid) return;
     this.emitToUI({
@@ -1406,7 +1409,11 @@ export class OffscreenClient implements KernelClientFacade {
       ...(msg.roundId ? { roundId: msg.roundId } : {}),
     };
     this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state, detail);
-    this.renderCompactionNotice(msg.scoopJid, msg.state, detail);
+    // `msg.rowId` is the kernel's id for this round's row — the one it
+    // persists and replays. Adopting it keeps the rendered seam and the
+    // restored one the same row; without it, a panel that mounted mid-round
+    // would append a second seam next to the replayed one (#2843).
+    this.renderCompactionNotice(msg.scoopJid, msg.state, detail, msg.rowId);
   }
 
   private handleScoopStatus(msg: ScoopStatusMsg): void {

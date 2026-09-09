@@ -5,8 +5,9 @@
  * The round lifecycles (settle, retract, late retraction, round-id scoping)
  * are pinned end-to-end through the panel in
  * `tests/ui/offscreen-client.test.ts`; this file covers what only the shared
- * reducer can answer: that two units keep their own rows, and that a unit can
- * be forgotten.
+ * reducer can answer: that two units keep their own rows, that a unit can be
+ * forgotten, and how a row id handed in from outside (the kernel's, off the
+ * wire) beats minting a second one for the same round.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -44,6 +45,40 @@ describe('CompactionRowTracker', () => {
     // No open row: a terminal phase for a round this tracker no longer knows
     // must not conjure one.
     expect(rows.apply('cone_1', 'idle', IDLE)).toBeNull();
+  });
+
+  describe('an id supplied from elsewhere', () => {
+    it('opens the round under it instead of minting a second id', () => {
+      const rows = tracker();
+      const action = rows.apply('cone_1', 'summarizing', IDLE, 'kernel-row-7');
+      expect(action).toMatchObject({ kind: 'open', messageId: 'kernel-row-7' });
+      // And the round it settles is that same row.
+      expect(rows.apply('cone_1', 'idle', IDLE, 'kernel-row-7')).toMatchObject({
+        kind: 'settle',
+        messageId: 'kernel-row-7',
+      });
+    });
+
+    // The panel mounted mid-round: it never saw the opening phase, so without
+    // an id from the kernel it would ignore the terminal one and never show
+    // the seam until the next replay.
+    it('settles a round it never saw open', () => {
+      const rows = tracker();
+      expect(rows.apply('cone_1', 'idle', IDLE, 'kernel-row-7')).toMatchObject({
+        kind: 'settle',
+        messageId: 'kernel-row-7',
+      });
+    });
+
+    it('keeps the row it is already tracking when the two disagree', () => {
+      const rows = tracker();
+      const opened = rows.apply('cone_1', 'summarizing', IDLE);
+      // Its own row is the one on screen; a late-arriving other id must not
+      // strand it half-rendered.
+      expect(rows.apply('cone_1', 'idle', IDLE, 'kernel-row-9')).toMatchObject({
+        messageId: opened?.messageId,
+      });
+    });
   });
 
   it('carries the transcript path onto the row when the snapshot landed', () => {
