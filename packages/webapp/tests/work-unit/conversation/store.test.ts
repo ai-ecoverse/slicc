@@ -11,6 +11,7 @@ import 'fake-indexeddb/auto';
 import type { AgentMessage } from '../../../src/core/index.js';
 import type { ConversationIdentity } from '../../../src/work-unit/conversation/store.js';
 import { WorkUnitConversationStore } from '../../../src/work-unit/conversation/store.js';
+import type { ConversationMarker } from '../../../src/work-unit/conversation/types.js';
 import { legacyAgentMessages } from './fixtures.js';
 
 let dbCounter = 0;
@@ -211,6 +212,127 @@ describe('WorkUnitConversationStore', () => {
     expect(moved?.workspaceId).toBe(to.workspaceId);
     expect(moved?.key).toBe(to.key);
     expect(moved?.entries).toHaveLength(5);
+  });
+
+  describe('markers', () => {
+    const marker = (over: Partial<ConversationMarker> = {}): ConversationMarker => ({
+      id: 'compaction-cone_1-abc',
+      kind: 'compaction',
+      timestamp: 5000,
+      compaction: { trigger: 'idle', state: 'summarizing' },
+      ...over,
+    });
+
+    it('settles a round in place instead of stacking rows', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      expect(await store.putMarker(identity.key, marker())).toBe(true);
+      expect(
+        await store.putMarker(
+          identity.key,
+          marker({ compaction: { trigger: 'idle', state: 'summarized' } })
+        )
+      ).toBe(true);
+      const markers = (await store.load(identity.key))?.markers;
+      expect(markers).toHaveLength(1);
+      expect(markers?.[0].compaction.state).toBe('summarized');
+    });
+
+    it('survives the compaction that produced it', async () => {
+      // The whole point: `syncAgentMessages` replaces `entries` wholesale on
+      // a compaction, and the marker announcing it must not go with them.
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      await store.putMarker(identity.key, marker());
+      const compacted = [
+        { role: 'user', content: [{ type: 'text', text: 'summary of earlier work' }] },
+      ] as unknown as AgentMessage[];
+      const after = await store.syncAgentMessages(identity, compacted);
+      expect(after?.entries).toHaveLength(1);
+      expect(after?.markers).toHaveLength(1);
+    });
+
+    it('retracts a round that kept nothing', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      await store.putMarker(identity.key, marker());
+      expect(await store.deleteMarker(identity.key, marker().id)).toBe(true);
+      expect((await store.load(identity.key))?.markers).toEqual([]);
+      // Already gone: nothing to write, and not an error either.
+      expect(await store.deleteMarker(identity.key, marker().id)).toBe(false);
+    });
+
+    it('keeps markers in timestamp order and caps the list', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+      for (let i = 0; i < 70; i++) {
+        await store.putMarker(identity.key, marker({ id: `m${i}`, timestamp: 1000 + i }));
+      }
+      const markers = (await store.load(identity.key))?.markers ?? [];
+      expect(markers).toHaveLength(64);
+      // Oldest went first, and what is left is still ascending.
+      expect(markers[0].id).toBe('m6');
+      expect(markers.map((m) => m.timestamp)).toEqual([...markers.map((m) => m.timestamp)].sort());
+    });
+
+    it('refuses to annotate a conversation that is not stored', async () => {
+      // An annotation with no conversation under it would derive to a
+      // transcript that is nothing but seams.
+      expect(await store.putMarker(identity.key, marker())).toBe(false);
+      expect(await store.load(identity.key)).toBeNull();
+    });
+
+    it('never writes over a newer schema or a failed read', async () => {
+      const written = await store.syncAgentMessages(identity, legacyAgentMessages());
+      await store.save({ ...written!, version: 99 });
+      expect(await store.putMarker(identity.key, marker())).toBe(false);
+
+      await store.save({ ...written!, version: 1 });
+      const readSpy = vi
+        .spyOn(store, 'read')
+        .mockResolvedValue({ status: 'error', reason: 'IndexedDB unavailable' });
+      expect(await store.putMarker(identity.key, marker())).toBe(false);
+      readSpy.mockRestore();
+      expect((await store.load(identity.key))?.markers).toBeUndefined();
+    });
+
+    // The real sequence of an adopted idle compaction: the round settles its
+    // marker while its caller persists the freshly compacted history. Both
+    // read the record and then save a whole copy, so without a per-key queue
+    // the later save wins outright — dropping the marker, or reinstating the
+    // pre-compaction entries it just replaced.
+    it('does not lose either write when a marker and a history sync overlap', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages(), { now: 1000 });
+      const compacted = [
+        { role: 'user', content: [{ type: 'text', text: 'summary of earlier work' }] },
+      ] as unknown as AgentMessage[];
+
+      // Started in the same tick, deliberately un-awaited between.
+      const written = store.putMarker(
+        identity.key,
+        marker({ compaction: { trigger: 'idle', state: 'summarized' } })
+      );
+      const synced = store.syncAgentMessages(identity, compacted, { now: 2000 });
+      expect(await Promise.all([written, synced])).toEqual([true, expect.anything()]);
+
+      const record = await store.load(identity.key);
+      expect(record?.entries).toHaveLength(1);
+      expect(record?.markers).toHaveLength(1);
+    });
+
+    it('keeps every marker when a burst of rounds settles at once', async () => {
+      await store.syncAgentMessages(identity, legacyAgentMessages());
+
+      await Promise.all(
+        [1, 2, 3, 4, 5].map((i) =>
+          store.putMarker(identity.key, marker({ id: `m${i}`, timestamp: 1000 + i }))
+        )
+      );
+
+      expect((await store.load(identity.key))?.markers?.map((m) => m.id)).toEqual([
+        'm1',
+        'm2',
+        'm3',
+        'm4',
+        'm5',
+      ]);
+    });
   });
 
   it('rekey is a no-op when keys match or the source is absent', async () => {

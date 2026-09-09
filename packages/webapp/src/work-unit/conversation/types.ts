@@ -28,7 +28,7 @@
 
 import type { LickChannel } from '../../base/lick-channels.js';
 import type { AgentMessage } from '../../core/index.js';
-import type { ChatMessage } from '../../scoops/chat-types.js';
+import type { ChatCompactionMarker, ChatMessage } from '../../scoops/chat-types.js';
 
 /**
  * Schema version of a persisted record. Bumping it makes every older record
@@ -117,6 +117,29 @@ export interface ToolResultConversationEntry extends MessageEntryBase {
   isError?: boolean;
 }
 
+/**
+ * A transcript row that records something that happened TO the conversation
+ * rather than in it — today, one context-compaction round (#2843).
+ *
+ * Markers are NOT entries, and that is the whole point. `syncAgentMessages`
+ * re-ingests Pi's message list and replaces `entries` wholesale on a
+ * compaction, so a marker living in that list would be erased by the very
+ * event it announces. It also has no place in Pi's history: the model must
+ * never be shown a row saying its own context was summarized.
+ *
+ * Anchored by `timestamp` alone, because no entry survives a rewrite to
+ * anchor to. Recorded when the round SETTLES, so the marker sorts after the
+ * summary message compaction just wrote and lands exactly on the seam.
+ */
+export interface ConversationMarker {
+  /** Stable across the round's phases: the opening phase mints it. */
+  id: string;
+  kind: 'compaction';
+  /** Epoch ms — the only anchor; see the interface doc. */
+  timestamp: number;
+  compaction: ChatCompactionMarker;
+}
+
 export type ConversationEntry =
   | UserConversationEntry
   | ExternalEventConversationEntry
@@ -160,6 +183,13 @@ export interface WorkUnitConversationRecord {
   folder: string;
   origin: ConversationOrigin;
   entries: ConversationEntry[];
+  /**
+   * Transcript rows that annotate the conversation instead of belonging to
+   * it ({@link ConversationMarker}). Absent on every record written before
+   * markers existed, which reads as "no annotations" — the UI derivation is
+   * then exactly what it was.
+   */
+  markers?: ConversationMarker[];
   createdAt: number;
   updatedAt: number;
   /** Which legacy store the record was first built from, if migrated. */

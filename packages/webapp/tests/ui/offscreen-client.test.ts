@@ -1466,6 +1466,38 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     expect(ids[0]).not.toBe(ids[2]);
   });
 
+  // The kernel mints the row id, persists the marker under it and replays it
+  // in the buffer. The panel renders THAT row, so a settle after a replay
+  // updates the seam instead of appending a second one (#2843).
+  it('renders the row under the id the kernel sent', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { rowId: 'compaction-cone_123-kernel' });
+    phase('idle', { rowId: 'compaction-cone_123-kernel' });
+
+    expect(events.map((e) => e.messageId)).toEqual([
+      'compaction-cone_123-kernel',
+      'compaction-cone_123-kernel',
+    ]);
+  });
+
+  // This panel mounted mid-round, so it never saw the opening phase. The
+  // kernel did, and names the row: the seam appears now rather than waiting
+  // for the next replay.
+  it('settles a named row for a round whose opening phase it missed', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('idle', { rowId: 'compaction-cone_123-kernel' });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      messageId: 'compaction-cone_123-kernel',
+      marker: { state: 'summarized' },
+    });
+  });
+
   it('does not disturb an in-flight assistant stream', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();

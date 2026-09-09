@@ -1103,6 +1103,15 @@ export interface CompactionStateMsg {
    * compaction row is currently on the transcript (#2843).
    */
   roundId?: string;
+  /**
+   * Id of the transcript row this phase acts on, minted by the kernel's
+   * `CompactionRowTracker` — the SAME id it persists as a marker and replays
+   * in the message buffer. The panel adopts it so a row it rendered live and
+   * a row a replay hands it are one row, not two. Absent when the phase is
+   * not a row at all (`extracting-memory`), and on envelopes from a kernel
+   * older than this field, where the panel mints its own.
+   */
+  rowId?: string;
 }
 
 /**
@@ -1249,6 +1258,12 @@ export interface ScoopMessagesReplacedMsg {
     isStreaming?: boolean;
     model?: string;
     usage?: ChatMessage['usage'];
+    /**
+     * Compaction-marker row (#2843): the replay's record of a compaction
+     * round. On the wire because a replay is the ONLY way the row reaches a
+     * remounted panel or a follower — no agent event replays it.
+     */
+    compaction?: ChatMessage['compaction'];
   }>;
   /**
    * Ids of the messages still pending in the orchestrator's queue for this

@@ -30,6 +30,17 @@
  * entries do not extend the stored prefix. That is detected, counted on
  * `rewrites`, and applied as a replace; silently interleaving the two would
  * splice a pre-compaction conversation into a post-compaction one.
+ *
+ * `markers` sit OUTSIDE that reconciliation ({@link putMarker}): they
+ * annotate the conversation rather than belonging to it, so an entry replace
+ * leaves them standing — which is the only way a compaction marker can
+ * survive the compaction that produced it.
+ *
+ * Every read-modify-write path here is SERIALIZED per key ({@link serialize}).
+ * A compaction settles its marker at the same moment the round's caller
+ * persists the freshly compacted history, and both paths read the record and
+ * then save a whole copy; overlapping reads would let the later save drop the
+ * marker or reinstate the pre-compaction entries.
  */
 
 import type { AgentMessage } from '../../core/index.js';
@@ -37,6 +48,7 @@ import { createLogger } from '../../core/index.js';
 import { entriesFromAgentMessages } from './entries.js';
 import type {
   ConversationEntry,
+  ConversationMarker,
   ConversationOrigin,
   LegacyConversationKeys,
   WorkUnitConversationRecord,
@@ -49,6 +61,14 @@ export const CONVERSATION_DB_NAME = 'slicc-work-units';
 const DB_VERSION = 1;
 const CONVERSATIONS_STORE = 'conversations';
 const MIGRATIONS_STORE = 'migrations';
+
+/**
+ * How many {@link ConversationMarker}s one record keeps. A marker is tiny and
+ * a session compacts a handful of times, so the cap exists only so a runaway
+ * compaction loop cannot grow the record without bound. Oldest go first — the
+ * seams a user can still scroll to are the recent ones.
+ */
+const MAX_MARKERS = 64;
 
 /** Resumable cursor of a versioned migration into the canonical store. */
 export interface ConversationMigrationState {
@@ -94,6 +114,12 @@ export interface ConversationIdentity {
 export class WorkUnitConversationStore {
   private dbPromise: Promise<IDBDatabase> | null = null;
   private readonly dbName: string;
+  /**
+   * Tail of the in-flight write chain per canonical key — see
+   * {@link serialize}. Empty in the common case: an entry is dropped as soon
+   * as its chain drains.
+   */
+  private readonly writeChains = new Map<string, Promise<unknown>>();
 
   /** `dbName` is injectable so tests get one database per suite. */
   constructor(options: { dbName?: string } = {}) {
@@ -237,6 +263,15 @@ export class WorkUnitConversationStore {
   ): Promise<WorkUnitConversationRecord | null> {
     const now = options.now ?? Date.now();
     const next = entriesFromAgentMessages(messages);
+    return this.serialize(identity.key, () => this.ingestEntries(identity, next, options, now));
+  }
+
+  private async ingestEntries(
+    identity: ConversationIdentity,
+    next: ConversationEntry[],
+    options: { createdAt?: number },
+    now: number
+  ): Promise<WorkUnitConversationRecord | null> {
     try {
       const current = await this.read(identity.key);
       if (current.status === 'incompatible' || current.status === 'error') {
@@ -260,6 +295,98 @@ export class WorkUnitConversationStore {
       });
       return null;
     }
+  }
+
+  /**
+   * Upsert one {@link ConversationMarker} on a unit's record, keyed by `id`
+   * so a round's terminal phase settles the row its opening phase created.
+   *
+   * Returns `true` when the record was written. `false` covers every reason
+   * not to, and none of them is an error worth surfacing: the same
+   * never-overwrite guards {@link syncAgentMessages} applies, plus an ABSENT
+   * record — a marker annotates a conversation, and there is nothing to
+   * annotate before the conversation itself is stored. `false` is the caller's
+   * cue to hold the marker and retry once history has been written
+   * (`Bridge.flushPendingMarkers`), which is how a cone that compacts before
+   * its first checkpoint still keeps its seam.
+   */
+  async putMarker(key: string, marker: ConversationMarker): Promise<boolean> {
+    return this.withRecord(key, (record) => {
+      const kept = (record.markers ?? []).filter((m) => m.id !== marker.id);
+      kept.push(marker);
+      kept.sort((a, b) => a.timestamp - b.timestamp);
+      return { ...record, markers: kept.slice(-MAX_MARKERS) };
+    });
+  }
+
+  /**
+   * Retract a marker — a compaction round that kept nothing must stop
+   * claiming it happened (#2843). A no-op when the marker is already gone.
+   */
+  async deleteMarker(key: string, markerId: string): Promise<boolean> {
+    return this.withRecord(key, (record) => {
+      const kept = (record.markers ?? []).filter((m) => m.id !== markerId);
+      if (kept.length === (record.markers?.length ?? 0)) return null;
+      return { ...record, markers: kept };
+    });
+  }
+
+  /**
+   * Read-modify-write one record under the write guards. `mutate` returning
+   * `null` means "nothing to change", which writes nothing at all.
+   */
+  private withRecord(
+    key: string,
+    mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
+  ): Promise<boolean> {
+    return this.serialize(key, () => this.mutateRecord(key, mutate));
+  }
+
+  private async mutateRecord(
+    key: string,
+    mutate: (record: WorkUnitConversationRecord) => WorkUnitConversationRecord | null
+  ): Promise<boolean> {
+    try {
+      const current = await this.read(key);
+      // `absent` joins `incompatible` / `error` here rather than creating a
+      // record: an annotation with no conversation under it would derive to a
+      // transcript that is nothing but seams.
+      if (current.status !== 'ok') return false;
+      const next = mutate(current.record);
+      if (!next) return false;
+      await this.save({ ...next, updatedAt: Date.now() });
+      return true;
+    } catch (err) {
+      log.warn('Conversation marker write failed', { key, error: errorText(err) });
+      return false;
+    }
+  }
+
+  /**
+   * Run `op` after every write already queued for `key` has finished.
+   *
+   * IndexedDB gives each transaction its own consistency, not each
+   * read-modify-write: two callers that read the same record and then save a
+   * whole copy both succeed, and the second silently discards whatever the
+   * first added. That is exactly the shape of a compaction — its marker
+   * settles while the round's caller persists the compacted history — so
+   * every RMW path here queues per key instead.
+   *
+   * A rejected op does not break the chain (`then(op, op)`), and the entry is
+   * dropped once it is the tail, so the map cannot grow with idle keys.
+   */
+  private serialize<T>(key: string, op: () => Promise<T>): Promise<T> {
+    const prior = this.writeChains.get(key) ?? Promise.resolve();
+    const run = prior.then(op, op);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.writeChains.set(key, settled);
+    void settled.then(() => {
+      if (this.writeChains.get(key) === settled) this.writeChains.delete(key);
+    });
+    return run;
   }
 
   /** Read the cursor of a versioned migration, or `null` if it never ran. */

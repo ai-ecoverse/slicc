@@ -20,6 +20,7 @@ import { getBudgetWindowSnapshot, refreshBudgetWindow } from '../providers/budge
 import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
+import { type CompactionRowAction, CompactionRowTracker } from '../scoops/compaction-rows.js';
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
@@ -33,6 +34,7 @@ import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import type { ConversationMarker } from '../work-unit/conversation/types.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
@@ -81,6 +83,14 @@ const log = createLogger('kernel-bridge');
  * proxy costs one late counter, never a missing one.
  */
 const FIRST_BUDGET_PROBE_MS = 2_500;
+
+/**
+ * How many settled compaction markers wait for a canonical record to exist
+ * (`pendingMarkers`). A young conversation compacts once or twice before its
+ * first checkpoint; anything beyond that is a record that will never accept a
+ * write, and holding more would be hoarding.
+ */
+const MAX_PENDING_MARKERS = 4;
 
 interface FacadeLickManager {
   setForwarder(forwarder: ((event: ForwardedLickEvent) => void) | null): void;
@@ -137,6 +147,12 @@ interface BufferedChatMessage {
   isStreaming?: boolean;
   model?: string;
   usage?: ChatMessage['usage'];
+  /**
+   * Compaction-marker row: bookkeeping about the conversation rather than a
+   * message in it. Carried so the row survives the round trip through the UI
+   * store — the view renders on this field alone (`messageEls`).
+   */
+  compaction?: ChatMessage['compaction'];
 }
 
 export class Bridge implements KernelFacade {
@@ -169,6 +185,25 @@ export class Bridge implements KernelFacade {
   private readonly conesBeingCreated = new Map<string, Promise<void>>();
   /** Current assistant message ID per scoop */
   private currentMessageId = new Map<string, string>();
+  /**
+   * Compaction-row bookkeeping for the DURABLE copy of each round's marker
+   * ({@link recordCompactionRow}). This instance is the one that MINTS the row
+   * id: the kernel outlives every panel, so its verdict is the one the wire
+   * carries and the panel adopts (`CompactionStateMsg.rowId`).
+   */
+  private readonly compactionRows = new CompactionRowTracker(
+    (scoopJid) => `compaction-${scoopJid}-${uid()}`
+  );
+  /**
+   * Settled markers whose canonical record did not exist yet, per scoop.
+   *
+   * A cone can compact before its conversation is first checkpointed — one
+   * oversized opening prompt is enough — and a marker has nothing to annotate
+   * until then, so `putMarker` declines. Holding it here and retrying when the
+   * turn ends means the seam lands on the record the history sync just
+   * created, instead of being lost until the next compaction (#2843).
+   */
+  private readonly pendingMarkers = new Map<string, ConversationMarker[]>();
   /** Panel-facing scoop state and projection. */
   private readonly scoopPresentation = new ScoopPresentation();
   /** Post-transport agent-event translation and fan-out. */
@@ -278,6 +313,10 @@ export class Bridge implements KernelFacade {
         }
 
         bridge.persistScoop(scoopJid);
+        // The turn is over, so the session checkpoint has had its chance to
+        // create the canonical record a seam from earlier in this turn could
+        // not be written to yet.
+        void bridge.flushPendingMarkers(scoopJid);
 
         bridge.emit({
           type: 'agent-event',
@@ -327,6 +366,10 @@ export class Bridge implements KernelFacade {
       },
 
       onCompactionStateChange: (scoopJid, state, detail) => {
+        // The tracker runs BEFORE the emission so the row id rides the wire:
+        // the panel renders the row this kernel will persist and replay, under
+        // the same id, instead of minting a second one for the same round.
+        const action = bridge.compactionRows.apply(scoopJid, state, detail);
         bridge.emit({
           type: 'compaction-state',
           scoopJid,
@@ -334,7 +377,13 @@ export class Bridge implements KernelFacade {
           trigger: detail.trigger,
           ...(detail.transcriptPath ? { transcriptPath: detail.transcriptPath } : {}),
           ...(detail.roundId ? { roundId: detail.roundId } : {}),
+          ...(action ? { rowId: action.messageId } : {}),
         });
+        // The panel renders the row from the emission above; this DURABLY
+        // records the same round, because a compaction marker exists nowhere
+        // in Pi's history and a reload would otherwise erase the seam it
+        // announces (#2843).
+        void bridge.recordCompactionRow(scoopJid, action);
       },
 
       onError: (scoopJid, error) => {
@@ -941,7 +990,30 @@ export class Bridge implements KernelFacade {
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
       source: sourceLabelFor(scoop),
     });
-    return toBufferedChatMessages(chatMessages);
+    // Pi's history holds no compaction rows — it cannot, they are bookkeeping
+    // about it — so the canonical record's markers are folded back in here.
+    // Without this a rebuild from live agent state (every boot seed) would be
+    // the transcript MINUS its seams, and persist that over the UI store.
+    const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
+    return toBufferedChatMessages(
+      interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+    );
+  }
+
+  /**
+   * A unit's stored {@link ConversationMarker}s, or `undefined` when there is
+   * no canonical store, no record, or nothing annotated. Never throws — the
+   * store's reads already answer instead of failing, and a missing marker
+   * costs a seam, not a transcript.
+   */
+  private async loadConversationMarkers(
+    scoop: RegisteredScoop
+  ): Promise<ConversationMarker[] | undefined> {
+    const store = this.orchestrator?.getConversationStore?.();
+    if (!store) return undefined;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const record = await store.load(conversationKeyFor(scoop));
+    return record?.markers;
   }
 
   /**
@@ -1459,6 +1531,114 @@ export class Bridge implements KernelFacade {
     }
 
     empty();
+  }
+
+  /**
+   * Record one SETTLED compaction round durably: as a marker on the unit's
+   * canonical record, and as a row in the unit's message buffer + UI store.
+   *
+   * Both writes are needed and neither is redundant. The buffer is what the
+   * panel replays from for the rest of this session (and what `persistScoop`
+   * writes to `browser-coding-agent`); the canonical marker is what survives
+   * the compaction ITSELF — `syncAgentMessages` replaces the record's entries
+   * wholesale on the next turn, and every boot re-seeds the buffer from Pi's
+   * history, which never held the row (#2843).
+   *
+   * An OPENING phase is deliberately not written anywhere durable. The panel
+   * renders the in-flight row live from the same tracker's verdict, and the
+   * phase stream does not replay: a tab that reloaded between the opening
+   * write and the round's terminal phase would restore a seam stuck
+   * "compacting history…" with nothing left alive to settle it. Only a round
+   * that finished is a fact about the conversation.
+   */
+  private async recordCompactionRow(
+    scoopJid: string,
+    action: CompactionRowAction | null
+  ): Promise<void> {
+    if (!action || action.kind === 'open') return;
+    const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) return;
+    const buf = this.getBuffer(scoopJid);
+    if (action.kind === 'retract') {
+      // Spliced in place: `getBuffer` handed this array out by reference, and
+      // swapping in a copy would leave a holder appending to a detached one.
+      const at = buf.findIndex((m) => m.id === action.messageId);
+      if (at >= 0) buf.splice(at, 1);
+    } else {
+      const existing = buf.find((m) => m.id === action.messageId);
+      if (existing) existing.compaction = action.marker;
+      else {
+        buf.push({
+          id: action.messageId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          compaction: action.marker,
+        });
+      }
+    }
+    this.persistScoop(scoopJid);
+    const store = this.orchestrator?.getConversationStore?.();
+    if (!store) return;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const key = conversationKeyFor(scoop);
+    if (action.kind === 'retract') {
+      this.dropPendingMarker(scoopJid, action.messageId);
+      await store.deleteMarker(key, action.messageId);
+      return;
+    }
+    const marker: ConversationMarker = {
+      id: action.messageId,
+      kind: 'compaction',
+      // Stamped when the round settles so the marker sorts AFTER the summary
+      // message it produced — which is where the seam belongs.
+      timestamp: Date.now(),
+      compaction: action.marker,
+    };
+    if (!(await store.putMarker(key, marker))) this.holdPendingMarker(scoopJid, marker);
+  }
+
+  /**
+   * Keep a marker the canonical record could not take yet — see
+   * {@link pendingMarkers}. Capped, oldest first: the retry is a courtesy for
+   * a young conversation, not a durable queue.
+   */
+  private holdPendingMarker(scoopJid: string, marker: ConversationMarker): void {
+    const held = this.pendingMarkers.get(scoopJid) ?? [];
+    this.pendingMarkers.set(
+      scoopJid,
+      [...held.filter((m) => m.id !== marker.id), marker].slice(-MAX_PENDING_MARKERS)
+    );
+  }
+
+  /** A retracted round stops waiting to be written down. */
+  private dropPendingMarker(scoopJid: string, markerId: string): void {
+    const held = this.pendingMarkers.get(scoopJid);
+    if (!held) return;
+    const kept = held.filter((m) => m.id !== markerId);
+    if (kept.length === 0) this.pendingMarkers.delete(scoopJid);
+    else this.pendingMarkers.set(scoopJid, kept);
+  }
+
+  /**
+   * Retry the markers whose record did not exist when their round settled.
+   * Called at the end of a turn, by which point the session checkpoint has
+   * created the conversation the seam belongs to.
+   */
+  private async flushPendingMarkers(scoopJid: string): Promise<void> {
+    const held = this.pendingMarkers.get(scoopJid);
+    if (!held || held.length === 0) return;
+    const store = this.orchestrator?.getConversationStore?.();
+    const scoop = this.orchestrator?.getScoops().find((s) => s.jid === scoopJid);
+    if (!store || !scoop) return;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const key = conversationKeyFor(scoop);
+    const stuck: ConversationMarker[] = [];
+    for (const marker of held) {
+      if (!(await store.putMarker(key, marker))) stuck.push(marker);
+    }
+    if (stuck.length === 0) this.pendingMarkers.delete(scoopJid);
+    else this.pendingMarkers.set(scoopJid, stuck);
   }
 
   /**
@@ -2243,5 +2423,6 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
     model: m.model,
     usage: m.usage,
     isStreaming: false,
+    compaction: m.compaction,
   }));
 }
