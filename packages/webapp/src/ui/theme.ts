@@ -60,7 +60,10 @@ export function isThemeLight(): boolean {
 const sprinkleWindows = new Set<Window>();
 
 export function registerSprinkleWindow(w: Window | null | undefined): void {
-  if (w) sprinkleWindows.add(w);
+  if (!w) return;
+  sprinkleWindows.add(w);
+  // A newly loaded/reparented document missed earlier broadcasts.
+  syncSprinkleTheme(w);
 }
 
 export function unregisterSprinkleWindow(w: Window | null | undefined): void {
@@ -74,17 +77,20 @@ function getActiveOverrides(): Record<string, string> | null {
   return theme?.tokens ?? null;
 }
 
-function broadcastTheme(): void {
-  const isLight = isThemeLight();
-  const overrides = getActiveOverrides();
-  for (const w of sprinkleWindows) {
-    try {
-      w.postMessage({ type: 'slicc-theme', isLight, overrides }, '*');
-    } catch {
-      // Window likely detached — drop silently.
-      sprinkleWindows.delete(w);
-    }
+function syncSprinkleTheme(w: Window): void {
+  try {
+    w.postMessage(
+      { type: 'slicc-theme', isLight: isThemeLight(), overrides: getActiveOverrides() },
+      '*'
+    );
+  } catch {
+    // Window likely detached — drop silently.
+    sprinkleWindows.delete(w);
   }
+}
+
+function broadcastTheme(): void {
+  for (const w of sprinkleWindows) syncSprinkleTheme(w);
 }
 
 export function applyTheme(): void {
