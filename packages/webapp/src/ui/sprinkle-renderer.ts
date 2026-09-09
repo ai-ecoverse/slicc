@@ -10,6 +10,7 @@
 
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
+import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
   iframeFetchResponseSource,
   type SprinkleAgentOptions,
@@ -498,9 +499,9 @@ export class SprinkleRenderer {
   var _hidInputReportListeners = new Set();
   var _sprinkleName = '';
   var _state = null;
-  var _themeOverrideKeys = [];
   var _cbId = 0;
   var _callbacks = {};
+  ${iframeThemeBridgeSource}
 
   window.addEventListener('message', function(event) {
     var msg = event.data;
@@ -518,16 +519,7 @@ export class SprinkleRenderer {
         });
       }
     } else if (msg.type === 'slicc-theme') {
-      document.documentElement.classList.toggle('theme-light', !!msg.isLight);
-      var rootStyle = document.documentElement.style;
-      _themeOverrideKeys.forEach(function(key) { rootStyle.removeProperty(key); });
-      _themeOverrideKeys = [];
-      Object.entries(msg.overrides || {}).forEach(function(entry) {
-        if (entry[0].startsWith('--') && typeof entry[1] === 'string') {
-          rootStyle.setProperty(entry[0], entry[1]);
-          _themeOverrideKeys.push(entry[0]);
-        }
-      });
+      applyIframeTheme(event);
     } else if (msg.id && _callbacks[msg.id]) {
       var cb = _callbacks[msg.id];
       delete _callbacks[msg.id];

@@ -129,7 +129,7 @@ function sanitizeCustomCss(css: string | undefined): string | undefined {
 }
 
 /** Sanitize a full theme in place (returns a new object; input is untouched). */
-function sanitizeTheme(theme: SliccTheme): SliccTheme {
+export function sanitizeTheme(theme: SliccTheme): SliccTheme {
   return {
     ...theme,
     tokens: sanitizeTokens(theme.tokens),

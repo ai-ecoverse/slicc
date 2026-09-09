@@ -3,7 +3,12 @@
  * and applies .theme-light class on <html> for CSS variable switching.
  */
 
-import { applyThemeOverrides, getActiveThemeId, getCustomThemes } from './theme-engine.js';
+import {
+  applyThemeOverrides,
+  getActiveThemeId,
+  getCustomThemes,
+  sanitizeTheme,
+} from './theme-engine.js';
 import { PRESETS } from './theme-presets.js';
 
 export type ThemePreference = 'dark' | 'light' | 'system';
@@ -74,13 +79,35 @@ function getActiveOverrides(): Record<string, string> | null {
   const id = getActiveThemeId();
   if (!id) return null;
   const theme = PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
-  return theme?.tokens ?? null;
+  // Stored/imported theme JSON is untrusted, just as it is in buildThemeCss().
+  return theme ? sanitizeTheme(theme).tokens : null;
+}
+
+/** Preserve the sprinkle rules from the already-sanitized preset stylesheet. */
+function getSprinkleOverrideCss(): string {
+  const style = document.getElementById?.('slicc-theme-overrides') as HTMLStyleElement | null;
+  const rules: string[] = [];
+  for (const rule of style?.sheet?.cssRules ?? []) {
+    if (
+      'selectorText' in rule &&
+      typeof rule.selectorText === 'string' &&
+      (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill'))
+    ) {
+      rules.push(rule.cssText);
+    }
+  }
+  return rules.join('\n');
 }
 
 function syncSprinkleTheme(w: Window): void {
   try {
     w.postMessage(
-      { type: 'slicc-theme', isLight: isThemeLight(), overrides: getActiveOverrides() },
+      {
+        type: 'slicc-theme',
+        isLight: isThemeLight(),
+        overrides: getActiveOverrides(),
+        css: getSprinkleOverrideCss(),
+      },
       '*'
     );
   } catch {

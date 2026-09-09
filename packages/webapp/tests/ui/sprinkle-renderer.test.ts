@@ -495,6 +495,7 @@ describe('full document rendering', () => {
       frameDom.window.dispatchEvent(
         new frameDom.window.MessageEvent('message', {
           data: { type: 'slicc-theme', isLight, overrides },
+          source: frameDom.window.parent,
         })
       );
     };
@@ -526,7 +527,10 @@ describe('full document rendering', () => {
     getState.mockReturnValue({ items: ['first', 'second'] });
     dom.window.document.body.setAttribute('data-theme', 'light');
     iframe.dispatchEvent(new dom.window.Event('load'));
-    expect(post).toHaveBeenCalledWith({ type: 'slicc-theme', isLight: true, overrides: null }, '*');
+    expect(post).toHaveBeenCalledWith(
+      { type: 'slicc-theme', isLight: true, overrides: null, css: '' },
+      '*'
+    );
     expect(post).toHaveBeenCalledWith(
       { type: 'sprinkle-init', name: 'work-list', savedState: { items: ['first', 'second'] } },
       '*'
@@ -536,7 +540,7 @@ describe('full document rendering', () => {
     dom.window.document.body.setAttribute('data-theme', 'dark');
     iframe.dispatchEvent(new dom.window.Event('load'));
     expect(post).toHaveBeenCalledWith(
-      { type: 'slicc-theme', isLight: false, overrides: null },
+      { type: 'slicc-theme', isLight: false, overrides: null, css: '' },
       '*'
     );
     renderer.dispose();
