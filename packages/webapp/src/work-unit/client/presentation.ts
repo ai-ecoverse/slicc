@@ -35,8 +35,9 @@ export interface WorkUnitTabDescriptor {
   awaiting?: boolean;
   /**
    * Messages produced since the user last looked at this unit, from
-   * {@link import('./unread.js').UnreadLedger}. Omitted at zero, and always
-   * omitted for the selected unit.
+   * {@link import('./unread.js').UnreadLedger}. Omitted at zero, for the
+   * selected unit, and for a scoop — a scoop's turns are its cone's work, not
+   * news the user is expected to read.
    */
   unread?: number;
 }
@@ -216,9 +217,11 @@ export function toTabDescriptors(
       // pin on an idle tab.
       ...(unit.state === 'working' && unit.phase ? { phase: unit.phase } : {}),
       ...(unit.state === 'idle' && unit.awaiting ? { awaiting: true as const } : {}),
-      // The selected unit is read by definition; the ledger already clears it,
-      // and this keeps that true even for a caller that hands over its own map.
-      ...(unit.id !== selectedId && (unread?.get(unit.id) ?? 0) > 0
+      // Only a cone, and never the selected one: the selected unit is read by
+      // definition and a scoop is not news at all. The ledger already applies
+      // both rules; re-applying them here keeps them true for a caller that
+      // hands over its own map.
+      ...(isRoot && unit.id !== selectedId && (unread?.get(unit.id) ?? 0) > 0
         ? { unread: unread?.get(unit.id) }
         : {}),
     };

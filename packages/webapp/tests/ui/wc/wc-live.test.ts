@@ -339,26 +339,37 @@ describe('createWcLiveCallbacks', () => {
     wiring.refs.switcher.remove();
   });
 
-  it('dots a tab whose turn ended while the user was on another one', () => {
+  it('dots a cone whose turn ended while the user was on another one', () => {
+    const away = scoop({
+      jid: 'cone-2',
+      name: 'sliccy',
+      folder: 'cone-2',
+      parentJid: null,
+      assistantLabel: 'sliccy',
+    });
     const worker = scoop({ jid: 'scoop-worker', name: 'worker' });
-    const wiring = makeWiring({ selected: cone, scoops: [cone, worker] });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, away, worker] });
     const callbacks = createWcLiveCallbacks(wiring);
     const unreadOf = (jid: string): number | undefined =>
       wiring.refs.switcher.scoops.find((chip) => chip.key === jid)?.unread;
 
+    callbacks.onStatusChange(away.jid, 'processing' as never);
+    expect(unreadOf(away.jid)).toBeUndefined();
+    callbacks.onStatusChange(away.jid, 'ready' as never);
+    expect(unreadOf(away.jid)).toBe(1);
+    // A scoop's turn is the work its cone was asked for, not news of its own.
     callbacks.onStatusChange(worker.jid, 'processing' as never);
-    expect(unreadOf(worker.jid)).toBeUndefined();
     callbacks.onStatusChange(worker.jid, 'ready' as never);
-    expect(unreadOf(worker.jid)).toBe(1);
+    expect(unreadOf(worker.jid)).toBeUndefined();
     // The selected tab is read by definition, even across its own turn.
     callbacks.onStatusChange(cone.jid, 'processing' as never);
     callbacks.onStatusChange(cone.jid, 'ready' as never);
     expect(unreadOf(cone.jid)).toBeUndefined();
 
-    // Selecting the scoop is the read receipt; the next repaint clears the dot.
-    wiring.selectScoop(asUnit(worker));
+    // Selecting the cone is the read receipt; the next repaint clears the dot.
+    wiring.selectScoop(asUnit(away));
     wiring.refreshScoops?.();
-    expect(unreadOf(worker.jid)).toBeUndefined();
+    expect(unreadOf(away.jid)).toBeUndefined();
   });
 
   it('counts a completed turn where a follower can still see it', () => {

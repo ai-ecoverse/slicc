@@ -54,34 +54,50 @@ function mountFollower(): {
 }
 
 const CONE = { jid: 'cone-a', name: 'cone', isCone: true, parentId: null };
+/** A second cone plus one of its scoops, both moving through `state`. */
 const roster = (state: 'working' | 'idle', turns?: number) => [
   CONE,
+  {
+    jid: 'cone-b',
+    name: 'cone',
+    isCone: true,
+    parentId: null,
+    state,
+    ...(turns === undefined ? {} : { turns }),
+  },
   {
     jid: 'scoop-a',
     name: 'helper',
     isCone: false,
-    parentId: 'cone-a',
+    parentId: 'cone-b',
     state,
     ...(turns === undefined ? {} : { turns }),
   },
 ];
 
 describe('follower strip unread', () => {
-  it('dots a followed scoop whose turn ended off-screen, and clears it on selection', () => {
+  it('dots a followed cone whose turn ended off-screen, and clears it on selection', () => {
     const { switcher, onScoopsList } = mountFollower();
     const unreadOf = (key: string): number | undefined =>
       switcher.scoops.find((chip) => chip.key === key)?.unread;
 
     onScoopsList(roster('working'), 'cone-a');
-    expect(unreadOf('scoop-a')).toBeUndefined();
+    expect(unreadOf('cone-b')).toBeUndefined();
     onScoopsList(roster('idle'), 'cone-a');
-    expect(unreadOf('scoop-a')).toBe(1);
+    expect(unreadOf('cone-b')).toBe(1);
     // Opening the tab is the read receipt here as well — the follower's own
     // click, which republishes the strip for the new selection.
     switcher.dispatchEvent(
-      new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' }, bubbles: true })
+      new CustomEvent('slicc-scoop-select', { detail: { key: 'cone-b' }, bubbles: true })
     );
-    expect(unreadOf('scoop-a')).toBeUndefined();
+    expect(unreadOf('cone-b')).toBeUndefined();
+  });
+
+  it("never dots a scoop, whose turns are its cone's work", () => {
+    const { switcher, onScoopsList } = mountFollower();
+    onScoopsList(roster('working'), 'cone-a');
+    onScoopsList(roster('idle'), 'cone-a');
+    expect(switcher.scoops.find((chip) => chip.key === 'scoop-a')?.unread).toBeUndefined();
   });
 
   it('dots a turn the coalescing window swallowed, seen only as a bumped counter', () => {
@@ -90,11 +106,11 @@ describe('follower strip unread', () => {
       switcher.scoops.find((chip) => chip.key === key)?.unread;
 
     onScoopsList(roster('idle', 3), 'cone-a');
-    expect(unreadOf('scoop-a')).toBeUndefined();
+    expect(unreadOf('cone-b')).toBeUndefined();
     // The leader ran a whole turn between these two frames. State says `idle`
     // both times; the counter is the only thing that says a turn ended.
     onScoopsList(roster('idle', 4), 'cone-a');
-    expect(unreadOf('scoop-a')).toBe(1);
+    expect(unreadOf('cone-b')).toBe(1);
   });
 
   it('opens a first roster with nothing unread', () => {
