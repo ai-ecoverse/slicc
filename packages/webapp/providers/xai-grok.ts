@@ -36,11 +36,13 @@ import {
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
+import type { ProviderBudgetWindow } from '../src/providers/provider-budget.js';
 import type {
   InterceptingOAuthLauncher,
   OAuthLoginOptions,
   ProviderConfig,
 } from '../src/providers/types.js';
+import { fetchXaiGrokUsage } from '../src/providers/xai-grok-usage.js';
 import { getAccounts, saveOAuthAccount } from '../src/ui/provider-settings.js';
 import { XaiErrorCode, XaiOAuthError } from './xai-grok-errors.js';
 
@@ -219,6 +221,26 @@ async function getValidAccessToken(): Promise<string> {
   return account.accessToken; // best-effort; xAI will 401 if revoked
 }
 
+/**
+ * The account's rolling SuperGrok allowance, or `null` when this account does
+ * not report one.
+ *
+ * Grok bills a subscription window rather than per token, so the session's
+ * dollars are a footnote — the window is what decides whether the next turn
+ * runs. The endpoint is undocumented; `xai-grok-usage.ts` carries the full
+ * account of it and the defensive posture that follows.
+ *
+ * Never logs in and never renews interactively — a decorative counter must not
+ * pop an auth window. Being signed out THROWS rather than returning `null`:
+ * `null` files the account under "this provider has no budget" for half an
+ * hour, so signing back in would keep showing dollars long after the session
+ * was valid again.
+ */
+async function getBudgetUsage(): Promise<ProviderBudgetWindow | null> {
+  if (!getXaiAccount()?.accessToken) throw new Error('xAI Grok budget: not signed in');
+  return fetchXaiGrokUsage(await getValidAccessToken(), fetch);
+}
+
 // ── Stream functions ───────────────────────────────────────────────
 
 function makeErrorOutput(model: Model<Api>, error: unknown): AssistantMessageEvent {
@@ -346,8 +368,21 @@ export const config: ProviderConfig = {
   requiresBaseUrl: false,
   isOAuth: true,
   defaultModelId: XAI_DEFAULT_MODEL_ID,
-  oauthTokenDomains: ['api.x.ai', '*.x.ai', 'auth.x.ai', 'accounts.x.ai'],
+  // A host absent from this list has its OAuth token MASKED by the fetch
+  // proxy — the request is then dropped CLIENT-SIDE, so curl exits non-zero
+  // with an empty body and NO http status. That reads like a network outage,
+  // not an auth problem, which is exactly the wrong place to start debugging.
+  // `cli-chat-proxy.grok.com` is here because the billing window lives there
+  // (see `src/providers/xai-grok-usage.ts`); `api.x.ai` has no usage route.
+  oauthTokenDomains: [
+    'api.x.ai',
+    '*.x.ai',
+    'auth.x.ai',
+    'accounts.x.ai',
+    'cli-chat-proxy.grok.com',
+  ],
   getModelIds: () => getNativeXaiModels().map(toModelMetadata),
+  getBudgetUsage,
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,
