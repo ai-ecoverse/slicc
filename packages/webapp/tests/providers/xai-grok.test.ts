@@ -361,3 +361,60 @@ describe('xai-grok provider', () => {
     expect(mocks.streamOpenAICompletions.mock.calls[0][2]).not.toHaveProperty('onPayload');
   });
 });
+
+describe('xai-grok budget window', () => {
+  const creditsBody = {
+    config: {
+      currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', end: '2026-09-11T19:03:46Z' },
+      creditUsagePercent: 23,
+    },
+  };
+
+  function stubFetch(status: number, body: unknown) {
+    const fetchImpl = vi.fn(async () => ({
+      ok: status >= 200 && status < 300,
+      status,
+      text: async () => JSON.stringify(body),
+    }));
+    vi.stubGlobal('fetch', fetchImpl);
+    return fetchImpl;
+  }
+
+  it('lists the billing proxy in oauthTokenDomains', () => {
+    // A host missing from this list has its token MASKED and the request
+    // dropped client-side — no status, no body, looks like a network outage.
+    // The budget probe is unreachable without this entry.
+    expect(config.oauthTokenDomains).toContain('cli-chat-proxy.grok.com');
+    expect(config.oauthTokenDomains).toContain('api.x.ai');
+  });
+
+  it('reports the rolling SuperGrok window through the generic hook', async () => {
+    const fetchImpl = stubFetch(200, creditsBody);
+
+    await expect(config.getBudgetUsage?.()).resolves.toMatchObject({
+      percent: 23,
+      window: 'weekly',
+      status: 'ok',
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringContaining('cli-chat-proxy.grok.com'),
+      expect.objectContaining({ headers: { Authorization: 'Bearer oauth-token' } })
+    );
+  });
+
+  it('THROWS when signed out instead of reporting "no budget"', async () => {
+    // `null` would file the account under "this provider has no budget" for
+    // half an hour, so signing back in would keep showing dollars. This costs
+    // no network — the check is local.
+    providerSettingsMocks.accounts = [];
+    const fetchImpl = stubFetch(200, creditsBody);
+
+    await expect(config.getBudgetUsage?.()).rejects.toThrow('not signed in');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('never lets a retired endpoint look like a failure', async () => {
+    stubFetch(404, {});
+    await expect(config.getBudgetUsage?.()).resolves.toBeNull();
+  });
+});

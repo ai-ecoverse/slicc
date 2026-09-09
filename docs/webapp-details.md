@@ -171,20 +171,36 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - Parse with `isFeatureEnabled`/`coerceFeatureFlagValue` (trimmed, case-insensitive `on`/`true`/`1`). With `overridableFloats`, precedence is local → remote → bundled. `experimental-settings` is worker-controlled (`userToggleable: false`).
 - `setupFeatureFlagsForPage` loads the isolated cache synchronously, then non-blocking `/api/flags?float=<float>` refresh; later config needs reload.
 
-## Budget-mode cost surfaces (`/v1/usage`)
+## Budget-mode cost surfaces
 
 A provider that bills against a **rolling allowance** rather than per token makes session
 dollars the wrong headline: a family-priced model can bill $0.00 while the shared window burns
-down. Adobe's LLM proxy is the first case, reporting one 7-day window over `GET /v1/usage`
-(OpenCode Go's public shape, same IMS token as `/v1/messages`).
+down. Two providers report one:
+
+- **Adobe** — one 7-day window over `GET /v1/usage` on the LLM proxy (OpenCode Go's public
+  shape, same IMS token as `/v1/messages`).
+- **xAI Grok** — the rolling SuperGrok allowance behind the grok.com Settings > Usage tab, over
+  `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the OAuth access token.
+  The route is **unofficial and undocumented** (it is the JSON transcoding of the gRPC-web
+  `GetGrokCreditsConfig` the web app calls, and `api.x.ai` has no usage route at all), so
+  `providers/xai-grok-usage.ts` caps the body before parsing, clamps the percent, and degrades
+  to "no window" on any shape it does not recognise. Dropping `?format=credits` silently returns
+  the monthly RPC's shape instead.
 
 - **Provider hook** — `ProviderConfig.getBudgetUsage?()` (`providers/types.ts`). Its contract is
   a three-way answer, and the distinction is load-bearing for the cache: `null` = "this provider
   has no budget concept / the proxy lacks the endpoint" (re-probed in 30 min), **throw** = "the
   call failed" (retried in 5 min, previous reading stays on screen), a window = a reading.
-  Adobe's implementation is `providers/adobe-usage.ts` (pure + injectable `fetch`, so it is
-  testable — `providers/adobe.ts` itself cannot be imported under vitest); a 404/501 is an
-  answer, every other non-OK status is a failure.
+  Both implementations are pure modules with an injectable `fetch`, so they are testable
+  without network (`providers/adobe.ts` itself cannot be imported under vitest):
+  `providers/adobe-usage.ts` and `providers/xai-grok-usage.ts`. A 404/501 is an answer — and the
+  likeliest way an undocumented route retires — while every other non-OK status is a failure;
+  Grok's 401/403 throws a "re-login required" message rather than reaching a render path.
+- **OAuth token masking (`oauthTokenDomains`)** — a budget endpoint on a host the provider does
+  not declare in `oauthTokenDomains` has its token **masked**, and the fetch proxy then drops
+  the request CLIENT-SIDE: no HTTP status, no body, which reads like a network outage rather
+  than an auth problem. `cli-chat-proxy.grok.com` is in xai-grok's list for exactly this reason.
+  At runtime the same fix is `oauth-domain add <provider> <host>` then `oauth-token --renew`.
 - **Cache** — `providers/budget-window-cache.ts`: success 60 s, failure 5 min, unsupported
   30 min, one shared in-flight probe, keyed by provider id so a switched account never inherits
   the previous one's allowance. `providers/budget-usage-source.ts` is the singleton over it.
