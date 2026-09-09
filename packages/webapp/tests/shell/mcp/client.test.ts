@@ -221,7 +221,13 @@ describe('McpClient: protocol negotiation', () => {
         ? {
             status: 400,
             statusText: 'Bad Request',
-            body: jsonRpcError(sent.id, -32000, 'Bad Request: Mcp-Session-Id header is required'),
+            // Verbatim wire payload from Cloudflare's `agents` SDK: the
+            // rejection is not attributable to a request, so `id` is null.
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: null,
+              error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' },
+            }),
           }
         : {
             headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'minted-session' },
@@ -366,6 +372,15 @@ describe('McpClient: protocol negotiation', () => {
     [
       'invalid JSON-RPC envelope',
       JSON.stringify({ error: { code: -32601, message: 'Method not found' } }),
+    ],
+    // A null id is tolerated on the error path; a wrong non-null id is not.
+    [
+      'mismatched non-null request id',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 99,
+        error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' },
+      }),
     ],
   ])('does not fall back on an %s HTTP 400 response', async (_label, body) => {
     const { fetchImpl, calls } = stubFetch(() => ({

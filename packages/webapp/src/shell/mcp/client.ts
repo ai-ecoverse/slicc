@@ -185,9 +185,11 @@ function rpcFailure(error: McpRpcError): Error {
 
 function rpcErrorFromFrame(
   frame: JsonRpcResponseFrame,
-  expectedId: number
+  expectedId: number,
+  opts?: { allowNullId?: boolean }
 ): McpRpcError | undefined {
-  if (frame.jsonrpc !== '2.0' || frame.id !== expectedId || Object.hasOwn(frame, 'result')) {
+  const idMatches = frame.id === expectedId || (opts?.allowNullId === true && frame.id === null);
+  if (frame.jsonrpc !== '2.0' || !idMatches || Object.hasOwn(frame, 'result')) {
     return undefined;
   }
   const error = frame.error;
@@ -196,10 +198,19 @@ function rpcErrorFromFrame(
     : undefined;
 }
 
+/**
+ * Parse the JSON-RPC error envelope out of an HTTP >= 400 body.
+ *
+ * A transport-level rejection is often raised before the server has attributed
+ * the payload to a request, and JSON-RPC 2.0 requires `id: null` in exactly
+ * that case (Cloudflare's `agents` SDK does this for its missing-session
+ * rejection). A null id is therefore accepted here, unlike on the success
+ * path, where the id is what associates a frame with its request.
+ */
 function parseRpcError(text: string, expectedId: number): McpRpcError | undefined {
   try {
     const frame = JSON.parse(text) as JsonRpcResponseFrame;
-    return rpcErrorFromFrame(frame, expectedId);
+    return rpcErrorFromFrame(frame, expectedId, { allowNullId: true });
   } catch {
     return undefined;
   }
