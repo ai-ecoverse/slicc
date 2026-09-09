@@ -653,6 +653,11 @@ describe('budget-mode cost surfaces', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  // fetchMonitorData formats the reset badge against Date.now(); pin it to NOW
+  // so the 18h-ahead fixture stays in the future no matter the wall clock.
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(NOW));
+  afterEach(() => vi.restoreAllMocks());
+
   const budget = (over: Partial<SessionBudgetWindow> = {}): SessionBudgetWindow => ({
     percent: 9.5,
     status: 'ok',
