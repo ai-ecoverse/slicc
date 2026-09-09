@@ -18,6 +18,7 @@ import * as justBash from 'just-bash';
 import type { DirEntry, Stats, VirtualFS } from '../fs/index.js';
 import { FsError, joinPath, normalizePath, statsFromDirEntry } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
+import { parkReadBytes } from './request-body-provenance.js';
 
 // just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
 // at the package root for the Node bundle, but NOT from the browser bundle).
@@ -46,6 +47,25 @@ interface DirentEntry {
   isFile: boolean;
   isDirectory: boolean;
   isSymbolicLink: boolean;
+}
+
+/**
+ * Decode a file's bytes into the string just-bash's `readFile` contract
+ * returns. UTF-8 first — valid text files decode cleanly. Binary files (PNG,
+ * JPEG, …) contain invalid UTF-8 sequences; fall back to latin1, which maps
+ * each byte to a char and so preserves every value.
+ */
+function decodeReadBytes(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
+    // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
+    // String.fromCharCode maps each byte directly to its Unicode codepoint.
+    const chars = new Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
+    return chars.join('');
+  }
 }
 
 /**
@@ -328,19 +348,12 @@ export class VfsAdapter implements IFileSystem {
       const normalized = normalizePath(path);
       const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
       const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
-      // Try UTF-8 first — valid text files decode cleanly.
-      // Binary files (PNG, JPEG, etc.) contain invalid UTF-8 sequences;
-      // fall back to latin1 which maps each byte to a char, preserving all values.
-      try {
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      } catch {
-        // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
-        // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
-        // String.fromCharCode maps each byte directly to its Unicode codepoint.
-        const chars = new Array(bytes.length);
-        for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
-        return chars.join('');
-      }
+      const text = decodeReadBytes(bytes);
+      // Which of the two decodings ran is not recoverable from the string, and
+      // a `curl -d @file` body has to be sent as the bytes on disk rather than
+      // a re-encoding of the string (see request-body-provenance.ts).
+      parkReadBytes(text, bytes);
+      return text;
     });
   }
 

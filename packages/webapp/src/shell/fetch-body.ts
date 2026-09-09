@@ -13,12 +13,24 @@ export function parseFetchJson<T>(body: FetchBody): T {
   return JSON.parse(decodeFetchBody(body)) as T;
 }
 
+/**
+ * The bytes a `FetchBody` stands for. A string is read under the latin1
+ * convention (one char per byte) that just-bash `curl` and git use to thread
+ * binary through a string body.
+ *
+ * A code unit above 0xFF cannot come from that convention — it is Unicode text
+ * that was never a byte string — so such a string is encoded as UTF-8 instead.
+ * Masking it (`charCodeAt(i) & 0xff`) silently dropped the high bits and turned
+ * `→` (U+2192) into a lone `0x92`.
+ */
 export function getFetchBodyBytes(body: FetchBody): Uint8Array {
   if (typeof body !== 'string') return body;
-
+  for (let i = 0; i < body.length; i++) {
+    if (body.charCodeAt(i) > 0xff) return new TextEncoder().encode(body);
+  }
   const bytes = new Uint8Array(body.length);
   for (let i = 0; i < body.length; i++) {
-    bytes[i] = body.charCodeAt(i) & 0xff;
+    bytes[i] = body.charCodeAt(i);
   }
   return bytes;
 }
