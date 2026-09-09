@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -639,6 +639,13 @@ describe('budget-mode cost surfaces', () => {
   const NOW = Date.parse('2026-09-08T12:00:00.000Z');
   const RESETS_IN_18H = new Date(NOW + 18 * 60 * 60 * 1000).toISOString();
 
+  // fetchMonitorData reads Date.now(); RESETS_IN_18H is a wall-clock instant
+  // (2026-09-09T06:00Z). After that, formatBudgetResets prints "resetting now".
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   const budget = (over: Partial<SessionBudgetWindow> = {}): SessionBudgetWindow => ({
     percent: 9.5,
     status: 'ok',
@@ -731,7 +738,7 @@ describe('budget-mode cost surfaces', () => {
       expect(cost.meta).toBe('9.5% of weekly budget · $29.06 across 1 models');
       expect(cost.status).toBe('active');
       expect(cost.rows[0]).toMatchObject({ name: 'Weekly budget', meta: '9.5% used' });
-      expect(cost.rows[0].badges?.[0]).toMatch(/^resets in/);
+      expect(cost.rows[0].badges?.[0]).toBe('resets in 18h');
       // Per-model dollars keep their rows, below the window.
       expect(cost.rows[1]).toMatchObject({ name: 'claude-opus-5', meta: '$20.3400' });
     });
