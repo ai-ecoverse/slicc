@@ -482,6 +482,73 @@ describe('full document rendering', () => {
     expect(bridge.readFile).not.toHaveBeenCalled();
   });
 
+  it('updates and clears preset overrides in the iframe bridge', async () => {
+    const renderer = new SprinkleRenderer(container, makeBridge('theme-test'));
+    await renderer.render(
+      '<!DOCTYPE html><html><head></head><body>Theme</body></html>',
+      'theme-test'
+    );
+    const srcdoc = container.querySelector('iframe')!.srcdoc;
+    const frameDom = new JSDOM(srcdoc, { runScripts: 'dangerously' });
+    const root = frameDom.window.document.documentElement;
+    const theme = (isLight: boolean, overrides: object | null) => {
+      frameDom.window.dispatchEvent(
+        new frameDom.window.MessageEvent('message', {
+          data: { type: 'slicc-theme', isLight, overrides },
+          source: frameDom.window.parent,
+        })
+      );
+    };
+    theme(false, { '--s2-accent': '#abcdef', '--s2-bg-base': '#101010' });
+    expect(root.classList.contains('theme-light')).toBe(false);
+    expect(root.style.getPropertyValue('--s2-accent')).toBe('#abcdef');
+    theme(true, { '--s2-accent': '#123456' });
+    expect(root.classList.contains('theme-light')).toBe(true);
+    expect(root.style.getPropertyValue('--s2-accent')).toBe('#123456');
+    expect(root.style.getPropertyValue('--s2-bg-base')).toBe('');
+    theme(true, null);
+    expect(root.style.getPropertyValue('--s2-accent')).toBe('');
+    frameDom.window.close();
+    renderer.dispose();
+  });
+
+  it('rehydrates the current state and theme after an iframe reload', async () => {
+    const bridge = makeBridge('work-list');
+    const getState = vi.mocked(bridge.getState);
+    getState.mockReturnValue({ items: ['first'] });
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head></head><body>Queue</body></html>',
+      'work-list'
+    );
+    const iframe = container.querySelector('iframe')!;
+    const post = vi.spyOn(iframe.contentWindow!, 'postMessage');
+
+    getState.mockReturnValue({ items: ['first', 'second'] });
+    dom.window.document.body.setAttribute('data-theme', 'light');
+    iframe.dispatchEvent(new dom.window.Event('load'));
+    expect(post).toHaveBeenCalledWith(
+      { type: 'slicc-theme', isLight: true, overrides: null, css: '' },
+      '*'
+    );
+    expect(post).toHaveBeenCalledWith(
+      { type: 'sprinkle-init', name: 'work-list', savedState: { items: ['first', 'second'] } },
+      '*'
+    );
+
+    post.mockClear();
+    dom.window.document.body.setAttribute('data-theme', 'dark');
+    iframe.dispatchEvent(new dom.window.Event('load'));
+    expect(post).toHaveBeenCalledWith(
+      { type: 'slicc-theme', isLight: false, overrides: null, css: '' },
+      '*'
+    );
+    renderer.dispose();
+    post.mockClear();
+    iframe.dispatchEvent(new dom.window.Event('load'));
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('dispose removes full-doc iframe', async () => {
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);

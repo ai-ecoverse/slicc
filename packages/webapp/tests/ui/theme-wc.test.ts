@@ -65,6 +65,7 @@ describe('watchSprinkleThemeBroadcast', () => {
         posts.push(msg),
     } as unknown as Window;
     registerSprinkleWindow(fakeWindow);
+    expect(posts.at(-1)).toMatchObject({ type: 'slicc-theme', isLight: isThemeLight() });
     watchSprinkleThemeBroadcast();
 
     document.body.setAttribute('data-theme', 'light');
@@ -149,7 +150,7 @@ describeWithStorage('theme override broadcast to sprinkles', () => {
     setActiveTheme('bc-test');
     applyTheme();
 
-    const msg = posts.find((p: any) => p.type === 'slicc-theme') as any;
+    const msg = posts.filter((p: any) => p.type === 'slicc-theme').at(-1) as any;
     expect(msg).toBeDefined();
     expect(msg.overrides).toBeDefined();
     expect(msg.overrides['--s2-accent']).toBe('#abcdef');
@@ -164,7 +165,7 @@ describeWithStorage('theme override broadcast to sprinkles', () => {
 
     applyTheme();
 
-    const msg = posts.find((p: any) => p.type === 'slicc-theme') as any;
+    const msg = posts.filter((p: any) => p.type === 'slicc-theme').at(-1) as any;
     expect(msg).toBeDefined();
     expect(msg.overrides).toBeNull();
   });

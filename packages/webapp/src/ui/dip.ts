@@ -35,6 +35,7 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
+import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
   runJshOp,
   type SprinkleAgentOptions,
@@ -321,10 +322,11 @@ function buildBridgeScript(includeExec: boolean): string {
     parent.postMessage({ type: 'dip-height',
       height: document.documentElement.scrollHeight }, '*');
   }
+  ${iframeThemeBridgeSource}
   window.addEventListener('message', function(e) {
     if (!e.data || typeof e.data.type !== 'string') return;
     if (e.data.type === 'slicc-theme') {
-      document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+      applyIframeTheme(e);
       return;
     }
     /* Pushed device events (currently 'hid:inputreport'). The host

@@ -10,6 +10,7 @@
 
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from '@slicc/shared-ts';
 import type { EntryType } from '../fs/index.js';
+import { iframeThemeBridgeSource } from './iframe-theme.js';
 import {
   iframeFetchResponseSource,
   type SprinkleAgentOptions,
@@ -427,6 +428,8 @@ export class SprinkleRenderer {
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
   private iframe: HTMLIFrameElement | null = null;
+  private iframeLoadHandler: (() => void) | null = null;
+  private registeredWindow: Window | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityObserver: IntersectionObserver | null = null;
   private bridgeLifecycleReady = false;
@@ -498,6 +501,7 @@ export class SprinkleRenderer {
   var _state = null;
   var _cbId = 0;
   var _callbacks = {};
+  ${iframeThemeBridgeSource}
 
   window.addEventListener('message', function(event) {
     var msg = event.data;
@@ -515,7 +519,7 @@ export class SprinkleRenderer {
         });
       }
     } else if (msg.type === 'slicc-theme') {
-      document.documentElement.classList.toggle('theme-light', !!msg.isLight);
+      applyIframeTheme(event);
     } else if (msg.id && _callbacks[msg.id]) {
       var cb = _callbacks[msg.id];
       delete _callbacks[msg.id];
@@ -847,14 +851,21 @@ export class SprinkleRenderer {
     this.messageHandler = createIframeMessageListener(iframe, handlers);
     window.addEventListener('message', this.messageHandler);
 
-    const loaded = waitForIframeLoad(iframe, () => {
-      // Register with theme broadcaster so prefers-color-scheme changes flip CSS vars live
-      registerSprinkleWindow(iframe.contentWindow);
+    // Reparenting a srcdoc iframe creates a new document. Hydrate from the
+    // current bridge state and theme on every load, not just the first one.
+    this.iframeLoadHandler = () => {
+      unregisterSprinkleWindow(this.registeredWindow);
+      this.registeredWindow = iframe.contentWindow;
+      registerSprinkleWindow(this.registeredWindow);
       const savedState = this.bridge.getState();
       iframe.contentWindow?.postMessage(
         { type: 'sprinkle-init', name: sprinkleName, savedState },
         '*'
       );
+    };
+    iframe.addEventListener('load', this.iframeLoadHandler);
+
+    const loaded = waitForIframeLoad(iframe, () => {
       // Force a layout read while the pin (or the used 100% box) is in
       // effect, then restore percentage sizing so later panel resizes
       // still flow into the frame.
@@ -946,7 +957,12 @@ export class SprinkleRenderer {
       this.messageHandler = null;
     }
     if (this.iframe) {
-      unregisterSprinkleWindow(this.iframe.contentWindow);
+      if (this.iframeLoadHandler) {
+        this.iframe.removeEventListener('load', this.iframeLoadHandler);
+        this.iframeLoadHandler = null;
+      }
+      unregisterSprinkleWindow(this.registeredWindow);
+      this.registeredWindow = null;
       this.iframe.remove();
       this.iframe = null;
     }
@@ -1003,6 +1019,9 @@ export function collectThemeCSS(): string {
       );
     });
   for (const sheet of document.styleSheets) {
+    // Dynamic overrides arrive through slicc-theme; freezing them here would
+    // leave old preset colors behind after a theme switch or reset.
+    if ((sheet.ownerNode as HTMLElement | null)?.id === 'slicc-theme-overrides') continue;
     try {
       for (const rule of sheet.cssRules) {
         if (rule instanceof CSSFontFaceRule) {

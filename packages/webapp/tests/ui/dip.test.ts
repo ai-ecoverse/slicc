@@ -399,6 +399,8 @@ describe('mountDraftDip', () => {
     });
 
     iframe.dispatchEvent(new Event('load'));
+    // Registration now hydrates the theme; count only subsequent content updates.
+    postSpy.mockClear();
 
     draft.update('<div>same</div>');
     draft.update('<div>same</div>');

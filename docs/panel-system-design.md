@@ -423,3 +423,18 @@ Behavioral change to call out: `sessions-rail` (the freezer) is `position: fixed
 today, reserving space via `--rail-w` on `.wcui-appcol`. As a real docked panel
 it moves into flow, and its expand/collapse becomes a size change rather than an
 overlay + padding transition.
+
+### Sprinkle reloads after layout changes
+
+Full-document sprinkles receive the current `slicc-theme` message followed by
+`sprinkle-init` on every iframe load, including loads caused by rail reparenting.
+The init payload reads the latest saved bridge state. A sprinkle should restore
+its state when it receives `sprinkle-init`, before persisting startup defaults.
+Theme registration immediately sends the active theme and custom overrides;
+subsequent changes continue through the same broadcaster.
+
+Theme tokens are sanitized before broadcast using the same validation as the
+parent theme engine. Sanitized `.sprinkle-*` and `.fill` rules travel with the
+update instead of being frozen into the initial document. Sprinkles and dips
+share a receiver that accepts theme messages only from their parent and replaces
+or clears both tokens and custom rules when a preset changes or resets.
