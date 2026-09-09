@@ -40,6 +40,8 @@ The runtime renders the upgrade lick as a binary action card automatically — y
 
 The card flips to ✓ on confirm / muted ✗ on dismiss. Never auto-run the merge — the user must choose. Reviewing the changelog is **not** a card action; it is a separate step you can run first to help the user decide.
 
+**Before `lick_confirm` or `lick_dismiss`, check `list_scoops`.** A scoop that is `processing` may lose its in-flight work when the runtime moves to the new version. There is **no notification** — the scoop can look `ready` / finished, indistinguishable from a clean completion. Wait until every scoop is idle, or expect to re-feed any that were still working. Idle scoops survive.
+
 ## Which version am I running?
 
 `uname -r` prints the running version. `upgrade status` adds the last-booted one, whether a merge is pending, and the exact `upgrade apply` line to run when it is — that is where `--from`/`--to` come from without a card on screen. Realm scripts read `globalThis.SLICC_VERSION`.
@@ -99,6 +101,7 @@ Notes worth knowing:
 
 ## Do not
 
+- Do not call `lick_confirm` or `lick_dismiss` while `list_scoops` shows a scoop `processing`. In-flight work can drop to `ready` with no notification; wait until scoops are idle, or expect to re-feed them.
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
 - Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, `/shared/MEMORY.md`, and `/etc/` without the user explicitly extending the scope.
