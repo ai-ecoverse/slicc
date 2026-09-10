@@ -42,6 +42,7 @@ const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockSessionStore: vi.fn(function (this: any) {
     this.init = vi.fn().mockResolvedValue(undefined);
     this.saveMessages = vi.fn().mockResolvedValue(undefined);
+    this.load = vi.fn().mockResolvedValue(undefined);
     this.delete = vi.fn().mockResolvedValue(undefined);
   }),
   mockHandleAction: vi.fn().mockResolvedValue(undefined),
@@ -1495,6 +1496,30 @@ describe('Bridge follower mode', () => {
     expect(replaced).toBeDefined();
     expect(replaced.payload.scoopJid).toBe('cone_1');
     expect(replaced.payload.messages).toHaveLength(2);
+  });
+
+  it('applyFollowerSnapshot carries lickId/lickState onto the cone buffer', () => {
+    bridge.applyFollowerSnapshot([
+      {
+        id: 'sudo-request-lick-1',
+        role: 'user',
+        content: '[@test-scoop sudo-request]\nLick ID: lick-1\nKind: command\nDetail: git push',
+        timestamp: 100,
+        channel: 'sudo-request',
+        lickId: 'lick-1',
+        lickState: 'confirmed',
+      },
+    ] as any);
+
+    const after = (bridge as any).getBuffer('cone_1');
+    expect(after[0]).toMatchObject({ lickId: 'lick-1', lickState: 'confirmed' });
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced.payload.messages[0]).toMatchObject({
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
   });
 
   it('applyFollowerSnapshot is a noop when no orchestrator or no cone', () => {
@@ -3372,5 +3397,184 @@ describe('Bridge seedBuffersFromAgentState', () => {
   it('is a no-op when the orchestrator is not bound', async () => {
     const fresh = new Bridge();
     await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
+  });
+
+  const sudoBody = '[@test-scoop sudo-request]\nLick ID: lick-1\nKind: command\nDetail: git push';
+  const sudoHistory = [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: `[9/10/2026, 12:00:00 PM] test-scoop: ${sudoBody}` }],
+      timestamp: 10,
+    },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'noted' }],
+      timestamp: 11,
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      stopReason: 'stop',
+    },
+  ];
+
+  it.each(['confirmed', 'dismissed'] as const)(
+    'reseed keeps a %s sudo-request glyph instead of reverting to pending (#3004)',
+    async (lickState) => {
+      const context = makeContext(sudoHistory);
+      await bridge.bind({
+        getScoops: vi.fn(() => [coneScoop]),
+        getScoopContext: vi.fn(() => context),
+      } as any);
+      const store = (bridge as any).sessionStore;
+      store.load.mockResolvedValue({
+        id: 'session-cone',
+        messages: [
+          {
+            id: 'sudo-request-lick-1',
+            role: 'user',
+            content: sudoBody,
+            timestamp: 10,
+            source: 'lick',
+            channel: 'sudo-request',
+            lickId: 'lick-1',
+            lickState,
+          },
+        ],
+      });
+
+      await bridge.seedBuffersFromAgentState();
+
+      const buf = (bridge as any).getBuffer('cone_1');
+      const card = buf.find((m: { lickId?: string }) => m.lickId === 'lick-1');
+      expect(card).toMatchObject({
+        id: 'sudo-request-lick-1',
+        channel: 'sudo-request',
+        lickId: 'lick-1',
+        lickState,
+      });
+      expect(card.lickState).not.toBe('pending');
+      const persisted = store.saveMessages.mock.calls[0][1];
+      expect(persisted.find((m: { lickId?: string }) => m.lickId === 'lick-1')).toMatchObject({
+        lickId: 'lick-1',
+        lickState,
+      });
+    }
+  );
+
+  it('reseed does not invent a settled glyph when the store has none', async () => {
+    const context = makeContext(sudoHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+
+    await bridge.seedBuffersFromAgentState();
+
+    const buf = (bridge as any).getBuffer('cone_1');
+    const card = buf.find((m: { channel?: string }) => m.channel === 'sudo-request');
+    expect(card).toMatchObject({ lickId: 'lick-1', channel: 'sudo-request' });
+    expect(card.lickState).toBeUndefined();
+  });
+
+  it('reseed recovers a settled glyph from the channel-message DB when the UI store is stale', async () => {
+    const context = makeContext(sudoHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+      getMessagesForScoop: vi.fn(async () => [
+        {
+          id: 'sudo-request-lick-1',
+          chatJid: 'cone_1',
+          senderId: 'test-scoop',
+          senderName: 'test-scoop',
+          content: sudoBody,
+          timestamp: '2026-09-10T00:00:00.000Z',
+          fromAssistant: false,
+          channel: 'sudo-request',
+          lickId: 'lick-1',
+          lickState: 'confirmed',
+        },
+      ]),
+    } as any);
+    const store = (bridge as any).sessionStore;
+    store.load.mockResolvedValue({
+      id: 'session-cone',
+      messages: [
+        {
+          id: 'sudo-request-lick-1',
+          role: 'user',
+          content: sudoBody,
+          timestamp: 10,
+          source: 'lick',
+          channel: 'sudo-request',
+          lickId: 'lick-1',
+          lickState: 'pending',
+        },
+      ],
+    });
+
+    await bridge.seedBuffersFromAgentState();
+
+    const card = (bridge as any)
+      .getBuffer('cone_1')
+      .find((m: { lickId?: string }) => m.lickId === 'lick-1');
+    expect(card.lickState).toBe('confirmed');
+    const persisted = store.saveMessages.mock.calls[0][1];
+    expect(persisted.find((m: { lickId?: string }) => m.lickId === 'lick-1')?.lickState).toBe(
+      'confirmed'
+    );
+  });
+
+  it('reseed does not stamp a settled lick onto a later row that quotes the lick id', async () => {
+    const echoHistory = [
+      ...sudoHistory,
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '[9/10/2026, 12:01:00 PM] User: approved Lick ID: lick-1 just now',
+          },
+        ],
+        timestamp: 12,
+      },
+    ];
+    const context = makeContext(echoHistory);
+    await bridge.bind({
+      getScoops: vi.fn(() => [coneScoop]),
+      getScoopContext: vi.fn(() => context),
+    } as any);
+    const store = (bridge as any).sessionStore;
+    store.load.mockResolvedValue({
+      id: 'session-cone',
+      messages: [
+        {
+          id: 'sudo-request-lick-1',
+          role: 'user',
+          content: sudoBody,
+          timestamp: 10,
+          source: 'lick',
+          channel: 'sudo-request',
+          lickId: 'lick-1',
+          lickState: 'confirmed',
+        },
+      ],
+    });
+
+    await bridge.seedBuffersFromAgentState();
+
+    const buf = (bridge as any).getBuffer('cone_1');
+    const cards = buf.filter((m: { lickId?: string }) => m.lickId === 'lick-1');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      id: 'sudo-request-lick-1',
+      channel: 'sudo-request',
+      lickState: 'confirmed',
+    });
+    const echo = buf.find((m: { content: string }) => m.content.includes('approved Lick ID'));
+    expect(echo).toBeDefined();
+    expect(echo.id).not.toBe('sudo-request-lick-1');
+    expect(echo.lickState).toBeUndefined();
+    expect(echo.lickId).toBeUndefined();
   });
 });

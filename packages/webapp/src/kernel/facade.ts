@@ -864,9 +864,10 @@ export class Bridge implements KernelFacade {
     if (!this.orchestrator) return;
     const cone = rootsOf(this.orchestrator.getScoops())[0];
     if (!cone) return;
-    // Same projector as the leader rebuild so `error` / `compaction` cannot
-    // silently drop here when they are added there. Streaming is the one
-    // field a live leader snapshot may still carry, so it is restored after.
+    // Same projector as the leader rebuild so `error` / `compaction` /
+    // `lickId`/`lickState` cannot silently drop here when they are added
+    // there. Streaming is the one field a live leader snapshot may still
+    // carry, so it is restored after.
     const buf = toBufferedChatMessages(messages).map((row, i) => ({
       ...row,
       isStreaming: messages[i]?.isStreaming,
@@ -994,10 +995,13 @@ export class Bridge implements KernelFacade {
     // Without this a rebuild from live agent state (every boot seed) would be
     // the transcript MINUS its seams, and persist that over the UI store.
     const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
-    return this.withPersistedErrorCards(
+    return this.overlayPersistedLickDecisionsOn(
       scoop,
-      toBufferedChatMessages(
-        interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+      await this.withPersistedErrorCards(
+        scoop,
+        toBufferedChatMessages(
+          interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+        )
       )
     );
   }
@@ -1041,7 +1045,51 @@ export class Bridge implements KernelFacade {
     const { toChatMessages } = await import('../work-unit/conversation/derive.js');
     const chatMessages = await toChatMessages(record, { source: sourceLabelFor(scoop) });
     if (chatMessages.length === 0) return null;
-    return this.withPersistedErrorCards(scoop, toBufferedChatMessages(chatMessages));
+    return this.overlayPersistedLickDecisionsOn(
+      scoop,
+      await this.withPersistedErrorCards(scoop, toBufferedChatMessages(chatMessages))
+    );
+  }
+
+  /**
+   * Fold `lickId`/`lickState` onto a Pi-history rebuild. The UI store is the
+   * live snapshot; the orchestrator channel-message DB is the durable write
+   * `persistLickDecision` awaits. `applyMessageUpdate` persists the UI store
+   * fire-and-forget, so a reload that races that write still recovers the
+   * settled glyph from the channel DB. Failures here cost the glyph, not the
+   * transcript.
+   */
+  private async overlayPersistedLickDecisionsOn(
+    scoop: RegisteredScoop,
+    buf: BufferedChatMessage[]
+  ): Promise<BufferedChatMessage[]> {
+    if (!buf.some((m) => m.channel === 'sudo-request' || m.lickId || m.lickState)) return buf;
+    const stored: PersistedLickDecision[] = [];
+    if (this.sessionStore) {
+      try {
+        const session = await this.sessionStore.load(chatSessionIdFor(scoop));
+        if (session?.messages) stored.push(...session.messages);
+      } catch {
+        // glyph only
+      }
+    }
+    try {
+      const channel = await this.orchestrator?.getMessagesForScoop?.(scoop.jid);
+      if (channel) {
+        for (const m of channel) {
+          stored.push({
+            id: m.id,
+            content: m.content,
+            channel: m.channel,
+            lickId: m.lickId,
+            lickState: m.lickState,
+          });
+        }
+      }
+    } catch {
+      // glyph only
+    }
+    return overlayPersistedLickDecisions(buf, stored);
   }
 
   /**
@@ -2451,6 +2499,10 @@ function formatTranscript(messages: ReadonlyArray<{ role: string; content: strin
  * hand the panel identically-shaped rows — the field list is explicit on
  * purpose, so a new `ChatMessage` field is a compile-time decision here
  * rather than silently riding into the buffer.
+ *
+ * `lickId`/`lickState` (#3004) and `error` (#3003) are out-of-band (not in
+ * Pi history). Dropping them here lets `persistScoopAwait` clobber a settled
+ * sudo-request glyph or a cone-error card.
  */
 function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedChatMessage[] {
   return chatMessages.map((m) => ({
@@ -2461,6 +2513,8 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
     timestamp: m.timestamp,
     source: m.source,
     channel: m.channel,
+    lickId: m.lickId,
+    lickState: m.lickState,
     toolCalls: m.toolCalls?.map((tc) => ({
       id: tc.id,
       name: tc.name,
@@ -2521,4 +2575,93 @@ function bufferedTime(message: { timestamp: number }): number {
     if (!Number.isNaN(parsed)) return parsed;
   }
   return Number.NEGATIVE_INFINITY;
+}
+
+/** Subset of a UI-store row the reseed overlay copies lick decisions from. */
+interface PersistedLickDecision {
+  id: string;
+  content: string;
+  channel?: string;
+  lickId?: string;
+  lickState?: BufferedChatMessage['lickState'];
+}
+
+function isSettledLickState(
+  state: BufferedChatMessage['lickState']
+): state is 'confirmed' | 'dismissed' {
+  return state === 'confirmed' || state === 'dismissed';
+}
+
+/**
+ * A sudo-request (or other actionable lick) card, not ordinary prose that
+ * happens to mention a lick id.
+ */
+function isActionableLickRow(m: PersistedLickDecision): boolean {
+  return (
+    m.channel === 'sudo-request' || !!m.lickId || !!m.lickState || m.id.startsWith('sudo-request-')
+  );
+}
+
+/**
+ * Recover an actionable lick id from a reconstructed row. Live cards stamp
+ * `lickId`; a Pi-history rebuild may only have it in the sudo-request body
+ * (`Lick ID:` today, `Request ID:` on older envelopes) or the canonical
+ * `sudo-request-<id>` message id. Ordinary rows that quote those lines are
+ * not cards and must not match.
+ */
+function lickIdOf(m: PersistedLickDecision): string | undefined {
+  if (m.lickId) return m.lickId;
+  if (!isActionableLickRow(m)) return undefined;
+  const fromBody = /^(?:Lick ID|Request ID): (\S+)/m.exec(m.content)?.[1];
+  if (fromBody) return fromBody;
+  return m.id.startsWith('sudo-request-') ? m.id.slice('sudo-request-'.length) : undefined;
+}
+
+function rememberLickDecision(
+  map: Map<string, PersistedLickDecision>,
+  key: string,
+  msg: PersistedLickDecision
+): void {
+  const existing = map.get(key);
+  if (!existing || (isSettledLickState(msg.lickState) && !isSettledLickState(existing.lickState))) {
+    map.set(key, msg);
+  }
+}
+
+/**
+ * Copy persisted `lickId`/`lickState` onto a Pi-history rebuild so
+ * `persistScoopAwait` cannot replace a settled sudo-request glyph with the
+ * pending default. Store values win; a settled state is never replaced by
+ * pending/absent.
+ */
+function overlayPersistedLickDecisions(
+  rebuilt: BufferedChatMessage[],
+  stored: readonly PersistedLickDecision[] | undefined
+): BufferedChatMessage[] {
+  if (!stored || stored.length === 0) return rebuilt;
+  const byLickId = new Map<string, PersistedLickDecision>();
+  const byId = new Map<string, PersistedLickDecision>();
+  const byContent = new Map<string, PersistedLickDecision>();
+  for (const m of stored) {
+    if (!isActionableLickRow(m)) continue;
+    const lickId = lickIdOf(m);
+    if (lickId) rememberLickDecision(byLickId, lickId, m);
+    rememberLickDecision(byId, m.id, m);
+    rememberLickDecision(byContent, m.content, m);
+  }
+  return rebuilt.map((row) => {
+    if (!isActionableLickRow(row)) return row;
+    const rowLickId = lickIdOf(row);
+    const prior =
+      (rowLickId ? byLickId.get(rowLickId) : undefined) ??
+      byId.get(row.id) ??
+      byContent.get(row.content);
+    if (!prior || (!prior.lickId && !prior.lickState)) return row;
+    const lickId = prior.lickId ?? rowLickId ?? lickIdOf(prior);
+    const lickState = isSettledLickState(prior.lickState)
+      ? prior.lickState
+      : (row.lickState ?? prior.lickState);
+    if (lickId === row.lickId && lickState === row.lickState && prior.id === row.id) return row;
+    return { ...row, id: prior.id, lickId, lickState };
+  });
 }

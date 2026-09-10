@@ -1270,6 +1270,10 @@ export interface ScoopMessagesReplacedMsg {
      * from the replay instead of losing the live `error` event.
      */
     error?: boolean;
+    /** Actionable-lick id so a remounted panel / follower can flip the card. */
+    lickId?: string;
+    /** Settled sudo-request glyph: pending / confirmed / dismissed (#3004). */
+    lickState?: 'pending' | 'confirmed' | 'dismissed';
   }>;
   /**
    * Ids of the messages still pending in the orchestrator's queue for this

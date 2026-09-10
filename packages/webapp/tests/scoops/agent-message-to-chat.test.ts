@@ -118,6 +118,26 @@ describe('lickChannelFromBody', () => {
     expect(out).toHaveLength(1);
     expect(out[0].source).toBe('lick');
     expect(out[0].channel).toBe('sudo-request');
+    expect(out[0].lickId).toBe('sudo-mqf7gh5c-cr56age9');
+    expect(out[0].id).toBe('sudo-request-sudo-mqf7gh5c-cr56age9');
+    expect(out[0].lickState).toBeUndefined();
+  });
+
+  it('replayed sudo-request bodies recover lickId from the Lick ID line', () => {
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[9/10/2026, 12:00:00 PM] test-scoop: [@test-scoop sudo-request]\nLick ID: lick-1\nKind: command\nDetail: git push'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out[0]).toMatchObject({
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+      id: 'sudo-request-lick-1',
+    });
+    expect(out[0].lickState).toBeUndefined();
   });
 });
 
