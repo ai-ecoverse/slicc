@@ -253,7 +253,14 @@ struct ServerCommand: AsyncParsableCommand {
             logger: Logger(label: "slicc.cdp-proxy"),
             secretInjector: secretInjector
         )
-        let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
+        var httpConfiguration = HTTPClient.Configuration()
+        // Inflate declared gzip/br so /api/fetch-proxy does not forward
+        // compressed bytes after stripping `content-encoding` (#3037).
+        httpConfiguration.decompression = .enabled(limit: .ratio(25))
+        let httpClient = HTTPClient(
+            eventLoopGroupProvider: .singleton,
+            configuration: httpConfiguration
+        )
         let startupLatch = ServerStartupLatch()
 
         let router = Router(context: BasicRequestContext.self)

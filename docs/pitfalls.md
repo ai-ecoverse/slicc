@@ -942,6 +942,15 @@ reader doesn't go hunting for a launcher that never died.
 
 **Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
 
+### Pre-gzipped assets without `content-encoding`
+
+AEM Edge Delivery / Fastly often keep a gzip member in cache and, when asked for `identity`, still return those bytes **without** `content-encoding`. Native top-level navigation inflates them; `/api/fetch-proxy` used to forward the gzip magic labeled `text/javascript`, so in-page `import()` / `<script type=module>` threw `SyntaxError: Invalid or unexpected token`.
+
+The proxy no longer forces `accept-encoding: identity`. undici / AsyncHTTPClient negotiate gzip/br and decode a declared coding; a gzip-magic sniff (`1f 8b`) inflates the undeclared-cache case. `content-encoding` is stripped because `llm-proxy-response.ts` `synthesizeForwardResponse()` copies headers onto `new Response()`, which does **not** inflate.
+
+- Node: `packages/node-server/src/fetch-proxy-gzip.ts` + `routes/fetch-proxy.ts`
+- Swift: `packages/swift-server/Sources/Server/FetchProxyGzip.swift` + `APIRoutes.swift`
+
 ### The overlay CSP-strip proxy is a DIFFERENT hop
 
 The Electron / Sliccstart overlay has its own proxy, and it is **not**

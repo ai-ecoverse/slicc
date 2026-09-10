@@ -9,6 +9,7 @@ import {
   unmaskFormBody,
 } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
+import { createMaybeGunzipStream } from '../fetch-proxy-gzip.js';
 import {
   buildFetchProxyExposeHeaders,
   FETCH_PROXY_CONTENT_LENGTH_HEADER,
@@ -54,7 +55,8 @@ async function collectRawBody(req: Request): Promise<Buffer> {
 /**
  * Build the forwarded header set: copy non-hop-by-hop headers, then restore
  * the forbidden-header transports (Cookie/Origin/Referer/Proxy-*) the browser
- * could not send via fetch(), and force an identity encoding.
+ * could not send via fetch(). `accept-encoding` is skipped so undici
+ * negotiates gzip/br and decompresses transparently (#3037).
  */
 function buildForwardHeaders(req: Request, targetUrl: string): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -101,10 +103,6 @@ function buildForwardHeaders(req: Request, targetUrl: string): Record<string, st
       delete headers[key];
     }
   }
-  // Always request uncompressed responses — the proxy doesn't decompress and
-  // the browser→proxy hop is localhost, so compression has no benefit and
-  // would arrive as garbage once Content-Encoding is stripped below.
-  headers['accept-encoding'] = 'identity';
   return headers;
 }
 
@@ -306,24 +304,25 @@ function streamUpstreamBody(
   const upstreamStream = Readable.fromWeb(
     upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
   );
+  const decoded = createMaybeGunzipStream();
   const scrubChunk = createScrubStream(secretProxy, isText);
-  upstreamStream.on('error', (err) => {
+  const onStreamError = (err: Error) => {
     detachClientClose();
     if (!res.headersSent) {
       res.setHeader('X-Proxy-Error', '1');
-      res
-        .status(502)
-        .json({ error: `Proxy stream failed: ${err instanceof Error ? err.message : err}` });
+      res.status(502).json({ error: `Proxy stream failed: ${err.message}` });
     } else {
       res.destroy(err);
     }
-  });
+  };
+  upstreamStream.on('error', onStreamError);
+  decoded.on('error', onStreamError);
   // Belt-and-braces cleanup: 'finish' fires once the response is fully flushed;
   // 'close' fires regardless of how the response ended. Either way the abort
   // listener should be gone.
   res.on('finish', detachClientClose);
   res.on('close', detachClientClose);
-  upstreamStream.pipe(scrubChunk).pipe(res);
+  upstreamStream.pipe(decoded).pipe(scrubChunk).pipe(res);
 }
 
 /**

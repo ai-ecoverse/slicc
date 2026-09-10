@@ -100,6 +100,7 @@ describe('FETCH_PROXY_SKIP_HEADERS contract', () => {
       'x-proxy-cookie',
       'x-proxy-origin',
       'x-proxy-referer',
+      'accept-encoding',
     ]) {
       expect(FETCH_PROXY_SKIP_HEADERS.has(header)).toBe(true);
     }
