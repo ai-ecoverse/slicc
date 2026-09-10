@@ -191,8 +191,8 @@
          draws NO boxes of its own — flat entries separated by hairlines,
          one pill button per entry, everything else plain text. */
       #gelatiereStream[hidden] { display: none; }
-      .gelatiere-entry { padding: 14px 2px; }
-      .gelatiere-entry:first-child { padding-top: 4px; }
+      .gelatiere-entry { padding: 16px 4px; }
+      .gelatiere-entry:first-child { padding-top: 8px; }
       .gelatiere-entry + .gelatiere-entry,
       .gelatiere-done {
         border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
@@ -236,12 +236,16 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
       }
+      /* Buttons sit on the right, dialog-style: quiet "Not now" beside the
+         primary pill. The taken note pushes itself back to the left. */
       .gelatiere-actions {
         display: flex;
         align-items: center;
+        justify-content: flex-end;
         gap: 14px;
         margin-top: 12px;
       }
+      .gelatiere-actions .gelatiere-taken-note { margin-right: auto; }
       /* "Not now" is a quiet text button — one pill per entry is plenty. */
       .gelatiere-quiet-btn {
         background: none;
@@ -801,6 +805,13 @@
           actions.replaceChildren(done);
           if (window.LucideIcons) window.LucideIcons.render();
         }
+        // "Not now" first in the DOM: the row is right-aligned, so the quiet
+        // button sits left of the primary pill, which keeps the right edge.
+        actions.appendChild(gelatiereQuietButton('Not now', function () {
+          if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
+          card.remove();
+          if (!document.querySelector('.gelatiere-entry')) renderGelatiereEmpty('All caught up.');
+        }));
         if (s.kind === 'skill') {
           actions.appendChild(gelatierePrimaryButton('Install', function () {
             if (window.slicc) slicc.lick({ action: 'gelatiere-install',
@@ -821,11 +832,6 @@
           link.rel = 'noopener';
           actions.appendChild(link);
         }
-        actions.appendChild(gelatiereQuietButton('Not now', function () {
-          if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
-          card.remove();
-          if (!document.querySelector('.gelatiere-entry')) renderGelatiereEmpty('All caught up.');
-        }));
         card.appendChild(actions);
         return card;
       }
