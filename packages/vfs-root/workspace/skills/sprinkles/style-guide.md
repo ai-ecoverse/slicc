@@ -427,6 +427,24 @@ window.__SLICC_SPRINKLE_ASSETS__['slicc-editor.js'].then(function () {
 
 ### Collapsible
 
+Native `<details>` works in both rendering modes. Put only the always-visible
+trigger in `<summary>`; the explanation and finding rows must be siblings after
+it. Text inside `<summary>` never collapses, even when `open` is absent. Check
+with a summary-only result as well as one containing several finding rows.
+
+```html
+<details>
+  <summary>Source · Check</summary>
+  <p class="sprinkle-detail">Preview only · never published</p>
+</details>
+```
+
+Keep native mouse, Enter, and Space activation. In a full-document sprinkle,
+style a decorative chevron with `details[open] > summary .chevron` and hide the
+native marker with `list-style: none` plus `summary::-webkit-details-marker`.
+Verify that the body disappears on collapse; checking only `open` misses text
+placed inside the trigger.
+
 `.sprinkle-collapsible` — Expandable section. Add `--open` class to expand.
 
 ```html
