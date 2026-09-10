@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';
+import { createFixtureMemoryRows } from './fixture-render-markdown.js';
 import {
   MACHINE_WRITTEN_MEMORY_CONSOLIDATED_MARKDOWN,
   MACHINE_WRITTEN_MEMORY_MARKDOWN,
@@ -12,7 +12,7 @@ import { SYNTHETIC_MEMORY_MARKDOWN } from './synthetic-memory-fixture.js';
 function panel(width: number, markdown: string): SliccMemoryPanel {
   const panel = document.createElement('slicc-memory-panel') as SliccMemoryPanel;
   panel.style.cssText = `width:${width}px;height:760px;border:1px solid var(--line);border-radius:16px;`;
-  panel.setRows(createMemoryRows(markdown));
+  panel.setRows(createFixtureMemoryRows(markdown));
   return panel;
 }
 

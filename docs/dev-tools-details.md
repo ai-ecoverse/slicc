@@ -533,6 +533,13 @@ them through would reopen the same wrong-direction dependency. A new asset mode
 is a conscious decision; the gate fails closed. Shared code belongs in
 `@slicc/shared-ts`, imported by package name.
 
+A third zero-tolerance pass flags `packages/chrome-extension/src` importing
+FROM `packages/webapp/src` (#2276 slice E), except a top-level
+`import type { ... }` clause from `kernel/messages.js`. A fourth pass
+(`scanWebcomponentsWebappEscapes`, #3027) flags `packages/webcomponents`
+(`src/` and `tests/`) importing FROM `packages/webapp/src` — no type-only
+exemption. webcomponents is a leaf library; the climb inverts the stack.
+
 ## float-probe-ratchet
 
 `check-no-float-probes.mjs` (#2276 slice D) fails on any NEW read of one of

@@ -362,6 +362,14 @@ X, Y }` clauses, `export type { ... } from` re-exports, namespace/default
   `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` /
   `scanChromeExtensionWebappEscapes` — zero tolerance, no baseline, and the
   allowlist names exactly one path in exactly one clause shape.
+- A relative import in `packages/webcomponents` (`src/` or `tests/`) reaching
+  into `packages/webapp/src` (#3027). webcomponents is a leaf library that
+  webapp depends on; climbing the other way is a package cycle, undeclared in
+  `package.json`, and a direct breach of `packages/webcomponents/CLAUDE.md`
+  (`webcomponents` must not import `webapp`). No type-only exemption. Inject
+  a `(md: string) => string` callback or move the helper down. CI-enforced by
+  `findWebcomponentsWebappEscapes` / `scanWebcomponentsWebappEscapes` — zero
+  tolerance, no baseline.
 
 **Historical precedents**
 
@@ -398,6 +406,13 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   caller's import path changed. The 12 `kernel/messages.ts` types `service-worker.ts` needs
   stayed put and stayed `import type` — this category's exit criterion is closed with this
   slice.
+- **Issue #3027** — the library-cycle form: three `packages/webcomponents` files
+  (`src/memory/*.stories.ts` and `tests/memory/slicc-memory-panel.test.ts`) imported
+  `createMemoryRows` from `packages/webapp/src/ui/wc/wc-memory.ts`. The helper belonged
+  next to `slicc-memrow`; the webapp markdown renderer is now injected as a callback.
+  The intra-webapp baseline is `{}`, so this cross-package cycle was the remaining
+  entanglement of that shape, and the layer gate could not see it until
+  `scanWebcomponentsWebappEscapes` existed.
 
 **Class size** — 152 grandfathered back-edges across 92 files at full-stack baseline freeze
 (2026-08); 34 across 27 files at the original ui-only freeze (2026-07).

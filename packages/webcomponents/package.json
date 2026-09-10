@@ -43,6 +43,10 @@
       "types": "./src/panel/panel-registry.ts",
       "default": "./src/panel/panel-registry.ts"
     },
+    "./memory/rows": {
+      "types": "./src/memory/memory-rows.ts",
+      "default": "./src/memory/memory-rows.ts"
+    },
     "./memory/synthetic-fixture": {
       "types": "./src/memory/synthetic-memory-fixture.ts",
       "default": "./src/memory/synthetic-memory-fixture.ts"
