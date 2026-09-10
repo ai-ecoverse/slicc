@@ -509,8 +509,18 @@ prompt in the way. Details:
 
 - A batch tool fails as a whole when any listed scoop needs the flag; it never
   acts on the `own` half and skips the rest.
-- On a display-name tie the caller's OWN scoop always wins, so widening cannot
-  redirect a name that used to resolve locally.
+- **Resolution order is folder, then own display name, then any display name.**
+  Folders are globally unique (`/scoops/<folder>/` is one real directory), so an
+  exact folder match wins outright — otherwise a local scoop whose _display_
+  name equalled a foreign scoop's _folder_ would swallow the name, retargeting
+  the call and skipping the gate. The own-subtree preference then applies to
+  genuine display-name ties, so widening cannot redirect a name that used to
+  resolve locally.
+- A **cyclic** ownership chain is never advertised. It has no root owner either,
+  but it is a corrupted roster, not an orphan, and `unregisterScoop` cascades
+  over `childrenOf` without a visited set. `ownershipChainOf` (`work-unit/policy.ts`)
+  separates `cycle` from `dangling` for exactly this reason; no subtree contains
+  a cycle member either, so nothing else changes.
 - `scoop_scoop`'s duplicate-name check stays subtree-scoped: naming a new scoop
   after one you merely inherited is legal.
 - `scoop_wait` results are delivered to the **requesting** unit, not to each

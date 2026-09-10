@@ -319,25 +319,53 @@ export function capableApproverOf<
 }
 
 /**
- * The root that owns `unit` — the unit itself when it is one. Walks the
- * `parentJid` chain; returns `undefined` when the chain dangles (a parent that
- * is no longer registered) or loops, so callers can fall back deliberately
- * instead of treating a child as an owner.
+ * Outcome of walking a unit's `parentJid` chain upward.
+ *
+ * `dangling` and `cycle` both mean "no owning root", but they are NOT
+ * interchangeable: a dangling edge is an ordinary orphan (its cone was
+ * dropped) that a supervisor may legitimately adopt, while a cycle is a
+ * corrupted roster whose members must not be handed to a recursive cascade.
+ */
+export type OwnershipChain<T> =
+  | { kind: 'root'; root: T }
+  | { kind: 'dangling' }
+  | { kind: 'cycle' };
+
+/**
+ * Classify `unit`'s ownership chain: the root that owns it (itself when it is
+ * one), a dangling edge (some parent is no longer registered), or a cycle.
+ */
+export function ownershipChainOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
+  units: Iterable<T>,
+  unit: T | undefined
+): OwnershipChain<T> {
+  if (!unit) return { kind: 'dangling' };
+  const byJid = new Map<string, T>();
+  for (const u of units) byJid.set(u.jid, u);
+  const seen = new Set<string>();
+  let current: T = unit;
+  while (current.parentJid !== null) {
+    if (seen.has(current.jid)) return { kind: 'cycle' };
+    seen.add(current.jid);
+    const parent = byJid.get(current.parentJid);
+    if (!parent) return { kind: 'dangling' };
+    current = parent;
+  }
+  return { kind: 'root', root: current };
+}
+
+/**
+ * The root that owns `unit` — the unit itself when it is one. Returns
+ * `undefined` when the chain dangles (a parent that is no longer registered)
+ * or loops, so callers can fall back deliberately instead of treating a child
+ * as an owner. Use {@link ownershipChainOf} when the two cases differ.
  */
 export function rootOwnerOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
   units: Iterable<T>,
   unit: T | undefined
 ): T | undefined {
-  if (!unit) return undefined;
-  const byJid = new Map<string, T>();
-  for (const u of units) byJid.set(u.jid, u);
-  const seen = new Set<string>();
-  let current: T | undefined = unit;
-  while (current && current.parentJid !== null && !seen.has(current.jid)) {
-    seen.add(current.jid);
-    current = byJid.get(current.parentJid);
-  }
-  return current?.parentJid === null ? current : undefined;
+  const chain = ownershipChainOf(units, unit);
+  return chain.kind === 'root' ? chain.root : undefined;
 }
 
 /** Root records, oldest first (`addedAt` ascending, then jid for stability). */

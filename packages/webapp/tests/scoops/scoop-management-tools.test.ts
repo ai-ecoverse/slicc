@@ -1160,7 +1160,7 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
       .pick('feed_scoop')
       .execute({ scoop_name: helperA.folder, prompt: 'go' });
     expect(foreignScoop.isError).toBe(true);
-    expect(foreignScoop.content).toContain('not found in the scoops you can manage (cone-b)');
+    expect(foreignScoop.content).toContain('Not found in the scoops you can manage (cone-b)');
 
     const foreignCone = await b
       .pick('feed_scoop')
@@ -1184,7 +1184,7 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
     const b = toolsFor(coneB);
     const foreignScoop = await b.pick('drop_scoop').execute({ scoop_name: helperA.folder });
     expect(foreignScoop.isError).toBe(true);
-    expect(foreignScoop.content).toContain('not found in the scoops you can manage (cone-b)');
+    expect(foreignScoop.content).toContain('Not found in the scoops you can manage (cone-b)');
 
     const foreignCone = await b.pick('drop_scoop').execute({ scoop_name: coneA.folder });
     expect(foreignCone.isError).toBe(true);
@@ -1341,7 +1341,7 @@ describe('leading cone reaches inherited and foreign scoops', () => {
       .pick('drop_scoop')
       .execute({ scoop_name: orphan.folder, cross_cone: true });
     expect(dropped.isError).toBe(true);
-    expect(dropped.content).toContain('not found');
+    expect(dropped.content).toContain('Not found');
     expect(o.onDropScoop).not.toHaveBeenCalled();
   });
 
@@ -1416,13 +1416,92 @@ describe('leading cone reaches inherited and foreign scoops', () => {
     expect(l.onFeedScoop).toHaveBeenCalledWith(mine.jid, 'go');
   });
 
+  // Folders are globally unique; display names are not. A local scoop whose
+  // DISPLAY name equals a foreign scoop's FOLDER must not swallow the folder
+  // name — that would retarget the call and skip the cross-cone gate, so a
+  // `drop_scoop` would quietly destroy the local scoop instead.
+  it('resolves an exact folder before a local display name', async () => {
+    const decoy: RegisteredScoop = {
+      ...mine,
+      jid: 'scoop_decoy',
+      name: theirs.folder,
+      folder: 'decoy-scoop',
+      assistantLabel: 'decoy-scoop',
+      parentJid: lead.jid,
+    };
+    const onDropScoop = vi.fn(async () => {});
+    const tools = createScoopManagementTools({
+      scoop: lead,
+      onSendMessage: vi.fn(),
+      getScoops: () => [lead, other, mine, decoy, theirs, orphan],
+      onDropScoop,
+    });
+    const drop = tools.find((t) => t.name === 'drop_scoop')!;
+
+    // Without the flag the call is refused, not silently pointed at the decoy.
+    const refused = await drop.execute({ scoop_name: theirs.folder });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('cross_cone');
+    expect(onDropScoop).not.toHaveBeenCalled();
+
+    const dropped = await drop.execute({ scoop_name: theirs.folder, cross_cone: true });
+    expect(dropped.isError).toBeUndefined();
+    expect(onDropScoop).toHaveBeenCalledWith(theirs.jid);
+
+    // The own-subtree preference still applies to a genuine display-name tie.
+    const byDisplayName = await drop.execute({ scoop_name: decoy.name });
+    expect(byDisplayName.isError).toBe(true);
+  });
+
+  // A cyclic parentJid chain has no root owner either, but it is a corrupted
+  // roster rather than an orphan: `unregisterScoop` cascades over `childrenOf`
+  // with no visited set, so advertising a cycle member as droppable would
+  // recurse around the loop. No subtree contains one, so this is a no-op change
+  // for every other caller.
+  it('never advertises a cyclic ownership chain as inherited', async () => {
+    const cycleA: RegisteredScoop = {
+      ...mine,
+      jid: 'scoop_cycle_a',
+      name: 'cycle-a',
+      folder: 'cycle-a-scoop',
+      assistantLabel: 'cycle-a-scoop',
+      parentJid: 'scoop_cycle_b',
+    };
+    const cycleB: RegisteredScoop = {
+      ...cycleA,
+      jid: 'scoop_cycle_b',
+      name: 'cycle-b',
+      folder: 'cycle-b-scoop',
+      assistantLabel: 'cycle-b-scoop',
+      parentJid: 'scoop_cycle_a',
+    };
+    const onDropScoop = vi.fn(async () => {});
+    const tools = createScoopManagementTools({
+      scoop: lead,
+      onSendMessage: vi.fn(),
+      getScoops: () => [lead, mine, cycleA, cycleB],
+      onDropScoop,
+    });
+
+    const listed = await tools.find((t) => t.name === 'list_scoops')!.execute({});
+    expect(listed.content).toContain(mine.folder);
+    expect(listed.content).not.toContain(cycleA.folder);
+    expect(listed.content).not.toContain(cycleB.folder);
+
+    const dropped = await tools
+      .find((t) => t.name === 'drop_scoop')!
+      .execute({ scoop_name: cycleA.folder, cross_cone: true });
+    expect(dropped.isError).toBe(true);
+    expect(onDropScoop).not.toHaveBeenCalled();
+  });
+
   it('keeps a cone off the target list even for the leading cone', async () => {
     const l = toolsFor(lead);
     const result = await l
       .pick('drop_scoop')
       .execute({ scoop_name: other.folder, cross_cone: true });
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('not found');
+    expect(result.content).toContain('Not found');
     expect(l.onDropScoop).not.toHaveBeenCalled();
   });
 });

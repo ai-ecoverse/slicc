@@ -10,6 +10,8 @@ import {
   interactiveRootPolicy,
   isPolicySubset,
   isRootUnit,
+  ownershipChainOf,
+  rootOwnerOf,
   rootsOf,
   subtreeOf,
 } from '../../src/work-unit/policy.js';
@@ -507,5 +509,50 @@ describe('capableApproverOf', () => {
   it('returns undefined when the chain has no capable ancestor', () => {
     const orphan = childRecord('missing', { folder: 'orphan-scoop' });
     expect(capableApproverOf([orphan], orphan)).toBeUndefined();
+  });
+});
+
+// A dangling edge and a cycle both mean "no owning root", but they are not the
+// same thing: an orphan may be adopted by a supervisor, while a cycle is a
+// corrupted roster that must not be fed to a recursive cascade.
+describe('ownershipChainOf', () => {
+  const root = rootRecord({ jid: 'cone_1' });
+  const child = childRecord(root.jid, { folder: 'worker-scoop' });
+  const grandchild = childRecord(child.jid, { folder: 'deep-scoop' });
+
+  it('reports the owning root for a rooted chain, including a root itself', () => {
+    const all = [root, child, grandchild];
+    expect(ownershipChainOf(all, grandchild)).toEqual({ kind: 'root', root });
+    expect(ownershipChainOf(all, root)).toEqual({ kind: 'root', root });
+  });
+
+  it('reports a dangling edge when some parent is no longer registered', () => {
+    const orphan = childRecord('cone_dropped', { folder: 'orphan-scoop' });
+    expect(ownershipChainOf([orphan], orphan).kind).toBe('dangling');
+    // A whole orphaned branch dangles, not just the unit holding the edge.
+    const belowOrphan = childRecord(orphan.jid, { folder: 'below-scoop' });
+    expect(ownershipChainOf([orphan, belowOrphan], belowOrphan).kind).toBe('dangling');
+    expect(ownershipChainOf([root], undefined).kind).toBe('dangling');
+  });
+
+  it('reports a cycle instead of walking it forever', () => {
+    const a = childRecord('scoop_b', { jid: 'scoop_a', folder: 'a-scoop' });
+    const b = childRecord('scoop_a', { jid: 'scoop_b', folder: 'b-scoop' });
+    const below = childRecord(a.jid, { jid: 'scoop_c', folder: 'c-scoop' });
+    expect(ownershipChainOf([a, b], a).kind).toBe('cycle');
+    expect(ownershipChainOf([a, b], b).kind).toBe('cycle');
+    // Reached THROUGH a cycle counts as one too — the walk never terminates.
+    expect(ownershipChainOf([a, b, below], below).kind).toBe('cycle');
+  });
+
+  it('rootOwnerOf agrees with the chain on every outcome', () => {
+    const all = [root, child, grandchild];
+    expect(rootOwnerOf(all, grandchild)?.jid).toBe(root.jid);
+    const orphan = childRecord('cone_dropped', { folder: 'orphan-scoop' });
+    expect(rootOwnerOf([orphan], orphan)).toBeUndefined();
+    const a = childRecord('scoop_b', { jid: 'scoop_a', folder: 'a-scoop' });
+    const b = childRecord('scoop_a', { jid: 'scoop_b', folder: 'b-scoop' });
+    expect(rootOwnerOf([a, b], a)).toBeUndefined();
+    expect(rootOwnerOf(all, undefined)).toBeUndefined();
   });
 });

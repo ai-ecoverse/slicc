@@ -11,7 +11,13 @@ import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
 import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
-import { derivePolicy, isRootUnit, rootOwnerOf, subtreeOf } from '../work-unit/policy.js';
+import {
+  derivePolicy,
+  isRootUnit,
+  ownershipChainOf,
+  rootOwnerOf,
+  subtreeOf,
+} from '../work-unit/policy.js';
 import { leadingRootOf, uniqueFolder } from '../work-unit/record.js';
 import { type ImplementedWorkspaceMode, parseWorkspaceMode } from '../work-unit/workspace-mode.js';
 import {
@@ -162,9 +168,13 @@ function manageableScoops(config: ScoopManagementToolsConfig): ManagedScoop[] {
       continue;
     }
     if (!leads) continue;
-    // A dangling / looping ownership edge has no root owner — that is exactly
-    // what makes the scoop inherited rather than another cone's.
-    out.push({ scoop, relation: rootOwnerOf(units, scoop) ? 'foreign' : 'inherited' });
+    const chain = ownershipChainOf(units, scoop);
+    // A CYCLE is a corrupted roster, not an orphan: `unregisterScoop` cascades
+    // over `childrenOf` without a visited set, so advertising a cycle member as
+    // droppable would recurse around the loop instead of recovering anything.
+    // Cycles are in no subtree either, so skipping them changes nothing else.
+    if (chain.kind === 'cycle') continue;
+    out.push({ scoop, relation: chain.kind === 'root' ? 'foreign' : 'inherited' });
   }
   return out;
 }
@@ -175,9 +185,17 @@ function byName(name: string) {
 }
 
 /**
- * Resolve one user-supplied name against the manageable set. The caller's OWN
- * subtree wins a display-name tie, so widening the leading cone's reach can
- * never silently redirect a name that used to resolve locally.
+ * Resolve one user-supplied name against the manageable set, in the order that
+ * makes an unambiguous name unambiguous:
+ *
+ * 1. An exact FOLDER match. Folders are globally unique (`/scoops/<folder>/` is
+ *    one real directory), so naming one can only mean that scoop — even when a
+ *    local scoop's DISPLAY name happens to equal a foreign scoop's folder.
+ *    Resolving the local display name first would silently retarget the call
+ *    AND skip the cross-cone gate, so a `drop_scoop` could hit the wrong scoop.
+ * 2. A display-name match inside the caller's own subtree, so widening the
+ *    leading cone's reach cannot redirect a name that used to resolve locally.
+ * 3. Any remaining display-name match.
  */
 function findManageable(
   name: string,
@@ -185,8 +203,9 @@ function findManageable(
 ): ManagedScoop | undefined {
   const all = manageableScoops(config);
   return (
-    all.find((m) => m.relation === 'own' && byName(name)(m.scoop)) ??
-    all.find((m) => byName(name)(m.scoop))
+    all.find((m) => m.scoop.folder === name) ??
+    all.find((m) => m.relation === 'own' && m.scoop.name === name) ??
+    all.find((m) => m.scoop.name === name)
   );
 }
 
@@ -208,13 +227,15 @@ function resolveScoopNames(
   return { resolved, unknown };
 }
 
+/** Folder of the cone that owns `m`, for messages naming the boundary. */
+function ownerFolderOf(config: ScoopManagementToolsConfig, m: ManagedScoop): string {
+  return rootOwnerOf(config.getScoops(), m.scoop)?.folder ?? 'unknown';
+}
+
 /** Human phrase for the boundary a cross-cone call is about to cross. */
 function describeRelation(config: ScoopManagementToolsConfig, m: ManagedScoop): string {
-  if (m.relation === 'inherited') {
-    return 'inherited (its owning cone is gone, so no cone lists it as its own)';
-  }
-  const owner = rootOwnerOf(config.getScoops(), m.scoop);
-  return `owned by another cone (${owner?.folder ?? 'unknown'})`;
+  if (m.relation === 'inherited') return 'inherited (its owning cone is gone)';
+  return `owned by cone "${ownerFolderOf(config, m)}"`;
 }
 
 /**
@@ -235,9 +256,7 @@ function crossConeGate(
     .map((m) => `"${m.scoop.folder}" is ${describeRelation(config, m)}`)
     .join('; ');
   return {
-    content:
-      `Refusing to ${verb}: ${detail}. ` +
-      `Pass ${CROSS_CONE_PARAM}: true to act on a scoop outside your own subtree.`,
+    content: `Refusing to ${verb}: ${detail}. Pass ${CROSS_CONE_PARAM}: true to act on it anyway.`,
     isError: true,
   };
 }
@@ -246,10 +265,7 @@ function crossConeGate(
 function crossConeSchema(verb: string) {
   return {
     type: 'boolean' as const,
-    description:
-      `Required to ${verb} a scoop you do not own — one that is inherited (its cone is gone) ` +
-      `or owned by another cone. Defaults to false, and omitting it on such a scoop is an error, ` +
-      `so the cross-cone decision is always deliberate. Only the leading cone can resolve those names at all.`,
+    description: `Set true to ${verb} a scoop you do not own — inherited (its cone is gone) or another cone's. Default false; omitting it on such a scoop is an error, so the choice stays deliberate.`,
   };
 }
 
@@ -327,19 +343,17 @@ function parseModelId(
   };
 }
 
-/** Folders the caller can name, in registry order (`(none)` when empty). */
-function availableFolders(config: ScoopManagementToolsConfig): string {
-  return (
+/**
+ * Render an unresolved-name error listing what the caller CAN reach (#2360) —
+ * shared by the single-name and batch tools so both name the same scope.
+ */
+function notFoundError(names: readonly string[], config: ScoopManagementToolsConfig) {
+  const available =
     manageableScoops(config)
       .map((m) => m.scoop.folder)
-      .join(', ') || '(none)'
-  );
-}
-
-/** Render a "scoop not found" error naming what the caller CAN reach (#2360). */
-function notFoundError(name: string, config: ScoopManagementToolsConfig) {
+      .join(', ') || '(none)';
   return {
-    content: `Scoop "${name}" not found in the scoops you can manage (${config.scoop.folder}). Available: ${availableFolders(config)}`,
+    content: `Not found in the scoops you can manage (${config.scoop.folder}): ${names.join(', ')}. Available: ${available}`,
     isError: true as const,
   };
 }
@@ -455,7 +469,7 @@ async function executeFeedScoop(
     return { content: 'Cannot feed yourself.', isError: true };
   }
   const target = findManageable(scoop_name, config);
-  if (!target) return notFoundError(scoop_name, config);
+  if (!target) return notFoundError([scoop_name], config);
   const gate = crossConeGate([target], cross_cone, `feed "${scoop_name}"`, config);
   if (gate) return gate;
   try {
@@ -471,7 +485,7 @@ async function executeFeedScoop(
     const notice =
       target.relation === 'own'
         ? 'You will be notified when it completes.'
-        : `Its completion notice goes to its owning unit, not to you — use scoop_wait with ${CROSS_CONE_PARAM}: true to collect the result yourself.`;
+        : `Its completion notice goes to its owner; use scoop_wait (${CROSS_CONE_PARAM}: true) for the result.`;
     return { content: `Task sent to ${target.scoop.folder}. ${notice}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -483,8 +497,7 @@ async function executeFeedScoop(
 function relationTagFor(config: ScoopManagementToolsConfig, m: ManagedScoop): string {
   if (m.relation === 'own') return '';
   if (m.relation === 'inherited') return ' [INHERITED]';
-  const owner = rootOwnerOf(config.getScoops(), m.scoop);
-  return ` [FOREIGN: ${owner?.folder ?? 'unknown'}]`;
+  return ` [FOREIGN: ${ownerFolderOf(config, m)}]`;
 }
 
 async function executeListScoops(config: ScoopManagementToolsConfig): Promise<ToolResult> {
@@ -725,7 +738,7 @@ async function executeDropScoop(
     return { content: 'Cannot drop yourself.', isError: true };
   }
   const target = findManageable(scoop_name, config);
-  if (!target) return notFoundError(scoop_name, config);
+  if (!target) return notFoundError([scoop_name], config);
   const gate = crossConeGate([target], cross_cone, `drop "${scoop_name}"`, config);
   if (gate) return gate;
   try {
@@ -748,18 +761,6 @@ function emptyNamesError(): ToolResult {
   return { content: 'scoop_names must be a non-empty array.', isError: true };
 }
 
-function noMatchingScoopsError(
-  unknownNames: readonly string[],
-  config: ScoopManagementToolsConfig
-): ToolResult {
-  return {
-    content:
-      `No matching scoops found in the scoops you can manage (${config.scoop.folder}). ` +
-      `Unknown: ${unknownNames.join(', ')}. Available: ${availableFolders(config)}`,
-    isError: true,
-  };
-}
-
 async function executeMuteScoops(
   input: unknown,
   config: ScoopManagementToolsConfig
@@ -767,7 +768,7 @@ async function executeMuteScoops(
   const { scoop_names, cross_cone } = input as { scoop_names: string[]; cross_cone?: boolean };
   if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
   const { resolved, unknown } = resolveScoopNames(scoop_names, config);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
+  if (resolved.length === 0) return notFoundError(unknown, config);
   const gate = crossConeGate(resolved, cross_cone, 'mute these scoops', config);
   if (gate) return gate;
   config.onMuteScoops!(resolved.map((m) => m.scoop.jid));
@@ -807,7 +808,7 @@ async function executeUnmuteScoops(
   const { scoop_names, cross_cone } = input as { scoop_names: string[]; cross_cone?: boolean };
   if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
   const { resolved, unknown } = resolveScoopNames(scoop_names, config);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
+  if (resolved.length === 0) return notFoundError(unknown, config);
   const gate = crossConeGate(resolved, cross_cone, 'unmute these scoops', config);
   if (gate) return gate;
   const jids = resolved.map((m) => m.scoop.jid);
@@ -870,7 +871,7 @@ async function executeScoopWait(
   if (inputError) return inputError;
 
   const { resolved, unknown } = resolveScoopNames(scoop_names, config);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
+  if (resolved.length === 0) return notFoundError(unknown, config);
   const gate = crossConeGate(resolved, cross_cone, 'wait on these scoops', config);
   if (gate) return gate;
 
@@ -1067,7 +1068,7 @@ function feedScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
         scoop_name: {
           type: 'string',
           description:
-            'The scoop folder name (e.g., "test-scoop"). Must be a scoop list_scoops shows you — your own, or (leading cone only) one tagged [INHERITED] / [FOREIGN].',
+            'The scoop folder name (e.g., "test-scoop") — any name list_scoops shows you.',
         },
         prompt: {
           type: 'string',
@@ -1086,7 +1087,7 @@ function listScoopsTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'list_scoops',
     description:
-      'List the scoops you can manage: your own subtree, plus — if you are the leading cone — scoops tagged [INHERITED] (their owning cone is gone) and [FOREIGN: <cone>] (owned by another live cone). Names from this list are the only ones feed_scoop / drop_scoop / scoop_mute / scoop_unmute / scoop_wait can resolve, and a tagged one additionally needs cross_cone: true.',
+      'List the scoops you can manage: your own subtree, plus — leading cone only — ones tagged [INHERITED] (owning cone gone) or [FOREIGN: <cone>] (another cone owns it). These names are the only ones feed_scoop / drop_scoop / scoop_mute / scoop_unmute / scoop_wait resolve; a tagged one also needs cross_cone: true.',
     inputSchema: { type: 'object', properties: {} },
     execute: () => executeListScoops(config),
   };
@@ -1169,7 +1170,7 @@ function dropScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
         scoop_name: {
           type: 'string',
           description:
-            'The scoop folder name (e.g., "test-scoop"). Must be a scoop list_scoops shows you — your own, or (leading cone only) one tagged [INHERITED] / [FOREIGN].',
+            'The scoop folder name (e.g., "test-scoop") — any name list_scoops shows you.',
         },
         [CROSS_CONE_PARAM]: crossConeSchema('drop'),
       },
@@ -1234,7 +1235,7 @@ function scoopWaitTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description:
-            'Folder or display names of scoops you can manage (e.g., ["writer-scoop", "reviewer-scoop"]) — your own, or (leading cone only) one tagged [INHERITED] / [FOREIGN] by list_scoops.',
+            'Folder or display names of scoops list_scoops shows you (e.g., ["writer-scoop", "reviewer-scoop"]).',
         },
         timeout_ms: {
           type: 'number',
