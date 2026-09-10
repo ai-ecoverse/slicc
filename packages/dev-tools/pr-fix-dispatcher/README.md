@@ -52,6 +52,35 @@ signature now requires an explicit DNS-failure phrase (`getaddrinfo`,
 `ENOTFOUND`, `dns resolution`, …), and the aggregator job is forced to
 `unknown` so a sibling that named a real cause can win.
 
+### The aggregator must not own the skip reason
+
+Forcing the aggregator to `unknown` is not enough if the unknown _fallback_
+then picks it. GitHub's check-runs API lists `ci` before the child that
+actually failed (PR #3008: `lint` FAILURE + `ci` FAILURE). `classifyFailures`
+walks blocked → code → infra, and when nothing matches it used to return
+`classified[0]`. That made the skip comment `"ci" is the CI aggregator and
+does not name a failure cause` even though `lint` had also failed.
+
+Two compounding traps:
+
+- **`CODE_SIGNATURES.lint` does not match the job name `lint`.** The pattern
+  wants `biome (found|check)|eslint|prettier|lint(ing)? (error|failed)`. An
+  empty or truncated log excerpt (log fetch 403/410, or `MAX_LOGS_PER_PR`
+  spent on the aggregator first) classified the real job as unknown too
+  (`no plausible cause`).
+- **Log fetches followed `checks.failing` order.** With `ci` first, the
+  bounded log budget could starve the sibling.
+
+The unknown fallback never picks an aggregator-unknown. A failing well-known
+code job (`lint`, `typecheck`, `webapp`, `e2e`, `chrome-extension`,
+`node-matrix-tests`, `bundle-size`, `swift-*`) is `code` even with an empty
+excerpt, so the PR dispatches. `lint` / `typecheck` are also job-name
+signatures on the single-failure path (after infra, so a network flake on
+the lint job is still a re-run). Log fetches prefer non-`ci` jobs.
+
+Same class as the #2215 debt-gate + aggregator miss and the #2320
+NODE_OPTIONS false positive: aggregator noise dominating a named child.
+
 ### The debt boy-scout gate is the likeliest dispatch of all
 
 `check-touched-exemptions.mjs` (the `lint` job's "Debt boy-scout gate" step) fails

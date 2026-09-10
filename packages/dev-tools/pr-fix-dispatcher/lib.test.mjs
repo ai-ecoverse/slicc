@@ -11,9 +11,12 @@ import {
   formatFailuresForMatrix,
   hasRerunForSha,
   isAutomationPr,
+  isCiAggregatorJob,
   parseMarkers,
+  prioritizeLogFetch,
   screenPr,
   summarizeChecks,
+  wellKnownCodeCategory,
 } from './lib.mjs';
 
 const NOW = new Date('2025-01-15T12:00:00Z');
@@ -344,6 +347,38 @@ describe('classifyFailure', () => {
     expect(out.reason).toMatch(/no plausible cause/i);
   });
 
+  // Job name `lint` does not match CODE_SIGNATURES.lint (that pattern wants
+  // "biome" / "lint error"). An empty or truncated excerpt must still be
+  // code, or the aggregator-first fallback skips a mechanically fixable PR.
+  it('classifies a failing lint/typecheck job as code even with an empty excerpt', () => {
+    expect(classifyFailure({ jobName: 'lint', logExcerpt: '' })).toMatchObject({
+      kind: 'code',
+      category: 'lint',
+    });
+    expect(classifyFailure({ jobName: 'typecheck', logExcerpt: '' })).toMatchObject({
+      kind: 'code',
+      category: 'types',
+    });
+    expect(classifyFailure({ jobName: 'CI / lint', logExcerpt: '' })).toMatchObject({
+      kind: 'code',
+      category: 'lint',
+    });
+  });
+
+  it('still prefers a log-based code signature over the lint job-name fallback', () => {
+    expect(classifyFailure({ jobName: 'lint', logExcerpt: DEBT_GATE_EXCERPT })).toMatchObject({
+      kind: 'code',
+      category: 'debt-gate',
+    });
+  });
+
+  it('still classifies a network flake on the lint job as infra', () => {
+    expect(
+      classifyFailure({ jobName: 'lint', logExcerpt: 'getaddrinfo ENOTFOUND registry.npmjs.org' })
+        .kind
+    ).toBe('infra');
+  });
+
   it('tolerates missing input', () => {
     expect(classifyFailure().kind).toBe('unknown');
   });
@@ -409,6 +444,71 @@ describe('classifyFailures', () => {
   it('reports unknown for an empty list', () => {
     expect(classifyFailures([]).kind).toBe('unknown');
     expect(classifyFailures().kind).toBe('unknown');
+  });
+
+  // PR #3008: GitHub listed `ci` before `lint`. Both classified as unknown
+  // (aggregator noise; empty lint excerpt), and `classified[0]` made the skip
+  // reason the aggregator's sentence.
+  it('does not pick the aggregator unknown as the fallback (PR #3008)', () => {
+    const out = classifyFailures([
+      { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+      { name: 'lint', logExcerpt: '' },
+    ]);
+    expect(out.kind).toBe('code');
+    expect(out.category).toBe('lint');
+    expect(out.reason).toMatch(/lint/);
+    expect(out.reason).not.toMatch(/aggregator/i);
+  });
+
+  it('prefers a non-aggregator unknown over the aggregator sentence', () => {
+    const out = classifyFailures([
+      { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+      { name: 'mystery', logExcerpt: 'exit 7' },
+    ]);
+    expect(out.kind).toBe('unknown');
+    expect(out.reason).toMatch(/mystery/);
+    expect(out.reason).not.toMatch(/aggregator/i);
+  });
+
+  it('promotes a well-known code job with an empty excerpt to dispatch', () => {
+    for (const name of ['webapp', 'e2e', 'chrome-extension', 'node-matrix-tests', 'bundle-size']) {
+      expect(
+        classifyFailures([
+          { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+          { name, logExcerpt: '' },
+        ]),
+        name
+      ).toMatchObject({ kind: 'code' });
+    }
+    expect(
+      classifyFailures([
+        { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+        { name: 'swift-server', logExcerpt: '' },
+      ])
+    ).toMatchObject({ kind: 'code', category: 'build' });
+  });
+});
+
+describe('aggregator job helpers', () => {
+  it('recognises the ci aggregator under both check-run names', () => {
+    expect(isCiAggregatorJob('ci')).toBe(true);
+    expect(isCiAggregatorJob('CI')).toBe(true);
+    expect(isCiAggregatorJob('CI / ci')).toBe(true);
+    expect(isCiAggregatorJob('lint')).toBe(false);
+    expect(isCiAggregatorJob('CI / lint')).toBe(false);
+  });
+
+  it('maps well-known code jobs, including swift-*', () => {
+    expect(wellKnownCodeCategory('lint')).toBe('lint');
+    expect(wellKnownCodeCategory('typecheck')).toBe('types');
+    expect(wellKnownCodeCategory('webapp')).toBe('webapp');
+    expect(wellKnownCodeCategory('swift-optel')).toBe('build');
+    expect(wellKnownCodeCategory('mystery')).toBeNull();
+  });
+
+  it('fetches non-aggregator jobs before the ci aggregator', () => {
+    const ordered = prioritizeLogFetch([{ name: 'ci' }, { name: 'lint' }, { name: 'mystery' }]);
+    expect(ordered.map((f) => f.name)).toEqual(['lint', 'mystery', 'ci']);
   });
 });
 
@@ -815,5 +915,42 @@ describe('regression: PR #2215 — a debt-gate-only automation PR', () => {
     expect(out.category).toBe('debt-gate');
     expect(out.reason).toMatch(/debt-gate/);
     expect(out.reason).not.toMatch(/no plausible cause/i);
+  });
+});
+
+// PR #3008 (`renovate/ghosttyterminal-1.x`) failed `lint` and the `CI / ci`
+// aggregator. GitHub listed `ci` first; the lint excerpt was empty, so both
+// classified as unknown and the skip comment said `"ci" is the CI aggregator
+// and does not name a failure cause` — stranding a mechanically fixable
+// automation PR. Lint is a well-known code job even with no log.
+describe('regression: PR #3008 — lint + aggregator, empty lint excerpt', () => {
+  const failing = [
+    { name: 'ci', conclusion: 'failure', logExcerpt: AGGREGATOR_EXCERPT },
+    { name: 'lint', conclusion: 'failure', logExcerpt: '' },
+  ];
+  const input = candidate({
+    pr: {
+      number: 3008,
+      title: 'chore(deps): update dependency ghosttyterminal to v1.5.2',
+      headRef: 'renovate/ghosttyterminal-1.x',
+      headSha: SHA,
+      labels: [],
+      user: { type: 'Bot', login: 'renovate[bot]' },
+    },
+    failing,
+    checks: { failing, pending: false, newestFailureAt: minutesAgo(90) },
+  });
+
+  it('reaches the rubric rather than being screened out', () => {
+    expect(screenPr(input)).toBeNull();
+  });
+
+  it('dispatches a fixer naming lint, not the aggregator', () => {
+    const out = decidePrAction(input);
+    expect(out.action).toBe('dispatch');
+    expect(out.category).toBe('lint');
+    expect(out.reason).toMatch(/lint/);
+    expect(out.reason).not.toMatch(/aggregator/i);
+    expect(out.reason).not.toMatch(/"ci" is the CI aggregator/i);
   });
 });

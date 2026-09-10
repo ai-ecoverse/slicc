@@ -344,6 +344,30 @@ function matchSignature(table, text) {
 }
 
 /**
+ * Bare check-run name. GitHub reports this repo's jobs as `lint` / `ci`; some
+ * UIs and required-check titles use the `CI / lint` form.
+ * @param {string} jobName
+ * @returns {string}
+ */
+function bareCheckName(jobName) {
+  return String(jobName ?? '')
+    .trim()
+    .replace(/^ci\s*\/\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * The `CI / ci` aggregator job (`if: always()` over `needs: [*]`). Its log
+ * never names a cause — it only echoes that a sibling failed.
+ * @param {string} jobName
+ * @returns {boolean}
+ */
+export function isCiAggregatorJob(jobName) {
+  return bareCheckName(jobName) === 'ci';
+}
+
+/**
  * The `CI / ci` aggregator (`if: always()` over `needs: [*]`) always fails
  * whenever any child does; its own log only echoes that fact (plus the job
  * env dump). Classifying it from its log would let boilerplate — or a false
@@ -353,8 +377,76 @@ function matchSignature(table, text) {
  * @returns {boolean}
  */
 function isCiAggregatorNoise(jobName, logExcerpt) {
-  if (String(jobName).toLowerCase() !== 'ci') return false;
+  if (!isCiAggregatorJob(jobName)) return false;
   return /one or more jobs failed or were cancelled/i.test(String(logExcerpt));
+}
+
+/**
+ * Jobs whose name alone is a code-failure signature: the log may be empty or
+ * truncated (MAX_LOGS_PER_PR, a 403/410 log fetch) and still not say "biome"
+ * / "lint error". Checked after log-based CODE_SIGNATURES (so a debt-gate
+ * excerpt still wins) and after INFRA_SIGNATURES (so a network flake on the
+ * lint job is still a re-run).
+ */
+const JOB_NAME_CODE_CATEGORIES = {
+  lint: 'lint',
+  typecheck: 'types',
+};
+
+/**
+ * Failing jobs that evaluate this repo's code. Used when every per-job
+ * classification is `unknown` (empty excerpt, aggregator noise) so a named
+ * child still dispatches instead of skipping with the aggregator's sentence.
+ * `swift-*` covers swift-server / swift-optel / swift-launcher / …
+ */
+const WELL_KNOWN_CODE_JOBS = new Set([
+  'lint',
+  'typecheck',
+  'webapp',
+  'e2e',
+  'chrome-extension',
+  'node-matrix-tests',
+  'bundle-size',
+]);
+
+/**
+ * Category for a well-known code job, or null. `lint` / `typecheck` map onto
+ * the existing CODE_SIGNATURES categories; other names stay as themselves so
+ * the dispatch reason names the job.
+ * @param {string} jobName
+ * @returns {string|null}
+ */
+export function wellKnownCodeCategory(jobName) {
+  const bare = bareCheckName(jobName);
+  if (JOB_NAME_CODE_CATEGORIES[bare]) return JOB_NAME_CODE_CATEGORIES[bare];
+  if (WELL_KNOWN_CODE_JOBS.has(bare)) return bare;
+  if (bare.startsWith('swift-')) return 'build';
+  return null;
+}
+
+/** @param {string} name @param {string} category */
+function codeVerdict(name, category) {
+  return {
+    kind: 'code',
+    category,
+    reason: `"${name}" failed in the code (${category}).`,
+  };
+}
+
+/**
+ * Spend the per-PR log budget on jobs that can name a cause. The `ci`
+ * aggregator is last: its log is boilerplate (`One or more jobs failed…` plus
+ * the env dump) and fetching it first used to starve a sibling (PR #3008).
+ * @param {Array<{name?: string, jobName?: string}>} failing
+ * @returns {Array<{name?: string, jobName?: string}>}
+ */
+export function prioritizeLogFetch(failing = []) {
+  const list = Array.isArray(failing) ? [...failing] : [];
+  return list.sort((a, b) => {
+    const aAgg = isCiAggregatorJob(a.name ?? a.jobName);
+    const bAgg = isCiAggregatorJob(b.name ?? b.jobName);
+    return Number(aAgg) - Number(bAgg);
+  });
 }
 
 /**
@@ -393,13 +485,7 @@ export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
     };
   }
   const code = matchSignature(CODE_SIGNATURES, text);
-  if (code) {
-    return {
-      kind: 'code',
-      category: code,
-      reason: `"${name}" failed in the code (${code}).`,
-    };
-  }
+  if (code) return codeVerdict(name, code);
   const infra = matchSignature(INFRA_SIGNATURES, text);
   if (infra) {
     return {
@@ -408,6 +494,12 @@ export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
       reason: `"${name}" failed in CI plumbing (${infra}) without evaluating the code.`,
     };
   }
+  // Job name `lint` / `typecheck` does not match CODE_SIGNATURES.lint (that
+  // pattern wants "biome" / "lint error"), so an empty excerpt used to land
+  // here as unknown. After infra, so a network flake on the lint job is still
+  // a re-run.
+  const named = JOB_NAME_CODE_CATEGORIES[bareCheckName(name)];
+  if (named) return codeVerdict(name, named);
   return {
     kind: 'unknown',
     category: null,
@@ -419,21 +511,45 @@ export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
  * Fold per-failure classifications into one verdict for the PR. `blocked`
  * dominates, then `code` (fix it), then `infra` (re-run it); `unknown` only
  * when nothing else matched.
+ *
+ * The unknown fallback must not pick the `ci` aggregator. GitHub lists that
+ * check first (PR #3008), `isCiAggregatorNoise` correctly forces it to
+ * `unknown`, and returning `classified[0]` then skipped with the aggregator's
+ * sentence even when a sibling (`lint`) had also failed. Prefer a
+ * non-aggregator unknown; if any remaining job is a well-known code job,
+ * promote it to `code` so the PR dispatches.
  * @param {Array<{name?: string, jobName?: string, logExcerpt?: string}>} failures
  * @returns {{kind: 'blocked'|'code'|'infra'|'unknown', category: string|null, reason: string}}
  */
 export function classifyFailures(failures = []) {
-  const classified = (Array.isArray(failures) ? failures : []).map((f) =>
-    classifyFailure({
-      jobName: f.jobName ?? f.name,
-      logExcerpt: f.logExcerpt ?? f.description ?? '',
-    })
-  );
+  const list = Array.isArray(failures) ? failures : [];
+  const classified = list.map((f) => {
+    const jobName = f.jobName ?? f.name;
+    return {
+      jobName,
+      ...classifyFailure({
+        jobName,
+        logExcerpt: f.logExcerpt ?? f.description ?? '',
+      }),
+    };
+  });
   for (const kind of ['blocked', 'code', 'infra']) {
     const hit = classified.find((c) => c.kind === kind);
     if (hit) return hit;
   }
+  return pickUnknownFallback(classified);
+}
+
+/**
+ * Last-resort unknown fold: never let aggregator noise own the skip reason.
+ * @param {Array<{jobName?: string, kind: string, category: string|null, reason: string}>} classified
+ */
+function pickUnknownFallback(classified) {
+  const named = classified.find((c) => wellKnownCodeCategory(c.jobName));
+  if (named) return codeVerdict(named.jobName, wellKnownCodeCategory(named.jobName));
+  const nonAggregator = classified.find((c) => !isCiAggregatorJob(c.jobName));
   return (
+    nonAggregator ??
     classified[0] ?? {
       kind: 'unknown',
       category: null,

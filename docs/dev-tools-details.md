@@ -198,7 +198,12 @@ The `CI / ci` aggregator (`if: always()` over `needs: [everything]`) fails
 alongside whichever job actually broke, and its own log says only "One or more
 jobs failed" (plus the job env dump). It is forced to `unknown` and cannot
 outrank a sibling: verdicts fold in `blocked` → `code` → `infra` order, with
-`unknown` used only when nothing else matched. A bare `dns` substring must never
+`unknown` used only when nothing else matched. The unknown fallback must not
+pick the aggregator either — GitHub lists `ci` first, so `classified[0]` used
+to skip with the aggregator's sentence while `lint` had also failed (PR #3008).
+A failing well-known code job (`lint`, `typecheck`, `webapp`, `e2e`,
+`chrome-extension`, `node-matrix-tests`, `bundle-size`, `swift-*`) is `code`
+even with an empty excerpt. A bare `dns` substring must never
 appear in the network infra signature — every Actions job dumps
 `NODE_OPTIONS: --dns-result-order=ipv4first`, and matching that classified PR
 #2320's real SPM pin conflict as a network flake. The flake hunter's
