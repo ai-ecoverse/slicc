@@ -176,10 +176,14 @@ export function docsFromArchive(args: {
   const docs: SessionSearchDoc[] = [];
   args.messages.forEach((message, messageIndex) => {
     const messageId = message.id || `i${messageIndex}`;
-    const bodyParts = [message.content];
+    // Truncate each part before joining so multi-MB tool results never sit
+    // fully in memory on the way into the index document.
+    const bodyParts = [truncateUtf8(message.content ?? '', SESSION_INDEX_BODY_BYTE_CAP)];
     for (const tc of message.toolCalls ?? []) {
-      bodyParts.push(tc.name, safeJson(tc.input));
-      if (tc.result) bodyParts.push(tc.result);
+      bodyParts.push(tc.name, truncateUtf8(safeJson(tc.input), SESSION_INDEX_BODY_BYTE_CAP));
+      if (tc.result) {
+        bodyParts.push(truncateUtf8(tc.result, SESSION_INDEX_BODY_BYTE_CAP));
+      }
     }
     const body = truncateUtf8(bodyParts.filter(Boolean).join('\n'), SESSION_INDEX_BODY_BYTE_CAP);
     if (!body.trim() && !message.compaction) return;
