@@ -79,10 +79,10 @@
       ]
     },
     "webapp": {
-      "lines": 84,
-      "statements": 82,
+      "lines": 85,
+      "statements": 83,
       "functions": 83,
-      "branches": 74,
+      "branches": 75,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -142,9 +142,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 67,
-      "functions": 65,
-      "regions": 64
+      "lines": 68,
+      "functions": 67,
+      "regions": 65
     },
     "swift-launcher": {
       "lines": 80,
