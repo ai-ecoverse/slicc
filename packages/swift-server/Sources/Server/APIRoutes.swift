@@ -28,10 +28,18 @@ private let proxyHopByHopHeaders: Set<String> = [
     // @slicc/shared-ts secrets-pipeline.ts) — consumed by the handler below
     // to compute and attach a real signature header; never forwarded as-is.
     "x-slicc-hmac-sign",
+    // Let AsyncHTTPClient negotiate gzip/br. Forcing `identity` made AEM/Fastly
+    // return cached gzip bytes with no `content-encoding` (#3037).
+    "accept-encoding",
 ]
 private let hmacSignHeader = HTTPField.Name("X-Slicc-Hmac-Sign")!
 private let proxyBlockedResponseHeaders: Set<String> = [
-    "transfer-encoding", "content-encoding", "www-authenticate",
+    "transfer-encoding",
+    // Stripped because this hop delivers decoded bytes: gzip-magic sniff in
+    // `MaybeGunzipState` inflates undeclared gzip (#3037). A synthetic SW
+    // `Response` does not inflate `content-encoding`.
+    "content-encoding",
+    "www-authenticate",
     "set-cookie",
 ]
 private let fetchProxyMethods: [HTTPRequest.Method] = [
@@ -1090,7 +1098,6 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
 
 private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClientRequest {
     var headers = HTTPHeaders(request.headers)
-    headers.remove(name: "accept-encoding")
 
     // Forbidden-header transport: restore X-Proxy-Cookie → Cookie
     if let proxyCookie = headers["x-proxy-cookie"].first {
@@ -1132,7 +1139,6 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     for header in proxyHopByHopHeaders {
         headers.remove(name: header)
     }
-    headers.add(name: "accept-encoding", value: "identity")
 
     var clientRequest = HTTPClientRequest(url: targetURL.absoluteString)
     clientRequest.method = HTTPMethod(request.method)
@@ -1235,6 +1241,7 @@ private func makeStreamingProxyResponse(
         asyncSequence: ScrubbingAsyncStream(
             upstream: upstreamBody,
             shouldScrub: shouldScrub,
+            shouldGunzip: isText,
             scrubber: scrubber
         ))
 
@@ -1263,6 +1270,7 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     typealias Element = ByteBuffer
     let upstream: HTTPClientResponse.Body
     let shouldScrub: Bool
+    let shouldGunzip: Bool
     let scrubber: SecretInjector
 
     struct AsyncIterator: AsyncIteratorProtocol {
@@ -1271,14 +1279,15 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
         let scrubber: SecretInjector
         var pendingTail: [UInt8] = []
         var didEmitTail = false
+        var gzip: MaybeGunzipState<HTTPClientResponse.Body.AsyncIterator>
 
         mutating func next() async throws -> ByteBuffer? {
             guard shouldScrub else {
-                // Fast path: no scrub work, just forward chunks.
-                return try await inner.next()
+                // Fast path: no scrub work; gunzip-sniff only for text.
+                return try await gzip.next(from: &inner)
             }
 
-            while let chunk = try await inner.next() {
+            while let chunk = try await gzip.next(from: &inner) {
                 // Combine any unfinished bytes from the previous chunk.
                 var bytes = pendingTail
                 bytes.append(contentsOf: chunk.readableBytesView)
@@ -1323,7 +1332,12 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     }
 
     func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(inner: upstream.makeAsyncIterator(), shouldScrub: shouldScrub, scrubber: scrubber)
+        AsyncIterator(
+            inner: upstream.makeAsyncIterator(),
+            shouldScrub: shouldScrub,
+            scrubber: scrubber,
+            gzip: MaybeGunzipState(enabled: shouldGunzip)
+        )
     }
 }
 

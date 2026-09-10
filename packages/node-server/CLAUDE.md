@@ -68,7 +68,7 @@ Chrome's browser-level socket drops on its own (`messageTooLarge`, inbound-queue
 
 ## API Routes
 
-- `ALL /api/fetch-proxy` — forwards browser requests across origins, injects masked secrets, records agent activity before forwarding
+- `ALL /api/fetch-proxy` — forwards browser requests across origins, injects masked secrets, records agent activity before forwarding. Does **not** force `accept-encoding: identity`; undici negotiates gzip/br, and a gzip-magic sniff inflates cached gzip that arrived with no `content-encoding` (#3037). `content-encoding` is stripped because the browser hop is a synthetic SW `Response` that does not inflate.
 - `GET /api/agent-activity` — `{ activeInLastMinute: boolean }` over non-OPTIONS `/api/fetch-proxy` traffic in a fixed 60 s window
 
 ## Secrets Architecture

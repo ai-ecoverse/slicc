@@ -38,6 +38,9 @@ export const FETCH_PROXY_SKIP_HEADERS: ReadonlySet<string> = new Set([
   // @slicc/shared-ts secrets-pipeline.ts) — consumed by the route handler
   // to compute and attach a real signature header; never forwarded as-is.
   'x-slicc-hmac-sign',
+  // Let undici negotiate gzip/br. Forcing `identity` made AEM/Fastly
+  // return cached gzip bytes with no `content-encoding` (#3037).
+  'accept-encoding',
 ]);
 
 /**
@@ -57,6 +60,10 @@ export const FETCH_PROXY_SKIP_HEADERS: ReadonlySet<string> = new Set([
  */
 export const FETCH_PROXY_SKIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
   'transfer-encoding',
+  // Stripped because this hop delivers decoded bytes: undici inflates a
+  // declared coding, and `streamUpstreamBody` gunzips a body that still
+  // starts with gzip magic when the coding is absent (#3037). A synthetic
+  // SW `Response` does not inflate `content-encoding`.
   'content-encoding',
   'content-length',
   'www-authenticate',

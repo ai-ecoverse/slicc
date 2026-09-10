@@ -9,8 +9,10 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { FETCH_PROXY_CONTENT_LENGTH_HEADER } from '../../src/fetch-proxy-headers.js';
 import { AgentActivityTracker } from '../../src/routes/agent-activity.js';
 import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
@@ -495,5 +497,118 @@ describe('registerFetchProxyRoute', () => {
     });
     expect(res.status).toBe(200);
     expect(receivedHeaders['x-bridge-token']).toBeUndefined();
+  });
+
+  it('does not force accept-encoding: identity on the upstream request', async () => {
+    let receivedAcceptEncoding: string | undefined;
+    await setup((req, res) => {
+      receivedAcceptEncoding = req.headers['accept-encoding'];
+      res.setHeader('content-type', 'text/plain');
+      res.end('ok');
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl, 'accept-encoding': 'identity' },
+    });
+    expect(res.status).toBe(200);
+    expect(receivedAcceptEncoding).not.toBe('identity');
+    expect(receivedAcceptEncoding?.toLowerCase() ?? '').toMatch(/gzip/);
+  });
+
+  it('gunzips a JS body that arrives pre-gzipped with no content-encoding', async () => {
+    const js = 'export function decorate() { return 1; }\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/javascript; charset=utf-8');
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': `${upstreamUrl}/scripts/aem.js` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBeNull();
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, 2)).not.toEqual(Buffer.from([0x1f, 0x8b]));
+    expect(body.toString('utf8')).toBe(js);
+  });
+
+  it('gunzips a CSS body that arrives pre-gzipped with no content-encoding', async () => {
+    const css = 'body { color: red; }\n';
+    const gz = gzipSync(css);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/css; charset=utf-8');
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': `${upstreamUrl}/styles/styles.css` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(await res.text()).toBe(css);
+  });
+
+  it('still delivers decoded JS when upstream sets content-encoding: gzip', async () => {
+    const js = 'export const styles = true;\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/javascript');
+      res.setHeader('content-encoding', 'gzip');
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(await res.text()).toBe(js);
+  });
+
+  it('forwards identity/plain JS unchanged', async () => {
+    const js = 'export const plain = true;\n';
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/javascript');
+      res.end(js);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(res.headers.get(FETCH_PROXY_CONTENT_LENGTH_HEADER.toLowerCase())).toBe(
+      String(Buffer.byteLength(js))
+    );
+    expect(await res.text()).toBe(js);
+  });
+
+  it('drops X-Proxy-Content-Length when undeclared gzip is inflated', async () => {
+    const js = 'export const x = 1;\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/javascript');
+      res.setHeader('content-length', String(gz.length));
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get(FETCH_PROXY_CONTENT_LENGTH_HEADER.toLowerCase())).toBeNull();
+    expect(await res.text()).toBe(js);
+  });
+
+  it('leaves application/gzip bodies compressed', async () => {
+    const js = 'export const x = 1;\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'application/gzip');
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': `${upstreamUrl}/foo.tar.gz` },
+    });
+    expect(res.status).toBe(200);
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+    expect(body.equals(gz)).toBe(true);
   });
 });

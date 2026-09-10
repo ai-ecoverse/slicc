@@ -60,7 +60,7 @@ Full route + follower internals: [`docs/swift-server-details.md`](../../docs/swi
 - Secrets (see Secrets Architecture): `GET|POST /api/secrets`, `GET|POST /api/secrets/session`, `/api/secrets/masked`, `/api/secrets/peek`, `POST /api/secrets/scope`, session-first `DELETE /api/secrets/:name`, `POST /api/secrets/scrub`.
 - `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` (`SignAndForward.swift`) — S3 creds from Keychain, transient IMS bearer for DA. DA `origin` allow-list `admin.da.live` (default) + `api.aem.live` (Helix 6); keep in lockstep with `@slicc/shared-ts` `DA_ALLOWED_ORIGINS`.
 - `POST /api/sudo-approve` (`SudoApprove.swift`) — native `osascript` via `Process`; loopback-only; fail-closed `deny`.
-- `ALL /api/fetch-proxy` — HTTP verbs plus WebDAV/CalDAV verbs (`PROPFIND`, `MKCOL`, `REPORT`, `COPY`, `MOVE`, `LOCK`, …); unknown → AsyncHTTPClient via `HTTPMethod.RAW(value:)`.
+- `ALL /api/fetch-proxy` — HTTP verbs plus WebDAV/CalDAV verbs (`PROPFIND`, `MKCOL`, `REPORT`, `COPY`, `MOVE`, `LOCK`, …); unknown → AsyncHTTPClient via `HTTPMethod.RAW(value:)`. Does **not** force `accept-encoding: identity`; `FetchProxyGzip.swift` sniffs gzip magic and inflates undeclared gzip (#3037), matching node-server.
 
 ## Tab Session Restore
 

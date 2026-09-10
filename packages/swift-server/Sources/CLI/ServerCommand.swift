@@ -253,7 +253,16 @@ struct ServerCommand: AsyncParsableCommand {
             logger: Logger(label: "slicc.cdp-proxy"),
             secretInjector: secretInjector
         )
-        let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
+        var httpConfiguration = HTTPClient.Configuration()
+        // Inflate declared gzip/br so /api/fetch-proxy does not forward
+        // compressed bytes after stripping `content-encoding` (#3037).
+        // No ratio cap: Node's undici has none either, and a 25× limit
+        // aborted repetitive JS/CSS that the CLI float accepted.
+        httpConfiguration.decompression = .enabled(limit: .none)
+        let httpClient = HTTPClient(
+            eventLoopGroupProvider: .singleton,
+            configuration: httpConfiguration
+        )
         let startupLatch = ServerStartupLatch()
 
         let router = Router(context: BasicRequestContext.self)
