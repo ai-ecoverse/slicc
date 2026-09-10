@@ -1,3 +1,4 @@
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
@@ -47,15 +48,6 @@ function openHelp(): { stdout: string; stderr: string; exitCode: number } {
     stderr: '',
     exitCode: 0,
   };
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 8192;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
 }
 
 function parseSizeSpec(spec: string): { maxW: number; maxH: number } | null {
@@ -399,7 +391,7 @@ async function handleViewTarget(
     );
   }
 
-  const base64 = toBase64(resized.bytes);
+  const base64 = uint8ToBase64(resized.bytes);
   const outKb = Math.round(resized.bytes.byteLength / 1024);
   return okOutcome(
     `${path} (${resized.nativeWidth}x${resized.nativeHeight} → ` +
