@@ -48,6 +48,7 @@ import {
   isAutomationPr,
   LABELS,
   parseMarkers,
+  prioritizeLogFetch,
   screenPr,
   summarizeChecks,
 } from './lib.mjs';
@@ -201,8 +202,11 @@ function jobIdFromDetailsUrl(url) {
 
 /** Attach a bounded log excerpt to each failing check that has a fetchable job log. */
 async function attachLogExcerpts(failing) {
+  // Non-aggregator jobs first so MAX_LOGS_PER_PR is not spent on the `ci`
+  // aggregator's boilerplate when a sibling (`lint`, …) named the cause.
+  const ordered = prioritizeLogFetch(failing);
   let fetched = 0;
-  for (const failure of failing) {
+  for (const failure of ordered) {
     if (failure.kind === 'status') {
       failure.logExcerpt = String(failure.description ?? '');
       continue;
@@ -219,7 +223,7 @@ async function attachLogExcerpts(failing) {
     });
     failure.logExcerpt = log ? extractLogExcerpt(log) : '';
   }
-  return failing;
+  return ordered;
 }
 
 /**
