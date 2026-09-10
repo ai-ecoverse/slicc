@@ -59,7 +59,10 @@ Invariants a reviewer must catch; mechanism in the linked docs.
   `record.markers` entry, NEVER a `ConversationEntry` — compaction replaces entries wholesale and
   would erase the row announcing it. Only a SETTLED round is written down (the phase stream does
   not replay, so a persisted in-flight seam could never be settled), under the row id the KERNEL
-  minted and the wire carried. **Users never
+  minted and the wire carried. A cone-error card (`ChatMessage.error`) is an ordinary
+  assistant-role row: the kernel appends it to the message buffer so it rides persist + replay;
+  it is not a marker (it does not have to survive a wholesale entry replace) and must never
+  become a Pi message. **Users never
   talk to a scoop**: a selected scoop is READ-ONLY (`isReadOnlyUnit`); asks go to the OWNING
   cone. Layout from `workspaceFor` ALONE (never hardcode `/workspace`); memory per cone.
   Privileged-float detection via `CapabilityBroker`, not `isExtensionRealm`, in scoops.
