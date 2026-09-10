@@ -261,9 +261,12 @@ Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS
 **File**: `packages/webapp/src/tools/file-tools.ts`
 
 Write or create a file in the virtual filesystem. Creates parent directories automatically.
-After `writeFile` resolves, the tool **stats the path and checks the byte size** before
+After `writeFile` resolves, the tool **reads the path back and compares content** before
 returning success — a resolve alone is not treated as durable (avoids the live failure
-where `File written:` was followed by `wc` reporting ENOENT on the same path).
+where `File written:` was followed by `wc` reporting ENOENT on the same path). Indexed
+`stat`/`size` is not used: ZenFS can answer metadata from an in-memory index while OPFS
+has no file, and some mounts report sizes that are not logical content length (AEM
+compressed listings; `/dev/null` always stats as 0).
 
 | Property   | Value                                                         |
 | ---------- | ------------------------------------------------------------- |
@@ -286,10 +289,11 @@ where `File written:` was followed by `wc` reporting ENOENT on the same path).
 
 **Behavior**:
 
-- Success string is returned only when `stat` shows a file whose size matches the
-  UTF-8 byte length of `content`
-- Missing path, wrong entry kind, or size mismatch → `isError: true` with
-  `Write did not land: …` (never a bare `File written:` lie)
+- Success string is returned only when a post-write `readTextFile` matches `content`
+  (full compare up to 256 KiB; larger payloads compare length + 4 KiB head/tail)
+- No-op sink devices (`/dev/null`) skip readback — the payload is discarded by design
+- Unreadable path or content mismatch → `isError: true` with `Write did not land: …`
+  (never a bare `File written:` lie)
 
 ---
 

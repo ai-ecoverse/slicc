@@ -7,7 +7,8 @@ import {
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import 'fake-indexeddb/auto';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { VirtualFS } from '../../src/fs/index.js';
+import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
+import { DEV_NULL } from '../../src/fs/virtual-device-paths.js';
 import { createFileTools } from '../../src/tools/file-tools.js';
 import type { ToolDefinition } from '../../src/tools/types.js';
 
@@ -62,7 +63,25 @@ describe('File Tools', () => {
       expect(result.content).not.toContain('File written:');
     });
 
-    it('returns isError when writeFile resolves but size does not match', async () => {
+    it('returns isError when indexed stat looks fine but readback fails (OPFS split-brain)', async () => {
+      // ZenFS can answer stat from the in-memory index while OPFS has no file —
+      // the exact failure verifyWriteLanded must not trust metadata for.
+      const realWrite = fs.writeFile.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+      };
+      fs.stat = async () => ({ type: 'file', size: 12, mtime: 0, ctime: 0 });
+      fs.readTextFile = async () => {
+        throw new Error("ENOENT: no such file or directory, open '/ghost.txt'");
+      };
+      const result = await writeFile.execute({ path: '/ghost.txt', content: 'never landed' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toMatch(/not readable|ENOENT/);
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('returns isError when writeFile resolves but content does not match', async () => {
       const realWrite = fs.writeFile.bind(fs);
       fs.writeFile = async (path: string) => {
         // Land a truncated file — writeFile "succeeded" but content did not.
@@ -70,8 +89,24 @@ describe('File Tools', () => {
       };
       const result = await writeFile.execute({ path: '/trunc.txt', content: 'expected-full' });
       expect(result.isError).toBe(true);
-      expect(result.content).toMatch(/size mismatch/);
+      expect(result.content).toMatch(/content mismatch/);
       expect(result.content).not.toContain('File written:');
+    });
+
+    it('succeeds when stat size diverges from content length but readback matches', async () => {
+      // AEM Source Bus reports compressed listing size; /dev/null stats as 0.
+      // Durability must not require universal stat-size equality.
+      const realWrite = fs.writeFile.bind(fs);
+      const realRead = fs.readTextFile.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+      };
+      fs.stat = async () => ({ type: 'file', size: 999999, mtime: 0, ctime: 0 });
+      fs.readTextFile = async (path: string) => realRead(path);
+      const result = await writeFile.execute({ path: '/aem-like.txt', content: 'payload' });
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('File written:');
+      await expect(realRead('/aem-like.txt')).resolves.toBe('payload');
     });
 
     it('propagates writeFile failures without a success string', async () => {
@@ -82,6 +117,19 @@ describe('File Tools', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toMatch(/EACCES|permission denied/);
       expect(result.content).not.toContain('File written:');
+    });
+
+    it('accepts nonempty writes to /dev/null without a false durability error', async () => {
+      const rfs = new RestrictedFS(fs, ['/workspace']);
+      const [nullWrite] = createFileTools(rfs as unknown as VirtualFS).filter(
+        (t) => t.name === 'write_file'
+      );
+      const result = await nullWrite.execute({
+        path: DEV_NULL,
+        content: 'discarded-but-accepted',
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toBe(`File written: ${DEV_NULL}`);
     });
   });
 
