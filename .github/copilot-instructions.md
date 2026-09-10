@@ -1,7 +1,7 @@
 # SLICC — Copilot Code Review Instructions
 
-Review SLICC's five runtimes (`webapp`, extension, Node, Swift, iOS) against these blind
-spots. Flag only genuine risks. Catalog: `docs/review-patterns.md`.
+Review all five runtimes (`webapp`, extension, Node, Swift, iOS).
+Flag concrete risks. Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
@@ -14,7 +14,8 @@ signing, DA `origin` allow-list / `aem://` #2811), browser ↔ extension (mounts
 
 ## 3. UI state preservation
 
-DOM rebuilds (`innerHTML`, `replaceChildren`, reflow) must capture and restore live state.
+DOM rebuilds (`innerHTML`, `replaceChildren`, reflow) must preserve live state.
+Sprinkle activation must clear attention state and place the parked container.
 
 ## 4. CDP / Chrome edge cases
 
@@ -86,4 +87,3 @@ dispatch, scanning all args.
 ## Severity
 
 🔴 Critical = likely prod issue · 🟡 Major = scenario-specific · 🔵 Minor = quality.
-Stay high-signal; prefer no comment to a speculative one.

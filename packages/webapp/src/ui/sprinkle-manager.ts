@@ -1012,8 +1012,9 @@ export class SprinkleManager implements SprinkleManagerHandle {
   /**
    * Route a rail-icon click to the right action based on current
    * state. When the sprinkle was surfaced in attention mode, promote
-   * it to user-opened (`markActivated`). When it has a registered
-   * rail icon but no content yet, open it. An already-open sprinkle
+   * it to user-opened (`markActivated`) and place its existing container.
+   * When it has a registered rail icon but no content yet, open it.
+   * An already-open sprinkle
    * re-runs `addSprinkle` on its existing (already-rendered) container —
    * idempotent when it's already shown, and the layout's re-place if it
    * was minimized/parked.
@@ -1021,7 +1022,6 @@ export class SprinkleManager implements SprinkleManagerHandle {
   async activate(name: string, zone?: string): Promise<void> {
     if (this.attentionOnly.has(name)) {
       this.markActivated(name);
-      return;
     }
     const entry = this.openSprinkles.get(name);
     if (!entry) {

@@ -30,7 +30,9 @@ for (const mode of ['fragment', 'document'] as const) {
     await gotoLeader(page);
     await waitForSW(page);
     await page.waitForSelector('slicc-input-card');
-    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
+    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
+      timeout: 20_000,
+    });
     await page.waitForFunction(() => Boolean(window.__slicc_sprinkleManager));
 
     const name = `e2e-details-${mode}`;
@@ -46,17 +48,19 @@ for (const mode of ['fragment', 'document'] as const) {
         await manager.fs.mkdir(dir, { recursive: true });
         await manager.fs.writeFile(`${dir}/${name}.shtml`, html);
         await manager.refresh();
-        await manager.open(name);
+        // Discovery surfaces new sprinkles for attention before the user
+        // opens them. Exercise that first rail activation deterministically.
+        await manager.open(name, undefined, { attention: true });
       },
       { name, html }
     );
 
     const panel = page.locator(`[data-sprinkle="${name}"]`);
-    if (!(await panel.isVisible())) {
-      await page
-        .getByRole('button', { name: mode === 'document' ? 'Disclosure probe' : name, exact: true })
-        .click();
-    }
+    await expect(panel).toBeHidden();
+    await page
+      .getByRole('button', { name: mode === 'document' ? 'Disclosure probe' : name, exact: true })
+      .click();
+    await expect(panel).toBeVisible({ timeout: 20_000 });
     const root = mode === 'document' ? panel.frameLocator('iframe') : panel;
     for (const kind of ['native', 'custom']) {
       const details = root.locator(`details.${kind}`);

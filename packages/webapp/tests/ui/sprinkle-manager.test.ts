@@ -1205,15 +1205,20 @@ describe('SprinkleManager', () => {
       expect(mgr.opened()).toContain('dash');
     });
 
-    it('activate promotes an attention-mode sprinkle to user-opened', async () => {
+    it('activate promotes and places an attention-mode sprinkle without recreating its content', async () => {
       await vfs.writeFile('/shared/sprinkles/q/q.shtml', '<title>Q</title><div>hi</div>');
       await mgr.refresh();
       await mgr.open('q', undefined, { attention: true });
       expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual([]);
+      const container = addSprinkle.mock.calls[0]?.[2];
+      addSprinkle.mockClear();
 
-      await mgr.activate('q');
+      await mgr.activate('q', 'left');
 
       expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual(['q']);
+      expect(addSprinkle).toHaveBeenCalledExactlyOnceWith('q', 'Q', container, 'left', {
+        icon: undefined,
+      });
     });
 
     it('activate re-places an already user-opened sprinkle (reopen after minimize)', async () => {
