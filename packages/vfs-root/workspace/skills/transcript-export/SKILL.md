@@ -2,10 +2,10 @@
 name: transcript-export
 description: |
   Use when the user asks to export, save, or download a transcript or session
-  history. Covers active-session export, archived (frozen) session export,
-  ZIP bundle layout, redaction guarantees, and the correct `session export`
-  shell syntax. Also explains what happens to credentials and reasoning blocks
-  in the exported bundle.
+  history; or (with Memory v2 on) to search or re-read past /sessions archives.
+  Covers active-session export, archived (frozen) session export, ZIP bundle
+  layout, redaction guarantees, `session export` syntax, and the Memory v2
+  `session search` / `session read` bounded search-then-read protocol.
 allowed-tools: bash, read_file
 ---
 
@@ -31,6 +31,32 @@ session export --id <session-id> --output /workspace/archive.zip
 ```
 
 The **default output path** is `/workspace/slicc-transcript-<session-id>.zip`.
+
+## Memory v2 — search then read (feature flag)
+
+When the `memory-v2` flag is **on** (Settings → Experimental, or a central
+override), `session` also exposes keyword search over `/sessions` archives.
+Prefer this over `rg` / `cat` on archives: legacy markdown embeds the whole
+session JSON on one line, so grep counts and line dumps are misleading.
+
+```bash
+# Bounded keyword search (title weighted above body; original content above
+# compaction summaries and prior search echoes):
+session search "OpTel budget" [--limit 8]
+
+# Read a bounded page for a hit id from search output:
+session read sess/<sessionId>/msg/<messageId> [--from N --count M]
+```
+
+Protocol:
+
+1. `session search <query>` returns short excerpts with stable `id=…` lines.
+2. `session read <id>` returns a hard-capped page and reports what remains.
+3. Stay under ~20 KB total across a few calls — never dump a whole archive.
+
+With Memory v2 on, new archives write prose-only markdown plus a `.jsonl`
+sidecar (one pi-ai-shaped message per line). Legacy embedded
+`<!-- slicc:session-data -->` archives remain searchable.
 
 ## What the bundle contains
 

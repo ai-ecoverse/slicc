@@ -201,6 +201,10 @@ async function writeSnapshot(
 
   await ensureSessionsDir(deps.vfs, sessionsDir);
   const transcriptPath = `${sessionsDir}/${filename}`;
+  // Cone + scoop live snapshots stay on the embedded-JSON markdown path.
+  // Memory-v2 prose+JSONL bundles are written only at freeze/enrichment time
+  // (session-freezer → lazy session-jsonl) so this boot-critical worker module
+  // does not grow the eager graph for a flag-gated feature.
   await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
   await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
   await deps.vfs.flush();
@@ -268,7 +272,14 @@ export function discardLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promis
       } catch (err) {
         if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
       }
+      // Dynamic: session-jsonl stays out of the worker first-load eager graph.
+      const { removeSessionJsonl } = await import('../transcript/session-jsonl.js');
+      await removeSessionJsonl(vfs, entry.filename);
     }
+    // Drop the keyword index so erased message bodies are not recoverable
+    // from /sessions/.search-index.json until a later search rebuilds it.
+    const { invalidateSessionSearchIndex } = await import('../transcript/session-search-index.js');
+    await invalidateSessionSearchIndex(vfs);
     await vfs.flush();
     log.info('Live session snapshot discarded', { cone: folder, removed: removed.length });
     return removed.length;

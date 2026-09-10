@@ -6,6 +6,7 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
   type FrozenSessionIndexEntry,
@@ -222,6 +223,6 @@ export async function thawFrozenSession(
 ): Promise<{ title: string; messages: ChatMessage[] }> {
   const raw = await fs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
   const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  const parsed = parseFrozenArchive(text);
+  const parsed = await loadFrozenArchive(fs, text, entry.filename);
   return { title: parsed.title || entry.title, messages: parsed.messages };
 }

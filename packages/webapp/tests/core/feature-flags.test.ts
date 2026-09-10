@@ -126,6 +126,24 @@ describe('feature flag registry', () => {
     expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
+  it('gates memory-v2 off by default and accepts a local override', () => {
+    initFeatureFlags('standalone');
+    expect(isFeatureEnabled('memory-v2')).toBe(false);
+    setFeatureFlagOverride('memory-v2', 'on');
+    expect(isFeatureEnabled('memory-v2')).toBe(true);
+    const def = listFlags().find((f) => f.id === 'memory-v2');
+    expect(def).toEqual(
+      expect.objectContaining({
+        id: 'memory-v2',
+        label: 'Memory v2',
+        description:
+          'Searchable session history and scoop pre-compaction snapshots for agent memory.',
+        defaultValue: 'off',
+        userToggleable: true,
+      })
+    );
+  });
+
   it('turns multiple cones ON everywhere except a Cherry embed (#2280)', () => {
     // Graduated. Cherry is the one carve-out: a garnish in someone else's
     // page stays single-cone, the same shape as `experimental-settings`.

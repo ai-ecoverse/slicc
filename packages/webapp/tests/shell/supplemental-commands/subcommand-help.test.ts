@@ -84,6 +84,14 @@ const DISPATCHERS: readonly Dispatcher[] = [
   // Fixed here: help exited non-zero with an arg error instead of helping.
   { command: 'workflow', source: 'workflow-command.ts', verbs: 'source', extraVerbs: ['run'] },
   { command: 'session', source: 'session-command.ts', verbs: 'source' },
+  // Lazy Memory-v2 verb dispatch (search/read/help) — split out of session-command
+  // so MiniSearch stays out of the worker first-load graph. Still a verb
+  // dispatcher: `session search --help` / `session read --help` must print help.
+  {
+    command: 'session',
+    source: 'session-command-memory.ts',
+    verbs: 'source',
+  },
   { command: 'hf', source: 'hf-command.ts', verbs: 'source' },
   { command: 'fswatch', source: 'fswatch-command.ts', verbs: ['create', 'list', 'delete'] },
   { command: 'di', source: 'di-command.ts', verbs: 'source' },
@@ -205,6 +213,31 @@ describe('subcommand --help', () => {
       }
     });
   }
+});
+
+describe('session Memory-v2 verb --help (lazy module)', () => {
+  it('flag-off: search/read --help stay on export-only usage', async () => {
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('standalone');
+    for (const verb of ['search', 'read'] as const) {
+      const r = await run('session', [verb, '--help']);
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toContain('session export');
+      expect(r.stdout).not.toMatch(/session search|session read/);
+    }
+  });
+
+  it('flag-on: search/read --help reach the lazy dispatcher and print verb usage', async () => {
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('standalone', { 'memory-v2': 'on' });
+    for (const verb of ['search', 'read'] as const) {
+      const r = await run('session', [verb, '--help']);
+      expect(r.exitCode).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout.toLowerCase()).toContain(verb);
+    }
+  });
 });
 
 describe('subcommand --help coverage', () => {

@@ -219,7 +219,7 @@ export function parseFrozenArchive(
   | 'live'
   | 'liveThrough'
   | 'compactions'
-> & { id?: string } {
+> & { id?: string; sidecar?: string } {
   let body = markdown;
   let title = 'Untitled';
   const meta: Pick<
@@ -232,7 +232,7 @@ export function parseFrozenArchive(
     | 'live'
     | 'liveThrough'
     | 'compactions'
-  > & { id?: string } = {};
+  > & { id?: string; sidecar?: string } = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
   //    The writer emits `title: ${JSON.stringify(value)}`, which means
@@ -265,6 +265,13 @@ export function parseFrozenArchive(
     body = body.replace(/<!-- slicc:session-data\n[\s\S]*?\n-->\n*/, '');
   }
 
+  // Memory v2: structured messages live in the JSONL sidecar. Sync parse
+  // returns empty messages + the sidecar name so callers can loadAsync
+  // via `loadFrozenArchive` in session-jsonl.ts (lazy).
+  if (meta.sidecar) {
+    return { title, messages: [], ...meta };
+  }
+
   // 3. Drop the leading `# title` heading if present.
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
@@ -284,7 +291,7 @@ function parseFrontmatterMeta(
   | 'live'
   | 'liveThrough'
   | 'compactions'
-> & { id?: string } {
+> & { id?: string; sidecar?: string } {
   const meta: ReturnType<typeof parseFrontmatterMeta> = {};
   const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
   const models = parseFrontmatterJson<FrozenSessionModel[]>(frontmatter, 'models');
@@ -311,6 +318,9 @@ function parseFrontmatterMeta(
   if (Number.isFinite(compactions) && compactions > 0) meta.compactions = compactions;
   const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
   if (id) meta.id = id;
+  // Memory v2 JSONL sidecar filename (basename under /sessions/).
+  const sidecar = frontmatter.match(/^sidecar:\s*(\S+)\s*$/m)?.[1];
+  if (sidecar) meta.sidecar = sidecar;
   return meta;
 }
 

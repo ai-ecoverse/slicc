@@ -335,4 +335,39 @@ describe('session command', () => {
       expect(writeFile).toHaveBeenCalledWith('/workspace/my-export.zip', expect.any(Uint8Array));
     });
   });
+
+  describe('memory-v2 search/read gating', () => {
+    it('does not advertise search/read in help when the flag is off', async () => {
+      const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+      initFeatureFlags('standalone');
+      const result = await createSessionCommand().execute(['--help'], mockCommandContext());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('session export');
+      expect(result.stdout).not.toContain('session search');
+    });
+
+    it('rejects search when memory-v2 is off', async () => {
+      const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+      initFeatureFlags('standalone');
+      const result = await createSessionCommand().execute(
+        ['search', 'optel'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/unknown subcommand/);
+    });
+
+    it('prints search help when memory-v2 is on', async () => {
+      const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+      // Central override — no localStorage dependency in this suite.
+      initFeatureFlags('standalone', { 'memory-v2': 'on' });
+      const result = await createSessionCommand().execute(
+        ['search', '--help'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).toContain('search');
+      expect(result.stdout).toContain('query');
+    });
+  });
 });

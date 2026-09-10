@@ -150,9 +150,11 @@ export function rewriteTranscriptPointers(
  * metadata; an HTML-commented JSON block carries the full structured
  * message list (toolCalls, attachments, source, channel, timestamps)
  * so the read-only chat-panel view can render with the same fidelity
- * as a live scoop. The visible markdown body below is what the chat
- * panel's "copy chat history" long-press produces — that part stays
- * human-readable.
+ * as a live scoop. The visible markdown body is what the chat panel's
+ * "copy chat history" long-press produces.
+ *
+ * Memory v2 prose+JSONL archives are written by `writeArchiveBundle` in
+ * `session-jsonl.ts` (lazy) — keep this eager path free of that glue.
  */
 export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
   const usageFrontmatter =
@@ -186,10 +188,10 @@ export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     usageFrontmatter +
     coneFrontmatter +
     `---\n\n`;
+  const title = `# ${archive.title}\n\n`;
   // Escape the only sequence that would prematurely close an HTML comment.
   const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
   const dataBlock = `${SESSION_DATA_START}${dataJson}${SESSION_DATA_END}\n\n`;
-  const title = `# ${archive.title}\n\n`;
   return header + dataBlock + title + formatChatForClipboard(archive.messages);
 }
 

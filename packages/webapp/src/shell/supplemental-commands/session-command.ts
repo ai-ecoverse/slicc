@@ -1,27 +1,28 @@
 /**
- * `session` shell command — export a transcript bundle to the VFS.
+ * `session` shell command — export, and (Memory v2) search/read over archives.
  *
  * Syntax:
  *   session export [--id <frozen-session-id>] [--output <path>]
+ *   session search <query> [--limit N]          # memory-v2 only
+ *   session read <id> [--from N --count M]      # memory-v2 only
  *
- * Default output: /workspace/slicc-transcript-<session-id>.zip
- * Chunks are streamed into memory, verified against the completion receipt
- * (byteLength), then written once via ctx.fs.writeFile.
- * Errors are prefixed `session export:` and exit 1.
+ * Default export output: /workspace/slicc-transcript-<session-id>.zip
+ * Search/read/help-when-flag-on live in `session-command-memory.ts` and load
+ * on first use so they stay out of the kernel-worker first-load eager graph.
  */
 
 import { TranscriptExportError } from '@slicc/shared-ts';
 import { sha256 } from 'js-sha256';
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getTranscriptExportService } from '../../transcript/export-provider.js';
 import type { TranscriptSessionSelector } from '../../transcript/export-service.js';
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
 import { isHelpRequest } from './subcommand-help.js';
 
-// ---------------------------------------------------------------------------
-// Arg parsing
-// ---------------------------------------------------------------------------
+export const EXPORT_USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
+
+type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
 interface ParsedExportArgs {
   sessionId: string | null;
@@ -29,8 +30,6 @@ interface ParsedExportArgs {
 }
 
 type ParseResult = { ok: true; args: ParsedExportArgs } | { ok: false; stderr: string };
-
-const USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
 
 /**
  * Reject --output paths that could escape VFS containment.
@@ -55,26 +54,26 @@ function parseExportArgs(args: readonly string[]): ParseResult {
     const flag = rest[i]!;
     if (flag === '--id') {
       if (sessionId !== null) {
-        return { ok: false, stderr: `session export: duplicate flag --id\n${USAGE}` };
+        return { ok: false, stderr: `session export: duplicate flag --id\n${EXPORT_USAGE}` };
       }
       const val = rest[i + 1];
       if (!val || val.startsWith('-')) {
         return {
           ok: false,
-          stderr: `session export: --id requires a value\n${USAGE}`,
+          stderr: `session export: --id requires a value\n${EXPORT_USAGE}`,
         };
       }
       sessionId = val;
       i++;
     } else if (flag === '--output') {
       if (outputPath !== null) {
-        return { ok: false, stderr: `session export: duplicate flag --output\n${USAGE}` };
+        return { ok: false, stderr: `session export: duplicate flag --output\n${EXPORT_USAGE}` };
       }
       const val = rest[i + 1];
       if (!val || val.startsWith('-')) {
         return {
           ok: false,
-          stderr: `session export: --output requires a path\n${USAGE}`,
+          stderr: `session export: --output requires a path\n${EXPORT_USAGE}`,
         };
       }
       outputPath = val;
@@ -82,22 +81,18 @@ function parseExportArgs(args: readonly string[]): ParseResult {
     } else if (flag.startsWith('-')) {
       return {
         ok: false,
-        stderr: `session export: unknown flag ${flag}\n${USAGE}`,
+        stderr: `session export: unknown flag ${flag}\n${EXPORT_USAGE}`,
       };
     } else {
       return {
         ok: false,
-        stderr: `session export: unexpected argument ${JSON.stringify(flag)}\n${USAGE}`,
+        stderr: `session export: unexpected argument ${JSON.stringify(flag)}\n${EXPORT_USAGE}`,
       };
     }
   }
 
   return { ok: true, args: { sessionId, outputPath } };
 }
-
-// ---------------------------------------------------------------------------
-// Chunk collection + verification
-// ---------------------------------------------------------------------------
 
 async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
@@ -108,7 +103,6 @@ async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array
     byteLength += chunk.byteLength;
   }
 
-  // Merge chunks into a single buffer before verification
   const merged = new Uint8Array(byteLength);
   let offset = 0;
   for (const chunk of chunks) {
@@ -121,7 +115,6 @@ async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array
     throw new TranscriptExportError('transfer-corrupt');
   }
 
-  // SHA-256 content integrity check — catches corruption that byteLength alone cannot.
   const actualSha256 = sha256(merged);
   if (actualSha256 !== completion.sha256) {
     throw new TranscriptExportError('transfer-corrupt');
@@ -130,68 +123,57 @@ async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array
   return merged;
 }
 
-// ---------------------------------------------------------------------------
-// Command factory
-// ---------------------------------------------------------------------------
+async function runExport(args: readonly string[], ctx: CommandContext): Promise<CommandResult> {
+  const parsed = parseExportArgs(args);
+  if (!parsed.ok) {
+    return { stdout: '', stderr: parsed.stderr, exitCode: 1 };
+  }
+
+  const { sessionId, outputPath } = parsed.args;
+
+  if (outputPath !== null) {
+    const pathCheck = validateOutputPath(outputPath);
+    if (!pathCheck.ok) {
+      return {
+        stdout: '',
+        stderr: `session export: --output ${pathCheck.reason}\n${EXPORT_USAGE}`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  const selector: TranscriptSessionSelector =
+    sessionId != null ? { kind: 'frozen', sessionId } : { kind: 'active' };
+
+  try {
+    const service = getTranscriptExportService();
+    const result = await service.export(selector, {});
+    const bytes = await collectAndVerify(result);
+    const resolvedOutput = outputPath ?? `/workspace/${result.filename}`;
+    await ctx.fs.writeFile(resolvedOutput, bytes);
+    return { stdout: `exported ${resolvedOutput}\n`, stderr: '', exitCode: 0 };
+  } catch (err) {
+    const message =
+      err instanceof TranscriptExportError
+        ? err.code
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return {
+      stdout: '',
+      stderr: `session export: ${message}\n`,
+      exitCode: 1,
+    };
+  }
+}
 
 export function createSessionCommand(): Command {
   return defineCommand('session', async (args, ctx) => {
     const sub = args[0];
-
-    if (isHelpRequest(args)) return { stdout: USAGE, stderr: '', exitCode: 0 };
-
-    if (sub !== 'export') {
-      return {
-        stdout: '',
-        stderr:
-          `session export: unknown subcommand ${JSON.stringify(sub ?? '')}` +
-          ` — usage: session export [--id <id>] [--output <path>]\n`,
-        exitCode: 1,
-      };
-    }
-
-    const parsed = parseExportArgs(args);
-    if (!parsed.ok) {
-      return { stdout: '', stderr: parsed.stderr, exitCode: 1 };
-    }
-
-    const { sessionId, outputPath } = parsed.args;
-
-    if (outputPath !== null) {
-      const pathCheck = validateOutputPath(outputPath);
-      if (!pathCheck.ok) {
-        return {
-          stdout: '',
-          stderr: `session export: --output ${pathCheck.reason}\n${USAGE}`,
-          exitCode: 1,
-        };
-      }
-    }
-
-    const selector: TranscriptSessionSelector =
-      sessionId != null ? { kind: 'frozen', sessionId } : { kind: 'active' };
-
-    try {
-      const service = getTranscriptExportService();
-      const result = await service.export(selector, {});
-      const bytes = await collectAndVerify(result);
-      // Resolve default output from the service-returned filename so active
-      // sessions get their real session id, not a client-side timestamp.
-      const resolvedOutput = outputPath ?? `/workspace/${result.filename}`;
-      await ctx.fs.writeFile(resolvedOutput, bytes);
-      return { stdout: `exported ${resolvedOutput}\n`, stderr: '', exitCode: 0 };
-    } catch (err) {
-      const message =
-        err instanceof TranscriptExportError
-          ? err.code
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      return {
-        stdout: '',
-        stderr: `session export: ${message}\n`,
-        exitCode: 1,
-      };
-    }
+    // Fast path: export stays in this eager module. Everything Memory-v2
+    // (help-when-on, search, read, flag-aware unknown) is lazy.
+    if (sub === 'export' && !isHelpRequest(args)) return runExport(args, ctx);
+    const { dispatchSessionMemoryAware } = await import('./session-command-memory.js');
+    return dispatchSessionMemoryAware(args, ctx, EXPORT_USAGE);
   });
 }
