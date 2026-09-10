@@ -17,14 +17,25 @@ describe('errorDetailsToRawString', () => {
     );
   });
 
-  it('JSON.stringifies objects instead of String() → [object Object]', () => {
+  it('extracts allowlisted message fields instead of String() → [object Object]', () => {
     expect(errorDetailsToRawString({ message: 'bedrock returned 400' })).toBe(
-      '{"message":"bedrock returned 400"}'
+      'bedrock returned 400'
     );
     expect(String({ message: 'bedrock returned 400' })).toBe('[object Object]');
   });
 
-  it('returns undefined for null, undefined, and circular objects', () => {
+  it('keeps error.type next to the message so quota_exceeded still filters', () => {
+    expect(
+      errorDetailsToRawString({
+        error: { type: 'quota_exceeded', message: 'Weekly budget has been fully used.' },
+      })
+    ).toBe('quota_exceeded: Weekly budget has been fully used.');
+  });
+
+  it('drops unknown object bags rather than serializing them', () => {
+    expect(
+      errorDetailsToRawString({ token: 'secret', request: { url: '/join/abc' } })
+    ).toBeUndefined();
     expect(errorDetailsToRawString(null)).toBeUndefined();
     expect(errorDetailsToRawString(undefined)).toBeUndefined();
     const circular: { self?: unknown } = {};
@@ -83,5 +94,11 @@ describe('formatErrorDetails', () => {
 
   it('formats Error instances', () => {
     expect(formatErrorDetails(new TypeError('cannot read x'))).toBe('TypeError: cannot read x');
+  });
+
+  it('does not serialize secret-bearing bags', () => {
+    expect(
+      formatErrorDetails({ token: 'secret', headers: { authorization: 'Bearer x' } })
+    ).toBeUndefined();
   });
 });

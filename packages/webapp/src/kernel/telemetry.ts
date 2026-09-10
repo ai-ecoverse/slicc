@@ -14,7 +14,11 @@
  */
 
 import { isUserFixableError } from '../core/error-families.js';
-import { errorDetailsToRawString, unwrapStructuredErrorMessage } from '../core/error-text.js';
+import {
+  errorDetailsToRawString,
+  formatErrorDetails,
+  unwrapStructuredErrorMessage,
+} from '../core/error-text.js';
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
@@ -312,9 +316,9 @@ function sanitizeErrorTarget(details: unknown): string | null | undefined {
   // Match the raw envelope first so a `429 {"error":{"type":"quota_exceeded"}}`
   // body still drops even after we unwrap to the inner `message`.
   if (isUserFixableError(raw)) return null;
-  const unwrapped = unwrapStructuredErrorMessage(raw);
-  if (isUserFixableError(unwrapped)) return null;
-  return sanitizeError(unwrapped);
+  const formatted = formatErrorDetails(details) ?? unwrapStructuredErrorMessage(raw);
+  if (isUserFixableError(formatted)) return null;
+  return sanitizeError(formatted);
 }
 
 function bindRuntimeErrorListeners(target: {
@@ -397,7 +401,8 @@ type FieldOutcome =
   | { kind: 'noise' };
 
 function sanitizeBeaconField(raw: unknown): FieldOutcome {
-  const asString = typeof raw === 'string' ? raw : errorDetailsToRawString(raw);
+  const asString =
+    typeof raw === 'string' ? raw : (formatErrorDetails(raw) ?? errorDetailsToRawString(raw));
   if (typeof asString !== 'string') return { kind: 'absent' };
   const unwrapped = unwrapStructuredErrorMessage(asString);
   // Helix `dataFromErrorObj` already toString()'d a POJO — nothing left to

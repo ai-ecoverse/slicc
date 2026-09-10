@@ -424,6 +424,16 @@ describe('telemetry', () => {
     });
   });
 
+  it('trackError drops unknown object bags instead of serializing them', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('js', { token: 'secret', request: { url: '/join/abc' } });
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
   it('trackError still drops user-fixable families when details is a structured object', async () => {
     const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
@@ -445,6 +455,21 @@ describe('telemetry', () => {
     trackError('js', { message: 'x'.repeat(250) });
     const target = mockSampleRUM.mock.calls[0][1].target as string;
     expect(target.length).toBeLessThanOrEqual(200);
+  });
+
+  it('CLI capture interceptor drops a thrown bag with no message field', async () => {
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'error', {
+      value: { token: 'secret', request: { url: '/join/abc' } },
+    });
+    window.dispatchEvent(errorEvent);
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
   });
 
   it('CLI capture interceptor beacons a thrown POJO via trackError, not [object Object]', async () => {

@@ -120,7 +120,7 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 
 A scoop failure reuses the `error` checkpoint row above rather than getting its own row: `trackScoopLifecycle()` sets `source: 'scoop:<name>'` (not the bare scoop name used by `enter`/`convert`/`leave`) and runs the message through the same `sanitizeError` used for `trackError`, dropping known user-fixable error families (no-api-key, invalid-model, auth-expired, quota-exceeded) before emitting.
 
-`trackError` / `trackScoopLifecycle` coerce non-string `details` **before** those filters (`Error` → `name: message`; object → `message` / `error.message` else `JSON.stringify`; never implicit `String()`). Structured JSON blobs are unwrapped to the inner message so families stay countable. On CLI/Electron, a capture-phase interceptor steals helix-rum-js's non-Error `window.error` / `unhandledrejection` payloads — helix's `dataFromErrorObj` otherwise beacons `source: 'undefined error'` / `target: '[object Object]'` (#3035).
+`trackError` / `trackScoopLifecycle` coerce non-string `details` **before** those filters (`Error` → `name: message`; object → allowlisted `message` / `error.message`, else drop — never `JSON.stringify` of the bag, never implicit `String()`). Structured JSON **strings** are unwrapped to the inner message so families stay countable. On CLI/Electron, a capture-phase interceptor steals helix-rum-js's non-Error `window.error` / `unhandledrejection` payloads — helix's `dataFromErrorObj` otherwise beacons `source: 'undefined error'` / `target: '[object Object]'` (#3035). Error-card **content** keeps original strings so quota envelopes still reach `errorCardEl`.
 
 ### Auto-instrumented (from enhancer, CLI/Electron only)
 

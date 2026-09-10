@@ -428,6 +428,18 @@ describe('WcChatController', () => {
       expect(trackError).toHaveBeenCalledWith('error-card', expect.any(TypeError));
     });
 
+    it('keeps a quota envelope string so the card can detect the family', () => {
+      agent.emit({
+        type: 'error',
+        error:
+          '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14.","resets_at":"2026-09-14T00:00:00.000Z"}}',
+      });
+      const card = thread.querySelector('slicc-error-card');
+      expect(card?.getAttribute('label')).toBe('Out of AI budget');
+      expect(card?.getAttribute('action')).toBe('settings');
+      expect(trackError).not.toHaveBeenCalled();
+    });
+
     it('does NOT fire for a no-api-key error (dedicated handler)', () => {
       agent.emit({ type: 'error', error: 'No API key configured for Anthropic' });
       expect(trackError).not.toHaveBeenCalled();

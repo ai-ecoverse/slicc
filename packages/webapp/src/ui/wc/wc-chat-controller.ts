@@ -1269,12 +1269,14 @@ export class WcChatController {
     // event picked up by `#handleErrorRetry`). Mark the message with `error`
     // so `messageEls` routes it to the card instead of the plain bubble.
     // `event.error` is typed `string` on the wire but production OpTel
-    // shows non-strings arriving here (#3035) — coerce so the card never
-    // renders `[object Object]`.
+    // shows non-strings arriving here (#3035) — coerce those so the card
+    // never renders `[object Object]`. Leave strings intact: quota
+    // envelopes (`429 {"error":{"type":"quota_exceeded",…}}`) must still
+    // reach `errorCardEl` so it can detect the family and read `resets_at`.
     this.#appendMessage({
       id: uid(),
       role: 'assistant',
-      content: formatErrorDetails(error) ?? '',
+      content: typeof error === 'string' ? error : (formatErrorDetails(error) ?? ''),
       timestamp: Date.now(),
       error: true,
     });
