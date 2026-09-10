@@ -681,10 +681,20 @@ function buildSpawnOptions(
  * its literal text; under an extra cone that path is another agent's folder and
  * every draft write there would escalate. The prompt — not the FS policy —
  * is rewritten to name this run's own scratch.
+ *
+ * Idempotent with `substitutePlaceholders`: per-cone scratch dirs start with
+ * the primary spelling (`…/agent-memory-curator-cone-…`), so a naive
+ * `replaceAll` would re-prefix already-expanded `{{SCRATCH_DIR}}` mentions.
+ * Protect the fully-substituted path first, then rewrite only the legacy
+ * primary spelling.
  */
 function rebaseScratchMentions(prompt: string, scratchDir: string): string {
   if (scratchDir === PRIMARY_CURATOR_SCRATCH) return prompt;
-  return prompt.replaceAll(PRIMARY_CURATOR_SCRATCH, scratchDir);
+  const sentinel = '\0SCRATCH\0';
+  return prompt
+    .replaceAll(scratchDir, sentinel)
+    .replaceAll(PRIMARY_CURATOR_SCRATCH, scratchDir)
+    .replaceAll(sentinel, scratchDir);
 }
 
 function substitutePlaceholders(template: string, values: Record<string, string>): string {
