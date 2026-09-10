@@ -218,7 +218,12 @@ kernel writes one per round (`Bridge.recordCompactionRow`, keyed by the row id
 so a `discarded` round deletes it); `toChatMessages` folds them back by
 `timestamp` alone, because no entry survives a rewrite to anchor to. The
 rendering side is unchanged: the row is a `ChatMessage` carrying `compaction`,
-and `messageEls` keys on that field.
+and `messageEls` keys on that field. Other out-of-band `ChatMessage` fields
+that also do not live in Pi history must take the same reseed hop:
+`toBufferedChatMessages` projects them explicitly, and a rebuild from agent
+state must not overwrite a settled UI-store value — `lickId`/`lickState` on
+sudo-request cards (#3004) overlay from `browser-coding-agent` so a confirmed
+or dismissed glyph cannot revert to pending.
 
 **Error cards are ordinary assistant-role rows, not markers.** A cone-error
 card (`ChatMessage.error` → `<slicc-error-card>`) is something the conversation

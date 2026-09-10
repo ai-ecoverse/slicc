@@ -558,8 +558,12 @@ in its default amber `pending` state. When the cone resolves the request, the
 orchestrator persists the decision onto the originating message's `lickState`
 and the card flips in place — a green check (`confirmed`) for `lick_confirm` or
 a red cross (`dismissed`, rendered muted) for `lick_dismiss` — so the resolved
-verdict survives reload. The design-time fixture (`?ui-fixture=1`) carries one
-sample per state (`pending` / `confirmed` / `dismissed`) for styling.
+verdict survives reload. Pi history does not carry `lickState`; the kernel
+projects `lickId`/`lickState` through `toBufferedChatMessages` and folds the
+UI-store value back on boot reseed so `persistScoopAwait` cannot clobber a
+settled glyph with the pending default (#3004). The design-time fixture
+(`?ui-fixture=1`) carries one sample per state (`pending` / `confirmed` /
+`dismissed`) for styling.
 
 #### Other actionable licks (beyond sudo)
 

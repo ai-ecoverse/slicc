@@ -133,8 +133,9 @@ function translateUserMessage(m: UserMessage, idSeed: () => string): ChatMessage
     if (env.body.length === 0 && env.sender == null) continue;
     const lickChannel =
       (env.sender ? lickChannelFromSenderName(env.sender) : null) ?? lickChannelFromBody(env.body);
+    const lickId = lickChannel ? lickIdFromBody(env.body) : undefined;
     const msg: ChatMessage = {
-      id: idSeed(),
+      id: lickChannel === 'sudo-request' && lickId ? `sudo-request-${lickId}` : idSeed(),
       role: 'user',
       content: env.body,
       timestamp: m.timestamp,
@@ -142,6 +143,7 @@ function translateUserMessage(m: UserMessage, idSeed: () => string): ChatMessage
     if (lickChannel) {
       msg.source = 'lick';
       msg.channel = lickChannel;
+      if (lickId) msg.lickId = lickId;
     }
     out.push(msg);
   }
@@ -472,4 +474,15 @@ export function lickChannelFromBody(body: string): LickChannel | null {
   if (/^\[scoop_wait [^\]]+\]/.test(body)) return 'scoop-wait';
   if (body.startsWith('[Session Reload]')) return 'session-reload';
   return null;
+}
+
+/**
+ * Recover an actionable lick id from a reconstructed lick body. Live cards
+ * stamp `lickId` on the ChannelMessage; Pi history only has the body, which
+ * carries `Lick ID:` (current sudo-request / upgrade / navigate envelopes)
+ * or the older `Request ID:` sudo-request line. Does not set `lickState` —
+ * the decision is not in Pi history (#3004).
+ */
+export function lickIdFromBody(body: string): string | undefined {
+  return /^(?:Lick ID|Request ID): (\S+)/m.exec(body)?.[1];
 }
