@@ -497,6 +497,8 @@ body{padding:12px 0;font-family:var(--s2-font-family, sans-serif);font-size:13px
 .sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
 .sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
+/* Adjacent stacked cards: host owns the gap so dip-author margin cannot lose on specificity. */
+.sprinkle-inline .sprinkle-action-card+.sprinkle-action-card{margin-top:12px}
 .sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
 .sprinkle-inline .sprinkle-grid{width:100%}
 input[type="range"]{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:var(--s2-gray-300);border-radius:2px;outline:none;cursor:default}
