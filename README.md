@@ -184,7 +184,7 @@ Once the product makes sense, the ice-cream language is easier to enjoy: it maps
 - **Licks** — external events that wake an agent up: webhooks, cron jobs, and other signals from the outside world.
 - **Floats** — normal engineers would call it runtimes, but would normal engineers have come up with this?
 - **Tray** — multiple floats can form a tray, a joint session with remote control.
-- **Sprinkles** — everything is better with sprinkles: small, optional enhancements you can add on top of the core system.
+- **Sprinkles** — everything is better with sprinkles: small, optional enhancements you can add on top of the core system. Select a newly discovered sprinkle's rail icon to open its panel.
 
 Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive system that can help build, extend, and operate itself. A browser agent running inside the browser: that's as self-recursive as tongue-out gelato.
 

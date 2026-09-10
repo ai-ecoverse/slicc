@@ -9,6 +9,7 @@
  *   Run: npm run test:e2e -- sprinkle-fetch-iframe
  */
 
+import type { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
@@ -34,7 +35,7 @@ interface SprinkleManagerHarness {
     writeFile(path: string, content: string): Promise<void>;
   };
   refresh(): Promise<void>;
-  open(name: string): Promise<void>;
+  open: SprinkleManager['open'];
   opened(): string[];
 }
 

@@ -81,6 +81,7 @@ use backoff for retries; make sure failures surface rather than hang.
 
 **Trigger patterns**
 
+- Activating a parked sprinkle must place its existing container as well as update attention/persistence state; assert visible content on the first rail click.
 - `el.innerHTML = …` or `replaceChildren()` that rebuilds a subtree holding live UI state.
 - Navigation / routing / reflow that re-renders without capturing and restoring state.
 - Component teardown without cleanup, or local state updated without persisting it.
