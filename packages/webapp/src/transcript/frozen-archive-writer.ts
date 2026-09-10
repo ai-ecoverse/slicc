@@ -96,6 +96,11 @@ export function heuristicTitle(messages: readonly ChatMessage[]): string {
  * Strip ephemeral fields that should never survive into a frozen archive
  * (transient pointers held only for the live render). What's left is a
  * pure data shape suitable for JSON round-trip and re-render.
+ *
+ * Compaction seams are kept: they are durable annotations (`transcriptPath`
+ * points at the pre-compaction archive), not render-only state. Enrichment
+ * rewrites those paths when it renames a provisional `live-`/`pending-`
+ * file ({@link rewriteTranscriptPointers}).
  */
 export function stripEphemeral(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.map((m) => {
@@ -117,8 +122,27 @@ export function stripEphemeral(messages: readonly ChatMessage[]): ChatMessage[] 
     }
     if (m.source) out.source = m.source;
     if (m.channel) out.channel = m.channel;
+    if (m.compaction) out.compaction = m.compaction;
     return out;
   });
+}
+
+/**
+ * Rewrite every occurrence of a provisional archive path to its canonical
+ * post-enrichment path. Covers the summary pointer sentence ("saved at …")
+ * in both the markdown body and the HTML-commented JSON message block, and
+ * any `ChatCompactionMarker.transcriptPath` values in that JSON.
+ *
+ * Exact substring replace (no regex): paths are absolute `/sessions/…`
+ * filenames, so a partial match cannot collide with other prose.
+ */
+export function rewriteTranscriptPointers(
+  content: string,
+  fromPath: string,
+  toPath: string
+): string {
+  if (!fromPath || fromPath === toPath) return content;
+  return content.split(fromPath).join(toPath);
 }
 
 /**

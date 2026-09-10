@@ -156,4 +156,80 @@ describe('freezeConeSession over a live snapshot', () => {
       'Build Fixed Twice'
     );
   });
+
+  it('rewrites every transcript pointer to the renamed archive path', async () => {
+    const vfs = makeFakeVfs();
+    const live = await seedLiveSnapshot(vfs);
+    const livePath = live.transcriptPath;
+    const pointerSentence = `The full transcript of the conversation before this compaction is saved at ${livePath} — read it when the summary is not enough.`;
+    const sessionWithPointers: Session = {
+      id: 'session-cone',
+      createdAt: 1,
+      updatedAt: 9,
+      messages: [
+        chat('user', `Earlier turns summarized.\n\n${pointerSentence}`, 1),
+        {
+          id: 'compaction-seam',
+          role: 'assistant',
+          content: '',
+          timestamp: 2,
+          compaction: {
+            trigger: 'threshold',
+            state: 'summarized',
+            transcriptPath: livePath,
+          },
+        },
+        chat('user', 'follow-up after compaction', 3),
+        chat('assistant', 'reply after compaction', 4),
+        chat('user', 'another follow-up', 5),
+      ],
+    };
+    const pointedStore = {
+      async load() {
+        return sessionWithPointers;
+      },
+    } as unknown as SessionStore;
+
+    const frozen = await freezeConeSession({
+      sessionStore: pointedStore,
+      vfs,
+      mode: 'quick',
+    });
+    expect(frozen?.filename).toBe(live.entry.filename);
+    // Freeze keeps the provisional name — pointers still resolve to the live file.
+    expect(vfs.files.has(livePath)).toBe(true);
+    mockRunOneOffCompactionCall.mockResolvedValue('Pointer Rewrite');
+
+    const updated = await enrichPendingSession(vfs, frozen!, {
+      model: { id: 'm', provider: 'anthropic' } as never,
+      apiKey: 'k',
+      skipMemory: true,
+      pickIcon: async () => null,
+    });
+
+    const newPath = `/sessions/${updated!.filename}`;
+    expect(vfs.files.has(livePath)).toBe(false);
+    expect(vfs.files.has(newPath)).toBe(true);
+
+    const raw = vfs.files.get(newPath)!;
+    expect(raw).not.toContain(livePath);
+    expect(raw).toContain(newPath);
+
+    const archive = parseFrozenArchive(raw);
+    const summary = archive.messages.find((m) => m.content.includes('Earlier turns summarized'));
+    expect(summary?.content).toContain(`saved at ${newPath}`);
+    expect(summary?.content).not.toContain(livePath);
+
+    const markers = archive.messages.filter((m) => m.compaction?.transcriptPath);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].compaction?.transcriptPath).toBe(newPath);
+    // Acceptance: every pointer resolves to an existing file.
+    for (const marker of markers) {
+      expect(vfs.files.has(marker.compaction!.transcriptPath!)).toBe(true);
+    }
+    const pathMatches = [...raw.matchAll(/\/sessions\/[^\s"'<>]+/g)].map((m) => m[0]);
+    for (const path of new Set(pathMatches)) {
+      expect(vfs.files.has(path)).toBe(true);
+    }
+  });
 });

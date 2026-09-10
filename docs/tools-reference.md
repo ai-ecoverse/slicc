@@ -657,10 +657,12 @@ exactly what compaction elides first. The summary
 message (and the naive-drop marker) ends with a pointer to that path so the agent can read what the
 summary replaced; the UI notice shows the same path, and the pointer sentence is stripped again
 before a later round's summary/memory prompts see the previous summary. "New chat" completes the
-snapshot on **Save** / **Skip memory** (same id and file, `live` dropped, enrichment renames it);
-**Erase** sends `discardLiveSnapshot` on the `clear-chat` envelope so the KERNEL deletes it; a bare
-`clear-chat` finalizes it into a pending draft. Every `/sessions/index.json` read-modify-write —
-page freezer, enrichment, worker snapshot — runs under one origin-wide Web Lock
+snapshot on **Save** / **Skip memory** (same id and file, `live` dropped, enrichment renames it
+to `<timestamp>-<slug>.md` and rewrites every embedded pointer — summary sentence and
+`ChatCompactionMarker.transcriptPath` — to the new path so nothing dangles at the deleted
+`live-…` name); **Erase** sends `discardLiveSnapshot` on the `clear-chat` envelope so the KERNEL
+deletes it; a bare `clear-chat` finalizes it into a pending draft. Every `/sessions/index.json`
+read-modify-write — page freezer, enrichment, worker snapshot — runs under one origin-wide Web Lock
 (`slicc:sessions-index`, `transcript/frozen-archive-writer.ts` `serializeIndexWrite`), and a
 snapshot re-checks the unit's session generation inside that transaction so a clear that overtook
 it writes nothing. The cursor (`liveThrough`) and round count also ride the archive frontmatter, so

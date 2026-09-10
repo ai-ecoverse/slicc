@@ -59,6 +59,7 @@ import {
   heuristicTitle,
   isDraftArchiveFilename,
   readSessionsIndexForWrite,
+  rewriteTranscriptPointers,
   serializeIndexWrite,
   shortId,
   slugify,
@@ -1205,11 +1206,14 @@ async function appendEnrichmentMemory(
 }
 
 /**
- * Enrichment steps 6–8 — rewrite the archive title, write under the new
- * canonical name, update the index, then drop the old pending file last.
- * This ordering keeps the index consistent with what's on disk even if
- * the final unlink fails — at worst we leak a stale pending-… file,
- * no data loss.
+ * Enrichment steps 6–8 — rewrite the archive title, rewrite any
+ * compaction transcript pointers from the provisional path to the
+ * canonical one, write under the new name, update the index, then drop
+ * the old draft file last. This ordering keeps the index consistent with
+ * what's on disk even if the final unlink fails — at worst we leak a
+ * stale pending-/live-… file, no data loss. Pointer rewrite is load-
+ * bearing: summaries and `ChatCompactionMarker.transcriptPath` still
+ * name the provisional file until this step.
  */
 /**
  * Rebuild the index entry for a just-enriched archive. Carries a
@@ -1271,7 +1275,11 @@ async function commitEnrichedArchive(
   if (isDraft) {
     try {
       await ensureDir(vfs, SESSIONS_DIR);
-      await vfs.writeFile(newPath, rewriteArchiveTitle(archiveContent, resolvedTitle));
+      // Title first, then pointer rewrite: the summary sentence and every
+      // marker.transcriptPath still name `oldPath` until the file moves.
+      const titled = rewriteArchiveTitle(archiveContent, resolvedTitle);
+      const rewritten = rewriteTranscriptPointers(titled, oldPath, newPath);
+      await vfs.writeFile(newPath, rewritten);
     } catch (err) {
       log.warn('Enrichment write failed (entry stays pending)', {
         filename: entry.filename,

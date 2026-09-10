@@ -20,8 +20,10 @@ import {
   isDraftArchiveFilename,
   liveSnapshotFilename,
   readSessionsIndexForWrite,
+  rewriteTranscriptPointers,
   serializeIndexWrite,
   slugify,
+  stripEphemeral,
   upsertSessionsIndexEntry,
 } from '../../src/transcript/frozen-archive-writer.js';
 
@@ -100,6 +102,56 @@ describe('formatArchiveAsMarkdown', () => {
     });
     expect(markdown).not.toContain('live:');
     expect(parseFrozenArchive(markdown).live).toBeUndefined();
+  });
+
+  it('keeps compaction seams (including transcriptPath) through stripEphemeral', () => {
+    const seam: ChatMessage = {
+      id: 'c1',
+      role: 'assistant',
+      content: '',
+      timestamp: 3,
+      compaction: {
+        trigger: 'threshold',
+        state: 'summarized',
+        transcriptPath: '/sessions/live-cone-abc.md',
+      },
+      model: 'claude-opus-4-6',
+    };
+    const [kept] = stripEphemeral([seam]);
+    expect(kept.compaction).toEqual(seam.compaction);
+    expect(kept.model).toBeUndefined();
+
+    const markdown = formatArchiveAsMarkdown({
+      id: 'sid',
+      title: 't',
+      frozenAt: 'now',
+      createdAt: 1,
+      updatedAt: 3,
+      messageCount: 1,
+      messages: [seam],
+    });
+    expect(parseFrozenArchive(markdown).messages[0].compaction).toEqual(seam.compaction);
+  });
+});
+
+describe('rewriteTranscriptPointers', () => {
+  it('replaces every occurrence of the provisional path with the canonical one', () => {
+    const from = '/sessions/live-cone-abc.md';
+    const to = '/sessions/2026-09-10T12-00-00-000Z-fixed.md';
+    const content = [
+      `saved at ${from} — read it`,
+      JSON.stringify({ compaction: { transcriptPath: from } }),
+      from,
+    ].join('\n');
+    const rewritten = rewriteTranscriptPointers(content, from, to);
+    expect(rewritten).not.toContain(from);
+    expect(rewritten.split(to)).toHaveLength(4); // three replacements → four parts
+  });
+
+  it('is a no-op when the path did not change', () => {
+    const path = '/sessions/live-cone-abc.md';
+    expect(rewriteTranscriptPointers(`saved at ${path}`, path, path)).toBe(`saved at ${path}`);
+    expect(rewriteTranscriptPointers('hello', '', '/sessions/x.md')).toBe('hello');
   });
 });
 
