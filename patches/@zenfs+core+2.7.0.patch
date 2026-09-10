@@ -1,8 +1,8 @@
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index ac8b186..e20f4ec 100644
+index 55f301b..4b25fde 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
-@@ -162,26 +162,67 @@ export function Async(FS) {
+@@ -167,26 +167,67 @@ export function Async(FS) {
          /**
           * @internal
           */
@@ -89,7 +89,7 @@ index ac8b186..e20f4ec 100644
          /**
           * @internal
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index 989b33f..203d023 100644
+index 989b33f..e51537d 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
 @@ -79,6 +79,30 @@ export class VCache {
@@ -106,7 +106,7 @@ index 989b33f..203d023 100644
 +        // same bytes (#2034): the second open found the first file's vnode
 +        // and its cached regions, while sequential reads evicted the vnode
 +        // between calls and never collided.
-+        // 2.6.6 (zen-fs/core#314) only logs the nlink/path mismatch above;
++        // 2.7.0 (zen-fs/core#314) only logs the nlink/path mismatch above;
 +        // it still returns the shared vnode, so the refuse-to-coalesce
 +        // guard stays until upstream actually isolates non-hardlink paths.
 +        if (node && !node.paths.has(path)
