@@ -49,13 +49,13 @@ import type {
 } from '../transcript/frozen-archive-format.js';
 import {
   frozenSessionPath,
-  loadFrozenArchive,
   readSessionsIndex,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import {
   findLiveSnapshotEntry,
+  formatArchiveAsMarkdown,
   heuristicTitle,
   isDraftArchiveFilename,
   readSessionsIndexForWrite,
@@ -64,10 +64,10 @@ import {
   shortId,
   slugify,
   upsertSessionsIndexEntry,
-  writeArchiveBundle,
 } from '../transcript/frozen-archive-writer.js';
 import {
   copySessionJsonl,
+  loadFrozenArchive,
   removeSessionJsonl,
   sidecarPathForArchive,
 } from '../transcript/session-jsonl.js';
@@ -487,9 +487,13 @@ async function writeFrozenArchive(
       ...provenance,
       ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
     };
-    await writeArchiveBundle(opts.vfs, filename, archive, {
-      sidecar: isFeatureEnabled('memory-v2'),
-    });
+    if (isFeatureEnabled('memory-v2')) {
+      // Lazy: keep Memory-v2 JSONL glue out of the eager freezer import graph.
+      const { writeArchiveBundle } = await import('../transcript/session-jsonl.js');
+      await writeArchiveBundle(opts.vfs, filename, archive);
+    } else {
+      await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, formatArchiveAsMarkdown(archive));
+    }
     await upsertSessionsIndexEntry(opts.vfs, indexEntry);
     // The WC new-session flow clears the chat in-place (no `location.reload()`),
     // but the OPFS backend still persists on its own debounce; force a flush so

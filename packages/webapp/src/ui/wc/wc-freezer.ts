@@ -6,7 +6,7 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
-import { loadFrozenArchive } from '../../transcript/frozen-archive-format.js';
+import { loadFrozenArchive } from '../../transcript/session-jsonl.js';
 import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
   type FrozenSessionIndexEntry,

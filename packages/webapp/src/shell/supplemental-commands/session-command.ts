@@ -7,9 +7,8 @@
  *   session read <id> [--from N --count M]      # memory-v2 only
  *
  * Default export output: /workspace/slicc-transcript-<session-id>.zip
- * Search/read are gated by the `memory-v2` feature flag and stay absent
- * from help when the flag is off. Memory v2 handlers load on first use so
- * they stay out of the kernel-worker first-load eager graph.
+ * Search/read/help-when-flag-on live in `session-command-memory.ts` and load
+ * on first use so they stay out of the kernel-worker first-load eager graph.
  */
 
 import { TranscriptExportError } from '@slicc/shared-ts';
@@ -21,7 +20,7 @@ import type { TranscriptSessionSelector } from '../../transcript/export-service.
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
 import { isHelpRequest } from './subcommand-help.js';
 
-const EXPORT_USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
+export const EXPORT_USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -168,54 +167,13 @@ async function runExport(args: readonly string[], ctx: CommandContext): Promise<
   }
 }
 
-async function memoryV2Enabled(): Promise<boolean> {
-  const { isMemoryV2Enabled } = await import('../../transcript/memory-v2-flag.js');
-  return isMemoryV2Enabled();
-}
-
-function unknownSubcommandOff(sub: string | undefined): string {
-  return (
-    `session export: unknown subcommand ${JSON.stringify(sub ?? '')}` +
-    ` — usage: session export [--id <id>] [--output <path>]\n`
-  );
-}
-
-function unknownSubcommandOn(sub: string | undefined): string {
-  return (
-    `session: unknown subcommand ${JSON.stringify(sub ?? '')}` +
-    ` — usage: session export|search|read (see session --help)\n`
-  );
-}
-
 export function createSessionCommand(): Command {
   return defineCommand('session', async (args, ctx) => {
-    if (isHelpRequest(args)) {
-      if (!(await memoryV2Enabled())) {
-        return { stdout: EXPORT_USAGE, stderr: '', exitCode: 0 };
-      }
-      const { runSessionMemoryVerb } = await import('./session-command-memory.js');
-      const sub = args[0];
-      const helpSub = sub && sub !== '--help' && sub !== '-h' ? sub : undefined;
-      return runSessionMemoryVerb('help', args, ctx, helpSub);
-    }
-
     const sub = args[0];
-
-    if (sub === 'export') return runExport(args, ctx);
-
-    if (sub === 'search' || sub === 'read') {
-      if (!(await memoryV2Enabled())) {
-        return { stdout: '', stderr: unknownSubcommandOff(sub), exitCode: 1 };
-      }
-      const { runSessionMemoryVerb } = await import('./session-command-memory.js');
-      return runSessionMemoryVerb(sub, args, ctx);
-    }
-
-    const on = await memoryV2Enabled();
-    return {
-      stdout: '',
-      stderr: on ? unknownSubcommandOn(sub) : unknownSubcommandOff(sub),
-      exitCode: 1,
-    };
+    // Fast path: export stays in this eager module. Everything Memory-v2
+    // (help-when-on, search, read, flag-aware unknown) is lazy.
+    if (sub === 'export' && !isHelpRequest(args)) return runExport(args, ctx);
+    const { dispatchSessionMemoryAware } = await import('./session-command-memory.js');
+    return dispatchSessionMemoryAware(args, ctx, EXPORT_USAGE);
   });
 }

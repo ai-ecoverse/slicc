@@ -45,12 +45,11 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { createLogger } from '../base/logger.js';
 import type { CompactionTrigger } from '../core/context-compaction.js';
-import { isFeatureEnabled } from '../core/feature-flags.js';
 import { FsError } from '../fs/types.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
-  loadFrozenArchive,
+  parseFrozenArchive,
   SESSIONS_DIR,
 } from '../transcript/frozen-archive-format.js';
 import {
@@ -64,7 +63,6 @@ import {
   serializeIndexWrite,
   sessionsIndexLockFor,
   upsertSessionsIndexEntryUnlocked,
-  writeArchiveBundle,
   writeSessionsIndexUnlocked,
 } from '../transcript/frozen-archive-writer.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
@@ -203,14 +201,11 @@ async function writeSnapshot(
 
   await ensureSessionsDir(deps.vfs, sessionsDir);
   const transcriptPath = `${sessionsDir}/${filename}`;
-  if (sessionsDir === SESSIONS_DIR) {
-    await writeArchiveBundle(deps.vfs, filename, archive, {
-      sidecar: isFeatureEnabled('memory-v2'),
-    });
-  } else {
-    // Scoop sandbox: markdown only — the search sidecar/index is cone-scoped.
-    await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
-  }
+  // Cone + scoop live snapshots stay on the embedded-JSON markdown path.
+  // Memory-v2 prose+JSONL bundles are written only at freeze/enrichment time
+  // (session-freezer → lazy session-jsonl) so this boot-critical worker module
+  // does not grow the eager graph for a flag-gated feature.
+  await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
   await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
   await deps.vfs.flush();
   log.info('Live session snapshot written', {
@@ -328,7 +323,7 @@ async function readSnapshotMessages(
   try {
     const raw = await vfs.readFile(`${sessionsDir}/${entry.filename}`, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return (await loadFrozenArchive(vfs, text, entry.filename)).messages;
+    return parseFrozenArchive(text).messages;
   } catch (err) {
     if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
     // The row survived without its file: rewrite the archive from the whole

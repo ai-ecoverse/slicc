@@ -197,3 +197,54 @@ export async function runSessionMemoryVerb(
   }
   return sub === 'search' ? runSearch(args, ctx) : runRead(args, ctx);
 }
+
+/**
+ * Flag-aware entry for non-export `session` verbs. Lives here so the eager
+ * `session-command.ts` module only needs one dynamic import for Memory v2.
+ */
+export async function dispatchSessionMemoryAware(
+  args: readonly string[],
+  ctx: CommandContext,
+  exportUsage: string
+): Promise<CommandResult> {
+  const { isMemoryV2Enabled } = await import('../../transcript/memory-v2-flag.js');
+  const on = isMemoryV2Enabled();
+
+  if (isHelpRequest(args)) {
+    if (!on) return { stdout: exportUsage, stderr: '', exitCode: 0 };
+    const sub = args[0];
+    const helpSub = sub && sub !== '--help' && sub !== '-h' ? sub : undefined;
+    return runSessionMemoryVerb('help', args, ctx, helpSub);
+  }
+
+  const sub = args[0];
+  if (sub === 'search' || sub === 'read') {
+    if (!on) {
+      return {
+        stdout: '',
+        stderr:
+          `session export: unknown subcommand ${JSON.stringify(sub)}` +
+          ` — usage: session export [--id <id>] [--output <path>]\n`,
+        exitCode: 1,
+      };
+    }
+    return runSessionMemoryVerb(sub, args, ctx);
+  }
+
+  if (!on) {
+    return {
+      stdout: '',
+      stderr:
+        `session export: unknown subcommand ${JSON.stringify(sub ?? '')}` +
+        ` — usage: session export [--id <id>] [--output <path>]\n`,
+      exitCode: 1,
+    };
+  }
+  return {
+    stdout: '',
+    stderr:
+      `session: unknown subcommand ${JSON.stringify(sub ?? '')}` +
+      ` — usage: session export|search|read (see session --help)\n`,
+    exitCode: 1,
+  };
+}

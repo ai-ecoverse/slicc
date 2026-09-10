@@ -266,7 +266,8 @@ export function parseFrozenArchive(
   }
 
   // Memory v2: structured messages live in the JSONL sidecar. Sync parse
-  // returns empty messages + the sidecar name so callers can loadAsync.
+  // returns empty messages + the sidecar name so callers can loadAsync
+  // via `loadFrozenArchive` in session-jsonl.ts (lazy).
   if (meta.sidecar) {
     return { title, messages: [], ...meta };
   }
@@ -275,38 +276,6 @@ export function parseFrozenArchive(
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
   return { title, messages: parseHeadingFallback(body), ...meta };
-}
-
-/**
- * Load messages for an archive, resolving a Memory v2 JSONL sidecar when
- * the markdown has no embedded session-data block.
- */
-export async function loadFrozenArchive(
-  vfs: { readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array> },
-  markdown: string,
-  archiveFilename?: string
-): Promise<
-  Pick<
-    FrozenSessionArchive,
-    | 'title'
-    | 'messages'
-    | 'cost'
-    | 'models'
-    | 'cone'
-    | 'coneLabel'
-    | 'memorySkipped'
-    | 'live'
-    | 'liveThrough'
-    | 'compactions'
-  > & { id?: string; sidecar?: string }
-> {
-  const parsed = parseFrozenArchive(markdown);
-  if (parsed.messages.length > 0 || !parsed.sidecar) return parsed;
-  const { readSessionJsonl } = await import('./session-jsonl.js');
-  const filename = archiveFilename ?? parsed.sidecar.replace(/\.jsonl$/i, '.md');
-  const fromSidecar = await readSessionJsonl(vfs, filename);
-  if (fromSidecar) return { ...parsed, messages: fromSidecar };
-  return parsed;
 }
 
 /** The scalar metadata a freezer-shaped frontmatter block carries, besides the title. */

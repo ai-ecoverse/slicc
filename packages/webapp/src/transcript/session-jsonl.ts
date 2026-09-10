@@ -10,7 +10,12 @@
 
 import type { ChatMessage, MessageAttachment, ToolCall } from '@slicc/shared-ts';
 import { FsError } from '../fs/types.js';
-import { SESSIONS_DIR } from './frozen-archive-format.js';
+import {
+  type FrozenSessionArchive,
+  parseFrozenArchive,
+  SESSIONS_DIR,
+} from './frozen-archive-format.js';
+import { formatArchiveAsMarkdown, stripEphemeral } from './frozen-archive-writer.js';
 
 /** Text content block matching pi-ai's `TextContent`. */
 export interface SessionJsonlTextContent {
@@ -69,6 +74,69 @@ export function sidecarPathForArchive(archivePathOrFilename: string): string {
 /** Filename only (`foo.jsonl`) for frontmatter. */
 export function sidecarFilenameForArchive(archiveFilename: string): string {
   return archiveFilename.replace(/\.md$/i, '.jsonl');
+}
+
+/**
+ * Turn the eager embedded-JSON markdown into Memory v2 prose+sidecar form:
+ * drop the HTML-commented data block and record `sidecar:` in frontmatter.
+ */
+function formatArchiveProseWithSidecar(
+  archive: FrozenSessionArchive,
+  sidecarFilename: string
+): string {
+  const embedded = formatArchiveAsMarkdown(archive);
+  const prose = embedded.replace(/<!-- slicc:session-data\n[\s\S]*?\n-->\n\n/, '');
+  return prose.replace(/^---\n([\s\S]*?)\n---\n\n/, (_match, body: string) => {
+    return `---\n${body}\nsidecar: ${sidecarFilename}\n---\n\n`;
+  });
+}
+
+/**
+ * Write a Memory v2 archive: prose-only markdown + JSONL sidecar.
+ * Call only when `memory-v2` is on; flag-off callers write via
+ * {@link formatArchiveAsMarkdown} so the eager worker graph stays clean.
+ */
+export async function writeArchiveBundle(
+  vfs: SessionJsonlVfs,
+  filename: string,
+  archive: FrozenSessionArchive
+): Promise<{ markdownPath: string; sidecarPath: string }> {
+  const sidecarFilename = sidecarFilenameForArchive(filename);
+  const markdownPath = `${SESSIONS_DIR}/${filename}`;
+  await vfs.writeFile(markdownPath, formatArchiveProseWithSidecar(archive, sidecarFilename));
+  const sidecarPath = await writeSessionJsonl(vfs, filename, stripEphemeral(archive.messages));
+  return { markdownPath, sidecarPath };
+}
+
+/**
+ * Load messages for an archive, resolving a Memory v2 JSONL sidecar when
+ * the markdown has no embedded session-data block.
+ */
+export async function loadFrozenArchive(
+  vfs: SessionJsonlReader,
+  markdown: string,
+  archiveFilename?: string
+): Promise<
+  Pick<
+    FrozenSessionArchive,
+    | 'title'
+    | 'messages'
+    | 'cost'
+    | 'models'
+    | 'cone'
+    | 'coneLabel'
+    | 'memorySkipped'
+    | 'live'
+    | 'liveThrough'
+    | 'compactions'
+  > & { id?: string; sidecar?: string }
+> {
+  const parsed = parseFrozenArchive(markdown);
+  if (parsed.messages.length > 0 || !parsed.sidecar) return parsed;
+  const filename = archiveFilename ?? parsed.sidecar.replace(/\.jsonl$/i, '.md');
+  const fromSidecar = await readSessionJsonl(vfs, filename);
+  if (fromSidecar) return { ...parsed, messages: fromSidecar };
+  return parsed;
 }
 
 /** Serialize ChatMessage[] to pi-ai-shaped JSONL (one message per line). */

@@ -30,7 +30,7 @@ import type { ChatMessage } from '../scoops/chat-types.js';
 import { processTranscriptAttachments } from './attachments.js';
 import type { TranscriptCollectionDeps } from './collect.js';
 import { collectActiveTranscriptSources } from './collect.js';
-import { loadFrozenArchive, readSessionsIndex } from './frozen-archive-format.js';
+import { readSessionsIndex } from './frozen-archive-format.js';
 import { type NormalizedTranscript, normalizeConversations } from './normalize.js';
 import { type KnownSecretBatchRedactor, redactTranscript } from './redact.js';
 import type { SanitizedTranscriptSnapshot } from './snapshot-store.js';
@@ -458,6 +458,9 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
     }
 
     // Parse the frozen archive (resolves Memory v2 JSONL sidecars).
+    // Dynamic: session-jsonl must stay out of the worker eager graph
+    // (orchestrator → export-service is boot-critical).
+    const { loadFrozenArchive } = await import('./session-jsonl.js');
     const { title, messages } = await loadFrozenArchive(this.deps.vfs, markdown, entry.filename);
 
     // Build a partial TranscriptDocumentV1 from UI ChatMessages.

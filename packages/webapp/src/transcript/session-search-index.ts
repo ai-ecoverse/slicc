@@ -12,10 +12,10 @@
 import type { ChatMessage } from '@slicc/shared-ts';
 import {
   type FrozenSessionIndexEntry,
-  loadFrozenArchive,
   readSessionsIndex,
   SESSIONS_DIR,
 } from './frozen-archive-format.js';
+import { loadFrozenArchive } from './session-jsonl.js';
 
 export const SESSION_SEARCH_INDEX_PATH = '/sessions/.search-index.json';
 

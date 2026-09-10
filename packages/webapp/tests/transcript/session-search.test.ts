@@ -7,19 +7,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { initFeatureFlags } from '../../src/core/feature-flags.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
-import {
-  loadFrozenArchive,
-  parseFrozenArchive,
-  SESSIONS_DIR,
-} from '../../src/transcript/frozen-archive-format.js';
-import {
-  formatArchiveAsMarkdown,
-  writeArchiveBundle,
-} from '../../src/transcript/frozen-archive-writer.js';
+import { parseFrozenArchive, SESSIONS_DIR } from '../../src/transcript/frozen-archive-format.js';
+import { formatArchiveAsMarkdown } from '../../src/transcript/frozen-archive-writer.js';
 import {
   chatMessagesToJsonl,
   jsonlToChatMessages,
+  loadFrozenArchive,
   sidecarFilenameForArchive,
+  writeArchiveBundle,
 } from '../../src/transcript/session-jsonl.js';
 import {
   classifyEchoKind,
@@ -99,7 +94,7 @@ describe('session JSONL sidecar', () => {
       ],
     };
     const filename = '2026-09-10T12-00-00-000Z-optel.md';
-    await writeArchiveBundle(vfs, filename, archive, { sidecar: true });
+    await writeArchiveBundle(vfs, filename, archive);
 
     const md = (await vfs.readFile(`${SESSIONS_DIR}/${filename}`, {
       encoding: 'utf-8',
@@ -185,20 +180,15 @@ describe('session search ranking', () => {
       msg('assistant', '# session search: budget (1 hits)\nid=sess/other/msg/z\n  …budget…', 'a1'),
       msg('user', 'Remind me of the OpTel number later.', 'u2'),
     ];
-    await writeArchiveBundle(
-      vfs,
-      filename,
-      {
-        id: sessionId,
-        title: 'OpTel planning',
-        frozenAt: '2026-09-09T10:00:00.000Z',
-        createdAt: 1,
-        updatedAt: 5,
-        messageCount: messages.length,
-        messages,
-      },
-      { sidecar: true }
-    );
+    await writeArchiveBundle(vfs, filename, {
+      id: sessionId,
+      title: 'OpTel planning',
+      frozenAt: '2026-09-09T10:00:00.000Z',
+      createdAt: 1,
+      updatedAt: 5,
+      messageCount: messages.length,
+      messages,
+    });
     await vfs.writeFile(
       '/sessions/index.json',
       JSON.stringify([
