@@ -424,6 +424,32 @@ describe('mountDraftDip', () => {
   });
 });
 
+describe('stacked action-card spacing', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it('host sheet gaps adjacent action cards without margining the single-card case', () => {
+    const inst = mountDip(container, '<div class="sprinkle-action-card">x</div>', vi.fn());
+    const iframe = container.querySelector('iframe')!;
+    const srcdoc = iframe.srcdoc;
+    // Single-card case stays zeroed (iframe padding owns that spacing).
+    expect(srcdoc).toContain('.sprinkle-inline .sprinkle-action-card{margin:0;width:100%}');
+    // Adjacent siblings get a gap via a rule that outranks a plain authored class.
+    expect(srcdoc).toContain(
+      '.sprinkle-inline .sprinkle-action-card + .sprinkle-action-card{margin-top:12px}'
+    );
+    inst.dispose();
+  });
+});
+
 describe('dip exec/agent trust gating', () => {
   let container: HTMLElement;
 

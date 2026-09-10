@@ -52,7 +52,7 @@ When the user clicks a button, you receive the lick as a message. Respond conver
 - **Tables** → `.sprinkle-table` with `.sprinkle-badge` for severity.
 - **Badges** → `.sprinkle-badge` variants (`--positive`, `--negative`, `--notice`, `--informative`).
 
-Multiple cards in one message: each is a separate `.sprinkle-action-card`. The host sheet zeros card margin and adds `margin-top: 12px` between adjacent cards — don't add your own card margins (a class like `.my-card { margin-top: 12px }` loses on specificity). Don't wrap multiple cards in a single container.
+Multiple cards in one message: each is a separate `.sprinkle-action-card`. The iframe padding owns the outer spacing and the host sheet zeros card margin and adds `margin-top: 12px` between adjacent cards — don't add your own card margins (a class like `.my-card { margin-top: 12px }` loses on specificity). Don't wrap multiple cards in a single container.
 
 ## Pre-styled form elements
 
