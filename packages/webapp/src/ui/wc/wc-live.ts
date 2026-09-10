@@ -1335,7 +1335,9 @@ export function attachWcWorkbench(
         refs,
         client,
         getUnits: () => workUnits.currentUnits(),
-
+        // Panel-hosted welcome (the gelatiere stream under Memory v2) must
+        // settle its card clicks page-side like the inline dip does.
+        interceptWelcomeLick: (event) => welcomeHolder.intercept?.(event) ?? false,
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
         onAttachImage: makeSprinkleAttachImage(composer, log),

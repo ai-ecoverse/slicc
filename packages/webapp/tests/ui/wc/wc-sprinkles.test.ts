@@ -21,6 +21,7 @@ import {
   enrichSprinkleIcons,
   isLucideIconSpec,
   isToolPanelId,
+  makeSprinkleLickHandler,
   pruneSprinkleIconLedger,
   readSprinkleIconLedger,
   recordSprinkleIcon,
@@ -193,6 +194,34 @@ describe('wireWcSprinkles boot resilience', () => {
     expect(warnSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('image attachments from sprinkles')
     );
+  });
+});
+
+describe('makeSprinkleLickHandler', () => {
+  const lick = (sprinkleName: string) =>
+    ({
+      type: 'sprinkle' as const,
+      sprinkleName,
+      timestamp: '2026-09-10T00:00:00.000Z',
+      body: { action: 'gelatiere-dismiss', data: { id: 'x' } },
+    }) as Parameters<ReturnType<typeof makeSprinkleLickHandler>>[0];
+
+  it('consults the welcome interceptor before the cone sees a panel lick', () => {
+    const send = vi.fn();
+    const intercept = vi.fn((e: { sprinkleName?: string }) => e.sprinkleName === 'welcome');
+    const handler = makeSprinkleLickHandler({ sendSprinkleLick: send } as never, intercept);
+    handler(lick('welcome'));
+    expect(intercept).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    handler(lick('dashboard'));
+    expect(send).toHaveBeenCalledWith('dashboard', expect.anything(), undefined);
+  });
+
+  it('forwards everything when no interceptor is wired', () => {
+    const send = vi.fn();
+    const handler = makeSprinkleLickHandler({ sendSprinkleLick: send } as never);
+    handler(lick('welcome'));
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 

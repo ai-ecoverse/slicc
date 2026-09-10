@@ -200,6 +200,22 @@ describe('ledger and store', () => {
     expect(await dismissGelatiereSuggestion(vfs, 'skill-github', NOW)).toBe(false);
   });
 
+  it('serializes concurrent settlements so neither write clobbers the other', async () => {
+    // Two card clicks in one tick: dismiss one suggestion, take another.
+    const vfs = fakeVfs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([suggestion(), suggestion({ id: 'tip-a' })]),
+    });
+    const [took, dismissed] = await Promise.all([
+      takeGelatiereSuggestion(vfs, 'skill-github', NOW),
+      dismissGelatiereSuggestion(vfs, 'tip-a', NOW),
+    ]);
+    expect(took).toBe(true);
+    expect(dismissed).toBe(true);
+    const after = await readGelatiereSuggestions(vfs);
+    expect(after.find((s) => s.id === 'skill-github')?.takenAt).toBe(NOW.toISOString());
+    expect(after.find((s) => s.id === 'tip-a')?.dismissedAt).toBe(NOW.toISOString());
+  });
+
   it('round-trips takenAt through the store file', async () => {
     const vfs = fakeVfs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([

@@ -298,18 +298,31 @@ export async function takeGelatiereSuggestion(
   return settleSuggestion(vfs, id, 'takenAt', now);
 }
 
-async function settleSuggestion(
+/**
+ * Settlements are read-modify-write on one JSON file, and two card clicks in
+ * the same tick (dismiss one, install another) are an ordinary user gesture —
+ * unserialized, the second write clobbers the first. One module-level chain
+ * keeps them in order; a failed settle must not wedge the chain.
+ */
+let settleChain: Promise<unknown> = Promise.resolve();
+
+function settleSuggestion(
   vfs: GelatiereVfs,
   id: string,
   field: 'dismissedAt' | 'takenAt',
   now: Date
 ): Promise<boolean> {
-  const suggestions = await readGelatiereSuggestions(vfs);
-  const target = suggestions.find((s) => s.id === id && !s.dismissedAt && !s.takenAt);
-  if (!target) return false;
-  target[field] = now.toISOString();
-  await writeGelatiereSuggestions(vfs, suggestions);
-  return true;
+  const run = async (): Promise<boolean> => {
+    const suggestions = await readGelatiereSuggestions(vfs);
+    const target = suggestions.find((s) => s.id === id && !s.dismissedAt && !s.takenAt);
+    if (!target) return false;
+    target[field] = now.toISOString();
+    await writeGelatiereSuggestions(vfs, suggestions);
+    return true;
+  };
+  const next = settleChain.then(run, run);
+  settleChain = next.catch(() => false);
+  return next;
 }
 
 // ─── Validation + merge ─────────────────────────────────────────────────────
