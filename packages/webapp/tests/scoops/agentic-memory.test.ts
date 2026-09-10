@@ -653,9 +653,44 @@ Curate {{MEMORY_PATH}}.`;
       // `{{SCRATCH_DIR}}` and spells the primary's out is rewritten rather
       // than sending every draft write into another agent's folder.
       const prompt = spawn.mock.calls[0][0].prompt;
-      expect(curatorScratchDir('cone-beta')).toBe('/scoops/agent-memory-curator-cone-beta');
-      expect(prompt).toContain('/scoops/agent-memory-curator-cone-beta');
+      const scratch = curatorScratchDir('cone-beta');
+      expect(scratch).toBe('/scoops/agent-memory-curator-cone-beta');
+      expect(prompt).toContain(scratch);
       expect(prompt).not.toContain('/scoops/agent-memory-curator/');
+      // Per-cone scratch dirs start with the primary spelling
+      // (`…/agent-memory-curator-…`); rebase must not re-prefix them.
+      expect(prompt).not.toContain(`${scratch}-cone-beta`);
+    });
+
+    it('does not double-substitute {{SCRATCH_DIR}} under an extra cone', async () => {
+      // Realistic shipped MEMORY.md: placeholders expand first, then the
+      // legacy rebase shim runs. The per-cone scratch
+      // `/scoops/agent-memory-curator-cone-slicc-engineering` starts with
+      // the primary prefix `/scoops/agent-memory-curator`, so a naive
+      // replaceAll doubles the cone suffix and the curator writes outside
+      // its sandbox (sudo escalation).
+      const cone = { folder: 'cone-slicc-engineering', jid: 'cone_slicc_engineering' };
+      const scratch = curatorScratchDir(cone.folder);
+      const doubled = `${scratch}-cone-slicc-engineering`;
+      expect(scratch).toBe('/scoops/agent-memory-curator-cone-slicc-engineering');
+      expect(doubled).toBe(
+        '/scoops/agent-memory-curator-cone-slicc-engineering-cone-slicc-engineering'
+      );
+
+      const memoryMd = `---\ntimeoutSeconds: 60\n---\nDraft in \`{{SCRATCH_DIR}}/draft.md\`, then write {{MEMORY_PATH}}.`;
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(memoryMd),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+        cone,
+      });
+
+      const prompt = spawn.mock.calls[0][0].prompt;
+      expect(prompt).toBe(`Draft in \`${scratch}/draft.md\`, then write ${DRAFT_PATH}.`);
+      expect(prompt).not.toContain(doubled);
     });
 
     it('rewrites a legacy MEMORY.md that spells the primary scratch folder out', async () => {
