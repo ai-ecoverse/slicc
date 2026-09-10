@@ -74,22 +74,30 @@ export function rangeContains(requirement, version) {
   }
 }
 
-const PROJECT_PIN_RE =
-  /url:\s*(https:\/\/github\.com\/[^\s]+)\r?\n[ \t]+(exactVersion|minorVersion):\s*(\S+)/g;
+// Comments, blank lines, merge keys, and anchors may sit between the xcodegen
+// `packages:` key and `url:` (and between `url:` and the version). Adjacent-
+// only matching dropped those pins while Renovate's url-first custom manager
+// still saw them (Codex review of PR #3014).
+const YML_SKIP_LINE = '(?:\\r?\\n(?:\\1[ \\t]+(?:#.*|<<:\\s*\\S+|&\\S.*)|\\1[ \\t]*))*';
+const PROJECT_PIN_RE = new RegExp(
+  `(?:^|\\n)([ \\t]*)([A-Za-z0-9._-]+):[^\\n]*${YML_SKIP_LINE}\\r?\\n\\1[ \\t]+url:\\s*(https://github\\.com/[^\\s]+)${YML_SKIP_LINE}\\r?\\n\\1[ \\t]+(exactVersion|minorVersion):\\s*(\\S+)`,
+  'g'
+);
 
 /** Pins from a xcodegen `project.yml`. */
 export function parseProjectYmlPins(text, path = 'project.yml') {
   const pins = [];
   const src = String(text ?? '');
   for (const m of src.matchAll(PROJECT_PIN_RE)) {
-    const repo = githubRepoFromUrl(m[1]);
+    const repo = githubRepoFromUrl(m[3]);
     if (!repo) continue;
     pins.push({
       ...repo,
-      kind: m[2],
-      version: m[3],
+      ymlName: m[2],
+      kind: m[4],
+      version: m[5],
       path,
-      match: m[0],
+      match: m[0].replace(/^\n/, ''),
     });
   }
   return pins;
@@ -167,6 +175,26 @@ export function dualPinKeys({ projectPins, swiftPins }) {
     if (projectKeys.has(pin.key)) keys.add(pin.key);
   }
   return keys;
+}
+
+/**
+ * Dual-pinned project.yml entries, one per GitHub identity + xcodegen key.
+ * Deduping by identity alone (ios-app and swift-launcher both pin WebRTC)
+ * would drop a renamed `packages:` key and let lint:swift-pins pass while
+ * Renovate still opens an unlabeled PR under the leftover alias.
+ */
+export function collectDualPins({ projectPins, swiftPins }) {
+  const dualKeys = dualPinKeys({ projectPins, swiftPins });
+  const seen = new Set();
+  const dualPins = [];
+  for (const pin of projectPins ?? []) {
+    if (!dualKeys.has(pin.key)) continue;
+    const alias = `${pin.key}\0${(pin.ymlName ?? '').toLowerCase()}`;
+    if (seen.has(alias)) continue;
+    seen.add(alias);
+    dualPins.push(pin);
+  }
+  return dualPins;
 }
 
 /**
@@ -288,9 +316,19 @@ export function applyMismatches(fileContents, mismatches, revisionsByKey = {}) {
   return changed;
 }
 
-/** `owner/repo` as it appears in the GitHub URL — the name Renovate's regex manager uses. */
+/**
+ * Names the `swift-pin` packageRule must list so grouping + the reconcile
+ * workflow actually fire. `owner/repo` is what the swift manager uses;
+ * `ymlName` is the xcodegen `packages:` key (PR #3008 opened as
+ * `GhosttyTerminal` while the rule only listed `Lakr233/libghostty-spm`).
+ */
 export function requiredRenovateNames(pin) {
-  return [`${pin.owner}/${pin.repo}`];
+  const names = [`${pin.owner}/${pin.repo}`];
+  const ymlName = pin.ymlName?.trim();
+  if (ymlName && !names.some((n) => n.toLowerCase() === ymlName.toLowerCase())) {
+    names.push(ymlName);
+  }
+  return names;
 }
 
 /** Extra names github-releases may register the same pin under. */
@@ -332,9 +370,14 @@ export function checkRenovateSwiftPinSync({ dualPins, renovate }) {
     }
   }
   const missing = [];
+  const missingSeen = new Set();
   for (const pin of pins) {
-    const required = `${pin.owner}/${pin.repo}`.toLowerCase();
-    if (!listed.has(required)) missing.push(`${pin.owner}/${pin.repo}`);
+    for (const name of requiredRenovateNames(pin)) {
+      const lower = name.toLowerCase();
+      if (listed.has(lower) || missingSeen.has(lower)) continue;
+      missingSeen.add(lower);
+      missing.push(name);
+    }
   }
   if (missing.length > 0) {
     problems.push(

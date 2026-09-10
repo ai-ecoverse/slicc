@@ -14,8 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { readPinFiles } from './files.mjs';
 import {
   checkRenovateSwiftPinSync,
+  collectDualPins,
   describeMismatch,
-  dualPinKeys,
   findMismatches,
 } from './lib.mjs';
 
@@ -24,15 +24,7 @@ const renovatePath = resolve(repoRoot, 'renovate.json');
 
 const { projectPins, swiftPins, resolvedPins } = readPinFiles(repoRoot);
 const mismatches = findMismatches({ projectPins, swiftPins, resolvedPins });
-
-const dualKeys = dualPinKeys({ projectPins, swiftPins });
-const seen = new Set();
-const dualPins = [];
-for (const pin of projectPins) {
-  if (!dualKeys.has(pin.key) || seen.has(pin.key)) continue;
-  seen.add(pin.key);
-  dualPins.push(pin);
-}
+const dualPins = collectDualPins({ projectPins, swiftPins });
 
 const renovate = existsSync(renovatePath) ? JSON.parse(readFileSync(renovatePath, 'utf8')) : null;
 const problems = [

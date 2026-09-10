@@ -218,9 +218,11 @@ Syncing those pins is mechanical; inventing a new dependency is still a hard
 skip. `renovate.json`'s regex `customManagers` entry covers `project.yml`, and
 each dual-pinned GitHub identity is grouped + labelled `swift-pin` so one PR
 moves both manifests. That still split (PRs #2320 / #2348: one PR on 151, the
-other on 150), so `renovate-swift-pin-reconcile.yml` raises the stale side the
-same way `renovate-format-reconcile.yml` reflows a formatter bump. `npm run
-lint:swift-pins` is the deterministic backstop. The dispatcher skips
+other on 150; PR #3008 opened as `GhosttyTerminal` because that is the xcodegen
+`packages:` key and missed the group), so `renovate-swift-pin-reconcile.yml`
+raises the stale side the same way `renovate-format-reconcile.yml` reflows a
+formatter bump. `npm run lint:swift-pins` is the deterministic backstop and
+requires the xcodegen key in `matchPackageNames` alongside `owner/repo`. The dispatcher skips
 `swift-pin` PRs so it does not race the reconciler; `pin-sync` remains the
 backup for an unlabeled leftover.
 
