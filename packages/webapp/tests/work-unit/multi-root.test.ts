@@ -129,6 +129,61 @@ describe('multiple roots', () => {
     expect(forB.content).not.toContain('A result');
   });
 
+  // The leading cone may wait on a scoop another root owns (loosened #2360).
+  // Parent routing would file that summary in the owner's transcript, so the
+  // WAITER is the delivery address whenever the schedule call names one.
+  it('a scoop_wait requester receives the whole batch, including another root’s child', async () => {
+    const scoops = registry();
+    const routed: ChannelMessage[] = [];
+    const service = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findParent: parentOrDefaultRoot(scoops),
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: vi.fn(),
+      handleMessage: async (msg) => {
+        routed.push(msg);
+      },
+      reportError: vi.fn(),
+    });
+
+    service.scheduleScoopWait([childA.jid, childB.jid], 10_000, rootA.jid);
+    service.setResponseFull(childA.jid, 'A result');
+    await service.notifyCompletion(childA.jid);
+    service.setResponseFull(childB.jid, 'B result');
+    await service.notifyCompletion(childB.jid);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const waits = routed.filter((m) => m.channel === 'scoop-wait');
+    expect(waits.map((m) => m.chatJid)).toEqual([rootA.jid]);
+    expect(waits[0].content).toContain('A result');
+    expect(waits[0].content).toContain('B result');
+  });
+
+  it('falls back to parent routing when the requester is gone before the wait resolves', async () => {
+    const scoops = registry();
+    const routed: ChannelMessage[] = [];
+    const service = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findParent: parentOrDefaultRoot(scoops),
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: vi.fn(),
+      handleMessage: async (msg) => {
+        routed.push(msg);
+      },
+      reportError: vi.fn(),
+    });
+
+    service.scheduleScoopWait([childB.jid], 10_000, 'cone_dropped');
+    service.setResponseFull(childB.jid, 'B result');
+    await service.notifyCompletion(childB.jid);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const waits = routed.filter((m) => m.channel === 'scoop-wait');
+    expect(waits.map((m) => m.chatJid)).toEqual([rootB.jid]);
+  });
+
   it('a root never produces a completion notification', async () => {
     const scoops = registry();
     const handleMessage = vi.fn(async () => {});

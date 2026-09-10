@@ -3,6 +3,7 @@ import {
   chatSessionIdFor,
   coneFolderFor,
   isPrimaryRoot,
+  leadingRootOf,
   legacyRecordIsCone,
   normalizeScoopRecord,
   PRIMARY_CONE_FOLDER,
@@ -25,6 +26,22 @@ describe('work-unit record helpers', () => {
     expect(isPrimaryRoot(rootRecord({ folder: PRIMARY_CONE_FOLDER }))).toBe(true);
     expect(isPrimaryRoot(rootRecord({ folder: 'cone-two' }))).toBe(false);
     expect(isPrimaryRoot(childRecord('cone_1', { folder: 'cone' }))).toBe(false);
+  });
+
+  // The leading cone is the only unit that may reach outside its own subtree,
+  // so "who leads" must follow the roster rather than the folder name alone.
+  it('picks the primary root as leading cone, else the oldest', () => {
+    const primary = rootRecord({ jid: 'cone_1', folder: 'cone', addedAt: '2026-02-01T00:00:00Z' });
+    const older = rootRecord({ jid: 'cone_2', folder: 'cone-a', addedAt: '2026-01-01T00:00:00Z' });
+    const newer = rootRecord({ jid: 'cone_3', folder: 'cone-b', addedAt: '2026-03-01T00:00:00Z' });
+    const scoop = childRecord('cone_2', { folder: 'worker-scoop' });
+
+    expect(leadingRootOf([older, primary, newer, scoop])?.jid).toBe('cone_1');
+    // Primary replaced (dropped): leadership moves to the oldest survivor.
+    expect(leadingRootOf([newer, older, scoop])?.jid).toBe('cone_2');
+    // A scoop is never the leading cone, and an empty roster has no leader.
+    expect(leadingRootOf([scoop])).toBeUndefined();
+    expect(leadingRootOf([])).toBeUndefined();
   });
 
   it('slugifies user-typed names', () => {

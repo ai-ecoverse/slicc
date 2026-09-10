@@ -406,7 +406,11 @@ export class Orchestrator implements ConeApprovalRouter {
         unregisterScoop: (jid) => this.unregisterScoop(jid),
         muteScoops: (jids) => this.muteScoops(jids),
         unmuteScoops: (jids) => this.unmuteScoops(jids),
-        scheduleScoopWait: (jids, timeoutMs) => this.scheduleScoopWait(jids, timeoutMs),
+        // `requesterJid` forwarded EXPLICITLY: a narrower lambda still satisfies
+        // the wider signature, and dropping it would silently route every
+        // cross-cone wait result back to the scoop's owner instead of the caller.
+        scheduleScoopWait: (jids, timeoutMs, requesterJid) =>
+          this.scheduleScoopWait(jids, timeoutMs, requesterJid),
         getScoops: () => this.getScoops(),
         getGlobalMemory: () => this.getGlobalMemory(),
         setGlobalMemory: (content) => this.setGlobalMemory(content),
@@ -1035,12 +1039,14 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.completionService.waitForScoops(jids, timeoutMs);
   }
 
-  /** Non-blocking variant of {@link waitForScoops}. */
+  /** Non-blocking variant of {@link waitForScoops}. Results go to
+   *  `requesterJid` when given (see `ScoopCompletionService.scheduleScoopWait`). */
   scheduleScoopWait(
     jids: readonly string[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    requesterJid?: string
   ): { scheduled: string[]; unknown: string[] } {
-    return this.completionService.scheduleScoopWait(jids, timeoutMs);
+    return this.completionService.scheduleScoopWait(jids, timeoutMs, requesterJid);
   }
 
   /**
