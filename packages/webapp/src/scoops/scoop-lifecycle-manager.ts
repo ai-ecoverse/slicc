@@ -214,7 +214,8 @@ export interface ScoopLifecycleDeps {
     >;
     scheduleScoopWait(
       jids: readonly string[],
-      timeoutMs?: number
+      timeoutMs?: number,
+      requesterJid?: string
     ): { scheduled: string[]; unknown: string[] };
     getScoops(): RegisteredScoop[];
     getGlobalMemory(): Promise<string>;
@@ -1062,8 +1063,10 @@ export class ScoopLifecycleManager {
         : undefined,
       onMuteScoops: policy.canManageChildren ? (jids) => cone.muteScoops(jids) : undefined,
       onUnmuteScoops: policy.canManageChildren ? (jids) => cone.unmuteScoops(jids) : undefined,
+      // The waiting unit is the delivery address, not the scoops' parent — the
+      // leading cone can wait on scoops it does not own (#2360 loosening).
       onScheduleScoopWait: policy.canManageChildren
-        ? (jids, timeoutMs) => cone.scheduleScoopWait(jids, timeoutMs)
+        ? (jids, timeoutMs) => cone.scheduleScoopWait(jids, timeoutMs, jid)
         : undefined,
       getGlobalMemory: () => cone.getGlobalMemory(),
       setGlobalMemory: policy.canWriteSharedMemory

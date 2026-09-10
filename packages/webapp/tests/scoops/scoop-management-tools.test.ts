@@ -1016,9 +1016,13 @@ describe('scoop_scoop — parentJid propagation from cone', () => {
 //
 // With several cones on one roster, name-based child resolution used to match
 // globally: cone A's `scoop_wait helper` could capture cone B's identically
-// named scoop. Every name lookup now runs against the caller's own subtree —
-// the calling unit plus what it transitively owns — and an unmatched name is
-// an error naming that subtree, never a global match.
+// named scoop. A name lookup now runs against the caller's own subtree — the
+// calling unit plus what it transitively owns — and an unmatched name is an
+// error naming what the caller can reach, never a global match.
+//
+// Cone B here is NOT the leading cone (cone A is the primary root), so it sees
+// the strict #2360 scope. The leading cone's wider reach is covered by the
+// "leading cone reaches inherited and foreign scoops" block below.
 // ---------------------------------------------------------------------------
 
 describe('name resolution is scoped to the caller subtree (#2360)', () => {
@@ -1156,7 +1160,7 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
       .pick('feed_scoop')
       .execute({ scoop_name: helperA.folder, prompt: 'go' });
     expect(foreignScoop.isError).toBe(true);
-    expect(foreignScoop.content).toContain('not found in your scoops (cone-b)');
+    expect(foreignScoop.content).toContain('not found in the scoops you can manage (cone-b)');
 
     const foreignCone = await b
       .pick('feed_scoop')
@@ -1180,7 +1184,7 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
     const b = toolsFor(coneB);
     const foreignScoop = await b.pick('drop_scoop').execute({ scoop_name: helperA.folder });
     expect(foreignScoop.isError).toBe(true);
-    expect(foreignScoop.content).toContain('not found in your scoops (cone-b)');
+    expect(foreignScoop.content).toContain('not found in the scoops you can manage (cone-b)');
 
     const foreignCone = await b.pick('drop_scoop').execute({ scoop_name: coneA.folder });
     expect(foreignCone.isError).toBe(true);
@@ -1198,18 +1202,22 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
     expect(result.content).toContain('Cannot drop yourself.');
   });
 
-  it('list_scoops lists only the caller’s subtree', async () => {
+  it('list_scoops lists only the caller’s subtree for a cone that does not lead', async () => {
     const b = toolsFor(coneB);
     const listed = await b.pick('list_scoops').execute({});
     expect(listed.content).toContain(`(${helperB.folder})`);
     expect(listed.content).not.toContain(`(${helperA.folder})`);
     expect(listed.content).not.toContain('deep-scoop');
+  });
 
+  it('list_scoops tags the leading cone’s reach instead of hiding it', async () => {
     const a = toolsFor(coneA);
     const listedA = await a.pick('list_scoops').execute({});
-    expect(listedA.content).toContain(helperA.folder);
+    expect(listedA.content).toContain(`(${helperA.folder}) —`);
     expect(listedA.content).toContain('deep-scoop');
-    expect(listedA.content).not.toContain('cone-b');
+    // Cone B's scoop is reachable but marked, and cone B itself is never a row.
+    expect(listedA.content).toContain(`(${helperB.folder}) [FOREIGN: cone-b]`);
+    expect(listedA.content).not.toContain('(cone-b) [CONE]');
   });
 
   it('scoop_scoop rejects a duplicate name inside the caller’s own subtree', async () => {
@@ -1230,6 +1238,192 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
     expect(created.folder).toBe('helper-scoop-2');
     expect(created.parentJid).toBe(coneB.jid);
     expect(result.content).toContain('helper-scoop-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The leading cone reaches inherited and foreign scoops (loosened #2360)
+//
+// Strict subtree scoping left an ORPHANED scoop — one whose owning cone is gone
+// — unreachable from every tool, and gave the cone a user actually talks to no
+// way to manage another cone's scoops. The leading cone (primary root, else the
+// oldest) can now resolve both, but only with an explicit `cross_cone: true`;
+// omitting it is an error, so the decision is never made by accident.
+// ---------------------------------------------------------------------------
+
+describe('leading cone reaches inherited and foreign scoops', () => {
+  const lead: RegisteredScoop = {
+    jid: 'cone_lead',
+    name: 'Lead',
+    folder: 'cone',
+    parentJid: null,
+    requiresTrigger: false,
+    assistantLabel: 'sliccy',
+    addedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const other: RegisteredScoop = {
+    ...lead,
+    jid: 'cone_other',
+    name: 'Other',
+    folder: 'cone-other',
+    assistantLabel: 'cone-other',
+    addedAt: '2026-01-02T00:00:00.000Z',
+  };
+  const mine: RegisteredScoop = {
+    jid: 'scoop_mine',
+    name: 'mine',
+    folder: 'mine-scoop',
+    parentJid: lead.jid,
+    requiresTrigger: true,
+    assistantLabel: 'mine-scoop',
+    addedAt: '2026-01-03T00:00:00.000Z',
+  };
+  const theirs: RegisteredScoop = {
+    ...mine,
+    jid: 'scoop_theirs',
+    name: 'theirs',
+    folder: 'theirs-scoop',
+    assistantLabel: 'theirs-scoop',
+    parentJid: other.jid,
+  }; // prettier-ignore
+  /** Orphan: its parent is not on the roster, so no subtree contains it. */
+  const orphan: RegisteredScoop = {
+    ...mine,
+    jid: 'scoop_orphan',
+    name: 'orphan',
+    folder: 'orphan-scoop',
+    assistantLabel: 'orphan-scoop',
+    parentJid: 'cone_dropped',
+  }; // prettier-ignore
+
+  const ROSTER = [lead, other, mine, theirs, orphan];
+
+  function toolsFor(caller: RegisteredScoop) {
+    const onFeedScoop = vi.fn(async () => {});
+    const onDropScoop = vi.fn(async () => {});
+    const onMuteScoops = vi.fn();
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...ROSTER],
+      onFeedScoop,
+      onDropScoop,
+      onMuteScoops,
+      onScheduleScoopWait,
+    });
+    return {
+      pick: (name: string) => tools.find((t) => t.name === name)!,
+      onFeedScoop,
+      onDropScoop,
+      onMuteScoops,
+      onScheduleScoopWait,
+    };
+  }
+
+  it('list_scoops distinguishes own, inherited and foreign scoops', async () => {
+    const listed = await toolsFor(lead).pick('list_scoops').execute({});
+    expect(listed.content).toContain(`(${mine.folder}) —`);
+    expect(listed.content).toContain(`(${orphan.folder}) [INHERITED]`);
+    expect(listed.content).toContain(`(${theirs.folder}) [FOREIGN: cone-other]`);
+  });
+
+  it('hides both from a cone that does not lead, even with cross_cone', async () => {
+    const o = toolsFor(other);
+    const listed = await o.pick('list_scoops').execute({});
+    expect(listed.content).not.toContain(orphan.folder);
+    expect(listed.content).not.toContain(mine.folder);
+
+    const dropped = await o
+      .pick('drop_scoop')
+      .execute({ scoop_name: orphan.folder, cross_cone: true });
+    expect(dropped.isError).toBe(true);
+    expect(dropped.content).toContain('not found');
+    expect(o.onDropScoop).not.toHaveBeenCalled();
+  });
+
+  it('refuses a foreign target without cross_cone and names the owning cone', async () => {
+    const l = toolsFor(lead);
+    const refused = await l.pick('feed_scoop').execute({ scoop_name: theirs.folder, prompt: 'go' });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('cross_cone');
+    expect(refused.content).toContain('cone-other');
+    expect(l.onFeedScoop).not.toHaveBeenCalled();
+
+    // An explicit `false` is just as deliberate a "no" as omitting it.
+    const explicitFalse = await l
+      .pick('feed_scoop')
+      .execute({ scoop_name: theirs.folder, prompt: 'go', cross_cone: false });
+    expect(explicitFalse.isError).toBe(true);
+    expect(l.onFeedScoop).not.toHaveBeenCalled();
+  });
+
+  it('refuses an inherited target without cross_cone and says why it is orphaned', async () => {
+    const l = toolsFor(lead);
+    const refused = await l.pick('drop_scoop').execute({ scoop_name: orphan.folder });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('inherited');
+    expect(refused.content).toContain('cross_cone');
+    expect(l.onDropScoop).not.toHaveBeenCalled();
+  });
+
+  it('feeds, waits on and drops both once cross_cone is set', async () => {
+    const l = toolsFor(lead);
+    const fed = await l
+      .pick('feed_scoop')
+      .execute({ scoop_name: theirs.folder, prompt: 'go', cross_cone: true });
+    expect(fed.isError).toBeUndefined();
+    expect(l.onFeedScoop).toHaveBeenCalledWith(theirs.jid, 'go');
+    // The scoop still reports to its own owner, so the ack must not promise a
+    // notification that lands in another cone's transcript.
+    expect(fed.content).toContain('scoop_wait');
+
+    await l
+      .pick('scoop_wait')
+      .execute({ scoop_names: [orphan.folder, theirs.folder], cross_cone: true });
+    expect(l.onScheduleScoopWait).toHaveBeenCalledWith([orphan.jid, theirs.jid], undefined);
+
+    const dropped = await l
+      .pick('drop_scoop')
+      .execute({ scoop_name: orphan.folder, cross_cone: true });
+    expect(dropped.isError).toBeUndefined();
+    expect(l.onDropScoop).toHaveBeenCalledWith(orphan.jid);
+  });
+
+  it('fails a mixed batch as a whole instead of silently muting the own half', async () => {
+    const l = toolsFor(lead);
+    const refused = await l
+      .pick('scoop_mute')
+      .execute({ scoop_names: [mine.folder, theirs.folder] });
+    expect(refused.isError).toBe(true);
+    expect(l.onMuteScoops).not.toHaveBeenCalled();
+
+    const allowed = await l
+      .pick('scoop_mute')
+      .execute({ scoop_names: [mine.folder, theirs.folder], cross_cone: true });
+    expect(allowed.isError).toBeUndefined();
+    expect(l.onMuteScoops).toHaveBeenCalledWith([mine.jid, theirs.jid]);
+  });
+
+  it('never needs cross_cone for the caller’s own scoops', async () => {
+    const l = toolsFor(lead);
+    const fed = await l.pick('feed_scoop').execute({ scoop_name: mine.folder, prompt: 'go' });
+    expect(fed.isError).toBeUndefined();
+    expect(fed.content).toContain('You will be notified');
+    expect(l.onFeedScoop).toHaveBeenCalledWith(mine.jid, 'go');
+  });
+
+  it('keeps a cone off the target list even for the leading cone', async () => {
+    const l = toolsFor(lead);
+    const result = await l
+      .pick('drop_scoop')
+      .execute({ scoop_name: other.folder, cross_cone: true });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not found');
+    expect(l.onDropScoop).not.toHaveBeenCalled();
   });
 });
 

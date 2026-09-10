@@ -222,7 +222,9 @@ These three cone-only tools collapse the fan-out into a single follow-up turn:
 
 ### When to use which
 
-> Every scoop name you pass to `feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute` or `scoop_wait` is resolved against the scoops YOU own — what `list_scoops` shows you. Another cone's identically named scoop is never matched; the call errors instead (#2360).
+> Every scoop name you pass to `feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute` or `scoop_wait` is resolved against what `list_scoops` shows you. Another cone's identically named scoop is never matched by a bare name; the call errors instead (#2360).
+>
+> If you are the LEADING cone, `list_scoops` also shows scoops you do not own, tagged `[INHERITED]` (their owning cone is gone) or `[FOREIGN: <cone>]` (another cone owns them). You can feed, wait on, mute and drop those — but only by passing `cross_cone: true` in the same call. Omitting it is an error, not a no-op, so you never touch another cone's work by accident. Two things to know before you do: a cross-cone `feed_scoop` sends its completion notice to the scoop's OWN owner, so use `scoop_wait ({ …, cross_cone: true })` if you need the result yourself; and a batch call refuses the whole batch when any listed scoop needs the flag.
 
 - **Fan-out + synthesis** (your next useful step depends on all scoops) → `scoop_wait`.
 - **Background work you'll check later** → `scoop_mute` now, `scoop_unmute` when you want the summaries.

@@ -13,7 +13,7 @@
 
 import { slugify } from '@slicc/shared-ts';
 import type { RegisteredScoop, WorkUnitModel, WorkUnitThinking } from '../scoops/types.js';
-import { isRootUnit } from './policy.js';
+import { isRootUnit, rootsOf } from './policy.js';
 
 /**
  * Role fields a record persisted before #2279 still carries on disk. Only
@@ -98,6 +98,23 @@ export function chatSessionIdFor(scoop: Pick<RegisteredScoop, 'folder'>): string
 /** `true` for the primary root (folder `cone`): URL context `cone`, session `session-cone`. */
 export function isPrimaryRoot(scoop: Pick<RegisteredScoop, 'parentJid' | 'folder'>): boolean {
   return isRootUnit(scoop) && scoop.folder === PRIMARY_CONE_FOLDER;
+}
+
+/**
+ * The LEADING cone: the primary root when it is still registered, else the
+ * oldest one. Same rule as the strip's `defaultRootOf` (which reads tray
+ * summaries) and the orchestrator's `defaultRoot`, so "who leads" cannot
+ * disagree between the roster, the UI and the scoop tools.
+ *
+ * The leading cone is the only unit allowed to reach outside its own subtree
+ * (`ScoopRelation` `inherited` / `foreign`), so replacing the primary cone
+ * genuinely moves that authority instead of pinning it to folder `cone`.
+ */
+export function leadingRootOf<
+  T extends Pick<RegisteredScoop, 'parentJid' | 'folder' | 'addedAt' | 'jid'>,
+>(units: Iterable<T>): T | undefined {
+  const roots = rootsOf(units);
+  return roots.find((root) => isPrimaryRoot(root)) ?? roots[0];
 }
 
 /** Lower-case, dash-separated, ASCII-only slug of a user-typed name. */

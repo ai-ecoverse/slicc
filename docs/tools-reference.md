@@ -399,16 +399,30 @@ Scoop-only (not registered for the cone — it has no parent to message; its ass
 ### list_scoops
 
 When `policy.canManageChildren` is true (every root, and a child given nested
-delegation). List the scoops you own — your own subtree, not another cone's
-(#2360). Every name-based scoop tool (`feed_scoop`, `drop_scoop`, `scoop_mute`,
-`scoop_unmute`, `scoop_wait`) resolves names against exactly this list, so a
-name that is not here is an error, never a cross-cone match.
+delegation). Lists the scoops you can manage. Every name-based scoop tool
+(`feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute`, `scoop_wait`)
+resolves names against exactly this list, so a name that is not here is an
+error, never a widening match (#2360).
 
 | Property   | Value                                            |
 | ---------- | ------------------------------------------------ |
 | **Name**   | `list_scoops`                                    |
 | **Input**  | None                                             |
 | **Output** | `{ content: "Scoop list\n- name1\n- name2..." }` |
+
+Rows are tagged by how the caller reaches them:
+
+| Tag                 | Relation    | Meaning                                                      |
+| ------------------- | ----------- | ------------------------------------------------------------ |
+| _(none)_            | `own`       | In the caller's own subtree — what it created, transitively  |
+| `[INHERITED]`       | `inherited` | Orphaned: its owning cone is gone, so no subtree contains it |
+| `[FOREIGN: cone-x]` | `foreign`   | Alive and owned by another cone's subtree                    |
+
+A cone that does not lead sees only `own` rows. The **leading cone** — the
+primary root (folder `cone`) when registered, else the oldest, matching
+`leadingRootOf` — also sees inherited and foreign rows, and can act on them by
+passing `cross_cone: true`. A cone is never a row: `feed_scoop` / `drop_scoop`
+address delegated units, and a sibling cone is a peer.
 
 ---
 
@@ -444,16 +458,18 @@ nested-delegation grant). Create a new scoop owned by the caller.
 
 When `policy.canManageChildren` is true. Delegate a task to a scoop.
 
-| Property   | Value                                       |
-| ---------- | ------------------------------------------- |
-| **Name**   | `feed_scoop`                                |
-| **Input**  | `{ scoop_name: string, prompt: string }`    |
-| **Output** | `{ content: "Task sent to scoop-name..." }` |
+| Property   | Value                                                          |
+| ---------- | -------------------------------------------------------------- |
+| **Name**   | `feed_scoop`                                                   |
+| **Input**  | `{ scoop_name: string, prompt: string, cross_cone?: boolean }` |
+| **Output** | `{ content: "Task sent to scoop-name..." }`                    |
 
 **Requirements**:
 
-- The scoop must be one you own (your subtree); another cone's scoop resolves as
-  "not found"
+- The scoop must be one `list_scoops` shows you. For anything but an `own` row,
+  `cross_cone: true` is required (see [Cross-cone reach](#cross-cone-reach))
+- A cross-cone feed reports completion to the scoop's OWN owner, so the
+  acknowledgement points at `scoop_wait` instead of promising you a notification
 - `prompt` must be complete and self-contained
 - Scoop has NO access to cone's conversation history
 - Include all context: file paths, URLs, instructions, expected output format
@@ -464,13 +480,43 @@ When `policy.canManageChildren` is true. Delegate a task to a scoop.
 
 When `policy.canManageChildren` is true. Remove a scoop.
 
-| Property   | Value                          |
-| ---------- | ------------------------------ |
-| **Name**   | `drop_scoop`                   |
-| **Input**  | `{ scoop_name: string }`       |
-| **Output** | `{ content: "Scoop removed" }` |
+| Property   | Value                                          |
+| ---------- | ---------------------------------------------- |
+| **Name**   | `drop_scoop`                                   |
+| **Input**  | `{ scoop_name: string, cross_cone?: boolean }` |
+| **Output** | `{ content: "Scoop removed" }`                 |
 
-Scoped to your own subtree — a cone cannot drop a sibling cone's scoop.
+Scoped to your own subtree, unless you are the leading cone and pass
+`cross_cone: true` — see [Cross-cone reach](#cross-cone-reach). A cone is never
+a target.
+
+---
+
+### Cross-cone reach
+
+Name resolution is subtree-scoped: a cone resolves only what it transitively
+owns (#2360). Two cases sat outside every subtree, so no tool could reach them —
+an **inherited** scoop (its owning cone is gone) and another cone's **foreign**
+scoop, which nobody but its owner could inspect even when its cone was wedged.
+
+The **leading cone** (primary root when registered, else oldest —
+`leadingRootOf` in `work-unit/record.ts`) resolves both, on one condition: the
+call must pass `cross_cone: true`. It is accepted by `feed_scoop`, `drop_scoop`,
+`scoop_mute`, `scoop_unmute` and `scoop_wait`, defaults to false, and omitting
+it on a non-`own` target is an **error naming the boundary** rather than a
+silent no-op — the widening is deliberate at every call site, with no approval
+prompt in the way. Details:
+
+- A batch tool fails as a whole when any listed scoop needs the flag; it never
+  acts on the `own` half and skips the rest.
+- On a display-name tie the caller's OWN scoop always wins, so widening cannot
+  redirect a name that used to resolve locally.
+- `scoop_scoop`'s duplicate-name check stays subtree-scoped: naming a new scoop
+  after one you merely inherited is legal.
+- `scoop_wait` results are delivered to the **requesting** unit, not to each
+  scoop's parent, so a cross-cone wait lands where it was asked for.
+- A non-leading cone cannot resolve those names at all — `cross_cone: true`
+  there still returns "not found".
 
 ---
 
@@ -590,7 +636,7 @@ Hidden from the chat UI via `hidden-tools.ts`.
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | **request_secret**       | ✓    | ✓              | Human types the value; the agent only ever receives the mask          |
 | **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
-| **list_scoops**          | ✓    | grant          | `canManageChildren` — lists the caller's subtree                      |
+| **list_scoops**          | ✓    | grant          | `canManageChildren` — subtree, plus tagged rows for the leading cone  |
 | **scoop_scoop**          | ✓    | grant          | `canCreateChildren` — roots, and children given nested delegation     |
 | **feed_scoop**           | ✓    | grant          | `canManageChildren` — same grant turns this on with create            |
 | **drop_scoop**           | ✓    | grant          | `canManageChildren`                                                   |

@@ -513,10 +513,17 @@ export class ScoopCompletionService {
    * Non-blocking variant of {@link waitForScoops}. Kicks off the wait in
    * the background and delivers a `scoop-wait` channel message to the cone
    * when the wait resolves.
+   *
+   * `requesterJid` is the unit that called `scoop_wait`; the results go THERE.
+   * For an own-subtree wait that IS the scoops' parent, so nothing changes. It
+   * matters when the leading cone waits on a scoop it does not own: parent
+   * routing would file the summary in the owning cone's transcript and leave
+   * the waiter blocked on a lick that never arrives.
    */
   scheduleScoopWait(
     jids: readonly string[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    requesterJid?: string
   ): { scheduled: string[]; unknown: string[] } {
     const uniqueJids = Array.from(new Set(jids));
     const scheduled = uniqueJids.filter((jid) => this.deps.hasScoop(jid));
@@ -526,7 +533,7 @@ export class ScoopCompletionService {
     // drain, waiter registration) before its first await, so by the time
     // control returns to us the scoops are already muted.
     void this.waitForScoops(scheduled, timeoutMs)
-      .then((results) => this.deliverWaitResultsToCone(results))
+      .then((results) => this.deliverWaitResultsToCone(results, requesterJid))
       .catch((err) => {
         log.error('scheduleScoopWait failed', {
           error: err instanceof Error ? err.message : String(err),
@@ -536,11 +543,22 @@ export class ScoopCompletionService {
     return { scheduled, unknown };
   }
 
-  private async deliverWaitResultsToCone(results: WaitResult[]): Promise<void> {
+  private async deliverWaitResultsToCone(
+    results: WaitResult[],
+    requesterJid?: string
+  ): Promise<void> {
     if (results.length === 0) return;
-    // `resolveScoopNames` matches scoop names globally, so one `scoop_wait`
-    // batch may span children of different parents once several roots exist.
-    // Group by parent and deliver each parent exactly its own results.
+    // The requester gets the whole batch in one lick — it asked for it, and a
+    // batch can legitimately span scoops it does not own, whose parents would
+    // otherwise receive results nobody there waited for.
+    const requester = requesterJid === undefined ? undefined : this.deps.getScoop(requesterJid);
+    if (requester) {
+      await this.deliverWaitResultsTo(requester, results);
+      return;
+    }
+    // No (or no longer registered) requester: fall back to parent routing. A
+    // batch may span children of different parents once several roots exist,
+    // so group by parent and deliver each parent exactly its own results.
     const byParent = new Map<string, { parent: RegisteredScoop; results: WaitResult[] }>();
     for (const r of results) {
       const parent = this.deps.findParent(r.jid);
