@@ -8,119 +8,160 @@ export interface Edit {
   line: string;
 }
 
-/**
- * Decide whether step `d` on diagonal `k` was reached from the insert
- * neighbour (k+1) rather than the delete neighbour (k-1). Shared by the
- * forward pass and the backtrack so both stay in lockstep.
- */
-function cameFromInsert(v: number[], k: number, d: number, offset: number): boolean {
-  return k === -d || (k !== d && v[k - 1 + offset] < v[k + 1 + offset]);
+/** A subproblem uses offsets into the original arrays, never copies of them. */
+interface DiffRange {
+  aStart: number;
+  aEnd: number;
+  bStart: number;
+  bEnd: number;
 }
 
-/**
- * Forward pass: compute the trace of furthest-reaching points and the number
- * of edits (`finalD`) needed to reach (n, m).
- */
-function computeForwardTrace(
+interface Frontier {
+  x: Int32Array;
+  start: number;
+  end: number;
+  reverse: boolean;
+}
+
+/** Follow matching lines in either direction, starting at (x, y). */
+function matchingEnd(
   a: string[],
   b: string[],
-  n: number,
-  m: number,
-  max: number,
-  offset: number
-): { trace: number[][]; finalD: number } {
-  const trace: number[][] = [];
-  const v = new Array<number>(2 * max + 1).fill(0);
+  range: DiffRange,
+  x: number,
+  y: number,
+  reverse: boolean
+): number {
+  const n = range.aEnd - range.aStart;
+  const m = range.bEnd - range.bStart;
+  while (
+    x < n &&
+    y < m &&
+    a[reverse ? range.aEnd - x - 1 : range.aStart + x] ===
+      b[reverse ? range.bEnd - y - 1 : range.bStart + y]
+  ) {
+    x++;
+    y++;
+  }
+  return x;
+}
 
-  for (let d = 0; d <= max; d++) {
-    trace.push(v.slice());
-    for (let k = -d; k <= d; k += 2) {
-      let x = cameFromInsert(v, k, d, offset)
-        ? v[k + 1 + offset] // insert: come from k+1
-        : v[k - 1 + offset] + 1; // delete: come from k-1
-      let y = x - k;
-      while (x < n && y < m && a[x] === b[y]) {
-        x++;
-        y++;
+/** Extend one search frontier and return a split when the two searches meet. */
+function advanceFrontier(
+  a: string[],
+  b: string[],
+  range: DiffRange,
+  d: number,
+  front: Frontier,
+  opposite: Frontier,
+  checkOverlap: boolean
+): [number, number] | undefined {
+  const n = range.aEnd - range.aStart;
+  const m = range.bEnd - range.bStart;
+  const offset = Math.ceil((n + m) / 2) + 1;
+  const v = front.x;
+
+  for (let k = -d + front.start; k <= d - front.end; k += 2) {
+    const index = offset + k;
+    let x = k === -d || (k !== d && v[index - 1] < v[index + 1]) ? v[index + 1] : v[index - 1] + 1;
+    x = matchingEnd(a, b, range, x, x - k, front.reverse);
+    const y = x - k;
+    v[index] = x;
+    if (x > n) front.end += 2;
+    else if (y > m) front.start += 2;
+    else if (checkOverlap) {
+      const otherK = n - m - k;
+      const otherIndex = offset + otherK;
+      const otherX = otherIndex >= 0 && otherIndex < 2 * offset + 1 ? opposite.x[otherIndex] : -1;
+      if (otherX >= 0 && x + otherX >= n) {
+        return front.reverse ? [otherX, otherX - otherK] : [x, y];
       }
-      v[k + offset] = x;
-      if (x >= n && y >= m) return { trace, finalD: d };
     }
   }
-
-  return { trace, finalD: max };
+  return undefined;
 }
 
 /**
- * Backtrack from (n, m) to (0, 0) using the forward-pass trace, emitting the
- * edit script in forward order.
+ * Myers' bidirectional search finds a point on a shortest edit path using only
+ * two frontiers. No per-distance snapshots: the old trace retained O((N+M)D)
+ * numbers and exhausted the kernel worker heap on large, dissimilar files.
+ * The scratch arrays are reused by every subproblem in this diff invocation.
  */
-function backtrackTrace(
+function findMiddle(
   a: string[],
   b: string[],
-  n: number,
-  m: number,
-  offset: number,
-  trace: number[][],
-  finalD: number
-): Edit[] {
-  const edits: Edit[] = [];
-  let x = n;
-  let y = m;
+  range: DiffRange,
+  forwardX: Int32Array,
+  reverseX: Int32Array
+): [number, number] | undefined {
+  const n = range.aEnd - range.aStart;
+  const m = range.bEnd - range.bStart;
+  const maxD = Math.ceil((n + m) / 2);
+  const offset = maxD + 1;
+  forwardX.fill(-1, 0, 2 * maxD + 3);
+  reverseX.fill(-1, 0, 2 * maxD + 3);
+  forwardX[offset + 1] = 0;
+  reverseX[offset + 1] = 0;
+  const forward: Frontier = { x: forwardX, start: 0, end: 0, reverse: false };
+  const reverse: Frontier = { x: reverseX, start: 0, end: 0, reverse: true };
+  const odd = (n - m) % 2 !== 0;
 
-  for (let d = finalD; d > 0; d--) {
-    // trace[d] holds v state AFTER d-1 was processed (pushed at start of d loop)
-    const prev = trace[d];
-    const k = x - y;
-    const prevK = cameFromInsert(prev, k, d, offset) ? k + 1 : k - 1;
-    const prevX = prev[prevK + offset];
-    const prevY = prevX - prevK;
-
-    // Diagonal (equal) moves after the edit at step d
-    while (x > prevX && y > prevY) {
-      x--;
-      y--;
-      edits.push({ type: 'equal', line: a[x] });
-    }
-
-    // The actual edit at step d
-    if (x === prevX && y > prevY) {
-      y--;
-      edits.push({ type: 'insert', line: b[y] });
-    } else if (y === prevY && x > prevX) {
-      x--;
-      edits.push({ type: 'delete', line: a[x] });
-    }
+  for (let d = 0; d < maxD; d++) {
+    const split =
+      advanceFrontier(a, b, range, d, forward, reverse, odd) ??
+      advanceFrontier(a, b, range, d, reverse, forward, !odd);
+    if (split) return [range.aStart + split[0], range.bStart + split[1]];
   }
-
-  // Remaining diagonal at d=0 (matches from the very beginning)
-  while (x > 0 && y > 0) {
-    x--;
-    y--;
-    edits.push({ type: 'equal', line: a[x] });
-  }
-
-  edits.reverse();
-  return edits;
+  // No common line: deleting and inserting the entire range is optimal.
+  return undefined;
 }
 
 /**
- * Myers diff algorithm — computes shortest edit script between two line arrays.
- * Exported as an internal helper for the three-way merge core (`merge-file-core.ts`).
+ * Exact Myers line diff in O(N+M) space, including the output and work stack.
+ * Shared by unified diffs, statistics and the three-way merge core. A stack of
+ * ranges avoids recursive call-stack overflow; equal edges bypass the search.
  */
 export function myersDiff(a: string[], b: string[]): Edit[] {
-  const n = a.length;
-  const m = b.length;
+  const edits: Edit[] = [];
+  const pending: DiffRange[] = [{ aStart: 0, aEnd: a.length, bStart: 0, bEnd: b.length }];
+  let scratch: [Int32Array, Int32Array] | undefined;
 
-  if (n === 0 && m === 0) return [];
-  if (n === 0) return b.map((line) => ({ type: 'insert' as const, line }));
-  if (m === 0) return a.map((line) => ({ type: 'delete' as const, line }));
+  while (pending.length > 0) {
+    const range = pending.pop()!;
+    let { aStart, aEnd, bStart, bEnd } = range;
+    while (aStart < aEnd && bStart < bEnd && a[aStart] === b[bStart]) {
+      edits.push({ type: 'equal', line: a[aStart++] });
+      bStart++;
+    }
+    while (aStart < aEnd && bStart < bEnd && a[aEnd - 1] === b[bEnd - 1]) {
+      aEnd--;
+      bEnd--;
+    }
+    if (aEnd < range.aEnd) {
+      pending.push({ aStart: aEnd, aEnd: range.aEnd, bStart: bEnd, bEnd: range.bEnd });
+    }
 
-  const max = n + m;
-  const offset = max;
-
-  const { trace, finalD } = computeForwardTrace(a, b, n, m, max, offset);
-  return backtrackTrace(a, b, n, m, offset, trace, finalD);
+    let split: [number, number] | undefined;
+    if (aStart < aEnd && bStart < bEnd) {
+      // Allocate once, after trimming the outer equal edges. Subsequent ranges
+      // cannot be larger, and reuse cannot retain stale reachability states.
+      if (!scratch) {
+        const size = 2 * Math.ceil((aEnd - aStart + bEnd - bStart) / 2) + 3;
+        scratch = [new Int32Array(size), new Int32Array(size)];
+      }
+      split = findMiddle(a, b, { aStart, aEnd, bStart, bEnd }, ...scratch);
+    }
+    if (split) {
+      const [aMiddle, bMiddle] = split;
+      // LIFO: process left, right, then the equal suffix queued above.
+      pending.push({ aStart: aMiddle, aEnd, bStart: bMiddle, bEnd });
+      pending.push({ aStart, aEnd: aMiddle, bStart, bEnd: bMiddle });
+    } else {
+      for (let i = aStart; i < aEnd; i++) edits.push({ type: 'delete', line: a[i] });
+      for (let i = bStart; i < bEnd; i++) edits.push({ type: 'insert', line: b[i] });
+    }
+  }
+  return edits;
 }
 
 /**

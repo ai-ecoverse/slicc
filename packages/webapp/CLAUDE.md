@@ -112,6 +112,9 @@ Invariants a reviewer must catch; mechanism in the linked docs.
   `localStorage['slicc_cloud_managed']` providers, not user-added; `?connect=1` is login-only.
 - **Never monkeypatch a method on a get/set-asymmetric Proxy** (`docs/webapp-details.md`): the
   sudo-fs Proxy advertises `MONKEYPATCH_UNSAFE_FS`; reassigning a gated method OOMs the worker.
+- **Line diff memory** (`git/diff.ts`, `docs/webapp-details.md`): keep Myers scratch storage
+  linear in input lines. Diff, stat and merge-file share it; per-distance trace snapshots
+  can exhaust the kernel worker heap. Preserve shortest edit paths for merge alignment.
 - **Provider quirks** (`docs/pitfalls.md`): attach the Adobe proxy's `X-Session-Id` at the call
   site (`ensureSessionIdHeader` is defense-in-depth). Claude Bedrock capability shims belong in
   `providers/claude-model-version.ts`, never the call site. OpenRouter (Free)
