@@ -78,8 +78,10 @@ Rules:
 
 - `id` is a stable slug (`skill-github`, `use-case-fswatch-deploy`, `tip-mount-once`) so a repeat pass recognises it.
 - Speak to the user as "you" in every field — never about them in the third person ("Lars builds…" is wrong; "You build…" is right).
-- `title` is one sentence in plain, direct language, sentence case. `body` is two or three sentences: what it is, why it fits you, what changes.
-- `evidence` is one friendly sentence, spoken to the user, saying what you saw that led here — "You told the welcome wizard you're a developer who lives in GitHub", "In Tuesday's bakery session you ran the build–serve–screenshot loop three times by hand". Never a field dump like `role=developer, tasks=[…]`.
+- The card shows exactly two things — WHAT to do and WHY — so write the fields that way:
+  - `title` is the WHAT: a short imperative, eight words or fewer, sentence case — "Install the GitHub skill", "Script your build–serve–screenshot loop". No benefit clause bolted on ("…to manage repos and pull requests from chat" belongs in the why, if anywhere).
+  - `body` is the WHY: one or two sentences, grounded in what you actually saw, that tell the story of the change — what you watched the user do by hand, and what gets better. "You ran the build–serve–screenshot loop 80+ times by hand in your bakery session; a workflow file replays it as one command." It must not restate the title, list features, or repeat `evidence` word for word.
+- `evidence` is one friendly sentence, spoken to the user, saying what you saw that led here — "You told the welcome wizard you're a developer who lives in GitHub". It rides the lick for the cones; the card does not render it, so do not lean on it to justify the suggestion — the why lives in `body`. Never a field dump like `role=developer, tasks=[…]`.
 - `url` is optional: the skill page or the man page.
 - Never suggest what `upskill list` already shows installed, and never invent a skill or command that is not in the catalog, the repo listing, or the sitemap.
 

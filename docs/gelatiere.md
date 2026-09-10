@@ -44,7 +44,7 @@ and `/tmp/`.
 | `packages/webapp/src/ui/wc/wc-gelatiere.ts`                            | The session-end hook: if the flag is on, the unit exists and a pass is due, lick the unit with `session-settled`                                                         |
 | `packages/webapp/src/ui/wc/wc-message-view.ts` (`lickCardEl`)          | Gelatiere licks render with their own kind and icon (`ice-cream-cone`) and a readable body (`describeGelatiereLick`) instead of the JSON the cone reads                  |
 | `packages/webapp/src/ui/boot/setup-welcome-flow.ts`                    | `gelatiere-dismiss` / `-install` / `-try` card clicks settle the store page-side; install/try go on to the cone                                                          |
-| `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml`             | After onboarding the welcome card renders the open suggestions as one `.sprinkle-action-card` each                                                                       |
+| `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml`             | After onboarding the welcome sprinkle renders the open suggestions as flat `.gelatiere-entry` rows (hairline separators, no nested card chrome)                          |
 | `packages/vfs-root/workspace/skills/gelatiere/SKILL.md`                | What a cone does with the lick and the card buttons; what the gelatiere does with its licks; the reusable single-suggestion dip                                          |
 
 ## How a pass runs
@@ -94,9 +94,14 @@ the store through the dip bridge and renders whatever is open. Its buttons emit:
 | `gelatiere-install` | page stamps `takenAt`, then the cone runs the `install` command (per the skill) |
 | `gelatiere-try`     | page stamps `takenAt`, then the cone acts on the `prompt` (per the skill)       |
 
-The stream renders the three states differently: open suggestions are full cards with buttons, taken
-ones collapse into a "Done" ledger (title + installed/tried), dismissed ones disappear — the store
-keeps them so a later pass cannot resurrect what the user waved away.
+The stream renders the three states differently: open suggestions are flat entries (the sidebar
+panel is already a rounded container, so entries draw no box of their own — WHAT as an imperative
+title with a quiet small-caps kind label, WHY as one paragraph, one primary pill plus a text-style
+"Not now"), taken ones collapse into a "Done" ledger (single ellipsized line + installed/tried),
+dismissed ones disappear — the store keeps them so a later pass cannot resurrect what the user
+waved away. Copy contract (`GELATIERE.md`): `title` is the WHAT (imperative, ≤8 words), `body` is
+the WHY (1–2 grounded sentences, no title restatement); `evidence` rides the lick for cones and is
+not rendered on the entry.
 
 Under Memory v2 the welcome sprinkle also stays in the rail after onboarding (it is hidden
 onboarding-only furniture otherwise): `sprinkle-discovery.ts` un-hides it when the flag is on, and it
