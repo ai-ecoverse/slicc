@@ -123,10 +123,10 @@ describe('rangeContains', () => {
 describe('parsers', () => {
   it('reads exactVersion and minorVersion pins from project.yml', () => {
     const pins = parseProjectYmlPins(PROJECT_YML, 'packages/ios-app/project.yml');
-    expect(pins.map((p) => `${p.key}:${p.kind}:${p.version}`)).toEqual([
-      'lakr233/libghostty-spm:exactVersion:1.3.2',
-      'huggingface/swift-huggingface:minorVersion:0.9.0',
-      'stasel/webrtc:exactVersion:150.0.0',
+    expect(pins.map((p) => `${p.ymlName}:${p.key}:${p.kind}:${p.version}`)).toEqual([
+      'GhosttyTerminal:lakr233/libghostty-spm:exactVersion:1.3.2',
+      'HuggingFace:huggingface/swift-huggingface:minorVersion:0.9.0',
+      'WebRTC:stasel/webrtc:exactVersion:150.0.0',
     ]);
   });
 
@@ -335,7 +335,7 @@ describe('commitShaFromTagRef', () => {
 describe('checkRenovateSwiftPinSync', () => {
   const dualPins = parseProjectYmlPins(PROJECT_YML);
 
-  it('accepts a swift-pin rule that lists every owner/repo', () => {
+  it('accepts a swift-pin rule that lists every owner/repo and xcodegen key', () => {
     const renovate = {
       packageRules: [
         {
@@ -344,7 +344,9 @@ describe('checkRenovateSwiftPinSync', () => {
             'stasel/WebRTC',
             'WebRTC',
             'Lakr233/libghostty-spm',
+            'GhosttyTerminal',
             'huggingface/swift-huggingface',
+            'HuggingFace',
           ],
         },
       ],
@@ -369,6 +371,28 @@ describe('checkRenovateSwiftPinSync', () => {
     expect(problems[0]).toMatch(/swift-huggingface/);
   });
 
+  it('fails when the xcodegen package key is missing (PR #3008 GhosttyTerminal)', () => {
+    const problems = checkRenovateSwiftPinSync({
+      dualPins,
+      renovate: {
+        packageRules: [
+          {
+            addLabels: [SWIFT_PIN_LABEL],
+            matchPackageNames: [
+              'stasel/WebRTC',
+              'WebRTC',
+              'Lakr233/libghostty-spm',
+              'huggingface/swift-huggingface',
+            ],
+          },
+        ],
+      },
+    });
+    expect(problems[0]).toMatch(/GhosttyTerminal/);
+    expect(problems[0]).toMatch(/HuggingFace/);
+    expect(problems[0]).not.toMatch(/libghostty-spm/);
+  });
+
   it('fails when the rule exists but there are no dual pins', () => {
     const problems = checkRenovateSwiftPinSync({
       dualPins: [],
@@ -383,5 +407,13 @@ describe('renovate name helpers', () => {
   it('requires owner/repo and allows the repo-only github-releases alias', () => {
     expect(requiredRenovateNames(pin)).toEqual(['stasel/WebRTC']);
     expect(extraRenovateNames(pin)).toEqual(['WebRTC']);
+  });
+
+  it('also requires the xcodegen packages: key when it differs from owner/repo', () => {
+    const ghostty = {
+      ...githubRepoFromUrl('https://github.com/Lakr233/libghostty-spm'),
+      ymlName: 'GhosttyTerminal',
+    };
+    expect(requiredRenovateNames(ghostty)).toEqual(['Lakr233/libghostty-spm', 'GhosttyTerminal']);
   });
 });

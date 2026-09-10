@@ -11,7 +11,9 @@ failed with `depends on 'webrtc' 151 and root depends on 'webrtc' 150`.
 - **`lib.mjs`** — pure parse / compare / apply (unit-tested in `lib.test.mjs`).
 - **`check-swift-pins.mjs`** — the guard. `npm run lint:swift-pins`, wired into
   `lint` / `lint:ci`. Also asserts `renovate.json` labels every dual pin
-  `swift-pin` so the workflow below actually runs.
+  `swift-pin` and lists both the GitHub `owner/repo` and the xcodegen
+  `packages:` key (PR #3008 opened as `GhosttyTerminal` and missed the group)
+  so the workflow below actually runs.
 - **`reconcile.mjs`** — `--write` raises the stale side to the higher version
   already in the tree and, for exact pins, peels the git tag into
   `Package.resolved`. Consumed by

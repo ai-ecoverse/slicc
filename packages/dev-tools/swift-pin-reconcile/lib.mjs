@@ -75,21 +75,22 @@ export function rangeContains(requirement, version) {
 }
 
 const PROJECT_PIN_RE =
-  /url:\s*(https:\/\/github\.com\/[^\s]+)\r?\n[ \t]+(exactVersion|minorVersion):\s*(\S+)/g;
+  /(?:^|\n)([ \t]*)([A-Za-z0-9._-]+):\r?\n\1[ \t]+url:\s*(https:\/\/github\.com\/[^\s]+)\r?\n\1[ \t]+(exactVersion|minorVersion):\s*(\S+)/g;
 
 /** Pins from a xcodegen `project.yml`. */
 export function parseProjectYmlPins(text, path = 'project.yml') {
   const pins = [];
   const src = String(text ?? '');
   for (const m of src.matchAll(PROJECT_PIN_RE)) {
-    const repo = githubRepoFromUrl(m[1]);
+    const repo = githubRepoFromUrl(m[3]);
     if (!repo) continue;
     pins.push({
       ...repo,
-      kind: m[2],
-      version: m[3],
+      ymlName: m[2],
+      kind: m[4],
+      version: m[5],
       path,
-      match: m[0],
+      match: m[0].replace(/^\n/, ''),
     });
   }
   return pins;
@@ -288,9 +289,19 @@ export function applyMismatches(fileContents, mismatches, revisionsByKey = {}) {
   return changed;
 }
 
-/** `owner/repo` as it appears in the GitHub URL — the name Renovate's regex manager uses. */
+/**
+ * Names the `swift-pin` packageRule must list so grouping + the reconcile
+ * workflow actually fire. `owner/repo` is what the swift manager uses;
+ * `ymlName` is the xcodegen `packages:` key (PR #3008 opened as
+ * `GhosttyTerminal` while the rule only listed `Lakr233/libghostty-spm`).
+ */
 export function requiredRenovateNames(pin) {
-  return [`${pin.owner}/${pin.repo}`];
+  const names = [`${pin.owner}/${pin.repo}`];
+  const ymlName = pin.ymlName?.trim();
+  if (ymlName && !names.some((n) => n.toLowerCase() === ymlName.toLowerCase())) {
+    names.push(ymlName);
+  }
+  return names;
 }
 
 /** Extra names github-releases may register the same pin under. */
@@ -333,8 +344,9 @@ export function checkRenovateSwiftPinSync({ dualPins, renovate }) {
   }
   const missing = [];
   for (const pin of pins) {
-    const required = `${pin.owner}/${pin.repo}`.toLowerCase();
-    if (!listed.has(required)) missing.push(`${pin.owner}/${pin.repo}`);
+    for (const name of requiredRenovateNames(pin)) {
+      if (!listed.has(name.toLowerCase())) missing.push(name);
+    }
   }
   if (missing.length > 0) {
     problems.push(
