@@ -126,6 +126,21 @@ describe('telemetry — standalone-worker branch', () => {
     );
   });
 
+  it('unhandledrejection listener unwraps object reasons instead of [object Object]', async () => {
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockWorkerRum.mockClear();
+
+    const ev = new Event('unhandledrejection') as PromiseRejectionEvent;
+    Object.defineProperty(ev, 'reason', { value: { message: 'bedrock returned 400' } });
+    workerSelf.dispatchEvent(ev);
+
+    expect(mockWorkerRum).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ source: 'js', target: 'bedrock returned 400' })
+    );
+  });
+
   it('unhandledrejection listener stringifies non-Error reasons', async () => {
     const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();

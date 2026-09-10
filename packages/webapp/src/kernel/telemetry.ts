@@ -14,6 +14,11 @@
  */
 
 import { isUserFixableError } from '../core/error-families.js';
+import {
+  errorDetailsToRawString,
+  formatErrorDetails,
+  unwrapStructuredErrorMessage,
+} from '../core/error-text.js';
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
@@ -144,45 +149,32 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
       // worker-safe inlined sampler and register error listeners on `self`.
       const mod = await import('./rum-worker.js');
       sampleRUM = mod.default as SampleRUM;
-      self.addEventListener('error', (e) => {
-        // Prefer `error.message` over `event.message`: a thrown Error with
-        // an empty top-level event message still yields a useful payload via
-        // the underlying Error.message.
-        const evt = e as ErrorEvent;
-        trackError('js', evt.error?.message ?? evt.message ?? '');
-      });
-      self.addEventListener('unhandledrejection', (e) => {
-        const reason = (e as PromiseRejectionEvent).reason;
-        const msg = reason instanceof Error ? reason.message : String(reason);
-        trackError('js', msg);
-      });
+      bindRuntimeErrorListeners(self);
     } else if (mode === 'extension') {
       const mod = await import('./rum.js');
       sampleRUM = mod.default as SampleRUM;
 
       // Helix-rum-js auto-registers its own error/unhandledrejection listeners
       // for selected sessions. The inlined rum.js does not — register equivalents
-      // here so the extension panel still records JS errors. Do NOT add these to
-      // the CLI/Electron branch (would double-fire alongside helix's listeners).
-      // trackError applies sanitizeError internally so Vite/path filtering is
-      // shared with the CLI sampleRUM wrapper below.
+      // here so the extension panel still records JS errors. Do NOT add the
+      // generic pair to the CLI/Electron branch (would double-fire alongside
+      // helix's listeners for real `Error`s). trackError applies sanitizeError
+      // internally so Vite/path filtering is shared with the CLI sampleRUM
+      // wrapper below.
       if (typeof window !== 'undefined') {
-        window.addEventListener('error', (e) => {
-          // Same `error.message`-first preference as the worker branch above.
-          const evt = e as ErrorEvent;
-          trackError('js', evt.error?.message ?? evt.message ?? '');
-        });
-        window.addEventListener('unhandledrejection', (e) => {
-          const reason = (e as PromiseRejectionEvent).reason;
-          const msg = reason instanceof Error ? reason.message : String(reason);
-          trackError('js', msg);
-        });
+        bindRuntimeErrorListeners(window);
       }
     } else {
       // CLI / Electron — use @adobe/helix-rum-js with its auto-loaded enhancer
       // (CWV, auto-click). The extension can't load the enhancer at runtime
       // because the manifest CSP blocks external script loads, which is why
       // the extension branch above uses the inlined rum.js instead.
+      // Helix's own window.error handler is the producer of source
+      // `undefined error` + target `[object Object]`: `dataFromErrorObj`
+      // does `error.toString()` on a plain object and keeps the fallback
+      // source when `error.stack` is missing (#3035). Capture-phase
+      // interceptors below steal only those non-Error payloads so helix
+      // still owns real `Error` frames.
       if (typeof window !== 'undefined') {
         window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
       }
@@ -200,6 +192,7 @@ export async function initTelemetry(opts: { isExtensionRealm?: boolean } = {}): 
       // wrapper is intentionally not restored on teardown: there is no
       // disposeTelemetry helper, and CLI / Electron pages live for the session.
       wrapSendBeaconForViteFilter();
+      interceptHelixPojoErrors();
       const mod = await import('@adobe/helix-rum-js');
       sampleRUM = mod.sampleRUM as SampleRUM;
     }
@@ -237,24 +230,10 @@ export function trackImageView(context: string): void {
   sampleRUM?.('viewmedia', { source: context });
 }
 
-/** Error occurred. source=error type (js/llm/tool), target=details */
-export function trackError(errorType: string, details?: string): void {
-  let target = details;
-  if (typeof target === 'string') {
-    // User-fixable known states (no-api-key, invalid-model, auth-expired,
-    // quota-exceeded) own dedicated remediation UX and are not regressions — beaconing them
-    // would only add triage noise. Mirrors the sibling filters in
-    // `trackScoopLifecycle` and `wc-chat-controller.ts#emitErrorCardBeacon`
-    // so the raw `llm` beacon emitted from `scoop-context.ts` doesn't leak
-    // when the two `scoop:*` cascades are already silenced. See issue #1276
-    // (Adobe 403 `Model not allowed`) and #1208 (missing API key). Match
-    // before `sanitizeError` truncates to 200 chars so a long prefix can't
-    // push the family substring past the cutoff.
-    if (isUserFixableError(target)) return;
-    const sanitized = sanitizeError(target);
-    if (sanitized === null) return;
-    target = sanitized;
-  }
+/** Error occurred. source=error type (js/llm/tool/error-card), target=details */
+export function trackError(errorType: string, details?: unknown): void {
+  const target = sanitizeErrorTarget(details);
+  if (target === null) return;
   sampleRUM?.('error', { source: errorType, target });
 }
 
@@ -287,25 +266,11 @@ export function trackSettingsOpen(trigger: string): void {
 export function trackScoopLifecycle(
   event: ScoopLifecycleEvent,
   scoopName: string,
-  details?: string
+  details?: unknown
 ): void {
   if (event === 'error') {
-    let target: string | undefined = details;
-    if (typeof target === 'string') {
-      // User-fixable known states (no-api-key, invalid-model, auth-expired)
-      // own dedicated remediation UX in the error card and are not regressions
-      // — beaconing them would only add triage noise. The sibling `error-card`
-      // beacon in `wc-chat-controller.ts#emitErrorCardBeacon` already filters
-      // these families; matching that policy here closes the bypass via the
-      // scoop-lifecycle beacon. See issue #1208. Match against the raw message
-      // before `sanitizeError` truncates to 200 chars — a long `Scoop "<name>"
-      // failed …` prefix could otherwise push the family substring past the
-      // cutoff and defeat the filter.
-      if (isUserFixableError(target)) return;
-      const sanitized = sanitizeError(target);
-      if (sanitized === null) return;
-      target = sanitized;
-    }
+    const target = sanitizeErrorTarget(details);
+    if (target === null) return;
     sampleRUM?.('error', { source: `scoop:${scoopName}`, target });
     return;
   }
@@ -332,6 +297,75 @@ function isViteDevFrame(line: string): boolean {
     line.includes('[vite]') ||
     /https?:\/\/localhost:\d+\/@vite\//.test(line) ||
     /\/__vite_ping/.test(line)
+  );
+}
+
+/**
+ * Coerce `details` to a sanitized beacon target. Returns `null` when the
+ * checkpoint should be dropped (user-fixable family or pure Vite noise) and
+ * `undefined` when there is no target string to send.
+ *
+ * Coercion runs BEFORE the filters: a non-string used to skip
+ * `isUserFixableError` / `sanitizeError` and land in `sampleRUM` as an
+ * object, which helix `JSON.stringify`s into a nested value that rum-distiller
+ * facets as the literal `[object Object]` (#3035).
+ */
+function sanitizeErrorTarget(details: unknown): string | null | undefined {
+  const raw = errorDetailsToRawString(details);
+  if (raw === undefined) return details === undefined || details === null ? undefined : null;
+  // Match the raw envelope first so a `429 {"error":{"type":"quota_exceeded"}}`
+  // body still drops even after we unwrap to the inner `message`.
+  if (isUserFixableError(raw)) return null;
+  const formatted = formatErrorDetails(details) ?? unwrapStructuredErrorMessage(raw);
+  if (isUserFixableError(formatted)) return null;
+  return sanitizeError(formatted);
+}
+
+function bindRuntimeErrorListeners(target: {
+  addEventListener: (type: string, listener: (event: Event) => void) => void;
+}): void {
+  target.addEventListener('error', (e) => {
+    const evt = e as ErrorEvent;
+    trackError('js', evt.error ?? evt.message ?? '');
+  });
+  target.addEventListener('unhandledrejection', (e) => {
+    trackError('js', (e as PromiseRejectionEvent).reason);
+  });
+}
+
+function isNonErrorObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !(value instanceof Error);
+}
+
+/**
+ * Helix-rum-js `dataFromErrorObj` (v2.15.3) starts at `source: 'undefined
+ * error'` and sets `target = error.toString()`. A thrown plain object
+ * therefore beacons `[object Object]` under that source — 210 pv of the
+ * production `[object Object]` class. Capture-phase listeners steal only
+ * non-Error payloads so helix still owns real `Error` frames (no double
+ * count); `stopImmediatePropagation` drops helix's unreadable ping.
+ */
+function interceptHelixPojoErrors(): void {
+  if (typeof window === 'undefined') return;
+  window.addEventListener(
+    'error',
+    (e) => {
+      const err = (e as ErrorEvent).error;
+      if (!isNonErrorObject(err)) return;
+      trackError('js', err);
+      e.stopImmediatePropagation();
+    },
+    true
+  );
+  window.addEventListener(
+    'unhandledrejection',
+    (e) => {
+      const reason = (e as PromiseRejectionEvent).reason;
+      if (!isNonErrorObject(reason)) return;
+      trackError('js', reason);
+      e.stopImmediatePropagation();
+    },
+    true
   );
 }
 
@@ -367,8 +401,15 @@ type FieldOutcome =
   | { kind: 'noise' };
 
 function sanitizeBeaconField(raw: unknown): FieldOutcome {
-  if (typeof raw !== 'string') return { kind: 'absent' };
-  const sanitized = sanitizeError(raw);
+  const asString =
+    typeof raw === 'string' ? raw : (formatErrorDetails(raw) ?? errorDetailsToRawString(raw));
+  if (typeof asString !== 'string') return { kind: 'absent' };
+  const unwrapped = unwrapStructuredErrorMessage(asString);
+  // Helix `dataFromErrorObj` already toString()'d a POJO — nothing left to
+  // recover. Treat the literal as noise so a leftover ping is blanked / dropped
+  // rather than occupying the top error facet.
+  if (unwrapped === '[object Object]') return { kind: 'noise' };
+  const sanitized = sanitizeError(unwrapped);
   if (sanitized === null) return { kind: 'noise' };
   return { kind: 'kept', value: sanitized, mutated: sanitized !== raw };
 }
@@ -388,6 +429,10 @@ function sanitizeErrorBeaconBody(parsed: ParsedBeacon): true | string | null {
   const targetVotesDrop = targetOutcome.kind !== 'kept';
   const eitherPresent = sourceOutcome.kind !== 'absent' || targetOutcome.kind !== 'absent';
   if (eitherPresent && sourceVotesDrop && targetVotesDrop) return true;
+  // Helix leftover: source stays `undefined error` (a kept string) while
+  // target is the unrecoverable `[object Object]` noise. Drop the pair —
+  // an empty-target `undefined error` ping is still un-triageable.
+  if (targetOutcome.kind === 'noise' && parsed.source === 'undefined error') return true;
   let mutated = false;
   if (sourceOutcome.kind === 'kept') {
     if (sourceOutcome.mutated) {

@@ -35,7 +35,7 @@ export function isNoApiKeyError(content: string | null | undefined): boolean {
  * remediation UX consistent.
  */
 export function isInvalidModelError(content: string | null | undefined): boolean {
-  if (!content) return false;
+  if (typeof content !== 'string' || !content) return false;
   const lower = content.toLowerCase();
   return (
     lower.includes('the provided model identifier is invalid') ||
@@ -51,7 +51,7 @@ export function isInvalidModelError(content: string | null | undefined): boolean
  * whole string.
  */
 export function isAuthExpiredError(content: string | null | undefined): boolean {
-  if (!content) return false;
+  if (typeof content !== 'string' || !content) return false;
   return content.toLowerCase().includes('please log in again');
 }
 
@@ -94,7 +94,7 @@ const QUOTA_CONNECT_CTA_RE = /\s*You can (?:also )?connect your own LLM provider
  * error: ` wrapper never drops it out of detection.
  */
 export function isQuotaExceededError(content: string | null | undefined): boolean {
-  if (!content) return false;
+  if (typeof content !== 'string' || !content) return false;
   return content.toLowerCase().includes(QUOTA_ERROR_TYPE);
 }
 

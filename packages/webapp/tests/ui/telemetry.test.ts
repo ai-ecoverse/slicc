@@ -375,6 +375,120 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
   });
 
+  // #3035 — before this fix, a non-string `details` skipped sanitizeError and
+  // landed in sampleRUM as an object. helix sendPing JSON.stringifies that
+  // nested value; rum-distiller facets it as the literal `[object Object]`
+  // (970 pv, Jun–Sep 2026). Reproduction: the same Error / `{message}` /
+  // `{error:{message}}` payloads that production showed.
+  it('trackError beacons Error and object details as a message, not [object Object]', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('error-card', new TypeError('cannot read x'));
+    trackError('error-card', { message: 'The system encountered an unexpected error' });
+    trackError('llm', {
+      type: 'error',
+      error: { type: 'upstream_error', message: 'bedrock returned 400' },
+    });
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(3);
+    expect(errorCalls[0][1]).toEqual({
+      source: 'error-card',
+      target: 'TypeError: cannot read x',
+    });
+    expect(errorCalls[1][1]).toEqual({
+      source: 'error-card',
+      target: 'The system encountered an unexpected error',
+    });
+    expect(errorCalls[2][1]).toEqual({ source: 'llm', target: 'bedrock returned 400' });
+    for (const [, data] of errorCalls) {
+      expect(data.target).not.toBe('[object Object]');
+      expect(typeof data.target).toBe('string');
+    }
+  });
+
+  it('trackError unwraps JSON-blob string details to the inner message', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError(
+      'error-card',
+      '{"type":"error","error":{"type":"upstream_error","message":"bedrock returned 400"}}'
+    );
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', {
+      source: 'error-card',
+      target: 'bedrock returned 400',
+    });
+  });
+
+  it('trackError drops unknown object bags instead of serializing them', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('js', { token: 'secret', request: { url: '/join/abc' } });
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError still drops user-fixable families when details is a structured object', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('llm', {
+      error: { type: 'quota_exceeded', message: 'Weekly budget has been fully used.' },
+    });
+    trackError('llm', { message: 'No API key configured for provider "anthropic".' });
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError still truncates long string details after coercion', async () => {
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackError('js', { message: 'x'.repeat(250) });
+    const target = mockSampleRUM.mock.calls[0][1].target as string;
+    expect(target.length).toBeLessThanOrEqual(200);
+  });
+
+  it('CLI capture interceptor drops a thrown bag with no message field', async () => {
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'error', {
+      value: { token: 'secret', request: { url: '/join/abc' } },
+    });
+    window.dispatchEvent(errorEvent);
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('CLI capture interceptor beacons a thrown POJO via trackError, not [object Object]', async () => {
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'error', {
+      value: { message: 'bedrock returned 400' },
+    });
+    window.dispatchEvent(errorEvent);
+
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', {
+      source: 'js',
+      target: 'bedrock returned 400',
+    });
+  });
+
   it('CLI sampleRUM wrapper passes through non-error checkpoints unchanged', async () => {
     const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
@@ -760,6 +874,38 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
     const sent = JSON.parse(underlying.mock.calls[0][1] as string);
     expect(sent.source).toBe('https://example.com/app.js');
     expect(sent.target).toBe('');
+  });
+
+  it('drops helix leftover [object Object] under source undefined error', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'undefined error',
+      target: '[object Object]',
+    });
+    const result = navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(result).toBe(true);
+    expect(underlying).not.toHaveBeenCalled();
+  });
+
+  it('unwraps a nested object target on an error beacon body', async () => {
+    const underlying = installUnderlyingBeacon();
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
+    await initTelemetry();
+
+    const body = JSON.stringify({
+      checkpoint: 'error',
+      source: 'Unhandled Rejection',
+      target: { message: 'bedrock returned 400' },
+    });
+    navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
+    expect(underlying).toHaveBeenCalledOnce();
+    const sent = JSON.parse(underlying.mock.calls[0][1] as string);
+    expect(sent.target).toBe('bedrock returned 400');
+    expect(sent.source).toBe('Unhandled Rejection');
   });
 
   it('rewrites error beacons with mixed Vite + real-app content', async () => {

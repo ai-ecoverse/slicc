@@ -9,6 +9,7 @@
 import type { ChatCompactionMarker, ToolProgressEvent } from '@slicc/shared-ts';
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { isUserFixableError } from '../../core/error-families.js';
+import { errorDetailsToRawString, formatErrorDetails } from '../../core/error-text.js';
 import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
   applyDictationMarkers,
@@ -1261,16 +1262,21 @@ export class WcChatController {
     this.setProcessing(false);
   }
 
-  #handleError(error: string): void {
+  #handleError(error: unknown): void {
     this.setProcessing(false);
     // The error path renders as `<slicc-error-card>` (a presentational card
     // with a "Try again" button that emits the bubbled `slicc-error-retry`
     // event picked up by `#handleErrorRetry`). Mark the message with `error`
     // so `messageEls` routes it to the card instead of the plain bubble.
+    // `event.error` is typed `string` on the wire but production OpTel
+    // shows non-strings arriving here (#3035) — coerce those so the card
+    // never renders `[object Object]`. Leave strings intact: quota
+    // envelopes (`429 {"error":{"type":"quota_exceeded",…}}`) must still
+    // reach `errorCardEl` so it can detect the family and read `resets_at`.
     this.#appendMessage({
       id: uid(),
       role: 'assistant',
-      content: error,
+      content: typeof error === 'string' ? error : (formatErrorDetails(error) ?? ''),
       timestamp: Date.now(),
       error: true,
     });
@@ -1287,9 +1293,10 @@ export class WcChatController {
    * from the agent-loop `'llm'`/`'tool'` beacons. Mirrors `#emitChatSendBeacon`'s
    * fire-and-forget style — telemetry must never disrupt the error-render path.
    */
-  #emitErrorCardBeacon(error: string): void {
+  #emitErrorCardBeacon(error: unknown): void {
     try {
-      if (isUserFixableError(error)) return;
+      const raw = typeof error === 'string' ? error : errorDetailsToRawString(error);
+      if (typeof raw === 'string' && isUserFixableError(raw)) return;
       trackError('error-card', error);
     } catch {
       // Telemetry must never block the error render.
