@@ -8,18 +8,38 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## Directory Structure
 
-| Path                                  | Purpose                                                                                    |
-| ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                                          |
-| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS                            |
-| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`                         |
-| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md`                         |
-| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                                                      |
-| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                                                 |
-| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                                                       |
-| `packages/vfs-root/etc/`              | System config seeded into `/etc/` (`models`, `sudoers`, `APPROVALS.md`, `slicc/keys.json`) |
+| Path                                    | Purpose                                                                                    |
+| --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `packages/vfs-root/shared/`             | Shared content that becomes `/shared/` in the VFS                                          |
+| `packages/vfs-root/workspace/`          | Default workspace content that becomes `/workspace/` in the VFS                            |
+| `packages/vfs-root/shared/CLAUDE.md`    | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`                         |
+| `packages/vfs-root/shared/MEMORY.md`    | User-editable memory curator config bundled as `/shared/MEMORY.md`                         |
+| `packages/vfs-root/shared/GELATIERE.md` | User-editable gelatiere pass instructions + config bundled as `/shared/GELATIERE.md`       |
+| `packages/vfs-root/shared/sprinkles/`   | Built-in sprinkle UIs                                                                      |
+| `packages/vfs-root/shared/sounds/`      | Shared notification sounds                                                                 |
+| `packages/vfs-root/workspace/skills/`   | Default installable workspace skills                                                       |
+| `packages/vfs-root/etc/`                | System config seeded into `/etc/` (`models`, `sudoers`, `APPROVALS.md`, `slicc/keys.json`) |
 
 ## Adding Default Content
+
+### Gelatiere
+
+- `shared/GELATIERE.md` is the gelatiere's twin of `MEMORY.md`: the store's build-time fallback
+  and the seeded `/shared/GELATIERE.md`, seeded only when absent, user-edited only. Same
+  frontmatter dialect (`base/instruction-frontmatter.ts`); keys are `intervalHours`, `nightly`
+  (5-field cron) and `maxSuggestions` (capped at 10). No placeholders: the unit `cat`s the file at
+  the start of every pass, so keep it self-contained (literal paths, `date` for today).
+- The gelatiere is a persistent SCOOP under a synthetic owner (folder `gelatiere`,
+  `scoops/gelatiere-unit.ts`), not a spawned agent: its charter is the record's `systemPromptAppend`, the pass recipe is this file.
+  Its deliverable is `gelatiere suggest <candidates.json> && gelatiere deliver`; the command owns
+  the store and the addressing. Keep the recipe's commands on `GELATIERE_ALLOWED_COMMANDS` (a child
+  escalates anything else) and its cross-pass memory in `/shared/.gelatiere/notes.md`. Design:
+  `docs/gelatiere.md`.
+- `shared/sprinkles/welcome/welcome.shtml` is the wizard on first run and the gelatiere's
+  suggestion stream afterwards (one `.sprinkle-action-card` per open suggestion, read through the
+  dip bridge's `slicc.readFile`). The card buttons lick `gelatiere-install` / `gelatiere-try`
+  (settled page-side, then the cone acts per `workspace/skills/gelatiere/SKILL.md`) and
+  `gelatiere-dismiss` (settled page-side).
 
 ### Memory curator
 

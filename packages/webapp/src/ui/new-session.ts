@@ -226,6 +226,7 @@ async function runAgenticBackgroundPass(
     memoryPending: curated ? curated.memoryPending === true : true,
   });
   opts.onBackgroundEnriched?.(curated);
+  opts.onSessionSettled?.(curated ?? current);
 }
 
 export interface RunNewSessionFreezeOptions {
@@ -260,6 +261,14 @@ export interface RunNewSessionFreezeOptions {
    * caller refresh the freezer rail when the rename + icon land late.
    */
   onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
+  /**
+   * Fired once per freeze when the session has SETTLED — the archive is
+   * durable and every background pass over it has finished (the curator under
+   * `agentic-memory`, the enrichment call otherwise). The gelatiere hangs
+   * off this: its pass mines the same archive, so it must not start while
+   * the curator is still working it. Never awaited; errors are the hook's own.
+   */
+  onSessionSettled?: (entry: FrozenSessionIndexEntry | null) => void;
   /**
    * Non-blocking hook called after the Markdown archive write succeeds and
    * before the caller clears histories. Used to produce and persist the full
@@ -474,6 +483,7 @@ export async function runNewSessionFreeze(
     log.info('Frozen without enrichment (no LLM credentials) — left pending', {
       filename: frozen.filename,
     });
+    opts.onSessionSettled?.(frozen);
     return frozen;
   }
 
@@ -499,7 +509,9 @@ export async function runNewSessionFreeze(
 
   if (winner.kind === 'llm') {
     // LLM won (< raceMs): enrichment already applied; return the enriched entry.
-    return winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
+    const settled = winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
+    opts.onSessionSettled?.(settled);
+    return settled;
   }
 
   // Timer won: the archive is durable, so the caller may clear the chat now.
@@ -511,6 +523,7 @@ export async function runNewSessionFreeze(
       enriched: updated?.filename ?? null,
     });
     opts.onBackgroundEnriched?.(updated);
+    opts.onSessionSettled?.(updated ?? frozen);
   });
   return frozen;
 }
@@ -616,5 +629,6 @@ async function runQuickFreeze(
     }
   }
 
+  if (frozen) opts.onSessionSettled?.(frozen);
   return frozen;
 }

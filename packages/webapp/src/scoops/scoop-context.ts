@@ -30,6 +30,7 @@
  */
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { isGelatiereUnit } from '../base/gelatiere-constants.js';
 import {
   type CompactionSnapshot,
   type CompactionTrigger,
@@ -606,8 +607,13 @@ export class ScoopContext {
     await this.settleLiveSnapshot(options.discardLiveSnapshot === true);
   }
 
-  /** Whether compact-on-idle applies to this unit right now (flag + role). */
+  /**
+   * Whether compact-on-idle applies to this unit right now (flag + role).
+   * The gelatiere is the exception to the flag: a persistent advisor that
+   * lives on licks for weeks must compact, or it overruns its own context.
+   */
   private idleCompactionEnabled(): boolean {
+    if (isGelatiereUnit(this.scoop)) return true;
     return this.unit.parentId === null && isFeatureEnabled('compact-on-idle');
   }
 

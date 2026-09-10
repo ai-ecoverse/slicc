@@ -86,6 +86,13 @@ const WELCOME_FLOW_ACTIONS = new Set<string>([
   'oauth-attempt',
   'device-code-decision',
   'shortcut-migrate',
+  // The welcome card's post-setup suggestion stream (the gelatiere). All
+  // three settle the entry in `/shared/.gelatiere/suggestions.json` here;
+  // dismiss stops there, while install / try also go on to the cone, which
+  // acts on them per the `gelatiere` skill.
+  'gelatiere-dismiss',
+  'gelatiere-install',
+  'gelatiere-try',
 ]);
 
 /**
@@ -113,6 +120,12 @@ export interface WelcomeConnectAttemptData {
 export interface WelcomeOAuthAttemptData {
   provider?: unknown;
   baseUrl?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/** Nested `data` on the welcome card's `gelatiere-*` licks; only `id` matters here. */
+interface WelcomeGelatiereCardData {
+  id?: unknown;
   readonly [key: string]: unknown;
 }
 
@@ -310,7 +323,45 @@ const WELCOME_BRANCHES: Record<
     deps.onShortcutMigrate();
     return true;
   },
+  'gelatiere-dismiss': (body, deps) => {
+    settleGelatiereSuggestion(body, deps);
+    return true;
+  },
+  // Install / Try it are the user ANSWERING the suggestion, so the store is
+  // settled here — deterministically, before the cone sees the lick — and
+  // the lick still goes on to the cone to do the work. The first live pass
+  // showed a cone that installed the skill and skipped the `gelatiere dismiss`
+  // the skill asks for; the card would have come back on the next render.
+  'gelatiere-install': (body, deps) => {
+    settleGelatiereSuggestion(body, deps);
+    return false;
+  },
+  'gelatiere-try': (body, deps) => {
+    settleGelatiereSuggestion(body, deps);
+    return false;
+  },
 };
+
+/**
+ * One shared load of the gelatiere store module: two card clicks in the same tick
+ * (dismiss one, install another) must both settle, and a second `import()`
+ * issued while the first is still in flight is not guaranteed to run its
+ * `.then` under every module runner.
+ */
+let gelatiereModule: Promise<typeof import('../../base/gelatiere-store.js')> | undefined;
+function loadGelatiereModule(): Promise<typeof import('../../base/gelatiere-store.js')> {
+  gelatiereModule ??= import('../../base/gelatiere-store.js');
+  return gelatiereModule;
+}
+
+function settleGelatiereSuggestion(body: WelcomeBranchBody, deps: WelcomeBranchDeps): void {
+  const id = (body?.data as WelcomeGelatiereCardData | undefined)?.id;
+  if (typeof id !== 'string' || !id || !deps.vfs) return;
+  const vfs = deps.vfs;
+  void loadGelatiereModule()
+    .then(({ dismissGelatiereSuggestion }) => dismissGelatiereSuggestion(vfs, id))
+    .catch((err) => deps.log.warn('Failed to settle gelatiere suggestion', err));
+}
 
 function dispatchWelcomeBranch(
   action: string,

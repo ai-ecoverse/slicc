@@ -60,6 +60,7 @@ import {
   NavigationWatcher,
 } from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import { resolveFloatTopology } from '../core/float-topology.js';
 import { setMountCapabilityBroker } from '../fs/mount/capability-broker.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -1050,6 +1051,45 @@ export function shouldStartLickWsBridge(adapter: CapabilityAdapterId): boolean {
 }
 
 /**
+ * Step 8b: the gelatiere seam for the `gelatiere` shell command and — with
+ * the `memory-v2` flag on — the unit itself plus its nightly crontask.
+ * Everything here is lazy and fire-and-forget: the unit module and the store
+ * module (which carries the bundled GELATIERE.md) stay out of the worker's
+ * eager bundle, and the host never waits on a unit registration. The seam
+ * lands a tick after boot; the command reports "not booted yet" until then.
+ */
+function publishGelatiere(
+  orchestrator: OrchestratorType,
+  lickManager: LickManager,
+  sharedFs: VirtualFS | null,
+  log: KernelHostLogger
+): void {
+  void import('../scoops/gelatiere-unit.js')
+    .then(async (unit) => {
+      const seam = unit.createGelatiereSeam(orchestrator, lickManager);
+      unit.publishGelatiereSeam(seam);
+      if (!sharedFs || !isFeatureEnabled('memory-v2')) return;
+      const { loadGelatiereConfig } = await import('../base/gelatiere-store.js');
+      const config = await loadGelatiereConfig(sharedFs);
+      await unit.bootGelatiere(seam, config.nightly);
+    })
+    .catch((err) => log.warn('gelatiere seam failed to publish', err));
+}
+
+/** Step 5: the `agent` command's bridge, which needs a shared FS. */
+function publishAgentSeams(
+  orchestrator: Parameters<typeof publishAgentBridge>[0],
+  sharedFs: Parameters<typeof publishAgentBridge>[1] | null,
+  log: KernelHostLogger
+): void {
+  if (!sharedFs) {
+    log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
+    return;
+  }
+  publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+}
+
+/**
  * Register the approver runner used by `agent`-gated biscotto seats.
  *
  * Lives here because it needs BOTH the agent bridge and the shared VFS, which
@@ -1070,11 +1110,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs, capabilityBroker } =
     await bootOrchestrator(container, browser, bridge, callbacks, config);
   progress('orchestrator-ready');
-  if (sharedFs) {
-    publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
-  } else {
-    log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
-  }
+  publishAgentSeams(orchestrator, sharedFs, log);
 
   // 5b. Mount /proc on the shared FS. `mountInternal` keeps it out
   // of `listMounts()` (so scoops can't see it), out of `mount list`,
@@ -1112,6 +1148,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
   //    shell commands. globalThis is identical in worker + page.
   kernelHostGlobals().__slicc_lickManager = lickManager;
+  publishGelatiere(orchestrator, lickManager, sharedFs, log);
 
   // 8a-pre. browser.websocket subscriber registry. The registry owns
   //    the resolved sink dispatchers + the page-side CDP bridge so

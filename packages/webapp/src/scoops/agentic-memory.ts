@@ -1,4 +1,13 @@
 import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
+import {
+  type FrontmatterValue,
+  parseFrontmatter,
+  readArray,
+  readBoundedTimeout,
+  readOptionalString,
+  splitInstructionDocument,
+  validatePaths,
+} from '../base/instruction-frontmatter.js';
 import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import {
@@ -102,8 +111,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'wc',
   'xxd',
 ];
-const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
-const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);
+const MEMORY_FRONTMATTER = {
+  arrayKeys: new Set(['writablePaths', 'visiblePaths', 'allowedCommands']),
+  scalarKeys: new Set(['model', 'timeoutSeconds', 'thinkingLevel']),
+};
 
 /**
  * Spawned agents resolve an absent thinking level to `'off'`. That is wrong for
@@ -268,7 +279,6 @@ function rebaseVisiblePaths(paths: string[], workspace: WorkUnitWorkspace): stri
   return rebased;
 }
 
-type FrontmatterValue = string | string[];
 type WaitOutcome =
   | { type: 'result'; result: AgentSpawnResult }
   | { type: 'error'; error: unknown }
@@ -382,16 +392,18 @@ function parseMemoryDocument(
   content: string,
   workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
 ): MemoryConfig {
-  const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-  const match = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  if (!match?.[2].trim()) throw new Error('MEMORY.md requires frontmatter and a prompt');
-  const values = parseFrontmatter(match[1]);
+  const document = splitInstructionDocument(content, 'MEMORY.md');
+  const values = parseFrontmatter(document.frontmatter, MEMORY_FRONTMATTER);
   const writablePaths = readArray(values, 'writablePaths', defaultWritablePaths(workspace));
   if (writablePaths.length === 0) throw new Error('writablePaths must not be empty');
   validatePaths(writablePaths, 'writablePaths');
   const visiblePaths = readArray(values, 'visiblePaths', defaultVisiblePaths(workspace));
   validatePaths(visiblePaths, 'visiblePaths');
-  const timeoutSeconds = readTimeout(values.timeoutSeconds);
+  const timeoutSeconds = readBoundedTimeout(
+    values.timeoutSeconds,
+    DEFAULT_MEMORY_TIMEOUT_SECONDS,
+    MAX_MEMORY_TIMEOUT_SECONDS
+  );
   const model = readOptionalString(values.model, 'model');
   return {
     writablePaths: writablePaths.map((path) => rebaseOntoCone(path, workspace)),
@@ -402,7 +414,7 @@ function parseMemoryDocument(
     ...(model ? { model } : {}),
     thinkingLevel: readThinkingLevel(values.thinkingLevel),
     timeoutSeconds,
-    promptTemplate: match[2].trim(),
+    promptTemplate: document.body,
   };
 }
 
@@ -412,129 +424,6 @@ function readThinkingLevel(value: FrontmatterValue | undefined): ThinkingLevel {
     throw new Error(`thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}`);
   }
   return value;
-}
-
-function parseFrontmatter(frontmatter: string): Record<string, FrontmatterValue> {
-  const result: Record<string, FrontmatterValue> = {};
-  const lines = frontmatter.split('\n');
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line.trim() || line.trimStart().startsWith('#')) continue;
-    const keyMatch = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
-    if (!keyMatch) throw new Error(`Invalid frontmatter line: ${line}`);
-    const [, key, rest] = keyMatch;
-    if (ARRAY_KEYS.has(key)) {
-      const parsed = parseArrayValue(lines, index, rest);
-      result[key] = parsed.value;
-      index = parsed.lastIndex;
-    } else if (SCALAR_KEYS.has(key) && rest.trim()) {
-      result[key] = parseScalar(rest);
-    } else {
-      throw new Error(`Unsupported or empty frontmatter field: ${key}`);
-    }
-  }
-  return result;
-}
-
-function parseArrayValue(
-  lines: string[],
-  keyIndex: number,
-  inline: string
-): { value: string[]; lastIndex: number } {
-  if (inline.trim()) {
-    const value = inline.trim();
-    if (!value.startsWith('[') || !value.endsWith(']')) throw new Error('Expected an array');
-    const inner = value.slice(1, -1).trim();
-    return {
-      value: inner ? splitInlineArray(inner) : [],
-      lastIndex: keyIndex,
-    };
-  }
-  const value: string[] = [];
-  let lastIndex = keyIndex;
-  for (let index = keyIndex + 1; index < lines.length; index += 1) {
-    const item = lines[index].match(/^\s+-\s+(.+)$/);
-    if (!item) break;
-    value.push(parseScalar(stripBlockArrayComment(item[1])));
-    lastIndex = index;
-  }
-  return { value, lastIndex };
-}
-
-function splitInlineArray(inner: string): string[] {
-  const items: string[] = [];
-  let start = 0;
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < inner.length; index += 1) {
-    const char = inner[index];
-    if (char === '"' || char === "'") {
-      quote = quote === char ? undefined : (quote ?? char);
-    } else if (char === ',' && !quote) {
-      items.push(parseScalar(inner.slice(start, index)));
-      start = index + 1;
-    }
-  }
-  if (quote) throw new Error('Unclosed quoted value');
-  items.push(parseScalar(inner.slice(start)));
-  return items;
-}
-
-function stripBlockArrayComment(raw: string): string {
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (char === '"' || char === "'") {
-      quote = quote === char ? undefined : (quote ?? char);
-    } else if (char === '#' && !quote && (index === 0 || /\s/.test(raw[index - 1]))) {
-      return raw.slice(0, index).trimEnd();
-    }
-  }
-  return raw;
-}
-
-function parseScalar(raw: string): string {
-  const value = raw.trim();
-  if (!value) throw new Error('Empty frontmatter value');
-  const quote = value[0];
-  if ((quote === '"' || quote === "'") && value.at(-1) === quote) return value.slice(1, -1);
-  if (quote === '"' || quote === "'") throw new Error('Unclosed quoted value');
-  return value;
-}
-
-function readArray(
-  values: Record<string, FrontmatterValue>,
-  key: string,
-  fallback: string[]
-): string[] {
-  const value = values[key];
-  if (value === undefined) return [...fallback];
-  if (!Array.isArray(value) || value.some((item) => !item)) throw new Error(`${key} is invalid`);
-  return [...value];
-}
-
-function readOptionalString(value: FrontmatterValue | undefined, key: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value) throw new Error(`${key} is invalid`);
-  return value;
-}
-
-function readTimeout(value: FrontmatterValue | undefined): number {
-  if (value === undefined) return DEFAULT_MEMORY_TIMEOUT_SECONDS;
-  if (typeof value !== 'string') throw new Error('timeoutSeconds is invalid');
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('timeoutSeconds must be positive');
-  return Math.min(parsed, MAX_MEMORY_TIMEOUT_SECONDS);
-}
-
-function validatePaths(paths: string[], key: string): void {
-  if (
-    paths.some(
-      (path) =>
-        !path.startsWith('/') || path.includes('\0') || (key === 'writablePaths' && path === '/')
-    )
-  ) {
-    throw new Error(`${key} must contain absolute VFS paths`);
-  }
 }
 
 /**

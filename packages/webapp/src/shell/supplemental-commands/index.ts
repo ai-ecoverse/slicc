@@ -29,6 +29,7 @@ import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
+import { createGelatiereCommand } from './gelatiere-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
@@ -257,6 +258,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
           createUpgradeCommand({ fs: options.fs, fetch: options.fetch }),
         ]
       : []),
+    ...(options.fs ? [createGelatiereCommand({ fs: options.fs })] : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
     createFfprobeCommand(),

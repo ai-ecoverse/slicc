@@ -122,7 +122,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'sprinkle']],
   ['Clipboard', ['pbcopy', 'pbpaste', 'xclip', 'xsel']],
   ['Filesystem', ['mount', 'umount', 'fswatch']],
-  ['Scoops & agents', ['agent', 'mcp', 'webhook', 'crontask']],
+  ['Scoops & agents', ['agent', 'gelatiere', 'mcp', 'webhook', 'crontask']],
   ['Process', ['ps', 'kill', 'meminfo', 'uptime']],
   // Advertised by bash's `help` table but unimplemented upstream — SLICC
   // registers them so they answer honestly instead of 127 (#2816).

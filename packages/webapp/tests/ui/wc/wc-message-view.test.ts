@@ -1038,3 +1038,47 @@ describe('navigate / discovery lick event labels', () => {
     expect(card.getAttribute('event-label')).toBe('docs.example.com');
   });
 });
+
+describe('gelatiere lick cards', () => {
+  it('render with their own kind, the action as pill, and a readable body', () => {
+    const body = {
+      action: 'gelatiere-suggestions',
+      data: {
+        added: 2,
+        open: 3,
+        suggestions: [{ title: 'Install the GitHub skill' }, { title: 'Save the loop' }],
+        path: '/shared/.gelatiere/suggestions.json',
+        skill: '/workspace/skills/gelatiere/SKILL.md',
+      },
+    };
+    const els = messageEls({
+      id: 'l1',
+      role: 'user',
+      source: 'lick',
+      channel: 'sprinkle',
+      content: `[Sprinkle Event: gelatiere]\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``,
+      timestamp: 1,
+    });
+    const card = els.find((e: HTMLElement) => e.tagName.toLowerCase() === 'slicc-lick-card');
+    expect(card).toBeDefined();
+    expect(card?.getAttribute('kind')).toBe('gelatiere');
+    expect(card?.getAttribute('event-label')).toBe('suggestions');
+    expect(card?.textContent).toContain('2 new suggestions (3 open)');
+    expect(card?.textContent).toContain('Install the GitHub skill');
+    expect(card?.textContent).not.toContain('"action"');
+  });
+
+  it('leaves other sprinkle licks on the generic rendering', () => {
+    const els = messageEls({
+      id: 'l2',
+      role: 'user',
+      source: 'lick',
+      channel: 'sprinkle',
+      content: '[Sprinkle Event: welcome]\n```json\n{"action":"first-run"}\n```',
+      timestamp: 1,
+    });
+    const card = els.find((e: HTMLElement) => e.tagName.toLowerCase() === 'slicc-lick-card');
+    expect(card?.getAttribute('kind')).toBe('sprinkle');
+    expect(card?.getAttribute('event-label')).toBe('welcome');
+  });
+});
