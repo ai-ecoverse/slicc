@@ -24,6 +24,7 @@ type CompactConfig = {
   contextWindow?: number;
   onMemoryUpdates?: unknown;
   shouldExtractMemories?: unknown;
+  onBeforeCompaction?: unknown;
 };
 
 const captures = vi.hoisted(() => ({
@@ -145,12 +146,13 @@ function createMockFs() {
 
 async function initWith(
   model: Record<string, unknown>,
-  extraCallbacks: Record<string, unknown> = {}
+  extraCallbacks: Record<string, unknown> = {},
+  scoop: RegisteredScoop = baseScoop
 ): Promise<CompactConfig> {
   mocks.resolveCurrentModel.mockReturnValue(model as never);
   const callbacks = { ...createMockCallbacks(), ...extraCallbacks };
   const ctx = new ScoopContext(
-    baseScoop,
+    scoop,
     callbacks as never,
     createMockFs() as never,
     undefined,
@@ -227,5 +229,35 @@ describe('ScoopContext compaction memory gating (#2003)', () => {
   it('leaves onMemoryUpdates unset without an appendConeMemory callback (unchanged)', async () => {
     const config = await initWith(MODEL);
     expect(config.onMemoryUpdates).toBeUndefined();
+  });
+});
+
+describe('ScoopContext scoop pre-compaction snapshot gating (memory-v2)', () => {
+  const MODEL = { id: 'sonnet', provider: 'adobe', contextWindow: 200_000 };
+  const childScoop: RegisteredScoop = {
+    ...baseScoop,
+    jid: 'scoop_worker_1',
+    name: 'worker',
+    folder: 'worker',
+    parentJid: 'cone_test_1',
+  };
+
+  beforeEach(() => {
+    captures.agentCtorCalls.length = 0;
+    captures.createCompactContextCalls.length = 0;
+    mocks.resolveCurrentModel.mockReset();
+    mocks.enabledFlags.clear();
+  });
+
+  it('always wires onBeforeCompaction for roots', async () => {
+    const config = await initWith(MODEL);
+    expect(config.onBeforeCompaction).toBeTypeOf('function');
+  });
+
+  it('wires onBeforeCompaction for scoops so memory-v2 can gate live', async () => {
+    // The hook is always attached; the live flag check is inside it — same
+    // pattern as shouldExtractMemories / agentic-memory (#2003).
+    const config = await initWith(MODEL, {}, childScoop);
+    expect(config.onBeforeCompaction).toBeTypeOf('function');
   });
 });

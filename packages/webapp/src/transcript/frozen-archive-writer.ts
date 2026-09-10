@@ -193,9 +193,26 @@ export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
   return header + dataBlock + title + formatChatForClipboard(archive.messages);
 }
 
-export async function ensureSessionsDir(vfs: ArchiveVfs): Promise<void> {
+/** Index path for a sessions directory (`/sessions` or a scoop sandbox). */
+export function sessionsIndexPathFor(sessionsDir: string): string {
+  return sessionsDir === SESSIONS_DIR ? SESSIONS_INDEX_PATH : `${sessionsDir}/index.json`;
+}
+
+/**
+ * Web Lock name for a sessions index. Cone archives share one origin-wide
+ * lock; scoop sandboxes each get their own so a scoop compaction cannot
+ * serialize behind the freezer.
+ */
+export function sessionsIndexLockFor(sessionsDir: string): string {
+  return sessionsDir === SESSIONS_DIR ? SESSIONS_INDEX_LOCK : `slicc:sessions-index:${sessionsDir}`;
+}
+
+export async function ensureSessionsDir(
+  vfs: ArchiveVfs,
+  sessionsDir: string = SESSIONS_DIR
+): Promise<void> {
   try {
-    await vfs.mkdir(SESSIONS_DIR, { recursive: true });
+    await vfs.mkdir(sessionsDir, { recursive: true });
   } catch {
     // Already exists or unsupported — writeFile will surface the real error.
   }
@@ -207,10 +224,11 @@ export async function ensureSessionsDir(vfs: ArchiveVfs): Promise<void> {
  * treating an EIO as "no entries" would rewrite the index without them.
  */
 export async function readSessionsIndexForWrite(
-  vfs: ArchiveVfs
+  vfs: ArchiveVfs,
+  sessionsDir: string = SESSIONS_DIR
 ): Promise<FrozenSessionIndexEntry[]> {
   try {
-    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+    const raw = await vfs.readFile(sessionsIndexPathFor(sessionsDir), { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
@@ -248,12 +266,18 @@ let indexWriteChain: Promise<void> = Promise.resolve();
  * realm. The callback must do the whole read-modify-write inside and must
  * not call another locked helper (Web Locks are not reentrant); the
  * `*Unlocked` primitives are for that.
+ *
+ * `lockName` defaults to the cone `/sessions` lock; scoop sandboxes pass
+ * {@link sessionsIndexLockFor} so they do not share the freezer's lock.
  */
-export function serializeIndexWrite<T>(run: () => Promise<T>): Promise<T> {
+export function serializeIndexWrite<T>(
+  run: () => Promise<T>,
+  lockName: string = SESSIONS_INDEX_LOCK
+): Promise<T> {
   const locked = (): Promise<T> => {
     const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
     if (typeof locks?.request !== 'function') return run();
-    return locks.request(SESSIONS_INDEX_LOCK, () => run());
+    return locks.request(lockName, () => run());
   };
   const next = indexWriteChain.then(locked, locked);
   indexWriteChain = next.then(
@@ -266,21 +290,24 @@ export function serializeIndexWrite<T>(run: () => Promise<T>): Promise<T> {
 /** Write the whole index. Caller holds the lock (`serializeIndexWrite`). */
 export function writeSessionsIndexUnlocked(
   vfs: ArchiveVfs,
-  entries: readonly FrozenSessionIndexEntry[]
+  entries: readonly FrozenSessionIndexEntry[],
+  sessionsDir: string = SESSIONS_DIR
 ): Promise<void> {
-  return vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+  return vfs.writeFile(sessionsIndexPathFor(sessionsDir), JSON.stringify(entries, null, 2));
 }
 
 /** Insert or replace one row, newest first. Caller holds the lock. */
 export async function upsertSessionsIndexEntryUnlocked(
   vfs: ArchiveVfs,
-  entry: FrozenSessionIndexEntry
+  entry: FrozenSessionIndexEntry,
+  sessionsDir: string = SESSIONS_DIR
 ): Promise<void> {
-  const existing = await readSessionsIndexForWrite(vfs);
-  await writeSessionsIndexUnlocked(vfs, [
-    entry,
-    ...existing.filter((e) => e.filename !== entry.filename),
-  ]);
+  const existing = await readSessionsIndexForWrite(vfs, sessionsDir);
+  await writeSessionsIndexUnlocked(
+    vfs,
+    [entry, ...existing.filter((e) => e.filename !== entry.filename)],
+    sessionsDir
+  );
 }
 
 /**

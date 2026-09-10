@@ -75,6 +75,14 @@ describe('feature flag registry', () => {
         defaultValue: 'off',
         userToggleable: true,
       }),
+      expect.objectContaining({
+        id: 'memory-v2',
+        label: 'Memory v2',
+        description:
+          'Searchable session history and scoop pre-compaction snapshots for agent memory.',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -210,6 +218,7 @@ describe('feature flag registry', () => {
       'agentic-memory': 'off',
       'multiple-cones': 'on',
       'compact-on-idle': 'off',
+      'memory-v2': 'off',
     });
     expect(
       resolveFlags(
@@ -223,6 +232,7 @@ describe('feature flag registry', () => {
       'agentic-memory': 'off',
       'multiple-cones': 'on',
       'compact-on-idle': 'off',
+      'memory-v2': 'off',
     });
   });
 

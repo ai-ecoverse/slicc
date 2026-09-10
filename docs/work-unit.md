@@ -223,7 +223,13 @@ that also do not live in Pi history must take the same reseed hop:
 `toBufferedChatMessages` projects them explicitly, and a rebuild from agent
 state must not overwrite a settled UI-store value — `lickId`/`lickState` on
 sudo-request cards (#3004) overlay from `browser-coding-agent` so a confirmed
-or dismissed glyph cannot revert to pending.
+or dismissed glyph cannot revert to pending. Behind `memory-v2`, a scoop's
+pre-compaction archive lives under `/scoops/<folder>/sessions/<jid>/` (not cone
+`/sessions`); the marker's `transcriptPath` still points at that sandbox
+file. The JID segment isolates drop-then-recreate lifetimes that reuse the
+same folder. Scoop archives are never enrichment-renamed — the live path is
+stable for that registration; a pointer into a deleted scoop is acceptable
+only after `drop_scoop`.
 
 **Error cards are ordinary assistant-role rows, not markers.** A cone-error
 card (`ChatMessage.error` → `<slicc-error-card>`) is something the conversation
