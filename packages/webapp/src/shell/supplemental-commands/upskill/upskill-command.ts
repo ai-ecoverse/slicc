@@ -24,14 +24,10 @@ import { fetchCompanyCatalog } from './catalog/catalog-fetch.js';
 import { createGitHubRequestContext } from './github/github-auth.js';
 import { installFromGitHub, listGitHubSkills, parseGitHubRef } from './github/github-install.js';
 import { fetchRepoZip, stripZipPrefix } from './github/github-zip.js';
-import {
-  formatDiscoveredSkills,
-  formatDiscoveryScope,
-  formatSkillInfo,
-  upskillHelp,
-} from './help.js';
+import { formatSkillInfo, upskillHelp } from './help.js';
 import type { InstallProvenance } from './install-pipeline.js';
 import { installSkillFromZip, runPostInstallHooks } from './install-pipeline.js';
+import { handleUpskillList } from './list.js';
 import { formatProvenance, readProvenance, resolveCommitSha } from './provenance.js';
 import { installRecommendedSkills } from './recommendations.js';
 import { installFromBrowseSh, parseBrowseShRef } from './registries/browse-sh.js';
@@ -245,25 +241,6 @@ function parseUpskillFlags(args: string[]): ParsedUpskillFlags {
     i++;
   }
   return parsed;
-}
-
-async function handleUpskillList(
-  fs: VirtualFS
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const skills = await import('../../../skills/index.js');
-  const discovered = await skills.discoverSkills(fs);
-  if (discovered.length === 0) {
-    return {
-      stdout: `No discoverable local skills found.\n\n${formatDiscoveryScope()}`,
-      stderr: '',
-      exitCode: 0,
-    };
-  }
-  return {
-    stdout: formatDiscoveredSkills(discovered, 'Discoverable local skills'),
-    stderr: '',
-    exitCode: 0,
-  };
 }
 
 async function handleUpskillInfoRead(
@@ -577,7 +554,7 @@ async function dispatchSubcommand(
     case 'upgrade':
       return handleUpskillUpdate(args.slice(1), fs, fetchFn);
     case 'list':
-      return handleUpskillList(fs);
+      return handleUpskillList(args.slice(1), fs, fetchFn);
     case 'info':
     case 'read':
       return handleUpskillInfoRead(args[0], args[1], fs);

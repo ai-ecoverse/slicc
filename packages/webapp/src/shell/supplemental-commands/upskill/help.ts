@@ -77,7 +77,7 @@ Install skills from GitHub repositories, the Tessl registry, or browse.sh.
 
 Commands:
   search <query>             Search registries for skills
-  list                       List discoverable local skills
+  list [--outdated] [--json]  List discoverable local skills
   update [<skill>…]          Re-install skills from their recorded source
   upgrade [<skill>…]         Alias for update
   tabs [--json]              Suggest skills for open browser tabs
@@ -97,6 +97,8 @@ GitHub Installation:
   upskill owner/repo --branch name       Same, using flag syntax
 
 Updating installed skills:
+  upskill list --outdated                Skills a bare update would change
+  upskill list --json                    Machine-readable discovered-skill list
   upskill update                         Update every skill with provenance
   upskill update mixtape                 Update just that skill
   upskill update --dry-run               Report what would change, write nothing
@@ -138,7 +140,8 @@ Options:
   --force                  Overwrite existing skills (keeps dotfiles)
   --dry-run, -n            update only: report changes without writing
   --from <owner>/<repo>    update only: record a source for an unrecorded skill
-  --json                   update only: machine-readable result
+  --outdated               list only: skills a bare update would change
+  --json                   list / update / tabs: machine-readable result
   -h, --help               Show help
 
 GitHub rate limits:
@@ -153,6 +156,7 @@ Examples:
   upskill aemcoder/skills@fix/stateless-tab-targeting --all
   upskill tessl:postgres-pro
   upskill browse:weather.gov/get-forecast-1uezib
+  upskill list --outdated
   upskill update --dry-run
 `,
     stderr: '',
