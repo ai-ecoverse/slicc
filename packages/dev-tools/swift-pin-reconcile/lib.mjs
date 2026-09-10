@@ -74,8 +74,15 @@ export function rangeContains(requirement, version) {
   }
 }
 
-const PROJECT_PIN_RE =
-  /(?:^|\n)([ \t]*)([A-Za-z0-9._-]+):\r?\n\1[ \t]+url:\s*(https:\/\/github\.com\/[^\s]+)\r?\n\1[ \t]+(exactVersion|minorVersion):\s*(\S+)/g;
+// Comments, blank lines, merge keys, and anchors may sit between the xcodegen
+// `packages:` key and `url:` (and between `url:` and the version). Adjacent-
+// only matching dropped those pins while Renovate's url-first custom manager
+// still saw them (Codex review of PR #3014).
+const YML_SKIP_LINE = '(?:\\r?\\n(?:\\1[ \\t]+(?:#.*|<<:\\s*\\S+|&\\S.*)|\\1[ \\t]*))*';
+const PROJECT_PIN_RE = new RegExp(
+  `(?:^|\\n)([ \\t]*)([A-Za-z0-9._-]+):[^\\n]*${YML_SKIP_LINE}\\r?\\n\\1[ \\t]+url:\\s*(https://github\\.com/[^\\s]+)${YML_SKIP_LINE}\\r?\\n\\1[ \\t]+(exactVersion|minorVersion):\\s*(\\S+)`,
+  'g'
+);
 
 /** Pins from a xcodegen `project.yml`. */
 export function parseProjectYmlPins(text, path = 'project.yml') {
@@ -168,6 +175,26 @@ export function dualPinKeys({ projectPins, swiftPins }) {
     if (projectKeys.has(pin.key)) keys.add(pin.key);
   }
   return keys;
+}
+
+/**
+ * Dual-pinned project.yml entries, one per GitHub identity + xcodegen key.
+ * Deduping by identity alone (ios-app and swift-launcher both pin WebRTC)
+ * would drop a renamed `packages:` key and let lint:swift-pins pass while
+ * Renovate still opens an unlabeled PR under the leftover alias.
+ */
+export function collectDualPins({ projectPins, swiftPins }) {
+  const dualKeys = dualPinKeys({ projectPins, swiftPins });
+  const seen = new Set();
+  const dualPins = [];
+  for (const pin of projectPins ?? []) {
+    if (!dualKeys.has(pin.key)) continue;
+    const alias = `${pin.key}\0${(pin.ymlName ?? '').toLowerCase()}`;
+    if (seen.has(alias)) continue;
+    seen.add(alias);
+    dualPins.push(pin);
+  }
+  return dualPins;
 }
 
 /**
@@ -343,9 +370,13 @@ export function checkRenovateSwiftPinSync({ dualPins, renovate }) {
     }
   }
   const missing = [];
+  const missingSeen = new Set();
   for (const pin of pins) {
     for (const name of requiredRenovateNames(pin)) {
-      if (!listed.has(name.toLowerCase())) missing.push(name);
+      const lower = name.toLowerCase();
+      if (listed.has(lower) || missingSeen.has(lower)) continue;
+      missingSeen.add(lower);
+      missing.push(name);
     }
   }
   if (missing.length > 0) {

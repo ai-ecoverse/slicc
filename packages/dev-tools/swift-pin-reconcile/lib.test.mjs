@@ -3,6 +3,7 @@ import {
   applyMismatches,
   checkRenovateSwiftPinSync,
   cmpSemver,
+  collectDualPins,
   commitShaFromTagRef,
   describeMismatch,
   dualPinKeys,
@@ -127,6 +128,25 @@ describe('parsers', () => {
       'GhosttyTerminal:lakr233/libghostty-spm:exactVersion:1.3.2',
       'HuggingFace:huggingface/swift-huggingface:minorVersion:0.9.0',
       'WebRTC:stasel/webrtc:exactVersion:150.0.0',
+    ]);
+  });
+
+  it('keeps a pin when a comment or YAML anchor sits between the key and url', () => {
+    const pins = parseProjectYmlPins(`packages:
+  GhosttyTerminal: &ghostty # wrapper
+    # keep this exact
+    <<: *shared
+    url: https://github.com/Lakr233/libghostty-spm
+    # version
+    exactVersion: 1.5.2
+`);
+    expect(pins).toEqual([
+      expect.objectContaining({
+        ymlName: 'GhosttyTerminal',
+        key: 'lakr233/libghostty-spm',
+        kind: 'exactVersion',
+        version: '1.5.2',
+      }),
     ]);
   });
 
@@ -371,6 +391,40 @@ describe('checkRenovateSwiftPinSync', () => {
     expect(problems[0]).toMatch(/swift-huggingface/);
   });
 
+  it('fails when a second xcodegen alias for the same GitHub identity is missing', () => {
+    const projectPins = [
+      ...dualPins,
+      {
+        ...dualPins.find((p) => p.key === 'stasel/webrtc'),
+        ymlName: 'WebRTCKit',
+        path: 'other.yml',
+      },
+    ];
+    const problems = checkRenovateSwiftPinSync({
+      dualPins: collectDualPins({
+        projectPins,
+        swiftPins: parsePackageSwiftPins(PACKAGE_SWIFT),
+      }),
+      renovate: {
+        packageRules: [
+          {
+            addLabels: [SWIFT_PIN_LABEL],
+            matchPackageNames: [
+              'stasel/WebRTC',
+              'WebRTC',
+              'Lakr233/libghostty-spm',
+              'GhosttyTerminal',
+              'huggingface/swift-huggingface',
+              'HuggingFace',
+            ],
+          },
+        ],
+      },
+    });
+    expect(problems[0]).toMatch(/WebRTCKit/);
+    expect(problems[0]).not.toMatch(/GhosttyTerminal/);
+  });
+
   it('fails when the xcodegen package key is missing (PR #3008 GhosttyTerminal)', () => {
     const problems = checkRenovateSwiftPinSync({
       dualPins,
@@ -415,5 +469,25 @@ describe('renovate name helpers', () => {
       ymlName: 'GhosttyTerminal',
     };
     expect(requiredRenovateNames(ghostty)).toEqual(['Lakr233/libghostty-spm', 'GhosttyTerminal']);
+  });
+});
+
+describe('collectDualPins', () => {
+  it('keeps one entry per identity + xcodegen key, not per identity', () => {
+    const projectPins = [
+      ...parseProjectYmlPins(PROJECT_YML, 'packages/ios-app/project.yml'),
+      ...parseProjectYmlPins(
+        `packages:
+  WebRTCKit:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 150.0.0
+`,
+        'packages/swift-launcher/project.yml'
+      ),
+    ];
+    const swiftPins = parsePackageSwiftPins(PACKAGE_SWIFT);
+    const dual = collectDualPins({ projectPins, swiftPins });
+    const webrtc = dual.filter((p) => p.key === 'stasel/webrtc').map((p) => p.ymlName);
+    expect(webrtc.sort()).toEqual(['WebRTC', 'WebRTCKit']);
   });
 });
