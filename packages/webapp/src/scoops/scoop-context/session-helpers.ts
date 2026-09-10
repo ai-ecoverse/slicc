@@ -38,7 +38,8 @@ export interface SessionHelpersDeps {
   onCompactionStateChange?: (state: CompactionState, detail: CompactionStateDetail) => void;
   /**
    * Pre-compaction transcript snapshot (`scoops/live-session-snapshot.ts`).
-   * Wired for roots only — a scoop's `/sessions` is not its to write.
+   * Roots always wire it into `/sessions`. Scoops wire it behind `memory-v2`
+   * into `/scoops/<folder>/sessions/` — their sandbox, not cone `/sessions`.
    */
   onBeforeCompaction?: CompactionConfig['onBeforeCompaction'];
 }

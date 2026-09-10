@@ -364,10 +364,15 @@ export class ScoopContext {
           this.structuredOutputCaptured = true;
         },
         spawnBashJob: (command) => this.bashJobs.spawn(command),
-        onBeforeCompaction:
-          this.unit.parentId === null
-            ? (messages, trigger) => this.snapshotBeforeCompaction(messages, trigger)
-            : undefined,
+        // Roots always snapshot into `/sessions`. Scoops snapshot into
+        // `/scoops/<folder>/sessions/` only while `memory-v2` is on — the
+        // flag is checked LIVE at each round (same pattern as
+        // `shouldExtractMemories` / agentic-memory), so a mid-session
+        // toggle applies to the next compaction without a re-init.
+        // `/sessions` stays cone-only; scoop archives use the sandbox
+        // grant already present on RestrictedFS.
+        onBeforeCompaction: (messages, trigger) =>
+          this.maybeSnapshotBeforeCompaction(messages, trigger),
       });
 
       if (runtime.kind === 'abandoned') return;
@@ -657,9 +662,21 @@ export class ScoopContext {
   }
 
   /**
-   * Pre-compaction transcript snapshot (`live-session-snapshot.ts`), wired
-   * into the compactor for roots. Lazy-imported: the writer is not on the
-   * boot path, and the worker's eager closure is budgeted.
+   * Gate + write the pre-compaction snapshot. Roots always; scoops only
+   * while `memory-v2` is enabled (checked live each round).
+   */
+  private async maybeSnapshotBeforeCompaction(
+    messages: AgentMessage[],
+    trigger: CompactionTrigger
+  ): Promise<CompactionSnapshot | undefined> {
+    if (this.unit.parentId !== null && !isFeatureEnabled('memory-v2')) return undefined;
+    return this.snapshotBeforeCompaction(messages, trigger);
+  }
+
+  /**
+   * Pre-compaction transcript snapshot (`live-session-snapshot.ts`).
+   * Lazy-imported: the writer is not on the boot path, and the worker's
+   * eager closure is budgeted.
    */
   private async snapshotBeforeCompaction(
     messages: AgentMessage[],
@@ -667,12 +684,15 @@ export class ScoopContext {
   ): Promise<CompactionSnapshot | undefined> {
     if (!this.fs || this.disposed) return undefined;
     const generation = this.sessionGeneration;
-    const { snapshotLiveSession } = await import('./live-session-snapshot.js');
+    const { scoopSessionsDir, snapshotLiveSession } = await import('./live-session-snapshot.js');
+    const isRoot = this.unit.parentId === null;
     const result = await snapshotLiveSession({
       vfs: this.fs,
       cone: { folder: this.scoop.folder, label: this.scoop.assistantLabel },
       messages,
       trigger,
+      // Scoop archives stay inside the sandbox; cone archives keep `/sessions`.
+      ...(isRoot ? {} : { sessionsDir: scoopSessionsDir(this.scoop.folder) }),
       stillValid: () => !this.disposed && generation === this.sessionGeneration,
     });
     return result ? { transcriptPath: result.transcriptPath } : undefined;

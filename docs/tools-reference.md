@@ -680,7 +680,16 @@ read-modify-write — page freezer, enrichment, worker snapshot — runs under o
 (`slicc:sessions-index`, `transcript/frozen-archive-writer.ts` `serializeIndexWrite`), and a
 snapshot re-checks the unit's session generation inside that transaction so a clear that overtook
 it writes nothing. The cursor (`liveThrough`) and round count also ride the archive frontmatter, so
-a corrupt-index rebuild restores them. Scoops write no snapshot.
+a corrupt-index rebuild restores them.
+
+Behind the `memory-v2` feature flag (off by default), scoops get the same pre-compaction snapshot +
+pointer treatment, written under `/scoops/<folder>/sessions/` with a per-sandbox index lock. Cone
+`/sessions` stays cone-only — the scoop's RestrictedFS already grants its sandbox, so no ACL
+widening is required. Scoop archives are never enrichment-renamed (the freezer only touches cone
+`/sessions`); the live `live-*.md` path is therefore the permanent pointer for the scoop's lifetime.
+A pointer into a deleted scoop is acceptable only after `drop_scoop`, which tears down the scoop's
+stores (and, for ephemeral `agent` runs, the sandbox folder). With `memory-v2` off, scoop behavior
+is unchanged (no snapshot, no pointer).
 
 **Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
 `ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after 30 idle minutes and

@@ -1,12 +1,22 @@
 /**
- * Live session snapshot — the transcript a compaction round writes to
- * `/sessions` BEFORE it replaces older messages with a summary.
+ * Live session snapshot — the transcript a compaction round writes BEFORE
+ * it replaces older messages with a summary.
  *
  * A "New chat" freeze used to be the only time a cone's conversation reached
  * `/sessions`; everything a mid-session compaction summarized away was gone
  * for good. Now every round (threshold, overflow recovery, idle) appends to
- * one per-cone archive marked `live: true`, and the summary message carries
+ * one per-unit archive marked `live: true`, and the summary message carries
  * its path so the agent can read what the summary dropped.
+ *
+ * Default root: `/sessions` (cones). Behind `memory-v2`, a scoop writes the
+ * same document shape under its own sandbox at `/scoops/<folder>/sessions/`
+ * — `/sessions` stays cone-only, and the scoop's RestrictedFS already grants
+ * that path, so no ACL widening is required. Scoop archives are never
+ * enrichment-renamed (the freezer only touches cone `/sessions`); the live
+ * path is therefore the permanent pointer for the scoop's lifetime. A
+ * pointer into a deleted scoop is acceptable only after `drop_scoop`, which
+ * tears down the scoop's stores (and, for ephemeral `agent` runs, the
+ * sandbox folder).
  *
  * The archive ACCUMULATES: the agent's history after a round is
  * `[summary, ...kept tail]`, so the next round would re-present the tail.
@@ -17,17 +27,16 @@
  * visible checkpoint.
  *
  * Every write here is ONE index transaction (`serializeIndexWrite`, a Web
- * Lock shared with the page-side freezer): the row is read, the archive is
- * read and rewritten, and the row is written back without another realm's
- * "New chat" interleaving. The caller's `stillValid` guard is consulted
- * inside that transaction, so a snapshot whose session was cleared while it
- * waited for the lock writes nothing instead of resurrecting the chat.
+ * Lock shared with the page-side freezer for cone archives, or a per-sandbox
+ * lock for scoop archives): the row is read, the archive is read and
+ * rewritten, and the row is written back without another realm's "New chat"
+ * interleaving. The caller's `stillValid` guard is consulted inside that
+ * transaction, so a snapshot whose session was cleared while it waited for
+ * the lock writes nothing instead of resurrecting the chat.
  *
  * Same document format as the freezer, via `transcript/frozen-archive-writer`
- * — the rail shows the snapshot like any archive, and "New chat" either
+ * — the rail shows a cone snapshot like any archive, and "New chat" either
  * finishes it (save / skip reuse the entry) or deletes it (erase).
- *
- * Roots only: a scoop has no `/sessions` of its own to write.
  */
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
@@ -49,6 +58,7 @@ import {
   liveSnapshotFilename,
   readSessionsIndexForWrite,
   serializeIndexWrite,
+  sessionsIndexLockFor,
   upsertSessionsIndexEntryUnlocked,
   writeSessionsIndexUnlocked,
 } from '../transcript/frozen-archive-writer.js';
@@ -58,13 +68,23 @@ import type { ChatMessage } from './chat-types.js';
 
 const log = createLogger('live-session-snapshot');
 
+/** Sessions directory for a scoop's private pre-compaction archives. */
+export function scoopSessionsDir(folder: string): string {
+  return `/scoops/${folder}/sessions`;
+}
+
 export interface SnapshotLiveSessionDeps {
   vfs: ArchiveVfs;
-  /** Cone the conversation belongs to; `label` is recorded for extra cones only. */
+  /** Unit the conversation belongs to; `label` is recorded for extra cones only. */
   cone: { folder: string; label?: string };
   /** The agent's history as the model last saw it — pre-elision, pre-summary. */
   messages: readonly AgentMessage[];
   trigger: CompactionTrigger;
+  /**
+   * Where archives and the index live. Defaults to cone `/sessions`. Scoops
+   * pass {@link scoopSessionsDir} so the write stays inside their sandbox.
+   */
+  sessionsDir?: string;
   /**
    * Consulted INSIDE the index transaction, right before anything is
    * written. `false` means the session this history belongs to is gone
@@ -85,7 +105,7 @@ export interface LiveSessionSnapshotResult {
 }
 
 /**
- * Write (or extend) the cone's live snapshot with everything in `messages`
+ * Write (or extend) the unit's live snapshot with everything in `messages`
  * that is not on disk yet. Returns `null` when `stillValid` said no. Throws
  * on a VFS fault — the compaction core catches and continues without a
  * pointer.
@@ -94,6 +114,7 @@ export function snapshotLiveSession(
   deps: SnapshotLiveSessionDeps
 ): Promise<LiveSessionSnapshotResult | null> {
   const folder = deps.cone.folder || PRIMARY_CONE_FOLDER;
+  const sessionsDir = deps.sessionsDir ?? SESSIONS_DIR;
   // The projection is pure and can be expensive on a long history: do it
   // before taking the lock so the transaction itself stays short. Uncapped:
   // this is the archive of record for what compaction is about to drop, and
@@ -106,24 +127,26 @@ export function snapshotLiveSession(
     if (deps.stillValid && !deps.stillValid()) {
       log.info('Live session snapshot skipped: session gone before the write', {
         cone: folder,
+        sessionsDir,
         trigger: deps.trigger,
       });
       return null;
     }
-    return writeSnapshot(deps, folder, chat);
-  });
+    return writeSnapshot(deps, folder, sessionsDir, chat);
+  }, sessionsIndexLockFor(sessionsDir));
 }
 
 /** The transaction body: read the row and the archive, merge, write both. Lock held. */
 async function writeSnapshot(
   deps: SnapshotLiveSessionDeps,
   folder: string,
+  sessionsDir: string,
   chat: ChatMessage[]
 ): Promise<LiveSessionSnapshotResult> {
   const now = deps.now ?? Date.now;
-  const entries = await readSessionsIndexForWrite(deps.vfs);
+  const entries = await readSessionsIndexForWrite(deps.vfs, sessionsDir);
   const existing = findLiveSnapshotEntry(entries, folder);
-  const prior = existing ? await readSnapshotMessages(deps.vfs, existing) : null;
+  const prior = existing ? await readSnapshotMessages(deps.vfs, sessionsDir, existing) : null;
   // A live row whose archive vanished starts over from the full history:
   // its cursor would otherwise skip everything the lost file held.
   const cursor = prior === null ? 0 : (existing?.liveThrough ?? newestTimestamp(prior));
@@ -165,19 +188,21 @@ async function writeSnapshot(
     compactions,
   };
 
-  await ensureSessionsDir(deps.vfs);
-  await deps.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, formatArchiveAsMarkdown(archive));
-  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry);
+  await ensureSessionsDir(deps.vfs, sessionsDir);
+  const transcriptPath = `${sessionsDir}/${filename}`;
+  await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
+  await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
   await deps.vfs.flush();
   log.info('Live session snapshot written', {
     cone: folder,
+    sessionsDir,
     filename,
     trigger: deps.trigger,
     appended: fresh.length,
     total: merged.length,
     compactions,
   });
-  return { transcriptPath: `${SESSIONS_DIR}/${filename}`, entry, appended: fresh.length };
+  return { transcriptPath, entry, appended: fresh.length };
 }
 
 /**
@@ -185,6 +210,8 @@ async function writeSnapshot(
  * session ended WITHOUT going through the freezer (a bare `clear-chat`), so
  * the transcript is complete as written and the boot catch-up may enrich
  * its title like any quick-freeze draft. Nothing to do when there is none.
+ *
+ * Cone `/sessions` only — scoop sandboxes are not freezer-managed.
  */
 export function finalizeLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promise<boolean> {
   const folder = coneFolder || PRIMARY_CONE_FOLDER;
@@ -209,6 +236,8 @@ export function finalizeLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promi
  * Delete a cone's live snapshot — file and row — inside one transaction.
  * The "erase" half of "New chat", run in the kernel so it is ordered with
  * the snapshot writer instead of racing it from the page.
+ *
+ * Cone `/sessions` only — scoop sandboxes are not freezer-managed.
  */
 export function discardLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promise<number> {
   const folder = coneFolder || PRIMARY_CONE_FOLDER;
@@ -266,10 +295,11 @@ function newestTimestamp(messages: readonly ChatMessage[]): number {
  */
 async function readSnapshotMessages(
   vfs: ArchiveVfs,
+  sessionsDir: string,
   entry: FrozenSessionIndexEntry
 ): Promise<ChatMessage[] | null> {
   try {
-    const raw = await vfs.readFile(`${SESSIONS_DIR}/${entry.filename}`, { encoding: 'utf-8' });
+    const raw = await vfs.readFile(`${sessionsDir}/${entry.filename}`, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     return parseFrozenArchive(text).messages;
   } catch (err) {
@@ -278,6 +308,7 @@ async function readSnapshotMessages(
     // history the agent still holds rather than continue from a cursor that
     // now points past messages nobody has.
     log.warn('Live snapshot archive missing; rewriting from the agent history', {
+      sessionsDir,
       filename: entry.filename,
     });
     return null;
