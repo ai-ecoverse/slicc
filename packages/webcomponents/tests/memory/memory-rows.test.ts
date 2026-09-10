@@ -121,6 +121,20 @@ describe('parseMemoryRows', () => {
   });
 });
 
+describe('fixtureRenderMarkdown', () => {
+  it('turns markdown links into anchors and drops javascript: hrefs', () => {
+    const html = fixtureRenderMarkdown(
+      'See [the synthetic reference](https://example.invalid/reference) and [xss](javascript:alert(1)).'
+    );
+    expect(html).toContain(
+      '<a href="https://example.invalid/reference" target="_blank" rel="noopener noreferrer">the synthetic reference</a>'
+    );
+    expect(html).toContain('xss');
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).not.toContain('href="javascript:');
+  });
+});
+
 describe('createMemoryRows', () => {
   it('builds slicc-memrow cards with heading, section, and rich title', () => {
     const rows = createMemoryRows(
@@ -135,6 +149,16 @@ describe('createMemoryRows', () => {
     expect(rows[0].getAttribute('tag')).toBe('feedback');
     expect(rows[0].querySelector('strong')?.textContent).toBe('Remember');
     expect(rows[0].querySelector('code')?.textContent).toBe('milk');
+  });
+
+  it('renders the synthetic fixture link as an anchor', () => {
+    const rows = createMemoryRows(SYNTHETIC_MEMORY_MARKDOWN, fixtureRenderMarkdown);
+    document.body.append(...rows);
+    const link = rows
+      .map((row) => row.querySelector('a'))
+      .find((anchor) => anchor?.textContent === 'the synthetic reference');
+    expect(link?.getAttribute('href')).toBe('https://example.invalid/reference');
+    expect(link?.getAttribute('target')).toBe('_blank');
   });
 
   it('escapes raw HTML in the fixture renderer', () => {
