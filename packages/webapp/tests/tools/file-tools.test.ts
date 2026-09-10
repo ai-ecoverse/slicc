@@ -7,7 +7,8 @@ import {
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import 'fake-indexeddb/auto';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { VirtualFS } from '../../src/fs/index.js';
+import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
+import { DEV_NULL } from '../../src/fs/virtual-device-paths.js';
 import { createFileTools } from '../../src/tools/file-tools.js';
 import type { ToolDefinition } from '../../src/tools/types.js';
 
@@ -40,11 +41,95 @@ describe('File Tools', () => {
       const result = await writeFile.execute({ path: '/hello.txt', content: 'Hello!' });
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('/hello.txt');
+      // Durability: the success string must mean a subsequent reader can see it.
+      await expect(fs.readTextFile('/hello.txt')).resolves.toBe('Hello!');
     });
 
     it('creates parent directories', async () => {
       const result = await writeFile.execute({ path: '/a/b/c.txt', content: 'deep' });
       expect(result.isError).toBeFalsy();
+      await expect(fs.readTextFile('/a/b/c.txt')).resolves.toBe('deep');
+    });
+
+    it('returns isError when writeFile resolves but the path is not readable', async () => {
+      // Repro of the live durability lie: write_file said "File written:" while
+      // an immediate follow-up on the same path saw ENOENT. Force that window
+      // by making writeFile a no-op success.
+      fs.writeFile = async () => {};
+      const result = await writeFile.execute({ path: '/phantom.txt', content: 'never landed' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toContain('/phantom.txt');
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('returns isError when indexed stat looks fine but readback fails (OPFS split-brain)', async () => {
+      // ZenFS can answer stat from the in-memory index while OPFS has no file —
+      // the exact failure verifyWriteLanded must not trust metadata for.
+      const realWrite = fs.writeFile.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+      };
+      fs.stat = async () => ({ type: 'file', size: 12, mtime: 0, ctime: 0 });
+      fs.readTextFile = async () => {
+        throw new Error("ENOENT: no such file or directory, open '/ghost.txt'");
+      };
+      const result = await writeFile.execute({ path: '/ghost.txt', content: 'never landed' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toMatch(/not readable|ENOENT/);
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('returns isError when writeFile resolves but content does not match', async () => {
+      const realWrite = fs.writeFile.bind(fs);
+      fs.writeFile = async (path: string) => {
+        // Land a truncated file — writeFile "succeeded" but content did not.
+        await realWrite(path, 'x');
+      };
+      const result = await writeFile.execute({ path: '/trunc.txt', content: 'expected-full' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/content mismatch/);
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('succeeds when stat size diverges from content length but readback matches', async () => {
+      // AEM Source Bus reports compressed listing size; /dev/null stats as 0.
+      // Durability must not require universal stat-size equality.
+      const realWrite = fs.writeFile.bind(fs);
+      const realRead = fs.readTextFile.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+      };
+      fs.stat = async () => ({ type: 'file', size: 999999, mtime: 0, ctime: 0 });
+      fs.readTextFile = async (path: string) => realRead(path);
+      const result = await writeFile.execute({ path: '/aem-like.txt', content: 'payload' });
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('File written:');
+      await expect(realRead('/aem-like.txt')).resolves.toBe('payload');
+    });
+
+    it('propagates writeFile failures without a success string', async () => {
+      fs.writeFile = async () => {
+        throw new Error('EACCES: permission denied, write /locked.txt');
+      };
+      const result = await writeFile.execute({ path: '/locked.txt', content: 'nope' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/EACCES|permission denied/);
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('accepts nonempty writes to /dev/null without a false durability error', async () => {
+      const rfs = new RestrictedFS(fs, ['/workspace']);
+      const [nullWrite] = createFileTools(rfs as unknown as VirtualFS).filter(
+        (t) => t.name === 'write_file'
+      );
+      const result = await nullWrite.execute({
+        path: DEV_NULL,
+        content: 'discarded-but-accepted',
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toBe(`File written: ${DEV_NULL}`);
     });
   });
 
@@ -255,6 +340,25 @@ describe('File Tools', () => {
       });
       expect(result.isError).toBe(true);
       expect(result.content).toContain('2 times');
+    });
+
+    it('returns isError when the edit write resolves but the file vanishes', async () => {
+      await fs.writeFile('/edit-gone.txt', 'before');
+      const realWrite = fs.writeFile.bind(fs);
+      const realRm = fs.rm.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+        await realRm(path);
+      };
+      const result = await editFile.execute({
+        path: '/edit-gone.txt',
+        old_string: 'before',
+        new_string: 'after',
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toMatch(/not readable|ENOENT|no such file/i);
+      expect(result.content).not.toContain('File edited:');
     });
   });
 });

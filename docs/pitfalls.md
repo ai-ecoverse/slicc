@@ -658,6 +658,18 @@ enforced by `patches/@zenfs+dom+*.patch`:
   mechanism behind the long-standing "phantom deletions" in `/workspace`
   (files a `git` checkout reports as deleted that will not go away).
 
+**`write_file` must not trust `writeFile` resolving alone.** The agent tool
+(`packages/webapp/src/tools/file-tools.ts`) reads the path back and compares
+content after every write/edit before returning `File written:` / `File edited:`.
+Indexed `stat`/`size` is insufficient: ZenFS can answer from the in-memory index
+while OPFS has no file (`docs/pitfalls.md` above), and some backends report sizes
+that are not logical content length (AEM compressed listings; `/dev/null` is
+always size 0). A live instance observed `File written:` followed by `wc`
+reporting ENOENT on the same path — a success string that lies about durability
+breaks every memory design that depends on the file. Fail closed with
+`Write did not land: …` instead. Full readback is capped at 256 KiB (larger
+writes sample length + head/tail); sink devices skip readback by design.
+
 **Concurrent reads are only as safe as the inode numbers.** ZenFS keys its
 vnode cache by `ino`, and every vnode owns a sparse data cache. Two paths whose
 inodes share an ino while both are open therefore share one vnode — and the

@@ -15,9 +15,23 @@ import {
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { normalizePath } from '../fs/path-utils.js';
+import { isNoOpWriteDevicePath } from '../fs/virtual-device-paths.js';
 import type { ToolDefinition, ToolResult } from './types.js';
 
 const log = createLogger('tool:fs');
+
+/**
+ * Full content readback for durability checks at or below this UTF-16 length.
+ * Larger writes compare length + a head/tail sample instead of a second full
+ * copy — agent payloads are usually small; multi-MB writes should not double
+ * peak memory. Middle-of-file corruption on huge writes can slip past the
+ * sample (documented tradeoff).
+ */
+const VERIFY_FULL_READBACK_MAX_CHARS = 256 * 1024;
+
+/** Head/tail sample size for oversized durability checks. */
+const VERIFY_SAMPLE_CHARS = 4096;
 
 /**
  * Arguments for `read_file` — its `inputSchema` is the contract. Values arrive
@@ -51,6 +65,60 @@ export interface EditFileInput {
 /** Create all file tools bound to a VirtualFS instance. */
 export function createFileTools(fs: VirtualFS): ToolDefinition[] {
   return [createReadFileTool(fs), createWriteFileTool(fs), createEditFileTool(fs)];
+}
+
+/**
+ * Confirm a write actually landed before telling the agent it succeeded.
+ *
+ * `writeFile` resolving is not enough: ZenFS/OPFS can update an in-memory index
+ * (or a mount backend can ack) while a subsequent reader still sees ENOENT —
+ * the live failure mode where `write_file` returned `File written:` and an
+ * immediate `wc` on the same path reported "No such file or directory".
+ * Indexed `stat`/`size` cannot catch that split-brain (and is wrong for
+ * targets whose reported size is not logical content length — AEM compressed
+ * listings, `/dev/null`). Read the path back and compare readable content.
+ *
+ * No-op sink devices (`/dev/null`) discard the payload by design: once
+ * `writeFile` resolves, there is nothing durable to read — skip readback.
+ *
+ * @returns `null` when readable content matches (or the path is a sink);
+ * otherwise an error message suitable for `ToolResult.content`.
+ */
+async function verifyWriteLanded(
+  fs: VirtualFS,
+  path: string,
+  content: string
+): Promise<string | null> {
+  if (isNoOpWriteDevicePath(normalizePath(path))) {
+    return null;
+  }
+  try {
+    const readBack = await fs.readTextFile(path);
+    if (content.length <= VERIFY_FULL_READBACK_MAX_CHARS) {
+      if (readBack !== content) {
+        return (
+          `Write did not land: ${path} content mismatch ` +
+          `(expected ${content.length} chars, got ${readBack.length})`
+        );
+      }
+      return null;
+    }
+    // Oversized: length + head/tail samples (see VERIFY_FULL_READBACK_MAX_CHARS).
+    if (readBack.length !== content.length) {
+      return (
+        `Write did not land: ${path} content mismatch ` +
+        `(expected ${content.length} chars, got ${readBack.length})`
+      );
+    }
+    const n = VERIFY_SAMPLE_CHARS;
+    if (readBack.slice(0, n) !== content.slice(0, n) || readBack.slice(-n) !== content.slice(-n)) {
+      return `Write did not land: ${path} content mismatch (head/tail sample)`;
+    }
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return `Write did not land: ${path} is not readable (${message})`;
+  }
 }
 
 /**
@@ -194,6 +262,11 @@ function createWriteFileTool(fs: VirtualFS): ToolDefinition {
 
       try {
         await fs.writeFile(path, content);
+        const durabilityError = await verifyWriteLanded(fs, path, content);
+        if (durabilityError) {
+          log.error('Write durability check failed', { path, error: durabilityError });
+          return { content: durabilityError, isError: true };
+        }
         return { content: `File written: ${path}` };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -252,6 +325,11 @@ function createEditFileTool(fs: VirtualFS): ToolDefinition {
 
         const newContent = content.replace(oldString, newString);
         await fs.writeFile(path, newContent);
+        const durabilityError = await verifyWriteLanded(fs, path, newContent);
+        if (durabilityError) {
+          log.error('Edit durability check failed', { path, error: durabilityError });
+          return { content: durabilityError, isError: true };
+        }
         return { content: `File edited: ${path}` };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
