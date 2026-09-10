@@ -30,7 +30,7 @@ import type { ChatMessage } from '../scoops/chat-types.js';
 import { processTranscriptAttachments } from './attachments.js';
 import type { TranscriptCollectionDeps } from './collect.js';
 import { collectActiveTranscriptSources } from './collect.js';
-import { parseFrozenArchive, readSessionsIndex } from './frozen-archive-format.js';
+import { loadFrozenArchive, readSessionsIndex } from './frozen-archive-format.js';
 import { type NormalizedTranscript, normalizeConversations } from './normalize.js';
 import { type KnownSecretBatchRedactor, redactTranscript } from './redact.js';
 import type { SanitizedTranscriptSnapshot } from './snapshot-store.js';
@@ -457,8 +457,8 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       throw new TranscriptExportError('session-not-found');
     }
 
-    // Parse the frozen archive.
-    const { title, messages } = parseFrozenArchive(markdown);
+    // Parse the frozen archive (resolves Memory v2 JSONL sidecars).
+    const { title, messages } = await loadFrozenArchive(this.deps.vfs, markdown, entry.filename);
 
     // Build a partial TranscriptDocumentV1 from UI ChatMessages.
     const convId = 'legacy-cone';

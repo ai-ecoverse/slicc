@@ -145,16 +145,29 @@ export function rewriteTranscriptPointers(
   return content.split(fromPath).join(toPath);
 }
 
+export interface FormatArchiveOptions {
+  /**
+   * Memory v2: omit the HTML-commented JSON block and point at a JSONL
+   * sidecar instead. Grep over the markdown then sees prose only. The
+   * sidecar filename is recorded in frontmatter as `sidecar:`.
+   */
+  sidecarFilename?: string;
+}
+
 /**
  * Render the archive as markdown. The frontmatter carries scalar
  * metadata; an HTML-commented JSON block carries the full structured
  * message list (toolCalls, attachments, source, channel, timestamps)
  * so the read-only chat-panel view can render with the same fidelity
- * as a live scoop. The visible markdown body below is what the chat
- * panel's "copy chat history" long-press produces — that part stays
- * human-readable.
+ * as a live scoop — unless {@link FormatArchiveOptions.sidecarFilename}
+ * is set, in which case the structured data lives in the JSONL sidecar
+ * and the markdown stays prose-only (Memory v2). The visible markdown
+ * body is what the chat panel's "copy chat history" long-press produces.
  */
-export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
+export function formatArchiveAsMarkdown(
+  archive: FrozenSessionArchive,
+  options: FormatArchiveOptions = {}
+): string {
   const usageFrontmatter =
     (archive.cost ? `cost: ${JSON.stringify(archive.cost)}\n` : '') +
     (archive.models ? `models: ${JSON.stringify(archive.models)}\n` : '');
@@ -174,7 +187,8 @@ export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     // cursor back, or the next round re-appends the kept tail.
     (archive.live ? `live: true\n` : '') +
     (archive.live && archive.liveThrough ? `liveThrough: ${archive.liveThrough}\n` : '') +
-    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '');
+    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '') +
+    (options.sidecarFilename ? `sidecar: ${options.sidecarFilename}\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
@@ -186,10 +200,14 @@ export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     usageFrontmatter +
     coneFrontmatter +
     `---\n\n`;
+  const title = `# ${archive.title}\n\n`;
+  if (options.sidecarFilename) {
+    // Prose only — machine-readable messages are in the sidecar.
+    return header + title + formatChatForClipboard(archive.messages);
+  }
   // Escape the only sequence that would prematurely close an HTML comment.
   const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
   const dataBlock = `${SESSION_DATA_START}${dataJson}${SESSION_DATA_END}\n\n`;
-  const title = `# ${archive.title}\n\n`;
   return header + dataBlock + title + formatChatForClipboard(archive.messages);
 }
 
@@ -205,6 +223,29 @@ export function sessionsIndexPathFor(sessionsDir: string): string {
  */
 export function sessionsIndexLockFor(sessionsDir: string): string {
   return sessionsDir === SESSIONS_DIR ? SESSIONS_INDEX_LOCK : `slicc:sessions-index:${sessionsDir}`;
+}
+
+/**
+ * Write the markdown archive and, when Memory v2 is requested, its JSONL
+ * sidecar. Returns the markdown path.
+ */
+export async function writeArchiveBundle(
+  vfs: ArchiveVfs,
+  filename: string,
+  archive: FrozenSessionArchive,
+  options: { sidecar?: boolean } = {}
+): Promise<{ markdownPath: string; sidecarPath?: string }> {
+  const { writeSessionJsonl, sidecarFilenameForArchive } = await import('./session-jsonl.js');
+  const markdownPath = `${SESSIONS_DIR}/${filename}`;
+  if (options.sidecar) {
+    const sidecarFilename = sidecarFilenameForArchive(filename);
+    const markdown = formatArchiveAsMarkdown(archive, { sidecarFilename });
+    await vfs.writeFile(markdownPath, markdown);
+    const sidecarPath = await writeSessionJsonl(vfs, filename, stripEphemeral(archive.messages));
+    return { markdownPath, sidecarPath };
+  }
+  await vfs.writeFile(markdownPath, formatArchiveAsMarkdown(archive));
+  return { markdownPath };
 }
 
 export async function ensureSessionsDir(

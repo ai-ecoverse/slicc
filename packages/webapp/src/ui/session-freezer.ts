@@ -28,6 +28,7 @@ import {
   COMPACTION_TITLE_INSTRUCTION,
   runOneOffCompactionCall,
 } from '../core/context-compaction.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
@@ -48,14 +49,13 @@ import type {
 } from '../transcript/frozen-archive-format.js';
 import {
   frozenSessionPath,
-  parseFrozenArchive,
+  loadFrozenArchive,
   readSessionsIndex,
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import {
   findLiveSnapshotEntry,
-  formatArchiveAsMarkdown,
   heuristicTitle,
   isDraftArchiveFilename,
   readSessionsIndexForWrite,
@@ -64,7 +64,9 @@ import {
   shortId,
   slugify,
   upsertSessionsIndexEntry,
+  writeArchiveBundle,
 } from '../transcript/frozen-archive-writer.js';
+import { renameSessionJsonl, sidecarPathForArchive } from '../transcript/session-jsonl.js';
 import { workspaceFor } from '../work-unit/descriptor.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import type { ChatMessage, Session } from './types.js';
@@ -481,8 +483,9 @@ async function writeFrozenArchive(
       ...provenance,
       ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
     };
-    const archiveMarkdown = formatArchiveAsMarkdown(archive);
-    await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
+    await writeArchiveBundle(opts.vfs, filename, archive, {
+      sidecar: isFeatureEnabled('memory-v2'),
+    });
     await upsertSessionsIndexEntry(opts.vfs, indexEntry);
     // The WC new-session flow clears the chat in-place (no `location.reload()`),
     // but the OPFS backend still persists on its own debounce; force a flush so
@@ -946,7 +949,7 @@ export async function enrichPendingSession(
   }
   const archiveContent = await readPendingArchive(vfs, entry);
   if (archiveContent === null) return null;
-  const agentMessages = recoverPendingMessages(entry, archiveContent);
+  const agentMessages = await recoverPendingMessages(vfs, entry, archiveContent);
   if (agentMessages === null) return null;
   // #1989: the agentic background pass clears `memoryPending` only AFTER
   // the curator's rewrite lands — a tab dying between the two leaves a
@@ -1094,13 +1097,14 @@ async function readPendingArchive(
 }
 
 /** Enrichment step 3 — recover the messages so the LLM calls can re-run. */
-function recoverPendingMessages(
+async function recoverPendingMessages(
+  vfs: LocalVfsClient,
   entry: FrozenSessionIndexEntry,
   archiveContent: string
-): AgentMessage[] | null {
+): Promise<AgentMessage[] | null> {
   let messages: ChatMessage[];
   try {
-    messages = parseFrozenArchive(archiveContent).messages;
+    messages = (await loadFrozenArchive(vfs, archiveContent, entry.filename)).messages;
   } catch (err) {
     log.warn('Failed to parse pending archive — leaving entry intact', {
       filename: entry.filename,
@@ -1277,9 +1281,20 @@ async function commitEnrichedArchive(
       await ensureDir(vfs, SESSIONS_DIR);
       // Title first, then pointer rewrite: the summary sentence and every
       // marker.transcriptPath still name `oldPath` until the file moves.
+      // Also rewrite any JSONL sidecar path references (Memory v2).
       const titled = rewriteArchiveTitle(archiveContent, resolvedTitle);
-      const rewritten = rewriteTranscriptPointers(titled, oldPath, newPath);
+      const oldSidecar = sidecarPathForArchive(entry.filename);
+      const newSidecar = sidecarPathForArchive(newFilename);
+      let rewritten = rewriteTranscriptPointers(titled, oldPath, newPath);
+      rewritten = rewriteTranscriptPointers(rewritten, oldSidecar, newSidecar);
+      // Keep frontmatter `sidecar:` basename in sync with the renamed file.
+      if (oldSidecar !== newSidecar) {
+        const oldBase = oldSidecar.slice(oldSidecar.lastIndexOf('/') + 1);
+        const newBase = newSidecar.slice(newSidecar.lastIndexOf('/') + 1);
+        rewritten = rewritten.split(`sidecar: ${oldBase}`).join(`sidecar: ${newBase}`);
+      }
       await vfs.writeFile(newPath, rewritten);
+      await renameSessionJsonl(vfs, entry.filename, newFilename);
     } catch (err) {
       log.warn('Enrichment write failed (entry stays pending)', {
         filename: entry.filename,

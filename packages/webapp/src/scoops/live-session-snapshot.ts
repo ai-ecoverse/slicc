@@ -45,11 +45,12 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { createLogger } from '../base/logger.js';
 import type { CompactionTrigger } from '../core/context-compaction.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import { FsError } from '../fs/types.js';
 import {
   type FrozenSessionArchive,
   type FrozenSessionIndexEntry,
-  parseFrozenArchive,
+  loadFrozenArchive,
   SESSIONS_DIR,
 } from '../transcript/frozen-archive-format.js';
 import {
@@ -63,6 +64,7 @@ import {
   serializeIndexWrite,
   sessionsIndexLockFor,
   upsertSessionsIndexEntryUnlocked,
+  writeArchiveBundle,
   writeSessionsIndexUnlocked,
 } from '../transcript/frozen-archive-writer.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
@@ -201,7 +203,14 @@ async function writeSnapshot(
 
   await ensureSessionsDir(deps.vfs, sessionsDir);
   const transcriptPath = `${sessionsDir}/${filename}`;
-  await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
+  if (sessionsDir === SESSIONS_DIR) {
+    await writeArchiveBundle(deps.vfs, filename, archive, {
+      sidecar: isFeatureEnabled('memory-v2'),
+    });
+  } else {
+    // Scoop sandbox: markdown only — the search sidecar/index is cone-scoped.
+    await deps.vfs.writeFile(transcriptPath, formatArchiveAsMarkdown(archive));
+  }
   await upsertSessionsIndexEntryUnlocked(deps.vfs, entry, sessionsDir);
   await deps.vfs.flush();
   log.info('Live session snapshot written', {
@@ -268,6 +277,9 @@ export function discardLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promis
       } catch (err) {
         if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
       }
+      // Dynamic: session-jsonl stays out of the worker first-load eager graph.
+      const { removeSessionJsonl } = await import('../transcript/session-jsonl.js');
+      await removeSessionJsonl(vfs, entry.filename);
     }
     await vfs.flush();
     log.info('Live session snapshot discarded', { cone: folder, removed: removed.length });
@@ -312,7 +324,7 @@ async function readSnapshotMessages(
   try {
     const raw = await vfs.readFile(`${sessionsDir}/${entry.filename}`, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseFrozenArchive(text).messages;
+    return (await loadFrozenArchive(vfs, text, entry.filename)).messages;
   } catch (err) {
     if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
     // The row survived without its file: rewrite the archive from the whole

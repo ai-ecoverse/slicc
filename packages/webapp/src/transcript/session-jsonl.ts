@@ -1,0 +1,279 @@
+/**
+ * Session JSONL sidecar — machine-readable archive companion.
+ *
+ * When Memory v2 is on, `/sessions/<name>.md` stays prose-only (grep-safe)
+ * and the structured messages live beside it as `<name>.jsonl`: one
+ * pi-ai-shaped message per line. Legacy archives keep the HTML-commented
+ * JSON block inside the markdown; this module only writes/reads the split
+ * form.
+ */
+
+import type { ChatMessage, ToolCall } from '@slicc/shared-ts';
+import { FsError } from '../fs/types.js';
+import { SESSIONS_DIR } from './frozen-archive-format.js';
+
+/** Text content block matching pi-ai's `TextContent`. */
+export interface SessionJsonlTextContent {
+  type: 'text';
+  text: string;
+}
+
+/** Tool-call content block matching pi-ai's toolCall shape (arguments object). */
+export interface SessionJsonlToolCallContent {
+  type: 'toolCall';
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+export type SessionJsonlContent = SessionJsonlTextContent | SessionJsonlToolCallContent;
+
+/**
+ * One JSONL line. Mirrors pi-ai `Message` roles so agents and tools can
+ * round-trip without the ChatMessage tool-call flattening.
+ */
+export interface SessionJsonlMessage {
+  role: 'user' | 'assistant' | 'toolResult';
+  content: SessionJsonlContent[] | string;
+  id?: string;
+  timestamp?: number;
+  toolCallId?: string;
+  isError?: boolean;
+  source?: string;
+  channel?: string;
+  compaction?: ChatMessage['compaction'];
+}
+
+/** Minimal read surface for loading a JSONL sidecar. */
+export interface SessionJsonlReader {
+  readFile(path: string, options: { encoding: 'utf-8' }): Promise<string | Uint8Array>;
+}
+
+/** VFS surface needed to read/write a sidecar next to an archive. */
+export interface SessionJsonlVfs extends SessionJsonlReader {
+  writeFile(path: string, content: string): Promise<void>;
+  rm(path: string, options?: { recursive?: boolean }): Promise<void>;
+}
+
+/** `/sessions/foo.md` → `/sessions/foo.jsonl`. */
+export function sidecarPathForArchive(archivePathOrFilename: string): string {
+  const base = archivePathOrFilename.endsWith('.md')
+    ? archivePathOrFilename.slice(0, -3)
+    : archivePathOrFilename.replace(/\.md$/i, '');
+  const withExt = `${base}.jsonl`;
+  return withExt.startsWith('/') ? withExt : `${SESSIONS_DIR}/${withExt}`;
+}
+
+/** Filename only (`foo.jsonl`) for frontmatter. */
+export function sidecarFilenameForArchive(archiveFilename: string): string {
+  return archiveFilename.replace(/\.md$/i, '.jsonl');
+}
+
+/** Serialize ChatMessage[] to pi-ai-shaped JSONL (one message per line). */
+export function chatMessagesToJsonl(messages: readonly ChatMessage[]): string {
+  const lines: string[] = [];
+  for (const message of messages) {
+    for (const line of expandChatMessage(message)) {
+      lines.push(JSON.stringify(line));
+    }
+  }
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
+}
+
+/** Parse JSONL back into ChatMessage[] (toolCall + toolResult collapsed). */
+export function jsonlToChatMessages(jsonl: string): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let lastAssistant: ChatMessage | null = null;
+  for (const rawLine of jsonl.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parsed = parseJsonlLine(line);
+    if (!parsed) continue;
+    if (parsed.role === 'user') {
+      out.push(userFromJsonl(parsed));
+      lastAssistant = null;
+    } else if (parsed.role === 'assistant') {
+      const chat = assistantFromJsonl(parsed);
+      out.push(chat);
+      lastAssistant = chat;
+    } else if (parsed.role === 'toolResult') {
+      attachToolResult(lastAssistant, parsed);
+    }
+  }
+  return out;
+}
+
+function parseJsonlLine(line: string): SessionJsonlMessage | null {
+  try {
+    return JSON.parse(line) as SessionJsonlMessage;
+  } catch {
+    return null;
+  }
+}
+
+function userFromJsonl(parsed: SessionJsonlMessage): ChatMessage {
+  return {
+    id: parsed.id ?? fallbackId('u'),
+    role: 'user',
+    content: contentToText(parsed.content),
+    timestamp: parsed.timestamp ?? 0,
+    ...(parsed.source ? { source: parsed.source } : {}),
+    ...(parsed.channel ? { channel: parsed.channel } : {}),
+  };
+}
+
+function assistantFromJsonl(parsed: SessionJsonlMessage): ChatMessage {
+  const toolCalls = extractToolCalls(parsed.content);
+  return {
+    id: parsed.id ?? fallbackId('a'),
+    role: 'assistant',
+    content: contentToText(parsed.content),
+    timestamp: parsed.timestamp ?? 0,
+    ...(toolCalls.length ? { toolCalls } : {}),
+    ...(parsed.source ? { source: parsed.source } : {}),
+    ...(parsed.compaction ? { compaction: parsed.compaction } : {}),
+  };
+}
+
+function attachToolResult(lastAssistant: ChatMessage | null, parsed: SessionJsonlMessage): void {
+  if (!parsed.toolCallId || !lastAssistant?.toolCalls) return;
+  const match = lastAssistant.toolCalls.find((tc) => tc.id === parsed.toolCallId);
+  if (!match) return;
+  match.result = contentToText(parsed.content);
+  if (parsed.isError) match.isError = true;
+}
+
+export async function writeSessionJsonl(
+  vfs: SessionJsonlVfs,
+  archiveFilename: string,
+  messages: readonly ChatMessage[]
+): Promise<string> {
+  const path = sidecarPathForArchive(archiveFilename);
+  await vfs.writeFile(path, chatMessagesToJsonl(messages));
+  return path;
+}
+
+export async function readSessionJsonl(
+  vfs: SessionJsonlReader,
+  archiveFilenameOrPath: string
+): Promise<ChatMessage[] | null> {
+  const path = sidecarPathForArchive(archiveFilenameOrPath);
+  try {
+    const raw = await vfs.readFile(path, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    return jsonlToChatMessages(text);
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+export async function removeSessionJsonl(
+  vfs: SessionJsonlVfs,
+  archiveFilenameOrPath: string
+): Promise<void> {
+  const path = sidecarPathForArchive(archiveFilenameOrPath);
+  try {
+    await vfs.rm(path);
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return;
+    throw err;
+  }
+}
+
+/**
+ * Rename a sidecar with the archive. No-op when the source is missing.
+ * Callers that already rewrote markdown pointers should also rewrite any
+ * embedded `.jsonl` paths via {@link rewriteTranscriptPointers}.
+ */
+export async function renameSessionJsonl(
+  vfs: SessionJsonlVfs,
+  fromArchiveFilename: string,
+  toArchiveFilename: string
+): Promise<void> {
+  if (fromArchiveFilename === toArchiveFilename) return;
+  const from = sidecarPathForArchive(fromArchiveFilename);
+  const to = sidecarPathForArchive(toArchiveFilename);
+  try {
+    const raw = await vfs.readFile(from, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    await vfs.writeFile(to, text);
+    try {
+      await vfs.rm(from);
+    } catch (err) {
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+    }
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return;
+    throw err;
+  }
+}
+
+function expandChatMessage(message: ChatMessage): SessionJsonlMessage[] {
+  if (message.role === 'user') {
+    return [
+      {
+        role: 'user',
+        content: [{ type: 'text', text: message.content }],
+        id: message.id,
+        timestamp: message.timestamp,
+        ...(message.source ? { source: message.source } : {}),
+        ...(message.channel ? { channel: message.channel } : {}),
+      },
+    ];
+  }
+
+  const content: SessionJsonlContent[] = [];
+  if (message.content) content.push({ type: 'text', text: message.content });
+  for (const tc of message.toolCalls ?? []) {
+    content.push({
+      type: 'toolCall',
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.input,
+    });
+  }
+  const assistant: SessionJsonlMessage = {
+    role: 'assistant',
+    content: content.length ? content : [{ type: 'text', text: '' }],
+    id: message.id,
+    timestamp: message.timestamp,
+    ...(message.source ? { source: message.source } : {}),
+    ...(message.compaction ? { compaction: message.compaction } : {}),
+  };
+  const lines: SessionJsonlMessage[] = [assistant];
+  for (const tc of message.toolCalls ?? []) {
+    if (tc.result === undefined && !tc.isError) continue;
+    lines.push({
+      role: 'toolResult',
+      toolCallId: tc.id,
+      content: [{ type: 'text', text: tc.result ?? '' }],
+      ...(tc.isError ? { isError: true } : {}),
+      timestamp: message.timestamp,
+    });
+  }
+  return lines;
+}
+
+function contentToText(content: SessionJsonlContent[] | string): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is SessionJsonlTextContent => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+}
+
+function extractToolCalls(content: SessionJsonlContent[] | string): ToolCall[] {
+  if (typeof content === 'string') return [];
+  return content
+    .filter((block): block is SessionJsonlToolCallContent => block.type === 'toolCall')
+    .map((block) => ({
+      id: block.id,
+      name: block.name,
+      input: block.arguments,
+    }));
+}
+
+function fallbackId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
