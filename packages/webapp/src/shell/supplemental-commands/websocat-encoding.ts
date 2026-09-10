@@ -1,3 +1,7 @@
+import { uint8ToBase64 } from '@slicc/shared-ts';
+
+export { uint8ToBase64 as bytesToBase64 };
+
 /** JSON-RPC 2.0 method call emitted from a stdin line (`--jsonrpc`). */
 interface JsonRpcMethodCall {
   id: number;
@@ -33,17 +37,11 @@ export function buildJsonRpc(line: string, id: number, omit: boolean): string {
   return JSON.stringify(payload);
 }
 
-export function bytesToBase64(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
 export function bytesToTextSafe(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
   } catch {
-    return bytesToBase64(bytes);
+    return uint8ToBase64(bytes);
   }
 }
 

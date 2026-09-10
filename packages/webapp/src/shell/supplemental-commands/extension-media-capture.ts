@@ -18,6 +18,7 @@
  * unchanged.
  */
 
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import { isExtensionRealm } from '../../base/runtime-env.js';
 
 /** Camera / mic capture request forwarded to the popup. */
@@ -162,13 +163,10 @@ function newRequestId(): string {
 }
 
 function base64UrlEncode(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return uint8ToBase64(new TextEncoder().encode(s))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 }
 
 function base64Decode(b64: string): Uint8Array {

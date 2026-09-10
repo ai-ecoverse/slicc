@@ -7,6 +7,7 @@
  * Commands: route, route-list, unroute
  */
 
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import { createLogger } from '../../../../base/logger.js';
 import { bindTabCapture, type TabCaptureBinding } from '../session-rebind.js';
 import { requireTab } from '../state.js';
@@ -25,13 +26,6 @@ const FETCH_PATTERNS = [{ urlPattern: '*', requestStage: 'Request' }];
 // Named via the handler context rather than imported from `cdp/` so this
 // module stays inside the shell layer (see layer-stack import direction).
 type BrowserAPI = PlaywrightHandlerCtx['browser'];
-
-function utf8ToBase64(str: string): string {
-  const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary);
-}
 
 /** Convert a glob-style URL pattern to a RegExp. */
 export function patternToRegex(pattern: string): RegExp {
@@ -86,7 +80,7 @@ async function handleRequestPaused(
         requestId,
         responseCode: match.status,
         responseHeaders,
-        body: match.body ? utf8ToBase64(match.body) : undefined,
+        body: match.body ? uint8ToBase64(new TextEncoder().encode(match.body)) : undefined,
       },
       sessionId
     )

@@ -1,3 +1,4 @@
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
@@ -118,7 +119,7 @@ async function writeFileOutput(
 
   const sizeKB = Math.round(bytes.length / 1024);
   if (view) {
-    const base64 = toBase64(bytes);
+    const base64 = uint8ToBase64(bytes);
     return {
       stdout: `${fullPath} (${sizeKB} KB)\n<img:data:${mimeType};base64,${base64}>`,
       stderr: '',
@@ -154,15 +155,6 @@ Examples:
     stderr: '',
     exitCode: 0,
   };
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 8192;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
 }
 
 function getMimeTypeForExtension(filename: string): string {
