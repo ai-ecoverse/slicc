@@ -54,6 +54,42 @@ export function createFileTools(fs: VirtualFS): ToolDefinition[] {
 }
 
 /**
+ * Confirm a write actually landed before telling the agent it succeeded.
+ *
+ * `writeFile` resolving is not enough: ZenFS/OPFS can update an in-memory index
+ * (or a mount backend can ack) while a subsequent reader still sees ENOENT or a
+ * truncated size — the live failure mode where `write_file` returned
+ * `File written:` and an immediate `wc` on the same path reported "No such file
+ * or directory". Fail closed with an error the agent can act on.
+ *
+ * @returns `null` when the path is a file of the expected byte length; otherwise
+ * an error message suitable for `ToolResult.content`.
+ */
+async function verifyWriteLanded(
+  fs: VirtualFS,
+  path: string,
+  content: string
+): Promise<string | null> {
+  const expectedBytes = new TextEncoder().encode(content).byteLength;
+  try {
+    const st = await fs.stat(path);
+    if (st.type !== 'file') {
+      return `Write did not land: ${path} is a ${st.type}, not a file`;
+    }
+    if (st.size !== expectedBytes) {
+      return (
+        `Write did not land: ${path} size mismatch ` +
+        `(expected ${expectedBytes} bytes, got ${st.size})`
+      );
+    }
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return `Write did not land: ${path} is not readable (${message})`;
+  }
+}
+
+/**
  * Bound the read_file result to pi-coding-agent's own output-bounding contract
  * (`truncateHead` + `formatSize`) instead of returning whole files unbounded.
  * An unbounded read can dominate the whole context window and wedge compaction —
@@ -194,6 +230,11 @@ function createWriteFileTool(fs: VirtualFS): ToolDefinition {
 
       try {
         await fs.writeFile(path, content);
+        const durabilityError = await verifyWriteLanded(fs, path, content);
+        if (durabilityError) {
+          log.error('Write durability check failed', { path, error: durabilityError });
+          return { content: durabilityError, isError: true };
+        }
         return { content: `File written: ${path}` };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -252,6 +293,11 @@ function createEditFileTool(fs: VirtualFS): ToolDefinition {
 
         const newContent = content.replace(oldString, newString);
         await fs.writeFile(path, newContent);
+        const durabilityError = await verifyWriteLanded(fs, path, newContent);
+        if (durabilityError) {
+          log.error('Edit durability check failed', { path, error: durabilityError });
+          return { content: durabilityError, isError: true };
+        }
         return { content: `File edited: ${path}` };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

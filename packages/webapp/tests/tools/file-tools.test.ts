@@ -40,11 +40,48 @@ describe('File Tools', () => {
       const result = await writeFile.execute({ path: '/hello.txt', content: 'Hello!' });
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('/hello.txt');
+      // Durability: the success string must mean a subsequent reader can see it.
+      await expect(fs.readTextFile('/hello.txt')).resolves.toBe('Hello!');
     });
 
     it('creates parent directories', async () => {
       const result = await writeFile.execute({ path: '/a/b/c.txt', content: 'deep' });
       expect(result.isError).toBeFalsy();
+      await expect(fs.readTextFile('/a/b/c.txt')).resolves.toBe('deep');
+    });
+
+    it('returns isError when writeFile resolves but the path is not readable', async () => {
+      // Repro of the live durability lie: write_file said "File written:" while
+      // an immediate follow-up on the same path saw ENOENT. Force that window
+      // by making writeFile a no-op success.
+      fs.writeFile = async () => {};
+      const result = await writeFile.execute({ path: '/phantom.txt', content: 'never landed' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toContain('/phantom.txt');
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('returns isError when writeFile resolves but size does not match', async () => {
+      const realWrite = fs.writeFile.bind(fs);
+      fs.writeFile = async (path: string) => {
+        // Land a truncated file — writeFile "succeeded" but content did not.
+        await realWrite(path, 'x');
+      };
+      const result = await writeFile.execute({ path: '/trunc.txt', content: 'expected-full' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/size mismatch/);
+      expect(result.content).not.toContain('File written:');
+    });
+
+    it('propagates writeFile failures without a success string', async () => {
+      fs.writeFile = async () => {
+        throw new Error('EACCES: permission denied, write /locked.txt');
+      };
+      const result = await writeFile.execute({ path: '/locked.txt', content: 'nope' });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/EACCES|permission denied/);
+      expect(result.content).not.toContain('File written:');
     });
   });
 
@@ -255,6 +292,25 @@ describe('File Tools', () => {
       });
       expect(result.isError).toBe(true);
       expect(result.content).toContain('2 times');
+    });
+
+    it('returns isError when the edit write resolves but the file vanishes', async () => {
+      await fs.writeFile('/edit-gone.txt', 'before');
+      const realWrite = fs.writeFile.bind(fs);
+      const realRm = fs.rm.bind(fs);
+      fs.writeFile = async (path: string, content: string | Uint8Array) => {
+        await realWrite(path, content);
+        await realRm(path);
+      };
+      const result = await editFile.execute({
+        path: '/edit-gone.txt',
+        old_string: 'before',
+        new_string: 'after',
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Write did not land/);
+      expect(result.content).toMatch(/not readable|ENOENT|no such file/i);
+      expect(result.content).not.toContain('File edited:');
     });
   });
 });

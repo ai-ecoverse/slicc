@@ -261,12 +261,15 @@ Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS
 **File**: `packages/webapp/src/tools/file-tools.ts`
 
 Write or create a file in the virtual filesystem. Creates parent directories automatically.
+After `writeFile` resolves, the tool **stats the path and checks the byte size** before
+returning success — a resolve alone is not treated as durable (avoids the live failure
+where `File written:` was followed by `wc` reporting ENOENT on the same path).
 
-| Property   | Value                               |
-| ---------- | ----------------------------------- |
-| **Name**   | `write_file`                        |
-| **Input**  | `{ path: string, content: string }` |
-| **Output** | `{ content: "File written" }`       |
+| Property   | Value                                                         |
+| ---------- | ------------------------------------------------------------- |
+| **Name**   | `write_file`                                                  |
+| **Input**  | `{ path: string, content: string }`                           |
+| **Output** | `{ content: "File written: <path>" }` or durability/`isError` |
 
 **Schema**:
 
@@ -280,6 +283,13 @@ Write or create a file in the virtual filesystem. Creates parent directories aut
   "required": ["path", "content"]
 }
 ```
+
+**Behavior**:
+
+- Success string is returned only when `stat` shows a file whose size matches the
+  UTF-8 byte length of `content`
+- Missing path, wrong entry kind, or size mismatch → `isError: true` with
+  `Write did not land: …` (never a bare `File written:` lie)
 
 ---
 

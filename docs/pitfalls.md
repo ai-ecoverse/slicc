@@ -658,6 +658,13 @@ enforced by `patches/@zenfs+dom+*.patch`:
   mechanism behind the long-standing "phantom deletions" in `/workspace`
   (files a `git` checkout reports as deleted that will not go away).
 
+**`write_file` must not trust `writeFile` resolving alone.** The agent tool
+(`packages/webapp/src/tools/file-tools.ts`) stats the path and checks byte size
+after every write/edit before returning `File written:` / `File edited:`. A live
+instance observed `File written:` followed by `wc` reporting ENOENT on the same
+path — a success string that lies about durability breaks every memory design
+that depends on the file. Fail closed with `Write did not land: …` instead.
+
 **Concurrent reads are only as safe as the inode numbers.** ZenFS keys its
 vnode cache by `ino`, and every vnode owns a sparse data cache. Two paths whose
 inodes share an ino while both are open therefore share one vnode — and the
