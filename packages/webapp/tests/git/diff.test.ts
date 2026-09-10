@@ -118,6 +118,26 @@ describe('unifiedDiff', () => {
 });
 
 describe('diffStat', () => {
+  it('counts a large replacement while preserving common interior lines in the patch', () => {
+    const oldLines = Array.from({ length: 1200 }, (_, i) => `old-${i}`);
+    const newLines = Array.from({ length: 1500 }, (_, i) => `new-${i}`);
+    oldLines.splice(600, 0, 'shared line');
+    newLines.splice(700, 0, 'shared line');
+    const oldContent = oldLines.join('\n');
+    const newContent = newLines.join('\n');
+    expect(diffStat(oldContent, newContent)).toEqual({ insertions: 1500, deletions: 1200 });
+    const patch = unifiedDiff({
+      oldContent,
+      newContent,
+      oldName: 'file',
+      newName: 'file',
+      color: false,
+    });
+    expect(patch).toContain('\n shared line\n');
+    expect(patch).toContain('-old-1199\n\\ No newline at end of file\n');
+    expect(patch).toContain('+new-1499\n\\ No newline at end of file\n');
+  });
+
   it('returns zero for identical content', () => {
     const result = diffStat('hello\n', 'hello\n');
     expect(result).toEqual({ insertions: 0, deletions: 0 });

@@ -44,6 +44,20 @@ describe('threeWayMerge', () => {
     expect(result.conflicts).toBe(0);
   });
 
+  it('keeps independent edits separate after a large replacement', () => {
+    const oldHead = Array.from({ length: 1200 }, (_, i) => `old-${i}\n`).join('');
+    const newHead = Array.from({ length: 1600 }, (_, i) => `new-${i}\n`).join('');
+    const common = 'shared one\nshared two\nshared three\n';
+    const base = `${oldHead}${common}original tail\n`;
+    const current = `${newHead}${common}original tail\n`;
+    const other = `${oldHead}${common}changed tail\n`;
+
+    expect(threeWayMerge(current, base, other, { labels })).toEqual({
+      content: `${newHead}${common}changed tail\n`,
+      conflicts: 0,
+    });
+  });
+
   it('divergent overlapping changes produce a conflict hunk', () => {
     const base = 'a\nb\nc\n';
     const current = 'a\nX\nc\n';
