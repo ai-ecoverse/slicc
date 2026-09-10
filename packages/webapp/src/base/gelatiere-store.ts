@@ -343,6 +343,22 @@ function optionalText(value: unknown, max: number): string | undefined {
   return trimmed ? trimmed.slice(0, max) : undefined;
 }
 
+/**
+ * `url` is the one agent-authored field that renders as an ATTRIBUTE (the
+ * welcome card's "Read more" href), not text — and the pass recipe has the
+ * unit read external catalogs, so a crafted `javascript:` URL could ride a
+ * suggestion into a same-origin click. Only http(s) survives this boundary.
+ */
+function httpUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const scheme = new URL(value).protocol;
+    return scheme === 'http:' || scheme === 'https:' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** What the agent (or the store) may hand us before validation — every field unchecked. */
 interface RawSuggestion {
   id?: unknown;
@@ -384,7 +400,7 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
     ...(entry.skill !== undefined ? { skill: optionalText(entry.skill, 120) } : {}),
     ...(entry.install !== undefined ? { install: optionalText(entry.install, 300) } : {}),
     ...(entry.prompt !== undefined ? { prompt: optionalText(entry.prompt, 1_000) } : {}),
-    ...(entry.url !== undefined ? { url: optionalText(entry.url, 500) } : {}),
+    ...(entry.url !== undefined ? { url: httpUrl(optionalText(entry.url, 500)) } : {}),
     ...(entry.evidence !== undefined ? { evidence: optionalText(entry.evidence, 500) } : {}),
     createdAt: stamp,
   };

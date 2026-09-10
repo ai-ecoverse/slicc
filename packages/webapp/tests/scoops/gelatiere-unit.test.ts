@@ -12,6 +12,7 @@ import {
   GelatiereFolderTakenError,
   type GelatiereLickManager,
   type GelatiereOrchestrator,
+  haltGelatiere,
   isGelatiereUnit,
   publishGelatiereSeam,
 } from '../../src/scoops/gelatiere-unit.js';
@@ -189,6 +190,28 @@ describe('gelatiere unit', () => {
     expect(changed).toEqual({ id: 'ct-2', cron: '0 4 * * *', created: true });
     expect(lm.deleteCronTask).toHaveBeenCalledWith('ct-1');
     expect(seam.nightly()).toEqual({ id: 'ct-2', cron: '0 4 * * *' });
+  });
+
+  it('dropNightly removes the persisted nightly; haltGelatiere runs it on the flag-off path', async () => {
+    resetLoggerDedupForTests();
+    const lm = fakeLickManager();
+    const seam = createGelatiereSeam(fakeOrchestrator([root('cone')]), lm);
+    // Nothing scheduled yet — dropping is a no-op, not an error.
+    expect(await seam.dropNightly()).toBe(false);
+    await seam.ensureNightly('0 3 * * *');
+    expect(seam.nightly()).toBeDefined();
+    // The flag-off boot path: a nightly persisted while memory-v2 was on
+    // must not keep waking the unit for billable passes.
+    await haltGelatiere(seam);
+    expect(seam.nightly()).toBeUndefined();
+    // And a broken seam never breaks boot.
+    const broken = {
+      ...seam,
+      dropNightly: async () => {
+        throw new Error('storage gone');
+      },
+    };
+    await expect(haltGelatiere(broken)).resolves.toBeUndefined();
   });
 
   it('publishGelatiereSeam publishes on the given target; bootGelatiere never throws', async () => {

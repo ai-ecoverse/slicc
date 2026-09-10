@@ -279,6 +279,32 @@ describe('coerceSuggestions', () => {
     expect(coerceSuggestions(undefined, 'now')).toEqual([]);
     expect(coerceSuggestions('nope', 'now')).toEqual([]);
   });
+
+  it('drops non-http(s) urls — the one field that renders as an href, not text', () => {
+    const entry = (url: string) => ({ kind: 'tip', title: 't', body: 'b', url });
+    const urls = (raw: string[]) =>
+      coerceSuggestions(
+        raw.map((u) => ({ ...entry(u), id: `u${raw.indexOf(u)}` })),
+        'now'
+      ).map((s) => s.url);
+    expect(
+      urls([
+        'https://www.sliccy.com/skills',
+        'http://localhost:5710/x',
+        'javascript:alert(1)',
+        'data:text/html,<script>1</script>',
+        'vbscript:x',
+        'not a url',
+      ])
+    ).toEqual([
+      'https://www.sliccy.com/skills',
+      'http://localhost:5710/x',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
 });
 
 describe('mergeSuggestions', () => {

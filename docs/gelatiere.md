@@ -8,7 +8,10 @@ receives a lick when new ones land.
 Feature flag: `memory-v2` (Settings → Experimental features, off by default; also in both
 `wrangler.jsonc` `FEATURE_FLAGS` lists — the same flag that gates session search and scoop
 pre-compaction snapshots). With the flag on the kernel host creates the unit and its nightly
-crontask at boot; `gelatiere init` does the same by hand.
+crontask at boot; `gelatiere init` does the same by hand. With the flag OFF, boot removes any
+nightly crontask persisted while it was on (`haltGelatiere`) — otherwise the LickManager would keep
+reloading it and the unit would keep making unattended, billable passes. The unit itself stays (a
+frozen transcript); flipping the flag back on reschedules the nightly.
 
 ## Why a scoop with a synthetic owner
 
@@ -60,7 +63,10 @@ and `/tmp/`.
    ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
    dismissed — are never replaced), and stamps `lastPassAt`. `deliver` licks every root cone except
    the gelatiere with the open suggestions created since `lastDeliveredAt`; nothing new → no lick
-   (unless `--force`).
+   (unless `--force`). An explicit `--scoop <target>` must resolve against the roster (folder, name
+   or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
+   "new" for the next attempt. Suggestion `url` fields survive only as `http(s)` (they render as a
+   live `href` in the welcome card; every other agent-authored field renders as text).
 4. It updates its notes file and replies in one line. Compaction trims its conversation while it
    idles.
 

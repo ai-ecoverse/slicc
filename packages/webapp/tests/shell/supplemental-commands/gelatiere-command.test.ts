@@ -180,6 +180,19 @@ describe('gelatiere command', () => {
     const forced = await run(fs, ['deliver', '--force', '--scoop', 'Research']);
     expect(forced.stdout).toContain('to 1 cone(s): Research');
     expect(seam.lick).toHaveBeenCalledWith('Research', expect.anything());
+
+    // A stale/misspelled target must fail BEFORE the ledger is stamped —
+    // otherwise the dropped lick reads as "nothing new" forever after.
+    seam.lick.mockClear();
+    const stampBefore = JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt;
+    const bogus = await run(fs, ['deliver', '--force', '--scoop', 'cone-retired']);
+    expect(bogus.exitCode).toBe(1);
+    expect(bogus.stderr).toContain('unknown delivery target "cone-retired"');
+    expect(bogus.stderr).toContain('cone, cone-research');
+    expect(seam.lick).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).toBe(
+      stampBefore
+    );
   });
 
   it('deliver fails cleanly with nothing to deliver to', async () => {

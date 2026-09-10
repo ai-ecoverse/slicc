@@ -96,6 +96,8 @@ export interface GelatiereSeam {
   ensureNightly(cron: string): Promise<{ id: string; cron: string; created: boolean }>;
   /** The registered nightly crontask, when there is one. */
   nightly(): { id: string; cron: string } | undefined;
+  /** Delete the nightly crontask when there is one. Returns whether one was removed. */
+  dropNightly(): Promise<boolean>;
   /** Send a `gelatiere` sprinkle lick to one unit (a folder, name or jid alias). */
   lick(target: string, body: unknown): void;
 }
@@ -270,6 +272,11 @@ export function createGelatiereSeam(
       );
       return { id: entry.id, cron: entry.cron, created: true };
     },
+    dropNightly: async () => {
+      const existing = findNightly(lickManager);
+      if (!existing) return false;
+      return lickManager.deleteCronTask(existing.id);
+    },
     lick: (target, body) => {
       lickManager.emitEvent({
         type: 'sprinkle',
@@ -308,6 +315,23 @@ export async function bootGelatiere(seam: GelatiereSeam, nightlyCron: string): P
     });
   } catch (error) {
     log.warn('gelatiere boot failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Boot-time hook for the flag-OFF path. A nightly crontask persisted while
+ * Memory v2 was on would keep waking the unit for billable passes after the
+ * user turned the flag off — LickManager reloads persisted crontasks on
+ * every init. The unit itself stays (it is a frozen transcript without
+ * licks); `bootGelatiere` puts the schedule back when the flag returns.
+ */
+export async function haltGelatiere(seam: GelatiereSeam): Promise<void> {
+  try {
+    if (await seam.dropNightly()) log.info('gelatiere nightly removed (memory-v2 is off)');
+  } catch (error) {
+    log.warn('gelatiere halt failed', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

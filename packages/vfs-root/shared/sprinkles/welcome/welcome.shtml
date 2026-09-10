@@ -754,7 +754,8 @@
               data: { id: s.id, prompt: s.prompt, title: s.title } });
             markTaken('Sent to the cone — watch the chat.');
           }));
-        } else if (s.url) {
+        } else if (s.url && /^https?:\/\//i.test(s.url)) {
+          // The store already drops non-http(s) urls; this is the render-side belt.
           var link = el('a', 'sprinkle-btn sprinkle-btn--secondary', 'Read more');
           link.href = s.url;
           link.target = '_blank';

@@ -69,7 +69,7 @@ Commands:
   status               Unit, nightly schedule, last pass, last delivery, counts
 
 deliver options:
-  --scoop <target>     One cone (or scoop) instead of every cone
+  --scoop <target>     One cone (folder or jid) instead of every cone
   --force              Send even when nothing is new since the last delivery
 
 Files:
@@ -179,8 +179,18 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
   if (added.length === 0 && !parsed.bools.has('--force')) {
     return ok('Nothing new since the last delivery; no lick sent (use --force to resend).\n');
   }
+  // An unresolvable explicit target would drop the lick downstream while this
+  // command still stamped `lastDeliveredAt` — and the next ordinary delivery
+  // would then say "nothing new". Validate against the roster before sending.
+  const roster = host.roots();
   const explicit = parsed.values.get('--scoop');
-  const targets = explicit ? [explicit] : host.roots().map((r) => r.folder);
+  const resolves = (r: GelatiereRootLike): boolean =>
+    r.folder === explicit || r.name === explicit || r.jid === explicit;
+  if (explicit && !roster.some(resolves)) {
+    const known = roster.map((r) => r.folder).join(', ') || 'none running';
+    return fail(`unknown delivery target "${explicit}" (cones: ${known})`);
+  }
+  const targets = explicit ? [explicit] : roster.map((r) => r.folder);
   if (targets.length === 0) return fail('no cone is running to deliver to');
   const body = store.buildGelatiereLickBody(added, open);
   for (const target of targets) host.lick(target, body);

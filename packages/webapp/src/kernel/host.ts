@@ -1068,7 +1068,11 @@ function publishGelatiere(
     .then(async (unit) => {
       const seam = unit.createGelatiereSeam(orchestrator, lickManager);
       unit.publishGelatiereSeam(seam);
-      if (!sharedFs || !isFeatureEnabled('memory-v2')) return;
+      if (!sharedFs || !isFeatureEnabled('memory-v2')) {
+        // Flag off: a nightly persisted while it was on must not keep firing.
+        await unit.haltGelatiere(seam);
+        return;
+      }
       const { loadGelatiereConfig } = await import('../base/gelatiere-store.js');
       const config = await loadGelatiereConfig(sharedFs);
       await unit.bootGelatiere(seam, config.nightly);
