@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { initFeatureFlags, setFeatureFlagOverride } from '../../src/core/feature-flags.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverSprinkles,
@@ -17,6 +18,37 @@ describe('discoverSprinkles', () => {
       dbName: `test-sprinkle-discovery-${dbCounter++}`,
       wipe: true,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    initFeatureFlags('standalone');
+  });
+
+  it('hides the welcome sprinkle until Memory v2 makes it the suggestion stream', async () => {
+    // Flag overrides live in localStorage, absent under the node test env.
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+    await vfs.writeFile(
+      '/shared/sprinkles/welcome/welcome.shtml',
+      '<title>Welcome</title><link rel="icon" href="ice-cream-cone">'
+    );
+    await vfs.writeFile('/shared/sprinkles/connect-llm/connect-llm.shtml', '<div>x</div>');
+    initFeatureFlags('standalone');
+
+    const hidden = await discoverSprinkles(vfs);
+    expect(hidden.has('welcome')).toBe(false);
+    expect(hidden.has('connect-llm')).toBe(false);
+
+    setFeatureFlagOverride('memory-v2', 'on');
+    const shown = await discoverSprinkles(vfs);
+    expect(shown.get('welcome')?.icon).toBe('ice-cream-cone');
+    // connect-llm is onboarding-only regardless of the flag.
+    expect(shown.has('connect-llm')).toBe(false);
   });
 
   it('returns empty map when no .shtml files exist', async () => {

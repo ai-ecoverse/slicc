@@ -75,8 +75,10 @@ export interface GelatiereSuggestion {
   evidence?: string;
   /** ISO timestamp of the pass that first produced it. */
   createdAt: string;
-  /** ISO timestamp; set when the user answered it from a card. */
+  /** ISO timestamp; set when the user waved it away ("Not now" / `gelatiere dismiss`). */
   dismissedAt?: string;
+  /** ISO timestamp; set when the user acted on it ("Install" / "Try it"). */
+  takenAt?: string;
 }
 
 export interface GelatiereState {
@@ -201,8 +203,9 @@ export async function readGelatiereSuggestions(
   for (const entry of parsed) {
     const suggestion = coerceSuggestion(entry, null);
     if (!suggestion) continue;
-    const dismissedAt = (entry as { dismissedAt?: unknown }).dismissedAt;
+    const { dismissedAt, takenAt } = entry as { dismissedAt?: unknown; takenAt?: unknown };
     if (typeof dismissedAt === 'string' && dismissedAt) suggestion.dismissedAt = dismissedAt;
+    if (typeof takenAt === 'string' && takenAt) suggestion.takenAt = takenAt;
     kept.push(suggestion);
   }
   return kept;
@@ -242,11 +245,18 @@ export function isPassDue(state: GelatiereState, now: Date, intervalHours: numbe
   return now.getTime() - last >= intervalHours * 3_600_000;
 }
 
-/** Suggestions still worth showing: not dismissed, newest first. */
+/** Suggestions still awaiting an answer: neither dismissed nor taken, newest first. */
 export function openSuggestions(
   suggestions: readonly GelatiereSuggestion[]
 ): GelatiereSuggestion[] {
-  return suggestions.filter((s) => !s.dismissedAt);
+  return suggestions.filter((s) => !s.dismissedAt && !s.takenAt);
+}
+
+/** Suggestions the user acted on ("Install" / "Try it"), newest first. */
+export function takenSuggestions(
+  suggestions: readonly GelatiereSuggestion[]
+): GelatiereSuggestion[] {
+  return suggestions.filter((s) => Boolean(s.takenAt));
 }
 
 /** Open suggestions created after `since` (all of them when `since` is absent). */
@@ -273,10 +283,31 @@ export async function dismissGelatiereSuggestion(
   id: string,
   now: Date = new Date()
 ): Promise<boolean> {
+  return settleSuggestion(vfs, id, 'dismissedAt', now);
+}
+
+/**
+ * Stamp `takenAt` on one suggestion — the user clicked "Install" or "Try it".
+ * Same stale-card semantics as {@link dismissGelatiereSuggestion}.
+ */
+export async function takeGelatiereSuggestion(
+  vfs: GelatiereVfs,
+  id: string,
+  now: Date = new Date()
+): Promise<boolean> {
+  return settleSuggestion(vfs, id, 'takenAt', now);
+}
+
+async function settleSuggestion(
+  vfs: GelatiereVfs,
+  id: string,
+  field: 'dismissedAt' | 'takenAt',
+  now: Date
+): Promise<boolean> {
   const suggestions = await readGelatiereSuggestions(vfs);
-  const target = suggestions.find((s) => s.id === id && !s.dismissedAt);
+  const target = suggestions.find((s) => s.id === id && !s.dismissedAt && !s.takenAt);
   if (!target) return false;
-  target.dismissedAt = now.toISOString();
+  target[field] = now.toISOString();
   await writeGelatiereSuggestions(vfs, suggestions);
   return true;
 }
@@ -373,9 +404,10 @@ export function coerceSuggestions(
 
 /**
  * Fold a pass's suggestions into the store. An id that is already present —
- * open or dismissed — keeps its existing entry (and its `dismissedAt`), so a
- * repeat pass cannot resurrect what the user waved away. New entries go first;
- * the oldest fall off past {@link MAX_STORED_SUGGESTIONS}, dismissed ones first.
+ * open, taken or dismissed — keeps its existing entry (and its settlement
+ * stamps), so a repeat pass cannot resurrect what the user already answered.
+ * New entries go first; the oldest fall off past
+ * {@link MAX_STORED_SUGGESTIONS}, settled ones (dismissed, then taken) first.
  */
 export function mergeSuggestions(
   existing: readonly GelatiereSuggestion[],
@@ -387,7 +419,9 @@ export function mergeSuggestions(
   const merged = [...added, ...existing];
   while (merged.length > maxStored) {
     const dismissedIndex = findLastIndex(merged, (s) => Boolean(s.dismissedAt));
-    merged.splice(dismissedIndex >= 0 ? dismissedIndex : merged.length - 1, 1);
+    const settledIndex =
+      dismissedIndex >= 0 ? dismissedIndex : findLastIndex(merged, (s) => Boolean(s.takenAt));
+    merged.splice(settledIndex >= 0 ? settledIndex : merged.length - 1, 1);
   }
   return { merged, added };
 }

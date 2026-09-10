@@ -2,6 +2,9 @@
 <html lang="en">
   <head>
     <title>Welcome</title>
+    <!-- Rail glyph: under Memory v2 this sprinkle stays in the rail as the
+         gelatiere's suggestion stream, so it wears the gelatiere's cone. -->
+    <link rel="icon" href="ice-cream-cone" />
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
@@ -216,6 +219,36 @@
         font-size: 12px;
         color: var(--s2-content-tertiary, #8a8a8a);
       }
+      /* A card the user just acted on: buttons gone, a quiet confirmation
+         line in their place. The card itself stays until the next render. */
+      .gelatiere-card.gelatiere-card--taken { opacity: 0.75; }
+      .gelatiere-taken-note {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-taken-note i { width: 14px; height: 14px; flex-shrink: 0; }
+      /* The "Done" ledger under the open cards: what was taken, one line each. */
+      .gelatiere-done { margin-top: 14px; }
+      .gelatiere-done-title {
+        padding: 0 4px 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--s2-content-tertiary, #8a8a8a);
+      }
+      .gelatiere-done-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 4px;
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-done-row i { width: 13px; height: 13px; flex-shrink: 0; color: var(--s2-content-positive, #2d9d78); }
+      .gelatiere-done-row .gelatiere-done-what { color: var(--s2-content-tertiary, #8a8a8a); }
     </style>
   </head>
   <body>
@@ -693,6 +726,17 @@
         card.appendChild(body);
 
         var actions = el('div', 'sprinkle-action-card__actions');
+        // Taking a card keeps it visible: the buttons swap for a quiet
+        // confirmation so the user sees what they set in motion. Dismissing
+        // removes it — "Not now" means "stop showing me this".
+        function markTaken(note) {
+          card.classList.add('gelatiere-card--taken');
+          var done = el('div', 'gelatiere-taken-note');
+          done.appendChild(lucide('check'));
+          done.appendChild(document.createTextNode(note));
+          actions.replaceChildren(done);
+          if (window.LucideIcons) window.LucideIcons.render();
+        }
         actions.appendChild(gelatiereButton('Not now', 'secondary', function () {
           if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
           card.remove();
@@ -702,13 +746,13 @@
           actions.appendChild(gelatiereButton('Install', 'primary', function () {
             if (window.slicc) slicc.lick({ action: 'gelatiere-install',
               data: { id: s.id, skill: s.skill || null, install: s.install || null, title: s.title } });
-            card.remove();
+            markTaken('Installing — the cone is on it.');
           }));
         } else if (s.kind === 'use-case' && s.prompt) {
           actions.appendChild(gelatiereButton('Try it', 'primary', function () {
             if (window.slicc) slicc.lick({ action: 'gelatiere-try',
               data: { id: s.id, prompt: s.prompt, title: s.title } });
-            card.remove();
+            markTaken('Sent to the cone — watch the chat.');
           }));
         } else if (s.url) {
           var link = el('a', 'sprinkle-btn sprinkle-btn--secondary', 'Read more');
@@ -719,6 +763,23 @@
         }
         card.appendChild(actions);
         return card;
+      }
+
+      // What the user already acted on, one quiet line each — proof the
+      // stream remembers, and a nudge that dismissed things stay gone.
+      var DONE_LEDGER_LIMIT = 5;
+      function buildDoneLedger(taken) {
+        var wrap = el('div', 'gelatiere-done');
+        wrap.appendChild(el('div', 'gelatiere-done-title', 'Done'));
+        taken.slice(0, DONE_LEDGER_LIMIT).forEach(function (s) {
+          var row = el('div', 'gelatiere-done-row');
+          row.appendChild(lucide('check'));
+          row.appendChild(document.createTextNode(s.title + ' '));
+          row.appendChild(el('span', 'gelatiere-done-what',
+            s.kind === 'skill' ? '· installed' : '· tried'));
+          wrap.appendChild(row);
+        });
+        return wrap;
       }
 
       function renderGelatiereEmpty(text) {
@@ -743,15 +804,22 @@
           var list = [];
           try { list = JSON.parse(raw); } catch (e) { list = []; }
           if (!Array.isArray(list)) list = [];
-          var open = list.filter(function (s) {
-            return s && typeof s === 'object' && !s.dismissedAt && s.id && s.title && s.body;
+          var readable = list.filter(function (s) {
+            return s && typeof s === 'object' && s.id && s.title && s.body;
           });
-          if (open.length === 0) {
+          // Three states: open cards up top, a "Done" ledger for what was
+          // taken, and dismissed ones simply gone (the store keeps them so
+          // a later pass cannot resurrect what the user waved away).
+          var open = readable.filter(function (s) { return !s.dismissedAt && !s.takenAt; });
+          var taken = readable.filter(function (s) { return s.takenAt; });
+          if (open.length === 0 && taken.length === 0) {
             renderGelatiereEmpty('Nothing from the gelatiere right now.');
             return;
           }
           stream.innerHTML = '';
+          if (open.length === 0) stream.appendChild(el('div', 'gelatiere-empty', 'All caught up.'));
           open.forEach(function (s) { stream.appendChild(buildSuggestionCard(s)); });
+          if (taken.length > 0) stream.appendChild(buildDoneLedger(taken));
           stream.hidden = false;
           if (window.LucideIcons) window.LucideIcons.render();
         }, function () {

@@ -66,8 +66,9 @@ and `/tmp/`.
 
 ## Stores
 
-- `/shared/.gelatiere/suggestions.json` — every suggestion, newest first, with `createdAt` and
-  (once answered) `dismissedAt`. Capped at 40; dismissed entries are trimmed before open ones.
+- `/shared/.gelatiere/suggestions.json` — every suggestion, newest first, with `createdAt` and,
+  once answered, `takenAt` (Install / Try it) or `dismissedAt` (Not now / `gelatiere dismiss`).
+  Capped at 40; past the cap, dismissed entries are trimmed first, then taken, then the oldest open.
 - `/shared/.gelatiere/state.json` — `passes`, `lastPassAt`, `lastDeliveredAt`.
 - `/shared/.gelatiere/notes.md` — the gelatiere's own cross-pass memory (free-form).
 - `/cones/gelatiere/` — the unit's workspace and `CLAUDE.md`, like any extra cone.
@@ -81,11 +82,20 @@ body `{ action: 'gelatiere-suggestions', data: { added, open, suggestions, path,
 in the skill index rather than in every lick. The welcome card does not depend on the lick — it reads
 the store through the dip bridge and renders whatever is open. Its buttons emit:
 
-| lick                | who handles it                                                                      |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `gelatiere-dismiss` | page (`setup-welcome-flow.ts`) stamps `dismissedAt`; no cone turn                   |
-| `gelatiere-install` | page stamps `dismissedAt`, then the cone runs the `install` command (per the skill) |
-| `gelatiere-try`     | page stamps `dismissedAt`, then the cone acts on the `prompt` (per the skill)       |
+| lick                | who handles it                                                                  |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `gelatiere-dismiss` | page (`setup-welcome-flow.ts`) stamps `dismissedAt`; no cone turn               |
+| `gelatiere-install` | page stamps `takenAt`, then the cone runs the `install` command (per the skill) |
+| `gelatiere-try`     | page stamps `takenAt`, then the cone acts on the `prompt` (per the skill)       |
+
+The stream renders the three states differently: open suggestions are full cards with buttons, taken
+ones collapse into a "Done" ledger (title + installed/tried), dismissed ones disappear — the store
+keeps them so a later pass cannot resurrect what the user waved away.
+
+Under Memory v2 the welcome sprinkle also stays in the rail after onboarding (it is hidden
+onboarding-only furniture otherwise): `sprinkle-discovery.ts` un-hides it when the flag is on, and it
+wears the gelatiere's `ice-cream-cone` glyph so the stream has a place the user can reopen when a
+lick announces new cards.
 
 ## Why these choices
 

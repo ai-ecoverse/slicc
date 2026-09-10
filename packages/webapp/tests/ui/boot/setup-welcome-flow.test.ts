@@ -19,8 +19,10 @@ vi.mock('../../../src/scoops/welcome-detection.js', () => ({
 }));
 
 const mockDismissGelatiereSuggestion = vi.fn(async (_vfs: unknown, _id: string) => true);
+const mockTakeGelatiereSuggestion = vi.fn(async (_vfs: unknown, _id: string) => true);
 vi.mock('../../../src/base/gelatiere-store.js', () => ({
   dismissGelatiereSuggestion: (vfs: unknown, id: string) => mockDismissGelatiereSuggestion(vfs, id),
+  takeGelatiereSuggestion: (vfs: unknown, id: string) => mockTakeGelatiereSuggestion(vfs, id),
 }));
 
 const LEDGER_KEY = 'slicc:welcome-flow-fired';
@@ -268,6 +270,7 @@ describe('gelatiere card licks', () => {
   beforeEach(() => {
     vi.stubGlobal('localStorage', makeFakeStorage());
     mockDismissGelatiereSuggestion.mockClear();
+    mockTakeGelatiereSuggestion.mockClear();
   });
 
   afterEach(() => {
@@ -295,13 +298,15 @@ describe('gelatiere card licks', () => {
     expect(mockDismissGelatiereSuggestion).not.toHaveBeenCalled();
   });
 
-  it('settles install / try in the store AND lets them through to the cone', async () => {
+  it('marks install / try as TAKEN in the store AND lets them through to the cone', async () => {
     const vfs = { writeFile: vi.fn() };
     const intercept = createWelcomeLickInterceptor(makeDeps({ vfs: vfs as never }));
     expect(intercept(welcomeLick('gelatiere-install', { id: 'skill-github' }))).toBe(false);
     expect(intercept(welcomeLick('gelatiere-try', { id: 'use-case-x', prompt: 'p' }))).toBe(false);
-    await vi.waitFor(() => expect(mockDismissGelatiereSuggestion).toHaveBeenCalledTimes(2));
-    expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
-    expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'use-case-x');
+    await vi.waitFor(() => expect(mockTakeGelatiereSuggestion).toHaveBeenCalledTimes(2));
+    expect(mockTakeGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
+    expect(mockTakeGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'use-case-x');
+    // Taken, not dismissed: the stream's Done ledger keys on the difference.
+    expect(mockDismissGelatiereSuggestion).not.toHaveBeenCalled();
   });
 });

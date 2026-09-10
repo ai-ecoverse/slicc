@@ -191,19 +191,22 @@ describe('gelatiere command', () => {
     expect(result.stderr).toContain('no cone is running');
   });
 
-  it('list shows open suggestions, --all adds dismissed, --json dumps the store', async () => {
+  it('list shows open suggestions, --all adds taken and dismissed, --json dumps the store', async () => {
     const fs = memoryFs({
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
         suggestion('skill-a', { install: 'upskill a' }),
         suggestion('tip-b', { kind: 'tip', dismissedAt: 'x' }),
+        suggestion('use-c', { kind: 'use-case', takenAt: 'x' }),
       ]),
     });
     const open = await run(fs, ['list']);
     expect(open.stdout).toContain('skill-a  [skill]');
     expect(open.stdout).toContain('install: upskill a');
     expect(open.stdout).not.toContain('tip-b');
+    expect(open.stdout).not.toContain('use-c');
     const all = await run(fs, ['list', '--all']);
     expect(all.stdout).toContain('tip-b  [tip] (dismissed)');
+    expect(all.stdout).toContain('use-c  [use-case] (taken)');
     const json = await run(fs, ['list', '--json']);
     expect(JSON.parse(json.stdout)).toHaveLength(1);
     expect((await run(memoryFs(), ['list'])).stdout).toContain('No suggestions yet');
@@ -232,6 +235,7 @@ describe('gelatiere command', () => {
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
         suggestion('a'),
         suggestion('b', { dismissedAt: 'x' }),
+        suggestion('c', { takenAt: 'x' }),
       ]),
     });
     const result = await run(fs, ['status']);
@@ -240,7 +244,7 @@ describe('gelatiere command', () => {
     expect(result.stdout).toContain('Interval:       24h');
     expect(result.stdout).toContain('Passes:         2');
     expect(result.stdout).toContain('Last delivery:  2026-09-09T00:05:00.000Z');
-    expect(result.stdout).toContain('Suggestions:    1 open, 2 total');
+    expect(result.stdout).toContain('Suggestions:    1 open, 1 taken, 3 total');
   });
 
   it('every seam-backed verb fails cleanly before the host publishes the seam', async () => {

@@ -324,7 +324,7 @@ const WELCOME_BRANCHES: Record<
     return true;
   },
   'gelatiere-dismiss': (body, deps) => {
-    settleGelatiereSuggestion(body, deps);
+    settleGelatiereSuggestion(body, deps, 'dismiss');
     return true;
   },
   // Install / Try it are the user ANSWERING the suggestion, so the store is
@@ -332,12 +332,14 @@ const WELCOME_BRANCHES: Record<
   // the lick still goes on to the cone to do the work. The first live pass
   // showed a cone that installed the skill and skipped the `gelatiere dismiss`
   // the skill asks for; the card would have come back on the next render.
+  // They stamp `takenAt` (not `dismissedAt`): the stream shows what the user
+  // acted on separately from what they waved away.
   'gelatiere-install': (body, deps) => {
-    settleGelatiereSuggestion(body, deps);
+    settleGelatiereSuggestion(body, deps, 'take');
     return false;
   },
   'gelatiere-try': (body, deps) => {
-    settleGelatiereSuggestion(body, deps);
+    settleGelatiereSuggestion(body, deps, 'take');
     return false;
   },
 };
@@ -354,12 +356,18 @@ function loadGelatiereModule(): Promise<typeof import('../../base/gelatiere-stor
   return gelatiereModule;
 }
 
-function settleGelatiereSuggestion(body: WelcomeBranchBody, deps: WelcomeBranchDeps): void {
+function settleGelatiereSuggestion(
+  body: WelcomeBranchBody,
+  deps: WelcomeBranchDeps,
+  mode: 'dismiss' | 'take'
+): void {
   const id = (body?.data as WelcomeGelatiereCardData | undefined)?.id;
   if (typeof id !== 'string' || !id || !deps.vfs) return;
   const vfs = deps.vfs;
   void loadGelatiereModule()
-    .then(({ dismissGelatiereSuggestion }) => dismissGelatiereSuggestion(vfs, id))
+    .then(({ dismissGelatiereSuggestion, takeGelatiereSuggestion }) =>
+      mode === 'take' ? takeGelatiereSuggestion(vfs, id) : dismissGelatiereSuggestion(vfs, id)
+    )
     .catch((err) => deps.log.warn('Failed to settle gelatiere suggestion', err));
 }
 

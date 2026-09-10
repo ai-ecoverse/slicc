@@ -64,8 +64,8 @@ Commands:
   run                  Ask the gelatiere for a pass right now
   suggest <file>       Fold a pass's candidates (JSON) into the store — the gelatiere's own step
   deliver [options]    Lick every other cone with the open suggestions — the gelatiere's other step
-  list [--all|--json]  Show open suggestions (--all includes dismissed)
-  dismiss <id>         Mark a suggestion as answered so it is not shown again
+  list [--all|--json]  Show open suggestions (--all includes taken and dismissed)
+  dismiss <id>         Wave a suggestion away so it is not shown again
   status               Unit, nightly schedule, last pass, last delivery, counts
 
 deliver options:
@@ -74,7 +74,7 @@ deliver options:
 
 Files:
   /shared/GELATIERE.md                 Pass instructions + config (intervalHours, nightly, maxSuggestions)
-  /shared/.gelatiere/suggestions.json  Every suggestion, with dismissedAt when answered
+  /shared/.gelatiere/suggestions.json  Every suggestion; takenAt when acted on, dismissedAt when waved away
   /shared/.gelatiere/state.json        Pass and delivery ledger
 
 Examples:
@@ -201,12 +201,12 @@ async function handleList(args: string[], fs: VirtualFS): Promise<CommandResult>
     return ok(
       all.length === 0
         ? 'No suggestions yet. `gelatiere run` asks for a pass now.\n'
-        : 'No open suggestions (every one has been dismissed; `--all` lists them).\n'
+        : 'No open suggestions (every one has been taken or dismissed; `--all` lists them).\n'
     );
   }
   let output = '';
   for (const s of shown) {
-    const state = s.dismissedAt ? ' (dismissed)' : '';
+    const state = s.dismissedAt ? ' (dismissed)' : s.takenAt ? ' (taken)' : '';
     output += `${s.id}  [${s.kind}]${state}\n  ${s.title}\n`;
     if (s.install) output += `  install: ${s.install}\n`;
     if (s.prompt) output += `  try: ${s.prompt}\n`;
@@ -237,7 +237,7 @@ async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   output += `Passes:         ${state.passes}\n`;
   output += `Last pass:      ${state.lastPassAt ?? 'never'}\n`;
   output += `Last delivery:  ${state.lastDeliveredAt ?? 'never'}\n`;
-  output += `Suggestions:    ${store.openSuggestions(all).length} open, ${all.length} total\n`;
+  output += `Suggestions:    ${store.openSuggestions(all).length} open, ${store.takenSuggestions(all).length} taken, ${all.length} total\n`;
   return ok(output);
 }
 

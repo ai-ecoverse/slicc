@@ -25,6 +25,8 @@ import {
   readGelatiereSuggestions,
   recordPass,
   suggestionsSince,
+  takeGelatiereSuggestion,
+  takenSuggestions,
 } from '../../src/base/gelatiere-store.js';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 
@@ -182,6 +184,33 @@ describe('ledger and store', () => {
     expect(await dismissGelatiereSuggestion(vfs, 'skill-github', NOW)).toBe(false);
     expect(await dismissGelatiereSuggestion(vfs, 'nope', NOW)).toBe(false);
   });
+
+  it('takeGelatiereSuggestion stamps takenAt and takes it out of the open set, not the store', async () => {
+    const vfs = fakeVfs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([suggestion(), suggestion({ id: 'tip-a' })]),
+    });
+    expect(await takeGelatiereSuggestion(vfs, 'skill-github', NOW)).toBe(true);
+    const after = await readGelatiereSuggestions(vfs);
+    expect(after[0].takenAt).toBe(NOW.toISOString());
+    expect(after[0].dismissedAt).toBeUndefined();
+    expect(openSuggestions(after).map((s) => s.id)).toEqual(['tip-a']);
+    expect(takenSuggestions(after).map((s) => s.id)).toEqual(['skill-github']);
+    // A settled card cannot be settled again either way.
+    expect(await takeGelatiereSuggestion(vfs, 'skill-github', NOW)).toBe(false);
+    expect(await dismissGelatiereSuggestion(vfs, 'skill-github', NOW)).toBe(false);
+  });
+
+  it('round-trips takenAt through the store file', async () => {
+    const vfs = fakeVfs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion({ takenAt: '2026-09-03T00:00:00.000Z' }),
+        suggestion({ id: 'tip-a', takenAt: 42 as unknown as string }),
+      ]),
+    });
+    const read = await readGelatiereSuggestions(vfs);
+    expect(read[0].takenAt).toBe('2026-09-03T00:00:00.000Z');
+    expect(read[1].takenAt).toBeUndefined();
+  });
 });
 
 describe('coerceSuggestions', () => {
@@ -265,6 +294,18 @@ describe('mergeSuggestions', () => {
     const existing = Array.from({ length: 3 }, (_, i) => suggestion({ id: `s${i}` }));
     const { merged } = mergeSuggestions(existing, [suggestion({ id: 'new' })], 3);
     expect(merged.map((s) => s.id)).toEqual(['new', 's0', 's1']);
+  });
+
+  it('evicts dismissed before taken before open past the cap', () => {
+    const existing = [
+      suggestion({ id: 'open-1' }),
+      suggestion({ id: 'taken-1', takenAt: 'x' }),
+      suggestion({ id: 'dismissed-1', dismissedAt: 'x' }),
+    ];
+    const once = mergeSuggestions(existing, [suggestion({ id: 'new-1' })], 3);
+    expect(once.merged.map((s) => s.id)).toEqual(['new-1', 'open-1', 'taken-1']);
+    const twice = mergeSuggestions(once.merged, [suggestion({ id: 'new-2' })], 3);
+    expect(twice.merged.map((s) => s.id)).toEqual(['new-2', 'new-1', 'open-1']);
   });
 });
 
