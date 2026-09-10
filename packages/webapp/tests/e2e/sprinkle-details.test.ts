@@ -1,5 +1,7 @@
+import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { openTerminal } from './two-instance-helpers.js';
 
 // Keep the collapsible body outside <summary>: Review once put all of a
 // source's explanation inside it, making a working disclosure look stuck.
@@ -23,17 +25,33 @@ const DISCLOSURES = `
   </details>
 </div>`;
 
-for (const mode of ['fragment', 'document'] as const) {
-  test(`sprinkle ${mode} keeps native disclosure mouse and keyboard behavior`, async ({ page }) => {
-    test.setTimeout(90_000);
+async function bootWithoutOpenSprinkles(page: Page): Promise<void> {
+  await gotoLeader(page, '/?sprinkles=');
+  await waitForSW(page);
+  await page.waitForSelector('slicc-input-card');
+  // Unlike the first-run welcome, the terminal's kernel-ready signal
+  // survives a reload (the same readiness gate used by speech recovery).
+  await openTerminal(page, 20_000);
+  await page.waitForFunction(() => Boolean(window.__slicc_sprinkleManager));
+}
+
+for (const { mode, kind } of [
+  { mode: 'fragment', kind: 'native' },
+  { mode: 'fragment', kind: 'custom' },
+  { mode: 'document', kind: 'native' },
+  { mode: 'document', kind: 'custom' },
+] as const) {
+  test(`sprinkle ${mode} keeps ${kind} disclosure mouse and keyboard behavior`, async ({
+    page,
+  }) => {
+    // Cold boot plus cross-frame input/visibility probes can each take
+    // seconds on CI. Keep each marker variant within its own budget.
+    test.setTimeout(120_000);
     await seedSkipSwReload(page);
-    await gotoLeader(page);
-    await waitForSW(page);
-    await page.waitForSelector('slicc-input-card');
+    await bootWithoutOpenSprinkles(page);
     await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
       timeout: 20_000,
     });
-    await page.waitForFunction(() => Boolean(window.__slicc_sprinkleManager));
 
     const name = `e2e-details-${mode}`;
     const html =
@@ -47,13 +65,20 @@ for (const mode of ['fragment', 'document'] as const) {
         const dir = `/shared/sprinkles/${name}`;
         await manager.fs.mkdir(dir, { recursive: true });
         await manager.fs.writeFile(`${dir}/${name}.shtml`, html);
-        await manager.refresh();
-        // Discovery surfaces new sprinkles for attention before the user
-        // opens them. Exercise that first rail activation deterministically.
-        await manager.open(name, undefined, { attention: true });
       },
       { name, html }
     );
+
+    // Install before the final boot so the VFS hot-reload event cannot
+    // race the first iframe render. The explicit empty open set also keeps
+    // boot discovery from opening the fixture alongside our setup below.
+    await bootWithoutOpenSprinkles(page);
+    await page.evaluate(async (name) => {
+      const manager = window.__slicc_sprinkleManager;
+      if (!manager) throw new Error('Sprinkle manager missing');
+      await manager.refresh();
+      await manager.open(name, undefined, { attention: true });
+    }, name);
 
     const panel = page.locator(`[data-sprinkle="${name}"]`);
     await expect(panel).toBeHidden();
@@ -62,37 +87,37 @@ for (const mode of ['fragment', 'document'] as const) {
       .click();
     await expect(panel).toBeVisible({ timeout: 20_000 });
     const root = mode === 'document' ? panel.frameLocator('iframe') : panel;
-    for (const kind of ['native', 'custom']) {
-      const details = root.locator(`details.${kind}`);
-      const summary = details.locator('summary');
-      const body = details.locator('.body');
-      // Visibility checks must include the ancestor's content-visibility:
-      // Chromium retains layout boxes for the closed ::details-content.
-      const bodyVisible = () => body.evaluate((element) => element.checkVisibility());
-      await expect(summary).toBeVisible();
-      await expect(details).not.toHaveAttribute('open');
-      await expect.poll(bodyVisible).toBe(false);
-      const closedHeight = await details.evaluate((element) => element.clientHeight);
-
-      await summary.click();
-      await expect(details).toHaveAttribute('open', '');
-      await expect.poll(bodyVisible).toBe(true);
-      expect(await details.evaluate((element) => element.clientHeight)).toBeGreaterThan(
-        closedHeight
+    const details = root.locator(`details.${kind}`);
+    const summary = details.locator('summary');
+    // Query the attribute and rendered body together in one iframe call.
+    // checkVisibility includes the ancestor's content-visibility: Chromium
+    // retains layout boxes for the closed ::details-content.
+    const disclosureState = () =>
+      details.evaluateAll(([element]) =>
+        element
+          ? {
+              open: element.hasAttribute('open'),
+              bodyVisible: element.querySelector('.body')?.checkVisibility(),
+              height: element.clientHeight,
+            }
+          : null
       );
-      await summary.click();
-      await expect(details).not.toHaveAttribute('open');
-      await expect.poll(bodyVisible).toBe(false);
+    await expect(summary).toBeVisible();
+    await expect.poll(disclosureState).toMatchObject({ open: false, bodyVisible: false });
+    const closedHeight = (await disclosureState())!.height;
 
-      await summary.focus();
-      await summary.press('Enter');
-      await expect(details).toHaveAttribute('open', '');
-      await expect.poll(bodyVisible).toBe(true);
-      await summary.press('Space');
-      await expect(details).not.toHaveAttribute('open');
-      await expect.poll(bodyVisible).toBe(false);
-      await expect(summary).toBeFocused();
-    }
+    await summary.click();
+    await expect.poll(disclosureState).toMatchObject({ open: true, bodyVisible: true });
+    expect((await disclosureState())!.height).toBeGreaterThan(closedHeight);
+    await summary.click();
+    await expect.poll(disclosureState).toMatchObject({ open: false, bodyVisible: false });
+
+    await summary.focus();
+    await summary.press('Enter');
+    await expect.poll(disclosureState).toMatchObject({ open: true, bodyVisible: true });
+    await summary.press('Space');
+    await expect.poll(disclosureState).toMatchObject({ open: false, bodyVisible: false });
+    await expect(summary).toBeFocused();
     // <summary> descendants always remain visible; moving collapsible text
     // into this span would defeat the body assertions above.
     await expect(root.locator('.always-visible')).toBeVisible();
