@@ -66,7 +66,11 @@ import {
   upsertSessionsIndexEntry,
   writeArchiveBundle,
 } from '../transcript/frozen-archive-writer.js';
-import { renameSessionJsonl, sidecarPathForArchive } from '../transcript/session-jsonl.js';
+import {
+  copySessionJsonl,
+  removeSessionJsonl,
+  sidecarPathForArchive,
+} from '../transcript/session-jsonl.js';
 import { workspaceFor } from '../work-unit/descriptor.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import type { ChatMessage, Session } from './types.js';
@@ -1294,7 +1298,9 @@ async function commitEnrichedArchive(
         rewritten = rewritten.split(`sidecar: ${oldBase}`).join(`sidecar: ${newBase}`);
       }
       await vfs.writeFile(newPath, rewritten);
-      await renameSessionJsonl(vfs, entry.filename, newFilename);
+      // Copy sidecar first; delete the old one only after the index commit
+      // succeeds so a failed index write cannot orphan the structured transcript.
+      await copySessionJsonl(vfs, entry.filename, newFilename);
     } catch (err) {
       log.warn('Enrichment write failed (entry stays pending)', {
         filename: entry.filename,
@@ -1327,6 +1333,14 @@ async function commitEnrichedArchive(
     } catch (err) {
       log.info('Stale pending archive cleanup failed (harmless)', {
         oldPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      await removeSessionJsonl(vfs, entry.filename);
+    } catch (err) {
+      log.info('Stale pending sidecar cleanup failed (harmless)', {
+        filename: entry.filename,
         error: err instanceof Error ? err.message : String(err),
       });
     }

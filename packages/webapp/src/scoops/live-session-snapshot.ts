@@ -281,6 +281,10 @@ export function discardLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promis
       const { removeSessionJsonl } = await import('../transcript/session-jsonl.js');
       await removeSessionJsonl(vfs, entry.filename);
     }
+    // Drop the keyword index so erased message bodies are not recoverable
+    // from /sessions/.search-index.json until a later search rebuilds it.
+    const { invalidateSessionSearchIndex } = await import('../transcript/session-search-index.js');
+    await invalidateSessionSearchIndex(vfs);
     await vfs.flush();
     log.info('Live session snapshot discarded', { cone: folder, removed: removed.length });
     return removed.length;

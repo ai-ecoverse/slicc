@@ -8,7 +8,7 @@
  * form.
  */
 
-import type { ChatMessage, ToolCall } from '@slicc/shared-ts';
+import type { ChatMessage, MessageAttachment, ToolCall } from '@slicc/shared-ts';
 import { FsError } from '../fs/types.js';
 import { SESSIONS_DIR } from './frozen-archive-format.js';
 
@@ -42,6 +42,8 @@ export interface SessionJsonlMessage {
   source?: string;
   channel?: string;
   compaction?: ChatMessage['compaction'];
+  /** Preserved so thaw/export keep attachment chips and ZIP files. */
+  attachments?: MessageAttachment[];
 }
 
 /** Minimal read surface for loading a JSONL sidecar. */
@@ -119,6 +121,7 @@ function userFromJsonl(parsed: SessionJsonlMessage): ChatMessage {
     timestamp: parsed.timestamp ?? 0,
     ...(parsed.source ? { source: parsed.source } : {}),
     ...(parsed.channel ? { channel: parsed.channel } : {}),
+    ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
   };
 }
 
@@ -132,6 +135,7 @@ function assistantFromJsonl(parsed: SessionJsonlMessage): ChatMessage {
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(parsed.source ? { source: parsed.source } : {}),
     ...(parsed.compaction ? { compaction: parsed.compaction } : {}),
+    ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
   };
 }
 
@@ -182,11 +186,12 @@ export async function removeSessionJsonl(
 }
 
 /**
- * Rename a sidecar with the archive. No-op when the source is missing.
- * Callers that already rewrote markdown pointers should also rewrite any
- * embedded `.jsonl` paths via {@link rewriteTranscriptPointers}.
+ * Copy a sidecar next to a renamed archive without deleting the source.
+ * Callers that need atomic rename should commit the index first, then
+ * {@link removeSessionJsonl} the old path — so a failed index write does not
+ * strand the only structured transcript under an unindexed name.
  */
-export async function renameSessionJsonl(
+export async function copySessionJsonl(
   vfs: SessionJsonlVfs,
   fromArchiveFilename: string,
   toArchiveFilename: string
@@ -198,15 +203,25 @@ export async function renameSessionJsonl(
     const raw = await vfs.readFile(from, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     await vfs.writeFile(to, text);
-    try {
-      await vfs.rm(from);
-    } catch (err) {
-      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    }
   } catch (err) {
     if (err instanceof FsError && err.code === 'ENOENT') return;
     throw err;
   }
+}
+
+/**
+ * Rename a sidecar with the archive. No-op when the source is missing.
+ * Prefer {@link copySessionJsonl} + deferred {@link removeSessionJsonl} when
+ * the index write can still fail after the copy.
+ */
+export async function renameSessionJsonl(
+  vfs: SessionJsonlVfs,
+  fromArchiveFilename: string,
+  toArchiveFilename: string
+): Promise<void> {
+  if (fromArchiveFilename === toArchiveFilename) return;
+  await copySessionJsonl(vfs, fromArchiveFilename, toArchiveFilename);
+  await removeSessionJsonl(vfs, fromArchiveFilename);
 }
 
 function expandChatMessage(message: ChatMessage): SessionJsonlMessage[] {
@@ -219,6 +234,7 @@ function expandChatMessage(message: ChatMessage): SessionJsonlMessage[] {
         timestamp: message.timestamp,
         ...(message.source ? { source: message.source } : {}),
         ...(message.channel ? { channel: message.channel } : {}),
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       },
     ];
   }
@@ -240,6 +256,7 @@ function expandChatMessage(message: ChatMessage): SessionJsonlMessage[] {
     timestamp: message.timestamp,
     ...(message.source ? { source: message.source } : {}),
     ...(message.compaction ? { compaction: message.compaction } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
   };
   const lines: SessionJsonlMessage[] = [assistant];
   for (const tc of message.toolCalls ?? []) {

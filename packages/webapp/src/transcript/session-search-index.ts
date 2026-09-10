@@ -22,6 +22,13 @@ export const SESSION_SEARCH_INDEX_PATH = '/sessions/.search-index.json';
 /** Hard cap on a single `session read` response (bytes, UTF-8). */
 export const SESSION_READ_BYTE_CAP = 12_000;
 
+/**
+ * Cap on indexed/stored body text per message (UTF-8 bytes). Compaction
+ * archives can hold multi-MB tool payloads; indexing them verbatim would
+ * blow the kernel-worker heap on first search.
+ */
+export const SESSION_INDEX_BODY_BYTE_CAP = 4_000;
+
 /** Default number of search hits returned. */
 export const SESSION_SEARCH_DEFAULT_LIMIT = 8;
 
@@ -174,7 +181,7 @@ export function docsFromArchive(args: {
       bodyParts.push(tc.name, safeJson(tc.input));
       if (tc.result) bodyParts.push(tc.result);
     }
-    const body = bodyParts.filter(Boolean).join('\n');
+    const body = truncateUtf8(bodyParts.filter(Boolean).join('\n'), SESSION_INDEX_BODY_BYTE_CAP);
     if (!body.trim() && !message.compaction) return;
     docs.push({
       id: makeHitId(args.sessionId, messageId),
@@ -310,13 +317,13 @@ export async function readSessionHit(
   let page = messages.slice(from, from + requested);
   let text = formatReadPage(page, from);
   let truncated = false;
-  while (text.length > SESSION_READ_BYTE_CAP && page.length > 1) {
+  while (utf8ByteLength(text) > SESSION_READ_BYTE_CAP && page.length > 1) {
     page = page.slice(0, -1);
     text = formatReadPage(page, from);
     truncated = true;
   }
-  if (text.length > SESSION_READ_BYTE_CAP) {
-    text = `${text.slice(0, SESSION_READ_BYTE_CAP - 20)}\n…[truncated]\n`;
+  if (utf8ByteLength(text) > SESSION_READ_BYTE_CAP) {
+    text = `${truncateUtf8(text, SESSION_READ_BYTE_CAP - 20)}\n…[truncated]\n`;
     truncated = true;
   }
   const count = page.length;
@@ -406,6 +413,34 @@ function formatReadPage(messages: readonly ChatMessage[], from: number): string 
     blocks.push('');
   });
   return blocks.join('\n');
+}
+
+/** Drop the persisted index so erased archives cannot be recovered from it. */
+export async function invalidateSessionSearchIndex(vfs: {
+  rm(path: string): Promise<void>;
+}): Promise<void> {
+  try {
+    await vfs.rm(SESSION_SEARCH_INDEX_PATH);
+  } catch {
+    // Missing index is the desired end state.
+  }
+}
+
+const utf8Encoder = new TextEncoder();
+
+function utf8ByteLength(text: string): number {
+  return utf8Encoder.encode(text).byteLength;
+}
+
+/** Truncate to at most `maxBytes` UTF-8 bytes on a code-point boundary. */
+export function truncateUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  const encoded = utf8Encoder.encode(text);
+  if (encoded.byteLength <= maxBytes) return text;
+  let end = maxBytes;
+  // Avoid splitting a multi-byte sequence: continuation bytes are 0b10xxxxxx.
+  while (end > 0 && (encoded[end] & 0xc0) === 0x80) end--;
+  return new TextDecoder().decode(encoded.subarray(0, end));
 }
 
 function safeJson(value: unknown): string {

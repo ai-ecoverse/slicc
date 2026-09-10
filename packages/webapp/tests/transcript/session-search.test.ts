@@ -29,8 +29,10 @@ import {
   porterStem,
   readSessionHit,
   rebuildSessionSearchIndex,
+  SESSION_INDEX_BODY_BYTE_CAP,
   SESSION_READ_BYTE_CAP,
   searchSessions,
+  truncateUtf8,
 } from '../../src/transcript/session-search-index.js';
 
 function msg(
@@ -45,7 +47,18 @@ function msg(
 describe('session JSONL sidecar', () => {
   it('round-trips chat messages through pi-ai-shaped JSONL', () => {
     const messages: ChatMessage[] = [
-      msg('user', 'What is the OpTel budget?', 'u1'),
+      msg('user', 'What is the OpTel budget?', 'u1', {
+        attachments: [
+          {
+            id: 'att-1',
+            name: 'budget.md',
+            mimeType: 'text/markdown',
+            size: 12,
+            kind: 'text',
+            path: '/tmp/attachment-budget.md',
+          },
+        ],
+      }),
       msg('assistant', 'The OpTel budget is $12k.', 'a1', {
         toolCalls: [
           {
@@ -61,9 +74,11 @@ describe('session JSONL sidecar', () => {
     expect(jsonl.split('\n').filter(Boolean)).toHaveLength(3); // user, assistant, toolResult
     expect(jsonl).toContain('"role":"toolResult"');
     expect(jsonl).toContain('"type":"toolCall"');
+    expect(jsonl).toContain('"path":"/tmp/attachment-budget.md"');
     const back = jsonlToChatMessages(jsonl);
     expect(back).toHaveLength(2);
     expect(back[0].content).toBe('What is the OpTel budget?');
+    expect(back[0].attachments?.[0].path).toBe('/tmp/attachment-budget.md');
     expect(back[1].toolCalls?.[0].result).toBe('budget: 12000');
   });
 
@@ -246,5 +261,25 @@ describe('session search ranking', () => {
     expect(titleHit[0].title).toContain('OpTel');
     expect(bodyHit[0].body).toContain('OpTel');
     expect(titleHit[0].title).not.toEqual(bodyHit[0].title);
+  });
+
+  it('caps indexed bodies and measures read pages in UTF-8 bytes', () => {
+    const huge = 'x'.repeat(SESSION_INDEX_BODY_BYTE_CAP + 5000);
+    const docs = docsFromArchive({
+      sessionId: 's3',
+      sessionTitle: 'Huge tool output',
+      filename: 'c.md',
+      messages: [
+        msg('assistant', 'ok', 'a1', {
+          toolCalls: [{ id: 't1', name: 'bash', input: {}, result: huge }],
+        }),
+      ],
+    });
+    expect(docs[0].body.length).toBeLessThanOrEqual(SESSION_INDEX_BODY_BYTE_CAP);
+
+    const cjk = '字'.repeat(8_000);
+    const capped = truncateUtf8(cjk, SESSION_READ_BYTE_CAP);
+    expect(new TextEncoder().encode(capped).byteLength).toBeLessThanOrEqual(SESSION_READ_BYTE_CAP);
+    expect(capped.length).toBeLessThan(cjk.length);
   });
 });
