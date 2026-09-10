@@ -315,6 +315,14 @@ describe('Bridge createCallbacks', () => {
     expect(emitted.payload.type).toBe('error');
     expect(emitted.payload.scoopJid).toBe(scoopJid);
     expect(emitted.payload.error).toBe('Something went wrong');
+    // The card also lands in the kernel buffer so persist/reseed can keep it
+    // (`#handleError` on the page is in-memory only).
+    const buf = (bridge as any).getBuffer(scoopJid);
+    expect(buf.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'Something went wrong',
+      error: true,
+    });
   });
 
   it('onSendMessage buffers, persists, and emits text_delta + response_done', () => {
@@ -2641,8 +2649,10 @@ describe('Bridge handlePanelMessage dispatch', () => {
       (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
     ) as any;
     expect(replaced?.payload.messages.map((m: any) => m.content)).toEqual(['restore me']);
-    // The legacy UI store is never consulted once the record answered.
-    expect(uiLoad).not.toHaveBeenCalled();
+    // The record is still the transcript source. The UI store is consulted
+    // only to fold persisted cone-error cards back in (#3003); an empty
+    // load leaves the derived messages untouched.
+    expect(uiLoad).toHaveBeenCalledWith('session-cone-two');
   });
 
   it('request-scoop-messages falls back to the legacy UI store when there is no canonical record', async () => {

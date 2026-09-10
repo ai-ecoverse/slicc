@@ -220,6 +220,15 @@ so a `discarded` round deletes it); `toChatMessages` folds them back by
 rendering side is unchanged: the row is a `ChatMessage` carrying `compaction`,
 and `messageEls` keys on that field.
 
+**Error cards are ordinary assistant-role rows, not markers.** A cone-error
+card (`ChatMessage.error` → `<slicc-error-card>`) is something the conversation
+showed, not something that happened TO it. The kernel appends it to the
+message buffer (`Bridge.recordErrorCard`) so it rides persist + replay, and a
+Pi-history rebuild folds the persisted `error: true` rows back in — Pi never
+held them, and they must not become a `ConversationEntry` (the model would see
+its own failure as a prior turn). `toBufferedChatMessages` projects `error`
+explicitly, the same way it projects `compaction`.
+
 **Only a SETTLED round is durable.** The kernel writes nothing on the opening
 phase and `interleaveMarkers` restores `summarized` / `fallback` only. The
 compaction phase stream does not replay, so a `summarizing` marker left behind

@@ -153,6 +153,13 @@ interface BufferedChatMessage {
    * store — the view renders on this field alone (`messageEls`).
    */
   compaction?: ChatMessage['compaction'];
+  /**
+   * Cone-error card: an ordinary assistant-role row the view renders as
+   * `<slicc-error-card>`. Carried so a reload's persist/reseed keeps the card
+   * (`messageEls` keys on this field). Distinct from `lickState` / `lickId`,
+   * which are a sibling projection (#3004).
+   */
+  error?: boolean;
 }
 
 export class Bridge implements KernelFacade {
@@ -387,6 +394,10 @@ export class Bridge implements KernelFacade {
       },
 
       onError: (scoopJid, error) => {
+        // Persist before the panel-facing emit: `#handleError` only appends
+        // in-memory, and a reload reseeds from Pi history which never held
+        // this row. The buffer + UI store is the durability path (#3003).
+        bridge.recordErrorCard(scoopJid, error);
         bridge.emit({
           type: 'error',
           scoopJid,
@@ -853,24 +864,12 @@ export class Bridge implements KernelFacade {
     if (!this.orchestrator) return;
     const cone = rootsOf(this.orchestrator.getScoops())[0];
     if (!cone) return;
-    const buf = messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      attachments: m.attachments,
-      timestamp: m.timestamp,
-      source: m.source,
-      channel: m.channel,
-      toolCalls: m.toolCalls?.map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-        result: tc.result,
-        isError: tc.isError,
-      })),
-      isStreaming: m.isStreaming,
-      model: m.model,
-      usage: m.usage,
+    // Same projector as the leader rebuild so `error` / `compaction` cannot
+    // silently drop here when they are added there. Streaming is the one
+    // field a live leader snapshot may still carry, so it is restored after.
+    const buf = toBufferedChatMessages(messages).map((row, i) => ({
+      ...row,
+      isStreaming: messages[i]?.isStreaming,
     }));
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
@@ -995,8 +994,11 @@ export class Bridge implements KernelFacade {
     // Without this a rebuild from live agent state (every boot seed) would be
     // the transcript MINUS its seams, and persist that over the UI store.
     const { interleaveMarkers } = await import('../work-unit/conversation/derive.js');
-    return toBufferedChatMessages(
-      interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+    return this.withPersistedErrorCards(
+      scoop,
+      toBufferedChatMessages(
+        interleaveMarkers(chatMessages, await this.loadConversationMarkers(scoop))
+      )
     );
   }
 
@@ -1039,7 +1041,7 @@ export class Bridge implements KernelFacade {
     const { toChatMessages } = await import('../work-unit/conversation/derive.js');
     const chatMessages = await toChatMessages(record, { source: sourceLabelFor(scoop) });
     if (chatMessages.length === 0) return null;
-    return toBufferedChatMessages(chatMessages);
+    return this.withPersistedErrorCards(scoop, toBufferedChatMessages(chatMessages));
   }
 
   /**
@@ -1639,6 +1641,52 @@ export class Bridge implements KernelFacade {
     }
     if (stuck.length === 0) this.pendingMarkers.delete(scoopJid);
     else this.pendingMarkers.set(scoopJid, stuck);
+  }
+
+  /**
+   * Append a cone-error card to the unit's message buffer and persist it.
+   *
+   * Unlike a compaction marker, this is an ordinary assistant-role row: it
+   * can ride the existing buffer + `browser-coding-agent` persist path, and
+   * it must never become a Pi `ConversationEntry` (the model would see its
+   * own failure as a prior turn). Boot reseed rebuilds from Pi history, so
+   * {@link withPersistedErrorCards} folds these rows back in from the UI
+   * store — the same store this write just updated (#3003).
+   */
+  private recordErrorCard(scoopJid: string, error: string): void {
+    this.getBuffer(scoopJid).push({
+      id: uid(),
+      role: 'assistant',
+      content: error,
+      timestamp: Date.now(),
+      error: true,
+    });
+    this.persistScoop(scoopJid);
+  }
+
+  /**
+   * Fold cone-error cards out of the UI store back into a Pi-history rebuild.
+   *
+   * `seedBuffersFromAgentState` / a remount rebuild from agent messages,
+   * which never held an `error` row, then persist that over the UI store.
+   * Without this fold the card `recordErrorCard` just wrote would be
+   * overwritten by the transcript minus its errors. Compaction seams are
+   * restored separately via `record.markers` + `interleaveMarkers`.
+   *
+   * Missing / unread store is a no-op — a missing card costs the retry
+   * affordance, not the transcript.
+   */
+  private async withPersistedErrorCards(
+    scoop: RegisteredScoop,
+    rebuilt: BufferedChatMessage[]
+  ): Promise<BufferedChatMessage[]> {
+    if (!this.sessionStore) return rebuilt;
+    try {
+      const session = await this.sessionStore.load(chatSessionIdFor(scoop));
+      return foldPersistedErrorCards(rebuilt, session?.messages);
+    } catch {
+      return rebuilt;
+    }
   }
 
   /**
@@ -2424,5 +2472,53 @@ function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedC
     usage: m.usage,
     isStreaming: false,
     compaction: m.compaction,
+    error: m.error,
   }));
+}
+
+/**
+ * Re-insert `error: true` rows a Pi-history rebuild cannot reconstruct.
+ * Dedupes by id so a row already in `rebuilt` (same-session buffer) is not
+ * doubled, and orders extras by timestamp so a card that landed between
+ * two turns stays between them after a reload.
+ */
+function foldPersistedErrorCards(
+  rebuilt: BufferedChatMessage[],
+  persisted: readonly ChatMessage[] | undefined
+): BufferedChatMessage[] {
+  if (!persisted || persisted.length === 0) return rebuilt;
+  const extras = persisted.filter((m) => m.error === true);
+  if (extras.length === 0) return rebuilt;
+  const seen = new Set(rebuilt.map((m) => m.id));
+  const fresh = extras.filter((m) => !seen.has(m.id));
+  if (fresh.length === 0) return rebuilt;
+  return interleaveBufferedByTimestamp(rebuilt, toBufferedChatMessages(fresh));
+}
+
+function interleaveBufferedByTimestamp(
+  base: BufferedChatMessage[],
+  extra: BufferedChatMessage[]
+): BufferedChatMessage[] {
+  const sorted = [...extra].sort((a, b) => bufferedTime(a) - bufferedTime(b));
+  const out: BufferedChatMessage[] = [];
+  let next = 0;
+  for (const message of base) {
+    const at = bufferedTime(message);
+    while (next < sorted.length && bufferedTime(sorted[next]) <= at) {
+      out.push(sorted[next++]);
+    }
+    out.push(message);
+  }
+  while (next < sorted.length) out.push(sorted[next++]);
+  return out;
+}
+
+function bufferedTime(message: { timestamp: number }): number {
+  const raw: unknown = message.timestamp;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Number.NEGATIVE_INFINITY;
 }

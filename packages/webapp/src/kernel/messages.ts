@@ -1264,6 +1264,12 @@ export interface ScoopMessagesReplacedMsg {
      * remounted panel or a follower — no agent event replays it.
      */
     compaction?: ChatMessage['compaction'];
+    /**
+     * Cone-error card (#3003): an ordinary assistant-role row. On the wire
+     * so a remounted panel and a tray follower render `<slicc-error-card>`
+     * from the replay instead of losing the live `error` event.
+     */
+    error?: boolean;
   }>;
   /**
    * Ids of the messages still pending in the orchestrator's queue for this
