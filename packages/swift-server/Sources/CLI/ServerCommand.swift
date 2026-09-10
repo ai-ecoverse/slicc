@@ -256,7 +256,9 @@ struct ServerCommand: AsyncParsableCommand {
         var httpConfiguration = HTTPClient.Configuration()
         // Inflate declared gzip/br so /api/fetch-proxy does not forward
         // compressed bytes after stripping `content-encoding` (#3037).
-        httpConfiguration.decompression = .enabled(limit: .ratio(25))
+        // No ratio cap: Node's undici has none either, and a 25× limit
+        // aborted repetitive JS/CSS that the CLI float accepted.
+        httpConfiguration.decompression = .enabled(limit: .none)
         let httpClient = HTTPClient(
             eventLoopGroupProvider: .singleton,
             configuration: httpConfiguration

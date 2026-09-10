@@ -946,7 +946,7 @@ reader doesn't go hunting for a launcher that never died.
 
 AEM Edge Delivery / Fastly often keep a gzip member in cache and, when asked for `identity`, still return those bytes **without** `content-encoding`. Native top-level navigation inflates them; `/api/fetch-proxy` used to forward the gzip magic labeled `text/javascript`, so in-page `import()` / `<script type=module>` threw `SyntaxError: Invalid or unexpected token`.
 
-The proxy no longer forces `accept-encoding: identity`. undici / AsyncHTTPClient negotiate gzip/br and decode a declared coding; a gzip-magic sniff (`1f 8b`) inflates the undeclared-cache case. `content-encoding` is stripped because `llm-proxy-response.ts` `synthesizeForwardResponse()` copies headers onto `new Response()`, which does **not** inflate.
+The proxy no longer forces `accept-encoding: identity`. undici / AsyncHTTPClient negotiate gzip/br and decode a declared coding; a gzip-magic sniff (`1f 8b`) inflates the undeclared-cache case **on text bodies only** (JS/CSS/HTML/JSON). A real `application/gzip` / `.tar.gz` download is left compressed. `content-encoding` is stripped because `llm-proxy-response.ts` `synthesizeForwardResponse()` copies headers onto `new Response()`, which does **not** inflate. When sniffing inflates, Node also drops `X-Proxy-Content-Length` so the progress bar is not keyed off the compressed size.
 
 - Node: `packages/node-server/src/fetch-proxy-gzip.ts` + `routes/fetch-proxy.ts`
 - Swift: `packages/swift-server/Sources/Server/FetchProxyGzip.swift` + `APIRoutes.swift`

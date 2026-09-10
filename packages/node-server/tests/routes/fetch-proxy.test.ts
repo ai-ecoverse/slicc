@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { FETCH_PROXY_CONTENT_LENGTH_HEADER } from '../../src/fetch-proxy-headers.js';
 import { AgentActivityTracker } from '../../src/routes/agent-activity.js';
 import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
@@ -573,6 +574,41 @@ describe('registerFetchProxyRoute', () => {
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-encoding')).toBeNull();
+    expect(res.headers.get(FETCH_PROXY_CONTENT_LENGTH_HEADER.toLowerCase())).toBe(
+      String(Buffer.byteLength(js))
+    );
     expect(await res.text()).toBe(js);
+  });
+
+  it('drops X-Proxy-Content-Length when undeclared gzip is inflated', async () => {
+    const js = 'export const x = 1;\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/javascript');
+      res.setHeader('content-length', String(gz.length));
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get(FETCH_PROXY_CONTENT_LENGTH_HEADER.toLowerCase())).toBeNull();
+    expect(await res.text()).toBe(js);
+  });
+
+  it('leaves application/gzip bodies compressed', async () => {
+    const js = 'export const x = 1;\n';
+    const gz = gzipSync(js);
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'application/gzip');
+      res.end(gz);
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': `${upstreamUrl}/foo.tar.gz` },
+    });
+    expect(res.status).toBe(200);
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+    expect(body.equals(gz)).toBe(true);
   });
 });

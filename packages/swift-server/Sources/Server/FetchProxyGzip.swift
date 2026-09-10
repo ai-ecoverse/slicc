@@ -59,8 +59,12 @@ final class GzipInflater {
     }
 
     func push(_ input: [UInt8], finish: Bool) throws -> [UInt8] {
-        try start()
+        // Check `ended` before `start()`: after Z_STREAM_END we already
+        // inflateEnd'd. A trailing empty finish from MaybeGunzipState would
+        // otherwise allocate a new z_stream that deinit then skips (ended
+        // is still true) and leak.
         if ended { return [] }
+        try start()
         if input.isEmpty && !finish { return [] }
         return try input.withUnsafeBufferPointer { buf in
             try self.inflate(buf, finish: finish)
@@ -103,13 +107,21 @@ final class GzipInflater {
 }
 
 /// Pulls ByteBuffer chunks from an upstream iterator, inflating once the
-/// first two bytes are gzip magic. Pass-through otherwise.
+/// first two bytes are gzip magic. Pass-through otherwise. `enabled` is
+/// false for non-text bodies so a real `application/gzip` download is not
+/// silently inflated.
 struct MaybeGunzipState<Iterator: AsyncIteratorProtocol> where Iterator.Element == ByteBuffer {
+    var enabled: Bool
     private var decided = false
     private var inflater: GzipInflater?
     private var finished = false
 
+    init(enabled: Bool = true) {
+        self.enabled = enabled
+    }
+
     mutating func next(from inner: inout Iterator) async throws -> ByteBuffer? {
+        if !enabled { return try await inner.next() }
         if finished { return nil }
         if !decided {
             return try await decide(from: &inner)

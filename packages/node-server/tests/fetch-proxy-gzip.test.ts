@@ -79,4 +79,24 @@ describe('fetch-proxy gzip sniff', () => {
     const truncated = gz.subarray(0, 8);
     await expect(collect(pipeThrough(Readable.from([truncated])))).rejects.toThrow();
   });
+
+  it('reports inflating before decoded bytes are pushed', async () => {
+    const decided: boolean[] = [];
+    const gz = gzipSync(PLAIN_JS);
+    const out = await collect(
+      Readable.from([gz]).pipe(createMaybeGunzipStream({ onDecided: (v) => decided.push(v) }))
+    );
+    expect(decided).toEqual([true]);
+    expect(out.toString('utf8')).toBe(PLAIN_JS);
+  });
+
+  it('reports not-inflating for identity/plain', async () => {
+    const decided: boolean[] = [];
+    await collect(
+      Readable.from([Buffer.from(PLAIN_JS)]).pipe(
+        createMaybeGunzipStream({ onDecided: (v) => decided.push(v) })
+      )
+    );
+    expect(decided).toEqual([false]);
+  });
 });

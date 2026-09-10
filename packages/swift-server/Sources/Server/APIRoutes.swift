@@ -1241,6 +1241,7 @@ private func makeStreamingProxyResponse(
         asyncSequence: ScrubbingAsyncStream(
             upstream: upstreamBody,
             shouldScrub: shouldScrub,
+            shouldGunzip: isText,
             scrubber: scrubber
         ))
 
@@ -1269,6 +1270,7 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     typealias Element = ByteBuffer
     let upstream: HTTPClientResponse.Body
     let shouldScrub: Bool
+    let shouldGunzip: Bool
     let scrubber: SecretInjector
 
     struct AsyncIterator: AsyncIteratorProtocol {
@@ -1277,11 +1279,11 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
         let scrubber: SecretInjector
         var pendingTail: [UInt8] = []
         var didEmitTail = false
-        var gzip = MaybeGunzipState<HTTPClientResponse.Body.AsyncIterator>()
+        var gzip: MaybeGunzipState<HTTPClientResponse.Body.AsyncIterator>
 
         mutating func next() async throws -> ByteBuffer? {
             guard shouldScrub else {
-                // Fast path: no scrub work, just gunzip-sniff and forward.
+                // Fast path: no scrub work; gunzip-sniff only for text.
                 return try await gzip.next(from: &inner)
             }
 
@@ -1330,7 +1332,12 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     }
 
     func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(inner: upstream.makeAsyncIterator(), shouldScrub: shouldScrub, scrubber: scrubber)
+        AsyncIterator(
+            inner: upstream.makeAsyncIterator(),
+            shouldScrub: shouldScrub,
+            scrubber: scrubber,
+            gzip: MaybeGunzipState(enabled: shouldGunzip)
+        )
     }
 }
 

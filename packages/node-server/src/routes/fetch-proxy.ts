@@ -1,4 +1,4 @@
-import { Readable, Transform } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import {
   HMAC_SIGN_HEADER,
@@ -304,7 +304,16 @@ function streamUpstreamBody(
   const upstreamStream = Readable.fromWeb(
     upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
   );
-  const decoded = createMaybeGunzipStream();
+  // Text only: a real `application/gzip` / `.tar.gz` body is a gzip member
+  // whose bytes ARE the representation. Sniffing it would silently inflate
+  // a download. JS/CSS/HTML (#3037) are all text.
+  const decoded = isText
+    ? createMaybeGunzipStream({
+        onDecided: (inflating) => {
+          if (inflating) res.removeHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER);
+        },
+      })
+    : new PassThrough();
   const scrubChunk = createScrubStream(secretProxy, isText);
   const onStreamError = (err: Error) => {
     detachClientClose();

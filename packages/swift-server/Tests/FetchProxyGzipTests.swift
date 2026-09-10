@@ -54,6 +54,30 @@ final class FetchProxyGzipTests: XCTestCase {
         XCTAssertEqual(String(buffer: inflated), plainJS)
     }
 
+    func testPushAfterStreamEndDoesNotRestartInflater() throws {
+        let gz = try gzipForTest(Array(plainJS.utf8))
+        let inflater = GzipInflater()
+        let first = try inflater.push(gz, finish: true)
+        XCTAssertEqual(String(data: Data(first), encoding: .utf8), plainJS)
+        // Trailing empty finish (MaybeGunzipState EOF) must be a no-op, not a
+        // leaked second z_stream.
+        let again = try inflater.push([], finish: true)
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testMaybeGunzipDisabledPassesGzipMagicThrough() async throws {
+        let gz = try gzipForTest(Array(plainJS.utf8))
+        var gzip = MaybeGunzipState<ChunkIterator>(enabled: false)
+        var iterator = ChunkIterator(chunks: [ByteBuffer(bytes: gz)])
+        var out = ByteBuffer()
+        while let chunk = try await gzip.next(from: &iterator) {
+            var copy = chunk
+            out.writeBuffer(&copy)
+        }
+        XCTAssertTrue(FetchProxyGzip.startsWithMagic(out.readableBytesView))
+        XCTAssertEqual(Array(out.readableBytesView), gz)
+    }
+
     func testTruncatedGzipThrows() async {
         let gz: [UInt8]
         do {
@@ -152,6 +176,19 @@ final class FetchProxyGzipTests: XCTestCase {
             XCTAssertEqual(response.status, .ok)
             XCTAssertNil(response.headers[.contentEncoding])
             XCTAssertEqual(String(buffer: response.body), js)
+        }
+    }
+
+    func testFetchProxyLeavesApplicationGzipBodiesCompressed() async throws {
+        let js = "export const x = 1;\n"
+        let gz = try gzipForTest(Array(js.utf8))
+        try await self.runFetchProxyGet(
+            upstreamHeaders: [HTTPField.Name("content-type")!: "application/gzip"],
+            upstreamBody: ByteBuffer(bytes: gz)
+        ) { response in
+            XCTAssertEqual(response.status, .ok)
+            XCTAssertTrue(FetchProxyGzip.startsWithMagic(response.body.readableBytesView))
+            XCTAssertEqual(Array(response.body.readableBytesView), gz)
         }
     }
 
