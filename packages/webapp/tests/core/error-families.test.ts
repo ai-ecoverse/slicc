@@ -36,6 +36,10 @@ describe('isQuotaExceededError', () => {
     expect(isQuotaExceededError('')).toBe(false);
     expect(isQuotaExceededError(null)).toBe(false);
     expect(isQuotaExceededError(undefined)).toBe(false);
+    // Non-strings used to throw on `.toLowerCase()` and abort the error-card
+    // render / beacon (#3035).
+    expect(isQuotaExceededError({ message: 'quota_exceeded' } as never)).toBe(false);
+    expect(isUserFixableError({ message: 'please log in again' } as never)).toBe(false);
   });
 });
 

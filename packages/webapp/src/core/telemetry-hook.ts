@@ -20,7 +20,7 @@
 
 export type AgentErrorSource = 'llm' | 'tool';
 
-export type AgentErrorTelemetrySink = (source: AgentErrorSource, details: string) => void;
+export type AgentErrorTelemetrySink = (source: AgentErrorSource, details: unknown) => void;
 
 let sink: AgentErrorTelemetrySink | null = null;
 
@@ -30,6 +30,6 @@ export function setAgentErrorTelemetrySink(fn: AgentErrorTelemetrySink | null): 
 }
 
 /** Emit an agent-loop error through the registered sink. No-op if unset. */
-export function emitAgentError(source: AgentErrorSource, details: string): void {
+export function emitAgentError(source: AgentErrorSource, details: unknown): void {
   sink?.(source, details);
 }

@@ -411,6 +411,23 @@ describe('WcChatController', () => {
       expect(trackError).toHaveBeenCalledWith('error-card', 'rate limited');
     });
 
+    it('coerces object/Error details onto the card and still beacons (#3035)', () => {
+      agent.emit({
+        type: 'error',
+        error: { message: 'bedrock returned 400' },
+      } as unknown as AgentEvent);
+      const card = thread.querySelector('slicc-error-card');
+      expect(card?.getAttribute('message')).toBe('bedrock returned 400');
+      expect(card?.getAttribute('message')).not.toBe('[object Object]');
+      expect(trackError).toHaveBeenCalledWith('error-card', { message: 'bedrock returned 400' });
+
+      vi.mocked(trackError).mockClear();
+      agent.emit({ type: 'error', error: new TypeError('cannot read x') } as unknown as AgentEvent);
+      const cards = thread.querySelectorAll('slicc-error-card');
+      expect(cards[cards.length - 1]?.getAttribute('message')).toBe('TypeError: cannot read x');
+      expect(trackError).toHaveBeenCalledWith('error-card', expect.any(TypeError));
+    });
+
     it('does NOT fire for a no-api-key error (dedicated handler)', () => {
       agent.emit({ type: 'error', error: 'No API key configured for Anthropic' });
       expect(trackError).not.toHaveBeenCalled();
