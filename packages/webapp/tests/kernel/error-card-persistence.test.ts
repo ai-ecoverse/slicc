@@ -214,4 +214,32 @@ describe('kernel error-card persistence', () => {
     const rebuilt = (await rebuild()) as ChatMessage[];
     expect(rebuilt.filter((m) => m.error === true)).toHaveLength(1);
   });
+
+  it('keeps error: true through a follower snapshot projection', () => {
+    sentMessages.length = 0;
+    bridge.applyFollowerSnapshot([
+      { id: 'u1', role: 'user', content: 'hi', timestamp: 100 },
+      {
+        id: 'err-snap',
+        role: 'assistant',
+        content: 'rate limited',
+        timestamp: 200,
+        error: true,
+      },
+    ]);
+
+    const buf = (bridge as unknown as { getBuffer: (jid: string) => ChatMessage[] }).getBuffer(
+      'cone_1'
+    );
+    expect(buf.find((m) => m.id === 'err-snap')).toMatchObject({
+      role: 'assistant',
+      content: 'rate limited',
+      error: true,
+    });
+
+    const replaced = sentMessages.find(
+      (m) => (m as { payload?: { type?: string } }).payload?.type === 'scoop-messages-replaced'
+    ) as { payload: { messages: ChatMessage[] } } | undefined;
+    expect(replaced?.payload.messages.find((m) => m.id === 'err-snap')?.error).toBe(true);
+  });
 });

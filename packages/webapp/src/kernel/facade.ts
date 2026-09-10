@@ -864,24 +864,12 @@ export class Bridge implements KernelFacade {
     if (!this.orchestrator) return;
     const cone = rootsOf(this.orchestrator.getScoops())[0];
     if (!cone) return;
-    const buf = messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      attachments: m.attachments,
-      timestamp: m.timestamp,
-      source: m.source,
-      channel: m.channel,
-      toolCalls: m.toolCalls?.map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-        result: tc.result,
-        isError: tc.isError,
-      })),
-      isStreaming: m.isStreaming,
-      model: m.model,
-      usage: m.usage,
+    // Same projector as the leader rebuild so `error` / `compaction` cannot
+    // silently drop here when they are added there. Streaming is the one
+    // field a live leader snapshot may still carry, so it is restored after.
+    const buf = toBufferedChatMessages(messages).map((row, i) => ({
+      ...row,
+      isStreaming: messages[i]?.isStreaming,
     }));
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
