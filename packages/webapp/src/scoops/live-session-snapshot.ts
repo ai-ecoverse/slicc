@@ -9,14 +9,17 @@
  * its path so the agent can read what the summary dropped.
  *
  * Default root: `/sessions` (cones). Behind `memory-v2`, a scoop writes the
- * same document shape under its own sandbox at `/scoops/<folder>/sessions/`
- * — `/sessions` stays cone-only, and the scoop's RestrictedFS already grants
- * that path, so no ACL widening is required. Scoop archives are never
- * enrichment-renamed (the freezer only touches cone `/sessions`); the live
- * path is therefore the permanent pointer for the scoop's lifetime. A
- * pointer into a deleted scoop is acceptable only after `drop_scoop`, which
- * tears down the scoop's stores (and, for ephemeral `agent` runs, the
- * sandbox folder).
+ * same document shape under its own sandbox at
+ * `/scoops/<folder>/sessions/<jid>/` — `/sessions` stays cone-only, and the
+ * scoop's RestrictedFS already grants that path, so no ACL widening is
+ * required. The JID segment isolates lifetimes: `drop_scoop` preserves
+ * `/scoops/<folder>/`, so a recreate with the same folder must not reopen
+ * the prior live index. Scoop archives are never enrichment-renamed (the
+ * freezer only touches cone `/sessions`); the live path is therefore the
+ * permanent pointer for that scoop registration. A pointer into a deleted
+ * scoop is acceptable only after `drop_scoop`, which tears down the scoop's
+ * stores (orphan session dirs under the preserved sandbox are leftover
+ * scratch).
  *
  * The archive ACCUMULATES: the agent's history after a round is
  * `[summary, ...kept tail]`, so the next round would re-present the tail.
@@ -68,9 +71,17 @@ import type { ChatMessage } from './chat-types.js';
 
 const log = createLogger('live-session-snapshot');
 
-/** Sessions directory for a scoop's private pre-compaction archives. */
-export function scoopSessionsDir(folder: string): string {
-  return `/scoops/${folder}/sessions`;
+/** Sessions directory for a scoop's private pre-compaction archives.
+ *
+ * Keyed by JID as well as folder: `drop_scoop` preserves `/scoops/<folder>/`
+ * (`docs/pitfalls.md`), so a recreate with the same folder name would otherwise
+ * reopen the prior lifetime's live index and append into the wrong archive.
+ * The JID is unique per registration, so each lifetime gets its own dir.
+ * Pointers into a dropped scoop's dir are acceptable after `drop_scoop`
+ * (conversation stores are gone; the orphan dir is leftover sandbox scratch).
+ */
+export function scoopSessionsDir(folder: string, jid: string): string {
+  return `/scoops/${folder}/sessions/${jid}`;
 }
 
 export interface SnapshotLiveSessionDeps {

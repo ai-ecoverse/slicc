@@ -683,13 +683,15 @@ it writes nothing. The cursor (`liveThrough`) and round count also ride the arch
 a corrupt-index rebuild restores them.
 
 Behind the `memory-v2` feature flag (off by default), scoops get the same pre-compaction snapshot +
-pointer treatment, written under `/scoops/<folder>/sessions/` with a per-sandbox index lock. Cone
-`/sessions` stays cone-only — the scoop's RestrictedFS already grants its sandbox, so no ACL
+pointer treatment, written under `/scoops/<folder>/sessions/<jid>/` with a per-sandbox index lock.
+The JID segment isolates lifetimes: `drop_scoop` preserves `/scoops/<folder>/`
+(`docs/pitfalls.md`), so a recreate with the same folder must not reopen the prior live index.
+Cone `/sessions` stays cone-only — the scoop's RestrictedFS already grants its sandbox, so no ACL
 widening is required. Scoop archives are never enrichment-renamed (the freezer only touches cone
-`/sessions`); the live `live-*.md` path is therefore the permanent pointer for the scoop's lifetime.
-A pointer into a deleted scoop is acceptable only after `drop_scoop`, which tears down the scoop's
-stores (and, for ephemeral `agent` runs, the sandbox folder). With `memory-v2` off, scoop behavior
-is unchanged (no snapshot, no pointer).
+`/sessions`); the live `live-*.md` path is therefore the permanent pointer for that scoop
+registration. A pointer into a deleted scoop is acceptable only after `drop_scoop`, which tears
+down the scoop's stores (orphan session dirs under the preserved sandbox are leftover scratch).
+With `memory-v2` off, scoop behavior is unchanged (no snapshot, no pointer).
 
 **Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
 `ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after 30 idle minutes and

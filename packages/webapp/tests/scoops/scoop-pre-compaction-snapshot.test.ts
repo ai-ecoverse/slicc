@@ -116,10 +116,11 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
     });
   });
 
-  it('writes the archive under /scoops/<folder>/sessions/ and the pointer resolves', async () => {
+  it('writes the archive under /scoops/<folder>/sessions/<jid>/ and the pointer resolves', async () => {
     const vfs = fakeVfs();
     const folder = 'research-worker';
-    const sessionsDir = scoopSessionsDir(folder);
+    const jid = 'scoop_research_1';
+    const sessionsDir = scoopSessionsDir(folder, jid);
     const result = await snapshotLiveSession({
       vfs,
       cone: { folder, label: 'Research' },
@@ -130,7 +131,7 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
     });
     expect(result).not.toBeNull();
     expect(result!.transcriptPath).toMatch(
-      new RegExp(`^/scoops/${folder}/sessions/live-research-worker-`)
+      new RegExp(`^/scoops/${folder}/sessions/${jid}/live-research-worker-`)
     );
     expect(result!.transcriptPath.startsWith('/sessions/')).toBe(false);
     expect(vfs.files.has(result!.transcriptPath)).toBe(true);
@@ -146,7 +147,8 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
   it('keeps the live path stable across rounds so the summary pointer stays resolvable', async () => {
     const vfs = fakeVfs();
     const folder = 'stable-scoop';
-    const sessionsDir = scoopSessionsDir(folder);
+    const jid = 'scoop_stable_1';
+    const sessionsDir = scoopSessionsDir(folder, jid);
     const first = await snapshotLiveSession({
       vfs,
       cone: { folder },
@@ -170,11 +172,44 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
     expect(vfs.files.has(second!.transcriptPath)).toBe(true);
   });
 
+  it('isolates lifetimes: same folder + new jid does not append into the prior live archive', async () => {
+    // drop_scoop preserves /scoops/<folder>/; a recreate reuses the folder
+    // with a new jid — JID-keyed sessions dirs keep the transcripts apart.
+    const vfs = fakeVfs();
+    const folder = 'reused-folder';
+    const firstDir = scoopSessionsDir(folder, 'scoop_old_1');
+    const secondDir = scoopSessionsDir(folder, 'scoop_new_2');
+    const first = await snapshotLiveSession({
+      vfs,
+      cone: { folder },
+      messages: [user('lifetime-one secret', 10), assistant('old', 20)],
+      trigger: 'threshold',
+      sessionsDir: firstDir,
+    });
+    const second = await snapshotLiveSession({
+      vfs,
+      cone: { folder },
+      messages: [user('lifetime-two only', 30), assistant('new', 40)],
+      trigger: 'threshold',
+      sessionsDir: secondDir,
+    });
+    expect(second!.transcriptPath).not.toBe(first!.transcriptPath);
+    expect(second!.transcriptPath.startsWith(secondDir)).toBe(true);
+    const firstArchive = parseFrozenArchive(vfs.files.get(first!.transcriptPath)!);
+    const secondArchive = parseFrozenArchive(vfs.files.get(second!.transcriptPath)!);
+    expect(firstArchive.messages.map((m) => m.content)).toEqual(['lifetime-one secret', 'old']);
+    expect(secondArchive.messages.map((m) => m.content)).toEqual(['lifetime-two only', 'new']);
+    expect(secondArchive.messages.some((m) => String(m.content).includes('lifetime-one'))).toBe(
+      false
+    );
+  });
+
   it('drives a scoop past the compaction threshold: archive + resolving pointer when memory-v2 is on', async () => {
     mocks.enabledFlags.add('memory-v2');
     const vfs = fakeVfs();
     const folder = 'heavy-lifter';
-    const sessionsDir = scoopSessionsDir(folder);
+    const jid = 'scoop_heavy_1';
+    const sessionsDir = scoopSessionsDir(folder, jid);
     let pointer: string | undefined;
 
     const onBeforeCompaction = async (
@@ -213,7 +248,7 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
 
     const result = await compact(input);
     expect(pointer).toBeDefined();
-    expect(pointer!).toMatch(new RegExp(`^/scoops/${folder}/sessions/live-`));
+    expect(pointer!).toMatch(new RegExp(`^/scoops/${folder}/sessions/${jid}/live-`));
     expect(vfs.files.has(pointer!)).toBe(true);
     expect(vfs.files.has('/sessions/index.json')).toBe(false);
     const archive = parseFrozenArchive(vfs.files.get(pointer!)!);
@@ -234,7 +269,7 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
         cone: { folder },
         messages: conversation(),
         trigger: 'threshold',
-        sessionsDir: scoopSessionsDir(folder),
+        sessionsDir: scoopSessionsDir(folder, 'scoop_silent_1'),
       });
       return result ? { transcriptPath: result.transcriptPath } : undefined;
     };
@@ -255,7 +290,7 @@ describe('scoop pre-compaction snapshots (memory-v2)', () => {
   it('uses a per-sandbox index lock, not the cone /sessions lock', async () => {
     const vfs = fakeVfs();
     const folder = 'locked-scoop';
-    const sessionsDir = scoopSessionsDir(folder);
+    const sessionsDir = scoopSessionsDir(folder, 'scoop_locked_1');
     const held: string[] = [];
     const locks = {
       async request<T>(name: string, callback: () => Promise<T>): Promise<T> {
@@ -291,12 +326,13 @@ describe('scoop snapshot RestrictedFS sandbox boundary', () => {
       wipe: true,
     });
     const folder = 'andy-scoop';
+    const jid = 'scoop_andy_1';
     await vfs.mkdir(`/scoops/${folder}`, { recursive: true });
     await vfs.mkdir('/scoops/other-scoop', { recursive: true });
     await vfs.mkdir('/sessions', { recursive: true });
 
     const restricted = new RestrictedFS(vfs, [`/scoops/${folder}/`, '/shared/']);
-    const sessionsDir = scoopSessionsDir(folder);
+    const sessionsDir = scoopSessionsDir(folder, jid);
 
     const result = await snapshotLiveSession({
       vfs: restricted,
@@ -306,7 +342,7 @@ describe('scoop snapshot RestrictedFS sandbox boundary', () => {
       sessionsDir,
     });
     expect(result).not.toBeNull();
-    expect(result!.transcriptPath.startsWith(`/scoops/${folder}/sessions/`)).toBe(true);
+    expect(result!.transcriptPath.startsWith(`/scoops/${folder}/sessions/${jid}/`)).toBe(true);
 
     // Readable through the same RestrictedFS (pointer resolves for the scoop).
     const raw = await restricted.readFile(result!.transcriptPath, { encoding: 'utf-8' });

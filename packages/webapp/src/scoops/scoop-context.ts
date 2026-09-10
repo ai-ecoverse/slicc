@@ -691,8 +691,10 @@ export class ScoopContext {
       cone: { folder: this.scoop.folder, label: this.scoop.assistantLabel },
       messages,
       trigger,
-      // Scoop archives stay inside the sandbox; cone archives keep `/sessions`.
-      ...(isRoot ? {} : { sessionsDir: scoopSessionsDir(this.scoop.folder) }),
+      // Scoop archives stay inside the sandbox, keyed by JID so a
+      // drop-then-recreate with the same folder cannot append into the
+      // prior lifetime's live archive (pitfalls: drop preserves /scoops/).
+      ...(isRoot ? {} : { sessionsDir: scoopSessionsDir(this.scoop.folder, this.scoop.jid) }),
       stillValid: () => !this.disposed && generation === this.sessionGeneration,
     });
     return result ? { transcriptPath: result.transcriptPath } : undefined;

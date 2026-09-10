@@ -39,7 +39,8 @@ export interface SessionHelpersDeps {
   /**
    * Pre-compaction transcript snapshot (`scoops/live-session-snapshot.ts`).
    * Roots always wire it into `/sessions`. Scoops wire it behind `memory-v2`
-   * into `/scoops/<folder>/sessions/` — their sandbox, not cone `/sessions`.
+   * into `/scoops/<folder>/sessions/<jid>/` — their sandbox, not cone
+   * `/sessions` (JID isolates drop-then-recreate lifetimes).
    */
   onBeforeCompaction?: CompactionConfig['onBeforeCompaction'];
 }
