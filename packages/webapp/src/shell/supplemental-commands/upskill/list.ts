@@ -61,7 +61,10 @@ function formatOutdatedHuman(results: SkillUpdateResult[], skipped: string[]): s
   const failures = results.filter((r) => r.outcome === 'error');
   if (failures.length > 0) {
     const noun = failures.length === 1 ? 'skill' : 'skills';
-    lines.push('', `Could not check ${failures.length} ${noun}.`);
+    lines.push('', `Could not check ${failures.length} ${noun}:`);
+    for (const result of failures) {
+      lines.push(`  ${result.skill}: failed — ${result.error}`);
+    }
   }
   return `${lines.join('\n')}\n`;
 }
@@ -103,17 +106,23 @@ async function listOutdated(
     dryRun: true,
   });
   const outdated = results.filter((r) => r.outcome === 'updated');
+  const failures = results.filter((r) => r.outcome === 'error');
+  // Staleness is information (exit 0), matching `update --dry-run`. A check
+  // that could not run is not: scripted callers must be able to tell "nothing
+  // stale" from "we could not look". Same `ok` / stderr / exit as update.
+  const ok = failures.length === 0;
+  const stderr = failures.map((r) => `upskill: ${r.skill}: ${r.error}\n`).join('');
   if (json) {
     return {
-      stdout: `${JSON.stringify({ ok: true, results: outdated, skipped })}\n`,
-      stderr: '',
-      exitCode: 0,
+      stdout: `${JSON.stringify({ ok, results: [...outdated, ...failures], skipped })}\n`,
+      stderr,
+      exitCode: ok ? 0 : 1,
     };
   }
   return {
     stdout: formatOutdatedHuman(results, skipped),
-    stderr: '',
-    exitCode: 0,
+    stderr,
+    exitCode: ok ? 0 : 1,
   };
 }
 
@@ -121,7 +130,8 @@ async function listOutdated(
  * `upskill list [--outdated] [--json]`
  *
  * Exit 0 whether or not anything is stale — staleness is information, not
- * failure, matching `update --dry-run`.
+ * failure. A skill whose check itself failed still exits 1, matching
+ * `update --dry-run`.
  */
 export async function handleUpskillList(
   args: string[],

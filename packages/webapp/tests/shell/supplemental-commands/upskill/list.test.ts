@@ -220,4 +220,26 @@ describe('upskill list', () => {
     expect(parsed.skipped).toEqual(['legacy']);
     expect(parsed.results.every((r) => r.outcome === 'updated')).toBe(true);
   });
+
+  it('preserves check failures under --outdated and exits non-zero', async () => {
+    await installAlpha(fs, V1);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      return response(404, JSON.stringify({ message: 'Not Found' }), {}, 'Not Found');
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['list', '--outdated', '--json'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('alpha');
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      results: Array<{ skill: string; outcome: string; error?: string }>;
+      skipped: string[];
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.results).toEqual([expect.objectContaining({ skill: 'alpha', outcome: 'error' })]);
+    expect(parsed.results[0]?.error).toBeTruthy();
+  });
 });

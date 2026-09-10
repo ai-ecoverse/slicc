@@ -83,7 +83,7 @@ A new SLICC release is a good moment to check them. This is read-only:
 upskill list --outdated
 ```
 
-It reuses the same classification as `upskill update --dry-run`: each skill's `.upskill` provenance record (source repo, ref, resolved commit, file list) compared against the ref's head. Only skills a bare `upskill update` would actually change are listed. Skills with no record are omitted with a skipped count — they are not printed as current. Exit 0 whether or not anything is stale. Use `upskill update --dry-run` when you want the per-file `unchanged` / `updated` / `added` / `removed` / `kept-local` breakdown.
+It reuses the same classification as `upskill update --dry-run`: each skill's `.upskill` provenance record (source repo, ref, resolved commit, file list) compared against the ref's head. Only skills a bare `upskill update` would actually change are listed. Skills with no record are omitted with a skipped count — they are not printed as current. Exit 0 whether or not anything is stale; a skill whose check itself failed still exits 1. Use `upskill update --dry-run` when you want the per-file `unchanged` / `updated` / `added` / `removed` / `kept-local` breakdown.
 
 Report what would change and let the user decide. To apply:
 
