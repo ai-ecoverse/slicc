@@ -25,8 +25,11 @@
  *    `/tmp/<cone>/<scoop>` for a scoop) instead of a bare `/tmp`. Upstream
  *    reads `$TMPDIR` too and falls back to `/tmp`; `scratchDir` is that rule
  *    with this repo's blank-value handling, so the two agree.
- * 2. Creation is best-effort rather than atomic — see {@link createExclusive}.
- *    This is the one behavioural gap, and it closes when the builtin arrives.
+ * 2. Creation is best-effort rather than atomic, and the 0600/0700 modes GNU
+ *    promises are not applied at all on the shell's own filesystem — see
+ *    {@link createExclusive}. The help text says so instead of repeating a mode
+ *    this runtime cannot deliver, which is the one place the overlay's OUTPUT
+ *    deliberately differs from upstream's.
  */
 
 import type { CommandContext, IFileSystem } from 'just-bash';
@@ -75,7 +78,9 @@ replaced with random characters; it defaults to tmp.XXXXXXXXXX. Without
 -p/-t/--tmpdir a bare TEMPLATE is relative to the current directory, while the
 default template is placed in $TMPDIR (or /tmp).
 
-Files are created with mode 0600 and directories with mode 0700.
+What you get back is a UNIQUE name, not a private one. This VFS tracks no
+permission bits, so the usual 0600/0700 modes cannot be applied and the /tmp
+tree is readable by every unit. Do not put secrets in a mktemp file.
 
   -d, --directory        create a directory, not a file
   -u, --dry-run          do not create anything, merely print a name
@@ -128,6 +133,9 @@ const LONG_FLAGS = new Set([
   'help',
   'version',
 ]);
+
+/** Long options that take no argument, so `--flag=value` is a diagnostic. */
+const NO_ARG_LONG_FLAGS = new Set(['directory', 'dry-run', 'quiet', 'help', 'version']);
 
 function fail(message: string): Result {
   return { stdout: '', stderr: `mktemp: ${message}\n`, exitCode: 1 };
@@ -187,7 +195,12 @@ function metaFromLong(arg: string): MetaFlag | 'stop' | null {
     // GNU rejects an attached value on options that take none.
     return eq === -1 ? name : `no-arg:${name}`;
   }
-  return LONG_FLAGS.has(name) ? null : 'stop';
+  if (!LONG_FLAGS.has(name)) return 'stop';
+  // A value attached to any other no-arg option is invalid too, and getopt
+  // reports it where it sits: `--directory=no --help` diagnoses the bad option
+  // rather than printing help. Stopping here lets the parser say so, keeping
+  // one source of truth for the diagnostic.
+  return eq === -1 || !NO_ARG_LONG_FLAGS.has(name) ? null : 'stop';
 }
 
 /** Scan a short cluster for `-h`; `'stop'` ends the scan at the first unknown. */
@@ -236,6 +249,12 @@ function applyLongFlag(
   const eq = arg.indexOf('=');
   const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
   const attached = eq === -1 ? undefined : arg.slice(eq + 1);
+
+  // GNU rejects an attached value on an option that takes none, so
+  // `--directory=no` is a diagnostic rather than a directory that gets created.
+  if (NO_ARG_LONG_FLAGS.has(name) && attached !== undefined) {
+    return fail(`option '--${name}' doesn't allow an argument`);
+  }
 
   if (name === 'directory') options.directory = true;
   else if (name === 'dry-run') options.dryRun = true;
@@ -407,17 +426,26 @@ async function pathIsTaken(fs: IFileSystem, path: string): Promise<boolean> {
 }
 
 /**
- * Create `path`, refusing to reuse an occupied name, with the mode applied as
- * soon as the backend allows.
+ * Create `path`, refusing to reuse an occupied name.
  *
  * Upstream does this in a single `IFileSystem.createExclusive` call, added by
  * the same PR this file is ported from. That method does not exist in the
  * pinned `just-bash`, so the sequence here is probe-then-create, and it is
  * genuinely weaker: between the `lstat` and the write another writer can take
- * the name and have its entry truncated, and the entry is briefly readable at
- * the backend's default mode. The window is narrow in this runtime — one kernel
- * worker, no other OS processes sharing the VFS — but it is real, and it is the
- * strongest reason to delete this overlay the moment the builtin ships.
+ * the name and have its entry truncated. The window is narrow in this runtime —
+ * one kernel worker, no other OS processes sharing the VFS — but it is real,
+ * and it is a reason to delete this overlay the moment the builtin ships.
+ *
+ * **The mode is best-effort, and on the shell's own filesystem it does nothing
+ * at all.** `VfsAdapter.chmod()` is an explicit no-op — the VFS tracks no
+ * permission bits — so the 0600/0700 that GNU (and upstream) promise cannot be
+ * applied here, and the `/tmp` tree is writable and readable by every unit by
+ * design (`builtinScoopGrants()` / `ALWAYS_WRITABLE_PREFIXES`). The call is
+ * kept because it is correct on any backend that does implement it, and
+ * because a THROWING chmod must not leave an entry behind at a mode the caller
+ * would misread as private. What this command guarantees is a unique name;
+ * privacy is not ours to give, and the help text says so rather than repeating
+ * a mode that would be fiction.
  *
  * @throws an EEXIST-coded error when the name is taken, so the caller retries.
  */

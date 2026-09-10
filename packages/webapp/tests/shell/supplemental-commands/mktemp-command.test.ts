@@ -150,6 +150,26 @@ describe('mktemp command', () => {
       expect(dirs.has(path)).toBe(true);
     });
 
+    it('still succeeds against a filesystem whose chmod is a no-op', async () => {
+      // This is the PRODUCTION path, not an edge case: `VfsAdapter.chmod()` is
+      // an explicit no-op because the VFS tracks no permission bits. The
+      // command must return a usable path anyway — the guarantee it makes is a
+      // unique name, not a private one.
+      const harness = fakeFs();
+      harness.fs.chmod = (async () => {}) as unknown as IFileSystem['chmod'];
+      const ctx = mockCommandContext({ cwd: '/workspace', env: new Map(), fs: harness.fs });
+
+      const result = await createMktempCommand().execute([], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(harness.files.has(result.stdout.trim())).toBe(true);
+    });
+
+    it('does not promise a mode the runtime cannot apply', async () => {
+      const { result } = await run(['--help']);
+      expect(result.stdout).toContain('UNIQUE name, not a private one');
+      expect(result.stdout).not.toMatch(/created with mode 0600/);
+    });
+
     it('takes the entry back when the mode cannot be applied', async () => {
       // A path returned as private but left readable is the failure mode this
       // command exists to avoid, so a failing chmod must not print a path.
@@ -387,6 +407,38 @@ describe('mktemp command', () => {
       const { result } = await run(['--help=1']);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe("mktemp: option '--help' doesn't allow an argument\n");
+    });
+  });
+
+  describe('options that take no argument reject an attached value', () => {
+    it.each([
+      ['--directory=no', 'directory'],
+      ['--dry-run=false', 'dry-run'],
+      ['--quiet=0', 'quiet'],
+      ['--version=1', 'version'],
+    ])('%s is a diagnostic, not a flag', async (arg, name) => {
+      // `--directory=no` reading as "yes, create a directory" is exactly the
+      // silent breakage #2255 is about: the caller asked for something, and
+      // the stripped name would grant the opposite.
+      const { result, files, dirs } = await run([arg]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(`mktemp: option '--${name}' doesn't allow an argument\n`);
+      expect(files.size).toBe(0);
+      expect(dirs.has('/tmp')).toBe(true); // only the seeded ones
+    });
+
+    it('reports the bad option even when --help comes after it', async () => {
+      // getopt diagnoses where it sits, so help does not short-circuit past an
+      // invalid option to its left.
+      const { result } = await run(['--directory=no', '--help']);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("mktemp: option '--directory' doesn't allow an argument\n");
+    });
+
+    it('still prints help when --help comes first', async () => {
+      const { result } = await run(['--help', '--directory=no']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Usage: mktemp');
     });
   });
 
