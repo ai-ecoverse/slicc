@@ -658,3 +658,118 @@ describe('cherry iframe repaint workaround', () => {
     }
   });
 });
+
+describe('dip host action-card spacing', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  function hostSheetFromSrcdoc(srcdoc: string): string {
+    const sheets = [...srcdoc.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1] ?? '');
+    const host = sheets.find((s) => s.includes('.sprinkle-inline .sprinkle-action-card'));
+    expect(host).toBeDefined();
+    return host ?? '';
+  }
+
+  function stackedCardFixture(hostCss: string, extraCss: string, html: string) {
+    const style = document.createElement('style');
+    style.textContent = `${hostCss}\n${extraCss}`;
+    document.head.appendChild(style);
+    const wrap = document.createElement('div');
+    wrap.style.width = '320px';
+    wrap.innerHTML = html;
+    document.body.appendChild(wrap);
+    return {
+      cards: [...wrap.querySelectorAll<HTMLElement>('.sprinkle-action-card')],
+      cleanup() {
+        style.remove();
+        wrap.remove();
+      },
+    };
+  }
+
+  it('injects a sibling gap in the host sheet while keeping the single-card reset', () => {
+    const inst = mountDip(container, '<div class="sprinkle-action-card">one</div>', vi.fn());
+    const host = hostSheetFromSrcdoc(container.querySelector('iframe')!.srcdoc);
+    expect(host).toMatch(/\.sprinkle-inline \.sprinkle-action-card\{margin:0;width:100%\}/);
+    expect(host).toMatch(
+      /\.sprinkle-inline \.sprinkle-action-card\s*\+\s*\.sprinkle-action-card\{margin-top:12px\}/
+    );
+    inst.dispose();
+  });
+
+  it('keeps a single card full-width with no extra top margin on the first card', () => {
+    const inst = mountDip(container, '<div class="sprinkle-action-card">one</div>', vi.fn());
+    const host = hostSheetFromSrcdoc(container.querySelector('iframe')!.srcdoc);
+    const { cards, cleanup } = stackedCardFixture(
+      host,
+      '',
+      '<div class="sprinkle-inline"><div class="sprinkle-action-card">one</div></div>'
+    );
+    try {
+      expect(cards).toHaveLength(1);
+      expect(getComputedStyle(cards[0]!).marginTop).toBe('0px');
+      expect(getComputedStyle(cards[0]!).width).toBe('100%');
+    } finally {
+      cleanup();
+      inst.dispose();
+    }
+  });
+
+  it('shows a non-zero gap between stacked action cards', () => {
+    const inst = mountDip(
+      container,
+      '<div class="sprinkle-action-card">a</div><div class="sprinkle-action-card">b</div><div class="sprinkle-action-card">c</div>',
+      vi.fn()
+    );
+    const host = hostSheetFromSrcdoc(container.querySelector('iframe')!.srcdoc);
+    const { cards, cleanup } = stackedCardFixture(
+      host,
+      '',
+      `<div class="sprinkle-inline">
+        <div class="sprinkle-action-card">a</div>
+        <div class="sprinkle-action-card">b</div>
+        <div class="sprinkle-action-card">c</div>
+      </div>`
+    );
+    try {
+      expect(cards).toHaveLength(3);
+      expect(getComputedStyle(cards[0]!).marginTop).toBe('0px');
+      expect(getComputedStyle(cards[1]!).marginTop).toBe('12px');
+      expect(getComputedStyle(cards[2]!).marginTop).toBe('12px');
+      for (const card of cards) {
+        expect(getComputedStyle(card).width).toBe('100%');
+      }
+    } finally {
+      cleanup();
+      inst.dispose();
+    }
+  });
+
+  it('host sibling gap outranks an authored card class margin-top', () => {
+    const inst = mountDip(container, '<div class="sprinkle-action-card">one</div>', vi.fn());
+    const host = hostSheetFromSrcdoc(container.querySelector('iframe')!.srcdoc);
+    const { cards, cleanup } = stackedCardFixture(
+      host,
+      '.my-card{margin-top:12px}',
+      `<div class="sprinkle-inline">
+        <div class="sprinkle-action-card my-card">a</div>
+        <div class="sprinkle-action-card my-card">b</div>
+      </div>`
+    );
+    try {
+      expect(getComputedStyle(cards[0]!).marginTop).toBe('0px');
+      expect(getComputedStyle(cards[1]!).marginTop).toBe('12px');
+    } finally {
+      cleanup();
+      inst.dispose();
+    }
+  });
+});
