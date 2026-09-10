@@ -300,7 +300,8 @@ function serializeMessages(messages: AgentMessage[]): string {
  * stripped again when a message is SERIALIZED for the summary and memory
  * prompts: a later round sees the previous summary at the head of the
  * conversation, and the path must not end up paraphrased into the next
- * summary or written into cone memory — the file is renamed on "New chat".
+ * summary or written into cone memory — enrichment renames the file on
+ * "New chat" and rewrites every embedded pointer to the new path.
  */
 const TRANSCRIPT_POINTER_RE =
   /\n*The full transcript of the conversation before this compaction is saved at \S+ — read it when the summary is not enough\.?/g;
