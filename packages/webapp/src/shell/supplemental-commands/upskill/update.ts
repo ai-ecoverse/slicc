@@ -598,6 +598,55 @@ function formatReport(
   return stdout;
 }
 
+/** The fields `list --outdated` and `update` share when classifying skills. */
+export interface SkillUpdateRequest {
+  skills: string[];
+  dryRun: boolean;
+  branch?: string;
+  from?: string;
+  path?: string;
+}
+
+/**
+ * Classify installed skills the same way `upskill update --dry-run` does.
+ * `list --outdated` reuses this instead of reimplementing the sha short-circuit
+ * and per-path vocabulary.
+ */
+export async function collectSkillUpdateResults(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  parsed: SkillUpdateRequest
+): Promise<{
+  results: SkillUpdateResult[];
+  skipped: string[];
+  missing: Array<{ name: string; reason: 'not-installed' | 'no-provenance' }>;
+}> {
+  const { targets, missing, skipped } = await resolveTargets(fs, parsed.skills, {
+    skills: parsed.skills,
+    dryRun: parsed.dryRun,
+    json: false,
+    branch: parsed.branch,
+    from: parsed.from,
+    path: parsed.path,
+  });
+  const results: SkillUpdateResult[] = [];
+  for (const target of targets) {
+    results.push(
+      target.provenance.kind === 'browse.sh'
+        ? await updateBrowseShSkill(fs, fetchFn, target.name, target.provenance, parsed.dryRun)
+        : await updateGitHubSkill(
+            fs,
+            fetchFn,
+            target.name,
+            target.provenance,
+            parsed.branch,
+            parsed.dryRun
+          )
+    );
+  }
+  return { results, skipped, missing };
+}
+
 /**
  * `upskill update|upgrade [<skill>…] [--dry-run] [--branch <ref>] [--json]`
  */
@@ -611,9 +660,9 @@ export async function handleUpskillUpdate(
     return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
   }
 
-  const { targets, missing, skipped } = await resolveTargets(fs, parsed.skills, parsed);
+  const { results, missing, skipped } = await collectSkillUpdateResults(fs, fetchFn, parsed);
 
-  if (targets.length === 0) {
+  if (results.length === 0) {
     // A sweep that found skills but could attribute none of them has nothing to
     // check and nothing to blame: report what it skipped and exit 0, the same
     // way it would with one attributable skill alongside them.
@@ -630,22 +679,6 @@ export async function handleUpskillUpdate(
       ? missing.map(missingMessage).join('')
       : 'upskill: no skill has install provenance yet — reinstall a skill, or run `upskill update <skill> --from <owner>/<repo>`, to record its source\n';
     return { stdout: '', stderr, exitCode: 1 };
-  }
-
-  const results: SkillUpdateResult[] = [];
-  for (const target of targets) {
-    results.push(
-      target.provenance.kind === 'browse.sh'
-        ? await updateBrowseShSkill(fs, fetchFn, target.name, target.provenance, parsed.dryRun)
-        : await updateGitHubSkill(
-            fs,
-            fetchFn,
-            target.name,
-            target.provenance,
-            parsed.branch,
-            parsed.dryRun
-          )
-    );
   }
 
   const failures = results.filter((r) => r.outcome === 'error');

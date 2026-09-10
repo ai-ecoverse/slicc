@@ -6,7 +6,7 @@ description: |
   lick renders a binary action card: `lick_confirm` to Update workspace files
   (three-way merge of bundled `vfs-root` files against the user's local edits)
   or `lick_dismiss` to clear it. Reviewing the changelog from GitHub, and
-  checking installed skills for updates with `upskill update --dry-run`, are
+  checking installed skills for updates with `upskill list --outdated`, are
   separate steps you can run first. Never auto-applies; the user resolves the
   card.
 allowed-tools: bash, read_file, write_file, edit_file
@@ -80,10 +80,10 @@ The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`
 A new SLICC release is a good moment to check them. This is read-only:
 
 ```bash
-upskill update --dry-run
+upskill list --outdated
 ```
 
-It reads each skill's `.upskill` provenance record (written at install time: source repo, ref, resolved commit, file list) and compares the recorded commit against the ref's head. Skills whose commit has not moved report `already current` without downloading anything; the rest are fetched and classified with the same vocabulary as `upgrade apply` — `unchanged`, `updated`, `added`, `removed`, `kept-local`.
+It reuses the same classification as `upskill update --dry-run`: each skill's `.upskill` provenance record (source repo, ref, resolved commit, file list) compared against the ref's head. Only skills a bare `upskill update` would actually change are listed. Skills with no record are omitted with a skipped count — they are not printed as current. Exit 0 whether or not anything is stale; a skill whose check itself failed still exits 1. Use `upskill update --dry-run` when you want the per-file `unchanged` / `updated` / `added` / `removed` / `kept-local` breakdown.
 
 Report what would change and let the user decide. To apply:
 
@@ -105,5 +105,5 @@ Notes worth knowing:
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
 - Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, `/shared/MEMORY.md`, and `/etc/` without the user explicitly extending the scope.
-- Do not run `upskill update` (without `--dry-run`) unless the user asks for it — the dry run is the safe default when you are volunteering the check.
+- Do not run `upskill update` (without `--dry-run`) unless the user asks for it — `upskill list --outdated` (or `upskill update --dry-run`) is the safe default when you are volunteering the check.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

@@ -11,6 +11,34 @@ import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
 import { formatDiscoveredSkills, formatDiscoveryScope, formatSkillInfo } from './help.js';
 
+async function handleSkillList(
+  args: string[],
+  fs: VirtualFS,
+  skills: typeof import('../../../skills/index.js')
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const unknown = args.slice(1).find((token) => token.startsWith('-'));
+  if (unknown) {
+    return {
+      stdout: '',
+      stderr: `skill: unknown option "${unknown}" for list\n`,
+      exitCode: 1,
+    };
+  }
+  const discovered = await skills.discoverSkills(fs);
+  if (discovered.length === 0) {
+    return {
+      stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}Install skills with: upskill owner/repo --all\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  return {
+    stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
 /**
  * Create skill command as an alias for upskill with local operations only.
  */
@@ -48,23 +76,8 @@ Examples:
 
     try {
       switch (subcommand) {
-        case 'list': {
-          const discovered = await skills.discoverSkills(fs);
-
-          if (discovered.length === 0) {
-            return {
-              stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}Install skills with: upskill owner/repo --all\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-
-          return {
-            stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
-            stderr: '',
-            exitCode: 0,
-          };
-        }
+        case 'list':
+          return handleSkillList(args, fs, skills);
 
         case 'info': {
           const name = args[1];

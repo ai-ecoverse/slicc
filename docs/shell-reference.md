@@ -1048,6 +1048,14 @@ Skill package manager. Installs into `/workspace/skills/<name>/` from three regi
 | `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                 |
 | `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`. |
 
+### `upskill list [--outdated] [--json]`
+
+Lists discoverable local skills (native `/workspace/skills` plus compatibility roots). Default output is the "what can I use right now" table, including provenance-less runtime-bundled skills.
+
+`--outdated` restricts the listing to the subset a bare `upskill update` would actually change. It reuses the `update --dry-run` classification (sha short-circuit, then per-path `unchanged` / `updated` / `added` / `removed` / `kept-local`). Skills with no `.upskill` record cannot be assessed and are omitted, with a one-line footer count — they are not printed as current. Exit code is 0 whether or not anything is stale. A skill whose check itself failed (network, missing upstream path) is not stale-vs-current information: it is reported, `ok` is false, and the exit code is 1 — the same contract as `update --dry-run`.
+
+`--json` emits `{ ok, skills[] }` for the default listing, or `{ ok, results[], skipped[] }` under `--outdated` (`results` is the stale skills plus any check failures; `skipped` is the name-sorted unattributed list). Unknown flags exit non-zero and name the offending flag.
+
 ### `upskill update|upgrade [<skill>…] [--dry-run] [--branch <ref>] [--from <owner>/<repo>] [--path <dir>] [--json]`
 
 Re-installs skills from the source recorded at install time, so refreshing a skill no longer means remembering the repo and running `--force`. With no skill name, every skill that has provenance is updated.

@@ -90,6 +90,16 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(uninstallResult.stderr).toContain('unknown command');
   });
 
+  it('skill list rejects an unknown flag instead of ignoring it', async () => {
+    const result = await createSkillCommand(fs).execute(
+      ['list', '--this-flag-is-nonsense'],
+      createMockCtx() as never
+    );
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('--this-flag-is-nonsense');
+  });
+
   it('upskill list uses unified local discovery wording', async () => {
     await fs.mkdir('/repo/.agents/skills/local-agent-skill', { recursive: true });
     await fs.writeFile('/repo/.agents/skills/local-agent-skill/SKILL.md', '# Local Agent Skill');
