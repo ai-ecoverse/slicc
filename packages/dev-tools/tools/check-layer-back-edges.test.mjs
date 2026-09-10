@@ -10,11 +10,13 @@ import {
   findChromeExtensionWebappEscapes,
   findCrossPackageEscapes,
   findLayerBackEdges,
+  findWebcomponentsWebappEscapes,
   isWebappSource,
   layerOf,
   scanBackEdges,
   scanChromeExtensionWebappEscapes,
   scanCrossPackageEscapes,
+  scanWebcomponentsWebappEscapes,
 } from './check-layer-back-edges.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -320,6 +322,102 @@ describe('check-layer-back-edges: findChromeExtensionWebappEscapes', () => {
   });
 });
 
+describe('check-layer-back-edges: findWebcomponentsWebappEscapes', () => {
+  it('flags a synthetic webcomponents → webapp/src import (the #3027 cycle)', () => {
+    const source = "import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';";
+    expect(
+      findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.stories.ts', source)
+    ).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/wc/wc-memory.js',
+        to: 'packages/webapp/src/ui/wc/wc-memory.js',
+      },
+    ]);
+  });
+
+  it('flags the same climb from a webcomponents test file', () => {
+    const source = "import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';";
+    expect(
+      findWebcomponentsWebappEscapes('tests/memory/slicc-memory-panel.test.ts', source)
+    ).toHaveLength(1);
+  });
+
+  it('flags a type-only import — webcomponents has no kernel/messages exemption', () => {
+    const source =
+      "import type { ExtensionMessage } from '../../../webapp/src/kernel/messages.js';";
+    expect(findWebcomponentsWebappEscapes('src/memory/memory-rows.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/kernel/messages.js',
+        to: 'packages/webapp/src/kernel/messages.js',
+      },
+    ]);
+  });
+
+  it('flags a dynamic import() targeting webapp/src', () => {
+    const source = "async function f() { await import('../../../webapp/src/ui/wc/wc-memory.js'); }";
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/wc/wc-memory.js',
+        to: 'packages/webapp/src/ui/wc/wc-memory.js',
+      },
+    ]);
+  });
+
+  it('flags a template-literal import() targeting webapp/src', () => {
+    const source = 'async function f() { await import(`../../../webapp/src/ui/wc/wc-memory.js`); }';
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/wc/wc-memory.js',
+        to: 'packages/webapp/src/ui/wc/wc-memory.js',
+      },
+    ]);
+  });
+
+  it('flags a concatenated specifier targeting webapp/src', () => {
+    const source = "import('../../../webapp' + '/src/ui/wc/wc-memory.js');";
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/wc/wc-memory.js',
+        to: 'packages/webapp/src/ui/wc/wc-memory.js',
+      },
+    ]);
+  });
+
+  it('flags a triple-slash reference path targeting webapp/src', () => {
+    const source = '/// <reference path="../../../webapp/src/ui/wc/wc-memory.ts" />\nexport {};';
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([
+      {
+        line: 1,
+        specifier: '../../../webapp/src/ui/wc/wc-memory.ts',
+        to: 'packages/webapp/src/ui/wc/wc-memory.ts',
+      },
+    ]);
+  });
+
+  it('allows imports that stay inside packages/webcomponents', () => {
+    const source = [
+      "import { SliccMemoryPanel } from './slicc-memory-panel.js';",
+      "import { escapeHtml } from '../internal/html.js';",
+    ].join('\n');
+    expect(findWebcomponentsWebappEscapes('src/memory/memory-rows.ts', source)).toEqual([]);
+  });
+
+  it('allows bare package specifiers', () => {
+    const source = "import { createMemoryRows } from '@slicc/webcomponents/memory/rows';";
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([]);
+  });
+
+  it('ignores escapes inside comments', () => {
+    const source = "// import { x } from '../../../webapp/src/ui/wc/wc-memory.js';";
+    expect(findWebcomponentsWebappEscapes('src/memory/slicc-memory-panel.ts', source)).toEqual([]);
+  });
+});
+
 describe('check-layer-back-edges: isWebappSource', () => {
   it('accepts .ts and .tsx source', () => {
     expect(isWebappSource('export-service.ts')).toBe(true);
@@ -388,6 +486,10 @@ describe('check-layer-back-edges: end-to-end over the real tree', () => {
 
   it('no chrome-extension source escapes into packages/webapp/src beyond the one exemption (zero tolerance)', () => {
     expect(scanChromeExtensionWebappEscapes()).toEqual({});
+  });
+
+  it('no webcomponents source or test escapes into packages/webapp/src (zero tolerance)', () => {
+    expect(scanWebcomponentsWebappEscapes()).toEqual({});
   });
 
   it('guard entry script passes and reports the grandfathered count', () => {

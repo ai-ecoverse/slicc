@@ -46,6 +46,12 @@
  * entirely. Zero-tolerance, no baseline: every other form (value imports,
  * dynamic import(), mixed `{ type X, Y }` clauses, namespace/default
  * imports, or a type-only import of any OTHER webapp module) is banned.
+ *
+ * A fourth pass closes the library-cycle gap (#3027): packages/webcomponents
+ * (src and tests) importing FROM packages/webapp/src. webcomponents is a leaf
+ * library that webapp depends on; a relative climb into webapp/src inverts
+ * that stack and is undeclared in package.json. Zero-tolerance, no baseline,
+ * and no type-only exemption — inject a callback or move the helper down.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -208,6 +214,11 @@ export function scanCrossPackageEscapes() {
 }
 
 const CHROME_EXT_SCAN_ROOT = resolve(repoRoot, 'packages/chrome-extension/src');
+const WEBCOMPONENTS_PKG = resolve(repoRoot, 'packages/webcomponents');
+const WEBCOMPONENTS_SCAN_DIRS = [
+  resolve(WEBCOMPONENTS_PKG, 'src'),
+  resolve(WEBCOMPONENTS_PKG, 'tests'),
+];
 
 /**
  * The only packages/webapp/src target a chrome-extension/src file may import,
@@ -251,11 +262,11 @@ const QUOTED_SEGMENT_RE = /['"]([^'"]*)['"]/g;
 // #2891.
 const TRIPLE_SLASH_REFERENCE_RE = /\/\/\/\s*<reference\s+path=["']([^"']+)["']\s*\/>/g;
 
-/** Resolve a chrome-extension/src-relative specifier against `packages/webapp/src`; null if it doesn't land there. */
-function resolveWebappTarget(importerDir, specifier) {
+/** Resolve a scan-root-relative specifier against `packages/webapp/src`; null if it doesn't land there. */
+function resolveWebappTarget(scanRoot, importerDir, specifier) {
   const queryAt = specifier.indexOf('?');
   const abs = resolve(
-    CHROME_EXT_SCAN_ROOT,
+    scanRoot,
     importerDir,
     queryAt >= 0 ? specifier.slice(0, queryAt) : specifier
   );
@@ -264,21 +275,23 @@ function resolveWebappTarget(importerDir, specifier) {
 }
 
 /**
- * Find every relative import in a packages/chrome-extension/src file that
- * targets packages/webapp/src. Returns `[{ line, specifier, to }]`; the one
- * allowed occurrence (a type-only named clause targeting
- * `kernel/messages.ts`) is excluded. Covers quoted specifiers, template
- * literals (interpolated or not), concatenated `+`-joined specifiers inside
- * `import()`/`require()`, and TS triple-slash reference paths — none of
- * those last three forms can ever be the granted type-only exemption, so
- * they are flagged unconditionally whenever they land in webapp/src.
+ * Find every relative import in `source` (rooted at `scanRoot`) that targets
+ * packages/webapp/src. Returns `[{ line, specifier, to }]`. When
+ * `allowTypeOnlyKernelMessages` is true, a top-level `import type { ... }`
+ * clause targeting `kernel/messages.js` is excluded (chrome-extension only).
+ * Covers quoted specifiers, template literals (interpolated or not),
+ * concatenated `+`-joined specifiers inside `import()`/`require()`, and TS
+ * triple-slash reference paths — none of those last three forms can ever be
+ * the granted type-only exemption, so they are flagged unconditionally
+ * whenever they land in webapp/src.
  */
-export function findChromeExtensionWebappEscapes(importerRel, source) {
+function findWebappEscapes(scanRoot, importerRel, source, options = {}) {
+  const allowTypeOnlyKernelMessages = options.allowTypeOnlyKernelMessages === true;
   const importerDir = dirname(importerRel);
 
   const hits = [];
   for (const m of source.matchAll(TRIPLE_SLASH_REFERENCE_RE)) {
-    const to = resolveWebappTarget(importerDir, m[1]);
+    const to = resolveWebappTarget(scanRoot, importerDir, m[1]);
     if (to === null) continue;
     const line = source.slice(0, m.index).split('\n').length;
     hits.push({ line, specifier: m[1], to });
@@ -292,17 +305,19 @@ export function findChromeExtensionWebappEscapes(importerRel, source) {
   // by that shared anchor to know whether a given RELATIVE_IMPORT_RE hit was
   // produced by a `import type { ... } from` clause.
   const typeOnlyFromIndices = new Map();
-  for (const m of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
-    const fromOffset = m[0].lastIndexOf('from');
-    const fromIndex = m.index + fromOffset;
-    const list = typeOnlyFromIndices.get(m[1]) ?? [];
-    list.push(fromIndex);
-    typeOnlyFromIndices.set(m[1], list);
+  if (allowTypeOnlyKernelMessages) {
+    for (const m of stripped.matchAll(TYPE_ONLY_NAMED_CLAUSE_RE)) {
+      const fromOffset = m[0].lastIndexOf('from');
+      const fromIndex = m.index + fromOffset;
+      const list = typeOnlyFromIndices.get(m[1]) ?? [];
+      list.push(fromIndex);
+      typeOnlyFromIndices.set(m[1], list);
+    }
   }
 
   for (const m of stripped.matchAll(RELATIVE_IMPORT_RE)) {
     const specifier = m[1];
-    const targetRel = resolveWebappTarget(importerDir, specifier);
+    const targetRel = resolveWebappTarget(scanRoot, importerDir, specifier);
     if (targetRel === null) continue;
 
     const isTypeOnlyOccurrence = (typeOnlyFromIndices.get(specifier) ?? []).includes(m.index);
@@ -317,7 +332,7 @@ export function findChromeExtensionWebappEscapes(importerRel, source) {
     const line = stripped.slice(0, m.index).split('\n').length;
     if (!raw.includes('$')) {
       // Fully static — resolve exactly like a quoted specifier.
-      const targetRel = resolveWebappTarget(importerDir, raw);
+      const targetRel = resolveWebappTarget(scanRoot, importerDir, raw);
       if (targetRel !== null) hits.push({ line, specifier: raw, to: targetRel });
       continue;
     }
@@ -332,13 +347,34 @@ export function findChromeExtensionWebappEscapes(importerRel, source) {
   for (const m of stripped.matchAll(CONCAT_CALL_ARGS_RE)) {
     const segments = [...m[1].matchAll(QUOTED_SEGMENT_RE)].map((seg) => seg[1]);
     const joined = segments.join('');
-    const targetRel = resolveWebappTarget(importerDir, joined);
+    const targetRel = resolveWebappTarget(scanRoot, importerDir, joined);
     if (targetRel === null) continue;
     const line = stripped.slice(0, m.index).split('\n').length;
     hits.push({ line, specifier: joined, to: targetRel });
   }
 
   return hits;
+}
+
+/**
+ * Find every relative import in a packages/chrome-extension/src file that
+ * targets packages/webapp/src. Returns `[{ line, specifier, to }]`; the one
+ * allowed occurrence (a type-only named clause targeting
+ * `kernel/messages.ts`) is excluded.
+ */
+export function findChromeExtensionWebappEscapes(importerRel, source) {
+  return findWebappEscapes(CHROME_EXT_SCAN_ROOT, importerRel, source, {
+    allowTypeOnlyKernelMessages: true,
+  });
+}
+
+/**
+ * Find every relative import in a packages/webcomponents file (src or tests,
+ * package-relative path) that targets packages/webapp/src. Zero-tolerance:
+ * no type-only exemption (#3027).
+ */
+export function findWebcomponentsWebappEscapes(importerRel, source) {
+  return findWebappEscapes(WEBCOMPONENTS_PKG, importerRel, source);
 }
 
 /** Scan the tree; returns `{ 'packages/chrome-extension/src/...': [hit] }` for files that escape. */
@@ -348,6 +384,30 @@ export function scanChromeExtensionWebappEscapes() {
     const srcRel = relative(CHROME_EXT_SCAN_ROOT, abs).split('\\').join('/');
     const hits = findChromeExtensionWebappEscapes(srcRel, readFileSync(abs, 'utf8'));
     if (hits.length > 0) escapes[relative(repoRoot, abs).split('\\').join('/')] = hits;
+  }
+  return escapes;
+}
+
+/** Recursively collect .ts/.tsx files, including tests and stories. */
+function collectTs(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const abs = resolve(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectTs(abs));
+    else if (entry.isFile() && /\.tsx?$/.test(entry.name)) out.push(abs);
+  }
+  return out;
+}
+
+/** Scan webcomponents src+tests; returns `{ 'packages/webcomponents/...': [hit] }` for files that escape. */
+export function scanWebcomponentsWebappEscapes() {
+  const escapes = {};
+  for (const dir of WEBCOMPONENTS_SCAN_DIRS) {
+    for (const abs of collectTs(dir)) {
+      const pkgRel = relative(WEBCOMPONENTS_PKG, abs).split('\\').join('/');
+      const hits = findWebcomponentsWebappEscapes(pkgRel, readFileSync(abs, 'utf8'));
+      if (hits.length > 0) escapes[relative(repoRoot, abs).split('\\').join('/')] = hits;
+    }
   }
   return escapes;
 }
@@ -387,10 +447,25 @@ function sortedCounts(counts) {
   return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
 }
 
+/** Write GitHub-error annotations for an escape map. Returns true when any hit existed. */
+function reportEscapes(escapes, detailForHit) {
+  const files = Object.keys(escapes);
+  if (files.length === 0) return false;
+  for (const file of files) {
+    for (const h of escapes[file]) {
+      process.stderr.write(
+        `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ${detailForHit(h)}\n`
+      );
+    }
+  }
+  return true;
+}
+
 function main() {
   const current = scanBackEdges();
   const escapes = scanCrossPackageEscapes();
   const chromeExtEscapes = scanChromeExtensionWebappEscapes();
+  const webcomponentsEscapes = scanWebcomponentsWebappEscapes();
 
   if (argv.includes('--update')) {
     writeFileSync(BASELINE_PATH, `${JSON.stringify(sortedCounts(current), null, 2)}\n`);
@@ -401,31 +476,28 @@ function main() {
     return;
   }
 
-  if (Object.keys(escapes).length > 0) {
-    for (const [file, hits] of Object.entries(escapes)) {
-      for (const h of hits) {
-        process.stderr.write(
-          `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ` +
-            `a relative import out of packages/webapp/src into ${h.to}. Move the shared code ` +
-            'into @slicc/shared-ts and import it by package name instead.\n'
-        );
-      }
-    }
-    process.exit(1);
-  }
-
-  if (Object.keys(chromeExtEscapes).length > 0) {
-    for (const [file, hits] of Object.entries(chromeExtEscapes)) {
-      for (const h of hits) {
-        process.stderr.write(
-          `::error file=${file},line=${h.line}::${file}:${h.line} imports '${h.specifier}' — ` +
-            'packages/chrome-extension/src must not depend on packages/webapp/src. The only ' +
-            'permitted exception is a top-level `import type { ... }` clause from ' +
-            'kernel/messages.ts (compiles away — no runtime coupling). Move shared protocol ' +
-            'code into @slicc/shared-ts instead.\n'
-        );
-      }
-    }
+  if (
+    reportEscapes(
+      escapes,
+      (h) =>
+        `a relative import out of packages/webapp/src into ${h.to}. Move the shared code ` +
+        'into @slicc/shared-ts and import it by package name instead.'
+    ) ||
+    reportEscapes(
+      chromeExtEscapes,
+      () =>
+        'packages/chrome-extension/src must not depend on packages/webapp/src. The only ' +
+        'permitted exception is a top-level `import type { ... }` clause from ' +
+        'kernel/messages.ts (compiles away — no runtime coupling). Move shared protocol ' +
+        'code into @slicc/shared-ts instead.'
+    ) ||
+    reportEscapes(
+      webcomponentsEscapes,
+      () =>
+        'packages/webcomponents must not depend on packages/webapp/src. Inject a ' +
+        'callback or move the helper into webcomponents instead.'
+    )
+  ) {
     process.exit(1);
   }
 
@@ -456,8 +528,9 @@ function main() {
 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   process.stdout.write(
-    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, and no ` +
-      `packages/chrome-extension/src → packages/webapp/src escapes ` +
+    `ok: no new layer back-edges, no cross-package escapes in packages/webapp/src, no ` +
+      `packages/chrome-extension/src → packages/webapp/src escapes, and no ` +
+      `packages/webcomponents → packages/webapp/src escapes ` +
       `(${total} grandfathered in ${Object.keys(current).length} baselined files)\n`
   );
 }

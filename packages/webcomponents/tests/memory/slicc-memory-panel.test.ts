@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';
+import { createFixtureMemoryRows } from '../../src/memory/fixture-render-markdown.js';
 import { REDACTED_REAL_WORLD_MEMORY_MARKDOWN } from '../../src/memory/redacted-real-world-memory-fixture.js';
 import { SliccMemoryPanel } from '../../src/memory/slicc-memory-panel.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
@@ -129,7 +129,7 @@ describe('slicc-memory-panel', () => {
   it('renders the real-world fixture with bounded titles, useful tags, and a derived count', () => {
     const panel = mount();
     panel.style.cssText = 'width:520px;height:760px';
-    panel.setRows(createMemoryRows(REDACTED_REAL_WORLD_MEMORY_MARKDOWN));
+    panel.setRows(createFixtureMemoryRows(REDACTED_REAL_WORLD_MEMORY_MARKDOWN));
     expect(panel.querySelector('input')?.placeholder).toBe('Search 106 memories…');
 
     const renderedTitleLengths = [...panel.querySelectorAll<HTMLElement>('.mt b')].map(

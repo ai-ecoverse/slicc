@@ -86,6 +86,14 @@ export {
   mountMachineWrittenMemoryFixture,
 } from './memory/machine-written-memory-fixture.js';
 export {
+  createMemoryRows,
+  MEMORY_TITLE_MAX,
+  type MemoryRow,
+  type MemoryTag,
+  parseMemoryRows,
+  type RenderMarkdown,
+} from './memory/memory-rows.js';
+export {
   mountRedactedRealWorldMemoryFixture,
   REDACTED_REAL_WORLD_MEMORY_MARKDOWN,
   REDACTED_REAL_WORLD_MEMORY_PATH,
