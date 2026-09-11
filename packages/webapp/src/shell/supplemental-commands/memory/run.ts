@@ -8,8 +8,11 @@
  * the user, a cone, a scheduled check — inspects that system and pokes it:
  *
  *   show [--cone <folder>]      the cone's memory file, verbatim
- *   status [--json] [--check]   files, budget, curation ledger; --check exits
- *                               non-zero on failed/lying state (P7 seed)
+ *   status [--json] [--check]   files, budget, curation ledger, last scheduled
+ *                               health check; --check exits non-zero on
+ *                               failed/lying state (P7's on-demand twin — the
+ *                               runtime schedules the same checks via
+ *                               scoops/memory-health.ts)
  *   log [--limit N]             per-archive curation ledger, newest first
  *   curate [...]                run a curator pass now, over the seam
  *   dream [...]                 run a memory-dreamer refactoring pass
@@ -60,9 +63,10 @@ All commands except \`status\` require the memory-v2 feature flag.
 
 Commands:
   show [--cone <folder>]     Print the cone's memory file (default: primary cone)
-  status [--json] [--check]  Memory files, budget, and the curation ledger;
-                             --check exits non-zero when the ledger shows a
-                             failed curation or curated-but-empty memory
+  status [--json] [--check]  Memory files, budget, the curation ledger, and the
+                             runtime's last scheduled health check; --check
+                             exits non-zero when the ledger shows a failed
+                             curation or curated-but-empty memory
   log [--limit N]            Per-archive curation ledger, newest first (default 20)
   curate [--archive <file>] [--cone <folder>]
                              Run a memory-curator pass now — the same pass the
@@ -81,6 +85,8 @@ Files:
   /shared/DREAMING.md             Dreamer instructions + config (frontmatter)
   /sessions/index.json            Per-archive curation ledger (memoryPending,
                                   memoryCuratedAt, memoryFailed, memorySkipped)
+  /sessions/.curation/health.json Last scheduled runtime health check (boot +
+                                  daily; written by the kernel, not a model)
 
 Examples:
   memory status --check
@@ -166,6 +172,18 @@ interface ConeMemoryRow {
   chars: number | null;
 }
 
+/**
+ * Where the runtime's scheduled health check persists its last report.
+ * Duplicate of `MEMORY_HEALTH_REPORT_PATH` in `scoops/memory-health.ts` —
+ * shell cannot import scoops; a cross-check test pins the two together.
+ */
+const HEALTH_REPORT_PATH = '/sessions/.curation/health.json';
+
+interface ScheduledCheckSummary {
+  at: string;
+  failures: string[];
+}
+
 interface MemoryStatusReport {
   memoryV2: boolean;
   sessions: number;
@@ -173,6 +191,20 @@ interface MemoryStatusReport {
   cones: ConeMemoryRow[];
   curation: { curated: number; failed: number; pending: number; skipped: number; none: number };
   checks: string[];
+  /** The runtime's last scheduled health check (P7); null when it never ran. */
+  scheduledCheck: ScheduledCheckSummary | null;
+}
+
+async function readScheduledCheck(fs: VirtualFS): Promise<ScheduledCheckSummary | null> {
+  const raw = await readMemoryFile(fs, HEALTH_REPORT_PATH);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as { at?: unknown; failures?: unknown };
+    if (typeof parsed.at !== 'string' || !Array.isArray(parsed.failures)) return null;
+    return { at: parsed.at, failures: parsed.failures.map(String) };
+  } catch {
+    return null;
+  }
 }
 
 async function buildStatusReport(fs: VirtualFS): Promise<MemoryStatusReport> {
@@ -207,6 +239,7 @@ async function buildStatusReport(fs: VirtualFS): Promise<MemoryStatusReport> {
     cones,
     curation,
     checks,
+    scheduledCheck: await readScheduledCheck(fs),
   };
 }
 
@@ -232,6 +265,17 @@ async function handleStatus(args: string[], fs: VirtualFS): Promise<CommandResul
     for (const check of report.checks) output += `  FAIL  ${check}\n`;
   } else {
     output += 'Health:     ok\n';
+  }
+  // The runtime's scheduled check (P7) — proof the system is being verified
+  // by code on a schedule, not only when someone asks.
+  if (report.scheduledCheck) {
+    const { at, failures } = report.scheduledCheck;
+    output +=
+      failures.length > 0
+        ? `Scheduled:  ${at} — ${failures.length} FAILURE(S), see ${HEALTH_REPORT_PATH}\n`
+        : `Scheduled:  ${at} — ok\n`;
+  } else {
+    output += 'Scheduled:  never ran (starts ~90s after boot with memory-v2 on)\n';
   }
   return { stdout: output, stderr: '', exitCode: failed ? 1 : 0 };
 }

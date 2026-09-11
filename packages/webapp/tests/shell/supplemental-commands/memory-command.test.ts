@@ -186,6 +186,45 @@ describe('memory status', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain('missing or empty');
   });
+
+  it('says when the scheduled runtime check has never run', async () => {
+    const result = await run(memoryFs(), ['status']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Scheduled:  never ran');
+  });
+
+  // The shell duplicates the health-report path (`shell/` cannot import
+  // `scoops/`), so write the report where the RUNTIME writes it — through
+  // the scoops module — and require `memory status` to find it there. This
+  // is the cross-check that pins the duplicated literal.
+  it('prints the last scheduled runtime check from where the health module persists it', async () => {
+    const { MEMORY_HEALTH_REPORT_PATH, runScheduledMemoryHealthCheck } = await import(
+      '../../../src/scoops/memory-health.js'
+    );
+    const fs = memoryFs({
+      [INDEX_PATH]: JSON.stringify([entry('a.md', '2026-09-01T00:00:00Z', { memoryFailed: 'x' })]),
+      [PRIMARY_MEMORY]: 'has content',
+    });
+    const writable = fs as unknown as {
+      files: Map<string, string>;
+      writeFile?: (path: string, content: string) => Promise<void>;
+      mkdir?: () => Promise<void>;
+    };
+    writable.writeFile = async (path, content) => void writable.files.set(path, content);
+    writable.mkdir = async () => {};
+    await runScheduledMemoryHealthCheck(fs as never, () => new Date('2026-09-11T12:00:00Z'));
+    expect(fs.files.has(MEMORY_HEALTH_REPORT_PATH)).toBe(true);
+
+    const failing = await run(fs, ['status']);
+    expect(failing.stdout).toContain('Scheduled:  2026-09-11T12:00:00.000Z — 1 FAILURE(S)');
+    expect(failing.stdout).toContain(MEMORY_HEALTH_REPORT_PATH);
+
+    // A healthy report renders as ok.
+    fs.files.set(INDEX_PATH, JSON.stringify([entry('a.md', '2026-09-01T00:00:00Z')]));
+    await runScheduledMemoryHealthCheck(fs as never, () => new Date('2026-09-11T13:00:00Z'));
+    const healthy = await run(fs, ['status']);
+    expect(healthy.stdout).toContain('Scheduled:  2026-09-11T13:00:00.000Z — ok');
+  });
 });
 
 describe('memory log', () => {

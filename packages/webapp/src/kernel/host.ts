@@ -1086,12 +1086,33 @@ function publishGelatiere(
  * through the worker's shared FS and the already-published agent bridge.
  * Lazy for the same reason as the gelatiere seam: the agentic-memory module
  * (and the bundled MEMORY.md it pulls in) stays out of the eager bundle.
+ *
+ * With `memory-v2` on this also starts the P7 scheduled health check
+ * (`scoops/memory-health.ts`): the RUNTIME verifies the curation ledger and
+ * the memory files on a schedule — boot + daily — persisting the numbers to
+ * `/sessions/.curation/health.json` and logging loudly on failure, so memory
+ * upkeep is checked by code rather than requested of the model. Returns the
+ * cancel function for `dispose()`.
  */
-function publishMemoryCuration(sharedFs: VirtualFS | null, log: KernelHostLogger): void {
-  if (!sharedFs) return;
+function publishMemoryCuration(sharedFs: VirtualFS | null, log: KernelHostLogger): () => void {
+  if (!sharedFs) return () => {};
   void import('../scoops/memory-curation-seam.js')
     .then((seam) => seam.publishMemorySeam(seam.createMemorySeam(sharedFs)))
     .catch((err) => log.warn('memory seam failed to publish', err));
+  let cancelled = false;
+  let cancel: (() => void) | null = null;
+  if (isFeatureEnabled('memory-v2')) {
+    void import('../scoops/memory-health.js')
+      .then((health) => {
+        if (cancelled) return;
+        cancel = health.scheduleMemoryHealthChecks(sharedFs, { log });
+      })
+      .catch((err) => log.warn('memory health check failed to schedule', err));
+  }
+  return () => {
+    cancelled = true;
+    cancel?.();
+  };
 }
 
 /** Step 5: the `agent` command's bridge, which needs a shared FS. */
@@ -1167,7 +1188,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //    shell commands. globalThis is identical in worker + page.
   kernelHostGlobals().__slicc_lickManager = lickManager;
   publishGelatiere(orchestrator, lickManager, sharedFs, log);
-  publishMemoryCuration(sharedFs, log);
+  const memoryHealthStop = publishMemoryCuration(sharedFs, log);
 
   // 8a-pre. browser.websocket subscriber registry. The registry owns
   //    the resolved sink dispatchers + the page-side CDP bridge so
@@ -1188,15 +1209,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 8a. /licks-ws bridge to the node-server. Only `node-rest` floats have a
   //     local node-server peer; extension-delegate / extension-direct route
   //     licks through the tray worker instead (see lick-ws-bridge.ts).
-  let lickWsBridgeStop: (() => void) | null = null;
-  if (shouldStartLickWsBridge(capabilityBroker.adapter)) {
-    lickWsBridgeStop = await startLickWsBridgeForHost(
-      lickManager,
-      log,
-      config.localLickWsUrl ?? null,
-      sharedFs
-    );
-  }
+  const lickWsBridgeStop: (() => void) | null = shouldStartLickWsBridge(capabilityBroker.adapter)
+    ? await startLickWsBridgeForHost(lickManager, log, config.localLickWsUrl ?? null, sharedFs)
+    : null;
 
   // 8b. CDP-level NavigationWatcher. `startNavigationWatcherForHost` self-skips
   //     when the CDP transport is the thin extension's `chrome.debugger` Port
@@ -1266,6 +1281,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
         unsubLeader,
         unsubFollower,
         bshWatchdogStop,
+        memoryHealthStop,
         scriptCatalogDispose,
         lickWsBridgeStop,
         navigationWatcherStop,
@@ -1291,6 +1307,7 @@ async function disposeKernelHost(h: {
   unsubLeader: (() => void) | null | undefined;
   unsubFollower: (() => void) | null | undefined;
   bshWatchdogStop: (() => void) | null;
+  memoryHealthStop: (() => void) | null;
   scriptCatalogDispose: (() => void) | null;
   lickWsBridgeStop: (() => void) | null;
   navigationWatcherStop: (() => Promise<void>) | null;
@@ -1307,6 +1324,7 @@ async function disposeKernelHost(h: {
   h.unsubLeader?.();
   h.unsubFollower?.();
   h.bshWatchdogStop?.();
+  h.memoryHealthStop?.();
   h.scriptCatalogDispose?.();
   h.lickWsBridgeStop?.();
   h.syncFsResponderDispose?.();

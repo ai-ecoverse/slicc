@@ -36,7 +36,8 @@ memory dream [--cone <folder>] [--all] [--wait]      # consolidate memory (dream
 
 - **Budget** grows logarithmically with the archived-session count; the curator is told to stay under it.
 - **Curation tally** counts index entries by ledger state: curated / failed / pending / skipped / unmarked (pre-ledger or freshly frozen).
-- **`--check`** exits non-zero on the two lying-memory shapes: any archive whose last curation attempt failed, or archives reporting success while the primary memory file is missing or empty. Use it in scheduled health checks — a clean run exits 0.
+- **`--check`** exits non-zero on the two lying-memory shapes: any archive whose last curation attempt failed, or archives reporting success while the primary memory file is missing or empty. A clean run exits 0.
+- **`Scheduled:`** shows the runtime's own health check — the kernel runs the same checks ~90s after boot and daily without being asked, persisting the numbers to `/sessions/.curation/health.json`. If that line says `never ran` long after boot, or names failures, the memory system needs attention even if nobody asked about it.
 
 ## Notes
 

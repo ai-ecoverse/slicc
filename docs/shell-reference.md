@@ -1083,6 +1083,11 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
 - `status --check` fails (exit 1) on the two "memory system that lies" shapes: an archive whose
   last curation attempt failed, or archives reporting successful curation while the primary memory
   file is missing or empty. Without `--check` the same findings print but exit 0.
+- The same checks also run WITHOUT being asked: with `memory-v2` on, the kernel schedules a
+  health check (~90s after boot, then daily — `scoops/memory-health.ts`) that persists its
+  numbers to `/sessions/.curation/health.json` and logs an error on failure. An unreadable
+  sessions index counts as a failure, never as "0 sessions, all fine". `memory status` prints
+  the last scheduled result on its `Scheduled:` line.
 - The ledger is `/sessions/index.json`: `memoryCuratedAt` (success), `memoryFailed` (last attempt's
   reason), `memoryPending` (owed), `memorySkipped` (user opted out).
 - `curate` runs the same pass the session freezer runs — snapshot → curator scoop → three-way
