@@ -394,6 +394,35 @@ export class LeaderTrayManager {
     await this.store.clear();
   }
 
+  /** The session the manager is currently leading, or null. */
+  getCurrentSession(): LeaderTraySession | null {
+    return this.currentSession;
+  }
+
+  /**
+   * Point followers and cached webhook URLs of an abandoned tray at their
+   * replacement. Public counterpart to the recovery path's internal call, for
+   * a caller that abandons a tray deliberately rather than on a stale-session
+   * error — `host reset` (`pageLeaderTray.reset()`).
+   *
+   * Without it, a reset re-mints the tray and leaves the old one with no
+   * forwarding address: followers dead-end on TRAY_EXPIRED and an external
+   * service's cached webhook URL POSTs into a tray that 410s, losing the event
+   * silently — the #1957 failure mode, reachable through the reset button as
+   * surely as through a crash. Best-effort and fire-and-forget, exactly like
+   * the recovery-path call: never awaited by the caller, every failure caught
+   * here, bounded by its own timeout.
+   */
+  supersedePreviousSession(
+    oldSession: LeaderTraySession,
+    next: { joinUrl: string; webhookUrl: string }
+  ): void {
+    // Superseding a tray with itself would make it redirect to its own join
+    // URL forever — guard the degenerate case a mis-sequenced caller could hit.
+    if (oldSession.trayId === '' || next.joinUrl === oldSession.joinUrl) return;
+    void this.notifyTraySuperseded(oldSession, next.joinUrl, next.webhookUrl);
+  }
+
   sendControlMessage(message: LeaderToWorkerControlMessage): void {
     if (!this.socket) {
       throw new Error('Tray leader WebSocket is not connected');

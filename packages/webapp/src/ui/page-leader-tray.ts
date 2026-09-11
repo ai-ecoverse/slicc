@@ -658,12 +658,27 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       leader.stop();
     },
     async reset(): Promise<LeaderTrayRuntimeStatus> {
+      // Capture the tray we are abandoning BEFORE stop()/clearSession() drop it,
+      // so we can point its followers and cached webhook URLs at the fresh tray.
+      // Without this a reset re-mints and leaves the old tray with no forwarding
+      // address — followers dead-end on TRAY_EXPIRED and an external service's
+      // cached webhook URL POSTs into a tray that 410s, losing the event
+      // silently (the #1957 failure mode, reachable through the reset button).
+      const previous = leader.getCurrentSession();
       sync.stop();
       peers.stop();
       leader.stop();
       await leader.clearSession();
       const session = await leader.start();
       updateUrlBar(session);
+      // Best-effort, fire-and-forget — the manager catches every error and
+      // bounds the request itself, so a hung old tray can never stall the reset.
+      if (previous) {
+        leader.supersedePreviousSession(previous, {
+          joinUrl: session.joinUrl,
+          webhookUrl: session.webhookUrl,
+        });
+      }
       return getLeaderTrayRuntimeStatus();
     },
     leader,

@@ -519,6 +519,83 @@ describe('tray-leader', () => {
     }
   });
 
+  it('supersedePreviousSession points the old tray at the replacement (host reset)', async () => {
+    // `host reset` abandons a tray deliberately, so it must leave the same
+    // forwarding address the stale-session recovery path leaves — otherwise a
+    // cached webhook URL POSTs into the reset tray and 410s, losing the event
+    // silently (#1957, reachable through the reset button).
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store: new MemorySessionStore(),
+      fetchImpl,
+      webSocketFactory: () => new FakeWebSocket(),
+      pingIntervalMs: 60_000,
+    });
+
+    const previous: LeaderTraySession = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'old-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-old',
+      controllerUrl: 'https://tray.example.com/controller/old-token',
+      joinUrl: 'https://tray.example.com/join/old-token',
+      webhookUrl: 'https://tray.example.com/webhook/old-token',
+      runtime: 'slicc-standalone',
+    };
+
+    manager.supersedePreviousSession(previous, {
+      joinUrl: 'https://tray.example.com/join/new-token',
+      webhookUrl: 'https://tray.example.com/webhook/new-token',
+    });
+    // Fire-and-forget: let the internal best-effort POST settle.
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      'https://tray.example.com/api/tray/old-tray/supersede'
+    );
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer old-token');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      joinUrl: 'https://tray.example.com/join/new-token',
+      webhookUrl: 'https://tray.example.com/webhook/new-token',
+    });
+
+    manager.stop();
+  });
+
+  it('supersedePreviousSession is a no-op when the replacement equals the old tray', async () => {
+    // A mis-sequenced caller must never make a tray redirect to its own join
+    // URL — that would be an infinite self-supersede.
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store: new MemorySessionStore(),
+      fetchImpl,
+      webSocketFactory: () => new FakeWebSocket(),
+      pingIntervalMs: 60_000,
+    });
+    const same: LeaderTraySession = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'c',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      runtime: 'slicc-standalone',
+    };
+    manager.supersedePreviousSession(same, {
+      joinUrl: same.joinUrl,
+      webhookUrl: same.webhookUrl,
+    });
+    await Promise.resolve();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    manager.stop();
+  });
+
   it('produces a different join URL after stop → clearSession → start (host reset)', async () => {
     const store = new MemorySessionStore();
     let socketIndex = 0;
