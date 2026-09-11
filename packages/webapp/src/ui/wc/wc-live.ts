@@ -42,6 +42,7 @@ import {
   type WcChatHost,
 } from './wc-chat-host.js';
 import { wireConeActions } from './wc-cone-actions.js';
+import { makeGelatiereCardFallback } from './wc-gelatiere-fallback.js';
 import {
   createWcLiveCallbacks,
   ensureWorkUnitClient,
@@ -1144,6 +1145,16 @@ export function attachWcWorkbench(
     options.standalone?.runtimeMode !== 'hosted-leader'
   ) {
     wireWcWelcome(boot, client, openVfs, welcomeHolder, log);
+  } else {
+    // No onboarding in these floats, but the gelatiere stream still renders
+    // its cards there — and their licks must settle page-side exactly like
+    // the onboarding interceptor would have (dismiss consumed, install/try
+    // stamped and forwarded). Without this, a hosted-leader click leaves the
+    // card open and a dismiss needlessly wakes the cone.
+    welcomeHolder.intercept = makeGelatiereCardFallback({
+      openVfs: async () => (await openVfs()).writer,
+      log,
+    });
   }
 
   const composer = wireWcComposer({
@@ -1335,7 +1346,9 @@ export function attachWcWorkbench(
         refs,
         client,
         getUnits: () => workUnits.currentUnits(),
-
+        // The panel-hosted gelatiere stream (`suggestions` under Memory v2)
+        // must settle its card clicks page-side like the inline dip does.
+        interceptWelcomeLick: (event) => welcomeHolder.intercept?.(event) ?? false,
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
         onAttachImage: makeSprinkleAttachImage(composer, log),

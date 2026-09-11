@@ -585,15 +585,16 @@
         document.getElementById('dots').children[5].style.display = 'none';
       }
 
-      function showAlreadyComplete(text) {
-        ['s1','s2','s3','s4','s5','s6'].forEach(function(id){
-          var el = document.getElementById(id);
-          if (el) el.classList.remove('active');
-        });
-        document.getElementById('footerArea').style.display = 'none';
-        document.getElementById('backBtn').hidden = true;
-        document.getElementById('sDoneText').textContent = text || "You're all set.";
-        document.getElementById('sDone').classList.add('active');
+      // Onboarding is done: the wizard card goes away entirely. No "all
+      // set" copy — the gelatiere's suggestion stream lives in its own
+      // sprinkle (/shared/sprinkles/suggestions/) and the cone posts it on
+      // every delivery, so this dip has nothing left to say. Removed, not
+      // hidden: the dip host styles `.sprinkle-action-card` with its own
+      // `display`, which outranks the `hidden` attribute and would leave an
+      // empty stepper card behind.
+      function showAlreadyComplete() {
+        var wizard = document.querySelector('.sprinkle-action-card');
+        if (wizard) wizard.remove();
       }
 
       // Hide every step until we know which one to show. We never

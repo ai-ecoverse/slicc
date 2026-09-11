@@ -70,11 +70,12 @@ interface ArchiveConeSessionDeps {
   writer: Awaited<ReturnType<FreezerRailDeps['openVfs']>>['writer'];
   /** Root being archived; `undefined` only if the roster is empty. */
   root: RegisteredScoop | undefined;
-  client: Pick<OffscreenClient, 'spawnAgent'>;
+  client: Pick<OffscreenClient, 'spawnAgent' | 'sendSprinkleLick' | 'getScoops'>;
   freezerNew(): HTMLElement | null;
   refreshFreezer(): void;
   runNewSessionFreeze: typeof import('../new-session.js').runNewSessionFreeze;
   runNewSessionFreezeQuick: typeof import('../new-session.js').runNewSessionFreezeQuick;
+  log: BootStageLogger;
 }
 
 /**
@@ -139,8 +140,30 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   const cone = root ? archiveConeTarget(root) : undefined;
   const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
     captureCompleteSnapshotFor(root, frozen);
+  // A session has ended: once its archive is settled, tell the gelatiere
+  // (gated on the `memory-v2` flag and its own interval). Lazy: the store
+  // module drags the bundled GELATIERE.md along, which has no place on the
+  // first-load path.
+  const onSessionSettled = (entry: FrozenSessionIndexEntry | null): void => {
+    void import('./wc-gelatiere.js')
+      .then(({ notifyGelatiereOfSessionEnd }) =>
+        notifyGelatiereOfSessionEnd({
+          client: deps.client,
+          vfs: deps.writer,
+          log: deps.log,
+          cone,
+          archive: entry?.filename,
+        })
+      )
+      .catch((err) => deps.log.warn('gelatiere notification failed to load', err));
+  };
   if (deps.action !== 'save') {
-    await deps.runNewSessionFreezeQuick({ vfs: deps.writer, cone, captureCompleteSnapshot });
+    await deps.runNewSessionFreezeQuick({
+      vfs: deps.writer,
+      cone,
+      captureCompleteSnapshot,
+      onSessionSettled,
+    });
     return;
   }
   await deps.runNewSessionFreeze({
@@ -148,6 +171,7 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
     cone,
     agenticMemorySpawn: (options) => deps.client.spawnAgent(options),
     captureCompleteSnapshot,
+    onSessionSettled,
     onProgress: (fraction) => {
       const el = deps.freezerNew();
       if (!el) return;
@@ -315,6 +339,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           refreshFreezer,
           runNewSessionFreeze,
           runNewSessionFreezeQuick,
+          log,
         });
         // Scoped to the cone we are clearing (#2568): its own `$TMPDIR`
         // subtree, which contains its scoops' scratch too. A sibling cone's

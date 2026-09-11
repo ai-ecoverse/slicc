@@ -52,6 +52,9 @@ const KIND_ICON: Record<string, string> = {
   discovery: 'radar',
   upgrade: 'circle-arrow-up',
   sprinkle: 'sparkles',
+  // The gelatiere's own licks (suggestions delivered to a cone, and the
+  // session-end / run licks it receives) wear the ice-cream cone.
+  gelatiere: 'ice-cream-cone',
   fswatch: 'eye',
   'scoop-notify': 'bell-ring',
   'scoop-idle': 'moon',

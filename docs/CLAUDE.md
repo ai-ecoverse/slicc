@@ -49,6 +49,7 @@ Architecture and build:
 - [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md) — how to add a new shell command, tool, provider, sprinkle, etc.
 - `kernel/process-model.md` — kernel-host / process-manager deep reference
 - `work-unit.md` — ADR for #1666: cone and scoop as roles over one `WorkUnit` runtime; policy table, invariants, migration phases
+- `gelatiere.md` — the gelatiere, SLICC's resident advisor: a persistent root unit that reviews sessions nightly and after a chat ends and suggests skills and use cases; why it is a root, stores, delivery, the welcome-card stream
 - `layouts.md` — the panel system (`SliccPanel` + `<slicc-layout>`), layout documents and their two VFS roots, the `layout` shell command, locking, the Cherry-pushed-layout wire path, and the dock-tree it supersedes
 - `panel-system-design.md` — why the panel system is shaped the way it is: the trust model for agent-authored panels, docked-vs-floating, and the two hardening measures (approval-path capture, trusted layer)
 

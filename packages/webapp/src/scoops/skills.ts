@@ -403,6 +403,7 @@ export async function createDefaultSkills(
 const ALWAYS_OVERWRITE_SHARED = new Set<string>([
   '/shared/sprinkles/welcome/welcome.shtml',
   '/shared/sprinkles/welcome/connect-llm.shtml',
+  '/shared/sprinkles/suggestions/suggestions.shtml',
 ]);
 
 /**

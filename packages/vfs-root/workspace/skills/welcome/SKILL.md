@@ -10,6 +10,8 @@ description: |
   (`first-run`, `onboarding-complete`, `connect-ready`, `connect-attempt`,
   `oauth-attempt`, `shortcut-migrate`, `request-mount`) are intercepted by
   the runtime and do not reach the agent — ignore them if they ever leak.
+  After onboarding the same card turns into the gelatiere's suggestion
+  stream; its `gelatiere-*` licks belong to the `gelatiere` skill, not this one.
 allowed-tools: bash
 ---
 
@@ -54,3 +56,7 @@ Your one and only job is to send a single short reply (≤ 6 sentences total) th
 Do **not** print a capability table, do **not** call `update_global_memory`, do **not** install other skills beyond the `upskill recommendations --install` step below, do **not** edit `/shared/CLAUDE.md`.
 
 After sending the reply, silently run `upskill recommendations --install` (do **not** show the output to the user) to land the user's recommended skill set. The command is profile-driven (it reads `/home/<user>/.welcome.json`, which the webapp persisted when the wizard finished) and idempotent.
+
+## After onboarding: the card stays
+
+Once `/shared/.welcomed` exists, `welcome.shtml` no longer shows the wizard. It renders the open suggestions from `/shared/.gelatiere/suggestions.json` — the gelatiere's stream — as one card each with **Install** / **Try it** / **Not now** buttons, plus a quiet "Done" ledger of taken suggestions (dismissed ones stay out of sight). Those buttons emit `gelatiere-install`, `gelatiere-try` and `gelatiere-dismiss` licks; read `/workspace/skills/gelatiere/SKILL.md` for how to handle them and for the `gelatiere` shell command. Posting `![Suggestions](/shared/sprinkles/welcome/welcome.shtml)` at any time re-renders the stream inline.

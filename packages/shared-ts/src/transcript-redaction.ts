@@ -110,6 +110,18 @@ function findExcluded(input: string): Range[] {
 // Public scanner
 // ---------------------------------------------------------------------------
 
+/** Options for {@link redactCredentialPatterns}. */
+export interface PatternRedactionOptions {
+  /**
+   * Restrict the scan to these categories. Omit for the full set (the
+   * export boundary). Archive-at-rest callers pass a high-precision subset:
+   * the keyword-assignment `password` rule matches ordinary code discussion
+   * (`token = getToken()`), which is acceptable noise in a one-way export
+   * but destroys content the user keeps and searches.
+   */
+  categories?: readonly CredentialCategory[];
+}
+
 /**
  * Scan `input` for named credential patterns and replace each match with
  * `⟦REDACTED:<category>:<idPrefix><n>⟧`. Patterns are processed in priority
@@ -120,13 +132,17 @@ function findExcluded(input: string): Range[] {
 export function redactCredentialPatterns(
   input: string,
   idPrefix: string,
-  firstId = 1
+  firstId = 1,
+  options?: PatternRedactionOptions
 ): PatternRedactionResult {
   const excluded = findExcluded(input);
   const claims: Claim[] = [];
   let nextId = firstId;
 
-  for (const { category, source, flags } of PATTERNS) {
+  const patterns = options?.categories
+    ? PATTERNS.filter((p) => options.categories?.includes(p.category))
+    : PATTERNS;
+  for (const { category, source, flags } of patterns) {
     for (const match of input.matchAll(new RegExp(source, flags))) {
       const start = match.index;
       if (start === undefined) continue;

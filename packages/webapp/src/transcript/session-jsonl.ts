@@ -10,6 +10,7 @@
 
 import type { ChatMessage, MessageAttachment, ToolCall } from '@slicc/shared-ts';
 import { FsError } from '../fs/types.js';
+import { redactChatMessagesAtRest } from './archive-redaction.js';
 import {
   type FrozenSessionArchive,
   parseFrozenArchive,
@@ -221,7 +222,10 @@ export async function writeSessionJsonl(
   messages: readonly ChatMessage[]
 ): Promise<string> {
   const path = sidecarPathForArchive(archiveFilename);
-  await vfs.writeFile(path, chatMessagesToJsonl(messages));
+  // At-rest credential redaction (P0c) — the sidecar is the structured copy
+  // of the same transcript `formatArchiveAsMarkdown` scrubs; both surfaces
+  // must persist clean. Idempotent (markers are excluded from re-scan).
+  await vfs.writeFile(path, chatMessagesToJsonl(redactChatMessagesAtRest(messages)));
   return path;
 }
 

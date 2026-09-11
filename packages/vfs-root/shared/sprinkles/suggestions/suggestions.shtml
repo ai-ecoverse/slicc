@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Suggestions</title>
+    <!-- Rail glyph: the gelatiere's suggestion stream wears the gelatiere's
+         cone. Pickable in the rail under Memory v2 (see sprinkle-discovery),
+         and re-posted into chat by the cone on every delivery per the
+         gelatiere skill. -->
+    <link rel="icon" href="ice-cream-cone" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+        background: transparent;
+        color: var(--s2-content-default, #e8e8e8);
+      }
+
+      /* ── Gelatiere stream ──
+         The sidebar panel / dip host is already a rounded container, so the
+         stream draws NO boxes of its own — flat entries separated by
+         hairlines, one pill button per entry, everything else plain text. */
+      #gelatiereStream[hidden] { display: none; }
+      .gelatiere-entry { padding: 16px 4px; }
+      .gelatiere-entry:first-child { padding-top: 8px; }
+      .gelatiere-entry + .gelatiere-entry,
+      .gelatiere-done {
+        border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
+      }
+      /* WHAT: kind icon + short imperative title; the kind as quiet
+         small caps on the right — no badge pill. */
+      .gelatiere-entry__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.35;
+        color: var(--s2-content-default, #e8e8e8);
+      }
+      .gelatiere-entry__head i { width: 15px; height: 15px; flex-shrink: 0; }
+      .gelatiere-entry__title { flex: 1; }
+      .gelatiere-kind {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        white-space: nowrap;
+      }
+      /* WHY: the one paragraph under the action. */
+      .gelatiere-why {
+        margin-top: 6px;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-cmd {
+        margin-top: 8px;
+        font-size: 11px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        overflow-wrap: anywhere;
+      }
+      .gelatiere-cmd code,
+      .gelatiere-why code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+      /* Buttons sit on the right, dialog-style: quiet "Not now" beside the
+         primary pill. The taken note pushes itself back to the left. */
+      .gelatiere-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 14px;
+        margin-top: 12px;
+      }
+      .gelatiere-actions .gelatiere-taken-note { margin-right: auto; }
+      /* "Not now" is a quiet text button — one pill per entry is plenty. */
+      .gelatiere-quiet-btn {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        cursor: pointer;
+        padding: 4px 0;
+      }
+      .gelatiere-quiet-btn:hover { color: var(--s2-content-secondary, #a1a1a1); }
+      .gelatiere-empty {
+        padding: 4px 2px;
+        font-size: 12px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+      }
+      /* An entry the user just acted on: buttons gone, a quiet confirmation
+         line in their place. The entry stays until the next render. */
+      .gelatiere-entry--taken .gelatiere-entry__head,
+      .gelatiere-entry--taken .gelatiere-why,
+      .gelatiere-entry--taken .gelatiere-cmd { opacity: 0.6; }
+      .gelatiere-taken-note {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--s2-content-positive, #2d9d78);
+      }
+      .gelatiere-taken-note i { width: 14px; height: 14px; flex-shrink: 0; }
+      /* The "Done" ledger under the open entries: one quiet line each. */
+      .gelatiere-done { margin-top: 4px; padding-top: 12px; }
+      .gelatiere-done-title {
+        padding-bottom: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--s2-content-tertiary, #8a8a8a);
+      }
+      .gelatiere-done-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-done-row i {
+        width: 13px;
+        height: 13px;
+        flex-shrink: 0;
+        color: var(--s2-content-positive, #2d9d78);
+      }
+      .gelatiere-done-row .gelatiere-done-title-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .gelatiere-done-row .gelatiere-done-what {
+        color: var(--s2-content-tertiary, #8a8a8a);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The gelatiere's suggestion stream. Filled by renderGelatiereStream()
+         from /shared/.gelatiere/suggestions.json. Split out of
+         welcome.shtml (PR #3005 Track C) so the stream is never hostage to
+         onboarding-surface handling: follower floats used to restart the
+         wizard here, and the extension panel swapped everything under the
+         welcome prefix for a "Set up SLICC" hand-off card. -->
+    <div id="gelatiereStream" hidden></div>
+
+    <script>
+      // The store is plain JSON the dip can read directly; every button is
+      // a lick. `gelatiere-dismiss` is settled by the runtime without
+      // waking the agent; `gelatiere-install` / `gelatiere-try` go to the
+      // cone, which acts on them per the `gelatiere` skill.
+      var GELATIERE_SUGGESTIONS_PATH = '/shared/.gelatiere/suggestions.json';
+      var KIND_LABELS = {
+        'skill':    { label: 'Skill',    icon: 'package' },
+        'use-case': { label: 'Try this', icon: 'sparkles' },
+        'tip':      { label: 'Tip',      icon: 'lightbulb' },
+      };
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
+      }
+
+      function lucide(name) {
+        var ic = document.createElement('i');
+        ic.setAttribute('data-lucide', name);
+        return ic;
+      }
+
+      function gelatierePrimaryButton(label, onClick) {
+        var btn = el('button', 'sprinkle-btn sprinkle-btn--primary', label);
+        btn.type = 'button';
+        btn.onclick = onClick;
+        return btn;
+      }
+
+      function gelatiereQuietButton(label, onClick) {
+        var btn = el('button', 'gelatiere-quiet-btn', label);
+        btn.type = 'button';
+        btn.onclick = onClick;
+        return btn;
+      }
+
+      // WHAT (icon + imperative title + quiet kind label), WHY (one
+      // paragraph), then one pill and a quiet "Not now". Flat on purpose:
+      // the sidebar panel is the box, so the entries draw none of their own.
+      function buildSuggestionCard(s) {
+        var meta = KIND_LABELS[s.kind] || KIND_LABELS.tip;
+        var card = el('div', 'gelatiere-entry');
+        card.dataset.id = s.id;
+
+        var head = el('div', 'gelatiere-entry__head');
+        head.appendChild(lucide(meta.icon));
+        head.appendChild(el('span', 'gelatiere-entry__title', s.title));
+        head.appendChild(el('span', 'gelatiere-kind', meta.label));
+        card.appendChild(head);
+
+        card.appendChild(el('div', 'gelatiere-why', s.body));
+        if (s.install) {
+          var install = el('div', 'gelatiere-cmd');
+          install.appendChild(document.createTextNode('Installs with '));
+          install.appendChild(el('code', null, s.install));
+          card.appendChild(install);
+        }
+
+        var actions = el('div', 'gelatiere-actions');
+        // Taking an entry keeps it visible: the buttons swap for a quiet
+        // confirmation so the user sees what they set in motion. Dismissing
+        // removes it — "Not now" means "stop showing me this".
+        function markTaken(note) {
+          card.classList.add('gelatiere-entry--taken');
+          var done = el('div', 'gelatiere-taken-note');
+          done.appendChild(lucide('check'));
+          done.appendChild(document.createTextNode(note));
+          actions.replaceChildren(done);
+          if (window.LucideIcons) window.LucideIcons.render();
+        }
+        // "Not now" first in the DOM: the row is right-aligned, so the quiet
+        // button sits left of the primary pill, which keeps the right edge.
+        actions.appendChild(gelatiereQuietButton('Not now', function () {
+          if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
+          card.remove();
+          if (!document.querySelector('.gelatiere-entry')) renderGelatiereEmpty('All caught up.');
+        }));
+        if (s.kind === 'skill') {
+          actions.appendChild(gelatierePrimaryButton('Install', function () {
+            if (window.slicc) slicc.lick({ action: 'gelatiere-install',
+              data: { id: s.id, skill: s.skill || null, install: s.install || null, title: s.title } });
+            markTaken('Installing — the cone is on it.');
+          }));
+        } else if (s.kind === 'use-case' && s.prompt) {
+          actions.appendChild(gelatierePrimaryButton('Try it', function () {
+            if (window.slicc) slicc.lick({ action: 'gelatiere-try',
+              data: { id: s.id, prompt: s.prompt, title: s.title } });
+            markTaken('Sent to the cone — watch the chat.');
+          }));
+        } else if (s.url && /^https?:\/\//i.test(s.url)) {
+          // The store already drops non-http(s) urls; this is the render-side belt.
+          var link = el('a', 'gelatiere-quiet-btn', 'Read more');
+          link.href = s.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          actions.appendChild(link);
+        }
+        card.appendChild(actions);
+        return card;
+      }
+
+      // What the user already acted on, one quiet line each — proof the
+      // stream remembers, and a nudge that dismissed things stay gone.
+      var DONE_LEDGER_LIMIT = 5;
+      function buildDoneLedger(taken) {
+        var wrap = el('div', 'gelatiere-done');
+        wrap.appendChild(el('div', 'gelatiere-done-title', 'Done'));
+        taken.slice(0, DONE_LEDGER_LIMIT).forEach(function (s) {
+          var row = el('div', 'gelatiere-done-row');
+          row.appendChild(lucide('check'));
+          row.appendChild(el('span', 'gelatiere-done-title-text', s.title));
+          row.appendChild(el('span', 'gelatiere-done-what',
+            s.kind === 'skill' ? 'installed' : 'tried'));
+          wrap.appendChild(row);
+        });
+        return wrap;
+      }
+
+      function renderGelatiereEmpty(text) {
+        var stream = document.getElementById('gelatiereStream');
+        stream.innerHTML = '';
+        stream.appendChild(el('div', 'gelatiere-empty', text));
+        stream.hidden = false;
+      }
+
+      function renderGelatiereStream() {
+        var stream = document.getElementById('gelatiereStream');
+        if (!stream) return;
+        // No bridge, or a bridge that cannot read the store (a follower
+        // rendering the leader's rail): the quiet empty line, never an error
+        // box and never a wizard.
+        if (!window.slicc || typeof slicc.readFile !== 'function') {
+          renderGelatiereEmpty('Nothing from the gelatiere yet.');
+          return;
+        }
+        // `exists` first: a missing store is the ordinary state before the
+        // first pass, and a failed `readFile` logs a console error upstream.
+        Promise.resolve(slicc.exists(GELATIERE_SUGGESTIONS_PATH)).then(function (present) {
+          return present ? slicc.readFile(GELATIERE_SUGGESTIONS_PATH) : '[]';
+        }).then(function (raw) {
+          var list = [];
+          try { list = JSON.parse(raw); } catch (e) { list = []; }
+          if (!Array.isArray(list)) list = [];
+          var readable = list.filter(function (s) {
+            return s && typeof s === 'object' && s.id && s.title && s.body;
+          });
+          // Three states: open cards up top, a "Done" ledger for what was
+          // taken, and dismissed ones simply gone (the store keeps them so
+          // a later pass cannot resurrect what the user waved away).
+          var open = readable.filter(function (s) { return !s.dismissedAt && !s.takenAt; });
+          var taken = readable.filter(function (s) { return s.takenAt; });
+          if (open.length === 0 && taken.length === 0) {
+            renderGelatiereEmpty('Nothing from the gelatiere right now.');
+            return;
+          }
+          stream.innerHTML = '';
+          if (open.length === 0) stream.appendChild(el('div', 'gelatiere-empty', 'All caught up.'));
+          open.forEach(function (s) { stream.appendChild(buildSuggestionCard(s)); });
+          if (taken.length > 0) stream.appendChild(buildDoneLedger(taken));
+          stream.hidden = false;
+          if (window.LucideIcons) window.LucideIcons.render();
+        }, function () {
+          renderGelatiereEmpty('Nothing from the gelatiere yet.');
+        });
+      }
+
+      renderGelatiereStream();
+    </script>
+  </body>
+</html>

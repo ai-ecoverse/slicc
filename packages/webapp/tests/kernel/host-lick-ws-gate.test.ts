@@ -37,7 +37,7 @@ describe('host.ts lick-ws gate wiring (source)', () => {
   it('guards startLickWsBridgeForHost with shouldStartLickWsBridge()', () => {
     // The bridge start is reached ONLY when the (unit-tested) predicate is true.
     expect(source).toMatch(
-      /if \(shouldStartLickWsBridge\(capabilityBroker\.adapter\)\)\s*\{[\s\S]*?startLickWsBridgeForHost\(/
+      /shouldStartLickWsBridge\(capabilityBroker\.adapter\)\s*\?\s*await startLickWsBridgeForHost\(/
     );
   });
 

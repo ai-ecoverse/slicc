@@ -18,6 +18,13 @@ vi.mock('../../../src/scoops/welcome-detection.js', () => ({
   hasOnboardingFinalLickInHistory: vi.fn(async () => true),
 }));
 
+const mockDismissGelatiereSuggestion = vi.fn(async (_vfs: unknown, _id: string) => true);
+const mockTakeGelatiereSuggestion = vi.fn(async (_vfs: unknown, _id: string) => true);
+vi.mock('../../../src/base/gelatiere-store.js', () => ({
+  dismissGelatiereSuggestion: (vfs: unknown, id: string) => mockDismissGelatiereSuggestion(vfs, id),
+  takeGelatiereSuggestion: (vfs: unknown, id: string) => mockTakeGelatiereSuggestion(vfs, id),
+}));
+
 const LEDGER_KEY = 'slicc:welcome-flow-fired';
 
 function makeFakeStorage(initial: Record<string, string> = {}): Storage {
@@ -256,5 +263,64 @@ describe('createWelcomeLickInterceptor', () => {
     await vi.waitFor(() => {
       expect(deps.fastForward.fire).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('gelatiere card licks', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', makeFakeStorage());
+    mockDismissGelatiereSuggestion.mockClear();
+    mockTakeGelatiereSuggestion.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('settles gelatiere-dismiss page-side against the VFS and never reaches the cone', async () => {
+    const vfs = { writeFile: vi.fn() };
+    const deps = makeDeps({ vfs: vfs as never });
+    const intercept = createWelcomeLickInterceptor(deps);
+    const inline: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'inline',
+      timestamp: new Date().toISOString(),
+      body: { action: 'gelatiere-dismiss', data: { id: 'skill-github' } },
+    };
+    expect(intercept(inline)).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
+  });
+
+  it("settles a dismiss from the rail-opened stream ('suggestions' sprinkleName)", async () => {
+    const vfs = { writeFile: vi.fn() };
+    const intercept = createWelcomeLickInterceptor(makeDeps({ vfs: vfs as never }));
+    const railLick: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'suggestions',
+      timestamp: new Date().toISOString(),
+      body: { action: 'gelatiere-dismiss', data: { id: 'skill-github' } },
+    };
+    expect(intercept(railLick)).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
+  });
+
+  it('swallows a malformed dismiss without touching the store', () => {
+    const intercept = createWelcomeLickInterceptor(makeDeps());
+    expect(intercept(welcomeLick('gelatiere-dismiss', {}))).toBe(true);
+    expect(mockDismissGelatiereSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('marks install / try as TAKEN in the store AND lets them through to the cone', async () => {
+    const vfs = { writeFile: vi.fn() };
+    const intercept = createWelcomeLickInterceptor(makeDeps({ vfs: vfs as never }));
+    expect(intercept(welcomeLick('gelatiere-install', { id: 'skill-github' }))).toBe(false);
+    expect(intercept(welcomeLick('gelatiere-try', { id: 'use-case-x', prompt: 'p' }))).toBe(false);
+    await vi.waitFor(() => expect(mockTakeGelatiereSuggestion).toHaveBeenCalledTimes(2));
+    expect(mockTakeGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
+    expect(mockTakeGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'use-case-x');
+    // Taken, not dismissed: the stream's Done ledger keys on the difference.
+    expect(mockDismissGelatiereSuggestion).not.toHaveBeenCalled();
   });
 });

@@ -53,6 +53,15 @@ Three things carry across sessions, and each has its own place in the archive:
 
 Pitfalls are the highest-value and most-often-lost category: a failure that cost half an hour is worth one line next time. Keep the error text that identifies it, not the stack trace.
 
+## Entry grammar: provenance and supersession
+
+Facts age. Write every entry so a later pass can tell whether it still holds:
+
+- Prefix entries with their actor: `human:` for what the user said, `process:` for what you inferred from tool output. Example: `- human: prefers rebase over merge (2026-09-11)`.
+- Version-pin claims that can rot: name the version, commit, or file the claim was verified against, e.g. `- process: coverage floor is 83% (coverage-thresholds.json @ 6.146.2)`. Never record a confidence score — what ages is the pin, not a probability.
+- A claim with a known expiry carries `stale_after: YYYY-MM-DD`, an absolute date, never a duration. Past that date the claim counts as unverified.
+- **Supersede, never append.** When this session proves a stored claim wrong, rewrite the claim in place — a claim and its correction must never both stand as prose. When the refuted claim is itself a trap worth remembering, record it under a `## Not true` section instead: `- not: <refuted claim> — why: <evidence> — instead: <correction> (YYYY-MM-DD)`.
+
 ## Reading the session archive
 
 **Never `cat` the archive and never `head` it.** Archives reach several megabytes, and the machine-readable `<!-- slicc:session-data ... -->` block is a _single line_ holding the whole session as JSON — roughly half the file. Reading it costs a fortune and tells you nothing the prose below it does not. Whole `### Tool` result bodies are the other half and are equally not worth reading.
@@ -120,7 +129,7 @@ Rules:
 - Write the result to {{MEMORY_PATH}}; do not merely return it in your response.
 
 <!-- How to customize
-Add curator instructions here, for example: also update the knowledge base at /path following its WIKI.md. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
+Add curator instructions here, for example: also file durable topical knowledge into the shared wiki at /shared/wiki following /shared/wiki/WIKI.md (add /shared/wiki/ to writablePaths first). By default moving knowledge into the wiki is the nightly dreamer's job (/shared/DREAMING.md), not the per-session curator's. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
 
 {{MEMORY_PATH}} resolves to a staged per-archive draft under /sessions/.curation/, not the live memory file: the pass snapshots the live file when it spawns, the curator rewrites the draft, and on a successful exit the runtime three-way-merges the rewrite back onto the live file. Edits the cone or the user makes to the live memory while the curator runs survive; where both sides changed the same lines the curator's version wins. An entry in writablePaths naming the memory file is substituted with the draft automatically, so this file keeps working unchanged. A failed or killed run leaves the live memory untouched and its outcome recorded at /sessions/.curation/<archive>/status.json.
 

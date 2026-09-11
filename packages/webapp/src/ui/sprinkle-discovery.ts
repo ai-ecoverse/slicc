@@ -13,6 +13,7 @@
  */
 
 import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import { shouldSkipNoiseDir, walkBounded } from '../fs/bounded-walk.js';
 import type { VirtualFS } from '../fs/index.js';
 
@@ -45,7 +46,21 @@ const MAX_SCAN_DIRS = 500;
  * `discoverSprinkles` so they never appear in the rail's [+] picker,
  * the panel registry, or anywhere else that lists pickable sprinkles.
  */
-const HIDDEN_SPRINKLES = new Set<string>(['welcome', 'connect-llm']);
+const HIDDEN_SPRINKLES = new Set<string>(['connect-llm', 'welcome']);
+
+/**
+ * The gelatiere's suggestion stream (`suggestions.shtml`, split out of the
+ * onboarding-only welcome sprinkle) is pickable once Memory v2 turns the
+ * gelatiere on — it stays in the rail (wearing the ice-cream-cone icon from
+ * its `.shtml`) so incoming tips and suggestions have a place the user can
+ * reopen. Without the flag there is nothing to stream, so it hides with the
+ * onboarding sprinkles.
+ */
+function isHiddenSprinkle(name: string): boolean {
+  if (HIDDEN_SPRINKLES.has(name)) return true;
+  if (name === 'suggestions') return !isFeatureEnabled('memory-v2');
+  return false;
+}
 
 export interface Sprinkle {
   /** basename without .shtml */
@@ -104,7 +119,7 @@ async function scanDir(
   for await (const filePath of walk) {
     if (!filePath.endsWith('.shtml')) continue;
     const name = sprinkleName(filePath);
-    if (HIDDEN_SPRINKLES.has(name)) continue;
+    if (isHiddenSprinkle(name)) continue;
     if (!sprinkles.has(name)) {
       let content: string;
       try {

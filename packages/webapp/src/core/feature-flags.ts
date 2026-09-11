@@ -84,7 +84,8 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
   Object.freeze({
     id: 'memory-v2',
     label: 'Memory v2',
-    description: 'Searchable session history and scoop pre-compaction snapshots for agent memory.',
+    description:
+      'Searchable session history, scoop pre-compaction snapshots, and the gelatiere — a resident advisor that reviews your sessions and suggests skills and use cases.',
     defaultValue: 'off',
     userToggleable: true,
   }),

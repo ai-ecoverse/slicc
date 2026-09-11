@@ -238,6 +238,14 @@ export interface AgentSpawnOptions {
    */
   name?: string;
   /**
+   * Other fixed names this spawn must not run alongside. Rejected exactly
+   * like a live namesake (`AGENT_NAME_IN_USE_PREFIX`) when a scoop under any
+   * of these names is still registered. Two agents that rewrite the SAME
+   * file under different names — the memory curator and the memory dreamer
+   * of one cone — use this so their three-way merges never race.
+   */
+  exclusiveWith?: string[];
+  /**
    * Hard turn ceiling for the spawned run (#1972). Enforced in
    * `ScoopContext` where the agent loop runs — the run stops at the
    * bound and the spawn resolves with a non-zero exit carrying the
@@ -1038,8 +1046,15 @@ export function createAgentBridge(
     // crashed one not yet cleaned up — reusing the name would clobber its
     // session history and scratch folder. Reject rather than collide; the
     // random path can never hit this (it excludes live JIDs by construction).
-    if (options.name !== undefined && ctx.orchestrator.getScoops().some((s) => s.jid === jid)) {
+    const liveJids = new Set(ctx.orchestrator.getScoops().map((s) => s.jid));
+    if (options.name !== undefined && liveJids.has(jid)) {
       return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
+    }
+    // Same rejection for a live rival (see `exclusiveWith`): a malformed
+    // rival token maps to a jid nothing can register under, so it never matches.
+    const rival = (options.exclusiveWith ?? []).find((n) => liveJids.has(`agent_${tokenToJid(n)}`));
+    if (rival !== undefined) {
+      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${rival}`, exitCode: 1 };
     }
     const scratchFolder = `/scoops/${folder}`;
 

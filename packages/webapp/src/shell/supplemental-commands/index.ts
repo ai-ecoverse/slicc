@@ -29,6 +29,7 @@ import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFfprobeCommand } from './ffprobe-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
+import { createGelatiereCommand } from './gelatiere-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
 import { createHfCommand } from './hf-command.js';
@@ -45,6 +46,7 @@ import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
 import { createMcpCommand } from './mcp-command.js';
 import { createMeminfoCommand } from './meminfo-command.js';
+import { createMemoryCommand } from './memory-command.js';
 import { createMktempCommand } from './mktemp-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createNodeCommand } from './node-command.js';
@@ -200,6 +202,32 @@ function secretCommandDeps(options: SupplementalCommandsConfig): SecretCommandDe
   };
 }
 
+/**
+ * The package-manager family (`ipk`/`npm`/`i`, `ipx`/`npx`, `di`/`uv`,
+ * `upgrade`) — every one of them needs BOTH a VFS and a fetch, so the whole
+ * group registers together or not at all.
+ */
+function packageManagerCommands(options: SupplementalCommandsConfig): Command[] {
+  const { fs, fetch } = options;
+  if (!fs || !fetch) return [];
+  const ipkDeps = {
+    fs,
+    fetch,
+    scriptCatalog: options.scriptCatalog,
+    syncScriptCommands: options.syncScriptCommands,
+  };
+  return [
+    createIpkCommand('ipk', ipkDeps),
+    createIpkCommand('npm', ipkDeps),
+    createIpkCommand('i', ipkDeps),
+    createIpxCommand('ipx', { fs, fetch }),
+    createIpxCommand('npx', { fs, fetch }),
+    createDiCommand('di', { fs, fetch }),
+    createDiCommand('uv', { fs, fetch }),
+    createUpgradeCommand({ fs, fetch }),
+  ];
+}
+
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({
@@ -230,33 +258,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createNodeCommand({ buildProcessConfig: options.buildProcessConfig }),
     createPython3LikeCommand('python3', { buildProcessConfig: options.buildProcessConfig }),
     createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
-    ...(options.fs && options.fetch
-      ? [
-          createIpkCommand('ipk', {
-            fs: options.fs,
-            fetch: options.fetch,
-            scriptCatalog: options.scriptCatalog,
-            syncScriptCommands: options.syncScriptCommands,
-          }),
-          createIpkCommand('npm', {
-            fs: options.fs,
-            fetch: options.fetch,
-            scriptCatalog: options.scriptCatalog,
-            syncScriptCommands: options.syncScriptCommands,
-          }),
-          createIpkCommand('i', {
-            fs: options.fs,
-            fetch: options.fetch,
-            scriptCatalog: options.scriptCatalog,
-            syncScriptCommands: options.syncScriptCommands,
-          }),
-          createIpxCommand('ipx', { fs: options.fs, fetch: options.fetch }),
-          createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
-          createDiCommand('di', { fs: options.fs, fetch: options.fetch }),
-          createDiCommand('uv', { fs: options.fs, fetch: options.fetch }),
-          createUpgradeCommand({ fs: options.fs, fetch: options.fetch }),
-        ]
-      : []),
+    ...packageManagerCommands(options),
+    ...(options.fs ? [createGelatiereCommand({ fs: options.fs })] : []),
+    ...(options.fs ? [createMemoryCommand({ fs: options.fs })] : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
     createFfprobeCommand(),

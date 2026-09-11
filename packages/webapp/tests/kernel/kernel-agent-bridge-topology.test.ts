@@ -34,7 +34,9 @@ describe('kernel AgentBridge topology', () => {
 
   it('publishes AgentBridge during host boot before returning the host', () => {
     const boot = hostSource.indexOf('await bootOrchestrator(');
-    const publish = hostSource.indexOf('publishAgentBridge(orchestrator, sharedFs');
+    // `publishAgentSeams` is the boot-time call site; it publishes the agent
+    // bridge once the shared FS exists.
+    const publish = hostSource.indexOf('publishAgentSeams(orchestrator, sharedFs');
     const ready = hostSource.indexOf('return {', publish);
     expect(boot).toBeGreaterThan(-1);
     expect(publish).toBeGreaterThan(boot);

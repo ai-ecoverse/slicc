@@ -264,6 +264,46 @@ describe('runNewSessionFreeze — write-first + race', () => {
     expect(onBackgroundEnriched).toHaveBeenLastCalledWith(curated);
   });
 
+  it('agentic path fires onSessionSettled only after the curator has finished', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    const frozen = { ...pending, memoryPending: true as const };
+    mockFreezeConeSession.mockResolvedValue(frozen);
+    mockEnrichPendingSession.mockResolvedValue(enriched);
+    const curator = deferred<FrozenSessionIndexEntry | null>();
+    mockCurateFrozenSessionMemories.mockReturnValue(curator.promise);
+    const onSessionSettled = vi.fn();
+
+    await runNewSessionFreeze({
+      vfs: {} as never,
+      agenticMemorySpawn: vi.fn(async () => ({ finalText: '', exitCode: 0 })),
+      onSessionSettled,
+    });
+    await flush();
+    // The archive is durable and the title landed, but the curator is still
+    // mining it — the gelatiere must not be told yet.
+    expect(onSessionSettled).not.toHaveBeenCalled();
+    curator.resolve({ ...enriched, memoryPending: undefined });
+    await flush();
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
+    expect(onSessionSettled.mock.calls[0][0]).toMatchObject({ filename: enriched.filename });
+  });
+
+  it('legacy path fires onSessionSettled once enrichment lands, even after the race timer won', async () => {
+    const enrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(enrich.promise);
+    const onSessionSettled = vi.fn();
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 5,
+      onSessionSettled,
+    });
+    expect(result?.filename).toBe('pending-abc.md');
+    expect(onSessionSettled).not.toHaveBeenCalled();
+    enrich.resolve(enriched);
+    await flush();
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
+  });
+
   it('agentic background pass survives a failed title enrichment and still curates the draft', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
     const frozen = { ...pending, memoryPending: true as const };
@@ -341,6 +381,14 @@ describe('runNewSessionFreeze — write-first + race', () => {
     await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 50, onProgress });
     expect(onProgress.mock.calls[0][0]).toBe(0);
     expect(onProgress.mock.calls.at(-1)?.[0]).toBeNull();
+  });
+
+  it('no credentials → fires onSessionSettled immediately (nothing runs later)', async () => {
+    mockGetApiKey.mockReturnValue(null);
+    const onSessionSettled = vi.fn();
+    await runNewSessionFreeze({ vfs: {} as never, onSessionSettled });
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
+    expect(mockEnrichPendingSession).not.toHaveBeenCalled();
   });
 
   it('no credentials → returns pending entry, skips enrichment entirely', async () => {
@@ -524,6 +572,15 @@ describe('runNewSessionFreezeQuick — captureCompleteSnapshot hook', () => {
     mockFreezeConeSession.mockClear();
     await runNewSessionFreezeQuick({ vfs: {} as never });
     expect(mockFreezeConeSession.mock.calls[0][0]).not.toHaveProperty('memory');
+  });
+
+  it('fires onSessionSettled once the quick archive is durable, and not when nothing froze', async () => {
+    const onSessionSettled = vi.fn();
+    await runNewSessionFreezeQuick({ vfs: {} as never, onSessionSettled });
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
+    mockFreezeConeSession.mockResolvedValueOnce(null);
+    await runNewSessionFreezeQuick({ vfs: {} as never, onSessionSettled });
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
   });
 
   it('does not invoke captureCompleteSnapshot when nothing was archived', async () => {

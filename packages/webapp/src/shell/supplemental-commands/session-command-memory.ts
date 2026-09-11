@@ -15,7 +15,8 @@ export const MEMORY_V2_HELP = `session — export and search session archives
       Default output: /workspace/slicc-transcript-<id>.zip
 
   search <query> [--limit N]
-      Keyword search over /sessions archives (title weighted 4× body).
+      Keyword search over /sessions archives and scoop session snapshots
+      (/scoops/<folder>/sessions/<jid>/), title weighted 4× body.
       Returns bounded excerpts with stable ids for session read.
 
   read <id> [--from N --count M]

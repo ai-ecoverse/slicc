@@ -2021,6 +2021,36 @@ describe('createAgentBridge — session archive (persistSession)', () => {
     expect(writes).toHaveLength(0);
   });
 
+  // `exclusiveWith`: the memory curator and the memory dreamer of one cone
+  // both snapshot a base and three-way-merge a draft onto the same file, so
+  // a live rival is rejected exactly like a live namesake.
+  it('rejects a spawn whose exclusiveWith rival is live; a malformed rival never matches', async () => {
+    const { orchestrator, registerCalls, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'should-not-be-used',
+    });
+    knownScoops.push({ jid: 'agent_memory_dreamer', folder: 'agent-memory-dreamer' } as never);
+
+    const rejected = await bridge.spawn({
+      ...BASE_OPTS,
+      name: 'memory-curator',
+      exclusiveWith: ['memory-dreamer'],
+      persistSession: true,
+    });
+    expect(rejected.exitCode).toBe(1);
+    expect(rejected.finalText).toContain('name already in use: memory-dreamer');
+    expect(registerCalls).toHaveLength(0);
+
+    const unrelated = await bridge.spawn({
+      ...BASE_OPTS,
+      name: 'memory-curator',
+      exclusiveWith: ['memory-dreamer-other', 'Not A Token'],
+      persistSession: true,
+    });
+    expect(unrelated.finalText).not.toContain('name already in use');
+  });
+
   it('writes the session archive even when the agent exits non-zero', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs, writes } = makeMockSharedFs();

@@ -25,6 +25,8 @@ export function isLoginDipAction(action: string): boolean {
 
 const STYLE_ID = 'slicc-signin-redirect-style';
 const CARD_CLASS = 'wc-signin-redirect';
+/** Modifier on the in-place welcome hand-off card (vs the bottom-of-thread login card). */
+export const WELCOME_HANDOFF_CARD_CLASS = `${CARD_CLASS}--welcome`;
 const STYLE = `
 .${CARD_CLASS}{display:flex;gap:10px;align-items:flex-start;margin:10px 12px;padding:12px 14px;
   border:1px solid var(--line);border-radius:12px;background:var(--ghost);color:var(--ink);
@@ -144,11 +146,16 @@ export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOption
  * focused when they click the button.
  */
 export function buildWelcomeHandoffCard(doc: Document, opts: SignInRedirectOptions): HTMLElement {
-  return createRedirectCard(doc, {
+  const card = createRedirectCard(doc, {
     title: 'Set up SLICC in the main tab',
     sub: 'SLICC needs a model connected before it can help. Open the main SLICC tab to finish setup and sign in, then come back to the side panel.',
     buttonLabel: 'Open SLICC tab',
     onOpenTab: opts.onOpenTab,
     dismissible: false,
   });
+  // Marked so the follower can retract it once the transcript proves the
+  // leader finished onboarding (a suggestion-stream dip only ever posts
+  // after the welcome flow completed).
+  card.classList.add(WELCOME_HANDOFF_CARD_CLASS);
+  return card;
 }

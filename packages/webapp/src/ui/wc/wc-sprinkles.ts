@@ -470,7 +470,30 @@ export interface WireWcSprinklesDeps {
   /** Panelized shells host sprinkle surfaces themselves — see the zone's hooks. */
   hostSprinkleSurface?: (surfaceId: string, surface: HTMLElement) => void;
   removeSprinkleSurface?: (surfaceId: string) => void;
+  /**
+   * The welcome flow's lick interceptor (page-side settlement of
+   * `gelatiere-*` card clicks and onboarding branches). `true` = handled,
+   * do not forward to the cone. Without it a panel-hosted welcome stream
+   * leaks every "Not now" to the cone as an unhandled lick.
+   */
+  interceptWelcomeLick?: (event: LickEvent) => boolean;
   log: BootStageLogger;
+}
+
+/**
+ * Panel-sprinkle licks bound for the cone, with the welcome interceptor
+ * consulted first: it settles gelatiere card clicks page-side (and swallows
+ * dismissals entirely) and ignores every other sprinkle. Exported for tests.
+ */
+export function makeSprinkleLickHandler(
+  client: Pick<OffscreenClient, 'sendSprinkleLick'>,
+  interceptWelcomeLick?: (event: LickEvent) => boolean
+): (event: LickEvent) => void {
+  return (event) => {
+    if (event.type !== 'sprinkle' || !event.sprinkleName) return;
+    if (interceptWelcomeLick?.(event)) return;
+    client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
+  };
 }
 
 export interface WcSprinklesHandle {
@@ -585,11 +608,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   const execHandler = createSprinkleExecHandler(client);
   const manager = new SprinkleManager(
     fs,
-    (event: LickEvent) => {
-      if (event.type === 'sprinkle' && event.sprinkleName) {
-        client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
-      }
-    },
+    makeSprinkleLickHandler(client, deps.interceptWelcomeLick),
     zone.callbacks(),
     () => {
       const cone = defaultRootOf(deps.getUnits());
@@ -599,8 +618,10 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       // Extension etiquette: auto-open sprinkles pulse for attention instead
       // of overlaying the chat mid-flow.
       ...(isExtension ? { autoOpenBehavior: 'attention' as const } : {}),
-      // `welcome` backs the inline onboarding dip; it must never appear as a
-      // panel sprinkle (mirrors INLINE_DIP_SPRINKLES in main.ts).
+      // `welcome` backs the inline onboarding dip and never appears as a
+      // panel sprinkle. The gelatiere's rail-resident suggestion stream is
+      // its own sprinkle (`suggestions`, see sprinkle-discovery), so the
+      // lock no longer depends on the Memory v2 flag.
       inlineSprinkles: new Set(['welcome']),
       execHandler,
       onAttachImage: onAttachImage ?? (() => {}),

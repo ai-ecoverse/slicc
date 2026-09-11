@@ -1,4 +1,13 @@
 import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
+import {
+  type FrontmatterValue,
+  parseFrontmatter,
+  readArray,
+  readBoundedTimeout,
+  readOptionalString,
+  splitInstructionDocument,
+  validatePaths,
+} from '../base/instruction-frontmatter.js';
 import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import {
@@ -102,8 +111,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'wc',
   'xxd',
 ];
-const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
-const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);
+const MEMORY_FRONTMATTER = {
+  arrayKeys: new Set(['writablePaths', 'visiblePaths', 'allowedCommands']),
+  scalarKeys: new Set(['model', 'timeoutSeconds', 'thinkingLevel']),
+};
 
 /**
  * Spawned agents resolve an absent thinking level to `'off'`. That is wrong for
@@ -143,6 +154,34 @@ export interface CuratorVfs {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
 }
 
+/**
+ * The instruction document a pass runs under. The curator's MEMORY.md is the
+ * default; the dreaming pass (`scoops/memory-dreaming.ts`) substitutes its
+ * own document and agent name while reusing every other piece of the
+ * machinery — config parsing, cone rebasing, the staged base/draft snapshot,
+ * the three-way merge, receipts, and the wall-clock bound.
+ */
+export interface MemoryPassInstructions {
+  /** VFS path of the user-editable instruction document. */
+  path: string;
+  /** Bundled fallback when the VFS copy is missing or invalid. */
+  fallback: string;
+  /**
+   * Agent name for `folder` — determines the scratch dir (`/scoops/agent-
+   * <name>`) and the collision domain (two passes on the SAME memory file
+   * must collide; different files must not).
+   */
+  nameFor(folder: string): string;
+  /**
+   * Agent names of the OTHER passes that rewrite the same memory file, for
+   * the bridge's `exclusiveWith`: the curator and the dreamer of one cone
+   * each snapshot a base and three-way-merge a draft, so two of them in
+   * flight at once would have the later one discard the earlier one's
+   * rewrite. Optional; defaults to none.
+   */
+  rivalsFor?(folder: string): string[];
+}
+
 export interface RunAgenticMemoryPassOptions {
   spawn: AgentBridge['spawn'];
   vfs: CuratorVfs;
@@ -157,6 +196,8 @@ export interface RunAgenticMemoryPassOptions {
   cone?: CuratorConeRef;
   /** UTC date override for deterministic tests; defaults to today's date. */
   today?: string;
+  /** Instruction document override; defaults to the curator's MEMORY.md. */
+  instructions?: MemoryPassInstructions;
   signal?: AbortSignal;
 }
 
@@ -192,30 +233,62 @@ export function curatorAgentName(folder: string): string {
   return folder === PRIMARY_CONE_FOLDER ? 'memory-curator' : `memory-curator-${folder}`;
 }
 
+/** The curator's instruction set — what a pass without an override runs under. */
+export const CURATOR_INSTRUCTIONS: MemoryPassInstructions = {
+  path: MEMORY_INSTRUCTIONS_PATH,
+  fallback: DEFAULT_MEMORY_MD,
+  nameFor: curatorAgentName,
+  rivalsFor: (folder) => [dreamerAgentName(folder)],
+};
+
+/**
+ * Agent name of the memory dreamer for `folder` (`scoops/memory-dreaming.ts`
+ * re-exports it) — defined beside the curator's so each can name the other
+ * as its rival without a module cycle. Per cone for the same reason as
+ * {@link curatorAgentName}: two dreams over the SAME memory file must
+ * collide; different cones' dreams must not block each other.
+ */
+export function dreamerAgentName(folder: string): string {
+  return folder === PRIMARY_CONE_FOLDER ? 'memory-dreamer' : `memory-dreamer-${folder}`;
+}
+
 /**
  * `agent` name tokens are `[a-z][a-z0-9]*` joined by single dashes, which is
  * exactly the shape `coneFolderFor` mints — but a folder that came from
  * somewhere else (a restored record, a hand-edited profile) could still be
  * unusable as a name, and the spawn would then fail with `invalid name`
- * instead of curating. Fall back to the primary curator name in that case:
+ * instead of curating. Fall back to the primary name in that case:
  * `writablePaths` still points at THIS cone's memory file, so the worst case
  * is the two passes serializing on one name, never a cross-cone write.
  */
-function safeCuratorName(folder: string): string {
-  const name = curatorAgentName(folder);
-  return SPAWNABLE_NAME.test(name) ? name : curatorAgentName(PRIMARY_CONE_FOLDER);
+function safeAgentName(instructions: MemoryPassInstructions, folder: string): string {
+  const name = instructions.nameFor(folder);
+  return SPAWNABLE_NAME.test(name) ? name : instructions.nameFor(PRIMARY_CONE_FOLDER);
+}
+
+/** The rivals of a pass, under the same primary-name fallback as its own name. */
+function safeRivalNames(instructions: MemoryPassInstructions, folder: string): string[] {
+  const safeFolder = SPAWNABLE_NAME.test(instructions.nameFor(folder))
+    ? folder
+    : PRIMARY_CONE_FOLDER;
+  return instructions.rivalsFor?.(safeFolder) ?? [];
 }
 
 /** Mirror of the agent bridge's `AGENT_NAME_PATTERN` (a legal down-edge away). */
 const SPAWNABLE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
- * The curator's private scratch folder. The agent bridge derives it from the
+ * A pass's private scratch folder. The agent bridge derives it from the
  * agent name (`/scoops/agent-<name>`), so a per-cone name moves it too — and
- * the prompt in `MEMORY.md` sends drafts there by path.
+ * the prompt sends drafts there by path.
  */
+function scratchDirFor(instructions: MemoryPassInstructions, folder: string): string {
+  return `/scoops/agent-${safeAgentName(instructions, folder)}`;
+}
+
+/** The curator's scratch folder for `folder` — kept for callers and tests. */
 export function curatorScratchDir(folder: string): string {
-  return `/scoops/agent-${safeCuratorName(folder)}`;
+  return scratchDirFor(CURATOR_INSTRUCTIONS, folder);
 }
 
 /** The primary cone's scratch folder — what a pre-#2271 `MEMORY.md` spells out. */
@@ -268,7 +341,6 @@ function rebaseVisiblePaths(paths: string[], workspace: WorkUnitWorkspace): stri
   return rebased;
 }
 
-type FrontmatterValue = string | string[];
 type WaitOutcome =
   | { type: 'result'; result: AgentSpawnResult }
   | { type: 'error'; error: unknown }
@@ -282,9 +354,10 @@ export async function runAgenticMemoryPass(
     if (opts.signal?.aborted) {
       return { ok: false, reason: 'aborted', legacyFallbackSafe: false };
     }
+    const instructions = opts.instructions ?? CURATOR_INSTRUCTIONS;
     const workspace = curatorWorkspaceFor(opts.cone);
-    const scratchDir = curatorScratchDir(opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
-    const config = await loadMemoryConfig(opts.vfs, workspace);
+    const scratchDir = scratchDirFor(instructions, opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
+    const config = await loadMemoryConfig(opts.vfs, workspace, instructions);
     const draftPath = curationDraftPath(opts.sessionArchivePath);
     try {
       await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
@@ -309,7 +382,8 @@ export async function runAgenticMemoryPass(
       prompt,
       opts.sessionArchivePath,
       workspace,
-      opts.cone
+      opts.cone,
+      instructions
     );
     if (opts.signal) spawnOptions.signal = opts.signal;
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
@@ -364,34 +438,43 @@ export async function runAgenticMemoryPass(
 
 async function loadMemoryConfig(
   vfs: Pick<LocalVfsClient, 'readFile'>,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
+  instructions: MemoryPassInstructions = CURATOR_INSTRUCTIONS
 ): Promise<MemoryConfig> {
   try {
-    const raw = await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' });
+    const raw = await vfs.readFile(instructions.path, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseMemoryDocument(text, workspace);
+    return parseMemoryDocument(text, workspace, documentLabel(instructions));
   } catch (error) {
-    log.warn('Could not load valid MEMORY.md; using built-in default', {
+    log.warn(`Could not load valid ${instructions.path}; using built-in default`, {
       error: errorText(error),
     });
-    return parseMemoryDocument(DEFAULT_MEMORY_MD, workspace);
+    return parseMemoryDocument(instructions.fallback, workspace, documentLabel(instructions));
   }
+}
+
+/** Basename of the instruction document, for parse-error messages. */
+function documentLabel(instructions: MemoryPassInstructions): string {
+  return instructions.path.slice(instructions.path.lastIndexOf('/') + 1);
 }
 
 function parseMemoryDocument(
   content: string,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
+  label = 'MEMORY.md'
 ): MemoryConfig {
-  const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-  const match = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  if (!match?.[2].trim()) throw new Error('MEMORY.md requires frontmatter and a prompt');
-  const values = parseFrontmatter(match[1]);
+  const document = splitInstructionDocument(content, label);
+  const values = parseFrontmatter(document.frontmatter, MEMORY_FRONTMATTER);
   const writablePaths = readArray(values, 'writablePaths', defaultWritablePaths(workspace));
   if (writablePaths.length === 0) throw new Error('writablePaths must not be empty');
   validatePaths(writablePaths, 'writablePaths');
   const visiblePaths = readArray(values, 'visiblePaths', defaultVisiblePaths(workspace));
   validatePaths(visiblePaths, 'visiblePaths');
-  const timeoutSeconds = readTimeout(values.timeoutSeconds);
+  const timeoutSeconds = readBoundedTimeout(
+    values.timeoutSeconds,
+    DEFAULT_MEMORY_TIMEOUT_SECONDS,
+    MAX_MEMORY_TIMEOUT_SECONDS
+  );
   const model = readOptionalString(values.model, 'model');
   return {
     writablePaths: writablePaths.map((path) => rebaseOntoCone(path, workspace)),
@@ -402,7 +485,7 @@ function parseMemoryDocument(
     ...(model ? { model } : {}),
     thinkingLevel: readThinkingLevel(values.thinkingLevel),
     timeoutSeconds,
-    promptTemplate: match[2].trim(),
+    promptTemplate: document.body,
   };
 }
 
@@ -412,129 +495,6 @@ function readThinkingLevel(value: FrontmatterValue | undefined): ThinkingLevel {
     throw new Error(`thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}`);
   }
   return value;
-}
-
-function parseFrontmatter(frontmatter: string): Record<string, FrontmatterValue> {
-  const result: Record<string, FrontmatterValue> = {};
-  const lines = frontmatter.split('\n');
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line.trim() || line.trimStart().startsWith('#')) continue;
-    const keyMatch = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
-    if (!keyMatch) throw new Error(`Invalid frontmatter line: ${line}`);
-    const [, key, rest] = keyMatch;
-    if (ARRAY_KEYS.has(key)) {
-      const parsed = parseArrayValue(lines, index, rest);
-      result[key] = parsed.value;
-      index = parsed.lastIndex;
-    } else if (SCALAR_KEYS.has(key) && rest.trim()) {
-      result[key] = parseScalar(rest);
-    } else {
-      throw new Error(`Unsupported or empty frontmatter field: ${key}`);
-    }
-  }
-  return result;
-}
-
-function parseArrayValue(
-  lines: string[],
-  keyIndex: number,
-  inline: string
-): { value: string[]; lastIndex: number } {
-  if (inline.trim()) {
-    const value = inline.trim();
-    if (!value.startsWith('[') || !value.endsWith(']')) throw new Error('Expected an array');
-    const inner = value.slice(1, -1).trim();
-    return {
-      value: inner ? splitInlineArray(inner) : [],
-      lastIndex: keyIndex,
-    };
-  }
-  const value: string[] = [];
-  let lastIndex = keyIndex;
-  for (let index = keyIndex + 1; index < lines.length; index += 1) {
-    const item = lines[index].match(/^\s+-\s+(.+)$/);
-    if (!item) break;
-    value.push(parseScalar(stripBlockArrayComment(item[1])));
-    lastIndex = index;
-  }
-  return { value, lastIndex };
-}
-
-function splitInlineArray(inner: string): string[] {
-  const items: string[] = [];
-  let start = 0;
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < inner.length; index += 1) {
-    const char = inner[index];
-    if (char === '"' || char === "'") {
-      quote = quote === char ? undefined : (quote ?? char);
-    } else if (char === ',' && !quote) {
-      items.push(parseScalar(inner.slice(start, index)));
-      start = index + 1;
-    }
-  }
-  if (quote) throw new Error('Unclosed quoted value');
-  items.push(parseScalar(inner.slice(start)));
-  return items;
-}
-
-function stripBlockArrayComment(raw: string): string {
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (char === '"' || char === "'") {
-      quote = quote === char ? undefined : (quote ?? char);
-    } else if (char === '#' && !quote && (index === 0 || /\s/.test(raw[index - 1]))) {
-      return raw.slice(0, index).trimEnd();
-    }
-  }
-  return raw;
-}
-
-function parseScalar(raw: string): string {
-  const value = raw.trim();
-  if (!value) throw new Error('Empty frontmatter value');
-  const quote = value[0];
-  if ((quote === '"' || quote === "'") && value.at(-1) === quote) return value.slice(1, -1);
-  if (quote === '"' || quote === "'") throw new Error('Unclosed quoted value');
-  return value;
-}
-
-function readArray(
-  values: Record<string, FrontmatterValue>,
-  key: string,
-  fallback: string[]
-): string[] {
-  const value = values[key];
-  if (value === undefined) return [...fallback];
-  if (!Array.isArray(value) || value.some((item) => !item)) throw new Error(`${key} is invalid`);
-  return [...value];
-}
-
-function readOptionalString(value: FrontmatterValue | undefined, key: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value) throw new Error(`${key} is invalid`);
-  return value;
-}
-
-function readTimeout(value: FrontmatterValue | undefined): number {
-  if (value === undefined) return DEFAULT_MEMORY_TIMEOUT_SECONDS;
-  if (typeof value !== 'string') throw new Error('timeoutSeconds is invalid');
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('timeoutSeconds must be positive');
-  return Math.min(parsed, MAX_MEMORY_TIMEOUT_SECONDS);
-}
-
-function validatePaths(paths: string[], key: string): void {
-  if (
-    paths.some(
-      (path) =>
-        !path.startsWith('/') || path.includes('\0') || (key === 'writablePaths' && path === '/')
-    )
-  ) {
-    throw new Error(`${key} must contain absolute VFS paths`);
-  }
 }
 
 /**
@@ -625,7 +585,8 @@ function buildSpawnOptions(
   prompt: string,
   sessionArchivePath: string,
   workspace: WorkUnitWorkspace,
-  cone: CuratorConeRef | undefined
+  cone: CuratorConeRef | undefined,
+  instructions: MemoryPassInstructions
 ): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   const basePath = curationBasePath(sessionArchivePath);
@@ -644,7 +605,11 @@ function buildSpawnOptions(
     // Durable transcript under a stable name — /sessions/agent-memory-curator-*.md
     // survives a new chat, so a curator run stays auditable for humans.
     persistSession: true,
-    name: safeCuratorName(cone?.folder ?? PRIMARY_CONE_FOLDER),
+    name: safeAgentName(instructions, cone?.folder ?? PRIMARY_CONE_FOLDER),
+    // The other pass over this memory file (dreamer for a curator and vice
+    // versa) must not be in flight: both snapshot a base and merge a draft,
+    // and the later merge would discard the earlier rewrite.
+    exclusiveWith: safeRivalNames(instructions, cone?.folder ?? PRIMARY_CONE_FOLDER),
     // Parent the run to the cone it curates so escalations and model
     // inheritance follow that cone, not the oldest root (#2271).
     ...(cone?.jid ? { parentJid: cone.jid } : {}),

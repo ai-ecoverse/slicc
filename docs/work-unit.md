@@ -531,6 +531,11 @@ own.
     `parentId` alone since #2358) — one flag, no second code path. On the
     follower the read-only state outranks the connection state, so a
     reconnect while a scoop is viewed cannot hand back its composer.
+  - **Silent units opt out of idle notices.** A child registered
+    `notifyOnComplete: false` (the gelatiere, the approver agent) suppresses
+    the "ready without work" idle nag along with its completion report —
+    `ScoopLifecycleManager` skips the idle timer for it. A unit that lives on
+    licks is idle by design; nagging its owner would be noise.
   - **Every request that needs a human goes to the owning cone.** `sudo_request`
     (incl. export approvals), idle / "waiting for parent" notices and
     completion reports already resolved their target through

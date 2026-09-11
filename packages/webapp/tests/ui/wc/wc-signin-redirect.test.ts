@@ -74,7 +74,7 @@ describe('buildWelcomeHandoffCard', () => {
   it('returns a detached card and does NOT focus the tab on build', () => {
     const onOpenTab = vi.fn();
     const card = buildWelcomeHandoffCard(document, { onOpenTab });
-    expect(card.className).toBe('wc-signin-redirect');
+    expect(card.className).toBe('wc-signin-redirect wc-signin-redirect--welcome');
     expect(card.textContent).toContain('Set up SLICC in the main tab');
     // The user hasn't acted yet — building the card must not open the tab.
     expect(onOpenTab).not.toHaveBeenCalled();

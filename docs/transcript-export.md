@@ -200,6 +200,30 @@ fields. Adding an entry is fail-open, so category 1 must stay in step with the v
 that gains a constraint there needs an entry here, and a field that loses one should lose its
 entry.
 
+### Archive-at-rest redaction
+
+Export-time redaction only protects the copy that leaves the machine. The archives themselves
+(`/sessions/*.md`, their `.jsonl` sidecars, scoop session snapshots, and spawned-agent archives
+under agent folders) are scrubbed **before they are persisted**, at the shared serializer
+chokepoints (`formatArchiveAsMarkdown`, `writeSessionJsonl`, `serializeAgentSessionArchive` —
+see `packages/webapp/src/transcript/archive-redaction.ts`).
+
+The at-rest pass is deliberately narrower than the export pass:
+
+- **Patterns only, no known-secret detector.** The known-secret redactor is an async worker
+  service; archive writes happen synchronously in both realms. Stored secrets are still caught
+  at export.
+- **High-precision categories only** — JWTs, PEM private-key blocks, `Bearer` header values,
+  and vendor key prefixes (`sk-…`, `xoxb-`/`xoxp-`, `AKIA…`, `ghp_…`, `hf_…`). The
+  keyword-assignment rule (`token = <anything>`) is export-only: it matches ordinary code
+  discussion, which is acceptable noise in a one-way export but not in the copy the user
+  keeps, searches, and thaws.
+
+At-rest markers use `ar` ids (`⟦REDACTED:api-key:ar1⟧`); the scan is idempotent (existing
+markers are never re-wrapped), so re-freezing or exporting an already-scrubbed archive is safe.
+A thawed session sees the markers instead of the original key — that is the point: key
+material pasted into a chat does not survive into long-term storage.
+
 ### Binary attachments — unchanged and potentially sensitive
 
 Text attachments (`text/*` MIME types) are redacted inline before export. Binary attachments

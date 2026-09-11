@@ -253,6 +253,31 @@ describe('upgrade apply', () => {
     expect(await fs.readFile(path)).toBe('intro\nlocal rule\noutro\nupstream rule\n');
   });
 
+  // The wiki schema is a contract file like MEMORY.md; index.md and log.md
+  // beside it are user data and must never be touched by an upgrade.
+  it('merges /shared/wiki/WIKI.md but ignores the wiki index and log', async () => {
+    const schema = '/shared/wiki/WIKI.md';
+    const index = '/shared/wiki/index.md';
+    await fs.writeFile(schema, 'intro\nlocal convention\noutro\n');
+    await fs.writeFile(index, 'my pages\n');
+
+    const { result, json } = await run(
+      fs,
+      makeFetch({
+        'v1.0.0': { [schema]: 'intro\nbase convention\noutro\n', [index]: 'seed index\n' },
+        'v2.0.0': {
+          [schema]: 'intro\nbase convention\noutro\nupstream convention\n',
+          [index]: 'new seed index\n',
+        },
+      })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(json.results).toEqual([{ path: schema, status: 'merged-clean' }]);
+    expect(await fs.readFile(schema)).toBe('intro\nlocal convention\noutro\nupstream convention\n');
+    expect(await fs.readFile(index)).toBe('my pages\n');
+  });
+
   it('ignores bundled files outside the upgrade scopes', async () => {
     const path = '/shared/CLAUDE.md';
     await fs.writeFile(path, 'local\n');

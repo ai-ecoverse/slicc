@@ -28,6 +28,8 @@ import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
 import '@slicc/webcomponents';
+import { GELATIERE_SPRINKLE_NAME } from '../../base/gelatiere-constants.js';
+import { describeGelatiereLick } from '../../base/gelatiere-store.js';
 import { isLickChannel } from '../../base/lick-channels.js';
 import {
   isAuthExpiredError,
@@ -1156,6 +1158,35 @@ export function reflowToolClusters(
   opts.openClusterAnchors.clear();
 }
 
+/** A `[Sprinkle Event: gelatiere]` lick — the resident advisor's own channel. */
+function isGelatiereLick(message: ChatMessage, header: RegExpExecArray | null): boolean {
+  return message.channel === 'sprinkle' && header?.[2]?.trim() === GELATIERE_SPRINKLE_NAME;
+}
+
+/**
+ * Body of a gelatiere lick card: a headline and the suggestion titles instead
+ * of the JSON the cone reads. Falls back to the generic markdown rendering
+ * when the body is not readable.
+ */
+function gelatiereLickSection(part: string): HTMLElement | null {
+  const described = describeGelatiereLick(part);
+  if (!described) return null;
+  const section = document.createElement('div');
+  const line = document.createElement('p');
+  line.textContent = described.headline;
+  section.append(line);
+  if (described.titles.length > 0) {
+    const list = document.createElement('ul');
+    for (const title of described.titles) {
+      const item = document.createElement('li');
+      item.textContent = title;
+      list.append(item);
+    }
+    section.append(list);
+  }
+  return section;
+}
+
 function lickCardEl(message: ChatMessage): HTMLElement {
   const header = LICK_HEADER_RE.exec(message.content);
   const count = message.lickCount ?? 1;
@@ -1163,9 +1194,15 @@ function lickCardEl(message: ChatMessage): HTMLElement {
   // name in the scoop's accent color, not a repetition of the channel name.
   const scoopMarker = SCOOP_MARKER_RE.exec(message.content);
   const scoopName = scoopMarker ? scoopTagName(scoopMarker[1]) : null;
+  const gelatiere = isGelatiereLick(message, header);
+  const gelatiereAction = gelatiere ? describeGelatiereLick(message.content)?.action : undefined;
   const card = el('slicc-lick-card', {
-    kind: message.channel ?? 'webhook',
-    'event-label': lickEventLabel(message.content, message.channel, header, scoopName),
+    // The gelatiere's licks wear their own kind (and icon); the pill names
+    // the action rather than repeating the sprinkle name.
+    kind: gelatiere ? GELATIERE_SPRINKLE_NAME : (message.channel ?? 'webhook'),
+    'event-label': gelatiere
+      ? (gelatiereAction ?? 'suggestions').replace(/^gelatiere-/, '')
+      : lickEventLabel(message.content, message.channel, header, scoopName),
     // Licks are ambient noise until the user opts in: collapsed by default,
     // the header click expands.
     collapsible: '',
@@ -1182,6 +1219,11 @@ function lickCardEl(message: ChatMessage): HTMLElement {
   // through the shared renderer, one section per collated lick.
   const parts = message.lickParts ?? [message.content];
   for (const part of parts) {
+    const friendly = gelatiere ? gelatiereLickSection(part) : null;
+    if (friendly) {
+      card.append(friendly);
+      continue;
+    }
     const section = document.createElement('div');
     section.innerHTML = renderMessageContent(lickPartBody(part));
     card.append(section);

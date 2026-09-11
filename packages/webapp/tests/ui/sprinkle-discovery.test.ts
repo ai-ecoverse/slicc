@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { initFeatureFlags, setFeatureFlagOverride } from '../../src/core/feature-flags.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverSprinkles,
@@ -17,6 +18,43 @@ describe('discoverSprinkles', () => {
       dbName: `test-sprinkle-discovery-${dbCounter++}`,
       wipe: true,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    initFeatureFlags('standalone');
+  });
+
+  it('hides onboarding sprinkles always; the suggestions stream only until Memory v2', async () => {
+    // Flag overrides live in localStorage, absent under the node test env.
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+    await vfs.writeFile('/shared/sprinkles/welcome/welcome.shtml', '<title>Welcome</title>');
+    await vfs.writeFile('/shared/sprinkles/connect-llm/connect-llm.shtml', '<div>x</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/suggestions/suggestions.shtml',
+      '<title>Suggestions</title><link rel="icon" href="ice-cream-cone">'
+    );
+    initFeatureFlags('standalone');
+
+    const hidden = await discoverSprinkles(vfs);
+    expect(hidden.has('welcome')).toBe(false);
+    expect(hidden.has('connect-llm')).toBe(false);
+    expect(hidden.has('suggestions')).toBe(false);
+
+    setFeatureFlagOverride('memory-v2', 'on');
+    const shown = await discoverSprinkles(vfs);
+    // The gelatiere's stream becomes rail-pickable, wearing its cone.
+    expect(shown.get('suggestions')?.icon).toBe('ice-cream-cone');
+    // The onboarding sprinkles stay hidden regardless of the flag — the
+    // stream was split out of welcome.shtml precisely so the wizard is
+    // never re-openable (and never mirrors to follower rails).
+    expect(shown.has('welcome')).toBe(false);
+    expect(shown.has('connect-llm')).toBe(false);
   });
 
   it('returns empty map when no .shtml files exist', async () => {

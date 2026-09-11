@@ -482,8 +482,14 @@ export class ScoopLifecycleManager {
 
     // The "no work received yet" notifier only makes sense for a delegated
     // unit — somebody is expected to feed it.
+    // A silent unit (`notifyOnComplete: false`, e.g. the gelatiere living on
+    // licks) opted out of announcing itself, and that includes the idle nag.
     const scoopForTimer = this.deps.getScoops().get(jid);
-    if (scoopForTimer && scoopForTimer.parentJid !== null) {
+    if (
+      scoopForTimer &&
+      scoopForTimer.parentJid !== null &&
+      scoopForTimer.notifyOnComplete !== false
+    ) {
       this.deps.idleTimers.start(jid);
     }
 

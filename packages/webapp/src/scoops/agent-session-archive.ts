@@ -8,13 +8,14 @@
  * It reuses {@link agentMessagesToChatMessages} (same `scoops/` layer) to
  * collapse the `AgentMessage[]` tool-call/result pairing into the flat
  * `ChatMessage` shape, then renders each message as `## <role>` + its text
- * with tool calls and results summarized. It imports nothing from `ui/` or
- * `transcript/` — those are layer back-edges from `scoops/` (the
- * session-freezer's `formatArchiveAsMarkdown` lives in `ui/`, so it is
- * intentionally NOT used here).
+ * with tool calls and results summarized. It deliberately does not use the
+ * session-freezer's `formatArchiveAsMarkdown` — this is a lighter,
+ * non-reloadable format — but it applies the same at-rest credential
+ * redaction before the bytes persist.
  */
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import { newAtRestState, redactArchiveText } from '../transcript/archive-redaction.js';
 import { agentMessagesToChatMessages } from './agent-message-to-chat.js';
 import type { ChatMessage, ToolCall } from './chat-types.js';
 
@@ -72,7 +73,10 @@ export function serializeAgentSessionArchive(input: AgentSessionArchiveInput): s
     }
   }
 
-  return lines.join('\n');
+  // At-rest credential redaction (P0c). This document is plain markdown —
+  // no embedded JSON to keep parseable — so one pass over the whole text
+  // covers prompt, message bodies, tool inputs, and results alike.
+  return redactArchiveText(lines.join('\n'), newAtRestState());
 }
 
 /** Render one flattened chat message (`## <role>` + text + tool calls). */
