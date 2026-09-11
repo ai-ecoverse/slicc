@@ -637,8 +637,37 @@ export class SessionTrayDurableObject {
     // it to retry FOLLOWER_JOIN_NOT_READY / TRAY_EXPIRED forever. Checked
     // before the expiry gate: a superseded tray is a more actionable signal
     // than a generic expiry, and supersession can be set before expiry hits.
-    if (tray.supersededByJoinUrl) {
+    //
+    // Only a FULL follower is redirected. The successor URL carries the
+    // replacement tray's FULL join token, and a guest seat has no claim on it:
+    // a biscotto is a revocable seat on THIS cone's live transcript, it dies
+    // with this tray by design, and handing its holder the successor's join
+    // capability would silently promote a guest to a full follower of the new
+    // tray (a guest→full escalation). A superseded tray therefore ends a
+    // guest's access with the same 403 a revoked seat gets — the redirect is
+    // for followers that legitimately hold the tray join token.
+    if (tray.supersededByJoinUrl && capability.trust === 'full') {
       return await this.supersededResponse(tray.supersededByJoinUrl, joinRequest, url);
+    }
+    if (tray.supersededByJoinUrl) {
+      // A live guest seat on a superseded tray: no successor to offer, and the
+      // leader is gone. Terminal, and indistinguishable from any other
+      // dead-seat answer so it leaks nothing about the replacement.
+      if (joinRequest) {
+        return await this.buildFollowerAttachResponse(
+          joinRequestControllerId(joinRequest),
+          {
+            action: 'fail',
+            code: 'TRAY_SUPERSEDED',
+            error: 'This guest session ended when the tray was replaced',
+          },
+          410
+        );
+      }
+      return jsonResponse(
+        { error: 'This guest session ended when the tray was replaced', code: 'TRAY_SUPERSEDED' },
+        410
+      );
     }
 
     const expiration = await this.ensureTrayIsActive();

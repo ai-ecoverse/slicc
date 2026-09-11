@@ -180,4 +180,45 @@ describe('biscotto join path', () => {
     );
     expect(guestBootstraps).toHaveLength(1);
   });
+
+  it('ends a guest seat on a superseded tray without leaking the successor join URL', async () => {
+    // The supersede redirect carries the REPLACEMENT tray's full join token.
+    // A guest holds a seat on THIS cone's transcript only, so it has no claim
+    // on that token; forwarding a seat there would silently promote it to a
+    // full follower of the new tray. A superseded tray ends a guest's access
+    // with a terminal 410 instead — no Location, no successor URL in the body.
+    const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
+    const t = await createTestTray(clock);
+    await attachLeader(t);
+    const seat = await mintSeat(t);
+
+    // Same shape as `notifyTraySuperseded`: a replacement tray's full join URL.
+    const successorToken = createCapabilityToken(crypto.randomUUID());
+    const successorJoinUrl = `${HOST}/join/${successorToken}`;
+    const superseded = await t.durable.fetch(
+      new Request(`${HOST}/internal/supersede`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerToken: t.controllerToken, joinUrl: successorJoinUrl }),
+      })
+    );
+    expect(superseded.status).toBe(200);
+
+    // A full follower still gets the redirect — it holds the tray join token.
+    const ownerRes = await join(t, t.joinToken, 'owner-device');
+    expect(ownerRes.status).toBe(308);
+    expect(ownerRes.headers.get('Location')).toBe(`${successorJoinUrl}?json=true`);
+
+    // The guest is turned away, terminally, with no trace of the successor.
+    const guestRes = await join(t, seat.token, 'guest-device');
+    expect(guestRes.status).toBe(410);
+    expect(guestRes.headers.get('Location')).toBeNull();
+    const guestRaw = await guestRes.text();
+    expect(guestRaw).not.toContain(successorToken);
+    const guestBody = JSON.parse(guestRaw) as {
+      result?: { code?: string; joinUrl?: string };
+    };
+    expect(guestBody.result?.code).toBe('TRAY_SUPERSEDED');
+    expect(guestBody.result?.joinUrl).toBeUndefined();
+  });
 });

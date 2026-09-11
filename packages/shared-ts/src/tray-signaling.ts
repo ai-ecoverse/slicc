@@ -509,6 +509,19 @@ export type FollowerAttachResult =
       code: 'TRAY_SUPERSEDED';
       error: string;
       joinUrl: string;
+    }
+  | {
+      /**
+       * A GUEST (biscotto) seat on a superseded tray, on HTTP 410. Terminal
+       * and deliberately WITHOUT `joinUrl`: the successor URL carries the
+       * replacement tray's full join token, which a guest has no claim on, so
+       * forwarding a seat there would silently promote it to a full follower
+       * of the new tray. A seat dies with its tray by design; a rove ends the
+       * guest's access rather than moving it.
+       */
+      action: 'fail';
+      code: 'TRAY_SUPERSEDED';
+      error: string;
     };
 
 export interface FollowerAttachResponse {

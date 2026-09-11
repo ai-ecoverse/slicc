@@ -20,7 +20,7 @@
  * |------------------------|------------------------------|----------------------|
  * | join, full token       | 308 → new join URL           | 410 TRAY_EXPIRED     |
  * | join, ?redirect=manual | 409 + successor-version link | 410 TRAY_EXPIRED     |
- * | join, biscotto seat    | HOLE: 308 → FULL join URL    | 410 TRAY_EXPIRED     |
+ * | join, biscotto seat    | 410 TRAY_SUPERSEDED, no URL  | 410 TRAY_EXPIRED     |
  * | join, invalid token    | 403 (no redirect leaked)     | 403                  |
  * | webhook, valid token   | 308 → new webhook URL        | 410, delivery lost   |
  * | webhook, no fwd URL    | 410 NO_LIVE_LEADER, lost     | 410, delivery lost   |
@@ -301,23 +301,27 @@ describe('roving trays — superseded rove (leader left a forwarding address)', 
     expect(res.headers.get('Location')).toBeNull();
   });
 
-  it("HOLE: hands a live guest seat the replacement's FULL join capability", async () => {
+  it('ends a live guest seat with a terminal 410 — never the successor join URL', async () => {
     // Seats die with their tray (nothing re-mints them on the replacement), so
-    // a rove should END a guest's access. Instead the supersede check runs
-    // after capability resolution without branching on trust, so a guest
-    // holding a biscotto URL for the old tray is handed the NEW tray's full
-    // join token in Location — a guest→full-follower escalation. This test
-    // pins the hole; fixing it means a live seat must NOT resolve to the
-    // replacement's join capability.
+    // a rove ENDS a guest's access rather than forwarding it. The successor URL
+    // carries the replacement's FULL join token, which a guest has no claim on;
+    // redirecting a seat there would silently promote it to a full follower of
+    // the new tray (the guest→full escalation this closes). The answer is
+    // terminal and leaks nothing about the replacement — no Location, no link.
     const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
     const { a, b, seat } = await rovedPair(clock);
 
     const res = await joinAttach(a, seat.token);
-    expect(res.status).toBe(308);
-    expect(res.headers.get('Location')).toBe(`${b.joinUrl}?json=true`);
-    // The leaked capability is the FULL join token, not a guest seat: joining
-    // through it would announce the guest to the leader as trust 'full'.
-    expect(res.headers.get('Location')).toContain(b.joinToken);
+    expect(res.status).toBe(410);
+    expect(res.headers.get('Location')).toBeNull();
+    expect(res.headers.get('Link')).toBeNull();
+    const raw = await res.text();
+    // The replacement's full join token appears nowhere in the response.
+    expect(raw).not.toContain(b.joinToken);
+    const body = JSON.parse(raw) as AttachBody;
+    expect(body.result?.action).toBe('fail');
+    expect(body.result?.code).toBe('TRAY_SUPERSEDED');
+    expect(body.result?.joinUrl).toBeUndefined();
   });
 
   it('redirects a webhook delivery with 308, carrying webhookId and query', async () => {

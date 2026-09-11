@@ -208,10 +208,15 @@ export function normalizeFollowerAttachResponse(
   // survives a body-shape change, #1957) and rides on every action, so a hub
   // that stops saying `fail` / `TRAY_SUPERSEDED` still redirects every caller
   // that reads this plan.
+  // `joinUrl` is absent on the guest-seat supersede variant (a rove ends a
+  // guest's access rather than forwarding it, so there is no successor to
+  // offer) — a webapp follower attaches with the full tray join token and
+  // takes the 308 path, but the read must tolerate its absence to stay sound.
   const supersededByJoinUrl =
     successorFromLink ??
     ((response.result.action === 'fail' || response.result.action === 'redirect') &&
-    response.result.code === 'TRAY_SUPERSEDED'
+    response.result.code === 'TRAY_SUPERSEDED' &&
+    'joinUrl' in response.result
       ? response.result.joinUrl
       : undefined);
   if (supersededByJoinUrl) {
