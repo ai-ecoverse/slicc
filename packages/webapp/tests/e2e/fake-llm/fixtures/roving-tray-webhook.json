@@ -1,0 +1,16 @@
+{
+  "model": "fake-cone-primary",
+  "models": ["fake-cone-primary", "fake-cone-alternate"],
+  "turns": [
+    {
+      "whenUserMessageMatches": "marker-one",
+      "content": "Rove event one received.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "marker-two",
+      "content": "Rove event two received.",
+      "contentChunkSize": 64
+    }
+  ]
+}
