@@ -3,7 +3,7 @@
  * compaction snapshot, so its document must round-trip through the reader
  * and its index primitives must be safe to call from either realm.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
@@ -22,6 +22,7 @@ import {
   readSessionsIndexForWrite,
   rewriteTranscriptPointers,
   serializeIndexWrite,
+  shortId,
   slugify,
   stripEphemeral,
   upsertSessionsIndexEntry,
@@ -257,5 +258,26 @@ describe('index primitives', () => {
     await expect(first).rejects.toThrow('boom');
     expect(await second).toBe('ok');
     expect(order).toEqual(['first', 'second']);
+  });
+});
+
+describe('shortId', () => {
+  it('stays unique across two clocks even when Math.random is frozen', () => {
+    // Production ids pair Date.now() with 4 random chars. Same-millisecond
+    // callers can collide on the random suffix (Node 25 CI on #3055 collapsed
+    // two pending-*.md rows). Distinct clocks must never collide, even with
+    // a deterministic RNG — the contract the freezer concurrency tests rely on.
+    const rand = vi.spyOn(Math, 'random').mockReturnValue(0.123456789);
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(Date.UTC(2026, 4, 13, 19, 0, 10));
+      const a = shortId();
+      now.mockReturnValue(Date.UTC(2026, 4, 13, 19, 0, 20));
+      const b = shortId();
+      expect(a).not.toBe(b);
+    } finally {
+      rand.mockRestore();
+      now.mockRestore();
+    }
   });
 });

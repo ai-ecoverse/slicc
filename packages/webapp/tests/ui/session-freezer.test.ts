@@ -3124,6 +3124,13 @@ describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => 
     // Both markSnapshotUnavailable and freezeConeSession write to the same
     // index file via indexWriteChain. Running them concurrently must still
     // produce exactly two entries (one per session) — not a clobbered index.
+    //
+    // Quick-mode filenames are `pending-${shortId()}.md`, and shortId() is
+    // base-36 Date.now() plus 4 random chars. Two freezes in the same
+    // millisecond can collide on the random suffix (Node 25 CI on #3055);
+    // upsert is keyed on filename, so a collision collapses the index to
+    // one row. Pin distinct clocks so this test asserts the mutex, not
+    // shortId uniqueness — same guard as "serializes concurrent enrichments".
     const vfs1 = makeFakeVfs();
     const store1 = makeFakeStore({
       id: 'session-1',
@@ -3138,12 +3145,23 @@ describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => 
       updatedAt: 3,
     });
 
+    const freezeQuickAt = async (store: SessionStore, utcSecond: number) => {
+      const dateSpy = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.UTC(2026, 4, 13, 19, 0, utcSecond));
+      try {
+        return await freezeConeSession({
+          sessionStore: store,
+          vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+          mode: 'quick',
+        });
+      } finally {
+        dateSpy.mockRestore();
+      }
+    };
+
     // Freeze first session to get a filename to mark.
-    const frozen1 = await freezeConeSession({
-      sessionStore: store1,
-      vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
-      mode: 'quick',
-    });
+    const frozen1 = await freezeQuickAt(store1, 10);
     expect(frozen1).not.toBeNull();
 
     // Race: mark session-1 and freeze session-2 concurrently.
@@ -3152,13 +3170,11 @@ describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => 
       vfs1 as unknown as Parameters<typeof markSnapshotUnavailable>[0],
       frozen1!.filename
     );
-    const freezePromise = freezeConeSession({
-      sessionStore: store2,
-      vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
-      mode: 'quick',
-    });
+    const freezePromise = freezeQuickAt(store2, 20);
 
-    await Promise.all([markPromise, freezePromise]);
+    const [, frozen2] = await Promise.all([markPromise, freezePromise]);
+    expect(frozen2).not.toBeNull();
+    expect(frozen2!.filename).not.toBe(frozen1!.filename);
 
     const index = await readSessionsIndex(
       vfs1 as unknown as Parameters<typeof readSessionsIndex>[0]
