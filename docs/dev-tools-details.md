@@ -216,7 +216,14 @@ workflow's 30 jobs, so `slicc-cli`, `go-optel`, `cloudflare-worker`,
 prevent — and a job added tomorrow would have joined them silently. Names are
 matched after the matrix leg is stripped (`node-matrix-tests (26)` →
 `node-matrix-tests`): GitHub always appends it, so the old allow-list's
-`node-matrix-tests` entry could never fire. A bare `dns` substring must never
+`node-matrix-tests` entry could never fire. Promotion by name is scoped to the
+`CI` workflow — `GET /commits/{sha}/check-runs` returns every check on the SHA,
+so without that scope a failing `AI Comment Detection` or `Renovate Lockfile
+Reconcile` would dispatch a code fixer over a labelling job, against a reconciler
+the dispatcher is supposed to yield to. `attachWorkflowNames()` stamps the
+workflow from the `actions/runs?head_sha=…` response already fetched for
+`hasRerunForSha`. Scoping applies to the name only: a log that genuinely says
+`biome found 2 errors` still classifies as `code` from any workflow. A bare `dns` substring must never
 appear in the network infra signature — every Actions job dumps
 `NODE_OPTIONS: --dns-result-order=ipv4first`, and matching that classified PR
 #2320's real SPM pin conflict as a network flake. The flake hunter's
@@ -255,6 +262,14 @@ a log naming both `ERESOLVE` and an invalid workflow file still hard-skips on
 `ci-config-change`, and `engine-mismatch` (`EBADENGINE`, `Unsupported engine`)
 stays hard for everyone because satisfying it means editing the Node version in
 `.github/workflows/`, which the fixer's prompt forbids.
+
+The `fix` job's bootstrap install has to survive those same failures, or
+dispatching them buys nothing: a hard `npm ci` dies on both an `ERESOLVE` and a
+drifted lockfile, which are precisely the categories now routed to it. It falls
+back to `npm install` (re-resolving the tree and regenerating the lockfile is the
+fix), then continues even on total failure, and reports `clean` / `re-resolved` /
+`failed` to the prompt through `steps.install.outputs.state` so a dirty lockfile
+is committed deliberately rather than by accident.
 
 ### Running one on demand
 

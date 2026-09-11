@@ -469,6 +469,25 @@ const JOB_NAME_CODE_CATEGORIES = {
  * `release-gate` is absent on purpose — {@link HARD_SKIP_JOB_PATTERN} already
  * blocks it by name, earlier and more strongly.
  */
+/**
+ * The workflow whose jobs evaluate this repo's code. Promotion by job NAME alone
+ * is scoped to it.
+ *
+ * `GET /commits/{sha}/check-runs` returns every check on the SHA, not just
+ * `ci.yml`'s — a Renovate PR also carries `AI Comment Detection`,
+ * `Renovate Lockfile Reconcile`, `Claude PR Review`, `Storybook Screenshots`.
+ * Under the allow-by-default rule below, a failure in any of those would
+ * otherwise promote on its name and send a fixer to edit branch code because a
+ * *labelling* job broke — and `Renovate Lockfile Reconcile` is one of the very
+ * reconcilers the dispatcher deliberately refuses to race.
+ *
+ * This scopes the NAME-ONLY path only. A failure whose log genuinely says
+ * `biome found 2 errors` still classifies as `code` through
+ * {@link CODE_SIGNATURES} whatever workflow it came from, because there the
+ * evidence is the log rather than the name.
+ */
+export const CODE_WORKFLOW_NAME = 'CI';
+
 const NON_CODE_JOBS = new Set([
   // The `if: always()` rollup over `needs: [*]`; its log only echoes that a
   // sibling failed.
@@ -610,6 +629,7 @@ export function classifyFailures(failures = [], options = {}) {
     const jobName = f.jobName ?? f.name;
     return {
       jobName,
+      promotable: isNamePromotable(f),
       ...classifyFailure(
         {
           jobName,
@@ -626,12 +646,66 @@ export function classifyFailures(failures = [], options = {}) {
   return pickUnknownFallback(classified);
 }
 
+/** Workflow-run id embedded in a check-run's `details_url` (…/actions/runs/<run>/job/<job>). */
+function runIdFromDetailsUrl(url) {
+  const match = /\/actions\/runs\/(\d+)/.exec(String(url ?? ''));
+  return match ? match[1] : null;
+}
+
+/**
+ * Stamp each failing check with the name of the workflow run that produced it,
+ * resolved against `GET /actions/runs?head_sha=…` — which the scanner already
+ * fetches for `hasRerunForSha`, so this costs no extra request.
+ *
+ * `workflow` is `null` — deliberately, not absent — when the check could not be
+ * traced to an Actions run: a check-run posted by a GitHub App (Codex, Copilot)
+ * has no `/actions/runs/` URL at all. {@link isNamePromotable} reads that `null`
+ * as "looked, found nothing", which is a refusal; absent means "never stated"
+ * and stays permissive for hand-built input. Same null-vs-absent distinction as
+ * {@link describeForeignHead}.
+ * @param {Array<{detailsUrl?: string|null}>} failing mutated in place
+ * @param {Array<{id?: number|string, name?: string}>} runs
+ * @returns {Array<object>} the same array
+ */
+export function attachWorkflowNames(failing = [], runs = []) {
+  const byRunId = new Map();
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (run?.id != null) byRunId.set(String(run.id), run.name ?? null);
+  }
+  for (const failure of Array.isArray(failing) ? failing : []) {
+    if (!failure) continue;
+    const runId = runIdFromDetailsUrl(failure.detailsUrl);
+    failure.workflow = (runId && byRunId.get(runId)) || null;
+  }
+  return Array.isArray(failing) ? failing : [];
+}
+
+/**
+ * May this failure be promoted to `code` on its job NAME alone? Requires an
+ * Actions check-run from {@link CODE_WORKFLOW_NAME}.
+ *
+ * A commit status (`kind: 'status'`) never qualifies: its context belongs to an
+ * external app, not to a job in this repo, and its `description` already reaches
+ * {@link CODE_SIGNATURES} as the excerpt.
+ * @param {{kind?: string, workflow?: string|null}} failure
+ * @returns {boolean}
+ */
+function isNamePromotable(failure) {
+  if (!failure || failure.kind === 'status') return false;
+  // Never stated — a hand-built failure, where the job name is all the evidence
+  // there is. Stated-but-null is {@link attachWorkflowNames} reporting that it
+  // could not trace the check to an Actions run, and that is a refusal.
+  if (!('workflow' in failure)) return true;
+  if (failure.workflow == null) return false;
+  return String(failure.workflow).trim().toLowerCase() === CODE_WORKFLOW_NAME.toLowerCase();
+}
+
 /**
  * Last-resort unknown fold: never let aggregator noise own the skip reason.
- * @param {Array<{jobName?: string, kind: string, category: string|null, reason: string}>} classified
+ * @param {Array<{jobName?: string, promotable?: boolean, kind: string, category: string|null, reason: string}>} classified
  */
 function pickUnknownFallback(classified) {
-  const named = classified.find((c) => wellKnownCodeCategory(c.jobName));
+  const named = classified.find((c) => c.promotable && wellKnownCodeCategory(c.jobName));
   if (named) return codeVerdict(named.jobName, wellKnownCodeCategory(named.jobName));
   const nonAggregator = classified.find((c) => !isCiAggregatorJob(c.jobName));
   return (

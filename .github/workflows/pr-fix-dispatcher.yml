@@ -147,8 +147,32 @@ jobs:
           node-version: 24
           cache: npm
 
+      # `npm ci` is the happy path, but it is ALSO the first casualty of exactly
+      # the failures this job is now dispatched for. An ERESOLVE on a Renovate
+      # branch (`dependency-resolution`) and a lockfile that drifted from its
+      # manifest (`generated-artifact` → `npm ci can only install...`) both kill
+      # a hard `npm ci` here, before the fixer gets its turn — so the job would
+      # fail at bootstrap and step 7 would mark the PR as needing a human on the
+      # one class of PR the fixer is most able to fix.
+      #
+      # So: fall back to `npm install`, which re-resolves the tree and
+      # regenerates the lockfile — that IS the fix for both cases — and if even
+      # that fails, keep going and let Claude diagnose it with tools rather than
+      # die in a `run:` step. The fallback leaves the lockfile dirty in the
+      # worktree, which the prompt below tells the fixer about explicitly so it
+      # commits that deliberately instead of sweeping it up by accident.
       - name: Install dependencies
-        run: npm ci
+        id: install
+        run: |
+          if npm ci; then
+            echo 'state=clean' >> "$GITHUB_OUTPUT"
+          elif npm install --no-audit --no-fund; then
+            echo '::warning::npm ci failed; npm install re-resolved the tree (lockfile may be modified)'
+            echo 'state=re-resolved' >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::both npm ci and npm install failed; the fixer starts without node_modules'
+            echo 'state=failed' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Configure git identity
         run: |
@@ -202,7 +226,20 @@ jobs:
 
             This is a routine automation-authored PR whose CI is failing. Take
             ownership of the existing PR — do NOT open a new one. You are already
-            checked out on its head branch with dependencies installed.
+            checked out on its head branch.
+
+            Dependency install: ${{ steps.install.outputs.state }}
+              clean       `npm ci` succeeded; the worktree is clean.
+              re-resolved `npm ci` FAILED and `npm install` was used instead — so
+                          the lockfile in your worktree is already modified. That
+                          regenerated lockfile is very likely the fix itself:
+                          check `git diff`, confirm it matches the failing check,
+                          and commit it deliberately. Do not discard it without
+                          reading it, and do not commit it blindly either.
+              failed      Neither worked; there is no `node_modules`. Diagnose the
+                          resolution failure from package.json / the lockfile, and
+                          if it needs a NEW dependency or a version decision,
+                          report back instead of guessing.
 
             Failing checks: ${{ matrix.failures }}
 

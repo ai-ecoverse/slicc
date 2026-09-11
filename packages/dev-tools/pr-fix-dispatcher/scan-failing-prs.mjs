@@ -37,6 +37,7 @@
  */
 import { appendFileSync } from 'node:fs';
 import {
+  attachWorkflowNames,
   buildDispatchMarker,
   buildSkipMarker,
   CONFIG,
@@ -358,6 +359,11 @@ async function evaluatePr(pr, now, targeted = false) {
   if (screened) return { pr: base, decision: screened, failures: checks.failing, runs: [] };
 
   const runs = await readRunsForSha(base.headSha);
+  // Before classification: a name-only promotion must know which workflow the
+  // check came from, so a failing `AI Comment Detection` / `Renovate Lockfile
+  // Reconcile` does not dispatch a code fixer. Costs no request — `runs` is
+  // already in hand for `hasRerunForSha`.
+  attachWorkflowNames(checks.failing, runs);
   const failures = await attachLogExcerpts(checks.failing);
   const decision = decidePrAction({
     pr: { ...base, user: pr.user },

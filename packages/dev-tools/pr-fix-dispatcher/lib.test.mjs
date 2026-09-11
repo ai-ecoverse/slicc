@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attachWorkflowNames,
   buildDispatchMarker,
   buildSkipMarker,
   CONFIG,
@@ -1130,5 +1131,105 @@ describe('regression: PR #3045 — a Go tidy-check failure on a Renovate bump', 
     expect(out.action).toBe('dispatch');
     expect(out.reason).toMatch(/slicc-cli/);
     expect(out.reason).not.toMatch(/no plausible cause/i);
+  });
+});
+
+// `GET /commits/{sha}/check-runs` returns every check on the SHA, not just
+// `ci.yml`'s. Allow-by-default promotion on a job NAME would otherwise send a
+// fixer to edit branch code because a labelling workflow broke — and
+// `Renovate Lockfile Reconcile` is one of the reconcilers the dispatcher
+// deliberately refuses to race. (Codex review on PR #3051.)
+describe('name-only promotion is scoped to the CI workflow', () => {
+  const RUNS = [
+    { id: 900, name: 'CI' },
+    { id: 901, name: 'AI Comment Detection' },
+    { id: 902, name: 'Renovate Lockfile Reconcile' },
+  ];
+  const job = (runId, jobId = 7) =>
+    `https://github.com/ai-ecoverse/slicc/actions/runs/${runId}/job/${jobId}`;
+
+  it('stamps each check with its workflow name', () => {
+    const failing = [
+      { name: 'lint', detailsUrl: job(900), kind: 'check-run' },
+      { name: 'classify', detailsUrl: job(901), kind: 'check-run' },
+    ];
+    attachWorkflowNames(failing, RUNS);
+    expect(failing.map((f) => f.workflow)).toEqual(['CI', 'AI Comment Detection']);
+  });
+
+  // A GitHub App's check-run (Codex, Copilot) has no /actions/runs/ URL at all.
+  it('stamps null — not absent — when the check traces to no Actions run', () => {
+    const failing = [
+      { name: 'Codex Review', detailsUrl: 'https://chatgpt.com/codex/whatever' },
+      { name: 'orphan', detailsUrl: job(404) },
+      { name: 'no url' },
+    ];
+    attachWorkflowNames(failing, RUNS);
+    for (const f of failing) {
+      expect(f, f.name).toHaveProperty('workflow', null);
+    }
+  });
+
+  it('refuses to promote a non-CI workflow on its name alone', () => {
+    for (const [jobName, runId] of [
+      ['classify', 901],
+      ['reconcile', 902],
+    ]) {
+      const failing = [
+        { name: 'ci', detailsUrl: job(900), kind: 'check-run', logExcerpt: AGGREGATOR_EXCERPT },
+        { name: jobName, detailsUrl: job(runId), kind: 'check-run', logExcerpt: '' },
+      ];
+      attachWorkflowNames(failing, RUNS);
+      expect(classifyFailures(failing).kind, jobName).toBe('unknown');
+    }
+  });
+
+  it('still promotes a CI job with an empty log', () => {
+    const failing = [
+      { name: 'ci', detailsUrl: job(900), kind: 'check-run', logExcerpt: AGGREGATOR_EXCERPT },
+      {
+        name: 'slicc-cli (ubuntu-latest)',
+        detailsUrl: job(900),
+        kind: 'check-run',
+        logExcerpt: '',
+      },
+    ];
+    attachWorkflowNames(failing, RUNS);
+    expect(classifyFailures(failing)).toMatchObject({ kind: 'code', category: 'slicc-cli' });
+  });
+
+  // The name is scoped; the LOG is not. Evidence in a log is evidence whatever
+  // workflow produced it, and that path predates this PR.
+  it('still classifies a non-CI workflow from its log', () => {
+    const failing = [
+      {
+        name: 'reconcile',
+        detailsUrl: job(902),
+        kind: 'check-run',
+        logExcerpt: 'biome found 2 errors',
+      },
+    ];
+    attachWorkflowNames(failing, RUNS);
+    expect(classifyFailures(failing)).toMatchObject({ kind: 'code', category: 'lint' });
+  });
+
+  it('never promotes a commit status on its context alone', () => {
+    const failing = [{ name: 'webapp', kind: 'status', description: '' }];
+    expect(classifyFailures(failing).kind).toBe('unknown');
+  });
+
+  // Hand-built input that never mentions a workflow keeps the old meaning:
+  // absence is not evidence, the job name is all there is.
+  it('leaves a failure that states no workflow promotable', () => {
+    expect(classifyFailures([{ name: 'webapp', logExcerpt: '' }])).toMatchObject({
+      kind: 'code',
+      category: 'webapp',
+    });
+  });
+
+  it('tolerates missing input', () => {
+    expect(attachWorkflowNames()).toEqual([]);
+    expect(attachWorkflowNames(null, null)).toEqual([]);
+    expect(attachWorkflowNames([{ name: 'x' }], undefined)[0].workflow).toBeNull();
   });
 });

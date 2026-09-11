@@ -97,6 +97,25 @@ lookup is an exact match, so before the strip the old allow-list's
 `node-matrix-tests` entry **could never fire** — that job is only ever reported
 with a leg.
 
+Allow-by-default only works because promotion-by-name is scoped to one workflow.
+`GET /commits/{sha}/check-runs` returns every check on the SHA, so a Renovate PR
+also carries `AI Comment Detection`, `Renovate Lockfile Reconcile`,
+`Claude PR Review` and `Storybook Screenshots`. Without the scope, a failure in
+any of those would promote on its name and send a fixer to edit branch code
+because a _labelling_ job broke — and the lockfile reconciler is one of the
+workflows the dispatcher explicitly refuses to race. `attachWorkflowNames()`
+stamps each failing check with its workflow, resolved against the
+`GET /actions/runs?head_sha=…` response the scanner already holds for
+`hasRerunForSha` (so it costs no extra request), and only `CI` is promotable.
+
+The **log** is not scoped, only the name: a `reconcile` job whose log genuinely
+says `biome found 2 errors` still classifies as `code`, because there the
+evidence is the log. A commit status never promotes on its context — that name
+belongs to an external app — and `workflow: null` (stamped when a check traces to
+no Actions run, e.g. a GitHub App's check-run) is a refusal, distinct from
+`workflow` being absent, which means "never stated" and stays permissive for
+hand-built input.
+
 ### A dependency conflict is not a hard skip on a Renovate branch
 
 `ERESOLVE` / `unable to resolve dependency tree` / `requires a peer of` is the
@@ -115,6 +134,18 @@ first-match-wins, so a log naming both `ERESOLVE` and an invalid workflow file
 still hard-skips on `ci-config-change`. `engine-mismatch` (`EBADENGINE`,
 `Unsupported engine`) stays hard for everyone: satisfying it means editing the
 Node version in `.github/workflows/`, which the prompt forbids.
+
+Dispatching those PRs is only useful if the fixer survives long enough to fix
+them. The `fix` job's bootstrap `npm ci` is the _first_ casualty of both an
+`ERESOLVE` and a drifted lockfile (`npm ci can only install...`) — the two
+categories most likely to reach it — so a hard `npm ci` would fail the job before
+Claude's turn and step 7 would mark the PR as needing a human. The step therefore
+falls back to `npm install` (which re-resolves the tree and regenerates the
+lockfile: that _is_ the fix for both), and on total failure continues anyway so
+the fixer can diagnose it with tools. `steps.install.outputs.state` is
+`clean` / `re-resolved` / `failed`, and the prompt is told which — `re-resolved`
+means the lockfile is already dirty in the worktree, to be read and committed
+deliberately rather than swept up by accident.
 
 ### The debt boy-scout gate is the likeliest dispatch of all
 
