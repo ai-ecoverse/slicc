@@ -142,4 +142,14 @@ describe('serve directory → index.html fallback (real responder + handler + VF
     );
     expect(rangeSpy).toHaveBeenCalledWith('/site/cut.mp4', 10, 20);
   });
+
+  it('answers 416 for a range past EOF without calling readFileRange', async () => {
+    const bytes = new Uint8Array(64).map((_, i) => i);
+    await vfs.writeFile('/site/cut.mp4', bytes);
+    const rangeSpy = vi.spyOn(vfs, 'readFileRange');
+    const res = await handlePreviewRequest(swChannel, '/site/cut.mp4', 1000, 'bytes=2000-');
+    expect(res.status).toBe(416);
+    expect(res.headers.get('Content-Range')).toBe('bytes */64');
+    expect(rangeSpy).not.toHaveBeenCalled();
+  });
 });

@@ -183,6 +183,40 @@ describe('installPreviewVfsResponder', () => {
     expect('content' in resp && resp.size).toBe(5);
   });
 
+  it('does not call readFileRange for a window at or past EOF (416, not EINVAL)', async () => {
+    const ch = new FakeChannel();
+    const bytes = new Uint8Array([10, 20, 30, 40, 50]);
+    const readFile = vi.fn(async () => bytes);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    const stat = vi.fn(
+      async (): Promise<Stats> => ({ type: 'file', size: bytes.byteLength, mtime: 0, ctime: 0 })
+    );
+    const client: LocalVfsClient = {
+      readDir: vi.fn(async () => []),
+      readFile,
+      readFileRange,
+      stat,
+    };
+    installPreviewVfsResponder({ channel: ch, getReader: () => client });
+
+    ch.emit({
+      type: 'preview-vfs-read',
+      id: 'r2',
+      path: '/shared/cut.mp4',
+      asText: false,
+      start: 2000,
+    });
+    await tick();
+
+    expect(readFileRange).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
+    expect('content' in resp && (resp.content as Uint8Array).byteLength).toBe(0);
+    expect('content' in resp && resp.size).toBe(5);
+  });
+
   it('non-ENOENT errors are logged and round-trip as { error }', async () => {
     const ch = new FakeChannel();
     const vfs = makeStubVfs();

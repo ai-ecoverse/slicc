@@ -205,7 +205,13 @@ async function readBinaryWindow(
   end: number | undefined,
   size: number
 ): Promise<Uint8Array> {
-  const to = end ?? size;
+  // Half-open `[start, to)`. A window at or past EOF (open-ended
+  // `bytes=2000-` on a 1000-byte file, a reversed closed range) must not
+  // reach `readFileRange` — that API rejects `end < start` with EINVAL,
+  // which the SW would turn into 500. Empty + `size` on the response lets
+  // `parseByteRange` answer 416 instead (#2857).
+  const to = Math.min(end ?? size, size);
+  if (start >= size || start >= to) return new Uint8Array(0);
   if (reader.readFileRange) {
     return reader.readFileRange(path, start, to);
   }
