@@ -17,6 +17,11 @@
 import { slugify as slugifyText } from '@slicc/shared-ts';
 import { FsError } from '../fs/types.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
+import {
+  newAtRestState,
+  redactArchiveText,
+  redactChatMessagesAtRest,
+} from './archive-redaction.js';
 import { formatChatForClipboard } from './chat-markdown.js';
 import {
   type FrozenSessionArchive,
@@ -156,7 +161,16 @@ export function rewriteTranscriptPointers(
  * Memory v2 prose+JSONL archives are written by `writeArchiveBundle` in
  * `session-jsonl.ts` (lazy) — keep this eager path free of that glue.
  */
-export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
+export function formatArchiveAsMarkdown(rawArchive: FrozenSessionArchive): string {
+  // At-rest credential redaction (P0c): scrub structural key material out
+  // of the bytes before they persist. Title included — the heuristic title
+  // is the first user message's head, which can carry a pasted key.
+  const redactState = newAtRestState();
+  const archive: FrozenSessionArchive = {
+    ...rawArchive,
+    title: redactArchiveText(rawArchive.title, redactState),
+    messages: redactChatMessagesAtRest(rawArchive.messages, redactState) as ChatMessage[],
+  };
   const usageFrontmatter =
     (archive.cost ? `cost: ${JSON.stringify(archive.cost)}\n` : '') +
     (archive.models ? `models: ${JSON.stringify(archive.models)}\n` : '');
