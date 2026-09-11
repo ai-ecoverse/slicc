@@ -65,6 +65,13 @@ export const LABEL_COLORS = {
 export const AUTOMATION_BRANCH_PREFIXES = ['automation/', 'renovate/', 'rum-fix/'];
 
 /**
+ * Head-branch prefixes whose PRs exist only to move a dependency version. A
+ * subset of {@link AUTOMATION_BRANCH_PREFIXES}: an `automation/` or `rum-fix/`
+ * branch carries hand-shaped code and gets no dependency waiver.
+ */
+export const DEPENDENCY_UPDATE_BRANCH_PREFIXES = ['renovate/'];
+
+/**
  * Labels whose PRs this repo already self-heals through
  * `renovate-patch-reconcile.yml` / `renovate-format-reconcile.yml` /
  * `renovate-swift-pin-reconcile.yml`. Acting on them would race those workflows.
@@ -85,6 +92,23 @@ const PENDING_CHECK_STATUSES = new Set([
   'requested',
   'pending',
 ]);
+
+/**
+ * npm refusing to resolve a tree. For most authors this is a hard skip — an
+ * `ERESOLVE` on a hand-written feature branch means somebody has to decide which
+ * version wins. On a dependency-update PR it is the opposite: resolving the tree
+ * for a version Renovate already chose is the entire content of the PR, and the
+ * fix is regenerating the lockfile or widening a sibling range. Blocking it
+ * there made the dispatcher structurally blind on its single most common
+ * candidate (PR #2964, `fix(deps): update codemirror`).
+ *
+ * Shared verbatim by {@link HARD_SKIP_SIGNATURES} and {@link CODE_SIGNATURES};
+ * {@link isDependencyUpdatePr} picks which table sees it. The two must stay one
+ * pattern — a text that stops matching the hard-skip entry but still matches the
+ * code entry would dispatch fixers on non-automation PRs.
+ */
+const DEPENDENCY_RESOLUTION_PATTERN =
+  /ERESOLVE|unable to resolve dependency tree|no matching version found|peer dep|requires a peer of/i;
 
 /**
  * Failure signatures that are hard overrides to the skip path: no re-run can
@@ -120,11 +144,14 @@ export const HARD_SKIP_SIGNATURES = [
     pattern:
       /npm publish|semantic-release|wrangler deploy|gh release|notariz|codesign|publish failed|release job/i,
   },
+  // Stays hard for every author including Renovate: satisfying it means editing
+  // the Node version in `.github/workflows/`, which the fixer is told not to do.
   {
-    category: 'dependency-change',
-    pattern:
-      /ERESOLVE|unable to resolve dependency tree|no matching version found|peer dep|requires a peer of|engine node is incompatible/i,
+    category: 'engine-mismatch',
+    pattern: /engine node is incompatible|EBADENGINE|unsupported engine/i,
   },
+  // Waived for dependency-update PRs — see {@link DEPENDENCY_RESOLUTION_PATTERN}.
+  { category: 'dependency-resolution', pattern: DEPENDENCY_RESOLUTION_PATTERN },
   {
     category: 'ci-config-change',
     pattern:
@@ -225,11 +252,21 @@ export const CODE_SIGNATURES = [
     pattern:
       /snapshot|tomatchsnapshot|obsolete snapshot|below (the )?configured minimum coverage|coverage .*below|does not meet (the )?threshold/i,
   },
+  // `go.mod` / `go.sum` are the Go half of the same "a generated manifest fell
+  // out of step with its source" failure `package-lock.json` covers, and the Go
+  // toolchain shares none of npm's vocabulary. `make tidy-check` in
+  // packages/slicc-cli and packages/go-optel prints `go.mod/go.sum are not tidy
+  // — run 'go mod tidy'`; PR #3045 (a Renovate pion/webrtc bump) skipped as
+  // `unknown` on exactly that line and a human pushed the `go mod tidy` commit.
   {
     category: 'generated-artifact',
     pattern:
-      /package-lock\.json|lock ?file (is )?out of (sync|date)|npm ci can only install|git diff --exit-code|generated file .* out of date|working tree is dirty/i,
+      /package-lock\.json|lock ?file (is )?out of (sync|date)|npm ci can only install|git diff --exit-code|generated file .* out of date|working tree is dirty|go mod tidy|go\.(mod|sum) (are|is) not tidy|missing go\.sum entry/i,
   },
+  // Reachable only for a dependency-update PR: for every other author
+  // {@link HARD_SKIP_SIGNATURES} matches the same text first and blocks. See
+  // {@link DEPENDENCY_RESOLUTION_PATTERN}.
+  { category: 'dependency-resolution', pattern: DEPENDENCY_RESOLUTION_PATTERN },
   // Renovate updates Package.swift / Package.resolved but historically missed
   // the sibling xcodegen `project.yml` `exactVersion:` pins (PR #2320). SPM
   // then fails with a version conflict that is a mechanical pin sync, not a
@@ -262,6 +299,21 @@ export function isAutomationPr(pr) {
   if (authorType === 'bot') return true;
   const ref = String(pr.head?.ref ?? pr.headRef ?? '');
   return AUTOMATION_BRANCH_PREFIXES.some((prefix) => ref.startsWith(prefix));
+}
+
+/**
+ * Is this PR a pure dependency bump? Keyed on the head branch alone, NOT on the
+ * author: `app/renovate` opens these, but so does a human re-pushing a renovate
+ * branch, and both PRs have the same mechanical content. Author type is the
+ * wrong key in the other direction too — every bot in this repo is a `Bot`, and
+ * a backlog-dispatcher PR must not inherit the dependency waiver.
+ * @param {{head?: {ref?: string}, headRef?: string}} pr
+ * @returns {boolean}
+ */
+export function isDependencyUpdatePr(pr) {
+  if (!pr) return false;
+  const ref = String(pr.head?.ref ?? pr.headRef ?? '');
+  return DEPENDENCY_UPDATE_BRANCH_PREFIXES.some((prefix) => ref.startsWith(prefix));
 }
 
 /** Fold `GET /commits/{sha}/check-runs` into failing entries plus a pending flag. */
@@ -346,6 +398,13 @@ function matchSignature(table, text) {
 /**
  * Bare check-run name. GitHub reports this repo's jobs as `lint` / `ci`; some
  * UIs and required-check titles use the `CI / lint` form.
+ *
+ * The trailing matrix suffix goes too. GitHub appends the matrix leg to the
+ * check-run name — `node-matrix-tests (26)`, `slicc-cli (ubuntu-latest)` — and
+ * every name-keyed lookup below is an exact match, so without this strip
+ * {@link WELL_KNOWN_CODE_JOBS}'s `node-matrix-tests` entry could never fire: that
+ * job is *only* ever reported with a leg. Same for a `lint (…)` leg reaching
+ * {@link JOB_NAME_CODE_CATEGORIES}.
  * @param {string} jobName
  * @returns {string}
  */
@@ -353,6 +412,7 @@ function bareCheckName(jobName) {
   return String(jobName ?? '')
     .trim()
     .replace(/^ci\s*\/\s*/i, '')
+    .replace(/\s*\([^()]*\)\s*$/, '')
     .trim()
     .toLowerCase();
 }
@@ -394,34 +454,63 @@ const JOB_NAME_CODE_CATEGORIES = {
 };
 
 /**
- * Failing jobs that evaluate this repo's code. Used when every per-job
- * classification is `unknown` (empty excerpt, aggregator noise) so a named
- * child still dispatches instead of skipping with the aggregator's sentence.
- * `swift-*` covers swift-server / swift-optel / swift-launcher / …
+ * Jobs in `ci.yml` that do NOT evaluate this repo's code, so their name alone is
+ * no evidence of a fixable failure.
+ *
+ * This is an allow-by-default deny-list, and it replaced an explicit
+ * `WELL_KNOWN_CODE_JOBS` allow-list that named 7 of the workflow's 30 jobs.
+ * Every job the allow-list omitted — `go-optel`, `cloudflare-worker`,
+ * `node-server`, `cherry`, `spoon`, `webcomponents`, `cloud-core`,
+ * `global-install`, `slicc-cli` — fell through to `unknown` and skipped, which
+ * is the whole failure mode this fallback exists to prevent. Naming the handful
+ * of non-code jobs is both shorter and self-maintaining: a job added to `ci.yml`
+ * tomorrow is a code job by default rather than a silent skip.
+ *
+ * `release-gate` is absent on purpose — {@link HARD_SKIP_JOB_PATTERN} already
+ * blocks it by name, earlier and more strongly.
  */
-const WELL_KNOWN_CODE_JOBS = new Set([
-  'lint',
-  'typecheck',
-  'webapp',
-  'e2e',
-  'chrome-extension',
-  'node-matrix-tests',
-  'bundle-size',
+/**
+ * The workflow whose jobs evaluate this repo's code. Promotion by job NAME alone
+ * is scoped to it.
+ *
+ * `GET /commits/{sha}/check-runs` returns every check on the SHA, not just
+ * `ci.yml`'s — a Renovate PR also carries `AI Comment Detection`,
+ * `Renovate Lockfile Reconcile`, `Claude PR Review`, `Storybook Screenshots`.
+ * Under the allow-by-default rule below, a failure in any of those would
+ * otherwise promote on its name and send a fixer to edit branch code because a
+ * *labelling* job broke — and `Renovate Lockfile Reconcile` is one of the very
+ * reconcilers the dispatcher deliberately refuses to race.
+ *
+ * This scopes the NAME-ONLY path only. A failure whose log genuinely says
+ * `biome found 2 errors` still classifies as `code` through
+ * {@link CODE_SIGNATURES} whatever workflow it came from, because there the
+ * evidence is the log rather than the name.
+ */
+export const CODE_WORKFLOW_NAME = 'CI';
+
+const NON_CODE_JOBS = new Set([
+  // The `if: always()` rollup over `needs: [*]`; its log only echoes that a
+  // sibling failed.
+  'ci',
+  // The `dorny/paths-filter` job every other job gates on.
+  'changes',
 ]);
 
 /**
- * Category for a well-known code job, or null. `lint` / `typecheck` map onto
- * the existing CODE_SIGNATURES categories; other names stay as themselves so
- * the dispatch reason names the job.
+ * Category for a failing job that evaluates this repo's code, or null when the
+ * job's name alone is no evidence. `lint` / `typecheck` map onto the existing
+ * CODE_SIGNATURES categories; `swift-*` covers swift-server / swift-optel /
+ * swift-launcher / …; every other name stays as itself so the dispatch reason
+ * names the job.
  * @param {string} jobName
  * @returns {string|null}
  */
 export function wellKnownCodeCategory(jobName) {
   const bare = bareCheckName(jobName);
+  if (!bare || NON_CODE_JOBS.has(bare)) return null;
   if (JOB_NAME_CODE_CATEGORIES[bare]) return JOB_NAME_CODE_CATEGORIES[bare];
-  if (WELL_KNOWN_CODE_JOBS.has(bare)) return bare;
   if (bare.startsWith('swift-')) return 'build';
-  return null;
+  return bare;
 }
 
 /** @param {string} name @param {string} category */
@@ -453,9 +542,15 @@ export function prioritizeLogFetch(failing = []) {
  * Classify a single failure as infrastructure, code, blocked (hard skip), or
  * unknown, from its job name plus a log excerpt.
  * @param {{jobName?: string, logExcerpt?: string}} failure
+ * @param {{dependencyUpdate?: boolean}} [options] `dependencyUpdate: true` waives
+ *   the `dependency-resolution` hard skip, and nothing else — see
+ *   {@link DEPENDENCY_RESOLUTION_PATTERN}
  * @returns {{kind: 'blocked'|'code'|'infra'|'unknown', category: string|null, reason: string}}
  */
-export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
+export function classifyFailure(
+  { jobName = '', logExcerpt = '' } = {},
+  { dependencyUpdate = false } = {}
+) {
   const name = String(jobName);
   const text = `${name}\n${String(logExcerpt)}`;
 
@@ -476,7 +571,13 @@ export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
       reason: `"${name}" is a release/deploy/secrets-class job — out of scope for an automated fix.`,
     };
   }
-  const blocked = matchSignature(HARD_SKIP_SIGNATURES, text);
+  // Filter the table rather than post-hoc unblocking the verdict: `blocked` is
+  // first-match-wins, so dropping the waived entry lets a later hard skip
+  // (`ci-config-change`) still win on a log that names both.
+  const hardSkips = dependencyUpdate
+    ? HARD_SKIP_SIGNATURES.filter((entry) => entry.category !== 'dependency-resolution')
+    : HARD_SKIP_SIGNATURES;
+  const blocked = matchSignature(hardSkips, text);
   if (blocked) {
     return {
       kind: 'blocked',
@@ -519,18 +620,23 @@ export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
  * non-aggregator unknown; if any remaining job is a well-known code job,
  * promote it to `code` so the PR dispatches.
  * @param {Array<{name?: string, jobName?: string, logExcerpt?: string}>} failures
+ * @param {{dependencyUpdate?: boolean}} [options] forwarded to {@link classifyFailure}
  * @returns {{kind: 'blocked'|'code'|'infra'|'unknown', category: string|null, reason: string}}
  */
-export function classifyFailures(failures = []) {
+export function classifyFailures(failures = [], options = {}) {
   const list = Array.isArray(failures) ? failures : [];
   const classified = list.map((f) => {
     const jobName = f.jobName ?? f.name;
     return {
       jobName,
-      ...classifyFailure({
-        jobName,
-        logExcerpt: f.logExcerpt ?? f.description ?? '',
-      }),
+      promotable: isNamePromotable(f),
+      ...classifyFailure(
+        {
+          jobName,
+          logExcerpt: f.logExcerpt ?? f.description ?? '',
+        },
+        options
+      ),
     };
   });
   for (const kind of ['blocked', 'code', 'infra']) {
@@ -540,12 +646,66 @@ export function classifyFailures(failures = []) {
   return pickUnknownFallback(classified);
 }
 
+/** Workflow-run id embedded in a check-run's `details_url` (…/actions/runs/<run>/job/<job>). */
+function runIdFromDetailsUrl(url) {
+  const match = /\/actions\/runs\/(\d+)/.exec(String(url ?? ''));
+  return match ? match[1] : null;
+}
+
+/**
+ * Stamp each failing check with the name of the workflow run that produced it,
+ * resolved against `GET /actions/runs?head_sha=…` — which the scanner already
+ * fetches for `hasRerunForSha`, so this costs no extra request.
+ *
+ * `workflow` is `null` — deliberately, not absent — when the check could not be
+ * traced to an Actions run: a check-run posted by a GitHub App (Codex, Copilot)
+ * has no `/actions/runs/` URL at all. {@link isNamePromotable} reads that `null`
+ * as "looked, found nothing", which is a refusal; absent means "never stated"
+ * and stays permissive for hand-built input. Same null-vs-absent distinction as
+ * {@link describeForeignHead}.
+ * @param {Array<{detailsUrl?: string|null}>} failing mutated in place
+ * @param {Array<{id?: number|string, name?: string}>} runs
+ * @returns {Array<object>} the same array
+ */
+export function attachWorkflowNames(failing = [], runs = []) {
+  const byRunId = new Map();
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (run?.id != null) byRunId.set(String(run.id), run.name ?? null);
+  }
+  for (const failure of Array.isArray(failing) ? failing : []) {
+    if (!failure) continue;
+    const runId = runIdFromDetailsUrl(failure.detailsUrl);
+    failure.workflow = (runId && byRunId.get(runId)) || null;
+  }
+  return Array.isArray(failing) ? failing : [];
+}
+
+/**
+ * May this failure be promoted to `code` on its job NAME alone? Requires an
+ * Actions check-run from {@link CODE_WORKFLOW_NAME}.
+ *
+ * A commit status (`kind: 'status'`) never qualifies: its context belongs to an
+ * external app, not to a job in this repo, and its `description` already reaches
+ * {@link CODE_SIGNATURES} as the excerpt.
+ * @param {{kind?: string, workflow?: string|null}} failure
+ * @returns {boolean}
+ */
+function isNamePromotable(failure) {
+  if (!failure || failure.kind === 'status') return false;
+  // Never stated — a hand-built failure, where the job name is all the evidence
+  // there is. Stated-but-null is {@link attachWorkflowNames} reporting that it
+  // could not trace the check to an Actions run, and that is a refusal.
+  if (!('workflow' in failure)) return true;
+  if (failure.workflow == null) return false;
+  return String(failure.workflow).trim().toLowerCase() === CODE_WORKFLOW_NAME.toLowerCase();
+}
+
 /**
  * Last-resort unknown fold: never let aggregator noise own the skip reason.
- * @param {Array<{jobName?: string, kind: string, category: string|null, reason: string}>} classified
+ * @param {Array<{jobName?: string, promotable?: boolean, kind: string, category: string|null, reason: string}>} classified
  */
 function pickUnknownFallback(classified) {
-  const named = classified.find((c) => wellKnownCodeCategory(c.jobName));
+  const named = classified.find((c) => c.promotable && wellKnownCodeCategory(c.jobName));
   if (named) return codeVerdict(named.jobName, wellKnownCodeCategory(named.jobName));
   const nonAggregator = classified.find((c) => !isCiAggregatorJob(c.jobName));
   return (
@@ -752,7 +912,9 @@ export function decidePrAction(input = {}) {
   if (screened) return screened;
 
   const { checks = {}, alreadyRerunSha = false } = input;
-  const verdict = classifyFailures(checks.failing);
+  const verdict = classifyFailures(checks.failing, {
+    dependencyUpdate: isDependencyUpdatePr(input.pr),
+  });
 
   if (verdict.kind === 'blocked') {
     return { action: 'skip', reason: verdict.reason, announce: true, category: verdict.category };
@@ -814,15 +976,26 @@ const FAILURE_LINE = /error|fail|✕|✗|cannot|unable|denied|conflict|timed out
  * Lines kept after each {@link FAILURE_LINE}. A gate that fails usually announces
  * the failure on one line and then spends the next few naming the offending file
  * and prescribing the fix — none of which contain a failure-ish word, so a
- * line-by-line filter throws away the only actionable part. Trailing context
- * only: the detail follows the announcement in every gate this repo runs, and
- * leading context would pad the excerpt with the passing output that preceded it.
+ * line-by-line filter throws away the only actionable part.
  */
 const CONTEXT_AFTER = 8;
 
 /**
- * Collapse a raw job log to the tail lines most likely to name the failure,
- * each with the following lines that explain it.
+ * Lines kept BEFORE each {@link FAILURE_LINE}. Trailing context alone assumes the
+ * announcement always precedes the prescription, and a `make`-driven job breaks
+ * that: `make tidy-check` prints its own summary line and only then does `make`
+ * echo `*** [Makefile:48: tidy-check] Error 1`, with `##[error]Process
+ * completed` last. On PR #3045 that ordering put the one actionable line —
+ * `go.mod/go.sum are not tidy — run 'go mod tidy'` — two lines ABOVE the nearest
+ * failure-ish line, so it never reached the excerpt and the PR classified as
+ * `unknown`. Kept deliberately short: leading context pads the excerpt with the
+ * passing output that preceded the failure.
+ */
+const CONTEXT_BEFORE = 3;
+
+/**
+ * Collapse a raw job log to the tail lines most likely to name the failure, each
+ * with the lines around it that explain it.
  * @param {string} log raw text from `GET /actions/jobs/{id}/logs`
  * @param {number} maxChars
  * @returns {string}
@@ -836,8 +1009,9 @@ export function extractLogExcerpt(log, maxChars = 2000) {
   const keep = new Set();
   for (const [index, line] of lines.entries()) {
     if (!FAILURE_LINE.test(line)) continue;
+    const first = Math.max(0, index - CONTEXT_BEFORE);
     const last = Math.min(lines.length - 1, index + CONTEXT_AFTER);
-    for (let i = index; i <= last; i += 1) keep.add(i);
+    for (let i = first; i <= last; i += 1) keep.add(i);
   }
   const interesting = [...keep].sort((a, b) => a - b).map((i) => lines[i]);
   const chosen = (interesting.length ? interesting : lines).slice(-40);

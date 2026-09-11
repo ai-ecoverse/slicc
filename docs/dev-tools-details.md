@@ -189,10 +189,15 @@ Two properties of that output are what the dispatcher has to accommodate:
 - **The actionable part reads as calm prose.** The filename line and the `Fix:`
   paragraph contain no failure-ish word, so a per-line "keep the error lines"
   filter keeps the announcement and discards the diagnosis.
-  `extractLogExcerpt()` therefore keeps a few lines _after_ each failure line
-  (trailing only — the detail always follows the announcement, and leading
-  context would just re-add the passing output) within the same size cap, since
-  the excerpt is what the fixer's prompt is built from.
+  `extractLogExcerpt()` therefore keeps a window _around_ each failure line —
+  eight lines after, three before — within the same size cap, since the excerpt
+  is what the fixer's prompt is built from. The leading half is not symmetry for
+  its own sake: a `make`-driven job inverts the usual order, because the recipe
+  prints its summary first and only then does `make` echo
+  `*** [Makefile:48: tidy-check] Error 1`. On PR #3045 that put the one
+  actionable line — `go.mod/go.sum are not tidy — run 'go mod tidy'` — above
+  every failure-ish line, so a trailing-only window dropped it and `slicc-cli`
+  classified as `unknown`.
 
 The `CI / ci` aggregator (`if: always()` over `needs: [everything]`) fails
 alongside whichever job actually broke, and its own log says only "One or more
@@ -201,9 +206,24 @@ outrank a sibling: verdicts fold in `blocked` → `code` → `infra` order, with
 `unknown` used only when nothing else matched. The unknown fallback must not
 pick the aggregator either — GitHub lists `ci` first, so `classified[0]` used
 to skip with the aggregator's sentence while `lint` had also failed (PR #3008).
-A failing well-known code job (`lint`, `typecheck`, `webapp`, `e2e`,
-`chrome-extension`, `node-matrix-tests`, `bundle-size`, `swift-*`) is `code`
-even with an empty excerpt. A bare `dns` substring must never
+A failing job that evaluates this repo's code is `code` even with an empty
+excerpt, and that test is a deny-list: everything in `ci.yml` counts except the
+`ci` aggregator and the `changes` paths-filter job (`release-gate` is already
+blocked by name, earlier). It replaced an allow-list that named 7 of the
+workflow's 30 jobs, so `slicc-cli`, `go-optel`, `cloudflare-worker`,
+`node-server`, `cherry`, `spoon`, `webcomponents`, `cloud-core` and
+`global-install` all fell through to the `unknown` skip this fallback exists to
+prevent — and a job added tomorrow would have joined them silently. Names are
+matched after the matrix leg is stripped (`node-matrix-tests (26)` →
+`node-matrix-tests`): GitHub always appends it, so the old allow-list's
+`node-matrix-tests` entry could never fire. Promotion by name is scoped to the
+`CI` workflow — `GET /commits/{sha}/check-runs` returns every check on the SHA,
+so without that scope a failing `AI Comment Detection` or `Renovate Lockfile
+Reconcile` would dispatch a code fixer over a labelling job, against a reconciler
+the dispatcher is supposed to yield to. `attachWorkflowNames()` stamps the
+workflow from the `actions/runs?head_sha=…` response already fetched for
+`hasRerunForSha`. Scoping applies to the name only: a log that genuinely says
+`biome found 2 errors` still classifies as `code` from any workflow. A bare `dns` substring must never
 appear in the network infra signature — every Actions job dumps
 `NODE_OPTIONS: --dns-result-order=ipv4first`, and matching that classified PR
 #2320's real SPM pin conflict as a network flake. The flake hunter's
@@ -225,6 +245,31 @@ formatter bump. `npm run lint:swift-pins` is the deterministic backstop and
 requires the xcodegen key in `matchPackageNames` alongside `owner/repo`. The dispatcher skips
 `swift-pin` PRs so it does not race the reconciler; `pin-sync` remains the
 backup for an unlabeled leftover.
+
+npm's own resolution failures (`ERESOLVE`, `unable to resolve dependency tree`,
+`requires a peer of`) are a **conditional** hard skip, the only one in the table.
+On a hand-written branch an `ERESOLVE` means somebody has to decide which version
+wins, which is a conversation and not a branch fix. On a `renovate/` branch it is
+the opposite: resolving the tree for a version Renovate already chose is the
+entire content of the PR, and the fix is regenerating the lockfile or widening a
+sibling range. Hard-skipping it there made the dispatcher structurally blind on
+its single most common candidate (PR #2964, `fix(deps): update codemirror`), so
+`isDependencyUpdatePr()` — keyed on the head branch, **not** the author, since
+every bot here is a `Bot` and a backlog PR must not inherit the waiver — drops
+that one entry from the hard-skip table and lets the identical pattern match as a
+`dependency-resolution` code signature instead. The waiver is that one category:
+a log naming both `ERESOLVE` and an invalid workflow file still hard-skips on
+`ci-config-change`, and `engine-mismatch` (`EBADENGINE`, `Unsupported engine`)
+stays hard for everyone because satisfying it means editing the Node version in
+`.github/workflows/`, which the fixer's prompt forbids.
+
+The `fix` job's bootstrap install has to survive those same failures, or
+dispatching them buys nothing: a hard `npm ci` dies on both an `ERESOLVE` and a
+drifted lockfile, which are precisely the categories now routed to it. It falls
+back to `npm install` (re-resolving the tree and regenerating the lockfile is the
+fix), then continues even on total failure, and reports `clean` / `re-resolved` /
+`failed` to the prompt through `steps.install.outputs.state` so a dirty lockfile
+is committed deliberately rather than by accident.
 
 ### Running one on demand
 

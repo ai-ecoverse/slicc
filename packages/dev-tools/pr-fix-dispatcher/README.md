@@ -71,15 +71,81 @@ Two compounding traps:
 - **Log fetches followed `checks.failing` order.** With `ci` first, the
   bounded log budget could starve the sibling.
 
-The unknown fallback never picks an aggregator-unknown. A failing well-known
-code job (`lint`, `typecheck`, `webapp`, `e2e`, `chrome-extension`,
-`node-matrix-tests`, `bundle-size`, `swift-*`) is `code` even with an empty
-excerpt, so the PR dispatches. `lint` / `typecheck` are also job-name
-signatures on the single-failure path (after infra, so a network flake on
-the lint job is still a re-run). Log fetches prefer non-`ci` jobs.
+The unknown fallback never picks an aggregator-unknown. A failing job that
+evaluates this repo's code is `code` even with an empty excerpt, so the PR
+dispatches. `lint` / `typecheck` are also job-name signatures on the
+single-failure path (after infra, so a network flake on the lint job is still a
+re-run). Log fetches prefer non-`ci` jobs.
 
 Same class as the #2215 debt-gate + aggregator miss and the #2320
 NODE_OPTIONS false positive: aggregator noise dominating a named child.
+
+### "Is this a code job?" is a deny-list, and names lose their matrix leg
+
+That test used to be an allow-list of seven names. `ci.yml` runs thirty jobs, so
+`slicc-cli`, `go-optel`, `cloudflare-worker`, `node-server`, `cherry`, `spoon`,
+`webcomponents`, `cloud-core` and `global-install` were all absent — each one
+falling through to the `unknown` skip the fallback exists to prevent — and any
+job added later would have joined them in silence. It is now a deny-list of the
+jobs that genuinely evaluate no code: the `ci` aggregator and the `changes`
+paths-filter job. (`release-gate` is not listed because `HARD_SKIP_JOB_PATTERN`
+already blocks it by name, earlier and more strongly.)
+
+`bareCheckName()` also strips the trailing matrix leg. GitHub reports these as
+`node-matrix-tests (26)` and `slicc-cli (ubuntu-latest)`, and every name-keyed
+lookup is an exact match, so before the strip the old allow-list's
+`node-matrix-tests` entry **could never fire** — that job is only ever reported
+with a leg.
+
+Allow-by-default only works because promotion-by-name is scoped to one workflow.
+`GET /commits/{sha}/check-runs` returns every check on the SHA, so a Renovate PR
+also carries `AI Comment Detection`, `Renovate Lockfile Reconcile`,
+`Claude PR Review` and `Storybook Screenshots`. Without the scope, a failure in
+any of those would promote on its name and send a fixer to edit branch code
+because a _labelling_ job broke — and the lockfile reconciler is one of the
+workflows the dispatcher explicitly refuses to race. `attachWorkflowNames()`
+stamps each failing check with its workflow, resolved against the
+`GET /actions/runs?head_sha=…` response the scanner already holds for
+`hasRerunForSha` (so it costs no extra request), and only `CI` is promotable.
+
+The **log** is not scoped, only the name: a `reconcile` job whose log genuinely
+says `biome found 2 errors` still classifies as `code`, because there the
+evidence is the log. A commit status never promotes on its context — that name
+belongs to an external app — and `workflow: null` (stamped when a check traces to
+no Actions run, e.g. a GitHub App's check-run) is a refusal, distinct from
+`workflow` being absent, which means "never stated" and stays permissive for
+hand-built input.
+
+### A dependency conflict is not a hard skip on a Renovate branch
+
+`ERESOLVE` / `unable to resolve dependency tree` / `requires a peer of` is the
+one conditional entry in the hard-skip table. On a hand-written branch it is a
+decision somebody has to make. On a `renovate/` branch it is the PR's entire
+content, and the fix is regenerating the lockfile or widening a sibling range —
+so blocking it made the dispatcher structurally blind on its most common
+candidate (PR #2964, `fix(deps): update codemirror`).
+
+`isDependencyUpdatePr()` keys on the head branch, **not** the author: every bot
+in this repo is a `Bot`, and a backlog-dispatcher PR must not inherit the waiver.
+When it holds, that one entry is filtered out of `HARD_SKIP_SIGNATURES` and the
+identical pattern matches as a `dependency-resolution` code signature. Filtering
+the table rather than unblocking the verdict matters — `blocked` is
+first-match-wins, so a log naming both `ERESOLVE` and an invalid workflow file
+still hard-skips on `ci-config-change`. `engine-mismatch` (`EBADENGINE`,
+`Unsupported engine`) stays hard for everyone: satisfying it means editing the
+Node version in `.github/workflows/`, which the prompt forbids.
+
+Dispatching those PRs is only useful if the fixer survives long enough to fix
+them. The `fix` job's bootstrap `npm ci` is the _first_ casualty of both an
+`ERESOLVE` and a drifted lockfile (`npm ci can only install...`) — the two
+categories most likely to reach it — so a hard `npm ci` would fail the job before
+Claude's turn and step 7 would mark the PR as needing a human. The step therefore
+falls back to `npm install` (which re-resolves the tree and regenerates the
+lockfile: that _is_ the fix for both), and on total failure continues anyway so
+the fixer can diagnose it with tools. `steps.install.outputs.state` is
+`clean` / `re-resolved` / `failed`, and the prompt is told which — `re-resolved`
+means the lockfile is already dirty in the worktree, to be read and committed
+deliberately rather than swept up by accident.
 
 ### The debt boy-scout gate is the likeliest dispatch of all
 
@@ -95,9 +161,19 @@ output never says "biome", "eslint", or "lint error" — it says
 `check-touched-exemptions: FAIL` and `still on the <rule> debt list`. Both
 phrasings, plus the "debt list is frozen and must not grow" variant, are matched
 by the `debt-gate` code signature, which is checked before the broader `lint` one.
-The log excerpt keeps the lines that _follow_ a failure line for the same reason:
+The log excerpt keeps a window _around_ each failure line for the same reason:
 the filename and the `Fix:` instruction contain no failure-ish word of their own,
 and without them the fixer's prompt names a failure it cannot act on.
+
+The window is eight lines after and three before. The leading half exists because
+`make` inverts the usual order — the recipe prints its summary first and only
+then does `make` echo `*** [Makefile:48: tidy-check] Error 1`. On PR #3045
+(`renovate/github.com-pion-webrtc-v4-4.x`) that left the one actionable line,
+`go.mod/go.sum are not tidy — run 'go mod tidy'`, above every failure-ish line:
+trailing-only context dropped it, `slicc-cli` classified as `unknown`, and a
+human pushed the `go mod tidy` commit by hand. Keep it short — leading context
+pads the excerpt with the passing output that preceded the failure, and the
+excerpt is what the fixer's prompt is built from.
 
 Silent drops (no label, no comment) happen before the rubric: the PR is not
 machine-authored, CI is green or still running, the newest failing conclusion is
