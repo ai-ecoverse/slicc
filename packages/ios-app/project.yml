@@ -250,7 +250,7 @@ packages:
     exactVersion: 1.5.20260903
   HuggingFace:
     url: https://github.com/huggingface/swift-huggingface
-    minorVersion: 0.9.0
+    minorVersion: 0.10.0
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 152.0.0
