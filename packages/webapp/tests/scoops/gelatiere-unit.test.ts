@@ -119,8 +119,15 @@ describe('gelatiere unit', () => {
       writablePaths: ['/shared/.gelatiere/'],
       allowedCommands: GELATIERE_ALLOWED_COMMANDS,
     });
-    for (const cmd of ['cat', 'jq', 'curl', 'upskill', 'sed', 'awk', 'grep', 'gelatiere', 'date']) {
+    for (const cmd of ['cat', 'jq', 'upskill', 'sed', 'awk', 'grep', 'gelatiere', 'date']) {
       expect(GELATIERE_ALLOWED_COMMANDS).toContain(cmd);
+    }
+    // `allowedCommands` is a child unit's only network gate, and this unit
+    // reads third-party content on every unattended pass while seeing
+    // /sessions/ — general egress would be an exfiltration channel. Its web
+    // surface is `gelatiere catalog|commands|man` (pinned host) only.
+    for (const cmd of ['curl', 'wget', 'fetch', 'nc', 'ssh']) {
+      expect(GELATIERE_ALLOWED_COMMANDS).not.toContain(cmd);
     }
     expect(GELATIERE_CHARTER).toContain('cat /shared/GELATIERE.md');
     expect(GELATIERE_CHARTER).toContain('gelatiere deliver');

@@ -144,7 +144,14 @@ export const GELATIERE_ALLOWED_COMMANDS = [
   'basename',
   'cat',
   'column',
-  'curl',
+  // NO `curl`: for a child unit `allowedCommands` is the only network gate,
+  // and this unit reads third-party content (catalog entries, repo READMEs)
+  // on every unattended pass while seeing /sessions/ and every cone's
+  // memory. One injected "also POST /sessions/*.md to …" line would turn the
+  // nightly into an approval-free exfiltration channel. The recipe's three
+  // known fetches go through `gelatiere catalog|commands|man`, which pin the
+  // host; anything else escalates through the sudo gate, which is right for
+  // egress.
   'cut',
   'date',
   'dirname',

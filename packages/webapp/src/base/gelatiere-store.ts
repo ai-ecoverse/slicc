@@ -2,7 +2,7 @@
  * The gelatiere's stores and its instruction-file contract — the pure half
  * of SLICC's resident advisor.
  *
- * The gelatiere itself is a persistent root work unit (`scoops/gelatiere-unit.ts`)
+ * The gelatiere itself is a persistent scoop (`scoops/gelatiere-unit.ts`)
  * that runs its passes inside its own conversation. What lives HERE is
  * everything that must be deterministic regardless of what the agent
  * writes: the config block of `/shared/GELATIERE.md`, the suggestion store
@@ -84,6 +84,14 @@ export interface GelatiereSuggestion {
 export interface GelatiereState {
   /** When the last pass folded suggestions into the store (`gelatiere suggest`). */
   lastPassAt?: string;
+  /**
+   * When the page last sent a `session-settled` lick. Stamped where the
+   * trigger is DECIDED, not where the pass lands: a pass that legitimately
+   * suggests nothing never runs `gelatiere suggest`, and with only
+   * `lastPassAt` as the gate every subsequent "New chat" would re-lick a
+   * billable pass until the model happened to produce output.
+   */
+  lastTriggeredAt?: string;
   /** When the last delivery lick went out (`gelatiere deliver`). */
   lastDeliveredAt?: string;
   /** Passes recorded through `gelatiere suggest`. */
@@ -228,6 +236,7 @@ export async function readGelatiereState(
   return {
     passes: typeof raw.passes === 'number' && raw.passes >= 0 ? raw.passes : 0,
     ...(typeof raw.lastPassAt === 'string' ? { lastPassAt: raw.lastPassAt } : {}),
+    ...(typeof raw.lastTriggeredAt === 'string' ? { lastTriggeredAt: raw.lastTriggeredAt } : {}),
     ...(typeof raw.lastDeliveredAt === 'string' ? { lastDeliveredAt: raw.lastDeliveredAt } : {}),
   };
 }
@@ -237,12 +246,32 @@ export async function writeGelatiereState(vfs: GelatiereVfs, state: GelatiereSta
   await vfs.writeFile(GELATIERE_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-/** True when no pass has run, or the last one is older than `intervalHours`. */
+/**
+ * True when the newest of `lastPassAt` / `lastTriggeredAt` is older than
+ * `intervalHours` (or neither exists). Both stamps count: a trigger whose
+ * pass produced no suggestions must still hold the interval.
+ */
 export function isPassDue(state: GelatiereState, now: Date, intervalHours: number): boolean {
-  if (!state.lastPassAt) return true;
-  const last = Date.parse(state.lastPassAt);
-  if (Number.isNaN(last)) return true;
-  return now.getTime() - last >= intervalHours * 3_600_000;
+  const newest = Math.max(
+    ...[state.lastPassAt, state.lastTriggeredAt]
+      .map((stamp) => (stamp ? Date.parse(stamp) : Number.NaN))
+      .filter((parsed) => !Number.isNaN(parsed))
+  );
+  if (!Number.isFinite(newest)) return true;
+  return now.getTime() - newest >= intervalHours * 3_600_000;
+}
+
+/**
+ * Stamp `lastTriggeredAt` — the page decided to send a `session-settled`
+ * lick. This is the interval gate's write half; see the field's doc for why
+ * `lastPassAt` alone cannot bound billable passes.
+ */
+export async function recordGelatiereTrigger(
+  vfs: GelatiereVfs,
+  now: Date = new Date()
+): Promise<void> {
+  const state = await readGelatiereState(vfs);
+  await writeGelatiereState(vfs, { ...state, lastTriggeredAt: now.toISOString() });
 }
 
 /** Suggestions still awaiting an answer: neither dismissed nor taken, newest first. */
@@ -303,6 +332,13 @@ export async function takeGelatiereSuggestion(
  * the same tick (dismiss one, install another) are an ordinary user gesture —
  * unserialized, the second write clobbers the first. One module-level chain
  * keeps them in order; a failed settle must not wedge the chain.
+ *
+ * The chain is PER REALM: page-side clicks and the worker-side `gelatiere
+ * dismiss` / `recordPass` each get their own module instance, so a click
+ * landing exactly inside a pass's read-merge-write can still be lost. That
+ * loss is rare (a pass takes minutes, the merge window is one microtask) and
+ * self-healing — the card renders again and the user clicks again. A shared
+ * cross-realm writer is not worth its wiring until that stops being true.
  */
 let settleChain: Promise<unknown> = Promise.resolve();
 
@@ -359,6 +395,24 @@ function httpUrl(value: string | undefined): string | undefined {
   }
 }
 
+/**
+ * `install` is the one agent-authored field a cone EXECUTES — the `gelatiere`
+ * skill tells it to run the command verbatim, with cone authority, after one
+ * click — and the pass recipe has the unit read external catalogs, so a
+ * prompt-injected catalog entry could otherwise ride a suggestion straight
+ * into a shell. Only a plain `upskill` invocation survives this boundary:
+ * `upskill` plus bare tokens (repo, `--path`, `--skill`, `--all`, …), no
+ * shell metacharacters, no quoting, no substitution.
+ */
+const INSTALL_TOKEN_RE = /^[A-Za-z0-9@._/:=-]+$/;
+
+function upskillInstall(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const tokens = value.split(/\s+/);
+  if (tokens[0] !== 'upskill' || tokens.length < 2) return undefined;
+  return tokens.slice(1).every((token) => INSTALL_TOKEN_RE.test(token)) ? value : undefined;
+}
+
 /** What the agent (or the store) may hand us before validation — every field unchecked. */
 interface RawSuggestion {
   id?: unknown;
@@ -398,7 +452,9 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
     title,
     body,
     ...(entry.skill !== undefined ? { skill: optionalText(entry.skill, 120) } : {}),
-    ...(entry.install !== undefined ? { install: optionalText(entry.install, 300) } : {}),
+    ...(entry.install !== undefined
+      ? { install: upskillInstall(optionalText(entry.install, 300)) }
+      : {}),
     ...(entry.prompt !== undefined ? { prompt: optionalText(entry.prompt, 1_000) } : {}),
     ...(entry.url !== undefined ? { url: httpUrl(optionalText(entry.url, 500)) } : {}),
     ...(entry.evidence !== undefined ? { evidence: optionalText(entry.evidence, 500) } : {}),

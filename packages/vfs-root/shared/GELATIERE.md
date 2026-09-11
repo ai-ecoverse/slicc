@@ -44,16 +44,16 @@ Cross the signals above with what SLICC can offer. Spend one command on each; do
 ```bash
 # The skill catalog: name, description, the tasks / roles / apps each skill fits, and WHERE it
 # lives (repo, path, skill, installAll) — the install command is built from those last four.
-curl -s https://www.sliccy.com/skills/catalog.json | jq -r '.data[] | "\(.name)\t\(.description)\ttasks=\(.tasks) role=\(.role) apps=\(.apps)\trepo=\(.repo) path=\(.path) skill=\(.skill) installAll=\(.installAll)"'
+gelatiere catalog | jq -r '.data[] | "\(.name)\t\(.description)\ttasks=\(.tasks) role=\(.role) apps=\(.apps)\trepo=\(.repo) path=\(.path) skill=\(.skill) installAll=\(.installAll)"'
 
 # Every shell command SLICC ships, one man page each — the use-case surface.
-curl -s https://www.sliccy.com/sitemap.xml | grep -o '<loc>[^<]*/man/[^<]*</loc>' | sed 's#.*/man/##; s#</loc>##' | tr '\n' ' '
+gelatiere commands
 
 # The community skills repo, when the catalog looks thin for this user.
 upskill ai-ecoverse/skills
 ```
 
-A man page is at `https://www.sliccy.com/man/<command>` — read one only when you are about to recommend that command and need to be sure it does what you think (`curl -s https://www.sliccy.com/man/<command>.plain.html | head -60`).
+Read a man page only when you are about to recommend that command and need to be sure it does what you think: `gelatiere man <command> | head -60`. You have no `curl` and need none — `gelatiere catalog`, `gelatiere commands` and `gelatiere man` are your whole web surface.
 
 ## What to suggest
 

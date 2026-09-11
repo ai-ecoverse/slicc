@@ -17,6 +17,7 @@ import {
   isPassDue,
   loadGelatiereConfig,
   readGelatiereState,
+  recordGelatiereTrigger,
 } from '../../base/gelatiere-store.js';
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -24,7 +25,7 @@ import type { OffscreenClient } from '../offscreen-client.js';
 
 export interface WcGelatiereDeps {
   client: Pick<OffscreenClient, 'sendSprinkleLick' | 'getScoops'>;
-  vfs: Pick<GelatiereVfs, 'readFile'>;
+  vfs: GelatiereVfs;
   log: BootStageLogger;
   /** The cone whose session just ended. */
   cone?: { folder: string; jid?: string };
@@ -59,7 +60,8 @@ export async function notifyGelatiereOfSessionEnd(deps: WcGelatiereDeps): Promis
       loadGelatiereConfig(deps.vfs),
       readGelatiereState(deps.vfs),
     ]);
-    if (!isPassDue(state, (deps.now ?? (() => new Date()))(), config.intervalHours)) {
+    const now = (deps.now ?? (() => new Date()))();
+    if (!isPassDue(state, now, config.intervalHours)) {
       deps.log.debug('gelatiere pass not due; session end not announced');
       return false;
     }
@@ -71,6 +73,11 @@ export async function notifyGelatiereOfSessionEnd(deps: WcGelatiereDeps): Promis
       },
     };
     deps.client.sendSprinkleLick(GELATIERE_SPRINKLE_NAME, body, unit.folder);
+    // The interval gate's write half. Stamped HERE, where the trigger was
+    // decided — a pass that (legitimately) suggests nothing never runs
+    // `gelatiere suggest`, so `lastPassAt` alone would let every subsequent
+    // "New chat" re-lick a billable pass.
+    await recordGelatiereTrigger(deps.vfs, now);
     deps.log.info('gelatiere told a session ended', { cone: deps.cone?.folder });
     return true;
   } catch (err) {

@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockIsFeatureEnabled = vi.fn();
+vi.mock('../../../src/core/feature-flags.js', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+}));
+
 import {
   GELATIERE_INSTRUCTIONS_PATH,
   GELATIERE_STATE_PATH,
@@ -57,6 +63,7 @@ describe('gelatiere command', () => {
   let seam: ReturnType<typeof fakeSeam>;
 
   beforeEach(() => {
+    mockIsFeatureEnabled.mockReset().mockReturnValue(true);
     seam = fakeSeam([
       { folder: 'cone', name: 'sliccy', jid: 'cone_1' },
       { folder: 'cone-research', name: 'Research', jid: 'cone_2' },
@@ -66,6 +73,7 @@ describe('gelatiere command', () => {
 
   afterEach(() => {
     delete (globalThis as Globals).__slicc_gelatiere;
+    vi.unstubAllGlobals();
   });
 
   const run = (fs: VirtualFS, args: string[], env: Record<string, string> = {}) =>
@@ -256,8 +264,66 @@ describe('gelatiere command', () => {
     expect(result.stdout).toContain('Nightly:        registered, cron "0 3 * * *" (ct-1)');
     expect(result.stdout).toContain('Interval:       24h');
     expect(result.stdout).toContain('Passes:         2');
+    expect(result.stdout).toContain('Last trigger:   never');
     expect(result.stdout).toContain('Last delivery:  2026-09-09T00:05:00.000Z');
     expect(result.stdout).toContain('Suggestions:    1 open, 1 taken, 3 total');
+    expect(result.stdout).not.toContain('Memory v2');
+  });
+
+  it('status leads with the flag when Memory v2 is off — "registered" must not read as "active"', async () => {
+    mockIsFeatureEnabled.mockReturnValue(false);
+    const result = await run(memoryFs(), ['status']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.startsWith('Memory v2:      OFF')).toBe(true);
+    expect(result.stdout).toContain('session ends do not trigger passes');
+  });
+
+  it('catalog and man fetch only the pinned host; man rejects non-slug names', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.includes('catalog') ? '{"data":[{"name":"github"}]}' : 'GELATIERE(1) man page',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const catalog = await run(memoryFs(), ['catalog']);
+    expect(catalog.exitCode).toBe(0);
+    expect(catalog.stdout).toContain('"name":"github"');
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/skills/catalog.json');
+
+    const man = await run(memoryFs(), ['man', 'gelatiere']);
+    expect(man.exitCode).toBe(0);
+    expect(man.stdout).toContain('man page');
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/man/gelatiere.plain.html');
+
+    // The name lands in the URL path: no traversal, no scheme smuggling.
+    for (const bad of ['../secrets', 'a/b', 'x?y=1', 'UPPER', '']) {
+      const result = await run(memoryFs(), ['man', bad].filter(Boolean));
+      expect(result.exitCode, `man ${bad}`).toBe(1);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('commands extracts the man-page slugs from the sitemap and reports HTTP failures', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        '<urlset><loc>https://www.sliccy.com/man/zeta</loc><loc>https://www.sliccy.com/man/alpha</loc><loc>https://www.sliccy.com/about</loc></urlset>',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['commands']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('alpha zeta\n');
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/sitemap.xml');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 503, text: async () => '' }))
+    );
+    const down = await run(memoryFs(), ['commands']);
+    expect(down.exitCode).toBe(1);
+    expect(down.stderr).toContain('HTTP 503');
   });
 
   it('every seam-backed verb fails cleanly before the host publishes the seam', async () => {

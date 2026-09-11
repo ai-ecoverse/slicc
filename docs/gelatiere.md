@@ -11,7 +11,8 @@ pre-compaction snapshots). With the flag on the kernel host creates the unit and
 crontask at boot; `gelatiere init` does the same by hand. With the flag OFF, boot removes any
 nightly crontask persisted while it was on (`haltGelatiere`) — otherwise the LickManager would keep
 reloading it and the unit would keep making unattended, billable passes. The unit itself stays (a
-frozen transcript); flipping the flag back on reschedules the nightly.
+frozen transcript); flipping the flag back on reschedules the nightly, and `gelatiere status` leads
+with a "Memory v2: OFF" line while the flag is off so "registered" does not read as "active".
 
 ## Why a scoop with a synthetic owner
 
@@ -44,6 +45,7 @@ and `/tmp/`.
 | `packages/webapp/src/ui/wc/wc-gelatiere.ts`                            | The session-end hook: if the flag is on, the unit exists and a pass is due, lick the unit with `session-settled`                                                         |
 | `packages/webapp/src/ui/wc/wc-message-view.ts` (`lickCardEl`)          | Gelatiere licks render with their own kind and icon (`ice-cream-cone`) and a readable body (`describeGelatiereLick`) instead of the JSON the cone reads                  |
 | `packages/webapp/src/ui/boot/setup-welcome-flow.ts`                    | `gelatiere-dismiss` / `-install` / `-try` card clicks settle the store page-side; install/try go on to the cone                                                          |
+| `packages/webapp/src/ui/wc/wc-gelatiere-fallback.ts`                   | The same card settlement for floats without the onboarding interceptor (cherry, hosted-leader) — `wc-live.ts` wires it wherever `wireWcWelcome` is skipped               |
 | `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml`             | After onboarding the welcome sprinkle renders the open suggestions as flat `.gelatiere-entry` rows (hairline separators, no nested card chrome)                          |
 | `packages/vfs-root/workspace/skills/gelatiere/SKILL.md`                | What a cone does with the lick and the card buttons; what the gelatiere does with its licks; the reusable single-suggestion dip                                          |
 
@@ -51,13 +53,21 @@ and `/tmp/`.
 
 1. A lick reaches the gelatiere unit: `[Cron Event: gelatiere-nightly]` (the crontask
    `gelatiere init` registers against folder `gelatiere`, cron from `GELATIERE.md`), a
-   `[Sprinkle Event: gelatiere]` with `session-settled` (from `wc-gelatiere.ts`, only when
-   `now − lastPassAt ≥ intervalHours`) or `run` (from `gelatiere run`), or a direct message.
+   `[Sprinkle Event: gelatiere]` with `session-settled` (from `wc-gelatiere.ts`, only when the
+   newest of `lastPassAt` / `lastTriggeredAt` is older than `intervalHours`) or `run` (from
+   `gelatiere run`), or a direct message. The page stamps `lastTriggeredAt` the moment it sends
+   the lick — the interval gate must hold even when the pass legitimately suggests nothing and
+   never reaches `gelatiere suggest`.
 2. Its charter says: `cat /shared/GELATIERE.md` and follow it. The file walks it through the
    profile, the cones' memory files, the session index and the newest archives (never `cat` an
    archive), `upskill list`, its own `/shared/.gelatiere/notes.md`, the previous suggestions, then the
    catalog, the sitemap and the community repo — and how to build `install` from a catalog row
-   (`upskill <repo> [--path p] --skill <name>`, never the bare name).
+   (`upskill <repo> [--path p] --skill <name>`, never the bare name). The unit has **no `curl`**:
+   for a child unit `allowedCommands` is the only network gate, and an unattended agent that reads
+   third-party content while seeing `/sessions/` and every cone's memory must not hold general
+   egress — one injected catalog line could otherwise exfiltrate any archive. Its whole web surface
+   is `gelatiere catalog` / `gelatiere commands` / `gelatiere man <cmd>`, three pinned
+   `www.sliccy.com` fetches; anything else escalates through the sudo gate.
 3. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.
    `suggest` validates (`coerceSuggestions`: kind ∈ skill | use-case | tip, required id/title/body,
    ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
@@ -66,7 +76,9 @@ and `/tmp/`.
    (unless `--force`). An explicit `--scoop <target>` must resolve against the roster (folder, name
    or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
    "new" for the next attempt. Suggestion `url` fields survive only as `http(s)` (they render as a
-   live `href` in the welcome card; every other agent-authored field renders as text).
+   live `href` in the welcome card; every other agent-authored field renders as text), and `install`
+   only as a plain `upskill` invocation — bare tokens, no shell metacharacters — because the cone
+   executes it verbatim after one click and the pass reads third-party content.
 4. It updates its notes file and replies in one line. Compaction trims its conversation while it
    idles.
 
@@ -75,7 +87,7 @@ and `/tmp/`.
 - `/shared/.gelatiere/suggestions.json` — every suggestion, newest first, with `createdAt` and,
   once answered, `takenAt` (Install / Try it) or `dismissedAt` (Not now / `gelatiere dismiss`).
   Capped at 40; past the cap, dismissed entries are trimmed first, then taken, then the oldest open.
-- `/shared/.gelatiere/state.json` — `passes`, `lastPassAt`, `lastDeliveredAt`.
+- `/shared/.gelatiere/state.json` — `passes`, `lastPassAt`, `lastTriggeredAt`, `lastDeliveredAt`.
 - `/shared/.gelatiere/notes.md` — the gelatiere's own cross-pass memory (free-form).
 - `/cones/gelatiere/` — the unit's workspace and `CLAUDE.md`, like any extra cone.
 

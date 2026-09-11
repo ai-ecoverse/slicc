@@ -4,7 +4,7 @@
  * file so the help text and the store stay out of the worker's eager
  * bundle).
  *
- * The gelatiere is a persistent root unit (`scoops/gelatiere-unit.ts`) that
+ * The gelatiere is a persistent scoop (`scoops/gelatiere-unit.ts`) that
  * runs its passes in its own conversation; this command is how those passes
  * land and how anyone else pokes it:
  *
@@ -12,6 +12,7 @@
  *   run                  lick the unit: "do a pass now"
  *   suggest <file>       the gelatiere's last step — fold candidates into the store
  *   deliver              the gelatiere's other last step — lick every other cone
+ *   catalog | commands | man <cmd>   pinned-host fetches (the unit has no curl)
  *   list | dismiss | status
  *
  * `shell/` sits below `scoops/`, so the orchestrator-facing operations come
@@ -67,6 +68,9 @@ Commands:
   list [--all|--json]  Show open suggestions (--all includes taken and dismissed)
   dismiss <id>         Wave a suggestion away so it is not shown again
   status               Unit, nightly schedule, last pass, last delivery, counts
+  catalog              The skill catalog (JSON) from www.sliccy.com
+  commands             Every shell command SLICC ships, from the sitemap
+  man <command>        One man page, plain text
 
 deliver options:
   --scoop <target>     One cone (folder or jid) instead of every cone
@@ -233,6 +237,63 @@ async function handleDismiss(args: string[], fs: VirtualFS): Promise<CommandResu
     : fail(`no open suggestion with id "${id}"`);
 }
 
+/**
+ * The pass recipe's whole web surface, served through pinned-host fetches so
+ * the unit needs no `curl`: for a child unit `allowedCommands` is the only
+ * network gate, and an unattended agent that reads third-party content while
+ * seeing `/sessions/` must not hold general egress (an injected catalog line
+ * could otherwise exfiltrate any archive). These verbs fetch three known
+ * `www.sliccy.com` resources and nothing else.
+ */
+const GELATIERE_FETCH_ORIGIN = 'https://www.sliccy.com';
+/** Man pages cap: the recipe only ever wanted `head -60` worth. */
+const MAN_BYTE_CAP = 16_000;
+/** Catalog / sitemap cap — generous, but bounded against a hijacked CDN. */
+const FETCH_BYTE_CAP = 512_000;
+const MAN_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+async function fetchSliccy(path: string, cap: number): Promise<string> {
+  const response = await fetch(`${GELATIERE_FETCH_ORIGIN}${path}`);
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+  const text = await response.text();
+  return text.length > cap ? text.slice(0, cap) : text;
+}
+
+async function handleCatalog(): Promise<CommandResult> {
+  try {
+    const body = await fetchSliccy('/skills/catalog.json', FETCH_BYTE_CAP);
+    return ok(body.endsWith('\n') ? body : `${body}\n`);
+  } catch (error) {
+    return fail(`catalog fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function handleCommands(): Promise<CommandResult> {
+  try {
+    const xml = await fetchSliccy('/sitemap.xml', FETCH_BYTE_CAP);
+    const names = [...xml.matchAll(/<loc>[^<]*\/man\/([a-z0-9-]+)(?:\.html)?<\/loc>/g)]
+      .map((m) => m[1])
+      .sort();
+    if (names.length === 0) return fail('no man pages found in the sitemap');
+    return ok(`${[...new Set(names)].join(' ')}\n`);
+  } catch (error) {
+    return fail(`sitemap fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function handleMan(args: string[]): Promise<CommandResult> {
+  const name = args[0];
+  if (!name) return fail('man requires a command name: gelatiere man <command>');
+  // The name lands in the URL path; only a plain command slug may travel.
+  if (!MAN_NAME_RE.test(name)) return fail(`not a command name: "${name}"`);
+  try {
+    const body = await fetchSliccy(`/man/${name}.plain.html`, MAN_BYTE_CAP);
+    return ok(body.endsWith('\n') ? body : `${body}\n`);
+  } catch (error) {
+    return fail(`man fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   const store = await loadStore();
   const host = seam();
@@ -240,12 +301,21 @@ async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   const config = await store.loadGelatiereConfig(fs);
   const state = await store.readGelatiereState(fs);
   const all = await store.readGelatiereSuggestions(fs);
-  let output = `Unit:           ${unit ? `${unit.jid} (folder ${unit.folder})` : 'not created — run `gelatiere init`'}\n`;
+  let output = '';
+  // The unit itself survives the flag being turned off (it is a frozen
+  // transcript without licks) — say so, or "registered" reads like "active".
+  const { isMemoryV2Enabled } = await import('../../../transcript/memory-v2-flag.js');
+  if (!isMemoryV2Enabled()) {
+    output +=
+      'Memory v2:      OFF — the nightly is unscheduled and session ends do not trigger passes\n';
+  }
+  output += `Unit:           ${unit ? `${unit.jid} (folder ${unit.folder})` : 'not created — run `gelatiere init`'}\n`;
   const nightly = host?.nightly();
   output += `Nightly:        ${nightly ? `registered, cron "${nightly.cron}" (${nightly.id})` : `not registered — run \`gelatiere init\` (cron "${config.nightly}")`}\n`;
   output += `Interval:       ${config.intervalHours}h between session-end passes\n`;
   output += `Passes:         ${state.passes}\n`;
   output += `Last pass:      ${state.lastPassAt ?? 'never'}\n`;
+  output += `Last trigger:   ${state.lastTriggeredAt ?? 'never'}\n`;
   output += `Last delivery:  ${state.lastDeliveredAt ?? 'never'}\n`;
   output += `Suggestions:    ${store.openSuggestions(all).length} open, ${store.takenSuggestions(all).length} taken, ${all.length} total\n`;
   return ok(output);
@@ -275,6 +345,12 @@ export async function runGelatiere(
       return handleDismiss(rest, options.fs);
     case 'status':
       return handleStatus(options.fs);
+    case 'catalog':
+      return handleCatalog();
+    case 'commands':
+      return handleCommands();
+    case 'man':
+      return handleMan(rest);
     default:
       return fail(`unknown command: ${subcommand}\n${HELP}`);
   }

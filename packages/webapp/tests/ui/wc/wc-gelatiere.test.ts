@@ -21,11 +21,16 @@ const NOW = new Date('2026-09-09T12:00:00.000Z');
 function makeVfs(files: Record<string, string> = {}) {
   const map = new Map(Object.entries(files));
   return {
+    files: map,
     readFile: async (path: string) => {
       const text = map.get(path);
       if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
       return text;
     },
+    writeFile: async (path: string, content: string) => {
+      map.set(path, content);
+    },
+    mkdir: async () => {},
   };
 }
 
@@ -88,6 +93,20 @@ describe('notifyGelatiereOfSessionEnd', () => {
       },
       'gelatiere'
     );
+  });
+
+  it('stamps lastTriggeredAt when the lick is sent, so an empty pass still holds the interval', async () => {
+    const client = makeClient(WITH_UNIT);
+    const vfs = makeVfs();
+    expect(await notifyGelatiereOfSessionEnd({ client, vfs, log, now: () => NOW })).toBe(true);
+    const state = JSON.parse(vfs.files.get(GELATIERE_STATE_PATH) ?? '{}');
+    expect(state.lastTriggeredAt).toBe(NOW.toISOString());
+    // The pass the lick asked for suggested nothing (no `gelatiere suggest`,
+    // so no lastPassAt) — the next "New chat" inside the interval must NOT
+    // re-lick a billable pass.
+    const soon = new Date(NOW.getTime() + 60_000);
+    expect(await notifyGelatiereOfSessionEnd({ client, vfs, log, now: () => soon })).toBe(false);
+    expect(client.sendSprinkleLick).toHaveBeenCalledTimes(1);
   });
 
   it('respects the interval from the instruction file', async () => {
