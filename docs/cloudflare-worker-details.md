@@ -99,6 +99,16 @@ start/resume flows:
   - Both header targets are normalized through `URL`, so a stored join URL cannot inject
     a header delimiter. A replacement that does not parse keeps the old `409` +
     `action: "fail"` shape — a redirect needs a target.
+  - **Only a FULL follower is redirected.** The successor URL carries the replacement
+    tray's full join token, and a `biscotto` guest seat has no claim on it: a seat is a
+    revocable seat on _this_ cone's transcript and dies with the tray by design, so
+    forwarding it would silently promote a guest to a full follower of the new tray (a
+    guest→full escalation). `handleJoin` branches on `capability.trust` — a guest on a
+    superseded tray gets a terminal `410 TRAY_SUPERSEDED` with no `Location`, no link, and
+    no `joinUrl` in the body, indistinguishable from any other dead-seat answer. The
+    `FollowerAttachResult` union carries a `TRAY_SUPERSEDED` `fail` variant WITHOUT
+    `joinUrl` for this case; iOS/Go model the successor as optional and treat its absence
+    as terminal, so no follower change was needed.
   - `Access-Control-Expose-Headers: Link` is set on the capability CORS surface so a
     cross-origin follower can read the link. Note that `applySliccLinks` skips 3xx, so
     a supersede response carries the successor link **without** the standard rel set.
@@ -112,6 +122,15 @@ start/resume flows:
   an external service caches it for the life of a long job, and a tray reset mid-job used
   to turn the callback into a bare `410 TRAY_EXPIRED` that a fire-and-forget sender drops
   on the floor — a lick that never arrives and nothing reporting an error.
+  - **The leader supersedes on BOTH abandonment paths.** Stale-session recovery
+    (`shouldRecreateTray`) and a deliberate `host reset` (`pageLeaderTray.reset()` →
+    `LeaderTrayManager.supersedePreviousSession`) both point the abandoned tray at the
+    fresh one. A reset that only re-minted left the old tray with no forwarding address,
+    so the reset button reached the same #1957 loss as a crash. Both calls are
+    best-effort and fire-and-forget: a crashed leader that ran neither falls back to the
+    reclaim-TTL `410`. This forwarding is _reliable_, not _invisible_ — the `Location`
+    still hands out the replacement's webhook capability; the stable per-cone address
+    (#2812) is what removes that.
   - **The replacement's webhook URL is stored separately** (`supersededByWebhookUrl`)
     because it is not derivable: the join URL carries the join token, a delivery needs the
     webhook token. It is optional on `/supersede`, so a leader that predates it leaves the

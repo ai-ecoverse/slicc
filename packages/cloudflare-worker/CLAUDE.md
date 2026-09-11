@@ -63,6 +63,15 @@ body) on **both** `/join/:token` and `/webhook/:token/:webhookId`. Both dispatch
 **before** `ensureTrayIsActive()` in the DO's `fetch`; the webhook relay applies that gate
 itself, after the capability token and the supersede check.
 
+**Only a FULL follower is redirected on `/join`.** The successor URL carries the
+replacement tray's full join token; a `biscotto` guest seat has no claim on it, so
+`handleJoin` branches on `capability.trust` and answers a guest on a superseded tray with a
+terminal `410 TRAY_SUPERSEDED` (no `Location`, no link, no `joinUrl`) rather than forwarding
+it — otherwise the redirect would silently promote a guest to a full follower of the new
+tray. The `FollowerAttachResult` union carries a `TRAY_SUPERSEDED` `fail` variant WITHOUT
+`joinUrl` for exactly this case; iOS/Go model the successor as optional and treat its
+absence as terminal, so no follower change is needed.
+
 **Adding a capability that hands out a URL means storing its replacement on supersede.**
 `supersededByJoinUrl` and `supersededByWebhookUrl` are separate (neither token derives from
 the other; the webhook URL is cached externally for a long job). Ordering, `json=true`
