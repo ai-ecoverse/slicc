@@ -8,11 +8,8 @@
  * UI surface — there is no side panel or detached popout fallback.
  */
 
+import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  EXTENSION_BRIDGE_PORT_NAME,
-  EXTENSION_BRIDGE_PROTOCOL_VERSION,
-} from '../../webapp/src/cdp/extension-bridge-protocol.js';
 import { CHERRY_PANEL_PORT_NAME } from '../src/cherry-panel-protocol.js';
 
 const sessionStorage = new Map<string, unknown>();

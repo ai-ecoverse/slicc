@@ -144,20 +144,21 @@ both files of a pair listed or the windows 404.
 
 ## Import Boundary
 
-`src/` must not depend on `packages/webapp/src` at runtime — enforced zero-tolerance by
-`check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` (`npm run
+`src/` and `tests/` must not depend on `packages/webapp/src` at runtime — enforced
+zero-tolerance by `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` (`npm run
 lint:layer-back-edges`), covering quoted, template-literal, and `+`-concatenated
-`import()`/`require()` specifiers plus TS triple-slash references. The pure protocol modules
-the extension needs (CDP bridge envelope, `LEADER_EXT_ID_QUERY_NAME`, proxy-headers, link
-extraction, `cdp/types` `TargetInfo` subset, `iframe-repaint.ts` DOM helper) live in
-`@slicc/shared-ts` (whose `tsconfig.json` includes `DOM`); webapp keeps re-export shims at
-each original path.
+`import()`/`require()` specifiers plus TS triple-slash references. Scan roots are `src` and
+`tests` (#3047; same shape as the webcomponents pass). The pure protocol modules the
+extension needs (CDP bridge envelope, `LEADER_EXT_ID_QUERY_NAME`, proxy-headers, link
+extraction, `cdp/types` `TargetInfo` subset, `iframe-repaint.ts` DOM helper,
+`isExtensionMessage`) live in `@slicc/shared-ts` (whose `tsconfig.json` includes `DOM`);
+webapp keeps re-export shims at each original path.
 
-Sole exception: `service-worker.ts`'s top-level `import type { ... } from
-'../../webapp/src/kernel/messages.js'` — a webapp-internal message-envelope union that
-compiles away (no runtime coupling). The guard allowlists only that path as a top-level
-`import type { ... }` clause; a value import, a mixed `{ type X, Y }` clause, or a type-only
-import of any OTHER webapp module all still fail.
+Sole exception: a top-level `import type { ... } from '../../webapp/src/kernel/messages.js'`
+— a webapp-internal message-envelope union that compiles away (no runtime coupling). The
+guard allowlists only that path as a top-level `import type { ... }` clause in `src` and
+`tests`; a value import, a mixed `{ type X, Y }` clause, or a type-only import of any OTHER
+webapp module all still fail.
 
 ## Runtime Conventions
 

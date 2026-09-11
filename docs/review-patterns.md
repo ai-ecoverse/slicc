@@ -343,24 +343,25 @@ isTrayExtension = getChromeExtensionRealm` and the like). Privileged float
   (`base/api-endpoint.ts` / `shell/proxied-fetch.ts`) followed by property
   access (`api.getChromeExtensionRealm()`), or a dynamic `import()` of one of
   those same mixed modules followed by property access.
-- A relative import in `packages/chrome-extension/src` reaching into
-  `packages/webapp/src` (#2276 slice E). This is the _reciprocal_ of the
-  cross-package-escape check above: it catches the thin extension depending
+- A relative import in `packages/chrome-extension` (`src/` or `tests/`) reaching
+  into `packages/webapp/src` (#2276 slice E, #3047). This is the _reciprocal_ of
+  the cross-package-escape check above: it catches the thin extension depending
   on webapp's runtime instead of the other direction. Value imports, dynamic
   `import()` (quoted, template-literal, or `+`-concatenated), mixed `{ type
 X, Y }` clauses, `export type { ... } from` re-exports, namespace/default
   imports, and TS triple-slash `/// <reference path="..." />` directives are
-  all banned outright. **Only a top-level `import type { ... } from
-'.../kernel/messages.js'` clause is granted** — nothing else, including a
-  type-only import of any OTHER webapp module, or a type-only import of
-  `kernel/messages.js` in any other shape (mixed, `export type`, namespace).
-  That one exemption exists because it compiles away entirely, so it carries
-  no runtime/bundle coupling, which is what this category's exit criterion is
-  about; the message-envelope union it names is core webapp-internal kernel
-  infrastructure (11+ webapp files), not extension-specific, so moving it
-  would invert the dependency for no bundle-coupling benefit. CI-enforced by
-  `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes` /
-  `scanChromeExtensionWebappEscapes` — zero tolerance, no baseline, and the
+  all banned outright — including from `tests/`. **Only a top-level `import
+type { ... } from '.../kernel/messages.js'` clause is granted** — nothing
+  else, including a type-only import of any OTHER webapp module, or a
+  type-only import of `kernel/messages.js` in any other shape (mixed, `export
+type`, namespace). That one exemption exists because it compiles away
+  entirely, so it carries no runtime/bundle coupling, which is what this
+  category's exit criterion is about; the message-envelope union it names is
+  core webapp-internal kernel infrastructure (11+ webapp files), not
+  extension-specific, so moving it would invert the dependency for no
+  bundle-coupling benefit. CI-enforced by `check-layer-back-edges.mjs`'s
+  `findChromeExtensionWebappEscapes` / `scanChromeExtensionWebappEscapes` —
+  zero tolerance, no baseline, scan roots `src` and `tests`, and the
   allowlist names exactly one path in exactly one clause shape.
 - A relative import in `packages/webcomponents` (`src/` or `tests/`) reaching
   into `packages/webapp/src` (#3027). webcomponents is a leaf library that
@@ -406,6 +407,13 @@ host-command.ts` reaching three rungs up into `scoops/` for the tray status read
   caller's import path changed. The 12 `kernel/messages.ts` types `service-worker.ts` needs
   stayed put and stayed `import type` — this category's exit criterion is closed with this
   slice.
+- **Issue #3047** — the same reciprocal form as #2276 slice E, in
+  `packages/chrome-extension/tests/` rather than `src/`. Four test files
+  imported `EXTENSION_BRIDGE_*` and `isExtensionMessage` from
+  `packages/webapp/src`; `scanChromeExtensionWebappEscapes` only walked
+  `src/`, so the climbs were invisible. Constants already lived in
+  `@slicc/shared-ts`; the value guard moved there too. The gate now scans
+  `src` and `tests`, matching the webcomponents pass from #3027 / PR #3033.
 - **Issue #3027** — the library-cycle form: three `packages/webcomponents` files
   (`src/memory/*.stories.ts` and `tests/memory/slicc-memory-panel.test.ts`) imported
   `createMemoryRows` from `packages/webapp/src/ui/wc/wc-memory.ts`. The helper belonged

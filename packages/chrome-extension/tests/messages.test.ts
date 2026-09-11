@@ -2,9 +2,12 @@
  * Tests for extension message types and helpers.
  */
 
+import { isExtensionMessage, type SprinkleSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import type { SprinkleSummaryEnvelope } from '../../webapp/src/kernel/messages.js';
-import { type ExtensionMessage, isExtensionMessage } from '../../webapp/src/kernel/messages.js';
+import type {
+  ExtensionMessage,
+  SprinkleSummaryEnvelope,
+} from '../../webapp/src/kernel/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {
@@ -89,16 +92,15 @@ describe('isExtensionMessage', () => {
 
 describe('sprinkle summary envelope', () => {
   it('is assignable to SprinkleSummary[] (compile-time wire invariant)', () => {
-    // The envelope shape is mirrored (not imported) from
-    // `tray-sync-protocol.ts` for webapp-worker tsconfig reasons — see the
+    // The envelope shape is mirrored (not imported) from shared-ts
+    // `SprinkleSummary` for webapp-worker tsconfig reasons — see the
     // comment on `SprinkleSummaryEnvelope`. This assignment is the
     // compile-time guard that keeps the mirror in lockstep: if either side
     // drifts, this file (typechecked in CI) stops compiling.
     const envelope: SprinkleSummaryEnvelope[] = [
       { name: 'a', title: 'A', path: '/a.shtml', open: false, autoOpen: false },
     ];
-    const summaries: import('../../webapp/src/scoops/tray-sync-protocol.js').SprinkleSummary[] =
-      envelope;
+    const summaries: SprinkleSummary[] = envelope;
     expect(summaries.length).toBe(1);
   });
 });

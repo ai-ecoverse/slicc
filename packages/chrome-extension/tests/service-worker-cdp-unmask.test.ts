@@ -1,9 +1,9 @@
-import { mask } from '@slicc/shared-ts';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
-} from '../../webapp/src/cdp/extension-bridge-protocol.js';
+  mask,
+} from '@slicc/shared-ts';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MessageListener = (msg: any, sender: any, sendResponse: (r: any) => void) => boolean | void;
 
