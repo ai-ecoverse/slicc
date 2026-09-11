@@ -1065,6 +1065,32 @@ gelatiere status                      # unit, nightly schedule, last pass / deli
 
 ---
 
+## memory
+
+The shell surface of durable cone memory — one file per cone (`/workspace/CLAUDE.md` for the
+primary, `/cones/<folder>/CLAUDE.md` for extras), rewritten by the memory-curator scoop after a
+chat freezes. Every verb except `status` requires the `memory-v2` flag; `status` always answers
+and reports the flag state.
+
+```bash
+memory show [--cone <folder>]        # the cone's memory file, verbatim
+memory status [--json] [--check]     # files, budget, curation ledger; --check exits non-zero on unhealthy state
+memory log [--limit N]               # per-archive curation ledger, newest first (default 20)
+memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now (default: newest archive)
+```
+
+- `status --check` fails (exit 1) on the two "memory system that lies" shapes: an archive whose
+  last curation attempt failed, or archives reporting successful curation while the primary memory
+  file is missing or empty. Without `--check` the same findings print but exit 0.
+- The ledger is `/sessions/index.json`: `memoryCuratedAt` (success), `memoryFailed` (last attempt's
+  reason), `memoryPending` (owed), `memorySkipped` (user opted out).
+- `curate` runs the same pass the session freezer runs — snapshot → curator scoop → three-way
+  merge onto the cone's memory file — through the kernel host's seam. A pass on an archive that
+  was still `memoryPending` resolves at the next boot catch-up via the bridge's receipt; it never
+  double-runs.
+
+---
+
 ## upskill
 
 Skill package manager. Installs into `/workspace/skills/<name>/` from three registries:

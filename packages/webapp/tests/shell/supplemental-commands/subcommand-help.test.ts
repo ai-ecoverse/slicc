@@ -99,6 +99,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'biscotto', source: 'biscotto/run.ts', verbs: 'source', extraVerbs: ['list'] },
   // Already correct (top-level `args.includes('--help')`) — pinned so they stay that way.
   { command: 'gelatiere', source: 'gelatiere/run.ts', verbs: 'source' },
+  { command: 'memory', source: 'memory/run.ts', verbs: 'source' },
   { command: 'crontask', source: 'crontask-command.ts', verbs: 'source' },
   { command: 'diskutil', source: 'df-command.ts', verbs: 'source' },
   { command: 'esptool', source: 'esptool-command.ts', verbs: 'source' },

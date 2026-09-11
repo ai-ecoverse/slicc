@@ -11,16 +11,18 @@
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../base/logger.js';
+import { computeBudget } from '../base/memory-budget.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 
+// The pure budget policy moved to base/memory-budget.ts so the `memory`
+// shell command can read it without a layer back-edge; re-exported here so
+// existing callers keep their import path.
+export { computeBudget, MEMORY_BASE_CHARS, MEMORY_PER_LOG_CHARS } from '../base/memory-budget.js';
+
 const log = createLogger('cone-memory-budget');
 
-/** Base allowance in characters before the logarithmic term kicks in. */
-export const MEMORY_BASE_CHARS = 4000;
-/** Per-log2(N+2) growth in characters. */
-export const MEMORY_PER_LOG_CHARS = 2000;
 /** Ratio over the budget that triggers a restructure pass. */
 export const MEMORY_OVERSHOOT_RATIO = 1.25;
 
@@ -43,15 +45,6 @@ Rules:
 - Preserve concrete identifiers (file paths, URLs, IDs, names) verbatim.
 - Be terse. Aim well under the original size.
 - Do NOT add preamble, commentary, or any heading other than the single consolidated one.`;
-
-/**
- * Budget in characters as a function of session count.
- * `BASE + PER_LOG * log2(N + 2)`. `N + 2` so N=0 yields a non-zero log term.
- */
-export function computeBudget(sessionCount: number): number {
-  const n = Number.isFinite(sessionCount) && sessionCount >= 0 ? sessionCount : 0;
-  return Math.round(MEMORY_BASE_CHARS + MEMORY_PER_LOG_CHARS * Math.log2(n + 2));
-}
 
 /**
  * Split cone-memory content for the legacy append-only consolidator. That

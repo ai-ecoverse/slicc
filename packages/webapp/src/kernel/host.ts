@@ -1080,6 +1080,20 @@ function publishGelatiere(
     .catch((err) => log.warn('gelatiere seam failed to publish', err));
 }
 
+/**
+ * Step 8c: the memory-curation seam for the `memory` shell command.
+ * `memory curate` runs the same agentic pass the session freezer runs,
+ * through the worker's shared FS and the already-published agent bridge.
+ * Lazy for the same reason as the gelatiere seam: the agentic-memory module
+ * (and the bundled MEMORY.md it pulls in) stays out of the eager bundle.
+ */
+function publishMemoryCuration(sharedFs: VirtualFS | null, log: KernelHostLogger): void {
+  if (!sharedFs) return;
+  void import('../scoops/memory-curation-seam.js')
+    .then((seam) => seam.publishMemorySeam(seam.createMemorySeam(sharedFs)))
+    .catch((err) => log.warn('memory seam failed to publish', err));
+}
+
 /** Step 5: the `agent` command's bridge, which needs a shared FS. */
 function publishAgentSeams(
   orchestrator: Parameters<typeof publishAgentBridge>[0],
@@ -1153,6 +1167,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //    shell commands. globalThis is identical in worker + page.
   kernelHostGlobals().__slicc_lickManager = lickManager;
   publishGelatiere(orchestrator, lickManager, sharedFs, log);
+  publishMemoryCuration(sharedFs, log);
 
   // 8a-pre. browser.websocket subscriber registry. The registry owns
   //    the resolved sink dispatchers + the page-side CDP bridge so

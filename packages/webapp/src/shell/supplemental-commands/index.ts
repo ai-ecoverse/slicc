@@ -46,6 +46,7 @@ import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
 import { createMcpCommand } from './mcp-command.js';
 import { createMeminfoCommand } from './meminfo-command.js';
+import { createMemoryCommand } from './memory-command.js';
 import { createMktempCommand } from './mktemp-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createNodeCommand } from './node-command.js';
@@ -259,6 +260,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
         ]
       : []),
     ...(options.fs ? [createGelatiereCommand({ fs: options.fs })] : []),
+    ...(options.fs ? [createMemoryCommand({ fs: options.fs })] : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
     createFfprobeCommand(),
