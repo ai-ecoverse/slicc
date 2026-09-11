@@ -1090,7 +1090,8 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   was still `memoryPending` resolves at the next boot catch-up via the bridge's receipt; it never
   double-runs.
 - `dream` spawns a `memory-dreamer` scoop per target cone that consolidates the memory file itself
-  (merge duplicates, drop superseded and stale facts, land under budget) — no session archive is
+  (merge duplicates, drop superseded and stale facts, move over-budget reference knowledge into
+  the shared wiki at `/shared/wiki/`, land under budget) — no session archive is
   read. Instructions come from user-editable `/shared/DREAMING.md`; the pass uses the same staged
   base/draft snapshot and three-way merge as curation, keyed `dream-<date>-<folder>.md`, with the
   outcome in that key's `/sessions/.curation/…/status.json`. Default is detached; `--wait` blocks

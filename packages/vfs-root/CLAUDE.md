@@ -14,7 +14,9 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 | `packages/vfs-root/workspace/`          | Default workspace content that becomes `/workspace/` in the VFS                            |
 | `packages/vfs-root/shared/CLAUDE.md`    | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`                         |
 | `packages/vfs-root/shared/MEMORY.md`    | User-editable memory curator config bundled as `/shared/MEMORY.md`                         |
+| `packages/vfs-root/shared/DREAMING.md`  | User-editable memory dreamer config bundled as `/shared/DREAMING.md`                       |
 | `packages/vfs-root/shared/GELATIERE.md` | User-editable gelatiere pass instructions + config bundled as `/shared/GELATIERE.md`       |
+| `packages/vfs-root/shared/wiki/`        | Shared knowledge-base scaffold (`WIKI.md` schema, empty `index.md`/`log.md`)               |
 | `packages/vfs-root/shared/sprinkles/`   | Built-in sprinkle UIs                                                                      |
 | `packages/vfs-root/shared/sounds/`      | Shared notification sounds                                                                 |
 | `packages/vfs-root/workspace/skills/`   | Default installable workspace skills                                                       |
@@ -105,6 +107,17 @@ apply` merge) would prompt the owner to approve the default already in force (#2
 
 - Add new built-in workspace skills under `packages/vfs-root/workspace/skills/<skill-name>/`.
 - Include `SKILL.md` and any companion assets or `.jsh` scripts the skill needs.
+
+### Wiki
+
+- `shared/wiki/` seeds the shared knowledge base at `/shared/wiki/`: `WIKI.md` is the schema
+  contract (upgrade-merged like `MEMORY.md`), `index.md` and `log.md` are user data seeded once.
+- The read-only CLI is `workspace/skills/wiki/wiki.jsh`, adapted from `ai-ecoverse/skills` →
+  `skills/llm-wiki/wiki.jsh` with the wiki root pinned to `/shared/wiki`; keep the body in sync
+  with upstream when refreshing, and keep the Tier-0 behavior (fs bound via `require`, zero scans
+  fail loudly) — `tests/shell/wiki-jsh.test.ts` pins both.
+- The nightly dreamer (`shared/DREAMING.md`) holds the write path: over-budget reference knowledge
+  moves from memory files into wiki pages, leaving a pointer line behind.
 
 ### Keyboard shortcuts
 

@@ -1,6 +1,7 @@
 ---
 writablePaths:
   - /workspace/CLAUDE.md
+  - /shared/wiki/
 visiblePaths:
   - /sessions/
   - /shared/
@@ -29,9 +30,10 @@ jq -r '.[] | "\(.frozenAt[0:10])  \(.cone // "cone")  \(.title)"' /sessions/inde
 ```
 
 4. **Reorganize.** Fold orphan bullets into the per-topic section they belong to; split a section that has become two topics; order sections so the most-used topics lead. Every `##` and `###` heading keeps (or gains) its last-verified date in `YYYY-MM-DD` form.
-5. **Land under budget.** The hard budget is {{BUDGET_CHARS}} characters for the whole file, no exempt region.
+5. **Move knowledge to the wiki.** When the file is over budget and a section is reference knowledge — facts about a domain, a system, a person — rather than working preferences or pitfalls, move it to a page under `/shared/wiki/` following `/shared/wiki/WIKI.md` (update `index.md`, append an `ingest` entry to `log.md`), and replace the section with one line naming the page. Move at most a couple of sections per pass; the memory file must keep working standalone.
+6. **Land under budget.** The hard budget is {{BUDGET_CHARS}} characters for the whole file, no exempt region.
 
-What a dreaming pass never does: add facts that are not already in the file, install anything, or touch any file other than {{MEMORY_PATH}}.
+What a dreaming pass never does: add facts that are not already in the file or the wiki, install anything, or touch any file other than {{MEMORY_PATH}} and the wiki.
 
 ## Working within the budget
 
@@ -59,7 +61,9 @@ also consolidate a knowledge base at /path. The frontmatter works exactly like /
 the live memory file: the pass snapshots the live file when it spawns, the dreamer rewrites the
 draft, and on a successful exit the runtime three-way-merges the rewrite back onto the live file.
 Edits made to the live memory while the dreamer runs survive. A failed or killed run leaves the
-live memory untouched, with the outcome recorded in that folder's status.json.
+live memory untouched, with the outcome recorded in that folder's status.json. Writes under
+/shared/wiki/ are NOT staged — a wiki page lands immediately — which is safe because wiki moves
+are additive; the pointer line replacing the moved section only lands if the pass completes.
 
 The pass runs per cone under the fixed name memory-dreamer (memory-dreamer-<folder> for extra
 cones), so parallel dreams over DIFFERENT memory files never collide and two dreams over the SAME

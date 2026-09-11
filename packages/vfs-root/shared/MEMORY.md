@@ -120,7 +120,7 @@ Rules:
 - Write the result to {{MEMORY_PATH}}; do not merely return it in your response.
 
 <!-- How to customize
-Add curator instructions here, for example: also update the knowledge base at /path following its WIKI.md. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
+Add curator instructions here, for example: also file durable topical knowledge into the shared wiki at /shared/wiki following /shared/wiki/WIKI.md (add /shared/wiki/ to writablePaths first). By default moving knowledge into the wiki is the nightly dreamer's job (/shared/DREAMING.md), not the per-session curator's. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
 
 {{MEMORY_PATH}} resolves to a staged per-archive draft under /sessions/.curation/, not the live memory file: the pass snapshots the live file when it spawns, the curator rewrites the draft, and on a successful exit the runtime three-way-merges the rewrite back onto the live file. Edits the cone or the user makes to the live memory while the curator runs survive; where both sides changed the same lines the curator's version wins. An entry in writablePaths naming the memory file is substituted with the draft automatically, so this file keeps working unchanged. A failed or killed run leaves the live memory untouched and its outcome recorded at /sessions/.curation/<archive>/status.json.
 
