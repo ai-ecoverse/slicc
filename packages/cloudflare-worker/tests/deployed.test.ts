@@ -404,10 +404,10 @@ describeIfConfigured('deployed tray worker', () => {
     }
   }, 30_000);
 
-  // After the leader socket closes, the runtime delivers webSocketClose on a
-  // possibly-fresh instance. Liveness must drop so webhooks are rejected with
-  // NO_LIVE_LEADER instead of being silently dropped against a dead socket.
-  it('drops leader liveness after the socket closes so webhooks are rejected', async () => {
+  // Probe liveness separately from delivery: stable webhook homes accept and
+  // persist events even when no leader is connected. A webhook POST is not a
+  // liveness probe, and polling it would enqueue duplicate events.
+  it('drops leader liveness on close and replays a queued webhook after reconnect', async () => {
     const baseUrl = new URL(workerBaseUrl!);
     const created = (await (
       await fetch(new URL('/tray', baseUrl), { method: 'POST' })
@@ -428,24 +428,70 @@ describeIfConfigured('deployed tray worker', () => {
       socket.close();
     });
 
-    // webSocketClose is processed asynchronously by the runtime; poll until the
-    // tray no longer reports a live leader.
-    let rejected = false;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-closed`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ phase: 'after-close' }),
+    // webSocketClose is processed asynchronously; the read-only join probe
+    // must independently report that the old leader is no longer live.
+    await expect
+      .poll(
+        async () => {
+          const response = await fetch(`${created.capabilities.join.url}?json=true`, {
+            signal: AbortSignal.timeout(5_000),
+          });
+          const body = (await response.json()) as {
+            code?: string;
+            leader?: { connected?: boolean };
+          };
+          return {
+            status: response.status,
+            code: body.code,
+            connected: body.leader?.connected,
+          };
+        },
+        { timeout: 15_000, interval: 1_000 }
+      )
+      .toEqual({ status: 409, code: 'FOLLOWER_JOIN_NOT_READY', connected: false });
+
+    // Send exactly once while disconnected. Acceptance must mean durable
+    // queueing, not a redirect or a false receipt of delivery to a dead socket.
+    const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-closed`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ phase: 'after-close' }),
+    });
+    expect(webhookResponse.status).toBe(202);
+    expect(webhookResponse.headers.get('location')).toBeNull();
+    await expect(webhookResponse.json()).resolves.toMatchObject({
+      ok: true,
+      accepted: true,
+      queued: true,
+    });
+
+    // Reconnect using the existing authority. No second POST triggers replay:
+    // the home's durable retry alarm must deliver the accepted event.
+    const reconnected = await openWebSocket(controller.websocket!.url);
+    try {
+      expect(await reconnected.nextMessage()).toMatchObject({ type: 'leader.connected' });
+      const replay = await reconnected.nextMessage(60_000);
+      expect(replay).toMatchObject({
+        type: 'webhook.event',
+        webhookId: 'ci-hook-closed',
+        body: { phase: 'after-close' },
       });
-      if (webhookResponse.status === 410) {
-        await expect(webhookResponse.json()).resolves.toMatchObject({ code: 'NO_LIVE_LEADER' });
-        rejected = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(typeof replay.deliveryId).toBe('string');
+      reconnected.socket.send(
+        JSON.stringify({
+          type: 'webhook.delivery',
+          deliveryId: replay.deliveryId,
+          disposition: 'delivered',
+        })
+      );
+      reconnected.socket.send(JSON.stringify({ type: 'ping' }));
+      expect(await reconnected.nextMessage()).toMatchObject({ type: 'pong' });
+    } finally {
+      reconnected.socket.close();
     }
-    expect(rejected).toBe(true);
-  }, 30_000);
+  }, 90_000);
 });
 
 describe('static assets + R2 archive', () => {
@@ -636,9 +682,10 @@ describe('cloud routes smoke', () => {
   });
 });
 
-function openWebSocket(
-  url: string
-): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
+function openWebSocket(url: string): Promise<{
+  socket: WebSocket;
+  nextMessage: (timeoutMs?: number) => Promise<Record<string, unknown>>;
+}> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const queue: Record<string, unknown>[] = [];
@@ -656,12 +703,12 @@ function openWebSocket(
       }
     });
 
-    const nextMessage = (): Promise<Record<string, unknown>> => {
+    const nextMessage = (timeoutMs = 15_000): Promise<Record<string, unknown>> => {
       if (queue.length > 0) {
         return Promise.resolve(queue.shift()!);
       }
       return new Promise((res, rej) => {
-        const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), 15_000);
+        const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), timeoutMs);
         waiters.push((msg) => {
           clearTimeout(timeout);
           res(msg);
