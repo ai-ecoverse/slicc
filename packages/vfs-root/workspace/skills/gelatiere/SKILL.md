@@ -78,6 +78,8 @@ gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
 
 which is the only way your work reaches the cones. Keep durable notes in `/shared/.gelatiere/notes.md`; your conversation is compacted while you idle. Reply in one line.
 
+On the NIGHTLY pass only, `GELATIERE.md` has you start the memory-dreaming pass first — `memory dream --all`, detached — which spawns sandboxed memory-dreamer scoops to consolidate each cone's memory file. You never edit memory files yourself.
+
 ## The `gelatiere` command
 
 ```bash

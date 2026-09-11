@@ -1077,6 +1077,7 @@ memory show [--cone <folder>]        # the cone's memory file, verbatim
 memory status [--json] [--check]     # files, budget, curation ledger; --check exits non-zero on unhealthy state
 memory log [--limit N]               # per-archive curation ledger, newest first (default 20)
 memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now (default: newest archive)
+memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactoring pass (--all: every cone with a memory file)
 ```
 
 - `status --check` fails (exit 1) on the two "memory system that lies" shapes: an archive whose
@@ -1088,6 +1089,13 @@ memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now (d
   merge onto the cone's memory file — through the kernel host's seam. A pass on an archive that
   was still `memoryPending` resolves at the next boot catch-up via the bridge's receipt; it never
   double-runs.
+- `dream` spawns a `memory-dreamer` scoop per target cone that consolidates the memory file itself
+  (merge duplicates, drop superseded and stale facts, land under budget) — no session archive is
+  read. Instructions come from user-editable `/shared/DREAMING.md`; the pass uses the same staged
+  base/draft snapshot and three-way merge as curation, keyed `dream-<date>-<folder>.md`, with the
+  outcome in that key's `/sessions/.curation/…/status.json`. Default is detached; `--wait` blocks
+  and prints each pass's report (exit 1 if any failed). The gelatiere's nightly runs
+  `memory dream --all`.
 
 ---
 

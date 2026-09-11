@@ -68,7 +68,13 @@ and `/tmp/`.
    egress — one injected catalog line could otherwise exfiltrate any archive. Its whole web surface
    is `gelatiere catalog` / `gelatiere commands` / `gelatiere man <cmd>`, three pinned
    `www.sliccy.com` fetches; anything else escalates through the sudo gate.
-3. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.
+3. On the nightly pass only, `GELATIERE.md` has it start the memory-dreaming pass first —
+   `memory dream --all`, detached — which spawns one sandboxed `memory-dreamer` scoop per cone
+   with a memory file to consolidate it under `/shared/DREAMING.md`'s instructions
+   (`scoops/memory-dreaming.ts`, the curator machinery with a different instruction document).
+   The gelatiere itself still cannot write memory files; `memory` is on its allow-list for this
+   one command, and the dreamers' writes go through the staged draft + three-way merge.
+4. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.
    `suggest` validates (`coerceSuggestions`: kind ∈ skill | use-case | tip, required id/title/body,
    ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
    dismissed — are never replaced), and stamps `lastPassAt`. `deliver` licks every root cone except
@@ -79,7 +85,7 @@ and `/tmp/`.
    live `href` in the welcome card; every other agent-authored field renders as text), and `install`
    only as a plain `upskill` invocation — bare tokens, no shell metacharacters — because the cone
    executes it verbatim after one click and the pass reads third-party content.
-4. It updates its notes file and replies in one line. Compaction trims its conversation while it
+5. It updates its notes file and replies in one line. Compaction trims its conversation while it
    idles.
 
 ## Stores

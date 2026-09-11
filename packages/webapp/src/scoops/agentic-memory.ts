@@ -154,6 +154,26 @@ export interface CuratorVfs {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
 }
 
+/**
+ * The instruction document a pass runs under. The curator's MEMORY.md is the
+ * default; the dreaming pass (`scoops/memory-dreaming.ts`) substitutes its
+ * own document and agent name while reusing every other piece of the
+ * machinery — config parsing, cone rebasing, the staged base/draft snapshot,
+ * the three-way merge, receipts, and the wall-clock bound.
+ */
+export interface MemoryPassInstructions {
+  /** VFS path of the user-editable instruction document. */
+  path: string;
+  /** Bundled fallback when the VFS copy is missing or invalid. */
+  fallback: string;
+  /**
+   * Agent name for `folder` — determines the scratch dir (`/scoops/agent-
+   * <name>`) and the collision domain (two passes on the SAME memory file
+   * must collide; different files must not).
+   */
+  nameFor(folder: string): string;
+}
+
 export interface RunAgenticMemoryPassOptions {
   spawn: AgentBridge['spawn'];
   vfs: CuratorVfs;
@@ -168,6 +188,8 @@ export interface RunAgenticMemoryPassOptions {
   cone?: CuratorConeRef;
   /** UTC date override for deterministic tests; defaults to today's date. */
   today?: string;
+  /** Instruction document override; defaults to the curator's MEMORY.md. */
+  instructions?: MemoryPassInstructions;
   signal?: AbortSignal;
 }
 
@@ -203,30 +225,42 @@ export function curatorAgentName(folder: string): string {
   return folder === PRIMARY_CONE_FOLDER ? 'memory-curator' : `memory-curator-${folder}`;
 }
 
+/** The curator's instruction set — what a pass without an override runs under. */
+export const CURATOR_INSTRUCTIONS: MemoryPassInstructions = {
+  path: MEMORY_INSTRUCTIONS_PATH,
+  fallback: DEFAULT_MEMORY_MD,
+  nameFor: curatorAgentName,
+};
+
 /**
  * `agent` name tokens are `[a-z][a-z0-9]*` joined by single dashes, which is
  * exactly the shape `coneFolderFor` mints — but a folder that came from
  * somewhere else (a restored record, a hand-edited profile) could still be
  * unusable as a name, and the spawn would then fail with `invalid name`
- * instead of curating. Fall back to the primary curator name in that case:
+ * instead of curating. Fall back to the primary name in that case:
  * `writablePaths` still points at THIS cone's memory file, so the worst case
  * is the two passes serializing on one name, never a cross-cone write.
  */
-function safeCuratorName(folder: string): string {
-  const name = curatorAgentName(folder);
-  return SPAWNABLE_NAME.test(name) ? name : curatorAgentName(PRIMARY_CONE_FOLDER);
+function safeAgentName(instructions: MemoryPassInstructions, folder: string): string {
+  const name = instructions.nameFor(folder);
+  return SPAWNABLE_NAME.test(name) ? name : instructions.nameFor(PRIMARY_CONE_FOLDER);
 }
 
 /** Mirror of the agent bridge's `AGENT_NAME_PATTERN` (a legal down-edge away). */
 const SPAWNABLE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
- * The curator's private scratch folder. The agent bridge derives it from the
+ * A pass's private scratch folder. The agent bridge derives it from the
  * agent name (`/scoops/agent-<name>`), so a per-cone name moves it too — and
- * the prompt in `MEMORY.md` sends drafts there by path.
+ * the prompt sends drafts there by path.
  */
+function scratchDirFor(instructions: MemoryPassInstructions, folder: string): string {
+  return `/scoops/agent-${safeAgentName(instructions, folder)}`;
+}
+
+/** The curator's scratch folder for `folder` — kept for callers and tests. */
 export function curatorScratchDir(folder: string): string {
-  return `/scoops/agent-${safeCuratorName(folder)}`;
+  return scratchDirFor(CURATOR_INSTRUCTIONS, folder);
 }
 
 /** The primary cone's scratch folder — what a pre-#2271 `MEMORY.md` spells out. */
@@ -292,9 +326,10 @@ export async function runAgenticMemoryPass(
     if (opts.signal?.aborted) {
       return { ok: false, reason: 'aborted', legacyFallbackSafe: false };
     }
+    const instructions = opts.instructions ?? CURATOR_INSTRUCTIONS;
     const workspace = curatorWorkspaceFor(opts.cone);
-    const scratchDir = curatorScratchDir(opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
-    const config = await loadMemoryConfig(opts.vfs, workspace);
+    const scratchDir = scratchDirFor(instructions, opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
+    const config = await loadMemoryConfig(opts.vfs, workspace, instructions);
     const draftPath = curationDraftPath(opts.sessionArchivePath);
     try {
       await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
@@ -319,7 +354,8 @@ export async function runAgenticMemoryPass(
       prompt,
       opts.sessionArchivePath,
       workspace,
-      opts.cone
+      opts.cone,
+      instructions
     );
     if (opts.signal) spawnOptions.signal = opts.signal;
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
@@ -374,25 +410,32 @@ export async function runAgenticMemoryPass(
 
 async function loadMemoryConfig(
   vfs: Pick<LocalVfsClient, 'readFile'>,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
+  instructions: MemoryPassInstructions = CURATOR_INSTRUCTIONS
 ): Promise<MemoryConfig> {
   try {
-    const raw = await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' });
+    const raw = await vfs.readFile(instructions.path, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseMemoryDocument(text, workspace);
+    return parseMemoryDocument(text, workspace, documentLabel(instructions));
   } catch (error) {
-    log.warn('Could not load valid MEMORY.md; using built-in default', {
+    log.warn(`Could not load valid ${instructions.path}; using built-in default`, {
       error: errorText(error),
     });
-    return parseMemoryDocument(DEFAULT_MEMORY_MD, workspace);
+    return parseMemoryDocument(instructions.fallback, workspace, documentLabel(instructions));
   }
+}
+
+/** Basename of the instruction document, for parse-error messages. */
+function documentLabel(instructions: MemoryPassInstructions): string {
+  return instructions.path.slice(instructions.path.lastIndexOf('/') + 1);
 }
 
 function parseMemoryDocument(
   content: string,
-  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE,
+  label = 'MEMORY.md'
 ): MemoryConfig {
-  const document = splitInstructionDocument(content, 'MEMORY.md');
+  const document = splitInstructionDocument(content, label);
   const values = parseFrontmatter(document.frontmatter, MEMORY_FRONTMATTER);
   const writablePaths = readArray(values, 'writablePaths', defaultWritablePaths(workspace));
   if (writablePaths.length === 0) throw new Error('writablePaths must not be empty');
@@ -514,7 +557,8 @@ function buildSpawnOptions(
   prompt: string,
   sessionArchivePath: string,
   workspace: WorkUnitWorkspace,
-  cone: CuratorConeRef | undefined
+  cone: CuratorConeRef | undefined,
+  instructions: MemoryPassInstructions
 ): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   const basePath = curationBasePath(sessionArchivePath);
@@ -533,7 +577,7 @@ function buildSpawnOptions(
     // Durable transcript under a stable name — /sessions/agent-memory-curator-*.md
     // survives a new chat, so a curator run stays auditable for humans.
     persistSession: true,
-    name: safeCuratorName(cone?.folder ?? PRIMARY_CONE_FOLDER),
+    name: safeAgentName(instructions, cone?.folder ?? PRIMARY_CONE_FOLDER),
     // Parent the run to the cone it curates so escalations and model
     // inheritance follow that cone, not the oldest root (#2271).
     ...(cone?.jid ? { parentJid: cone.jid } : {}),

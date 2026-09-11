@@ -119,7 +119,19 @@ describe('gelatiere unit', () => {
       writablePaths: ['/shared/.gelatiere/'],
       allowedCommands: GELATIERE_ALLOWED_COMMANDS,
     });
-    for (const cmd of ['cat', 'jq', 'upskill', 'sed', 'awk', 'grep', 'gelatiere', 'date']) {
+    for (const cmd of [
+      'cat',
+      'jq',
+      'upskill',
+      'sed',
+      'awk',
+      'grep',
+      'gelatiere',
+      'date',
+      // The nightly's `memory dream --all` — the recipe in GELATIERE.md
+      // must never escalate through the sudo gate on an unattended pass.
+      'memory',
+    ]) {
       expect(GELATIERE_ALLOWED_COMMANDS).toContain(cmd);
     }
     // `allowedCommands` is a child unit's only network gate, and this unit

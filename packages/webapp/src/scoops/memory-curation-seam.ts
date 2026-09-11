@@ -16,12 +16,14 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
+import { readSessionsIndex } from '../transcript/frozen-archive-format.js';
 import type { AgentBridge } from './agent-bridge.js';
 import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
   runAgenticMemoryPass,
 } from './agentic-memory.js';
+import { runMemoryDreamPass } from './memory-dreaming.js';
 
 export const MEMORY_SEAM_GLOBAL_KEY = '__slicc_memory';
 
@@ -34,9 +36,18 @@ export interface MemoryCurateRequest {
   cone?: CuratorConeRef;
 }
 
+export interface MemoryDreamRequest {
+  /** Cone whose memory file the pass refactors; omitted means the primary. */
+  cone?: CuratorConeRef;
+  /** UTC date override for deterministic tests; defaults to today's date. */
+  today?: string;
+}
+
 /** Published on `globalThis.__slicc_memory` by the kernel host. */
 export interface MemorySeam {
   curate(request: MemoryCurateRequest): Promise<AgenticMemoryPassResult>;
+  /** The nightly refactoring pass (`scoops/memory-dreaming.ts`), on demand. */
+  dream(request: MemoryDreamRequest): Promise<AgenticMemoryPassResult>;
 }
 
 interface MemorySeamGlobals {
@@ -63,6 +74,20 @@ export function createMemorySeam(sharedFs: VirtualFS): MemorySeam {
         sessionArchivePath: request.sessionArchivePath,
         sessionCount: request.sessionCount,
         ...(request.cone ? { cone: request.cone } : {}),
+      });
+    },
+    async dream(request: MemoryDreamRequest): Promise<AgenticMemoryPassResult> {
+      const bridge = (globalThis as unknown as MemorySeamGlobals).__slicc_agent;
+      if (!bridge) {
+        return { ok: false, reason: 'agent bridge not published yet', legacyFallbackSafe: false };
+      }
+      const sessionCount = (await readSessionsIndex(sharedFs)).length;
+      return runMemoryDreamPass({
+        spawn: (options) => bridge.spawn(options),
+        vfs: sharedFs,
+        sessionCount,
+        ...(request.cone ? { cone: request.cone } : {}),
+        ...(request.today ? { today: request.today } : {}),
       });
     },
   };

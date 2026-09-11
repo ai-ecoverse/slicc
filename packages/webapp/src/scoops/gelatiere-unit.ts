@@ -169,6 +169,10 @@ export const GELATIERE_ALLOWED_COMMANDS = [
   'jq',
   'ls',
   'man',
+  // `memory dream --all` in the nightly recipe. The gelatiere still cannot
+  // write memory files itself — the command spawns sandboxed memory-dreamer
+  // scoops whose writes go through the staged draft + three-way merge.
+  'memory',
   'mkdir',
   'nl',
   'paste',

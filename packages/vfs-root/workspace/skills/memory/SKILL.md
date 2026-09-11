@@ -2,11 +2,11 @@
 name: memory
 description: |
   Use this when the user asks what SLICC remembers, why a remembered fact is
-  missing or stale, whether memory curation ran, or to re-run curation for an
-  archived session. Covers the `memory` shell command (`show`, `status`,
-  `log`, `curate`), the per-cone memory files, and the curation ledger in
-  /sessions/index.json. Requires the memory-v2 feature flag for everything
-  except `memory status`.
+  missing or stale, whether memory curation ran, to re-run curation for an
+  archived session, or to consolidate a bloated memory file. Covers the
+  `memory` shell command (`show`, `status`, `log`, `curate`, `dream`), the
+  per-cone memory files, and the curation ledger in /sessions/index.json.
+  Requires the memory-v2 feature flag for everything except `memory status`.
 allowed-tools: bash
 ---
 
@@ -21,6 +21,7 @@ memory show [--cone <folder>]      # the cone's memory file, verbatim
 memory status [--json] [--check]   # files, budget, curation tally, health
 memory log [--limit N]             # per-archive ledger, newest first
 memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now
+memory dream [--cone <folder>] [--all] [--wait]      # consolidate memory (dreamer pass)
 ```
 
 ## When to reach for it
@@ -28,7 +29,8 @@ memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now
 - "What do you remember about me / this project?" → `memory show`.
 - A fact you expected to be remembered is missing → `memory log` to see whether the session that established it was ever curated; `memory status --check` for systemic failures.
 - After a failed curation (`memoryFailed` in the log) → fix the cause if visible (usually a missing provider or a timeout), then `memory curate --archive <that-file>`.
-- Extra cones keep separate memory: pass `--cone <folder>` to both `show` and `curate`.
+- The memory file has grown duplicated, contradictory, or over budget → `memory dream` (add `--wait` to see the dreamer's report; `--all` for every cone with a memory file). The gelatiere's nightly already runs `memory dream --all`, so reach for this manually only when it cannot wait.
+- Extra cones keep separate memory: pass `--cone <folder>` to `show`, `curate`, and `dream`.
 
 ## Reading `memory status`
 
@@ -39,5 +41,6 @@ memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now
 ## Notes
 
 - `memory curate` runs the exact pass the session freezer runs (snapshot → curator scoop → three-way merge), so concurrent edits to the memory file merge instead of being clobbered. It can take several minutes; the curator's closing report is printed when it lands.
+- `memory dream` reads no session archive — the dreamer consolidates the memory file itself under `/shared/DREAMING.md`'s instructions, through the same staged draft and merge. Detached by default; the outcome lands in `/sessions/.curation/dream-<date>-<cone>.md/status.json`.
 - The command does not edit the ledger itself; a manual pass on a still-pending archive is reconciled by the boot catch-up through the bridge's receipt.
 - Everything except `status` requires the **Memory v2** flag (Settings → Experimental).

@@ -41,10 +41,10 @@ function memoryFs(initial: Record<string, string> = {}, dirs: Record<string, Fak
 type Globals = typeof globalThis & { __slicc_memory?: unknown };
 
 function fakeSeam(result: { ok: true; report: string } | { ok: false; reason: string }) {
+  const outcome = () => (result.ok ? result : { ...result, legacyFallbackSafe: false as const });
   return {
-    curate: vi.fn(async () =>
-      result.ok ? result : { ...result, legacyFallbackSafe: false as const }
-    ),
+    curate: vi.fn(async () => outcome()),
+    dream: vi.fn(async () => outcome()),
   };
 }
 
@@ -86,7 +86,7 @@ describe('memory-v2 gating', () => {
   it('rejects every verb except status when the flag is off', async () => {
     mockIsFeatureEnabled.mockReturnValue(false);
     const fs = memoryFs({ [PRIMARY_MEMORY]: 'remember me' });
-    for (const verb of ['show', 'log', 'curate']) {
+    for (const verb of ['show', 'log', 'curate', 'dream']) {
       const result = await run(fs, [verb]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('memory-v2');
@@ -280,5 +280,82 @@ describe('memory curate', () => {
     const result = await run(memoryFs(), ['curate']);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('freeze a chat first');
+  });
+});
+
+describe('memory dream', () => {
+  it('fails before boot publishes the seam', async () => {
+    const result = await run(memoryFs({ [PRIMARY_MEMORY]: 'x' }), ['dream']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not booted');
+  });
+
+  it('detaches by default and points at the pass outcome file', async () => {
+    const seam = fakeSeam({ ok: true, report: 'consolidated' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const result = await run(memoryFs({ [PRIMARY_MEMORY]: 'x' }), ['dream']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Dreaming started for 1 cone(s)');
+    // The printed status path is the shell's duplicate of `dreamStateKey`
+    // (scoops/memory-dreaming.ts) — this pins the two shapes together.
+    const { dreamStateKey } = await import('../../../src/scoops/memory-dreaming.js');
+    const today = new Date().toISOString().slice(0, 10);
+    expect(result.stdout).toContain(
+      `/sessions/.curation/${dreamStateKey(today, 'cone')}/status.json`
+    );
+    expect(seam.dream).toHaveBeenCalledWith({});
+  });
+
+  it('forwards --cone and rejects combining it with --all', async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const fs = memoryFs({ '/cones/cone-side/CLAUDE.md': 'side' });
+    const forwarded = await run(fs, ['dream', '--cone', 'cone-side']);
+    expect(forwarded.exitCode).toBe(0);
+    expect(seam.dream).toHaveBeenCalledWith({ cone: { folder: 'cone-side' } });
+    const conflict = await run(fs, ['dream', '--all', '--cone', 'cone-side']);
+    expect(conflict.exitCode).toBe(1);
+    expect(conflict.stderr).toContain('mutually exclusive');
+  });
+
+  it('--all dreams every cone that has a memory file', async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const fs = memoryFs(
+      { [PRIMARY_MEMORY]: 'primary', '/cones/cone-side/CLAUDE.md': 'side' },
+      {
+        '/cones': [
+          { name: 'cone-side', type: 'directory' },
+          // A cone that never accumulated memory — nothing to consolidate.
+          { name: 'cone-empty', type: 'directory' },
+        ],
+      }
+    );
+    const result = await run(fs, ['dream', '--all']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('2 cone(s)');
+    expect(seam.dream).toHaveBeenCalledTimes(2);
+    expect(seam.dream).toHaveBeenCalledWith({});
+    expect(seam.dream).toHaveBeenCalledWith({ cone: { folder: 'cone-side' } });
+  });
+
+  it('--all fails when no cone has a memory file yet', async () => {
+    (globalThis as Globals).__slicc_memory = fakeSeam({ ok: true, report: '' });
+    const result = await run(memoryFs(), ['dream', '--all']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('nothing to dream about');
+  });
+
+  it('--wait blocks, prints each report, and exits 1 on a failed pass', async () => {
+    (globalThis as Globals).__slicc_memory = fakeSeam({ ok: true, report: 'merged 3 sections' });
+    const good = await run(memoryFs({ [PRIMARY_MEMORY]: 'x' }), ['dream', '--wait']);
+    expect(good.exitCode).toBe(0);
+    expect(good.stdout).toContain('cone: dreamed');
+    expect(good.stdout).toContain('merged 3 sections');
+
+    (globalThis as Globals).__slicc_memory = fakeSeam({ ok: false, reason: 'wall clock' });
+    const bad = await run(memoryFs({ [PRIMARY_MEMORY]: 'x' }), ['dream', '--wait']);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stdout).toContain('FAILED — wall clock');
   });
 });

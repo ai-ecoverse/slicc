@@ -12,6 +12,7 @@
  *                               non-zero on failed/lying state (P7 seed)
  *   log [--limit N]             per-archive curation ledger, newest first
  *   curate [...]                run a curator pass now, over the seam
+ *   dream [...]                 run a memory-dreamer refactoring pass
  *
  * `shell/` sits below `scoops/`, so the pass itself comes through the seam
  * the kernel host publishes on `globalThis.__slicc_memory` (mirrored
@@ -33,15 +34,18 @@ import { isHelpRequest } from '../subcommand-help.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
+type MemoryPassOutcome =
+  | { ok: true; report: string }
+  | { ok: false; reason: string; legacyFallbackSafe: boolean };
+
 /** Mirror of `MemorySeam` (`scoops/memory-curation-seam.ts`). */
 interface MemorySeamLike {
   curate(request: {
     sessionArchivePath: string;
     sessionCount: number;
     cone?: { folder: string };
-  }): Promise<
-    { ok: true; report: string } | { ok: false; reason: string; legacyFallbackSafe: boolean }
-  >;
+  }): Promise<MemoryPassOutcome>;
+  dream(request: { cone?: { folder: string } }): Promise<MemoryPassOutcome>;
 }
 
 interface MemoryGlobals {
@@ -63,11 +67,18 @@ Commands:
   curate [--archive <file>] [--cone <folder>]
                              Run a memory-curator pass now — the same pass the
                              session freezer runs (default: newest archive)
+  dream [--cone <folder>] [--all] [--wait]
+                             Run a memory-dreamer pass: consolidate a cone's
+                             memory file (merge duplicates, drop superseded and
+                             stale facts, land under budget). --all dreams every
+                             cone that has a memory file; default is detached —
+                             --wait blocks and prints each pass's report
 
 Files:
   /workspace/CLAUDE.md            The primary cone's memory file
   /cones/<folder>/CLAUDE.md       An extra cone's memory file
   /shared/MEMORY.md               Curator instructions + config (frontmatter)
+  /shared/DREAMING.md             Dreamer instructions + config (frontmatter)
   /sessions/index.json            Per-archive curation ledger (memoryPending,
                                   memoryCuratedAt, memoryFailed, memorySkipped)
 
@@ -75,6 +86,7 @@ Examples:
   memory status --check
   memory log --limit 5
   memory curate --archive 2026-09-11T08-30-00Z-fix-build.md
+  memory dream --all
 `;
 
 const VALUE_FLAGS = ['--cone', '--archive', '--limit'] as const;
@@ -89,7 +101,9 @@ function fail(message: string): CommandResult {
 
 function seam(): MemorySeamLike | null {
   const found = (globalThis as unknown as MemoryGlobals).__slicc_memory;
-  return found && typeof found.curate === 'function' ? found : null;
+  return found && typeof found.curate === 'function' && typeof found.dream === 'function'
+    ? found
+    : null;
 }
 
 async function memoryV2Off(): Promise<boolean> {
@@ -276,6 +290,74 @@ async function handleCurate(args: string[], fs: VirtualFS): Promise<CommandResul
   return ok(`Curated ${entry.filename}\n${report ? `${report}\n` : ''}`);
 }
 
+/**
+ * Where a dream pass records its outcome. The path shape is
+ * `dreamStateKey()`'s (`scoops/memory-dreaming.ts`) — duplicated here because
+ * shell cannot import scoops; a cross-check test pins the two together.
+ */
+function dreamStatusPath(folder: string): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `/sessions/.curation/dream-${today}-${folder}.md/status.json`;
+}
+
+async function handleDream(args: string[], fs: VirtualFS): Promise<CommandResult> {
+  const parsed = parseKnownFlags(args, { value: ['--cone'], bool: ['--all', '--wait'] });
+  if ('error' in parsed) return fail(parsed.error);
+  const all = parsed.bools.has('--all');
+  const cone = parsed.values.get('--cone');
+  if (all && cone !== undefined) return fail('--all and --cone are mutually exclusive');
+  const host = seam();
+  if (!host) return fail(NO_SEAM);
+
+  let folders: string[];
+  if (all) {
+    // Every cone that actually has a memory file — a cone that never
+    // accumulated memory has nothing to consolidate.
+    folders = [];
+    for (const folder of await listConeFolders(fs)) {
+      if ((await readMemoryFile(fs, memoryPathFor(folder))) !== null) folders.push(folder);
+    }
+    if (folders.length === 0) return fail('no cone has a memory file yet — nothing to dream about');
+  } else {
+    folders = [cone ?? PRIMARY_CONE_FOLDER];
+  }
+
+  const request = (folder: string) =>
+    host.dream(folder === PRIMARY_CONE_FOLDER ? {} : { cone: { folder } });
+
+  if (!parsed.bools.has('--wait')) {
+    for (const folder of folders) {
+      // Detached: the outcome lands in the pass's status.json either way.
+      void request(folder).catch(() => {});
+    }
+    const lines = folders.map((folder) => `  ${folder.padEnd(14)}${dreamStatusPath(folder)}`);
+    return ok(
+      `Dreaming started for ${folders.length} cone(s); outcomes land in:\n${lines.join('\n')}\n`
+    );
+  }
+
+  let output = '';
+  let failed = 0;
+  for (const folder of folders) {
+    const result = await request(folder);
+    if (result.ok) {
+      const report = result.report.trim();
+      output += `${folder}: dreamed\n${report ? `${indent(report)}\n` : ''}`;
+    } else {
+      failed++;
+      output += `${folder}: FAILED — ${result.reason}\n`;
+    }
+  }
+  return { stdout: output, stderr: '', exitCode: failed > 0 ? 1 : 0 };
+}
+
+function indent(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n');
+}
+
 /** The command body: `args` after the `memory` word, plus the shared FS. */
 export async function runMemory(
   args: string[],
@@ -298,6 +380,8 @@ export async function runMemory(
       return handleLog(rest, options.fs);
     case 'curate':
       return handleCurate(rest, options.fs);
+    case 'dream':
+      return handleDream(rest, options.fs);
     default:
       return fail(`unknown command: ${subcommand}\n${HELP}`);
   }
