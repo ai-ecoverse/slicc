@@ -1076,7 +1076,7 @@ and reports the flag state.
 memory show [--cone <folder>]        # the cone's memory file, verbatim
 memory status [--json] [--check]     # files, budget, curation ledger; --check exits non-zero on unhealthy state
 memory log [--limit N]               # per-archive curation ledger, newest first (default 20)
-memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now (default: newest archive)
+memory curate [--archive <file>] [--cone <folder>]   # run a curator pass now (default: newest archive, into the cone it was frozen from)
 memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactoring pass (--all: every cone with a memory file)
 ```
 
@@ -1090,6 +1090,11 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   the last scheduled result on its `Scheduled:` line.
 - The ledger is `/sessions/index.json`: `memoryCuratedAt` (success), `memoryFailed` (last attempt's
   reason), `memoryPending` (owed), `memorySkipped` (user opted out).
+- `--cone` must name an existing cone folder (`cone`, or a `/cones/<folder>` that exists); the
+  value crosses the memory seam and becomes `/cones/<folder>/CLAUDE.md` on the far side, so a
+  typo, a dropped cone or a path fragment fails here instead of steering a pass at the wrong
+  file. `curate` defaults to the cone the archive was frozen from (the index entry's `cone`); an
+  archive whose cone is gone needs an explicit `--cone`.
 - `curate` runs the same pass the session freezer runs — snapshot → curator scoop → three-way
   merge onto the cone's memory file — through the kernel host's seam. A pass on an archive that
   was still `memoryPending` resolves at the next boot catch-up via the bridge's receipt; it never

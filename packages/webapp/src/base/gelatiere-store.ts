@@ -446,16 +446,25 @@ function coerceSuggestion(raw: unknown, createdAt: string | null): GelatiereSugg
   const id = slugOf(idSource) || slugOf(`${kind}-${title}`);
   if (!id) return null;
   const stamp = createdAt ?? optionalText(entry.createdAt, 40) ?? '';
+  const skill = entry.skill !== undefined ? optionalText(entry.skill, 120) : undefined;
+  const install =
+    entry.install !== undefined ? upskillInstall(optionalText(entry.install, 300)) : undefined;
+  const prompt = entry.prompt !== undefined ? optionalText(entry.prompt, 1_000) : undefined;
+  // The kind contract GELATIERE.md documents, enforced: a `skill` card renders
+  // an Install button that runs `install` verbatim, so one without a validated
+  // command (missing, or rejected above) would be an actionable card with
+  // nothing behind it — stamped taken on click, then the cone finds no
+  // command. A `use-case` is its prompt. Malformed candidates drop here.
+  if (kind === 'skill' && (!skill || !install)) return null;
+  if (kind === 'use-case' && !prompt) return null;
   return {
     id,
     kind: kind as GelatiereSuggestionKind,
     title,
     body,
-    ...(entry.skill !== undefined ? { skill: optionalText(entry.skill, 120) } : {}),
-    ...(entry.install !== undefined
-      ? { install: upskillInstall(optionalText(entry.install, 300)) }
-      : {}),
-    ...(entry.prompt !== undefined ? { prompt: optionalText(entry.prompt, 1_000) } : {}),
+    ...(entry.skill !== undefined ? { skill } : {}),
+    ...(entry.install !== undefined ? { install } : {}),
+    ...(entry.prompt !== undefined ? { prompt } : {}),
     ...(entry.url !== undefined ? { url: httpUrl(optionalText(entry.url, 500)) } : {}),
     ...(entry.evidence !== undefined ? { evidence: optionalText(entry.evidence, 500) } : {}),
     createdAt: stamp,

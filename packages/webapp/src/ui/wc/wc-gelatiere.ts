@@ -43,11 +43,27 @@ export interface GelatiereSessionSettledBody {
 }
 
 /**
+ * The interval gate is a read → check → stamp sequence over the shared state
+ * file. Two cones settling sessions in the same tick would both read the
+ * same "due" state before either stamped it, and both would lick — two
+ * billable passes for one interval. Every call queues behind the previous
+ * one on this chain so the second read sees the first stamp.
+ */
+let gate: Promise<unknown> = Promise.resolve();
+
+/**
  * Lick the gelatiere if the flag is on, the unit exists, and a pass is due.
  * Resolves `true` when a lick was sent. Never throws — the freezer's clear
- * must not wait on, or fail on, this.
+ * must not wait on, or fail on, this. Concurrent callers are serialized
+ * (see {@link gate}).
  */
-export async function notifyGelatiereOfSessionEnd(deps: WcGelatiereDeps): Promise<boolean> {
+export function notifyGelatiereOfSessionEnd(deps: WcGelatiereDeps): Promise<boolean> {
+  const turn = gate.then(() => announceSessionEnd(deps));
+  gate = turn.catch(() => undefined);
+  return turn;
+}
+
+async function announceSessionEnd(deps: WcGelatiereDeps): Promise<boolean> {
   const enabled = deps.isEnabled ?? (() => isFeatureEnabled('memory-v2'));
   if (!enabled()) return false;
   try {

@@ -76,12 +76,16 @@ and `/tmp/`.
    one command, and the dreamers' writes go through the staged draft + three-way merge.
 4. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.
    `suggest` validates (`coerceSuggestions`: kind ∈ skill | use-case | tip, required id/title/body,
-   ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
+   plus the kind contract from `GELATIERE.md` — a `skill` needs `skill` and a validated `install`,
+   a `use-case` needs `prompt`; the stream renders an Install / Try it button for every card and
+   stamps it taken on click, so a card without the field behind its button is dropped rather than
+   shown — ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
    dismissed — are never replaced), and stamps `lastPassAt`. `deliver` licks every root cone except
    the gelatiere with the open suggestions created since `lastDeliveredAt`; nothing new → no lick
    (unless `--force`). An explicit `--scoop <target>` must resolve against the roster (folder, name
    or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
-   "new" for the next attempt. Suggestion `url` fields survive only as `http(s)` (they render as a
+   "new" for the next attempt — and a targeted send never advances `lastDeliveredAt` (it records
+   what every cone has been told), so the next broadcast still reaches the other cones. Suggestion `url` fields survive only as `http(s)` (they render as a
    live `href` in the suggestions card; every other agent-authored field renders as text), and `install`
    only as a plain `upskill` invocation — bare tokens, no shell metacharacters — because the cone
    executes it verbatim after one click and the pass reads third-party content.

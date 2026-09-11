@@ -109,6 +109,35 @@ describe('notifyGelatiereOfSessionEnd', () => {
     expect(client.sendSprinkleLick).toHaveBeenCalledTimes(1);
   });
 
+  // Two cones settling in the same tick both read the state file before
+  // either stamps it — without serialization both pass the gate and two
+  // billable passes start for one interval.
+  it('serializes concurrent session ends so only one passes the interval gate', async () => {
+    const client = makeClient(WITH_UNIT);
+    const vfs = makeVfs();
+    const results = await Promise.all([
+      notifyGelatiereOfSessionEnd({
+        client,
+        vfs,
+        log,
+        cone: { folder: 'cone' },
+        now: () => NOW,
+      }),
+      notifyGelatiereOfSessionEnd({
+        client,
+        vfs,
+        log,
+        cone: { folder: 'cone-research' },
+        now: () => NOW,
+      }),
+    ]);
+    expect(results).toEqual([true, false]);
+    expect(client.sendSprinkleLick).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(vfs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastTriggeredAt).toBe(
+      NOW.toISOString()
+    );
+  });
+
   it('respects the interval from the instruction file', async () => {
     const client = makeClient(WITH_UNIT);
     const vfs = makeVfs({

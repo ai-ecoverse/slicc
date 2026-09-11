@@ -32,7 +32,16 @@ function memoryFs(initial: Record<string, string> = {}) {
 }
 
 function suggestion(id: string, extra: Partial<GelatiereSuggestion> = {}): GelatiereSuggestion {
-  return { id, kind: 'skill', title: `Title ${id}`, body: 'b', createdAt: 'now', ...extra };
+  return {
+    id,
+    kind: 'skill',
+    title: `Title ${id}`,
+    body: 'b',
+    skill: id,
+    install: `upskill o/r --skill ${id}`,
+    createdAt: 'now',
+    ...extra,
+  };
 }
 
 type Globals = typeof globalThis & { __slicc_gelatiere?: unknown };
@@ -186,7 +195,9 @@ describe('gelatiere command', () => {
     expect(quiet.stdout).toContain('Nothing new since the last delivery');
     expect(seam.lick).not.toHaveBeenCalled();
     const forced = await run(fs, ['deliver', '--force', '--scoop', 'Research']);
-    expect(forced.stdout).toContain('to 1 cone(s): Research');
+    expect(forced.stdout).toContain(
+      'to 1 cone(s): Research (targeted; the delivery watermark is unchanged)'
+    );
     expect(seam.lick).toHaveBeenCalledWith('Research', expect.anything());
 
     // A stale/misspelled target must fail BEFORE the ledger is stamped —
@@ -200,6 +211,38 @@ describe('gelatiere command', () => {
     expect(seam.lick).not.toHaveBeenCalled();
     expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).toBe(
       stampBefore
+    );
+  });
+
+  // A targeted send reaches ONE cone. If it advanced the global watermark, the
+  // next broadcast would find "nothing new" and the other cones would never
+  // hear about these suggestions.
+  it('a targeted deliver leaves the watermark alone so a later broadcast still reaches the rest', async () => {
+    const fs = memoryFs({
+      [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
+        suggestion('new', { createdAt: '2026-09-09T10:00:00.000Z' }),
+      ]),
+      [GELATIERE_STATE_PATH]: JSON.stringify({
+        passes: 1,
+        lastDeliveredAt: '2026-09-05T00:00:00.000Z',
+      }),
+    });
+    const targeted = await run(fs, ['deliver', '--scoop', 'cone-research']);
+    expect(targeted.exitCode).toBe(0);
+    expect(seam.lick).toHaveBeenCalledTimes(1);
+    expect(seam.lick).toHaveBeenCalledWith('cone-research', expect.anything());
+    expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).toBe(
+      '2026-09-05T00:00:00.000Z'
+    );
+
+    seam.lick.mockClear();
+    const broadcast = await run(fs, ['deliver']);
+    expect(broadcast.stdout).toContain(
+      'Delivered 1 new (1 open) to 2 cone(s): cone, cone-research'
+    );
+    expect(seam.lick).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fs.files.get(GELATIERE_STATE_PATH) ?? '{}').lastDeliveredAt).not.toBe(
+      '2026-09-05T00:00:00.000Z'
     );
   });
 
@@ -217,7 +260,7 @@ describe('gelatiere command', () => {
       [GELATIERE_SUGGESTIONS_PATH]: JSON.stringify([
         suggestion('skill-a', { install: 'upskill a' }),
         suggestion('tip-b', { kind: 'tip', dismissedAt: 'x' }),
-        suggestion('use-c', { kind: 'use-case', takenAt: 'x' }),
+        suggestion('use-c', { kind: 'use-case', prompt: 'try it', takenAt: 'x' }),
       ]),
     });
     const open = await run(fs, ['list']);

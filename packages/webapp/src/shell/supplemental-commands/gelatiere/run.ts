@@ -73,7 +73,8 @@ Commands:
   man <command>        One man page, plain text
 
 deliver options:
-  --scoop <target>     One cone (folder or jid) instead of every cone
+  --scoop <target>     One cone (folder, name or jid) instead of every cone; does not
+                       advance the delivery watermark, so the others still get theirs
   --force              Send even when nothing is new since the last delivery
 
 Files:
@@ -198,9 +199,16 @@ async function handleDeliver(args: string[], fs: VirtualFS): Promise<CommandResu
   if (targets.length === 0) return fail('no cone is running to deliver to');
   const body = store.buildGelatiereLickBody(added, open);
   for (const target of targets) host.lick(target, body);
-  await store.writeGelatiereState(fs, { ...state, lastDeliveredAt: new Date().toISOString() });
+  // `lastDeliveredAt` records what EVERY cone has been told, so only a
+  // broadcast advances it. A targeted send that stamped it would make the
+  // next ordinary delivery compute "nothing new" and the other cones would
+  // never hear about these suggestions.
+  if (!explicit) {
+    await store.writeGelatiereState(fs, { ...state, lastDeliveredAt: new Date().toISOString() });
+  }
+  const note = explicit ? ' (targeted; the delivery watermark is unchanged)' : '';
   return ok(
-    `Delivered ${added.length} new (${open.length} open) to ${targets.length} cone(s): ${targets.join(', ')}\n`
+    `Delivered ${added.length} new (${open.length} open) to ${targets.length} cone(s): ${targets.join(', ')}${note}\n`
   );
 }
 

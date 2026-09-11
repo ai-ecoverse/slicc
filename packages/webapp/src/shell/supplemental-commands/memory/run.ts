@@ -70,7 +70,8 @@ Commands:
   log [--limit N]            Per-archive curation ledger, newest first (default 20)
   curate [--archive <file>] [--cone <folder>]
                              Run a memory-curator pass now — the same pass the
-                             session freezer runs (default: newest archive)
+                             session freezer runs (default: newest archive, into
+                             the cone it was frozen from)
   dream [--cone <folder>] [--all] [--wait]
                              Run a memory-dreamer pass: consolidate a cone's
                              memory file (merge duplicates, drop superseded and
@@ -145,6 +146,24 @@ function memoryPathFor(folder: string): string {
   return workspaceFor({ parentJid: null, folder }).memoryPath;
 }
 
+/**
+ * Resolve a cone folder against the cones that actually exist. A `--cone`
+ * value crosses the memory seam as a storage folder and becomes a path on
+ * the far side (`/cones/<folder>/CLAUDE.md`), written through the
+ * unrestricted shared VFS after normalization — so `../../shared`, a typo or
+ * a dropped cone must stop HERE, before a curator or dreamer is pointed at a
+ * file outside any real cone. (The gelatiere, a restricted scoop, has
+ * `memory` on its allow-list.)
+ */
+async function resolveConeFolder(
+  fs: VirtualFS,
+  value: string
+): Promise<{ folder: string } | { error: string }> {
+  const folders = await listConeFolders(fs);
+  if (folders.includes(value)) return { folder: value };
+  return { error: `unknown cone "${value}" (cones: ${folders.join(', ')})` };
+}
+
 /** The curation ledger state a sessions-index entry is in. */
 function entryState(
   entry: FrozenSessionIndexEntry
@@ -159,8 +178,9 @@ function entryState(
 async function handleShow(args: string[], fs: VirtualFS): Promise<CommandResult> {
   const parsed = parseKnownFlags(args, { value: ['--cone'] });
   if ('error' in parsed) return fail(parsed.error);
-  const folder = parsed.values.get('--cone') ?? PRIMARY_CONE_FOLDER;
-  const path = memoryPathFor(folder);
+  const resolved = await resolveConeFolder(fs, parsed.values.get('--cone') ?? PRIMARY_CONE_FOLDER);
+  if ('error' in resolved) return fail(resolved.error);
+  const path = memoryPathFor(resolved.folder);
   const content = await readMemoryFile(fs, path);
   if (content === null) return fail(`no memory file at ${path}`);
   return ok(content.endsWith('\n') || content === '' ? content : `${content}\n`);
@@ -323,11 +343,25 @@ async function handleCurate(args: string[], fs: VirtualFS): Promise<CommandResul
     entry = index.find((candidate) => candidate.filename === wanted);
     if (!entry) return fail(`no archive named "${wanted}" in /sessions/index.json`);
   }
-  const folder = parsed.values.get('--cone');
+  // The pass rewrites ONE cone's memory file. Default to the cone the archive
+  // was frozen from (`entry.cone`, absent on legacy entries = the primary):
+  // folding an extra cone's session into /workspace/CLAUDE.md would
+  // contaminate the primary's memory while leaving the owning cone untouched.
+  const explicit = parsed.values.get('--cone');
+  const wantedFolder = explicit ?? entry.cone ?? PRIMARY_CONE_FOLDER;
+  const resolved = await resolveConeFolder(fs, wantedFolder);
+  if ('error' in resolved) {
+    return fail(
+      explicit
+        ? resolved.error
+        : `archive "${entry.filename}" was frozen from cone "${wantedFolder}", which no longer exists — pass --cone <folder> to curate it into another cone`
+    );
+  }
+  const { folder } = resolved;
   const result = await host.curate({
     sessionArchivePath: `/sessions/${entry.filename}`,
     sessionCount: index.length,
-    ...(folder && folder !== PRIMARY_CONE_FOLDER ? { cone: { folder } } : {}),
+    ...(folder !== PRIMARY_CONE_FOLDER ? { cone: { folder } } : {}),
   });
   if (!result.ok) return fail(`curation failed: ${result.reason}`);
   const report = result.report.trim();
@@ -344,6 +378,27 @@ function dreamStatusPath(folder: string): string {
   return `/sessions/.curation/dream-${today}-${folder}.md/status.json`;
 }
 
+/** Which cones a `memory dream` invocation refactors. */
+async function dreamTargets(
+  fs: VirtualFS,
+  all: boolean,
+  cone: string | undefined
+): Promise<{ folders: string[] } | { error: string }> {
+  if (!all) {
+    const resolved = await resolveConeFolder(fs, cone ?? PRIMARY_CONE_FOLDER);
+    return 'error' in resolved ? resolved : { folders: [resolved.folder] };
+  }
+  // Every cone that actually has a memory file — a cone that never
+  // accumulated memory has nothing to consolidate.
+  const folders: string[] = [];
+  for (const folder of await listConeFolders(fs)) {
+    if ((await readMemoryFile(fs, memoryPathFor(folder))) !== null) folders.push(folder);
+  }
+  if (folders.length === 0)
+    return { error: 'no cone has a memory file yet — nothing to dream about' };
+  return { folders };
+}
+
 async function handleDream(args: string[], fs: VirtualFS): Promise<CommandResult> {
   const parsed = parseKnownFlags(args, { value: ['--cone'], bool: ['--all', '--wait'] });
   if ('error' in parsed) return fail(parsed.error);
@@ -353,18 +408,9 @@ async function handleDream(args: string[], fs: VirtualFS): Promise<CommandResult
   const host = seam();
   if (!host) return fail(NO_SEAM);
 
-  let folders: string[];
-  if (all) {
-    // Every cone that actually has a memory file — a cone that never
-    // accumulated memory has nothing to consolidate.
-    folders = [];
-    for (const folder of await listConeFolders(fs)) {
-      if ((await readMemoryFile(fs, memoryPathFor(folder))) !== null) folders.push(folder);
-    }
-    if (folders.length === 0) return fail('no cone has a memory file yet — nothing to dream about');
-  } else {
-    folders = [cone ?? PRIMARY_CONE_FOLDER];
-  }
+  const selected = await dreamTargets(fs, all, cone);
+  if ('error' in selected) return fail(selected.error);
+  const { folders } = selected;
 
   const request = (folder: string) =>
     host.dream(folder === PRIMARY_CONE_FOLDER ? {} : { cone: { folder } });

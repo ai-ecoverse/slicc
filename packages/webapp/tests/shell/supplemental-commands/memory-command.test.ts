@@ -106,7 +106,10 @@ describe('memory show', () => {
   });
 
   it('reads an extra cone via --cone', async () => {
-    const fs = memoryFs({ '/cones/cone-side/CLAUDE.md': 'side memories\n' });
+    const fs = memoryFs(
+      { '/cones/cone-side/CLAUDE.md': 'side memories\n' },
+      { '/cones': [{ name: 'cone-side', type: 'directory' }] }
+    );
     const result = await run(fs, ['show', '--cone', 'cone-side']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('side memories\n');
@@ -285,10 +288,12 @@ describe('memory curate', () => {
     });
   });
 
+  const SIDE_CONE = { '/cones': [{ name: 'cone-side', type: 'directory' as const }] };
+
   it('selects an archive with --archive and forwards --cone', async () => {
     const seam = fakeSeam({ ok: true, report: '' });
     (globalThis as Globals).__slicc_memory = seam;
-    const fs = memoryFs({ [INDEX_PATH]: JSON.stringify(index) });
+    const fs = memoryFs({ [INDEX_PATH]: JSON.stringify(index) }, SIDE_CONE);
     const result = await run(fs, ['curate', '--archive', 'old.md', '--cone', 'cone-side']);
     expect(result.exitCode).toBe(0);
     expect(seam.curate).toHaveBeenCalledWith({
@@ -296,6 +301,67 @@ describe('memory curate', () => {
       sessionCount: 2,
       cone: { folder: 'cone-side' },
     });
+  });
+
+  // An extra cone's archive must land in THAT cone's memory file, not the
+  // primary's — `entry.cone` is the default target when --cone is omitted.
+  it("defaults the target to the archive's own cone", async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const owned = [
+      entry('side.md', '2026-09-11T00:00:00.000Z', { cone: 'cone-side', coneLabel: 'Side' }),
+      ...index,
+    ];
+    const fs = memoryFs({ [INDEX_PATH]: JSON.stringify(owned) }, SIDE_CONE);
+    const result = await run(fs, ['curate']);
+    expect(result.exitCode).toBe(0);
+    expect(seam.curate).toHaveBeenCalledWith({
+      sessionArchivePath: '/sessions/side.md',
+      sessionCount: 3,
+      cone: { folder: 'cone-side' },
+    });
+    // The primary's own archives still say nothing about a cone.
+    seam.curate.mockClear();
+    await run(fs, ['curate', '--archive', 'new.md']);
+    expect(seam.curate).toHaveBeenCalledWith({
+      sessionArchivePath: '/sessions/new.md',
+      sessionCount: 3,
+    });
+  });
+
+  it('refuses an archive whose cone is gone unless --cone redirects it', async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const orphaned = [
+      entry('gone.md', '2026-09-11T00:00:00.000Z', { cone: 'cone-dropped' }),
+      ...index,
+    ];
+    const fs = memoryFs({ [INDEX_PATH]: JSON.stringify(orphaned) });
+    const refused = await run(fs, ['curate']);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain('frozen from cone "cone-dropped", which no longer exists');
+    expect(seam.curate).not.toHaveBeenCalled();
+    const redirected = await run(fs, ['curate', '--cone', 'cone']);
+    expect(redirected.exitCode).toBe(0);
+    expect(seam.curate).toHaveBeenCalledWith({
+      sessionArchivePath: '/sessions/gone.md',
+      sessionCount: 3,
+    });
+  });
+
+  // `--cone` becomes `/cones/<folder>/CLAUDE.md` on the far side of the seam,
+  // written through the unrestricted shared VFS — the value must be a real
+  // cone folder, never a path fragment.
+  it('rejects a --cone that is not an existing cone folder before crossing the seam', async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const fs = memoryFs({ [INDEX_PATH]: JSON.stringify(index) }, SIDE_CONE);
+    for (const bogus of ['../../shared', 'cone-typo', '/workspace']) {
+      const result = await run(fs, ['curate', '--cone', bogus]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`unknown cone "${bogus}" (cones: cone, cone-side)`);
+    }
+    expect(seam.curate).not.toHaveBeenCalled();
   });
 
   it('rejects an archive the index does not know', async () => {
@@ -348,7 +414,10 @@ describe('memory dream', () => {
   it('forwards --cone and rejects combining it with --all', async () => {
     const seam = fakeSeam({ ok: true, report: '' });
     (globalThis as Globals).__slicc_memory = seam;
-    const fs = memoryFs({ '/cones/cone-side/CLAUDE.md': 'side' });
+    const fs = memoryFs(
+      { '/cones/cone-side/CLAUDE.md': 'side' },
+      { '/cones': [{ name: 'cone-side', type: 'directory' }] }
+    );
     const forwarded = await run(fs, ['dream', '--cone', 'cone-side']);
     expect(forwarded.exitCode).toBe(0);
     expect(seam.dream).toHaveBeenCalledWith({ cone: { folder: 'cone-side' } });
@@ -376,6 +445,23 @@ describe('memory dream', () => {
     expect(seam.dream).toHaveBeenCalledTimes(2);
     expect(seam.dream).toHaveBeenCalledWith({});
     expect(seam.dream).toHaveBeenCalledWith({ cone: { folder: 'cone-side' } });
+  });
+
+  // A restricted scoop (the gelatiere has `memory` allow-listed) must not be
+  // able to point a dreamer at `/cones/../../shared/CLAUDE.md`.
+  it('rejects a --cone that is not an existing cone folder before crossing the seam', async () => {
+    const seam = fakeSeam({ ok: true, report: '' });
+    (globalThis as Globals).__slicc_memory = seam;
+    const fs = memoryFs(
+      { '/cones/cone-side/CLAUDE.md': 'side' },
+      { '/cones': [{ name: 'cone-side', type: 'directory' }] }
+    );
+    for (const bogus of ['../../shared', 'cone-typo']) {
+      const result = await run(fs, ['dream', '--cone', bogus]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`unknown cone "${bogus}" (cones: cone, cone-side)`);
+    }
+    expect(seam.dream).not.toHaveBeenCalled();
   });
 
   it('--all fails when no cone has a memory file yet', async () => {

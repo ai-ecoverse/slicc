@@ -30,7 +30,7 @@ memory dream [--cone <folder>] [--all] [--wait]      # consolidate memory (dream
 - A fact you expected to be remembered is missing → `memory log` to see whether the session that established it was ever curated; `memory status --check` for systemic failures.
 - After a failed curation (`memoryFailed` in the log) → fix the cause if visible (usually a missing provider or a timeout), then `memory curate --archive <that-file>`.
 - The memory file has grown duplicated, contradictory, or over budget → `memory dream` (add `--wait` to see the dreamer's report; `--all` for every cone with a memory file). The gelatiere's nightly already runs `memory dream --all`, so reach for this manually only when it cannot wait.
-- Extra cones keep separate memory: pass `--cone <folder>` to `show`, `curate`, and `dream`.
+- Extra cones keep separate memory: pass `--cone <folder>` to `show`, `curate`, and `dream`. The folder must exist (`cone`, or a `/cones/<folder>`); `curate` without it targets the cone the archive was frozen from.
 
 ## Reading `memory status`
 

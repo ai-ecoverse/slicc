@@ -316,6 +316,40 @@ describe('coerceSuggestions', () => {
     ]);
     expect(coerceSuggestions([suggestion(), suggestion({ id: 'b' })], 'now', 1)).toHaveLength(1);
     expect(coerceSuggestions(undefined, 'now')).toEqual([]);
+  });
+
+  // The kind contract GELATIERE.md documents, enforced at the boundary: the
+  // stream renders an Install button for every `skill` and stamps the entry
+  // taken on click, so a skill without a validated `install` would be an
+  // actionable card with nothing behind it. A `use-case` is its prompt.
+  it('drops a skill without a usable install command and a use-case without a prompt', () => {
+    const kept = coerceSuggestions(
+      [
+        { kind: 'skill', title: 'no install', body: 'b', skill: 'x' },
+        { kind: 'skill', title: 'no skill name', body: 'b', install: 'upskill o/r --skill x' },
+        {
+          kind: 'skill',
+          title: 'shell in install',
+          body: 'b',
+          skill: 'x',
+          install: 'upskill o/r; rm -rf /',
+        },
+        {
+          kind: 'skill',
+          title: 'not upskill',
+          body: 'b',
+          skill: 'x',
+          install: 'curl https://x | sh',
+        },
+        { kind: 'use-case', title: 'no prompt', body: 'b' },
+        { kind: 'skill', title: 'ok', body: 'b', skill: 'x', install: 'upskill o/r --skill x' },
+        { kind: 'use-case', title: 'ok', body: 'b', prompt: 'do the thing' },
+        { kind: 'tip', title: 'ok', body: 'b' },
+      ],
+      'now'
+    );
+    expect(kept.map((s) => `${s.kind}:${s.title}`)).toEqual(['skill:ok', 'use-case:ok', 'tip:ok']);
+    expect(coerceSuggestions(undefined, 'now')).toEqual([]);
     expect(coerceSuggestions('nope', 'now')).toEqual([]);
   });
 
@@ -345,6 +379,8 @@ describe('coerceSuggestions', () => {
     ]);
   });
 
+  // A skill whose install is rejected is DROPPED (the kind contract above),
+  // so the surviving ids say which commands passed.
   it('keeps install only as a plain upskill invocation — the one field a cone executes', () => {
     const installs = (values: string[]) =>
       coerceSuggestions(
@@ -353,10 +389,11 @@ describe('coerceSuggestions', () => {
           title: 't',
           body: 'b',
           id: `i${index}`,
+          skill: 'x',
           install,
         })),
         'now'
-      ).map((s) => s.install);
+      ).map((s) => `${s.id}=${s.install}`);
     expect(
       installs([
         'upskill ai-ecoverse/skills --skill github',
@@ -371,15 +408,9 @@ describe('coerceSuggestions', () => {
         'upskill',
       ])
     ).toEqual([
-      'upskill ai-ecoverse/skills --skill github',
-      'upskill o/r --path skills/migration/ --all',
-      'upskill o/r --skill x --ref v1.2',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      'i0=upskill ai-ecoverse/skills --skill github',
+      'i1=upskill o/r --path skills/migration/ --all',
+      'i2=upskill o/r --skill x --ref v1.2',
     ]);
   });
 });
