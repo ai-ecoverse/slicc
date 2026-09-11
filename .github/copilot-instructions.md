@@ -54,8 +54,8 @@ origins, comparisons without slash normalization.
 
 Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
 and relative imports out of `packages/webapp/src` (→ `@slicc/shared-ts`); move down,
-never grow baselines. chrome-extension→webapp (except `import type {` from
-kernel/messages.js) and webcomponents→webapp are zero-tolerance.
+never grow baselines. chrome-extension (src+tests)→webapp (except `import type {` from
+kernel/messages.js) and webcomponents (src+tests)→webapp are zero-tolerance.
 `isExtensionRealm` in `scoops/`/`tools/`/`kernel/` (not `host.ts`) → `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
