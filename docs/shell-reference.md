@@ -529,18 +529,20 @@ normal behavior.
 `packages/webapp/src/shell/supplemental-commands/builtin-shadow-map.ts` is authoritative. It
 currently maps exactly these npm package names:
 
-| npm package names                                       | SLICC built-in   |
-| ------------------------------------------------------- | ---------------- |
-| `@biomejs/biome`, `biome`                               | `biome`          |
-| `esbuild`                                               | `esbuild`        |
-| `playwright`, `@playwright/test`, `playwright-core`     | `playwright-cli` |
-| `puppeteer`, `puppeteer-core`                           | `puppeteer`      |
-| `typescript`                                            | `tsc`            |
-| `imagemagick`, `imagemagick-cli`, `imagemagick-convert` | `convert`        |
-| `magick-cli`, `@imagemagick/magick-wasm`                | `magick`         |
-| `ffmpeg`, `@ffmpeg/ffmpeg`                              | `ffmpeg`         |
-| `sqlite3`                                               | `sqlite3`        |
-| `v86`                                                   | `v86`            |
+| npm package names                                                                     | SLICC built-in   |
+| ------------------------------------------------------------------------------------- | ---------------- |
+| `@biomejs/biome`, `biome`                                                             | `biome`          |
+| `esbuild`                                                                             | `esbuild`        |
+| `playwright`, `@playwright/test`, `playwright-core`                                   | `playwright-cli` |
+| `puppeteer`, `puppeteer-core`                                                         | `puppeteer`      |
+| `typescript`                                                                          | `tsc`            |
+| `pdf-poppler`, `pdf-to-img`, `pdf2pic`, `pdf-img-convert`, `poppler`, `poppler-utils` | `pdftoppm`       |
+| `imagemagick`, `imagemagick-cli`, `imagemagick-convert`                               | `convert`        |
+| `magick-cli`, `@imagemagick/magick-wasm`                                              | `magick`         |
+| `ffmpeg`, `@ffmpeg/ffmpeg`                                                            | `ffmpeg`         |
+| `ffprobe`, `@ffprobe-installer/ffprobe`                                               | `ffprobe`        |
+| `sqlite3`                                                                             | `sqlite3`        |
+| `v86`                                                                                 | `v86`            |
 
 ### `npm run` / `ipk run` script running
 
