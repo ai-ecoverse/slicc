@@ -62,6 +62,21 @@ describe('LocalVfsClient', () => {
     expect(s.size).toBe(42);
   });
 
+  it('omits readFileRange when the source has none', () => {
+    const stub = makeStubVfs();
+    const client = createLocalVfsClient(stub.vfs);
+    expect(client.readFileRange).toBeUndefined();
+  });
+
+  it('forwards readFileRange (bound to the source) when the source has one', async () => {
+    const stub = makeStubVfs();
+    const slice = new Uint8Array([9, 8, 7]);
+    const readFileRange = vi.fn(async () => slice);
+    const client = createLocalVfsClient({ ...stub.vfs, readFileRange });
+    await expect(client.readFileRange?.('/clip.mp4', 4, 7)).resolves.toEqual(slice);
+    expect(readFileRange).toHaveBeenCalledWith('/clip.mp4', 4, 7);
+  });
+
   // #2409: `watch` is the one optional method, and the facade must not
   // invent one — a caller branches on its ABSENCE to fall back to polling.
   it('omits watch when the source cannot watch', () => {

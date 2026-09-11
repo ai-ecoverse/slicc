@@ -121,6 +121,20 @@ describe('RemoteVfsClient — end-to-end round-trip', () => {
     ctx.stop();
   });
 
+  it('readFileRange round-trips a window without a whole-file read (#2857)', async () => {
+    const ctx = setupRoundTrip();
+    const bytes = new Uint8Array([0, 1, 2, 3, 4]);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    ctx.vfs.client.readFileRange = readFileRange;
+    const result = await ctx.client.readFileRange('/clip.mp4', 1, 4);
+    expect(readFileRange).toHaveBeenCalledWith('/clip.mp4', 1, 4);
+    expect(ctx.vfs.readFile).not.toHaveBeenCalled();
+    expect(Array.from(result)).toEqual([1, 2, 3]);
+    ctx.stop();
+  });
+
   it('stat round-trips the stats envelope', async () => {
     const ctx = setupRoundTrip();
     const stats: Stats = { type: 'file', size: 1234, mtime: 555, ctime: 444 };

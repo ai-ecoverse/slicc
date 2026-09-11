@@ -17,7 +17,7 @@
  * exercises the real responder → VFS path this test covers.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import { handlePreviewRequest, type PreviewChannel } from '../../src/ui/preview-sw-handler.js';
@@ -128,5 +128,18 @@ describe('serve directory → index.html fallback (real responder + handler + VF
   it('returns 404 for a missing path', async () => {
     const res = await handlePreviewRequest(swChannel, '/site/missing.html', 1000);
     expect(res.status).toBe(404);
+  });
+
+  it('a Range request asks the VFS for only the window (#2857)', async () => {
+    const bytes = new Uint8Array(256).map((_, i) => i);
+    await vfs.writeFile('/site/cut.mp4', bytes);
+    const rangeSpy = vi.spyOn(vfs, 'readFileRange');
+    const res = await handlePreviewRequest(swChannel, '/site/cut.mp4', 1000, 'bytes=10-19');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('Content-Range')).toBe('bytes 10-19/256');
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(
+      Array.from(bytes.subarray(10, 20))
+    );
+    expect(rangeSpy).toHaveBeenCalledWith('/site/cut.mp4', 10, 20);
   });
 });
