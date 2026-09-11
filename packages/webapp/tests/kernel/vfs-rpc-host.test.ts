@@ -244,6 +244,44 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
     ctx.stop();
   });
 
+  it('readFile with start/end calls readFileRange and does not whole-file read (#2857)', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 3, 4, 5]);
+    const readFile = vi.fn(async () => bytes);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    const ctx = setupRoundTrip({
+      readDir: vi.fn(async () => []),
+      readFile,
+      readFileRange,
+      stat: vi.fn(
+        async (): Promise<Stats> => ({
+          type: 'file',
+          size: bytes.byteLength,
+          mtime: 0,
+          ctime: 0,
+        })
+      ),
+    });
+    ctx.panelTransport.send({
+      type: 'vfs-read-file',
+      requestId: 'r3r',
+      path: '/clip.mp4',
+      encoding: 'binary',
+      start: 1,
+      end: 4,
+    } satisfies VfsReadRequestMsg);
+    await waitForResponses(ctx, 1);
+    expect(readFileRange).toHaveBeenCalledWith('/clip.mp4', 1, 4);
+    expect(readFile).not.toHaveBeenCalled();
+    const resp = ctx.responses[0] as VfsReadFileResultMsg;
+    expect(resp.ok).toBe(true);
+    if (resp.ok && resp.encoding === 'binary') {
+      expect(Array.from(resp.data)).toEqual([1, 2, 3]);
+    }
+    ctx.stop();
+  });
+
   it('stat success returns the stats envelope', async () => {
     const ctx = setupRoundTrip();
     const stats: Stats = { type: 'file', size: 1234, mtime: 555, ctime: 444 };

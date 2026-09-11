@@ -65,8 +65,14 @@ export const TEXT_TYPES = new Set([
 ]);
 
 export type ReadOutcome =
-  | { ok: true; content: string | Uint8Array }
+  | { ok: true; content: string | Uint8Array; size?: number }
   | { ok: false; error: string | null };
+
+/** Optional half-open byte window forwarded on a `preview-vfs-read`. */
+export interface PreviewReadWindow {
+  start: number;
+  end?: number;
+}
 
 /**
  * Worst-case `vfs-read-file` RPC budget. Matches `RemoteVfsClient`'s 30 s
@@ -114,7 +120,8 @@ export async function readViaMainPage(
   channel: PreviewChannel,
   vfsPath: string,
   asText: boolean,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  byteWindow?: PreviewReadWindow
 ): Promise<ReadOutcome> {
   const id = `pvfs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -146,7 +153,13 @@ export async function readViaMainPage(
 
     function handler(event: MessageEvent): void {
       const data = event.data as
-        | { type?: string; id?: string; content?: string | Uint8Array; error?: string }
+        | {
+            type?: string;
+            id?: string;
+            content?: string | Uint8Array;
+            error?: string;
+            size?: number;
+          }
         | undefined;
       if (!data || data.id !== id) return;
       // Responder heard us — stop the cold-start re-post loop, but keep waiting
@@ -172,14 +185,25 @@ export async function readViaMainPage(
         return;
       }
       if (data.content !== undefined) {
-        resolve({ ok: true, content: data.content });
+        resolve({
+          ok: true,
+          content: data.content,
+          ...(typeof data.size === 'number' ? { size: data.size } : {}),
+        });
         return;
       }
       resolve({ ok: false, error: 'empty response' });
     }
 
     function post(): void {
-      channel.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+      channel.postMessage({
+        type: 'preview-vfs-read',
+        id,
+        path: vfsPath,
+        asText,
+        ...(byteWindow && Number.isInteger(byteWindow.start) ? { start: byteWindow.start } : {}),
+        ...(byteWindow && Number.isInteger(byteWindow.end) ? { end: byteWindow.end } : {}),
+      });
     }
 
     channel.addEventListener('message', handler);
@@ -248,7 +272,11 @@ export async function handlePreviewRequest(
 ): Promise<Response> {
   let path = vfsPath;
   let mimeType = getMimeType(path);
-  let outcome = await readViaMainPage(channel, path, TEXT_TYPES.has(mimeType), timeoutMs);
+  const asText = TEXT_TYPES.has(mimeType);
+  // Text stays whole-file. Binary Range requests ask for the window so a
+  // `<video>` scrub does not allocate the full entity on every 206 (#2857).
+  const byteWindow = asText ? undefined : byteWindowFromRangeHeader(rangeHeader);
+  let outcome = await readViaMainPage(channel, path, asText, timeoutMs, byteWindow);
 
   if (!outcome.ok && outcome.error && outcome.error.includes('EISDIR')) {
     path = path.endsWith('/') ? path + 'index.html' : path + '/index.html';
@@ -261,7 +289,7 @@ export async function handlePreviewRequest(
       typeof outcome.content === 'string'
         ? outcome.content
         : new Uint8Array(outcome.content as Uint8Array);
-    return rangedResponse(body, mimeType, rangeHeader);
+    return rangedResponse(body, mimeType, rangeHeader, outcome.size);
   }
 
   if (outcome.error && !outcome.error.includes('ENOENT')) {
@@ -292,10 +320,9 @@ export async function handlePreviewRequest(
  * returned whole: they are strings here, not bytes, so a byte range over them
  * would be wrong for any non-ASCII content, and nothing seeks a stylesheet.
  *
- * This still reads the whole file from the responder first — the range is
- * sliced from the buffer. That fixes seeking (the reason `<video>` needs 206)
- * without yet fixing peak memory; an offset/length read on the responder is
- * the follow-up for that.
+ * A responder that understands the optional byte window returns only that
+ * slice plus the entity `size`; an older responder returns the whole file
+ * and we slice here, which is always a valid answer to a Range request.
  */
 function rangedResponse(
   // `Uint8Array<ArrayBuffer>`, not the looser `ArrayBufferLike`: a view over a
@@ -303,7 +330,8 @@ function rangedResponse(
   // whichever buffer type it is handed.
   body: string | Uint8Array<ArrayBuffer>,
   mimeType: string,
-  rangeHeader: string | null | undefined
+  rangeHeader: string | null | undefined,
+  entitySize?: number
 ): Response {
   if (typeof body === 'string') {
     return new Response(body, {
@@ -312,7 +340,7 @@ function rangedResponse(
     });
   }
 
-  const size = body.byteLength;
+  const size = entitySize ?? body.byteLength;
   const baseHeaders: Record<string, string> = {
     'Content-Type': mimeType,
     'Cache-Control': 'no-cache',
@@ -330,7 +358,9 @@ function rangedResponse(
     return new Response(body, { status: 200, headers: baseHeaders });
   }
 
-  const slice = body.subarray(range.start, range.end + 1);
+  const expected = range.end - range.start + 1;
+  // New responder: body is already the window. Old responder: whole file.
+  const slice = body.byteLength === expected ? body : body.subarray(range.start, range.end + 1);
   return new Response(slice, {
     status: 206,
     headers: {
@@ -339,6 +369,25 @@ function rangedResponse(
       'Content-Length': String(slice.byteLength),
     },
   });
+}
+
+/**
+ * Resolve a `Range: bytes=…` header into a half-open window the responder
+ * can read without knowing the entity size. Closed `bytes=N-M` and
+ * open-ended `bytes=N-` qualify; suffix `bytes=-N` needs the size, so we
+ * leave it undefined and fall back to whole-file + slice.
+ */
+export function byteWindowFromRangeHeader(
+  header: string | null | undefined
+): PreviewReadWindow | undefined {
+  if (!header) return undefined;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return undefined;
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === '') return undefined;
+  const start = Number(rawStart);
+  if (rawEnd === '') return { start };
+  return { start, end: Number(rawEnd) + 1 };
 }
 
 /**

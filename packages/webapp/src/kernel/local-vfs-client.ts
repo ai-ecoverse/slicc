@@ -7,8 +7,8 @@
  * remains the canonical writer; future panel-initiated writes route
  * through `kernelClient.fs.*` RPCs.
  *
- * Today the panels only read (`readDir`, `readFile`, `stat`), so the
- * facade is purely a type-system constraint. It's a structural
+ * Today the panels read (`readDir`, `readFile`, `readFileRange`, `stat`),
+ * so the facade is purely a type-system constraint. It's a structural
  * subset of `VirtualFS`, so `VirtualFS` instances satisfy it for
  * free — extension panel and inline standalone paths keep working
  * without changes. The benefit is at the panel signatures: typing
@@ -31,6 +31,17 @@ export interface LocalVfsClient {
    * `'utf-8'`, `Uint8Array` for `'binary'`).
    */
   readFile(path: string, options?: ReadFileOptions): Promise<string | Uint8Array>;
+
+  /**
+   * Read the half-open byte window `[start, end)` of a file — same
+   * semantics as `VirtualFS.readFileRange`. OPTIONAL because a reader
+   * that only ever serves text (or an older `RemoteVfsClient` talking
+   * to a worker that predates the windowed `vfs-read-file`) can omit
+   * it; callers then fall back to `readFile` + `subarray`. The
+   * `/preview/*` responder uses this so a `Range: bytes=0-99` on a
+   * media file does not allocate the whole entity (#2857).
+   */
+  readFileRange?(path: string, start: number, end: number): Promise<Uint8Array>;
 
   /**
    * Stat a path. Throws `FsError(ENOENT)` if missing.
@@ -61,6 +72,7 @@ export interface LocalVfsClient {
  */
 export function createLocalVfsClient(source: LocalVfsClient): LocalVfsClient {
   const watch = source.watch?.bind(source);
+  const readFileRange = source.readFileRange?.bind(source);
   return {
     // Omit the second arg when unset so mocks that assert
     // `toHaveBeenCalledWith(path)` keep matching (#2765).
@@ -71,5 +83,6 @@ export function createLocalVfsClient(source: LocalVfsClient): LocalVfsClient {
     // Forwarded only when the source actually has it: leaving the key off
     // is the signal callers branch on.
     ...(watch ? { watch } : {}),
+    ...(readFileRange ? { readFileRange } : {}),
   };
 }

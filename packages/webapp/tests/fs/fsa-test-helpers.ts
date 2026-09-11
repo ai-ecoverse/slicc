@@ -20,6 +20,28 @@ function setFileContent(node: MockFileNode, content: string): void {
   node.mtime = Date.now();
 }
 
+/**
+ * Minimal `File` stand-in that still `slice()`s. `getNativeFile` consumers
+ * (ffmpeg WORKERFS, mediabunny `BlobSource`, `VirtualFS.readFileRange`)
+ * read lazily by slice; a mock without `slice` silently falls back to a
+ * whole-file `arrayBuffer()` and hides the path those callers exist for.
+ */
+function mockFileFromBytes(bytes: Uint8Array, lastModified: number): File {
+  const make = (view: Uint8Array): File =>
+    ({
+      size: view.byteLength,
+      lastModified,
+      text: async () => new TextDecoder().decode(view),
+      arrayBuffer: async () => view.slice().buffer,
+      slice: (start?: number, end?: number) => {
+        const from = start ?? 0;
+        const to = end ?? view.byteLength;
+        return make(view.subarray(from, to));
+      },
+    }) as unknown as File;
+  return make(bytes);
+}
+
 // Real `DOMException` (not a plain Error) so `@zenfs/dom`'s `convertException`
 // maps `.name` to the right POSIX errno. It only does that mapping for
 // `ex instanceof DOMException`; any other thrown error falls through to `EIO`
@@ -41,13 +63,7 @@ class MockFileHandle {
   ) {}
 
   async getFile(): Promise<File> {
-    const bytes = new Uint8Array(this.node.content);
-    return {
-      size: bytes.byteLength,
-      lastModified: this.node.mtime,
-      text: async () => new TextDecoder().decode(bytes),
-      arrayBuffer: async () => bytes.slice().buffer,
-    } as File;
+    return mockFileFromBytes(new Uint8Array(this.node.content), this.node.mtime);
   }
 
   // Faithful `FileSystemWritableFileStream`: honors `keepExistingData`, a

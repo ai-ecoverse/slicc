@@ -695,6 +695,14 @@ export interface VfsReadFileRequestMsg {
   path: string;
   /** Default `'utf-8'` (matches `VirtualFS.readFile`). */
   encoding?: 'utf-8' | 'binary';
+  /**
+   * Optional half-open byte window `[start, end)`. Present only on
+   * binary reads; an older host that ignores these fields returns the
+   * whole file and the client slices, which is today's behaviour.
+   * `end` omitted means "to EOF" — the host stats to resolve it.
+   */
+  start?: number;
+  end?: number;
 }
 
 /** Panel → worker: stat the entry at `path`. */

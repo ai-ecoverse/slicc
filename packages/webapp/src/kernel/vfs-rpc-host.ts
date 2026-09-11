@@ -18,6 +18,10 @@
  * Per-request lifecycle:
  *   `vfs-read-dir`   → `client.readDir(path)`             → `vfs-read-dir-result`
  *   `vfs-read-file`  → `client.readFile(path, options)`   → `vfs-read-file-result`
+ *                      Optional `start`/`end` on a binary read call
+ *                      `client.readFileRange` (or read-and-slice when
+ *                      the client has no ranged method) so a preview
+ *                      `Range` does not allocate the whole file (#2857).
  *                      Binary payloads are handed back as `Uint8Array`
  *                      with the underlying buffer in the transfer list,
  *                      so the `MessageChannel` adapter moves ownership
@@ -321,39 +325,14 @@ class VfsRpcHost {
   private async handleReadFile(req: VfsReadFileRequestMsg): Promise<void> {
     const encoding = req.encoding ?? 'utf-8';
     try {
+      if (encoding === 'binary' && Number.isInteger(req.start)) {
+        const data = await this.readFileWindow(req.path, req.start as number, req.end);
+        this.sendBinaryReadResult(req.requestId, req.path, data);
+        return;
+      }
       const data = await this.client.readFile(req.path, { encoding });
       if (encoding === 'binary') {
-        // `readFile({ encoding: 'binary' })` returns `Uint8Array`. If
-        // a misbehaving client handed back a string, fall through to
-        // an EIO so we don't ship a wire-shape mismatch.
-        if (!(data instanceof Uint8Array)) {
-          this.emitError(
-            'vfs-read-file-result',
-            req.requestId,
-            new FsError('EIO', 'readFile(binary) did not return Uint8Array'),
-            req.path
-          );
-          return;
-        }
-        const response: VfsReadFileResultMsg = {
-          type: 'vfs-read-file-result',
-          requestId: req.requestId,
-          ok: true,
-          encoding: 'binary',
-          data,
-        };
-        // Transfer the backing buffer so the MessageChannel adapter
-        // moves ownership (no copy) on standalone. The chrome.runtime
-        // adapter ignores the transfer list. If the Uint8Array is a
-        // view onto a SharedArrayBuffer (or another non-Transferable
-        // backing), skip the transfer list — `postMessage`'s transfer
-        // arg only accepts Transferable.
-        const buf = data.buffer;
-        const transfer =
-          typeof ArrayBuffer !== 'undefined' && buf instanceof ArrayBuffer
-            ? [buf as Transferable]
-            : undefined;
-        this.transport.send(response, transfer);
+        this.sendBinaryReadResult(req.requestId, req.path, data);
       } else {
         if (typeof data !== 'string') {
           this.emitError(
@@ -376,6 +355,56 @@ class VfsRpcHost {
     } catch (err) {
       this.emitError('vfs-read-file-result', req.requestId, err, req.path);
     }
+  }
+
+  /**
+   * Half-open `[start, end)` of `path`. `end` omitted means EOF (resolved
+   * via `stat`). Prefers `readFileRange` when the client has one.
+   */
+  private async readFileWindow(path: string, start: number, end?: number): Promise<Uint8Array> {
+    const to = end ?? (await this.client.stat(path)).size;
+    if (this.client.readFileRange) {
+      return this.client.readFileRange(path, start, to);
+    }
+    const whole = await this.client.readFile(path, { encoding: 'binary' });
+    if (!(whole instanceof Uint8Array)) {
+      throw new FsError('EIO', 'readFile(binary) did not return Uint8Array', path);
+    }
+    return new Uint8Array(whole.subarray(start, Math.min(to, whole.byteLength)));
+  }
+
+  private sendBinaryReadResult(requestId: string, path: string, data: string | Uint8Array): void {
+    // `readFile({ encoding: 'binary' })` / `readFileRange` return
+    // `Uint8Array`. If a misbehaving client handed back a string, fall
+    // through to an EIO so we don't ship a wire-shape mismatch.
+    if (!(data instanceof Uint8Array)) {
+      this.emitError(
+        'vfs-read-file-result',
+        requestId,
+        new FsError('EIO', 'readFile(binary) did not return Uint8Array'),
+        path
+      );
+      return;
+    }
+    const response: VfsReadFileResultMsg = {
+      type: 'vfs-read-file-result',
+      requestId,
+      ok: true,
+      encoding: 'binary',
+      data,
+    };
+    // Transfer the backing buffer so the MessageChannel adapter
+    // moves ownership (no copy) on standalone. The chrome.runtime
+    // adapter ignores the transfer list. If the Uint8Array is a
+    // view onto a SharedArrayBuffer (or another non-Transferable
+    // backing), skip the transfer list — `postMessage`'s transfer
+    // arg only accepts Transferable.
+    const buf = data.buffer;
+    const transfer =
+      typeof ArrayBuffer !== 'undefined' && buf instanceof ArrayBuffer
+        ? [buf as Transferable]
+        : undefined;
+    this.transport.send(response, transfer);
   }
 
   private async handleStat(req: VfsStatRequestMsg): Promise<void> {

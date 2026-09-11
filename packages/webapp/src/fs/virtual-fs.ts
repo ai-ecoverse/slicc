@@ -1843,11 +1843,14 @@ export class VirtualFS {
    * semantics, so `end - start` is the length and `start === end` is empty.
    *
    * A backend with a native ranged read (hostfs, via HTTP `Range`) transfers
-   * only the window; everything else reads the file and slices, which is
-   * correct but saves nothing. That distinction is the whole point: git wants
-   * a packfile as one buffer, so a repo whose largest pack exceeded the hostfs
-   * whole-file cap was unreadable outright, and a pack under the cap still
-   * cost its full size in kernel-worker memory per object lookup (#2711).
+   * only the window. OPFS-backed and FSA-picker paths go through a lazy
+   * `File.slice` (`getNativeFile`) — the same handle ffmpeg's WORKERFS and
+   * mediabunny's `BlobSource` use — so `/shared/*.mp4` no longer materializes
+   * the whole file to serve `bytes=0-99` (#2857). Everything else reads the
+   * file and slices, which is correct but saves nothing. Git wants a packfile
+   * as one buffer, so a repo whose largest pack exceeded the hostfs whole-file
+   * cap was unreadable outright, and a pack under the cap still cost its full
+   * size in kernel-worker memory per object lookup (#2711).
    *
    * @throws FsError EINVAL for a non-integer or descending window.
    */
@@ -1867,11 +1870,33 @@ export class VirtualFS {
         rebrandFsError(err, normalized);
       }
     }
+    const sliced = await this.sliceNativeFile(normalized, start, end);
+    if (sliced) return sliced;
     const whole = (await this.readFile(normalized, { encoding: 'binary' })) as Uint8Array;
     // Copy into a PLAIN Uint8Array: the local backend hands back a `Buffer`
     // (a subclass), and a ranged read must return the same shape whichever
     // side of the mount boundary it came from.
     return new Uint8Array(whole.subarray(start, Math.min(end, whole.byteLength)));
+  }
+
+  /**
+   * Half-open `[start, end)` of a lazy native `File`, or `null` when there
+   * is no handle (memory / hostfs / S3 / DA / AEM, directories, missing
+   * paths). Never throws — the caller falls back to a whole-file read.
+   */
+  private async sliceNativeFile(
+    normalized: string,
+    start: number,
+    end: number
+  ): Promise<Uint8Array | null> {
+    try {
+      const native = await this.getNativeFile(normalized);
+      if (!native) return null;
+      const blob = native.slice(start, Math.min(end, native.size));
+      return new Uint8Array(await blob.arrayBuffer());
+    } catch {
+      return null;
+    }
   }
 
   /**

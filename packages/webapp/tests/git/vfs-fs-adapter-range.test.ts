@@ -14,7 +14,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VirtualFS } from '../../src/fs/index.js';
 import type {
@@ -24,8 +24,10 @@ import type {
   MountStat,
   RefreshReport,
 } from '../../src/fs/mount/backend.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { FsError } from '../../src/fs/types.js';
 import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
+import { createDirectoryHandle } from '../fs/fsa-test-helpers.js';
 
 /** Stand-in for a bridge-backed mount holding one "packfile". */
 class FakePackBackend implements MountBackend {
@@ -170,6 +172,30 @@ describe('VirtualFS.readFileRange', () => {
   it('reads a window of an unmounted VFS file', async () => {
     await vfs.writeFile('/local.bin', PACK);
     await expect(vfs.readFileRange('/local.bin', 60, 64)).resolves.toEqual(PACK.slice(60, 64));
+  });
+
+  it('slices a native File for an FSA path without a whole-file read (#2857)', async () => {
+    const backend = LocalMountBackend.fromHandle(
+      createDirectoryHandle({ 'clip.mp4': 'ABCDEFGHIJ' }),
+      { mountId: 'fsa' }
+    );
+    const readSpy = vi.spyOn(backend, 'readFile');
+    await vfs.mkdir('/mnt', { recursive: true });
+    await vfs.mount('/mnt/fsa', backend);
+    readSpy.mockClear();
+    const got = await vfs.readFileRange('/mnt/fsa/clip.mp4', 2, 6);
+    expect(Array.from(got)).toEqual(Array.from(new TextEncoder().encode('CDEF')));
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it('prefers getNativeFile slice over a whole-file read for unmounted paths', async () => {
+    await vfs.writeFile('/local.bin', PACK);
+    const file = new File([PACK], 'local.bin');
+    const native = vi.spyOn(vfs, 'getNativeFile').mockResolvedValue(file);
+    const read = vi.spyOn(vfs, 'readFile');
+    await expect(vfs.readFileRange('/local.bin', 60, 64)).resolves.toEqual(PACK.slice(60, 64));
+    expect(native).toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('clamps a window that runs past the end of the file', async () => {

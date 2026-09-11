@@ -14,6 +14,7 @@
  * Per-request lifecycle (mirror of `VfsRpcHost`):
  *   readDir(path)                  → `vfs-read-dir`   → `vfs-read-dir-result`
  *   readFile(path, opts?)          → `vfs-read-file`  → `vfs-read-file-result`
+ *   readFileRange(path, a, b)      → `vfs-read-file` with `{start,end}` (binary)
  *   stat(path)                     → `vfs-stat`       → `vfs-stat-result`
  *   writeFile(path, data, opts?)   → `vfs-write-file` → `vfs-write-file-result`
  *                                    Binary writes carry the underlying
@@ -222,6 +223,19 @@ class RemoteWritableVfsClient implements RemoteWritableVfsClientHandle {
     const encoding = options?.encoding ?? 'utf-8';
     const req: VfsReadFileRequestMsg = { type: 'vfs-read-file', requestId, path, encoding };
     return this.request<string | Uint8Array>(requestId, 'vfs-read-file-result', path, req);
+  }
+
+  readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    const requestId = this.genId();
+    const req: VfsReadFileRequestMsg = {
+      type: 'vfs-read-file',
+      requestId,
+      path,
+      encoding: 'binary',
+      start,
+      end,
+    };
+    return this.request<Uint8Array>(requestId, 'vfs-read-file-result', path, req);
   }
 
   stat(path: string): Promise<Stats> {

@@ -282,6 +282,21 @@ describe('WritableVfsClient — write round-trip over MessageChannel', () => {
     ctx.stop();
   });
 
+  it('readFileRange round-trips a window without a whole-file read (#2857)', async () => {
+    const ctx = setupRoundTrip();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    ctx.read.client.readFileRange = readFileRange;
+    expect(ctx.client.readFileRange).toBeDefined();
+    const result = await ctx.client.readFileRange!('/clip.mp4', 1, 4);
+    expect(Array.from(result)).toEqual([2, 3, 4]);
+    expect(readFileRange).toHaveBeenCalledWith('/clip.mp4', 1, 4);
+    expect(ctx.read.readFile).not.toHaveBeenCalled();
+    ctx.stop();
+  });
+
   it('dispose() rejects in-flight writes with EBADF', async () => {
     const ctx = setupRoundTrip();
     // Block the backend so the request hangs in-flight.

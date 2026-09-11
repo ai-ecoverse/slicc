@@ -17,6 +17,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  byteWindowFromRangeHeader,
   getMimeType,
   handlePreviewRequest,
   isSliccAppPath,
@@ -28,7 +29,7 @@ import {
 } from '../../src/ui/preview-sw-handler.js';
 
 type ResponderReply =
-  | { content: string | Uint8Array }
+  | { content: string | Uint8Array; size?: number }
   | { error: string }
   | { drop: true } /* never reply — to exercise the timeout branch */;
 
@@ -38,13 +39,27 @@ type ResponderReply =
  */
 class FakeChannel implements PreviewChannel {
   private listeners = new Set<(ev: MessageEvent) => void>();
-  reads: Array<{ path: string; asText: boolean }> = [];
+  reads: Array<{ path: string; asText: boolean; start?: number; end?: number }> = [];
   reply: (path: string) => ResponderReply = () => ({ error: 'ENOENT: no such file' });
 
   postMessage(data: unknown): void {
-    const msg = data as { type?: string; id?: string; path?: string; asText?: boolean } | undefined;
+    const msg = data as
+      | {
+          type?: string;
+          id?: string;
+          path?: string;
+          asText?: boolean;
+          start?: number;
+          end?: number;
+        }
+      | undefined;
     if (msg?.type !== 'preview-vfs-read' || !msg.id || !msg.path) return;
-    this.reads.push({ path: msg.path, asText: !!msg.asText });
+    this.reads.push({
+      path: msg.path,
+      asText: !!msg.asText,
+      ...(typeof msg.start === 'number' ? { start: msg.start } : {}),
+      ...(typeof msg.end === 'number' ? { end: msg.end } : {}),
+    });
     const out = this.reply(msg.path);
     if ('drop' in out) return;
     queueMicrotask(() => {
@@ -472,5 +487,42 @@ describe('handlePreviewRequest range support', () => {
     const ch = new FakeChannel();
     const r = await handlePreviewRequest(ch, '/missing.mp4', undefined, 'bytes=0-9');
     expect(r.status).toBe(404);
+  });
+
+  it('asks the responder for only the ranged window, not the whole file (#2857)', async () => {
+    const ch = videoChannel();
+    const r = await handlePreviewRequest(ch, '/shared/cut.mp4', undefined, 'bytes=0-99');
+    expect(r.status).toBe(206);
+    expect((await r.arrayBuffer()).byteLength).toBe(100);
+    expect(ch.reads).toEqual([{ path: '/shared/cut.mp4', asText: false, start: 0, end: 100 }]);
+  });
+
+  it('does not re-slice a responder that already returned the window plus entity size', async () => {
+    const ch = new FakeChannel();
+    const slice = bytes.subarray(10, 20);
+    ch.reply = () => ({ content: slice, size: bytes.byteLength });
+    const r = await handlePreviewRequest(ch, '/shared/cut.mp4', undefined, 'bytes=10-19');
+    expect(r.status).toBe(206);
+    expect(r.headers.get('Content-Range')).toBe('bytes 10-19/1000');
+    expect(Array.from(new Uint8Array(await r.arrayBuffer()))).toEqual(Array.from(slice));
+  });
+});
+
+describe('byteWindowFromRangeHeader', () => {
+  it('maps a closed range onto a half-open window', () => {
+    expect(byteWindowFromRangeHeader('bytes=10-19')).toEqual({ start: 10, end: 20 });
+  });
+
+  it('maps an open-ended range onto a start-only window', () => {
+    expect(byteWindowFromRangeHeader('bytes=990-')).toEqual({ start: 990 });
+  });
+
+  it('leaves a suffix range unresolved (needs entity size)', () => {
+    expect(byteWindowFromRangeHeader('bytes=-100')).toBeUndefined();
+  });
+
+  it('returns undefined for absent or unparseable headers', () => {
+    expect(byteWindowFromRangeHeader(null)).toBeUndefined();
+    expect(byteWindowFromRangeHeader('bytes=a-b')).toBeUndefined();
   });
 });

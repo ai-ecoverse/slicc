@@ -11,6 +11,7 @@
  * Per-request lifecycle (mirror of `VfsRpcHost`):
  *   readDir(path)            → `vfs-read-dir`  → `vfs-read-dir-result`
  *   readFile(path, opts?)    → `vfs-read-file` → `vfs-read-file-result`
+ *   readFileRange(path, a, b)→ `vfs-read-file` with `{start,end}` (binary)
  *   stat(path)               → `vfs-stat`      → `vfs-stat-result`
  *   watch(basePaths, cb)     → `vfs-watch`     → `vfs-watch-result` ack,
  *                              then a `vfs-watch-event` push per change
@@ -93,6 +94,13 @@ export interface RemoteVfsClientHandle extends LocalVfsClient {
     basePaths: readonly string[],
     callback: (events: FsChangeEvent[]) => void
   ): Promise<() => void>;
+  /**
+   * Always present here: the windowed `vfs-read-file` is part of this
+   * client's wire, so a `/preview/*` Range never has to wait on an
+   * optional method (#2857). An older host that ignores `start`/`end`
+   * still answers with the whole file.
+   */
+  readFileRange(path: string, start: number, end: number): Promise<Uint8Array>;
   /** Tear down the transport subscription. Pending requests reject. */
   dispose(): void;
 }
@@ -214,6 +222,19 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
     const encoding = options?.encoding ?? 'utf-8';
     const req: VfsReadFileRequestMsg = { type: 'vfs-read-file', requestId, path, encoding };
     return this.request<string | Uint8Array>(requestId, 'vfs-read-file-result', path, req);
+  }
+
+  readFileRange(path: string, start: number, end: number): Promise<Uint8Array> {
+    const requestId = this.genId();
+    const req: VfsReadFileRequestMsg = {
+      type: 'vfs-read-file',
+      requestId,
+      path,
+      encoding: 'binary',
+      start,
+      end,
+    };
+    return this.request<Uint8Array>(requestId, 'vfs-read-file-result', path, req);
   }
 
   stat(path: string): Promise<Stats> {

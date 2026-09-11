@@ -74,6 +74,9 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - `getNativeFile` is part of the VFS read surface: `RestrictedFS` gates it like `readFile`
   (answering `null`, the caller's fallback read raises the sandbox ENOENT), `sudo-fs` lists it in
   `READ_ASYNC`, and `VfsAdapter` exposes it beyond just-bash's `IFileSystem` for duck-typing.
+  `VirtualFS.readFileRange` prefers that lazy `File` (then `File.slice`) for OPFS-backed and
+  FSA-picker paths so a `/preview/*` `Range` on `/shared/*.mp4` does not whole-file-read first
+  (#2857). Hostfs/S3/DA/AEM/memory backends still return `null` and fall back to read-and-slice.
 
 ## Git
 

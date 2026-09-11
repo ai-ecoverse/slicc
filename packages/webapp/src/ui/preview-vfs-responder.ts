@@ -11,8 +11,9 @@
  * The reader is held by reference (`getReader()`) so the caller can
  * swap from the page-side `localFs` to a kernel-RPC-backed
  * `RemoteVfsClient` once the worker is up and the `slicc_opfs_vfs`
- * flag is on. The wire contract with `preview-sw.ts` is unchanged —
- * same envelope shape, same `asText` boolean.
+ * flag is on. The wire contract with `preview-sw.ts` is additive:
+ * optional `start`/`end` on the read, optional `size` on a binary
+ * response. Older peers ignore the extras.
  */
 
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
@@ -25,6 +26,14 @@ export interface PreviewVfsReadRequest {
   path: string;
   /** `true` → utf-8 string; `false` → binary `Uint8Array`. */
   asText: boolean;
+  /**
+   * Optional half-open byte window `[start, end)`. Binary reads only;
+   * text stays whole-file. An older responder that ignores these fields
+   * returns the whole file and the SW slices — today's behaviour.
+   * `end` omitted means "to EOF".
+   */
+  start?: number;
+  end?: number;
 }
 
 /** Panel outbound: response branches mirror the SW's expectations. */
@@ -43,7 +52,7 @@ export type PreviewVfsResponse =
    * that predate the signal simply never restart — same behavior as before.
    */
   | { type: 'preview-vfs-start'; id: string }
-  | { type: 'preview-vfs-response'; id: string; content: string | Uint8Array }
+  | { type: 'preview-vfs-response'; id: string; content: string | Uint8Array; size?: number }
   | { type: 'preview-vfs-response'; id: string; error: string };
 
 /**
@@ -90,7 +99,13 @@ export function installPreviewVfsResponder(
 ): PreviewVfsResponderHandle {
   const { channel, getReader, logger } = opts;
 
-  async function respond(id: string, path: string, asText: boolean): Promise<void> {
+  async function respond(
+    id: string,
+    path: string,
+    asText: boolean,
+    start?: number,
+    end?: number
+  ): Promise<void> {
     try {
       const reader = getReader();
       // ZenFS' readFile does not throw EISDIR on a directory — it returns
@@ -109,12 +124,23 @@ export function installPreviewVfsResponder(
         } satisfies PreviewVfsResponse);
         return;
       }
+      if (!asText && Number.isInteger(start)) {
+        const content = await readBinaryWindow(reader, path, start as number, end, stats.size);
+        channel.postMessage({
+          type: 'preview-vfs-response',
+          id,
+          content,
+          size: stats.size,
+        } satisfies PreviewVfsResponse);
+        return;
+      }
       const encoding = asText ? 'utf-8' : 'binary';
       const content = await reader.readFile(path, { encoding });
       channel.postMessage({
         type: 'preview-vfs-response',
         id,
         content,
+        ...(asText ? {} : { size: stats.size }),
       } satisfies PreviewVfsResponse);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -146,7 +172,7 @@ export function installPreviewVfsResponder(
   const listener = (event: MessageEvent): void => {
     const data = event.data as PreviewVfsReadRequest | undefined;
     if (data?.type !== 'preview-vfs-read') return;
-    const { id, path, asText } = data;
+    const { id, path, asText, start, end } = data;
     // Ack on receipt (synchronously, before queueing) so the SW halts its
     // cold-start re-post loop before this (potentially multi-MB) read
     // begins; without it a slow read would be re-requested and duplicated.
@@ -157,7 +183,7 @@ export function installPreviewVfsResponder(
       // Signal dequeue-time so the requester's timeout measures the read
       // itself, not its wait in the backlog.
       channel.postMessage({ type: 'preview-vfs-start', id } satisfies PreviewVfsResponse);
-      return respond(id, path, asText);
+      return respond(id, path, asText, start, end);
     };
     queue = queue.then(dequeue, dequeue);
   };
@@ -165,4 +191,31 @@ export function installPreviewVfsResponder(
   return {
     dispose: () => channel.removeEventListener('message', listener),
   };
+}
+
+/**
+ * Half-open `[start, end)` of a binary preview read. Prefers
+ * `readFileRange` so OPFS-backed media is not pulled in whole (#2857);
+ * falls back to read-and-slice for a reader that has no ranged method.
+ */
+async function readBinaryWindow(
+  reader: LocalVfsClient,
+  path: string,
+  start: number,
+  end: number | undefined,
+  size: number
+): Promise<Uint8Array> {
+  // Half-open `[start, to)`. A window at or past EOF (open-ended
+  // `bytes=2000-` on a 1000-byte file, a reversed closed range) must not
+  // reach `readFileRange` — that API rejects `end < start` with EINVAL,
+  // which the SW would turn into 500. Empty + `size` on the response lets
+  // `parseByteRange` answer 416 instead (#2857).
+  const to = Math.min(end ?? size, size);
+  if (start >= size || start >= to) return new Uint8Array(0);
+  if (reader.readFileRange) {
+    return reader.readFileRange(path, start, to);
+  }
+  const whole = await reader.readFile(path, { encoding: 'binary' });
+  if (!(whole instanceof Uint8Array)) return new Uint8Array(0);
+  return new Uint8Array(whole.subarray(start, Math.min(to, whole.byteLength)));
 }

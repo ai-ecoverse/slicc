@@ -133,6 +133,7 @@ describe('installPreviewVfsResponder', () => {
     const vfs = makeStubVfs();
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
     vfs.readFile.mockResolvedValue(bytes);
+    vfs.stat.mockResolvedValue({ type: 'file', size: bytes.byteLength, mtime: 0, ctime: 0 });
     installPreviewVfsResponder({ channel: ch, getReader: () => vfs.client });
 
     ch.emit({ type: 'preview-vfs-read', id: 'p2', path: '/preview/logo.png', asText: false });
@@ -141,7 +142,79 @@ describe('installPreviewVfsResponder', () => {
     expect(vfs.readFile).toHaveBeenCalledWith('/preview/logo.png', { encoding: 'binary' });
     const resp = responsesOf(ch)[0] as PreviewVfsResponse;
     expect('content' in resp).toBe(true);
-    if ('content' in resp) expect(resp.content).toBeInstanceOf(Uint8Array);
+    if ('content' in resp) {
+      expect(resp.content).toBeInstanceOf(Uint8Array);
+      expect(resp.size).toBe(4);
+    }
+  });
+
+  it('a ranged binary read uses readFileRange and does not call readFile (#2857)', async () => {
+    const ch = new FakeChannel();
+    const bytes = new Uint8Array([10, 20, 30, 40, 50]);
+    const readFile = vi.fn(async () => bytes);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    const stat = vi.fn(
+      async (): Promise<Stats> => ({ type: 'file', size: bytes.byteLength, mtime: 0, ctime: 0 })
+    );
+    const client: LocalVfsClient = {
+      readDir: vi.fn(async () => []),
+      readFile,
+      readFileRange,
+      stat,
+    };
+    installPreviewVfsResponder({ channel: ch, getReader: () => client });
+
+    ch.emit({
+      type: 'preview-vfs-read',
+      id: 'r1',
+      path: '/shared/cut.mp4',
+      asText: false,
+      start: 1,
+      end: 4,
+    });
+    await tick();
+
+    expect(readFileRange).toHaveBeenCalledWith('/shared/cut.mp4', 1, 4);
+    expect(readFile).not.toHaveBeenCalled();
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
+    expect('content' in resp && Array.from(resp.content as Uint8Array)).toEqual([20, 30, 40]);
+    expect('content' in resp && resp.size).toBe(5);
+  });
+
+  it('does not call readFileRange for a window at or past EOF (416, not EINVAL)', async () => {
+    const ch = new FakeChannel();
+    const bytes = new Uint8Array([10, 20, 30, 40, 50]);
+    const readFile = vi.fn(async () => bytes);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      bytes.subarray(start, end)
+    );
+    const stat = vi.fn(
+      async (): Promise<Stats> => ({ type: 'file', size: bytes.byteLength, mtime: 0, ctime: 0 })
+    );
+    const client: LocalVfsClient = {
+      readDir: vi.fn(async () => []),
+      readFile,
+      readFileRange,
+      stat,
+    };
+    installPreviewVfsResponder({ channel: ch, getReader: () => client });
+
+    ch.emit({
+      type: 'preview-vfs-read',
+      id: 'r2',
+      path: '/shared/cut.mp4',
+      asText: false,
+      start: 2000,
+    });
+    await tick();
+
+    expect(readFileRange).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
+    expect('content' in resp && (resp.content as Uint8Array).byteLength).toBe(0);
+    expect('content' in resp && resp.size).toBe(5);
   });
 
   it('non-ENOENT errors are logged and round-trip as { error }', async () => {
@@ -332,6 +405,29 @@ describe('installPreviewVfsResponder', () => {
     const bin = responsesOf(ch)[1] as PreviewVfsResponse;
     expect(worker.readFile).toHaveBeenLastCalledWith('/preview/a.png', { encoding: 'binary' });
     expect('content' in bin && bin.content).toBeInstanceOf(Uint8Array);
+
+    const allBytes = new Uint8Array([9, 8, 7, 6, 5]);
+    const readFileRange = vi.fn(async (_p: string, start: number, end: number) =>
+      allBytes.subarray(start, end)
+    );
+    worker.client.readFileRange = readFileRange;
+    worker.stat.mockResolvedValue({ type: 'file', size: allBytes.byteLength, mtime: 0, ctime: 0 });
+    worker.readFile.mockClear();
+    ch.emit({
+      type: 'preview-vfs-read',
+      id: 't3',
+      path: '/preview/a.mp4',
+      asText: false,
+      start: 1,
+      end: 3,
+    });
+    await tick(20);
+
+    const ranged = responsesOf(ch)[2] as PreviewVfsResponse;
+    expect(readFileRange).toHaveBeenCalledWith('/preview/a.mp4', 1, 3);
+    expect(worker.readFile).not.toHaveBeenCalled();
+    expect('content' in ranged && Array.from(ranged.content as Uint8Array)).toEqual([8, 7]);
+    expect('content' in ranged && ranged.size).toBe(5);
 
     remoteVfs.dispose();
     host.stop();
