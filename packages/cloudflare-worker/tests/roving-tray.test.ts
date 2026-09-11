@@ -1,20 +1,25 @@
 /**
- * Roving-tray characterization matrix (issue #2812 groundwork).
+ * Roving-tray characterization matrix (issue #2812).
  *
  * A tray is an INSTANCE — one SessionTrayDurableObject addressed by
- * `idFromName(trayId)` — but every capability the hub hands out bakes that
- * instance id into a long-lived string (`createCapabilityToken` produces
- * `<trayId>.<secret>` for every token family). When the tray "roves" (the
- * leader abandons it for a fresh one, or it expires), every external holder
- * of such a string is pointing at a dead object.
+ * `idFromName(trayId)`. This suite drives that DO directly to pin the behavior
+ * of each tray-anchored surface across every rove shape.
  *
- * This suite pins TODAY's behavior for every tray-anchored reference across
- * every rove shape, so the eventual fix (#2812: stable per-cone addressing)
- * is written against an executable statement of the status quo rather than
- * a prose one. Rows marked `HOLE:` document behavior we believe is wrong;
- * they assert what the code DOES, not what it should do.
+ * ## What this covers vs. what moved on
  *
- * The matrix:
+ * The WEBHOOK surface no longer anchors on the tray: #2812 put a stable
+ * cone-scoped address (`/wh/<coneId>.<secret>`) in front of it via the
+ * `WebhookHomeDurableObject`, so a rove is INVISIBLE to an external sender.
+ * That path is covered by `webhook-home.test.ts` (the DO) and the
+ * `index.test.ts` "survives a rove invisibly" test (end to end). The webhook
+ * rows BELOW pin the LEGACY tray-scoped surface (`/webhook/<trayId>...`), which
+ * is retained only so an already-cached legacy URL keeps working via its 308
+ * migration path — that behavior is unchanged and still worth guarding.
+ *
+ * The JOIN surface still anchors on the tray (followers are SLICC clients that
+ * persist the replacement), so its 308 supersede path is the live contract.
+ *
+ * The matrix (tray DO surfaces):
  *
  * | surface \ rove         | superseded (forwarding left) | expired (none left)  |
  * |------------------------|------------------------------|----------------------|
@@ -22,18 +27,22 @@
  * | join, ?redirect=manual | 409 + successor-version link | 410 TRAY_EXPIRED     |
  * | join, biscotto seat    | 410 TRAY_SUPERSEDED, no URL  | 410 TRAY_EXPIRED     |
  * | join, invalid token    | 403 (no redirect leaked)     | 403                  |
- * | webhook, valid token   | 308 → new webhook URL        | 410, delivery lost   |
- * | webhook, no fwd URL    | 410 NO_LIVE_LEADER, lost     | 410, delivery lost   |
- * | webhook, invalid token | 403 (no redirect leaked)     | 403                  |
+ * | webhook (legacy) valid | 308 → new webhook URL        | 410, delivery lost   |
+ * | webhook (legacy) no fwd| 410 NO_LIVE_LEADER, lost     | 410, delivery lost   |
+ * | webhook (legacy) bad   | 403 (no redirect leaked)     | 403                  |
  * | live preview URL       | HOLE: no forwarding surface  | 404 (resolve = null) |
  * | supersede after expiry | n/a                          | accepted (recovery)  |
  *
+ * The `live preview URL` HOLE remains — previews are a separate surface with
+ * its own token family and no forwarding indirection; out of scope for #2812
+ * and tracked for follow-up.
+ *
  * Not in the matrix because they are structural rather than behavioral:
- * push registrations (`TrayRecord.pushTokens`) and biscotto seats die with
- * the tray record itself — nothing carries them to the replacement — and
- * redirect chains never flatten server-side (pinned below), so a sender that
- * crosses more roves than the client-side hop cap (`MAX_SUPERSEDE_REDIRECTS`
- * = 5 in `tray-webrtc.ts`) dead-ends even though every hop still answers.
+ * push registrations (`TrayRecord.pushTokens`) die with the tray record, and
+ * legacy redirect chains never flatten server-side (pinned below), so a sender
+ * on a legacy URL that crosses more roves than the client-side hop cap
+ * (`MAX_SUPERSEDE_REDIRECTS` = 5 in `tray-webrtc.ts`) dead-ends — another
+ * reason the stable cone address supersedes the legacy shape.
  */
 import { describe, expect, it } from 'vitest';
 import { SessionTrayDurableObject } from '../src/session-tray.js';

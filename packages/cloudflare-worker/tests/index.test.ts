@@ -23,6 +23,7 @@ import {
   wantsJSON,
 } from '../src/shared.js';
 import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
+import { WebhookHomeDurableObject } from '../src/webhook-home.js';
 import {
   createFakeWebSocketPair,
   FakeDurableObjectState,
@@ -85,6 +86,53 @@ class FakeNamespace {
   }
 }
 
+/**
+ * A namespace of real WebhookHomeDurableObject instances (#2812), sharing the
+ * tray namespace so a home can confirm-controller and internal-forward against
+ * the same fake trays the rest of the harness drives.
+ */
+class FakeHomeNamespace {
+  private readonly instances = new Map<string, WebhookHomeDurableObject>();
+
+  constructor(
+    private readonly now: () => number,
+    private readonly trayNamespace: FakeNamespace
+  ) {}
+
+  idFromName(name: string): DurableObjectIdLike {
+    return new FakeDurableObjectId(name);
+  }
+
+  get(id: DurableObjectIdLike): {
+    fetch: (input: Request | string | URL, init?: RequestInit) => Promise<Response>;
+  } {
+    const key = id.toString();
+    let instance = this.instances.get(key);
+    if (!instance) {
+      const state = new FakeDurableObjectState();
+      instance = new WebhookHomeDurableObject(
+        state,
+        {
+          TRAY_HUB: this.trayNamespace as unknown as {
+            idFromName(n: string): { toString(): string };
+            get(i: { toString(): string }): {
+              fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
+            };
+          },
+        },
+        { now: this.now }
+      );
+      this.instances.set(key, instance);
+    }
+    return {
+      fetch: (input: Request | string | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(String(input), init);
+        return instance.fetch(request);
+      },
+    };
+  }
+}
+
 const MOCK_HTML = '<html><body>SPA</body></html>';
 const fakeAssets = {
   fetch: async (_req: Request) =>
@@ -109,9 +157,11 @@ function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
+  const homeNamespace = new FakeHomeNamespace(() => now, namespace);
   return {
     env: makeEnv({
       TRAY_HUB: namespace,
+      WEBHOOK_HOMES: homeNamespace as unknown as WorkerEnv['WEBHOOK_HOMES'],
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
     }),
@@ -134,15 +184,21 @@ describe('tray worker skeleton', () => {
 
     const body = (await response.json()) as {
       trayId: string;
+      coneId: string;
       capabilities: {
         join: { url: string };
         controller: { url: string };
-        webhook: { url: string };
+        webhook: { url: string; rebindToken?: string };
       };
     };
     expect(body.capabilities.join.url).toContain(`/join/${body.trayId}.`);
     expect(body.capabilities.controller.url).toContain(`/controller/${body.trayId}.`);
-    expect(body.capabilities.webhook.url).toContain(`/webhook/${body.trayId}.`);
+    // The webhook capability is the STABLE cone-scoped shape (#2812): the URL
+    // names the CONE, not the tray instance, so it survives a rove.
+    expect(body.coneId).toBeTruthy();
+    expect(body.capabilities.webhook.url).toContain(`/wh/${body.coneId}.`);
+    expect(body.capabilities.webhook.url).not.toContain(`/wh/${body.trayId}.`);
+    expect(body.capabilities.webhook.rebindToken).toContain(`${body.coneId}.`);
 
     for (const legacyPath of ['/session', '/trays']) {
       const legacy = await handleWorkerRequest(
@@ -1335,6 +1391,7 @@ describe('tray worker skeleton', () => {
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'POST /wh/:token/:webhookId',
         'POST /api/tray/:trayId/preview',
         'PUT /api/tray/:trayId/preview/:previewToken/file',
         'POST /api/tray/:trayId/preview/:previewToken/finalize',
@@ -1945,9 +2002,15 @@ describe('POST /api/tray/:trayId/supersede', () => {
     };
   }
 
-  it('redirects a webhook delivery to the replacement tray with a 308 (#1957)', async () => {
-    const { env } = createTestHarness();
-    const { trayId, controllerToken, webhookUrl } = await setupTrayWithWebhook(env);
+  it('redirects a LEGACY tray-scoped webhook delivery to the replacement with a 308 (#1957)', async () => {
+    // The stable `/wh/<coneId>` shape (#2812) never needs this redirect — the
+    // home forwards it — but an already-cached LEGACY `/webhook/<trayId>` URL
+    // still gets the 308 migration path. Build that legacy URL from the tray's
+    // stored webhook token, since `POST /tray` now hands out the stable shape.
+    const { env, readTray } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithWebhook(env);
+    const tray = await readTray(trayId);
+    const webhookUrl = `https://www.sliccy.ai/webhook/${tray!.webhookToken}`;
     const freshWebhookUrl = 'https://www.sliccy.ai/webhook/fresh-tray.deadbeef';
 
     const supersede = await handleWorkerRequest(
@@ -1982,6 +2045,97 @@ describe('POST /api/tray/:trayId/supersede', () => {
     expect(delivery.status).toBe(308);
     expect(delivery.headers.get('Location')).toBe(`${freshWebhookUrl}/h3-render-done`);
     await expect(delivery.json()).resolves.toMatchObject({ code: 'TRAY_SUPERSEDED' });
+  });
+
+  it('a stable cone webhook URL survives a rove invisibly (#2812)', async () => {
+    // The payoff: register on tray A, rove to tray B by re-creating with the
+    // SAME cone identity, and prove the ORIGINAL /wh/ URL now delivers to B
+    // with NO redirect and NO capability in any response header. This is what
+    // the tray-scoped 308 could only approximate.
+    const { env } = createTestHarness();
+
+    // Attach a leader and open its control socket so a delivery can be relayed.
+    const connectLeaderFor = async (controllerUrl: string, controllerId: string): Promise<void> => {
+      const attach = await handleWorkerRequest(
+        new Request(controllerUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ controllerId }),
+        }),
+        env
+      );
+      const leader = (await attach.json()) as { websocket: { url: string } };
+      await handleWorkerRequest(
+        new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+        env
+      );
+    };
+
+    // Tray A + live leader.
+    const createdA = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const a = (await createdA.json()) as {
+      trayId: string;
+      coneId: string;
+      capabilities: {
+        controller: { url: string };
+        webhook: { url: string; rebindToken: string };
+      };
+    };
+    await connectLeaderFor(a.capabilities.controller.url, 'lead-a');
+    const stableUrl = a.capabilities.webhook.url;
+
+    // A delivery reaches tray A.
+    const toA = await handleWorkerRequest(
+      new Request(`${stableUrl}/wh-render`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ event: 'a' }),
+      }),
+      env
+    );
+    expect(toA.status).toBe(202);
+
+    // Rove: re-create carrying the SAME cone identity (what the leader sends on
+    // reset). The worker rebinds the home to the fresh tray B.
+    const coneSecret = new URL(stableUrl).pathname.split('/').pop()!.split('.')[1];
+    const rebindSecret = a.capabilities.webhook.rebindToken.split('.')[1];
+    const createdB = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ coneId: a.coneId, coneSecret, rebindSecret }),
+      }),
+      env
+    );
+    const b = (await createdB.json()) as {
+      trayId: string;
+      coneId: string;
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
+    expect(b.trayId).not.toBe(a.trayId);
+    expect(b.coneId).toBe(a.coneId);
+    // The stable URL is byte-for-byte identical across the rove.
+    expect(b.capabilities.webhook.url).toBe(stableUrl);
+    await connectLeaderFor(b.capabilities.controller.url, 'lead-b');
+
+    // The ORIGINAL URL now delivers to tray B — no redirect, no Location.
+    const toB = await handleWorkerRequest(
+      new Request(`${stableUrl}/wh-render`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ event: 'b' }),
+      }),
+      env
+    );
+    expect(toB.status).toBe(202);
+    expect(toB.headers.get('Location')).toBeNull();
+    const body = await toB.text();
+    // No capability of either tray leaks into the delivery response.
+    expect(body).not.toContain(a.trayId);
+    expect(body).not.toContain(b.trayId);
   });
 
   it('rejects a supersede whose webhookUrl is not an absolute URL', async () => {

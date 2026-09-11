@@ -92,6 +92,10 @@
       {
         "name": "CLOUD_SESSIONS",
         "class_name": "CloudSessionsDurableObject"
+      },
+      {
+        "name": "WEBHOOK_HOMES",
+        "class_name": "WebhookHomeDurableObject"
       }
     ]
   },
@@ -103,6 +107,10 @@
     {
       "tag": "v2-cloud-sessions",
       "new_classes": ["CloudSessionsDurableObject"]
+    },
+    {
+      "tag": "v3-webhook-homes",
+      "new_sqlite_classes": ["WebhookHomeDurableObject"]
     }
   ],
   "env": {
@@ -172,6 +180,10 @@
           {
             "name": "CLOUD_SESSIONS",
             "class_name": "CloudSessionsDurableObject"
+          },
+          {
+            "name": "WEBHOOK_HOMES",
+            "class_name": "WebhookHomeDurableObject"
           }
         ]
       }

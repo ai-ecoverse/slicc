@@ -351,12 +351,45 @@ export class SessionTrayDurableObject {
     if (url.pathname === '/internal/supersede' && request.method === 'POST') {
       return this.handleSupersede(request);
     }
+    // Called by a WebhookHome DO to confirm this tray's controller before it
+    // rebinds a cone's stable webhook address here (#2812). The second factor
+    // in the rebind gate: proves the caller actually leads this tray.
+    if (url.pathname === '/internal/confirm-controller' && request.method === 'POST') {
+      return this.handleConfirmController(request);
+    }
+    // Internal webhook delivery forwarded by a WebhookHome DO after it verified
+    // the cone-scoped delivery secret (#2812). Runs the same relay a public
+    // delivery runs, minus the public token check — the home already
+    // authenticated, and this route is reachable only through the DO stub.
+    const internalWebhookMatch = url.pathname.match(/^\/internal\/webhook\/([^/]+)$/);
+    if (internalWebhookMatch && request.method === 'POST') {
+      return this.webhooks.handleInternal(decodeURIComponent(internalWebhookMatch[1]!), request);
+    }
     if (url.pathname.startsWith('/internal/biscotto/')) {
       return dispatchBiscottoRoute(url, request, this.biscottoDeps(), (id) =>
         this.announceBiscottoRevocation(id)
       );
     }
     return null;
+  }
+
+  /**
+   * Confirm that the presented controller token matches this tray's, for a
+   * WebhookHome rebind. Answers `{ confirmed: boolean }` — never leaks whether
+   * the tray exists (a missing tray and a wrong token both answer
+   * `{ confirmed: false }`), so a caller learns nothing beyond "you do not
+   * control this tray".
+   */
+  private async handleConfirmController(request: Request): Promise<Response> {
+    let body: { controllerToken?: string };
+    try {
+      body = (await request.json()) as { controllerToken?: string };
+    } catch {
+      return jsonResponse({ confirmed: false }, 200);
+    }
+    const token = body.controllerToken ?? '';
+    const confirmed = this.tray ? this.matchesToken(token, this.tray.controllerToken) : false;
+    return jsonResponse({ confirmed }, 200);
   }
 
   // ──────────────────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ describeIfConfigured('deployed tray worker', () => {
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'POST /wh/:token/:webhookId',
         'POST /api/tray/:trayId/preview',
         'PUT /api/tray/:trayId/preview/:previewToken/file',
         'POST /api/tray/:trayId/preview/:previewToken/finalize',

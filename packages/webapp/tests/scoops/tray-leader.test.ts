@@ -5,6 +5,7 @@ import {
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
+  parseConeWebhookIdentity,
   parseLeaderTraySession,
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
@@ -1789,5 +1790,160 @@ describe('subscribeToLeaderTrayRuntimeStatus', () => {
     unsubscribeBad();
     unsubscribeGood();
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+});
+
+describe('parseConeWebhookIdentity (#2812)', () => {
+  it('recovers coneId, coneSecret and rebindSecret from the stable shape', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/wh/cone-1.deadbeef', 'cone-1.rebindcafe')
+    ).toEqual({ coneId: 'cone-1', coneSecret: 'deadbeef', rebindSecret: 'rebindcafe' });
+  });
+
+  it('returns null for the legacy tray-scoped shape (no rebind token)', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/webhook/tray-1.deadbeef', undefined)
+    ).toBeNull();
+  });
+
+  it('returns null when the rebind token names a different cone', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/wh/cone-1.deadbeef', 'cone-2.rebindcafe')
+    ).toBeNull();
+  });
+
+  it('returns null for a non-/wh/ path even with a rebind token', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/webhook/cone-1.deadbeef', 'cone-1.reb')
+    ).toBeNull();
+  });
+});
+
+describe('cone identity carry across a rove (#2812)', () => {
+  /** Build a create response for a stable-webhook tray. */
+  function stableCreate(trayId: string, coneId: string): string {
+    return JSON.stringify({
+      trayId,
+      coneId,
+      createdAt: '2026-03-11T00:00:00.000Z',
+      capabilities: {
+        join: { url: `https://tray.example.com/join/${trayId}.jt` },
+        controller: { url: `https://tray.example.com/controller/${trayId}.ct` },
+        webhook: {
+          url: `https://tray.example.com/wh/${coneId}.sec`,
+          rebindToken: `${coneId}.reb`,
+        },
+      },
+    });
+  }
+
+  function attachOk(trayId: string): string {
+    return JSON.stringify({
+      trayId,
+      controllerId: `controller-${trayId}`,
+      role: 'leader',
+      leaderKey: `key-${trayId}`,
+      websocket: { url: `wss://tray.example.com/controller/${trayId}.ct` },
+    });
+  }
+
+  it('persists the cone identity minted on first start', async () => {
+    const store = new MemorySessionStore();
+    const socket = new FakeWebSocket();
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(stableCreate('tray-1', 'cone-1'), { status: 201 }))
+      .mockResolvedValueOnce(new Response(attachOk('tray-1'), { status: 200 }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await ready;
+    socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+    const session = await startPromise;
+
+    expect(session.coneId).toBe('cone-1');
+    expect(session.coneSecret).toBe('sec');
+    expect(session.rebindSecret).toBe('reb');
+    // The create POST had no body (fresh mint), so the worker minted the identity.
+    expect(fetchImpl.mock.calls[0]?.[1]?.body).toBeUndefined();
+    manager.stop();
+  });
+
+  it('carries the stale tray cone identity into the fresh mint on recovery', async () => {
+    // A stored session with a cone identity fails to attach (stale tray), so the
+    // manager mints a fresh tray — and must send the SAME cone identity so the
+    // worker rebinds the same webhook home rather than minting a new URL.
+    const stored: LeaderTraySession = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'stale-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-stale',
+      controllerUrl: 'https://tray.example.com/controller/stale-tray.ct',
+      joinUrl: 'https://tray.example.com/join/stale-tray.jt',
+      webhookUrl: 'https://tray.example.com/wh/cone-1.sec',
+      runtime: 'slicc-standalone',
+      coneId: 'cone-1',
+      coneSecret: 'sec',
+      rebindSecret: 'reb',
+    };
+    const store = new MemorySessionStore();
+    await store.save(stored);
+
+    const socket = new FakeWebSocket();
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      // 1: attach against the stale controller URL fails 410 (tray gone).
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'TRAY_EXPIRED' }), { status: 410 })
+      )
+      // 2: create a fresh tray, carrying the cone identity.
+      .mockResolvedValueOnce(new Response(stableCreate('tray-2', 'cone-1'), { status: 201 }))
+      // 3: attach the fresh tray.
+      .mockResolvedValueOnce(new Response(attachOk('tray-2'), { status: 200 }))
+      // 4: best-effort supersede of the stale tray.
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await ready;
+    socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+    await startPromise;
+
+    // The 2nd call is the fresh-tray create; its body must carry the identity.
+    const createBody = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
+    expect(createBody).toMatchObject({
+      coneId: 'cone-1',
+      coneSecret: 'sec',
+      rebindSecret: 'reb',
+    });
+    manager.stop();
   });
 });

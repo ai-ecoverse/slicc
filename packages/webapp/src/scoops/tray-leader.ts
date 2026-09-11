@@ -31,11 +31,18 @@ const NOTIFY_SUPERSEDED_TIMEOUT_MS = 10_000;
 
 interface CreateTrayResponse {
   trayId: string;
+  /** Stable cone identity echoed back by the worker (#2812); absent on old hubs. */
+  coneId?: string;
   createdAt: string;
   capabilities: {
     join: { url: string };
     controller: { url: string };
-    webhook: { url: string };
+    /**
+     * The webhook base URL. Stable cone-scoped (`/wh/<coneId>.<secret>`) when
+     * the home bind succeeded, else the legacy tray-scoped `/webhook/...`.
+     * `rebindToken` is present only on the stable shape.
+     */
+    webhook: { url: string; rebindToken?: string };
   };
 }
 
@@ -143,6 +150,57 @@ export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
   }
 }
 
+/** The three cone-identity secrets that travel together across a rove (#2812). */
+interface ConeIdentity {
+  coneId: string;
+  coneSecret: string;
+  rebindSecret: string;
+}
+
+/**
+ * Recover the cone identity from a create response's stable webhook capability.
+ * The URL is `…/wh/<coneId>.<coneSecret>` and the rebind token is
+ * `<coneId>.<rebindSecret>`; returns null for the legacy tray-scoped shape
+ * (no rebind token) or anything that does not parse, so a caller falls back to
+ * the rove-fragile `webhookUrl`.
+ */
+export function parseConeWebhookIdentity(
+  webhookUrl: string,
+  rebindToken: string | undefined
+): ConeIdentity | null {
+  if (!rebindToken) return null;
+  let deliveryToken: string;
+  try {
+    const segments = new URL(webhookUrl).pathname.split('/').filter(Boolean);
+    if (segments.at(-2) !== 'wh') return null;
+    deliveryToken = decodeURIComponent(segments.at(-1) ?? '');
+  } catch {
+    return null;
+  }
+  const dot = deliveryToken.indexOf('.');
+  const rebindDot = rebindToken.indexOf('.');
+  if (dot <= 0 || rebindDot <= 0) return null;
+  const coneId = deliveryToken.slice(0, dot);
+  const coneSecret = deliveryToken.slice(dot + 1);
+  const rebindConeId = rebindToken.slice(0, rebindDot);
+  const rebindSecret = rebindToken.slice(rebindDot + 1);
+  // The rebind token must name the same cone — a mismatch is a malformed reply.
+  if (!coneId || !coneSecret || !rebindSecret || rebindConeId !== coneId) return null;
+  return { coneId, coneSecret, rebindSecret };
+}
+
+/** The carriable cone identity of a session, or null if it has none. */
+function coneIdentityOf(session: LeaderTraySession): ConeIdentity | null {
+  if (session.coneId && session.coneSecret && session.rebindSecret) {
+    return {
+      coneId: session.coneId,
+      coneSecret: session.coneSecret,
+      rebindSecret: session.rebindSecret,
+    };
+  }
+  return null;
+}
+
 export function parseLeaderTraySession(raw: string | null): LeaderTraySession | null {
   if (!raw) return null;
 
@@ -173,6 +231,17 @@ export function parseLeaderTraySession(raw: string | null): LeaderTraySession | 
       leaderWebSocketUrl:
         typeof parsed.leaderWebSocketUrl === 'string' ? parsed.leaderWebSocketUrl : null,
       runtime: parsed.runtime,
+      // Stable cone identity (#2812). All three travel together — a partial set
+      // could not authenticate a rebind, so treat any missing field as absent.
+      ...(typeof parsed.coneId === 'string' &&
+      typeof parsed.coneSecret === 'string' &&
+      typeof parsed.rebindSecret === 'string'
+        ? {
+            coneId: parsed.coneId,
+            coneSecret: parsed.coneSecret,
+            rebindSecret: parsed.rebindSecret,
+          }
+        : {}),
     };
   } catch {
     return null;
@@ -197,6 +266,13 @@ export class LeaderTrayManager {
   private stopped = false;
   private reconnecting = false;
   private reconnectGeneration = 0;
+  /**
+   * Cone identity to hand the NEXT tray mint so the worker rebinds the same
+   * webhook home instead of minting a new one (#2812). Set by the recovery and
+   * reset paths from the tray they are replacing; consumed once by
+   * `createTraySession`.
+   */
+  private carryConeIdentity: ConeIdentity | null = null;
 
   constructor(private readonly options: LeaderTrayManagerOptions) {
     this.store = options.store ?? new IndexedDbLeaderTraySessionStore();
@@ -423,6 +499,17 @@ export class LeaderTrayManager {
     void this.notifyTraySuperseded(oldSession, next.joinUrl, next.webhookUrl);
   }
 
+  /**
+   * Hand the cone identity of a tray being abandoned to the NEXT mint, so the
+   * worker rebinds the same webhook home and a cached webhook URL survives the
+   * rove (#2812). Called by `host reset` (`pageLeaderTray.reset()`) before it
+   * re-`start()`s the manager; the recovery path sets the same field inline.
+   * A no-op when the abandoned session predates the feature.
+   */
+  carryConeIdentityFrom(oldSession: LeaderTraySession): void {
+    this.carryConeIdentity = coneIdentityOf(oldSession);
+  }
+
   sendControlMessage(message: LeaderToWorkerControlMessage): void {
     if (!this.socket) {
       throw new Error('Tray leader WebSocket is not connected');
@@ -443,6 +530,11 @@ export class LeaderTrayManager {
         error: error instanceof Error ? error.message : String(error),
       });
       await this.store.clear();
+      // Carry the stale tray's cone identity into the fresh mint so the worker
+      // rebinds the same webhook home — a cached webhook URL survives the rove
+      // (#2812). Absent on a session minted before the feature; the mint then
+      // gets a fresh identity.
+      this.carryConeIdentity = coneIdentityOf(session);
       const fresh = await this.claimLeaderSession(null);
       // Best-effort, fire-and-forget: point any follower still holding the old
       // join link at the new tray. Never awaited — notifyTraySuperseded already
@@ -532,7 +624,27 @@ export class LeaderTrayManager {
   }
 
   private async createTraySession(): Promise<LeaderTraySession> {
-    const body = this.options.kind ? JSON.stringify({ kind: this.options.kind }) : undefined;
+    // Carry the cone identity from the tray we are replacing (reset / recovery)
+    // so the worker REBINDS the same webhook home rather than minting a new one
+    // — that is what keeps an external service's cached webhook URL alive across
+    // the rove (#2812). Consumed once: cleared so a later independent mint does
+    // not reuse a stale identity.
+    const carry = this.carryConeIdentity;
+    this.carryConeIdentity = null;
+    const bodyObject: {
+      kind?: TrayKind;
+      coneId?: string;
+      coneSecret?: string;
+      rebindSecret?: string;
+    } = {};
+    if (this.options.kind) bodyObject.kind = this.options.kind;
+    if (carry) {
+      bodyObject.coneId = carry.coneId;
+      bodyObject.coneSecret = carry.coneSecret;
+      bodyObject.rebindSecret = carry.rebindSecret;
+    }
+    const hasBody = Object.keys(bodyObject).length > 0;
+    const body = hasBody ? JSON.stringify(bodyObject) : undefined;
     const created = await this.fetchJson<CreateTrayResponse>(
       buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
       {
@@ -540,6 +652,15 @@ export class LeaderTrayManager {
         ...(body ? { headers: { 'content-type': 'application/json' } } : {}),
         ...(body ? { body } : {}),
       }
+    );
+
+    // The worker echoes the cone identity: on a fresh mint it minted one for us;
+    // on a carry it returned ours unchanged. Persist all three so the next rove
+    // can rebind. A legacy hub returns the tray-scoped webhook shape with no
+    // rebind token, and the session simply carries no cone identity.
+    const coneIdentity = parseConeWebhookIdentity(
+      created.capabilities.webhook.url,
+      created.capabilities.webhook.rebindToken
     );
 
     return {
@@ -551,6 +672,7 @@ export class LeaderTrayManager {
       joinUrl: created.capabilities.join.url,
       webhookUrl: created.capabilities.webhook.url,
       runtime: this.options.runtime,
+      ...(coneIdentity ?? {}),
     };
   }
 

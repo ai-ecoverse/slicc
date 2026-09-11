@@ -10,6 +10,8 @@ webapp as static assets. Deep reference:
 - `src/index.ts` — entry + public HTTP routing
 - `src/session-tray.ts` — `SessionTrayDurableObject`: controller WS (leader), follower
   WebRTC signaling, preview bridge WS
+- `src/webhook-home.ts` — `WebhookHomeDurableObject`: stable cone-scoped webhook
+  indirection (#2812); keyed by `coneId`, resolves to the current tray, forwards deliveries
 - `src/turn-credentials.ts` — TURN fetcher
 - `src/shared.ts` — capability tokens; `reclaimMsForTray`;
   `TRAY_RECLAIM_TTL_MS`/`HOSTED_TRAY_RECLAIM_TTL_MS`
@@ -72,10 +74,29 @@ tray. The `FollowerAttachResult` union carries a `TRAY_SUPERSEDED` `fail` varian
 `joinUrl` for exactly this case; iOS/Go model the successor as optional and treat its
 absence as terminal, so no follower change is needed.
 
-**Adding a capability that hands out a URL means storing its replacement on supersede.**
-`supersededByJoinUrl` and `supersededByWebhookUrl` are separate (neither token derives from
-the other; the webhook URL is cached externally for a long job). Ordering, `json=true`
-convention: [docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+**The webhook surface no longer supersedes — it is cone-stable (#2812).** A webhook URL is
+`/wh/<coneId>.<secret>/<id>`, routed to `WEBHOOK_HOMES.idFromName(coneId)` — a
+`WebhookHomeDurableObject` that verifies the secret and INTERNAL-FORWARDS to whichever tray
+is current (`/internal/webhook/:id` on the tray, which runs the relay minus the public token
+check). No redirect, no capability in a response header: a rove is invisible to an external
+sender. The leader mints `coneId` + the delivery + rebind secrets once, persists them, and
+sends the same three on every `POST /tray` so the worker REBINDS the home instead of minting
+a new URL. **Rebind is two-factor**: the home's own rebind secret AND the target tray
+confirming the controller token (`/internal/confirm-controller`), so a leaked coneId cannot
+steer deliveries at a tray the caller does not lead. The legacy `/webhook/<trayId>...` shape
+and its `supersededByWebhookUrl` 308 stay ONLY as the migration path for already-cached
+URLs; `supersededByJoinUrl` still drives the join surface. Ordering, `json=true` convention:
+[docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
+
+### WebhookHome lifecycle
+
+Stores `{ coneId, secretHash, rebindSecretHash, currentTrayId, revokedAt?, lastReboundAt }`
+in DO storage (never KV — the read matters the instant after a rebind, when KV would still
+serve the old tray). Only secret HASHES are stored. A home self-expires after
+`WEBHOOK_HOME_TTL_MS` (90d) with no rebind; `revoke` tombstones it permanently
+(`revokedAt` → 410, never resurrects). New DO class means a `wrangler.jsonc` binding
+(`WEBHOOK_HOMES`) + migration tag (`v3-webhook-homes`, `new_sqlite_classes`), prod +
+`env.staging` aligned.
 
 ### Biscotti (guest seats)
 

@@ -138,6 +138,12 @@ function forwardableHeaders(request: Request): Record<string, string> {
     if (key.startsWith('cf-') || key === 'host' || key.startsWith('x-slicc-preview-')) {
       continue;
     }
+    // Reserved WebhookHome routing headers (#2812): the cone delivery secret
+    // and webhook id are consumed by the home, and must never reach the cone
+    // — a public POST carrying them would otherwise forge them onto the event.
+    if (key === 'x-slicc-cone-secret' || key === 'x-slicc-webhook-id') {
+      continue;
+    }
     headers[key] = value;
   }
   return headers;
@@ -194,6 +200,38 @@ export class WebhookRelay {
     const superseded = this.supersededRedirect(request, webhookId, cors);
     if (superseded) return superseded;
 
+    return this.deliver(webhookId, request, cors);
+  }
+
+  /**
+   * Deliver a webhook forwarded INTERNALLY by a WebhookHome DO (#2812). The
+   * home already verified the cone-scoped delivery secret and resolved this
+   * tray as the current one, so there is no public token to check and no
+   * supersede redirect to answer — the home indirection replaces both. Runs
+   * the same expiry / live-leader / relay path a public delivery runs.
+   *
+   * Reachable only through the DO stub (the `/internal/*` routes never leave
+   * the worker), so skipping the token check does not widen the attack surface:
+   * an external caller can never address this route directly.
+   */
+  async handleInternal(webhookId: string, request: Request): Promise<Response> {
+    const cors = { 'access-control-allow-origin': '*' };
+    if (!webhookId) {
+      return jsonResponse(
+        { error: 'Webhook ID is required', code: 'WEBHOOK_ID_REQUIRED' },
+        400,
+        cors
+      );
+    }
+    return this.deliver(webhookId, request, cors);
+  }
+
+  /** Shared tail of `handle` and `handleInternal`: expiry → live-leader → relay. */
+  private async deliver(
+    webhookId: string,
+    request: Request,
+    cors: Record<string, string>
+  ): Promise<Response> {
     const expired = await this.deps.ensureTrayIsActive();
     if (expired) return expired;
 

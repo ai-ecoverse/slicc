@@ -669,6 +669,10 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       peers.stop();
       leader.stop();
       await leader.clearSession();
+      // Carry the abandoned tray's cone identity into the fresh mint so the
+      // worker rebinds the SAME webhook home — a cached webhook URL keeps
+      // working across the reset unchanged (#2812), not merely via a 308 hop.
+      if (previous) leader.carryConeIdentityFrom(previous);
       const session = await leader.start();
       updateUrlBar(session);
       // Best-effort, fire-and-forget — the manager catches every error and

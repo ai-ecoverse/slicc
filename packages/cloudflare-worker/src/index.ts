@@ -54,12 +54,15 @@ import {
   parseCapabilityToken,
   wantsJSON,
 } from './shared.js';
+import { WebhookHomeDurableObject } from './webhook-home.js';
 
 const SLICC_HOSTED_HOSTNAME = new URL(SLICC_HOSTED_ORIGIN).hostname;
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
   CLOUD_SESSIONS: DurableObjectNamespaceLike;
+  /** Stable cone-scoped webhook indirection (#2812). */
+  WEBHOOK_HOMES: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
   ASSET_ARCHIVE: R2Bucket;
   PREVIEW_STORAGE: R2Bucket;
@@ -618,6 +621,7 @@ const ROUTES_INDEX_BODY = {
     'GET|POST /join/:token',
     'GET|POST /controller/:token',
     'POST /webhook/:token/:webhookId',
+    'POST /wh/:token/:webhookId',
     'POST /api/tray/:trayId/preview',
     'PUT /api/tray/:trayId/preview/:previewToken/file',
     'POST /api/tray/:trayId/preview/:previewToken/finalize',
@@ -985,6 +989,17 @@ async function tryHandleCapabilityRoutes(
     return handleTraySupersede(request, stub);
   }
 
+  // Stable cone-scoped webhook delivery (#2812): `/wh/<coneId>.<secret>/<id>`.
+  // The id in the path names a CONE, not a tray instance, so the URL survives
+  // every rove. Routes to the WebhookHome DO, which verifies the secret and
+  // internal-forwards to whichever tray is current — no redirect, no capability
+  // in a response header. The legacy `/webhook/<trayId>.<secret>/<id>` shape
+  // below stays for already-cached URLs (its 308 migration path is unchanged).
+  const coneWebhookMatch = url.pathname.match(/^\/wh\/([^/]+?)(?:\/([^/]+))?$/);
+  if (coneWebhookMatch) {
+    return handleConeWebhookRoute(request, env, coneWebhookMatch[1]!, coneWebhookMatch[2]);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (!tokenMatch) return null;
 
@@ -1158,6 +1173,70 @@ export async function handleDmgDownload(
   }
 }
 
+/**
+ * Stable cone-scoped webhook delivery (#2812). `POST /wh/<coneId>.<secret>/<id>`.
+ *
+ * Routes to the cone's WebhookHome DO (`idFromName(coneId)`), which verifies
+ * the secret against its stored hash and internal-forwards the delivery to
+ * whichever tray it is currently bound to. The URL names the cone, so it never
+ * dies when the tray roves; there is no redirect and no capability in any
+ * response header.
+ */
+async function handleConeWebhookRoute(
+  request: Request,
+  env: WorkerEnv,
+  token: string,
+  webhookId: string | undefined
+): Promise<Response> {
+  const cors = { 'access-control-allow-origin': '*' };
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'POST, OPTIONS',
+        'access-control-allow-headers': 'content-type',
+      },
+    });
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405, {
+      ...cors,
+      allow: 'POST, OPTIONS',
+    });
+  }
+  const parsed = parseCapabilityToken(token);
+  if (!parsed) {
+    return jsonResponse(
+      { error: 'Malformed webhook capability', code: 'MALFORMED_CAPABILITY' },
+      400,
+      cors
+    );
+  }
+  if (!webhookId) {
+    return jsonResponse(
+      {
+        error: 'Webhook ID is required. Use POST /wh/{coneId}.{secret}/{webhookId}',
+        code: 'WEBHOOK_ID_REQUIRED',
+      },
+      400,
+      cors
+    );
+  }
+  const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(parsed.trayId));
+  // Hand the home the secret + webhookId out of band (reserved headers) and the
+  // sender's body verbatim, so its verify-then-forward sees the original
+  // payload. Buffer the body rather than stream it: a streamed body would need
+  // `duplex: 'half'` (workerd-only) on the sub-request.
+  const forwardUrl = new URL(request.url);
+  forwardUrl.pathname = '/internal/home/deliver';
+  const headers = new Headers(request.headers);
+  headers.set('x-slicc-cone-secret', parsed.secret);
+  headers.set('x-slicc-webhook-id', webhookId);
+  const forwardBody = await request.arrayBuffer();
+  return home.fetch(new Request(forwardUrl, { method: 'POST', headers, body: forwardBody }));
+}
+
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   let kind: 'desktop' | 'hosted' = 'desktop';
   // Tolerate three back-compat shapes: no content-length header at all
@@ -1189,6 +1268,24 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     }
   }
 
+  // A stable cone identity (#2812). The leader mints `coneId` + the two cone
+  // secrets ONCE, persists them, and sends the same three back on every reset
+  // so the webhook home — and the external-facing URL under it — stays byte-for-
+  // byte identical while the tray roves. A first-run leader (or an older one)
+  // sends none, and gets a fresh set it should persist.
+  const coneIdentity = parseConeIdentity(rawBody);
+  if (coneIdentity === 'invalid') {
+    return jsonResponse(
+      { error: 'coneId/coneSecret/rebindSecret must be non-empty strings', code: 'INVALID_BODY' },
+      400
+    );
+  }
+  const coneId = coneIdentity?.coneId ?? crypto.randomUUID();
+  // On a rebind the leader supplies the ORIGINAL secrets so the delivery URL is
+  // unchanged and the rebind is authenticated; on a first bind we mint them.
+  const coneSecret = coneIdentity?.coneSecret ?? createCapabilityToken(coneId).split('.')[1]!;
+  const rebindSecret = coneIdentity?.rebindSecret ?? createCapabilityToken(coneId).split('.')[1]!;
+
   const url = new URL(request.url);
   const trayId = crypto.randomUUID();
   const payload: CreateTrayRequest = {
@@ -1196,6 +1293,9 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     createdAt: new Date().toISOString(),
     joinToken: createCapabilityToken(trayId),
     controllerToken: createCapabilityToken(trayId),
+    // Legacy tray-scoped webhook token: still minted so an already-cached
+    // `/webhook/<trayId>...` URL keeps working (and its 308 migration path),
+    // but new registrations hand out the stable `/wh/<coneId>...` shape below.
     webhookToken: createCapabilityToken(trayId),
     kind,
   };
@@ -1213,9 +1313,23 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     return initResponse;
   }
 
+  // Bind (or rebind) the cone's webhook home to this fresh tray. The home
+  // confirms `controllerToken` against the tray before it points deliveries
+  // here, so a first bind claims the home and a rebind proves both the rebind
+  // secret and control of the target tray. A bind failure is fatal to the
+  // stable-webhook feature but not to the tray: fall back to no stable URL.
+  const bind = await bindWebhookHome(env, url, {
+    coneId,
+    secret: coneSecret,
+    rebindSecret,
+    trayId,
+    controllerToken: payload.controllerToken,
+  });
+
   return jsonResponse(
     {
       trayId,
+      coneId,
       createdAt: payload.createdAt,
       capabilities: {
         join: {
@@ -1226,14 +1340,87 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
           token: payload.controllerToken,
           url: `${url.origin}/controller/${payload.controllerToken}`,
         },
-        webhook: {
-          token: payload.webhookToken,
-          url: `${url.origin}/webhook/${payload.webhookToken}`,
-        },
+        webhook: bind.ok
+          ? {
+              token: `${coneId}.${coneSecret}`,
+              url: `${url.origin}/wh/${coneId}.${coneSecret}`,
+              // The rebind capability the leader persists and presents on every
+              // later reset. Never logged, never a lick — it steers deliveries.
+              rebindToken: `${coneId}.${rebindSecret}`,
+            }
+          : {
+              // Home bind failed: fall back to the legacy tray-scoped URL so
+              // webhooks still work (rove-fragile, but functional).
+              token: payload.webhookToken,
+              url: `${url.origin}/webhook/${payload.webhookToken}`,
+            },
       },
     },
     201
   );
+}
+
+interface ConeIdentity {
+  coneId: string;
+  coneSecret: string;
+  rebindSecret: string;
+}
+
+/**
+ * The cone identity from the create body: the triple when present and valid,
+ * `undefined` when absent (a fresh identity is minted for a first-run leader),
+ * `'invalid'` when malformed or partial.
+ *
+ * All three travel together — a rebind needs the delivery secret (so the URL
+ * is unchanged) AND the rebind secret (to authenticate). A body that supplies
+ * some but not all is a client bug, refused rather than silently half-applied.
+ */
+function parseConeIdentity(rawBody: string): ConeIdentity | undefined | 'invalid' {
+  if (rawBody.trim() === '') return undefined;
+  let body: { coneId?: unknown; coneSecret?: unknown; rebindSecret?: unknown };
+  try {
+    body = JSON.parse(rawBody) as typeof body;
+  } catch {
+    return 'invalid';
+  }
+  const present = [body.coneId, body.coneSecret, body.rebindSecret].filter((v) => v !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length !== 3) return 'invalid';
+  const { coneId, coneSecret, rebindSecret } = body;
+  const ok = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+  // `.` is the token delimiter — a coneId carrying one would corrupt the
+  // `<coneId>.<secret>` grammar the delivery route parses.
+  if (!ok(coneId) || coneId.includes('.') || !ok(coneSecret) || !ok(rebindSecret)) {
+    return 'invalid';
+  }
+  return { coneId, coneSecret, rebindSecret };
+}
+
+/** Bind or rebind a cone's webhook home to `trayId`. */
+async function bindWebhookHome(
+  env: WorkerEnv,
+  url: URL,
+  body: {
+    coneId: string;
+    secret: string;
+    rebindSecret: string;
+    trayId: string;
+    controllerToken: string;
+  }
+): Promise<{ ok: boolean }> {
+  try {
+    const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.coneId));
+    const res = await home.fetch(
+      new Request(new URL('/internal/home/bind', url), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    );
+    return { ok: res.status === 200 };
+  } catch {
+    return { ok: false };
+  }
 }
 
 const worker = {
@@ -1267,4 +1454,4 @@ const worker = {
 };
 
 export default worker;
-export { CloudSessionsDurableObject, SessionTrayDurableObject };
+export { CloudSessionsDurableObject, SessionTrayDurableObject, WebhookHomeDurableObject };

@@ -31,9 +31,19 @@ export function makeEnv(overrides?: Partial<WorkerEnv>): WorkerEnv {
     }),
   };
 
+  const fakeWebhookHomes = {
+    idFromName: (_name: string) => ({ toString: () => 'fake-home-id' }),
+    idFromString: (_id: string) => ({ toString: () => 'fake-home-id' }),
+    newUniqueId: () => ({ toString: () => 'fake-home-id' }),
+    get: (_id: unknown) => ({
+      fetch: async (_req: Request) => new Response('home DO not stubbed', { status: 501 }),
+    }),
+  };
+
   return {
     TRAY_HUB: fakeTrayHub as unknown as WorkerEnv['TRAY_HUB'],
     CLOUD_SESSIONS: fakeCloudSessions as unknown as WorkerEnv['CLOUD_SESSIONS'],
+    WEBHOOK_HOMES: fakeWebhookHomes as unknown as WorkerEnv['WEBHOOK_HOMES'],
     ASSETS: fakeAssets,
     ASSET_ARCHIVE: fakeR2,
     ...overrides,

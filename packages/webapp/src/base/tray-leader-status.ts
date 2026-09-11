@@ -26,6 +26,18 @@ export interface LeaderTraySession {
   leaderKey?: string;
   leaderWebSocketUrl?: string | null;
   runtime: string;
+  /**
+   * Stable cone identity for the tray-independent webhook home (#2812). Minted
+   * once by the worker on first `POST /tray`, persisted here, and sent back on
+   * every reset so the external-facing webhook URL survives a rove unchanged.
+   * Absent when the hub predates the feature or the home bind failed — the
+   * session then falls back to the legacy tray-scoped `webhookUrl`.
+   */
+  coneId?: string;
+  /** The `<secret>` half of the cone webhook delivery token. Never logged. */
+  coneSecret?: string;
+  /** The `<secret>` half of the cone rebind token — steers deliveries. Never logged. */
+  rebindSecret?: string;
 }
 
 export interface LeaderTrayRuntimeStatus {

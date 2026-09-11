@@ -2,33 +2,32 @@
 /**
  * Roving-tray webhook scenario (issue #2812) — the #1957 incident as a
  * repeatable test, against the harness's REAL `wrangler dev` tray hub, now
- * proving the RESET-supersede fix rather than the stranding it used to pin.
+ * proving the STABLE cone-scoped webhook address: a reset is invisible to an
+ * external sender holding the URL.
  *
- * A webhook URL bakes the tray id into its address. This scenario walks one
- * URL through a full rove and pins each stop:
+ * The stable URL (`/wh/<coneId>.<secret>/<id>`) names the CONE, not the tray
+ * instance, so it survives every rove. This scenario walks one URL through a
+ * full reset and pins each stop:
  *
- *   1. leader mints tray A, `webhook create` hands out URL_A — an external
- *      sender (this test process) delivers and the event reaches the cone;
- *   2. `host reset` roves the leader to tray B. `pageLeaderTray.reset()` now
- *      supersedes the abandoned tray (like the stale-session recovery path),
- *      so URL_A redirects to tray B's webhook surface instead of dead-ending
- *      in a 410 with the event lost — the #1957 failure mode, closed for the
- *      reset button too;
- *   3. an external sender that follows POST redirects (fetch's default — 308
- *      preserves method and body) recovers end to end: old URL, new tray,
- *      same registration, event in the cone;
- *   4. the old join URL redirects the same way.
- *
- * A manual probe still pins the cost #2812's stable-addressing work removes:
- * the replacement's webhook capability rides in `Location`. That is why this
- * spec is groundwork — the reset fix makes the forwarding RELIABLE; the
- * stable per-cone address makes the rove INVISIBLE.
+ *   1. leader mints tray A, `webhook create` hands out the stable URL — an
+ *      external sender (this test process) delivers and the event reaches the
+ *      cone;
+ *   2. `host reset` roves the leader to tray B. The leader re-creates carrying
+ *      the SAME cone identity, so the worker REBINDS the cone's webhook home to
+ *      tray B — the external URL is byte-for-byte unchanged;
+ *   3. the SAME URL now delivers to tray B with NO redirect: a plain POST
+ *      (redirect: 'manual') returns 202, not a 308, and no tray capability
+ *      appears in the response. The rove is invisible to the sender — the
+ *      failure mode #2812 removes, not merely catches;
+ *   4. the join surface still uses the 308 supersede path (followers are SLICC
+ *      clients that persist the replacement), unchanged.
  *
  * The DO-level matrix (`packages/cloudflare-worker/tests/roving-tray.test.ts`)
- * pins the per-surface behavior exhaustively; this spec proves the one
- * full-stack path — real leader, real Durable Object, real HTTP sender —
- * including the client-side half (the webhook registration outliving the
- * tray) that no worker-only test can see.
+ * and the worker index tests pin the per-surface behavior exhaustively; this
+ * spec proves the one full-stack path — real leader, real Durable Objects,
+ * real HTTP sender — including the client-side half (the leader persisting the
+ * cone identity and carrying it across the reset) that no worker-only test can
+ * see.
  */
 
 import type { Page } from '@playwright/test';
@@ -90,7 +89,7 @@ test.describe('roving tray — webhook URLs across a reset', () => {
     await resetFakeLlm();
   });
 
-  test('a reset supersedes the old tray so a cached webhook URL recovers', async ({ page }) => {
+  test('the stable webhook URL survives a reset invisibly', async ({ page }) => {
     test.setTimeout(CONE_TEST_TIMEOUT_MS);
     await bootMultiConeLeader(page, { fixture: rovingFixture, tray: true });
     await leaderJoinUrl(page); // enables sync and waits for the leader role
@@ -101,29 +100,31 @@ test.describe('roving tray — webhook URLs across a reset', () => {
     expect(created.exitCode).toBe(0);
     const hookUrl = /^URL: (\S+)$/m.exec(created.stdout)?.[1];
     expect(hookUrl, `webhook create output:\n${created.stdout}`).toBeTruthy();
-    // The address bakes in the tray INSTANCE — the whole problem #2812 removes.
-    expect(hookUrl).toContain(before.trayId);
+    // The stable shape names the CONE, not the tray instance — the /wh/ path.
+    expect(hookUrl).toContain('/wh/');
+    expect(hookUrl).not.toContain(before.trayId);
 
     const first = await deliver(hookUrl!, 'marker-one');
     expect(first.status).toBe(202);
     expect(((await first.json()) as { ok?: boolean }).ok).toBe(true);
     await expect(thread(page)).toContainText('Rove event one received.', { timeout: 90_000 });
 
-    // ── 2. Rove: `host reset` mints a fresh tray AND supersedes the old one
-    // (the fix). The registration survives in IndexedDB; the old tray now
-    // forwards instead of dead-ending in a 410 with the event lost.
+    // ── 2. Rove: `host reset` mints a fresh tray carrying the SAME cone
+    // identity, so the worker rebinds the cone's webhook home to the new tray.
     const reset = await execInTerminal(page, 'host reset');
     expect(reset.exitCode).toBe(0);
     await expect
       .poll(async () => (await leaderSession(page)).trayId, { timeout: 60_000 })
       .not.toBe(before.trayId);
     const after = await leaderSession(page);
+    // The external-facing URL did not change — same cone, same address.
+    expect(after.webhookUrl).toBe(before.webhookUrl);
 
-    // A manual probe sees the 308 the reset installed. It still carries the
-    // NEW tray's webhook capability in `Location` — the cost the stable
-    // per-cone address (#2812) will remove; the reset fix makes the forwarding
-    // RELIABLE, not yet invisible. (Poll: the supersede call is fire-and-forget
-    // from the reset, so it can land a beat after the new session appears.)
+    // ── 3. The SAME URL now delivers to the new tray with NO redirect. A
+    // manual-redirect POST returns 202 (not a 308), and no tray capability
+    // leaks into the response. The rove is invisible to the sender. (Poll: the
+    // rebind rides the reset's fresh `POST /tray`, which the socket handshake
+    // completes a beat after the new session appears in the status shim.)
     await expect
       .poll(
         async () => {
@@ -137,26 +138,25 @@ test.describe('roving tray — webhook URLs across a reset', () => {
         },
         { timeout: 30_000 }
       )
-      .toBe(308);
+      .toBe(202);
     const probe = await fetch(hookUrl!, {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ event: 'probe' }),
     });
-    expect(probe.headers.get('location')?.startsWith(`${after.webhookUrl}/`)).toBe(true);
+    expect(probe.headers.get('location')).toBeNull();
+    expect(await probe.text()).not.toContain(after.trayId);
 
-    // ── 3. An external sender that follows POST redirects (fetch's default —
-    // 308 preserves method and body) recovers end to end: old URL, new tray,
-    // same registration, event in the cone.
+    // And a real delivery reaches the cone on the new tray, same URL.
     const second = await deliver(hookUrl!, 'marker-two');
     expect(second.status).toBe(202);
     expect(((await second.json()) as { ok?: boolean }).ok).toBe(true);
     await expect(thread(page)).toContainText('Rove event two received.', { timeout: 90_000 });
 
-    // ── 4. The join surface redirects the same way. `?json=true` keeps the
-    // GET an API probe (a bare GET would land on the worker's SPA fallback)
-    // and is carried onto `Location` so a platform-followed hop stays one too.
+    // ── 4. The join surface still uses the 308 supersede path (followers are
+    // SLICC clients that persist the replacement). `?json=true` keeps the GET
+    // an API probe and is carried onto `Location`.
     const joinProbe = await fetch(`${before.joinUrl}?json=true`, { redirect: 'manual' });
     expect(joinProbe.status).toBe(308);
     expect(joinProbe.headers.get('location')).toBe(`${after.joinUrl}?json=true`);

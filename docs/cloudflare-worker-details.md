@@ -115,37 +115,48 @@ start/resume flows:
   - Shipped pre-#1957 followers degrade rather than break: their platforms follow the
     308 and re-POST, so they connect to the replacement but do not persist it, and
     re-walk the redirect on each reconnect until updated.
-- **Superseded webhook deliveries** answer the same way: `POST /webhook/:token/:webhookId`
-  on a superseded tray returns `308` + `Location: <replacement webhook URL>/:webhookId`
-  (the delivery's query string carried over) + `code: "TRAY_SUPERSEDED"`. This is the
-  half of the problem the join surface does not cover: a webhook URL embeds the tray id,
-  an external service caches it for the life of a long job, and a tray reset mid-job used
-  to turn the callback into a bare `410 TRAY_EXPIRED` that a fire-and-forget sender drops
-  on the floor — a lick that never arrives and nothing reporting an error.
-  - **The leader supersedes on BOTH abandonment paths.** Stale-session recovery
-    (`shouldRecreateTray`) and a deliberate `host reset` (`pageLeaderTray.reset()` →
-    `LeaderTrayManager.supersedePreviousSession`) both point the abandoned tray at the
-    fresh one. A reset that only re-minted left the old tray with no forwarding address,
-    so the reset button reached the same #1957 loss as a crash. Both calls are
-    best-effort and fire-and-forget: a crashed leader that ran neither falls back to the
-    reclaim-TTL `410`. This forwarding is _reliable_, not _invisible_ — the `Location`
-    still hands out the replacement's webhook capability; the stable per-cone address
-    (#2812) is what removes that.
-  - **The replacement's webhook URL is stored separately** (`supersededByWebhookUrl`)
-    because it is not derivable: the join URL carries the join token, a delivery needs the
-    webhook token. It is optional on `/supersede`, so a leader that predates it leaves the
-    webhook surface on its old `410`. An unparseable value is refused at write time.
-  - **`?redirect=manual` does not apply here**, unlike on `/join`. That opt-out exists so
-    a client which cannot suppress redirects can be _told_ about a hop instead, and a
-    webhook sender has no channel to be told through: it will not read a `Link` header or
-    parse a SLICC body, and a query string it happens to carry is not a request for
-    different semantics. The redirect is the only thing that saves the delivery.
-  - **Ordering in the relay is load-bearing: capability token → supersede → expiry gate →
-    live-leader check.** After the token because `Location` names the replacement's webhook
-    _capability_, which is a secret — an unauthenticated redirect would hand it to anyone
-    who guessed a tray id. Before the expiry gate (which is why `/webhook/*` dispatches
-    ahead of it in the DO's `fetch`, like `/join`) because the callback that needs
-    redirecting is precisely the one arriving after the old tray died. A test pins both.
+- **Webhook deliveries are cone-stable, not tray-superseded (#2812).** The webhook URL is
+  `POST /wh/<coneId>.<secret>/<webhookId>` — the id names the CONE, not the tray instance,
+  so it survives every rove. It routes to `WEBHOOK_HOMES.idFromName(coneId)`, a
+  `WebhookHomeDurableObject` (`src/webhook-home.ts`) that verifies the secret against a
+  stored hash and INTERNAL-FORWARDS the delivery to whichever tray it is currently bound to
+  (`/internal/webhook/:webhookId` on the tray, which runs the same relay a public delivery
+  runs, minus the public token check — the home already authenticated). No redirect, no
+  capability in any response header: a reset is invisible to the external sender. This is
+  the half of the problem the join surface does not cover — a webhook URL is cached by an
+  external service for the life of a long job, and #1957's 308 only helped a sender that
+  followed POST redirects, while leaking the replacement's capability in `Location`.
+  - **The home stores `{ coneId, secretHash, rebindSecretHash, currentTrayId, revokedAt?,
+lastReboundAt }` in DO storage, never KV** — the read matters the instant after a
+    rebind, which is exactly when KV would still serve the tray that just died. Only secret
+    HASHES are stored, so a leaked storage does not leak a working capability.
+  - **The leader owns the cone identity.** It mints `coneId` + the delivery secret + the
+    rebind secret once, persists all three on the `LeaderTraySession`, and sends them back
+    on every `POST /tray` (reset via `pageLeaderTray.reset()` →
+    `carryConeIdentityFrom`; stale-session recovery via `shouldRecreateTray` inline) so the
+    worker REBINDS the home to the fresh tray rather than minting a new URL. A first-run or
+    pre-#2812 leader sends none and gets a fresh identity to persist.
+  - **Rebind is two-factor (the strong option).** The home requires BOTH its own rebind
+    secret AND the target tray confirming the presented controller token
+    (`/internal/confirm-controller`, a round trip per rebind). A leaked `coneId` + rebind
+    secret alone cannot steer deliveries at a tray the caller does not lead. The first bind
+    (cone creation) has no prior secret, so it is claimed by the first caller who proves
+    controller ownership of the initial tray.
+  - **Lifecycle.** A home self-expires after `WEBHOOK_HOME_TTL_MS` (90d) with no rebind
+    (`410 HOME_EXPIRED`); `revoke` (rebind-secret-gated) tombstones it permanently
+    (`410 HOME_REVOKED`, never resurrects). A bind failure at create time is non-fatal:
+    the tray still comes up and the create response falls back to the legacy tray-scoped
+    webhook URL.
+- **Legacy tray-scoped webhook (`/webhook/:token/:webhookId`) — migration only.** Retained
+  so an already-cached pre-#2812 URL keeps working. On a superseded tray it answers `308` +
+  `Location: <replacement webhook URL>/:webhookId` + `code: "TRAY_SUPERSEDED"`, driven by
+  `supersededByWebhookUrl` (stored separately from `supersededByJoinUrl` — the tokens do
+  not derive from each other). The leader still supersedes on both abandonment paths
+  (recovery and reset), so a legacy URL is reliably forwarded; new registrations get the
+  stable `/wh/` shape instead. `?redirect=manual` does not apply to a webhook sender (it has
+  no channel to be told about a hop). Relay ordering is load-bearing: capability token →
+  supersede → expiry gate → live-leader check, which is why `/webhook/*` dispatches ahead of
+  the expiry gate in the DO's `fetch`, like `/join`. A test pins both.
 - Preview bridge tabs (`serve --bridge`) attach via `/__slicc/bridge` WS. DO relays
   `bridge.cdp.request`/`bridge.cdp.response` between leader and each bridge socket,
   keyed by `connId`. On leader (re)connect the DO replays `bridge.connected` for every
