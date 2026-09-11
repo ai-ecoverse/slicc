@@ -53,6 +53,15 @@ Three things carry across sessions, and each has its own place in the archive:
 
 Pitfalls are the highest-value and most-often-lost category: a failure that cost half an hour is worth one line next time. Keep the error text that identifies it, not the stack trace.
 
+## Entry grammar: provenance and supersession
+
+Facts age. Write every entry so a later pass can tell whether it still holds:
+
+- Prefix entries with their actor: `human:` for what the user said, `process:` for what you inferred from tool output. Example: `- human: prefers rebase over merge (2026-09-11)`.
+- Version-pin claims that can rot: name the version, commit, or file the claim was verified against, e.g. `- process: coverage floor is 83% (coverage-thresholds.json @ 6.146.2)`. Never record a confidence score — what ages is the pin, not a probability.
+- A claim with a known expiry carries `stale_after: YYYY-MM-DD`, an absolute date, never a duration. Past that date the claim counts as unverified.
+- **Supersede, never append.** When this session proves a stored claim wrong, rewrite the claim in place — a claim and its correction must never both stand as prose. When the refuted claim is itself a trap worth remembering, record it under a `## Not true` section instead: `- not: <refuted claim> — why: <evidence> — instead: <correction> (YYYY-MM-DD)`.
+
 ## Reading the session archive
 
 **Never `cat` the archive and never `head` it.** Archives reach several megabytes, and the machine-readable `<!-- slicc:session-data ... -->` block is a _single line_ holding the whole session as JSON — roughly half the file. Reading it costs a fortune and tells you nothing the prose below it does not. Whole `### Tool` result bodies are the other half and are equally not worth reading.

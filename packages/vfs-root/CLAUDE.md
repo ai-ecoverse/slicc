@@ -67,6 +67,12 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 - Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date, in UTC to match
   archive timestamps. Each pass re-verifies the oldest sections first; undated sections are
   maximally stale.
+- Entries follow the provenance/supersession grammar (MEMORY.md "Entry grammar"): `human:` /
+  `process:` actor prefixes, version pins instead of confidence scores, `stale_after: YYYY-MM-DD`
+  as an absolute instant, corrections that REPLACE claims, and a `## Not true` block
+  (`- not: … — why … — instead …`) for refuted claims worth keeping as traps. The dreamer
+  (`DREAMING.md`) enforces the grammar on old entries and reports contradiction-pair counts
+  before/after so a pass that cannot reduce them is visible.
 - The curator's write grant is `/workspace/CLAUDE.md` alone, not `/workspace/`. It can run `upskill`
   to look up a skill for a pitfall it found, and a directory-wide grant would also let it install
   into `/workspace/skills/`. Reads still cover `/workspace/`. Single-file entries in

@@ -117,6 +117,26 @@ Dream over {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions, budget {{BUDGET_CHARS}},
     expect(options.prompt).not.toContain('{{');
   });
 
+  // The bundled dreamer contract carries the P6 supersession duties and the
+  // wiki escape valve: contradictions resolve to one version (with the loser
+  // optionally preserved as negative knowledge), contradiction counts are
+  // reported so the pass is falsifiable, expired stale_after entries are
+  // re-verified or dropped, and over-budget reference knowledge moves to
+  // /shared/wiki/ — which is why the shipped frontmatter grants it.
+  it('bundled DREAMING.md instructs supersession, stale_after handling, and the wiki move', () => {
+    expect(DEFAULT_DREAMING_MD).toContain('Supersede contradictions.');
+    expect(DEFAULT_DREAMING_MD).toContain(
+      '- not: <refuted claim> — why: <evidence> — instead: <correction>'
+    );
+    expect(DEFAULT_DREAMING_MD).toContain('Count contradictory claim pairs before and after');
+    expect(DEFAULT_DREAMING_MD).toContain('`stale_after: YYYY-MM-DD` date has passed');
+    expect(DEFAULT_DREAMING_MD).toContain('no confidence scores');
+    expect(DEFAULT_DREAMING_MD).toContain('Move knowledge to the wiki.');
+    expect(DEFAULT_DREAMING_MD).toContain('/shared/wiki/WIKI.md');
+    // The frontmatter grant that makes the wiki move possible.
+    expect(DEFAULT_DREAMING_MD).toContain('- /shared/wiki/');
+  });
+
   it('falls back to the bundled DREAMING.md when the VFS copy is unreadable', async () => {
     const spawn = successSpawn();
 

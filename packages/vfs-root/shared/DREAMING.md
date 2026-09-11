@@ -21,8 +21,8 @@ Read the entire current memory at {{MEMORY_PATH}}. If the file is missing or emp
 ## What a dreaming pass does
 
 1. **Merge duplicates.** The per-session curator appends under time pressure; across weeks the same preference or project fact accumulates near-identical phrasings. Keep one — the most recent, most specific version.
-2. **Drop superseded facts.** When two lines contradict, the newer-dated one wins and the older one goes. A fact contradicted by the session titles in the index (a project renamed, a tool replaced) goes too.
-3. **Retire stale ephemera.** Sections whose last-verified date is old AND whose subject no longer appears in recent session titles are candidates for deletion — check before deleting:
+2. **Supersede contradictions.** When two lines contradict, the newer-dated one wins; rewrite in place so only one version stands — a claim and its correction must never survive together as prose. When the refuted claim is a trap worth remembering, record it under a `## Not true` section as `- not: <refuted claim> — why: <evidence> — instead: <correction> (YYYY-MM-DD)`. A fact contradicted by the session titles in the index (a project renamed, a tool replaced) goes too. Count contradictory claim pairs before and after the rewrite and put both numbers in the closing report; if the pass could not reduce the count, say so.
+3. **Retire stale ephemera.** An entry whose `stale_after: YYYY-MM-DD` date has passed is unverified — re-verify it against the index or drop it. Sections whose last-verified date is old AND whose subject no longer appears in recent session titles are candidates for deletion — check before deleting:
 
 ```bash
 # Recent activity, to test whether an old section still matters.
@@ -47,6 +47,7 @@ Measure, decide, then write once — never converge by trial and error:
 Rules:
 
 - Preserve concrete identifiers — file paths, URLs, IDs, names — verbatim.
+- Enforce the entry grammar from `/shared/MEMORY.md` where the information is recoverable: actor prefixes (`human:` / `process:`), version pins, `stale_after: YYYY-MM-DD` as an absolute instant, and no confidence scores.
 - Re-stamp a heading with {{TODAY}} only when you actually re-verified its content against the index this pass; otherwise keep its existing date.
 - Keep dates UTC.
 - Write the result to {{MEMORY_PATH}}; do not merely return it in your response.

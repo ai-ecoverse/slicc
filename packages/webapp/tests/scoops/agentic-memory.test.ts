@@ -200,6 +200,31 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(prompt).not.toContain('Preserve the user-authored header');
   });
 
+  // The provenance/supersession grammar: actor prefixes, version pins,
+  // stale_after as an absolute instant, no confidence scores, and the
+  // `not:` negative-knowledge block. Corrections must replace claims,
+  // never accumulate beside them as prose.
+  it('sends the entry grammar — provenance and supersession — to the curator', async () => {
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 4,
+      today: '2026-08-06',
+    });
+
+    const prompt = spawn.mock.calls[0][0].prompt;
+    expect(prompt).toContain('`human:` for what the user said');
+    expect(prompt).toContain('`process:` for what you inferred');
+    expect(prompt).toContain('Version-pin claims that can rot');
+    expect(prompt).toContain('Never record a confidence score');
+    expect(prompt).toContain('`stale_after: YYYY-MM-DD`, an absolute date, never a duration');
+    expect(prompt).toContain('Supersede, never append.');
+    expect(prompt).toContain('- not: <refuted claim> — why: <evidence> — instead: <correction>');
+  });
+
   it('accepts undated headings in a custom curator prompt', async () => {
     const spawn = successSpawn();
     const memoryMd = `---
