@@ -1283,11 +1283,11 @@ async function handleConeWebhookRoute(
 /**
  * `POST /api/tray/:trayId/webhook/rotate` — Bearer = the tray's controllerToken.
  *
- * Atomically replace the delivery secret in the same cone's home. The
- * deterministic replacement lets a client retry after a lost response without
- * storing raw capabilities in the home or leaving two live capabilities.
+ * Atomically replace both secrets in the same cone's home. The client persists
+ * fresh replacements before sending; an exact receipt permits lost-response
+ * retries without storing raw capabilities or retaining old mutation authority.
  *
- * Body: `{ oldConeId, oldSecret, oldRebindSecret }`.
+ * Body: `{ oldConeId, oldSecret, oldRebindSecret, secret, rebindSecret }`.
  * The controller token authenticates against the tray (the same authority that
  * minted the home); the old rebind secret authenticates the revoke.
  */
@@ -1301,7 +1301,13 @@ async function handleWebhookRotate(
   if (!controllerToken) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }
-  let body: { oldConeId?: string; oldSecret?: string; oldRebindSecret?: string };
+  let body: {
+    oldConeId?: string;
+    oldSecret?: string;
+    oldRebindSecret?: string;
+    secret?: string;
+    rebindSecret?: string;
+  };
   try {
     body = JSON.parse(new TextDecoder().decode(await readBoundedWebhookBody(request)));
   } catch (error) {
@@ -1317,23 +1323,27 @@ async function handleWebhookRotate(
     typeof body.oldSecret !== 'string' ||
     !body.oldSecret ||
     typeof body.oldRebindSecret !== 'string' ||
-    !body.oldRebindSecret
+    !body.oldRebindSecret ||
+    typeof body.secret !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(body.secret) ||
+    typeof body.rebindSecret !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(body.rebindSecret) ||
+    body.secret === body.oldSecret ||
+    body.rebindSecret === body.oldRebindSecret ||
+    body.secret === body.rebindSecret
   ) {
     return jsonResponse(
-      { error: 'oldConeId, oldSecret and oldRebindSecret are required', code: 'INVALID_BODY' },
+      {
+        error: 'Old identity and distinct fresh replacement secrets are required',
+        code: 'INVALID_BODY',
+      },
       400
     );
   }
 
   const coneId = body.oldConeId;
-  const rebindSecret = body.oldRebindSecret;
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`slicc-webhook-rotate-v1:${body.oldSecret}:${rebindSecret}`)
-  );
-  const coneSecret = Array.from(new Uint8Array(digest), (b) =>
-    b.toString(16).padStart(2, '0')
-  ).join('');
+  const rebindSecret = body.rebindSecret;
+  const coneSecret = body.secret;
   try {
     const oldHome = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.oldConeId));
     const rotated = await oldHome.fetch(
@@ -1344,6 +1354,7 @@ async function handleWebhookRotate(
         body: JSON.stringify({
           oldSecret: body.oldSecret,
           secret: coneSecret,
+          oldRebindSecret: body.oldRebindSecret,
           rebindSecret,
           trayId,
           controllerToken,

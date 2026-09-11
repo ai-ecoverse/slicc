@@ -70,9 +70,10 @@ webhook list && webhook delete wh-1
 ```
 
 If a delivery URL leaks, run `webhook rotate` on the connected leader, then
-`webhook list` and update every external sender. Rotation replaces the delivery
-secret for **all** webhooks, not an individual ID; the cone identity, webhook
-registrations, and queued events stay intact. Old URLs stop authenticating.
+`webhook list` and update every external sender. Rotation freshly randomizes both delivery
+and private management secrets for **all** webhooks, not an individual ID; the cone identity,
+webhook registrations, and queued events stay intact. Old URLs and old management secrets
+stop authenticating new operations.
 The command prints no capability. A lost response or transient failure preserves an
 idempotent retry intent, replayed before reconnect. A definitive refusal (for example,
 an old tab's `403` after another tab reset the tray) drops the rejected intent instead

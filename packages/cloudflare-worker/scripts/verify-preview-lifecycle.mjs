@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Read-only deployment prerequisite. Never provision bucket-wide policy in CI.
+import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 export const PREVIEW_PREFIX = 'previews/';
@@ -49,7 +50,7 @@ export function verifyRules(result) {
 /** Bounded, authenticated GET only; failures must stop deployment. */
 export async function verifyPreviewLifecycle(
   bucket,
-  { env = process.env, fetchImpl = fetch } = {}
+  { env = process.env, fetchImpl = fetch, sleepImpl = sleep } = {}
 ) {
   if (!BUCKETS.has(bucket)) throw new Error(HELP);
   const account = env.CLOUDFLARE_ACCOUNT_ID;
@@ -57,22 +58,58 @@ export async function verifyPreviewLifecycle(
   if (!account || !token)
     throw new Error('CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required');
   const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/r2/buckets/${bucket}/lifecycle`;
-  let body;
+  const body = await readLifecycle(url, token, fetchImpl, sleepImpl);
+  if (body?.success !== true) throw new Error('R2 lifecycle API did not report success');
+  verifyRules(body.result);
+}
+
+async function readLifecycle(url, token, fetchImpl, sleepImpl) {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = await readAttempt(url, token, fetchImpl);
+    if (!result.transient) return result.body;
+    if (attempt === attempts) {
+      throw new Error(
+        `R2 lifecycle transient failure exhausted after ${attempts} attempts (${result.transient}); check Cloudflare status/network and rerun. No policy was changed.`
+      );
+    }
+    await sleepImpl(1000 * 2 ** (attempt - 1));
+  }
+}
+
+async function readAttempt(url, token, fetchImpl) {
+  let response;
   try {
-    const response = await fetchImpl(url, {
+    response = await fetchImpl(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
       redirect: 'error',
       signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error();
-    body = await response.json();
   } catch {
-    // Do not echo upstream bodies, headers, or exceptions (may contain secrets).
-    throw new Error('Unable to read R2 lifecycle (HTTP/auth/network/timeout/JSON failure)');
+    return { transient: 'network/timeout' };
   }
-  if (body?.success !== true) throw new Error('R2 lifecycle API did not report success');
-  verifyRules(body.result);
+  if (!response.ok) {
+    // We never inspect error bodies; release the connection before another GET.
+    await response.body?.cancel().catch(() => {});
+  }
+  // Never echo upstream bodies, headers, or exceptions (may contain secrets).
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      `R2 lifecycle HTTP ${response.status}: authentication/permission denied; check CLOUDFLARE_API_TOKEN validity, CLOUDFLARE_ACCOUNT_ID, and Account → Workers R2 Storage → Read (or Edit) access to the preview bucket. Object-only credentials are insufficient.`
+    );
+  }
+  if (response.status === 429 || (response.status >= 500 && response.status <= 599)) {
+    return { transient: `HTTP ${response.status}` };
+  }
+  if (!response.ok)
+    throw new Error(`R2 lifecycle HTTP ${response.status}; check bucket/account configuration`);
+  try {
+    return { body: await response.json() };
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('Malformed R2 lifecycle JSON response');
+    return { transient: 'network/timeout reading response' };
+  }
 }
 
 export async function main(args = process.argv.slice(2), options) {

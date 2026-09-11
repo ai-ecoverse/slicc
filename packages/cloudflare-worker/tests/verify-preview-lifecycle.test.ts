@@ -141,9 +141,10 @@ describe('preview lifecycle prerequisite', () => {
       vi.fn().mockRejectedValue(new Error('fake-token')),
       vi.fn().mockImplementation(() => response([])),
     ]) {
-      await expect(verifyPreviewLifecycle(bucket, { env, fetchImpl })).rejects.toThrow();
+      const sleepImpl = vi.fn().mockResolvedValue(undefined);
+      await expect(verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl })).rejects.toThrow();
       try {
-        await verifyPreviewLifecycle(bucket, { env, fetchImpl });
+        await verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl });
       } catch (error) {
         expect(String(error)).not.toContain('fake-token');
       }
@@ -163,11 +164,23 @@ describe('preview lifecycle prerequisite', () => {
     const controller = new AbortController();
     timeout.mockReturnValue(controller.signal);
     try {
-      const check = verifyPreviewLifecycle(bucket, { env, fetchImpl });
-      const assertion = expect(check).rejects.toThrow('Unable to read');
+      fetchImpl
+        .mockImplementationOnce(
+          (_url, options) =>
+            new Promise<Response>((_resolve, reject) => {
+              options.signal.addEventListener('abort', () => reject(options.signal.reason));
+            })
+        )
+        .mockResolvedValue(response());
+      const check = verifyPreviewLifecycle(bucket, {
+        env,
+        fetchImpl,
+        sleepImpl: vi.fn().mockResolvedValue(undefined),
+      });
       expect(timeout).toHaveBeenCalledWith(30_000);
       controller.abort();
-      await assertion;
+      await check;
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
       timeout.mockRestore();
     }
@@ -201,6 +214,9 @@ describe('preview lifecycle prerequisite', () => {
       const gate = workflow.indexOf(`node ${script} ${bucket}`);
       expect(gate).toBeGreaterThan(0);
       expect(gate).toBeLessThan(workflow.indexOf('command: deploy'));
+      for (const mutation of workflow.matchAll(/command: deploy|^\s+secrets: \|/gm)) {
+        expect(gate).toBeLessThan(mutation.index);
+      }
       const step = workflow.slice(
         workflow.lastIndexOf('- name:', gate),
         workflow.indexOf('- name:', gate)
@@ -210,11 +226,96 @@ describe('preview lifecycle prerequisite', () => {
     }
   );
 
-  it('gates production release before secret mutation and deploy skip', () => {
+  it.each([429, 500, 502, 503, 504])('retries HTTP %s with bounded backoff', async (status) => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('fake-token', { status }))
+      .mockResolvedValueOnce(new Response('fake-token', { status }))
+      .mockImplementation(() => response());
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
+    await verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(sleepImpl.mock.calls).toEqual([[1000], [2000]]);
+    expect(new Set(fetchImpl.mock.calls.map((call) => call[1].signal)).size).toBe(3);
+  });
+
+  it.each([401, 403, 404])('does not retry permanent HTTP %s failures', async (status) => {
+    const fetchImpl = vi.fn().mockImplementation(() => new Response('fake-token', { status }));
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
+    const check = verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl });
+    await expect(check).rejects.toThrow(`HTTP ${status}`);
+    if (status !== 404) await expect(check).rejects.toThrow('Workers R2 Storage');
+    await expect(check).rejects.not.toThrow('fake-token');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
+  it('retries response-body transport failures but stops immediately if the retry is unauthorized', async () => {
+    const brokenBody = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('fake-token'));
+        },
+      })
+    );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(brokenBody)
+      .mockResolvedValueOnce(new Response('fake-token', { status: 403 }));
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
+    const check = verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl });
+    await expect(check).rejects.toThrow('HTTP 403');
+    await expect(check).rejects.not.toThrow('fake-token');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleepImpl.mock.calls).toEqual([[1000]]);
+  });
+
+  it('does not retry policy, schema, API or malformed JSON failures', async () => {
+    for (const makeResponse of [
+      () => response([]),
+      () => response([rule(14)]),
+      () => Response.json({ success: true, result: {} }),
+      () => Response.json({ success: false, errors: ['fake-token'] }),
+      () => new Response('fake-token'),
+    ]) {
+      const fetchImpl = vi.fn().mockImplementation(makeResponse);
+      const sleepImpl = vi.fn().mockResolvedValue(undefined);
+      await expect(verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl })).rejects.toThrow();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sleepImpl).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['network', 'HTTP 429', 'HTTP 503'])(
+    'reports sanitized exhausted %s failures',
+    async (kind) => {
+      const fetchImpl =
+        kind === 'network'
+          ? vi.fn().mockRejectedValue(new Error('fake-token'))
+          : vi
+              .fn()
+              .mockImplementation(
+                () => new Response('fake-token', { status: Number(kind.slice(5)) })
+              );
+      const sleepImpl = vi.fn().mockResolvedValue(undefined);
+      const check = verifyPreviewLifecycle(bucket, { env, fetchImpl, sleepImpl });
+      await expect(check).rejects.toThrow('transient failure exhausted after 3 attempts');
+      await expect(check).rejects.toThrow('check Cloudflare status/network and rerun');
+      await expect(check).rejects.not.toThrow('fake-token');
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(sleepImpl.mock.calls).toEqual([[1000], [2000]]);
+    }
+  );
+
+  it('gates production release after skip/archival and before all secret mutations and deploys', () => {
     const release = readFileSync('packages/cloudflare-worker/scripts/publish-worker.sh', 'utf8');
     const gate = release.indexOf(`node ${script} ${bucket}`);
     expect(gate).toBeGreaterThan(release.indexOf('set -euo pipefail'));
-    expect(gate).toBeLessThan(release.indexOf('WORKER_GATE='));
+    expect(gate).toBeGreaterThan(release.indexOf('exit 0', release.indexOf('WORKER_GATE=')));
+    expect(release.slice(0, gate).match(/^\s*archive_assets$/gm)).toHaveLength(2);
     expect(gate).toBeLessThan(release.indexOf('npx wrangler secret put'));
+    for (const match of release.matchAll(/^deploy_with_retry "(?:hub|preview)"/gm)) {
+      expect(gate).toBeLessThan(match.index);
+    }
   });
 });

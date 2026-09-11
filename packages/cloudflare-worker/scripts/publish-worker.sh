@@ -5,10 +5,11 @@
 # Order is intentional:
 # 1. Build + verify e2b template FIRST. If the template can't even boot, we
 #    don't want a worker that depends on it going live.
-# 2. Upload secrets BEFORE deploy (Wrangler ignores absent secrets at deploy
+# 2. Refresh the asset archive, then verify preview lifecycle before mutations.
+# 3. Upload secrets BEFORE deploy (Wrangler ignores absent secrets at deploy
 #    time but the new worker code references them at first request).
-# 3. Deploy the worker.
-# 4. Smoke-test the deployed worker with retry-with-backoff for edge propagation.
+# 4. Deploy the worker.
+# 5. Smoke-test the deployed worker with retry-with-backoff for edge propagation.
 #
 # Required env vars (set by semantic-release / release.yml):
 #   CLOUDFLARE_TURN_API_TOKEN, GITHUB_CLIENT_SECRET, E2B_API_KEY,
@@ -16,10 +17,6 @@
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (the latter two consumed by wrangler).
 #   SLICC_LAST_RELEASE_TAG (empty means first release and always deploys).
 set -euo pipefail
-
-# Hard prerequisite, before even secret uploads (which can activate a version).
-# Read-only: an operator must provision the prefix-scoped lifecycle first.
-node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
 
 WRANGLER_CONFIG="packages/cloudflare-worker/wrangler.jsonc"
 PREVIEW_WRANGLER_CONFIG="packages/cloudflare-worker/wrangler-preview.jsonc"
@@ -92,6 +89,11 @@ bash packages/dev-tools/e2b-template/scripts/build-template.sh
 # echo "[publish-worker] Verifying e2b template boots..."
 # SLICC_TEST_E2B_API_KEY="$E2B_API_KEY" bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
+# Refresh retention before the deployment prerequisite, even if it fails.
+# Never activate a version (including secret uploads) until both gates pass.
+archive_assets
+node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
 echo "[publish-worker] Uploading worker secrets..."
 echo "$CLOUDFLARE_TURN_API_TOKEN" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config "$WRANGLER_CONFIG"
 echo "$GITHUB_CLIENT_SECRET"      | npx wrangler secret put GITHUB_CLIENT_SECRET      --config "$WRANGLER_CONFIG"
@@ -106,10 +108,6 @@ if [ -n "${APNS_PRIVATE_KEY:-}" ]; then
 else
   echo "[publish-worker] APNS_PRIVATE_KEY not set; skipping APNs secrets (follower push stays disabled)."
 fi
-
-# Hard-fail before deploy if archiving fails; a build must never go live
-# unarchived. The deploy path keeps its established template/secrets/archive order.
-archive_assets
 
 echo "[publish-worker] Deploying worker..."
 deploy_with_retry "hub" "$WRANGLER_CONFIG"

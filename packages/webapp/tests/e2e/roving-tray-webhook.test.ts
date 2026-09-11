@@ -167,18 +167,34 @@ test.describe('roving tray — webhook URLs across a reset', () => {
     await leaderSession(page);
     await expect(thread(page)).toContainText('Queued event received.', { timeout: 90_000 });
 
+    // Reload recovered the rotated management capability too: it can authorize
+    // another rotation, not merely keep delivering with the first replacement.
+    const rotatedAgain = await execInTerminal(page, 'webhook rotate');
+    expect(rotatedAgain.exitCode, rotatedAgain.stderr).toBe(0);
+    const listedAgain = await execInTerminal(page, 'webhook list');
+    expect(listedAgain.exitCode).toBe(0);
+    const latest = listedAgain.stdout.match(/https?:\/\/[^\s]+\/wh\/[^\s]+/)?.[0];
+    expect(latest, listedAgain.stdout).toBeTruthy();
+    expect(latest).not.toBe(replacement);
+    expect(latest).not.toBe(hookUrl);
+    expect((await deliver(replacement!, 'retired-second-secret')).status).toBe(403);
+    expect((await deliver(latest!, 'marker-five')).status).toBe(202);
+    await expect(thread(page)).toContainText('Reloaded rotation event received.', {
+      timeout: 90_000,
+    });
+
     const hookId = /^ID:\s+(\S+)$/m.exec(created.stdout)?.[1];
     expect(hookId).toBeTruthy();
     const deleted = await execInTerminal(page, `webhook delete ${hookId}`);
     expect(deleted.exitCode, deleted.stderr).toBe(0);
-    expect((await deliver(replacement!, 'deleted-registration')).status).toBe(410);
+    expect((await deliver(latest!, 'deleted-registration')).status).toBe(410);
     // A fresh tray must not resurrect the revoked registration.
     const resetAgain = await execInTerminal(page, 'host reset');
     expect(resetAgain.exitCode).toBe(0);
     await expect
       .poll(async () => (await leaderSession(page)).trayId, { timeout: 60_000 })
       .not.toBe(after.trayId);
-    expect((await deliver(replacement!, 'still-deleted')).status).toBe(410);
+    expect((await deliver(latest!, 'still-deleted')).status).toBe(410);
   });
 
   test('the original preview URL still serves after host reset', async ({ page, context }) => {

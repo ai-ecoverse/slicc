@@ -165,8 +165,16 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
     creation without the private credentials. Never use the cone ID alone as the retry key:
     resets must create distinct trays. Cone IDs and both secrets accept only 1–128 URL-safe
     alphanumeric, `_` or `-` characters; dots and URL delimiters are rejected before creation.
-    Rotation first persists a private intent containing the old controller session. If its
-    response is lost, reload replays the deterministic old-secret rotation before any
+    Rotation first persists a private intent containing the old controller session and two
+    fresh cryptographic random replacements (`secret` and `rebindSecret`). Both hashes and
+    a receipt covering the old and new secrets, tray and controller commit atomically.
+    Old management credentials cannot rebind, revoke, or initiate another rotation.
+    Exact receipt replay is read-only, requires presenting both replacements, and works
+    even after source expiry/rebind; it never reveals secrets absent from the request.
+    Legacy deterministic pending intents without replacements are retained and refused
+    locally before HTTP; they require explicit operator reconciliation, not automatic
+    reminting or clearing, because the old operation may have committed.
+    If its response is lost, reload replays the exact persisted rotation before any
     attach/rebind/reset. Ambiguous transport/server failures retain the intent and block
     rebinding; definitive HTTP refusals (`400`/`401`/`403`/`404`/`405`/`410`/`422`) drop
     the rejected intent so startup is not permanently blocked by stale authority.

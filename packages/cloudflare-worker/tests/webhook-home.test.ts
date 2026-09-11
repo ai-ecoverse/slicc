@@ -22,6 +22,11 @@ import {
 } from '../src/webhook-home.js';
 
 const HOST = 'https://www.sliccy.ai';
+const replacementSecrets = {
+  oldSecret: 'sec',
+  secret: 'a'.repeat(32),
+  rebindSecret: 'b'.repeat(32),
+};
 
 class FakeHomeStorage implements WebhookHomeStorageLike {
   private readonly data = new Map<string, unknown>();
@@ -848,11 +853,16 @@ describe('WebhookHome — lifecycle', () => {
       home.fetch(
         new Request(`${HOST}/internal/home/rotate`, {
           method: 'POST',
-          body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new', ...overrides }),
+          body: JSON.stringify({
+            ...identity,
+            ...replacementSecrets,
+            oldRebindSecret: identity.rebindSecret,
+            ...overrides,
+          }),
         })
       );
     for (const overrides of [
-      { rebindSecret: 'bad' },
+      { oldRebindSecret: 'bad' },
       { controllerToken: 'bad' },
       { trayId: 'other' },
       { oldSecret: 'bad' },
@@ -866,9 +876,40 @@ describe('WebhookHome — lifecycle', () => {
     expect(await storage.get('webhook-home')).toEqual(rotated);
     expect((await home.fetch(deliverReq('sec', 'wh', {}))).status).toBe(403);
     expect((await home.fetch(bindReq(identity))).status).toBe(403);
+    // Even knowing the new public delivery URL does not revive leaked management.
+    expect(
+      (await home.fetch(bindReq({ ...identity, secret: replacementSecrets.secret }))).status
+    ).toBe(403);
+    expect(
+      (await rotate({ oldSecret: replacementSecrets.secret, secret: 'c'.repeat(32) })).status
+    ).toBe(403);
     trays['tray-1']!.ack = 'delivered';
     await home.alarm();
-    expect((await home.fetch(deliverReq('new', 'wh', {}))).status).toBe(202);
+    expect((await home.fetch(deliverReq(replacementSecrets.secret, 'wh', {}))).status).toBe(202);
+  });
+
+  it('keeps both old hashes live if atomic rotation persistence fails, then retries exactly', async () => {
+    const { env } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1' } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    const before = await storage.get('webhook-home');
+    const rotate = () =>
+      home.fetch(
+        new Request(`${HOST}/internal/home/rotate`, {
+          method: 'POST',
+          body: JSON.stringify({
+            ...identity,
+            ...replacementSecrets,
+            oldRebindSecret: identity.rebindSecret,
+          }),
+        })
+      );
+    vi.spyOn(storage, 'put').mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(rotate()).rejects.toThrow('storage unavailable');
+    expect(await storage.get('webhook-home')).toEqual(before);
+    expect((await home.fetch(bindReq(identity))).status).toBe(200);
+    expect((await rotate()).status).toBe(200);
+    expect((await home.fetch(bindReq(identity))).status).toBe(403);
   });
 
   it('finishes uncommitted rotation on an expired source but cannot bind to that expired target', async () => {
@@ -883,12 +924,16 @@ describe('WebhookHome — lifecycle', () => {
         await home.fetch(
           new Request(`${HOST}/internal/home/rotate`, {
             method: 'POST',
-            body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new' }),
+            body: JSON.stringify({
+              ...identity,
+              ...replacementSecrets,
+              oldRebindSecret: identity.rebindSecret,
+            }),
           })
         )
       ).status
     ).toBe(200);
-    expect((await home.fetch(bindReq({ ...identity, secret: 'new' }))).status).toBe(403);
+    expect((await home.fetch(bindReq({ ...identity, ...replacementSecrets }))).status).toBe(403);
   });
 
   it('recovers an exact committed receipt after rebind without consulting the expired source, but refuses stale mutations', async () => {
@@ -900,7 +945,12 @@ describe('WebhookHome — lifecycle', () => {
     const rotate = (overrides = {}) =>
       new Request(`${HOST}/internal/home/rotate`, {
         method: 'POST',
-        body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new', ...overrides }),
+        body: JSON.stringify({
+          ...identity,
+          ...replacementSecrets,
+          oldRebindSecret: identity.rebindSecret,
+          ...overrides,
+        }),
       });
     await home.fetch(bindReq(identity));
     expect((await home.fetch(rotate())).status).toBe(200);
@@ -909,7 +959,7 @@ describe('WebhookHome — lifecycle', () => {
         await home.fetch(
           bindReq({
             ...identity,
-            secret: 'new',
+            ...replacementSecrets,
             trayId: 'tray-2',
             controllerToken: 'ctrl-2',
           })
@@ -927,8 +977,10 @@ describe('WebhookHome — lifecycle', () => {
     for (const overrides of [
       { oldSecret: 'wrong' },
       { controllerToken: 'wrong' },
-      { rebindSecret: 'wrong' },
-      { oldSecret: 'new', secret: 'third' },
+      { oldRebindSecret: 'wrong' },
+      { oldSecret: replacementSecrets.secret, secret: 'c'.repeat(32) },
+      { secret: 'd'.repeat(32) },
+      { rebindSecret: 'e'.repeat(32) },
     ]) {
       expect((await restarted.fetch(rotate(overrides))).status).toBe(403);
     }

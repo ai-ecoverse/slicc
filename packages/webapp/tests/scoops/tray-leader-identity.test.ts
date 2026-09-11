@@ -294,7 +294,7 @@ describe('durable leader-session webhook management identity', () => {
     const identity = (await identityStore.load())!;
     let resolveRotation!: (response: Response) => void;
     fetchImpl.mockImplementationOnce(async (_url, init) => {
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(JSON.parse(String(init?.body))).toMatchObject({
         oldConeId: identity.coneId,
         oldSecret: identity.coneSecret,
         oldRebindSecret: identity.rebindSecret,
@@ -308,7 +308,6 @@ describe('durable leader-session webhook management identity', () => {
     const duplicate = first.rotateWebhook();
     const reset = first.reset();
     expect(creates).toHaveLength(1);
-    const newUrl = `${base}/wh/${identity.coneId}.newsecret`;
     const compareAndSwap = identityStore.compareAndSwap.bind(identityStore);
     const save = vi.spyOn(identityStore, 'compareAndSwap');
     save.mockImplementationOnce(async (expected, next) => {
@@ -316,16 +315,71 @@ describe('durable leader-session webhook management identity', () => {
       return compareAndSwap(expected, next);
     });
     await vi.waitFor(() => expect(resolveRotation).toBeTypeOf('function'));
+    const intent = (await identityStore.load())!.pendingRotation!;
+    const newUrl = `${base}/wh/${identity.coneId}.${intent.secret}`;
     resolveRotation(
       Response.json({
         coneId: identity.coneId,
-        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${identity.rebindSecret}` },
+        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${intent.rebindSecret}` },
       })
     );
     expect(await rotation).toEqual({ webhookUrl: newUrl });
     expect(await duplicate).toEqual({ webhookUrl: newUrl });
     expect((await reset).webhookUrl).toBe(newUrl);
-    expect(creates[1].coneSecret).toBe('newsecret');
+    expect(creates[1].coneSecret).toBe(intent.secret);
+    expect(creates[1].rebindSecret).toBe(intent.rebindSecret);
+    expect(JSON.stringify(getLeaderTrayRuntimeStatus())).not.toContain(intent.rebindSecret);
+    expect(JSON.stringify(await store.load())).not.toContain(intent.rebindSecret);
+  });
+
+  it('persists independent cryptographic replacements for rotations from the same leaked identity', async () => {
+    const first = manager();
+    await first.start();
+    const identity = (await identityStore.load())!;
+    const replacements: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Model independent copies of the same pre-rotation private record.
+      await identityStore.save(identity);
+      fetchImpl.mockImplementationOnce(async (_url, init) => {
+        const intent = (await identityStore.load())!.pendingRotation!;
+        const body = JSON.parse(String(init?.body));
+        expect(body.secret).toBe(intent.secret);
+        expect(body.rebindSecret).toBe(intent.rebindSecret);
+        for (const secret of [intent.secret, intent.rebindSecret]) {
+          expect(secret).toMatch(/^[a-f0-9]{32}$/);
+          expect(secret).not.toBe(identity.coneSecret);
+          expect(secret).not.toBe(identity.rebindSecret);
+          replacements.push(secret);
+        }
+        throw new Error('lost response');
+      });
+      await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
+    }
+    expect(new Set(replacements).size).toBe(4);
+  });
+
+  it('sends no rotation when another tab wins the intent CAS', async () => {
+    const first = manager();
+    await first.start();
+    const calls = fetchImpl.mock.calls.length;
+    vi.spyOn(identityStore, 'compareAndSwap').mockResolvedValueOnce(false);
+    await expect(first.rotateWebhook()).rejects.toThrow('another tab');
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
+    expect((await identityStore.load())?.pendingRotation).toBeUndefined();
+  });
+
+  it('refuses legacy deterministic intent without changing storage or sending credentials', async () => {
+    const first = manager();
+    const session = await first.start();
+    const identity = (await identityStore.load())!;
+    first.stop();
+    const key = `leader-webhook-identity:${base}`;
+    const raw = JSON.stringify({ ...identity, pendingRotation: session });
+    await db.setState(key, raw);
+    const calls = fetchImpl.mock.calls.length;
+    await expect(manager().start()).rejects.toThrow('rotation intent is invalid');
+    expect(await db.getState(key)).toBe(raw);
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
   });
 
   it('retains old identity after lost rotation response for an idempotent retry', async () => {
@@ -337,12 +391,13 @@ describe('durable leader-session webhook management identity', () => {
     expect(await identityStore.load()).toMatchObject(identity!);
     expect((await identityStore.load())?.pendingRotation?.trayId).toBe('tray-1');
     const failedBody = fetchImpl.mock.calls[2][1]?.body;
+    const intent = (await identityStore.load())!.pendingRotation!;
     fetchImpl.mockResolvedValueOnce(
       Response.json({
         coneId: identity!.coneId,
         webhook: {
-          url: `${base}/wh/${identity!.coneId}.newsecret`,
-          rebindToken: `${identity!.coneId}.${identity!.rebindSecret}`,
+          url: `${base}/wh/${identity!.coneId}.${intent.secret}`,
+          rebindToken: `${identity!.coneId}.${intent.rebindSecret}`,
         },
       })
     );
@@ -354,19 +409,20 @@ describe('durable leader-session webhook management identity', () => {
     const first = manager();
     await first.start();
     const identity = (await identityStore.load())!;
-    const newUrl = `${base}/wh/${identity.coneId}.newsecret`;
     fetchImpl.mockImplementationOnce(async () => {
       expect((await identityStore.load())?.pendingRotation?.trayId).toBe('tray-1');
       throw new Error('response lost after server committed rotation');
     });
     await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
     const rotationBody = fetchImpl.mock.calls[2][1]?.body;
+    const intent = (await identityStore.load())!.pendingRotation!;
+    const newUrl = `${base}/wh/${identity.coneId}.${intent.secret}`;
     first.stop();
     const callsBeforeReload = fetchImpl.mock.calls.length;
     fetchImpl.mockResolvedValueOnce(
       Response.json({
         coneId: identity.coneId,
-        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${identity.rebindSecret}` },
+        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${intent.rebindSecret}` },
       })
     );
     const reloaded = manager();
@@ -375,7 +431,7 @@ describe('durable leader-session webhook management identity', () => {
     expect(fetchImpl.mock.calls[callsBeforeReload][1]?.body).toBe(rotationBody);
     expect((await identityStore.load())?.pendingRotation).toBeUndefined();
     expect((await reloaded.reset()).webhookUrl).toBe(newUrl);
-    expect(creates[1].coneSecret).toBe('newsecret');
+    expect(creates[1].coneSecret).toBe(intent.secret);
   });
 
   it.each([400, 401, 403, 404, 410, 422])(
@@ -409,6 +465,7 @@ describe('durable leader-session webhook management identity', () => {
       );
       const rotating = first.rotateWebhook();
       await vi.waitFor(() => expect(reply).toBeTypeOf('function'));
+      const intent = (await identityStore.load())!.pendingRotation!;
       const newer = { ...identity, coneSecret: 'newer-tab-secret' };
       await new IndexedDbLeaderWebhookIdentityStore(base).save(newer);
       await store.save({
@@ -422,8 +479,8 @@ describe('durable leader-session webhook management identity', () => {
           : Response.json({
               coneId: identity.coneId,
               webhook: {
-                url: `${base}/wh/${identity.coneId}.late-secret`,
-                rebindToken: `${identity.coneId}.${identity.rebindSecret}`,
+                url: `${base}/wh/${identity.coneId}.${intent.secret}`,
+                rebindToken: `${identity.coneId}.${intent.rebindSecret}`,
               },
             })
       );
@@ -448,12 +505,15 @@ describe('durable leader-session webhook management identity', () => {
 
   it('keeps reconnect fail-closed when refusal races a newer pending rotation', async () => {
     const first = manager();
-    const session = await first.start();
+    await first.start();
     fetchImpl.mockRejectedValueOnce(new Error('lost response'));
     await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
     first.stop();
     const identity = (await identityStore.load())!;
-    const newer = { ...identity, pendingRotation: { ...session, trayId: 'tray-newer' } };
+    const newer = {
+      ...identity,
+      pendingRotation: { ...identity.pendingRotation!, trayId: 'tray-newer' },
+    };
     fetchImpl.mockImplementationOnce(async () => {
       await new IndexedDbLeaderWebhookIdentityStore(base).save(newer);
       return new Response(null, { status: 403 });
@@ -485,14 +545,15 @@ describe('durable leader-session webhook management identity', () => {
       await first.start();
       const identity = (await identityStore.load())!;
       let serverSecret = identity.coneSecret;
-      fetchImpl.mockImplementationOnce(async () => {
-        if (committed) serverSecret = 'newsecret';
+      fetchImpl.mockImplementationOnce(async (_url, init) => {
+        if (committed) serverSecret = JSON.parse(String(init?.body)).secret;
         throw new Error('uncertain response before source expires');
       });
       await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
       first.stop();
       // The worker's ownership-only rotation replay can authenticate a retained
       // source controller after expiry; it must not require a fresh target bind.
+      const intent = (await identityStore.load())!.pendingRotation!;
       fetchImpl.mockImplementationOnce(async (url, init) => {
         expect(String(url)).toBe(`${base}/api/tray/tray-1/webhook/rotate`);
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer tray-1.ct');
@@ -500,13 +561,13 @@ describe('durable leader-session webhook management identity', () => {
           oldSecret: identity.coneSecret,
           oldRebindSecret: identity.rebindSecret,
         });
-        expect(serverSecret).toBe(committed ? 'newsecret' : identity.coneSecret);
-        serverSecret = 'newsecret';
+        expect(serverSecret).toBe(committed ? intent.secret : identity.coneSecret);
+        serverSecret = intent.secret;
         return Response.json({
           coneId: identity.coneId,
           webhook: {
             url: `${base}/wh/${identity.coneId}.${serverSecret}`,
-            rebindToken: `${identity.coneId}.${identity.rebindSecret}`,
+            rebindToken: `${identity.coneId}.${intent.rebindSecret}`,
           },
         });
       });
@@ -559,7 +620,12 @@ describe('durable leader-session webhook management identity', () => {
     first.stop();
     await identityStore.save({
       ...identity,
-      pendingRotation: { ...session, workerBaseUrl: 'https://other.example.com' },
+      pendingRotation: {
+        ...session,
+        workerBaseUrl: 'https://other.example.com',
+        secret: 'a'.repeat(32),
+        rebindSecret: 'b'.repeat(32),
+      },
     });
     const calls = fetchImpl.mock.calls.length;
     await expect(manager().start()).rejects.toThrow('different hub');
@@ -570,13 +636,15 @@ describe('durable leader-session webhook management identity', () => {
     const first = manager();
     await first.start();
     const identity = (await identityStore.load())!;
-    const newUrl = `${base}/wh/${identity.coneId}.newsecret`;
-    fetchImpl.mockResolvedValueOnce(
-      Response.json({
+    let newUrl = '';
+    fetchImpl.mockImplementationOnce(async (_url, init) => {
+      const intent = JSON.parse(String(init?.body));
+      newUrl = `${base}/wh/${identity.coneId}.${intent.secret}`;
+      return Response.json({
         coneId: identity.coneId,
-        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${identity.rebindSecret}` },
-      })
-    );
+        webhook: { url: newUrl, rebindToken: `${identity.coneId}.${intent.rebindSecret}` },
+      });
+    });
     vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('session persistence failed'));
     await expect(first.rotateWebhook()).rejects.toThrow('session persistence failed');
     first.stop();

@@ -10,6 +10,8 @@ const credentials = {
   oldConeId: 'cone',
   oldSecret: 'old-secret',
   oldRebindSecret: 'rebind-secret',
+  secret: 'a'.repeat(32),
+  rebindSecret: 'b'.repeat(32),
 };
 function request(body: unknown = credentials, token = 'controller') {
   return new Request(`${origin}/api/tray/tray/webhook/rotate`, {
@@ -87,7 +89,7 @@ describe('public webhook rotation', () => {
     }
   });
 
-  it('derives the same replacement for retried credentials without changing cone identity', async () => {
+  it('echoes only the supplied replacements for exact retries without changing cone identity', async () => {
     const env = makeEnv();
     const rotate = vi.fn(async () => Response.json({ ok: true }));
     vi.spyOn(env.WEBHOOK_HOMES, 'get').mockReturnValue({ fetch: rotate } as never);
@@ -97,6 +99,8 @@ describe('public webhook rotation', () => {
     const result = await first.json();
     expect(await (await handleWorkerRequest(request(), env)).json()).toEqual(result);
     expect(result).toMatchObject({ coneId: credentials.oldConeId });
+    expect(result).toHaveProperty('webhook.rebindToken', `cone.${credentials.rebindSecret}`);
+    expect(result).toHaveProperty('webhook.url', `${origin}/wh/cone.${credentials.secret}`);
   });
 
   it.each([403, 500])('fails closed on home status %s without leaking secrets', async (status) => {
@@ -119,15 +123,20 @@ describe('public webhook rotation', () => {
     expect(await response.text()).not.toContain('rebind-secret');
   });
 
-  it.each([null, {}, { ...credentials, oldSecret: 123 }])(
-    'rejects malformed input',
-    async (body) => {
-      const env = makeEnv();
-      const get = vi.spyOn(env.WEBHOOK_HOMES, 'get');
-      expect((await handleWorkerRequest(request(body), env)).status).toBe(400);
-      expect(get).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    null,
+    {},
+    { ...credentials, oldSecret: 123 },
+    { ...credentials, secret: undefined, rebindSecret: undefined },
+    { ...credentials, secret: credentials.oldSecret },
+    { ...credentials, rebindSecret: credentials.oldRebindSecret },
+    { ...credentials, rebindSecret: credentials.secret },
+  ])('rejects malformed input', async (body) => {
+    const env = makeEnv();
+    const get = vi.spyOn(env.WEBHOOK_HOMES, 'get');
+    expect((await handleWorkerRequest(request(body), env)).status).toBe(400);
+    expect(get).not.toHaveBeenCalled();
+  });
 
   it('rotates through the real home, retries identically, and rejects the old delivery URL', async () => {
     const trayFetch = vi.fn(async (req: Request) => {
@@ -168,6 +177,22 @@ describe('public webhook rotation', () => {
     expect(result.coneId).toBe('cone');
     const retry = await handleWorkerRequest(request(), env);
     expect(await retry.json()).toEqual(result);
+    for (const body of [
+      { ...credentials, secret: 'c'.repeat(32) },
+      { ...credentials, rebindSecret: 'd'.repeat(32) },
+      { ...credentials, secret: undefined, rebindSecret: undefined },
+    ]) {
+      const stale = await handleWorkerRequest(request(body), env);
+      expect(stale.ok).toBe(false);
+      expect(await stale.text()).not.toContain(credentials.secret);
+    }
+    const revoked = await home.fetch(
+      new Request(`${origin}/internal/home/revoke`, {
+        method: 'POST',
+        body: JSON.stringify({ rebindSecret: credentials.oldRebindSecret }),
+      })
+    );
+    expect(revoked.status).toBe(403);
     const old = await handleWorkerRequest(
       new Request(`${origin}/wh/cone.old-secret/event`, { method: 'POST', body: '{}' }),
       env

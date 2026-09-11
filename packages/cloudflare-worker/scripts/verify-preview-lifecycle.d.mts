@@ -9,6 +9,7 @@ export interface LifecycleVerificationOptions {
     CLOUDFLARE_API_TOKEN?: string;
   };
   fetchImpl?: typeof fetch;
+  sleepImpl?: (milliseconds: number) => Promise<unknown>;
 }
 
 /** Validates untrusted Cloudflare lifecycle API results, throwing on unsafe rules. */

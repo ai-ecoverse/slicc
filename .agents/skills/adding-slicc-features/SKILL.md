@@ -44,9 +44,12 @@ Use these common extension points:
 
 `webhook rotate` is a leader-panel RPC operation (`tray-webhook-rotate`):
 wire it through `ui/boot/setup-standalone-panel-rpc.ts`, never expose the home's
-rebind secret in shell output or follower status. Rotation replaces the delivery
-hash atomically in the existing home; retries of the same old identity return
-the same replacement. A non-2xx home response must never report success.
+rebind secret in shell output or follower status. Rotation replaces both delivery
+and management hashes atomically in the existing home. Persist fresh random replacements
+in private pending intent before HTTP; exact receipt retries must present both replacements,
+not just the old identity. Old management credentials cannot authorize new mutations.
+Legacy pending intents without replacements fail closed without clearing storage.
+A non-2xx home response must never report success.
 
 For tray webhook lifecycle changes, management credentials belong only to
 `LeaderTrayManager`'s private IndexedDB identity store, scoped to the worker URL.

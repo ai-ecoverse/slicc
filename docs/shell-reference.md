@@ -964,8 +964,8 @@ codebase:sweep --wait
 
 ## webhook and crontask topology behavior
 
-**Credential rotation:** `webhook rotate` takes no arguments and replaces the
-delivery secret for every webhook on the connected cone's stable tray home.
+**Credential rotation:** `webhook rotate` takes no arguments and freshly randomizes the
+delivery and private management secrets for every webhook on the connected cone's stable tray home.
 Run `webhook list` afterward and update external senders: old URLs no longer
 authenticate. Cone identity, webhook registrations, and queued events remain.
 The operation uses the leader panel RPC in standalone and hosted extension

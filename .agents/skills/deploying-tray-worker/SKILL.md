@@ -192,10 +192,17 @@ R2 binding still handles runtime object access separately. Preserve all other
 deployment token permissions listed below when adding this access.
 
 `publish-worker.sh`, `worker.yml`, `worker-staging.yml`, and the staging deploy
-in `ci.yml` run this read-only gate before deployment. Production release checks
-even when the worker-change gate would skip deployment, and before secret uploads.
-Missing/disabled/unsafe rules, API authorization errors, malformed responses or
-30-second request timeouts fail the release; there is no warning-only bypass.
+in `ci.yml` run this read-only gate before deployment and before secret uploads.
+Production release skips still refresh the asset archive but do not read preview
+lifecycle policy. On the deploy path, archive refresh precedes this gate so a
+preview prerequisite failure cannot prevent retention refresh.
+Network/timeout failures, HTTP 429 and 5xx receive at most three GET attempts,
+each bounded to 30 seconds, with 1s then 2s backoff. Exhaustion fails closed with
+instructions to check Cloudflare status/network and rerun. HTTP 401/403 fail
+immediately with token/account and R2 configuration-read permission guidance.
+Other HTTP failures, missing/disabled/unsafe rules, unsuccessful API envelopes and
+malformed responses fail without retry; there is no warning-only bypass. Errors
+never print upstream bodies, headers or exception messages.
 Manual production/staging deployments, including preview-only or secret updates
 that can activate a version, must run the same check first. Local `wrangler dev`
 and `deploy --dry-run` builds are excluded because they do not ship a version.
@@ -343,8 +350,12 @@ response: the worker derives an authenticated opaque tray address and reuses its
 capabilities. Mint a new attempt for a deliberate reset, never reuse a fixed cone-based tray ID.
 Identity-less clients retain `/webhook/` URLs and do not depend on webhook-home availability.
 Cone IDs and both secrets must be URL-safe, dot-free components (1–128 characters).
-Rotation replaces the delivery hash atomically on the same
-home with a retry receipt; private pending intent resumes lost responses before rebind.
+Rotation replaces both delivery and management hashes atomically on the same home with a
+retry receipt covering old/new secrets, tray and controller. Private pending intent stores
+fresh random replacements before HTTP and resumes exact lost-response requests before rebind.
+Old management credentials cannot create fresh mutations; completed receipt replay is read-only
+and requires the caller to already present both replacements. Legacy deterministic pending
+intents lacking replacements are retained and refused locally for operator reconciliation.
 Transport failures, malformed success replies, `408`, `409`, `429` and server errors
 retain that intent. Definitive HTTP refusals (`400`/`401`/`403`/`404`/`405`/`410`/`422`)
 drop it so leader startup can continue. Identity changes use atomic IndexedDB

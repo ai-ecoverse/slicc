@@ -653,10 +653,11 @@ export class WebhookHomeDurableObject {
     return jsonResponse({ webhookId, revoked: true }, 200);
   }
 
-  /** Retry-safe rotation changes only the delivery hash, never identity or queued work. */
+  /** Exact receipts recover retries; old credentials cannot authorize new mutations. */
   private async handleRotate(request: Request): Promise<Response> {
     let body: {
       oldSecret?: string;
+      oldRebindSecret?: string;
       secret?: string;
       rebindSecret?: string;
       trayId?: string;
@@ -669,33 +670,43 @@ export class WebhookHomeDurableObject {
     } catch {
       return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
     }
-    const { oldSecret, secret, rebindSecret, trayId, controllerToken } = body ?? {};
+    const { oldSecret, oldRebindSecret, secret, rebindSecret, trayId, controllerToken } =
+      body ?? {};
     if (
-      ![oldSecret, secret, rebindSecret, trayId, controllerToken].every(
+      ![oldSecret, oldRebindSecret, secret, rebindSecret, trayId, controllerToken].every(
         (v) => typeof v === 'string' && v.length > 0
-      )
+      ) ||
+      !/^[A-Za-z0-9_-]{32,128}$/.test(secret!) ||
+      !/^[A-Za-z0-9_-]{32,128}$/.test(rebindSecret!) ||
+      secret === oldSecret ||
+      rebindSecret === oldRebindSecret ||
+      secret === rebindSecret
     ) {
       return jsonResponse({ error: 'Missing required field', code: 'INVALID_BODY' }, 400);
     }
-    if (
-      !this.home ||
-      !timingSafeEqual(await sha256Hex(rebindSecret!), this.home.rebindSecretHash)
-    ) {
+    if (!this.home) {
       return jsonResponse({ error: 'Invalid rebind capability', code: 'INVALID_REBIND' }, 403);
     }
     if (this.home.revokedAt) {
       return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410);
     }
     const replacement = await sha256Hex(secret!);
-    const receipt = await sha256Hex(JSON.stringify({ oldSecret, secret, trayId, controllerToken }));
+    const managementReplacement = await sha256Hex(rebindSecret!);
+    const receipt = await sha256Hex(
+      JSON.stringify({ oldSecret, oldRebindSecret, secret, rebindSecret, trayId, controllerToken })
+    );
     if (
       timingSafeEqual(this.home.secretHash, replacement) &&
+      timingSafeEqual(this.home.rebindSecretHash, managementReplacement) &&
       this.home.rotationReceiptHash &&
       timingSafeEqual(this.home.rotationReceiptHash, receipt)
     ) {
       // A lost response must be recoverable after source-tray expiry or a rebind.
       // This exact authenticated request already committed: no mutation or rebind.
       return jsonResponse({ coneId: this.home.coneId, rotated: true }, 200);
+    }
+    if (!timingSafeEqual(await sha256Hex(oldRebindSecret!), this.home.rebindSecretHash)) {
+      return jsonResponse({ error: 'Invalid rebind capability', code: 'INVALID_REBIND' }, 403);
     }
     if (
       this.home.currentTrayId !== trayId ||
@@ -712,9 +723,14 @@ export class WebhookHomeDurableObject {
         403
       );
     }
-    this.home.secretHash = replacement;
-    this.home.rotationReceiptHash = receipt;
-    await this.state.storage.put(HOME_STORAGE_KEY, this.home);
+    const rotated = {
+      ...this.home,
+      secretHash: replacement,
+      rebindSecretHash: managementReplacement,
+      rotationReceiptHash: receipt,
+    };
+    await this.state.storage.put(HOME_STORAGE_KEY, rotated);
+    this.home = rotated;
     return jsonResponse({ coneId: this.home.coneId, rotated: true }, 200);
   }
 

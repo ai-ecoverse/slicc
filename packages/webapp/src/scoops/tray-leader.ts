@@ -165,8 +165,8 @@ export interface ConeIdentity {
   rebindSecret: string;
   /** False until a stable capability is acknowledged; permits old-hub bootstrap. */
   established?: boolean;
-  /** Durable intent: replay deterministic rotation before any subsequent rebind. */
-  pendingRotation?: LeaderTraySession;
+  /** Private write-ahead intent: exact fresh replacements survive reload and retry. */
+  pendingRotation?: LeaderTraySession & { secret: string; rebindSecret: string };
   /** Private authenticated create intent, retained across transport/storage failure. */
   pendingCreateAttemptId?: string;
   /** Response target, recorded before saving the public session for reconciliation. */
@@ -212,12 +212,29 @@ export class IndexedDbLeaderWebhookIdentityStore implements LeaderWebhookIdentit
     ) {
       throw new Error('Stored webhook management identity is invalid');
     }
-    const pendingRotation = parsed.pendingRotation
+    const pendingSession = parsed.pendingRotation
       ? parseLeaderTraySession(JSON.stringify(parsed.pendingRotation))
       : null;
-    if (parsed.pendingRotation && !pendingRotation) {
+    const intent = parsed.pendingRotation;
+    if (
+      intent &&
+      (!pendingSession ||
+        typeof intent.secret !== 'string' ||
+        !/^[A-Za-z0-9_-]{32,128}$/.test(intent.secret) ||
+        typeof intent.rebindSecret !== 'string' ||
+        !/^[A-Za-z0-9_-]{32,128}$/.test(intent.rebindSecret) ||
+        intent.secret === parsed.coneSecret ||
+        intent.rebindSecret === parsed.rebindSecret ||
+        intent.secret === intent.rebindSecret)
+    ) {
+      // Legacy deterministic intents cannot establish whether the old operation
+      // committed. Preserve the record and refuse rather than silently rebind.
       throw new Error('Stored webhook rotation intent is invalid');
     }
+    const pendingRotation =
+      intent && pendingSession
+        ? { ...pendingSession, secret: intent.secret, rebindSecret: intent.rebindSecret }
+        : null;
     if (
       (parsed.pendingCreateAttemptId !== undefined &&
         (typeof parsed.pendingCreateAttemptId !== 'string' ||
@@ -804,7 +821,14 @@ export class LeaderTrayManager {
       throw new Error('webhook rotate: could not derive the controller token');
     }
     if (!currentIdentity.pendingRotation) {
-      const intent = { ...currentIdentity, pendingRotation: session };
+      const intent = {
+        ...currentIdentity,
+        pendingRotation: {
+          ...session,
+          secret: crypto.randomUUID().replace(/-/g, ''),
+          rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+        },
+      };
       if (!(await this.identityStore.compareAndSwap(currentIdentity, intent))) {
         throw new Error('webhook rotate: identity changed in another tab; retry');
       }
@@ -827,6 +851,8 @@ export class LeaderTrayManager {
         oldConeId: currentIdentity.coneId,
         oldSecret: currentIdentity.coneSecret,
         oldRebindSecret: currentIdentity.rebindSecret,
+        secret: currentIdentity.pendingRotation!.secret,
+        rebindSecret: currentIdentity.pendingRotation!.rebindSecret,
       }),
     }).catch(async (error: unknown) => {
       if (isDefinitiveRotationRefusal(error)) {
@@ -843,7 +869,8 @@ export class LeaderTrayManager {
     }
     if (
       identity.coneId !== currentIdentity.coneId ||
-      identity.rebindSecret !== currentIdentity.rebindSecret
+      identity.coneSecret !== currentIdentity.pendingRotation!.secret ||
+      identity.rebindSecret !== currentIdentity.pendingRotation!.rebindSecret
     ) {
       throw new Error('webhook rotate: hub changed the management identity');
     }
@@ -854,8 +881,10 @@ export class LeaderTrayManager {
       throw new Error('webhook rotate: identity changed in another tab; retry');
     }
     this.identity = completed;
+    // Never spread the private rotation intent into public session/status state.
+    const publicSession = parseLeaderTraySession(JSON.stringify(session))!;
     const next: LeaderTraySession = {
-      ...session,
+      ...publicSession,
       webhookUrl: rotated.webhook.url,
       coneId: identity.coneId,
     };

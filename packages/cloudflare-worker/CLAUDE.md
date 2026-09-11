@@ -118,9 +118,11 @@ body, eight pending requests; saturation rejects new work with `429`, never evic
 events. There is no accepted-event TTL. Durable alarms retry after 30 seconds when blocked,
 or one second after successful head removal with backlog.
 
-Rotation atomically replaces the delivery hash and retry receipt on the same home, retaining
-identity and queued work. The manager persists private pending rotation intent before the
-request and recovers it before rebinding. Registration deletion persists permanent hashed-ID
+Rotation atomically replaces both delivery and management hashes and an exact retry receipt
+on the same home, retaining identity and queued work. The manager persists fresh random
+replacements in private pending intent before HTTP. Exact replay requires both replacements;
+old management secrets cannot authorize fresh mutations. Legacy deterministic pending intents
+fail closed without clearing storage. Registration deletion persists permanent hashed-ID
 tombstones before discarding that ID's queue; local definitions are removed only after hub
 acknowledgement. See [lifecycle details](../../docs/cloudflare-worker-details.md#signaling)
 for error semantics and limits.

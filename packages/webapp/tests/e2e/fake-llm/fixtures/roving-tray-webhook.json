@@ -21,6 +21,11 @@
       "whenUserMessageMatches": "marker-four",
       "content": "Queued event received.",
       "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "marker-five",
+      "content": "Reloaded rotation event received.",
+      "contentChunkSize": 64
     }
   ]
 }
