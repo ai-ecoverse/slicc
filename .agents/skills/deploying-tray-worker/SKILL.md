@@ -17,9 +17,13 @@ npx wrangler whoami
 # Build the UI required by the hub worker.
 npm run build -w @slicc/webapp
 
+# Read-only, fail-closed prerequisite BEFORE any deploy or secret mutation.
+# Requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the environment.
+node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
 # Upload assets to R2 BEFORE deploying (mandatory gate).
 node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs \
-  --bucket slicc-asset-archive-staging --dir dist/ui/assets
+  slicc-asset-archive-staging --dir dist/ui/assets
 
 # Deploy the staging hub and preview workers as a pair.
 cd packages/cloudflare-worker
@@ -131,8 +135,72 @@ archive recovery and (both envs) present-asset fetch via the live worker.
 
 ## Provision R2 Prerequisites
 
-These manual Cloudflare operations **must exist before CI deploys**, else the upload
-step will fail.
+These manual Cloudflare operations **must exist before CI deploys**, else the
+read-only lifecycle prerequisite or asset upload step will fail. Obtain operator
+authorization before provisioning or changing live configuration; deployment scripts
+never change lifecycle rules automatically.
+
+### 0. Mandatory preview-upload cleanup backstop
+
+Both production and staging hub/preview workers bind `PREVIEW_STORAGE` to
+`sliccy-now-basic-storage`. This is **not** either `ASSET_ARCHIVE` bucket below;
+do not apply the asset archive's 14-day retention to preview storage.
+
+Provision an **enabled, object-age expiration of 90 days, scoped exactly to
+`previews/`** in that bucket before deploying bounded upload leases. The runtime
+maximum TTL is 30 days (`MAX_PREVIEW_TTL_MS`), but a snapshot can remain pending
+for 30 days and finalize for another 30 days: its earliest bytes can still be live
+at age 60 days. Therefore 45 days is unsafe. The deploy verifier accepts
+`60 < days <= 90`, with 90 days the operator setup policy.
+
+DO cleanup retires tombstones after 24 hours, even when R2 is unavailable. An R2
+put can settle arbitrarily later; object-age expiration starts from the object's
+write, not the preview mint or tombstone retirement. The lifecycle rule is the
+independent eventual-deletion backstop for those late objects. Expiration is
+asynchronous (90 days is eligibility age, not a deletion-time SLA). Keep this
+rule enabled after rollback or disabling uploads too: in-flight writes can still
+arrive.
+
+Operator setup (with authorized Cloudflare credentials supplied via environment,
+never saved to a repository file):
+
+```bash
+# Inspect first. Do not blindly replace the bucket's full lifecycle configuration.
+npx wrangler r2 bucket lifecycle list sliccy-now-basic-storage
+
+# If an equivalent enabled previews/ age rule does not already exist, add it.
+# Positional third argument is the exact object-key prefix (no leading slash).
+npx wrangler r2 bucket lifecycle add sliccy-now-basic-storage preview-retention-90d previews/ --expire-days 90
+
+# Mandatory read-back check; repeat safely (GET only, no provisioning).
+node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+```
+
+If the named rule already exists, inspect rather than adding a duplicate. Existing
+unrelated rules and objects must remain unchanged. An enabled bucket-wide or
+overlapping prefix rule that expires objects at age <=60 days (or on an absolute
+date) conflicts even if the 90-day rule is present; a narrower `previews/...`
+rule can also prematurely delete some previews. If inspection reveals a conflict,
+stop deployment and have the bucket owner explicitly reconcile it while preserving
+retention for unrelated data. Do not remove or rescope a broad rule without
+inventorying the other prefixes it protects. There is no automatic policy rewrite.
+
+The token needs **Account → Workers R2 Storage → Read** (or the existing Edit
+superset) covering `sliccy-now-basic-storage` for the lifecycle GET. Object-only
+credentials are not enough for bucket configuration inspection; the worker's
+R2 binding still handles runtime object access separately. Preserve all other
+deployment token permissions listed below when adding this access.
+
+`publish-worker.sh`, `worker.yml`, `worker-staging.yml`, and the staging deploy
+in `ci.yml` run this read-only gate before deployment. Production release checks
+even when the worker-change gate would skip deployment, and before secret uploads.
+Missing/disabled/unsafe rules, API authorization errors, malformed responses or
+30-second request timeouts fail the release; there is no warning-only bypass.
+Manual production/staging deployments, including preview-only or secret updates
+that can activate a version, must run the same check first. Local `wrangler dev`
+and `deploy --dry-run` builds are excluded because they do not ship a version.
+Provisioning is a required rollout step: CI will intentionally remain blocked until
+an authorized operator completes it.
 
 ### 1. Create R2 buckets
 
@@ -239,26 +307,64 @@ Persist the source/target pair before starting this handoff; a failed or interru
 transfer returns `503` and must retry the SAME pair before old-tray reset. The source
 is frozen until completion. Durable import receipts prevent a retry from resurrecting
 revoked previews. Existing bridge sockets close with `1012` and reconnect (new connId).
+Only `410 PREVIEW_TARGET_UNAVAILABLE` proves the source has not frozen and permits
+discarding the cached target. Generic `403`/`410` do not. Once frozen, retained target
+controller ownership permits finishing that exact pair even after target reclaim expiry.
+Import does not revive its leader session: the manager durably promotes the completed
+expired target to the next source, then attempts one bounded extra rove to a fresh tray.
+Never retarget a frozen source: some original-token locators may already have moved.
 Persistent snapshots keep their existing R2 keys, upload credentials and expiry; only
 the new owner cleans up expired/revoked archives. Do not renew the TTL during roves.
-Upload authorization durably leases the candidate R2 key (up to eight unresolved writes
-per preview). Body reads and R2 puts have 30-second deadlines. Cleanup retains a
-non-serving tombstone and repeats prefix sweeps until all writes definitively settle;
-an ambiguous R2 outcome can retain a preview slot rather than risk orphaned bytes.
+Upload authorization durably leases a unique candidate R2 key for 120 seconds (up to
+eight active writes per preview). Expired candidates cannot commit; retries never
+overwrite canonical objects. Lost release/authorization responses and vanished edges
+recover concurrency on the next authorization; expired keys collapse into one
+unresolved-write flag. Legacy string leases migrate once on first use.
+Body reads, R2 puts, authorization, commit and release have 30-second deadlines.
+Expiry/revoke retains a non-serving cleanup tombstone and repeats prefix sweeps for
+at most 24 hours, without consuming active preview slots. Unfinished transfers
+intentionally retain their non-serving locator-recovery ledger until the same transfer
+is retried, independently of this operational cleanup horizon. That ledger cannot serve
+content, accept uploads, or consume active preview slots. Timeout is NOT cancellation:
+the mandatory independent 90-day R2 lifecycle on `previews/` catches arbitrarily late
+writes after local cleanup ends. Do not shorten this below the maximum 30-day pending
+window plus 30-day finalized retention. Run the lifecycle deployment gate before
+deploying, including manual deployments; never rely on edge callbacks to reclaim bytes.
 Run `preview-continuity.test.ts` for local multi-DO continuity and failure regressions.
 
 ### Stable webhook lifecycle
 
 Preview webhook identity follows the leader-session lineage, not individual WorkUnits.
 Management secrets live in manager-private IndexedDB, outside public session/status,
-VFS and follower messages. Rotation replaces the delivery hash atomically on the same
+VFS and follower messages. Stable-aware `POST /tray` also carries a private `createAttemptId`
+(32–128 URL-safe alphanumeric, `_`, `-` characters), persisted before the request and retained
+until its session is durable. Retry the same identity AND attempt after bind failure or a lost
+response: the worker derives an authenticated opaque tray address and reuses its original
+capabilities. Mint a new attempt for a deliberate reset, never reuse a fixed cone-based tray ID.
+Identity-less clients retain `/webhook/` URLs and do not depend on webhook-home availability.
+Cone IDs and both secrets must be URL-safe, dot-free components (1–128 characters).
+Rotation replaces the delivery hash atomically on the same
 home with a retry receipt; private pending intent resumes lost responses before rebind.
+Transport failures, malformed success replies, `408`, `409`, `429` and server errors
+retain that intent. Definitive HTTP refusals (`400`/`401`/`403`/`404`/`405`/`410`/`422`)
+drop it so leader startup can continue. Identity changes use atomic IndexedDB
+compare-and-swap: a late tab response cannot restore a revoked secret or remove another
+tab's newer pending rotation. If another rotation remains pending, reconnect stays
+fail-closed until its replay completes.
 Deletion persists a permanent hashed registration tombstone before discarding that ID's
 queue, and removes its local definition only after hub acknowledgement.
 
 The home durably enqueues before forwarding or `202`. Acceptance is not completed agent
 work: replay is at-least-once and requires explicit delivery/filter acknowledgement.
-Missing registrations and unresolved targets block the FIFO until repair or revocation.
+Explicit `404 WEBHOOK_NOT_REGISTERED` / `422 WEBHOOK_TARGET_UNRESOLVED` responses with
+`accepted: false` get three consecutive attempts at least 30 seconds apart, then atomically
+leave the FIFO with a durable dead-letter receipt. Ambiguous/transient responses never
+exhaust a budget and reset the rejection streak. The latest 100 terminal receipts live in
+`webhook-dead-letter:0` through `:99`; `webhook-home.deadLetterCount` is the lifetime total.
+Only older terminal details are overwritten; the archive cannot consume active queue slots.
+Inspect/export through privileged DO storage tooling; no public archive or automatic replay.
+Explicit rejection backoff can be bypassed by other IDs, never later events of the same ID.
+Eligible independent backlog runs after one second; ambiguous outcomes remain blocking.
 Accepted events have no queue TTL or eviction. Limits: 100 events, 120 KiB encoded home
 record, 64 KiB body, eight pending requests. Capacity returns `429` with `Retry-After: 30`;
 oversized bodies return `413`. Alarms retry blocked heads after 30 seconds and remaining

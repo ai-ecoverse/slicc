@@ -167,11 +167,16 @@ export interface ConeIdentity {
   established?: boolean;
   /** Durable intent: replay deterministic rotation before any subsequent rebind. */
   pendingRotation?: LeaderTraySession;
+  /** Private authenticated create intent, retained across transport/storage failure. */
+  pendingCreateAttemptId?: string;
+  /** Response target, recorded before saving the public session for reconciliation. */
+  pendingCreateTrayId?: string;
 }
 
 export interface LeaderWebhookIdentityStore {
   load(): Promise<ConeIdentity | null>;
   save(identity: ConeIdentity): Promise<void>;
+  compareAndSwap(expected: ConeIdentity | null, next: ConeIdentity): Promise<boolean>;
 }
 
 /**
@@ -181,6 +186,7 @@ export interface LeaderWebhookIdentityStore {
  */
 export class IndexedDbLeaderWebhookIdentityStore implements LeaderWebhookIdentityStore {
   private readonly key: string;
+  private readonly snapshots = new WeakMap<ConeIdentity, string>();
 
   constructor(workerBaseUrl: string) {
     this.key = `leader-webhook-identity:${workerBaseUrl.replace(/\/+$/, '')}`;
@@ -212,17 +218,45 @@ export class IndexedDbLeaderWebhookIdentityStore implements LeaderWebhookIdentit
     if (parsed.pendingRotation && !pendingRotation) {
       throw new Error('Stored webhook rotation intent is invalid');
     }
-    return {
+    if (
+      (parsed.pendingCreateAttemptId !== undefined &&
+        (typeof parsed.pendingCreateAttemptId !== 'string' ||
+          !/^[A-Za-z0-9_-]{32,128}$/.test(parsed.pendingCreateAttemptId))) ||
+      (parsed.pendingCreateTrayId !== undefined &&
+        (!parsed.pendingCreateAttemptId ||
+          typeof parsed.pendingCreateTrayId !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(parsed.pendingCreateTrayId)))
+    ) {
+      throw new Error('Stored tray creation intent is invalid');
+    }
+    const identity: ConeIdentity = {
       coneId: parsed.coneId,
       coneSecret: parsed.coneSecret,
       rebindSecret: parsed.rebindSecret,
       established: parsed.established !== false,
       ...(pendingRotation ? { pendingRotation } : {}),
+      ...(parsed.pendingCreateAttemptId
+        ? { pendingCreateAttemptId: parsed.pendingCreateAttemptId }
+        : {}),
+      ...(parsed.pendingCreateTrayId ? { pendingCreateTrayId: parsed.pendingCreateTrayId } : {}),
     };
+    this.snapshots.set(identity, raw);
+    return identity;
   }
 
   async save(identity: ConeIdentity): Promise<void> {
-    await db.setState(this.key, JSON.stringify(identity));
+    const raw = JSON.stringify(identity);
+    await db.setState(this.key, raw);
+    this.snapshots.set(identity, raw);
+  }
+
+  async compareAndSwap(expected: ConeIdentity | null, next: ConeIdentity): Promise<boolean> {
+    const snapshot = expected === null ? null : this.snapshots.get(expected);
+    if (snapshot === undefined) throw new Error('Webhook identity must be loaded before updating');
+    const raw = JSON.stringify(next);
+    const replaced = await db.compareAndSetState(this.key, snapshot, raw);
+    if (replaced) this.snapshots.set(next, raw);
+    return replaced;
   }
 }
 
@@ -267,7 +301,11 @@ export function parseConeWebhookIdentity(
   const rebindConeId = rebindToken.slice(0, rebindDot);
   const rebindSecret = rebindToken.slice(rebindDot + 1);
   // The rebind token must name the same cone — a mismatch is a malformed reply.
-  if (!coneId || !coneSecret || !rebindSecret || rebindConeId !== coneId) return null;
+  if (
+    ![coneId, coneSecret, rebindSecret].every((part) => /^[A-Za-z0-9_-]+$/.test(part)) ||
+    rebindConeId !== coneId
+  )
+    return null;
   return { coneId, coneSecret, rebindSecret };
 }
 
@@ -467,6 +505,19 @@ export class LeaderTrayManager {
    */
   private async connectOnce(): Promise<LeaderTraySession> {
     if (this.rotation !== null) await this.rotation;
+    this.identity = await this.identityStore.load();
+    // Definitive refusals release their intent; ambiguous failures must replay
+    // before a rebind can accidentally use the revoked delivery secret.
+    if (this.identity?.pendingRotation) {
+      try {
+        await this.rotateWebhookOnce();
+      } catch (error) {
+        if (!isDefinitiveRotationRefusal(error)) throw error;
+        if (this.identity?.pendingRotation) {
+          throw new Error('Webhook rotation changed in another tab; retry before reconnecting');
+        }
+      }
+    }
     const storedSession = await this.store.load();
     const reusableSession =
       storedSession?.workerBaseUrl.replace(/\/+$/, '') ===
@@ -474,15 +525,12 @@ export class LeaderTrayManager {
         ? storedSession
         : null;
 
-    this.identity = await this.identityStore.load();
-    // The server may have rotated even when its response was lost. Replay the
-    // durable old-credential request before attach/rebind can reject that secret.
-    if (this.identity?.pendingRotation) await this.rotateWebhookOnce();
     const legacy = reusableSession && coneIdentityOf(reusableSession);
     if (!this.identity && legacy) await this.saveIdentity(legacy);
     // Persist migration before discarding any old copy of the management token.
     const safeSession = reusableSession && this.publicSession(reusableSession);
     if (safeSession && legacy) await this.store.save(safeSession);
+    await this.finishPendingCreate(safeSession);
 
     const pendingSource = await this.replacementStore.load();
     const session = pendingSource
@@ -589,6 +637,7 @@ export class LeaderTrayManager {
     if (await this.replacementStore.load()) {
       throw new Error('Tray replacement is pending; retry reset before clearing the session');
     }
+    await this.finishPendingCreate(await this.store.load());
     await this.store.clear();
   }
 
@@ -617,12 +666,39 @@ export class LeaderTrayManager {
 
   private async claimReplacement(
     source: LeaderTraySession,
-    target: LeaderTraySession | null
+    target: LeaderTraySession | null,
+    recoverExpiredOwner = true
   ): Promise<LeaderTraySession> {
-    const next =
-      target && target.trayId !== source.trayId ? target : await this.createTraySession();
-    await this.transferPreviousSession(source, next);
-    const claimed = await this.claimLeaderSession(next);
+    let next = target && target.trayId !== source.trayId ? target : await this.createTraySession();
+    try {
+      await this.transferPreviousSession(source, next);
+    } catch (error) {
+      // Only this source-issued code proves no freeze/import/locator mutation
+      // occurred. A generic 403/410 or lost response cannot authorize retargeting.
+      if (!(error instanceof LeaderTrayHttpError) || error.code !== 'PREVIEW_TARGET_UNAVAILABLE') {
+        throw error;
+      }
+      await this.finishPendingCreate(await this.store.load());
+      await this.store.clear();
+      next = await this.createTraySession();
+      await this.transferPreviousSession(source, next);
+    }
+    let claimed: LeaderTraySession;
+    try {
+      claimed = await this.claimLeaderSession(next);
+    } catch (error) {
+      if (error instanceof LeaderTrayHttpError && [403, 404, 410].includes(error.status)) {
+        // Transfer completed even if its target expired while we were offline.
+        // Promote that owner to the durable source before permitting a new mint.
+        // Never change a partially frozen pair. Bound automatic recovery to one
+        // extra rove; a later failure still leaves the next start resumable.
+        await this.replacementStore.save(next);
+        await this.finishPendingCreate(await this.store.load());
+        await this.store.clear();
+        if (recoverExpiredOwner) return this.claimReplacement(next, null, false);
+      }
+      throw error;
+    }
     // Only clear after transfer and target attach are durable. Lost responses retry
     // the same pair; never mint a third tray while the source is frozen.
     await this.replacementStore.clear();
@@ -707,11 +783,12 @@ export class LeaderTrayManager {
   }
 
   private async rotateWebhookOnce(): Promise<{ webhookUrl: string }> {
+    this.identity = await this.identityStore.load();
     const session = this.identity?.pendingRotation ?? this.currentSession;
     if (!session) {
       throw new Error('webhook rotate: no active tray session');
     }
-    const currentIdentity = this.identity;
+    let currentIdentity = this.identity;
     if (!currentIdentity || currentIdentity.established === false) {
       throw new Error(
         'webhook rotate: this tray has no stable webhook identity to rotate (legacy hub)'
@@ -727,7 +804,11 @@ export class LeaderTrayManager {
       throw new Error('webhook rotate: could not derive the controller token');
     }
     if (!currentIdentity.pendingRotation) {
-      await this.saveIdentity({ ...currentIdentity, pendingRotation: session });
+      const intent = { ...currentIdentity, pendingRotation: session };
+      if (!(await this.identityStore.compareAndSwap(currentIdentity, intent))) {
+        throw new Error('webhook rotate: identity changed in another tab; retry');
+      }
+      this.identity = currentIdentity = intent;
     }
     const rotateUrl = buildTrayWorkerUrl(
       session.workerBaseUrl,
@@ -747,6 +828,13 @@ export class LeaderTrayManager {
         oldSecret: currentIdentity.coneSecret,
         oldRebindSecret: currentIdentity.rebindSecret,
       }),
+    }).catch(async (error: unknown) => {
+      if (isDefinitiveRotationRefusal(error)) {
+        const { pendingRotation: _pending, ...retained } = currentIdentity;
+        await this.identityStore.compareAndSwap(currentIdentity, retained);
+        this.identity = await this.identityStore.load();
+      }
+      throw error;
     });
 
     const identity = parseConeWebhookIdentity(rotated.webhook.url, rotated.webhook.rebindToken);
@@ -759,13 +847,19 @@ export class LeaderTrayManager {
     ) {
       throw new Error('webhook rotate: hub changed the management identity');
     }
-    await this.saveIdentity({ ...identity, established: true });
+    const { pendingRotation: _pending, ...retained } = currentIdentity;
+    const completed = { ...retained, ...identity, established: true };
+    if (!(await this.identityStore.compareAndSwap(currentIdentity, completed))) {
+      this.identity = await this.identityStore.load();
+      throw new Error('webhook rotate: identity changed in another tab; retry');
+    }
+    this.identity = completed;
     const next: LeaderTraySession = {
       ...session,
       webhookUrl: rotated.webhook.url,
       coneId: identity.coneId,
     };
-    await this.store.save(next);
+    if ((await this.store.load())?.trayId === session.trayId) await this.store.save(next);
     if (this.currentSession === session) {
       this.currentSession = next;
       setLeaderTrayRuntimeStatus({ state: 'leader', session: next, error: null });
@@ -857,6 +951,7 @@ export class LeaderTrayManager {
         error: error instanceof Error ? error.message : String(error),
       });
       await this.replacementStore.save(session);
+      await this.finishPendingCreate(await this.store.load());
       await this.store.clear();
       return this.claimReplacement(session, null);
     }
@@ -943,38 +1038,67 @@ export class LeaderTrayManager {
     return claimedSession;
   }
 
+  /** A failed acknowledgement must not make the next deliberate reset replay a completed create. */
+  private async finishPendingCreate(session: LeaderTraySession | null): Promise<void> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = await this.identityStore.load();
+      if (
+        !session ||
+        !current?.pendingCreateTrayId ||
+        current.pendingCreateTrayId !== session.trayId
+      )
+        return;
+      const next = { ...current };
+      delete next.pendingCreateAttemptId;
+      delete next.pendingCreateTrayId;
+      if (await this.identityStore.compareAndSwap(current, next)) {
+        this.identity = next;
+        return;
+      }
+    }
+    throw new Error('Webhook identity changed while acknowledging tray creation');
+  }
+
+  private async prepareCreateIdentity(): Promise<ConeIdentity> {
+    await this.finishPendingCreate(await this.store.load());
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = await this.identityStore.load();
+      if (current?.pendingRotation) {
+        throw new Error('Webhook rotation must finish before tray creation');
+      }
+      if (current?.pendingCreateAttemptId) return current;
+      const next: ConeIdentity = {
+        ...(current ?? {
+          coneId: crypto.randomUUID(),
+          coneSecret: crypto.randomUUID().replace(/-/g, ''),
+          rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+          established: false,
+        }),
+        pendingCreateAttemptId: crypto.randomUUID(),
+      };
+      if (await this.identityStore.compareAndSwap(current, next)) return next;
+    }
+    throw new Error('Webhook identity changed while preparing tray creation');
+  }
+
   private async createTraySession(): Promise<LeaderTraySession> {
-    // Persist before the request: even a lost first-create response must retry
-    // the same home rather than orphaning a freshly generated capability.
-    if (!this.identity) {
-      await this.saveIdentity({
-        coneId: crypto.randomUUID(),
-        coneSecret: crypto.randomUUID().replace(/-/g, ''),
-        rebindSecret: crypto.randomUUID().replace(/-/g, ''),
-        established: false,
-      });
-    }
-    const carry = this.identity!;
-    const bodyObject: {
-      kind?: TrayKind;
-      coneId?: string;
-      coneSecret?: string;
-      rebindSecret?: string;
-    } = {};
-    if (this.options.kind) bodyObject.kind = this.options.kind;
-    if (carry) {
-      bodyObject.coneId = carry.coneId;
-      bodyObject.coneSecret = carry.coneSecret;
-      bodyObject.rebindSecret = carry.rebindSecret;
-    }
-    const hasBody = Object.keys(bodyObject).length > 0;
-    const body = hasBody ? JSON.stringify(bodyObject) : undefined;
+    // Persist one authenticated attempt before POST. Replays recover the same
+    // tray, but a later deliberate replacement gets an independent attempt.
+    const carry = await this.prepareCreateIdentity();
+    this.identity = carry;
+    const body = JSON.stringify({
+      ...(this.options.kind ? { kind: this.options.kind } : {}),
+      coneId: carry.coneId,
+      coneSecret: carry.coneSecret,
+      rebindSecret: carry.rebindSecret,
+      createAttemptId: carry.pendingCreateAttemptId,
+    });
     const created = await this.fetchJson<CreateTrayResponse>(
       buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
       {
         method: 'POST',
-        ...(body ? { headers: { 'content-type': 'application/json' } } : {}),
-        ...(body ? { body } : {}),
+        headers: { 'content-type': 'application/json' },
+        body,
       }
     );
 
@@ -990,7 +1114,6 @@ export class LeaderTrayManager {
       ) {
         throw new Error('Hub returned a different webhook management identity');
       }
-      await this.saveIdentity({ ...coneIdentity, established: true });
     } else if (
       carry.established ||
       created.capabilities.webhook.rebindToken ||
@@ -1010,8 +1133,20 @@ export class LeaderTrayManager {
       runtime: this.options.runtime,
       ...(coneIdentity ? { coneId: coneIdentity.coneId } : {}),
     };
+    // Record the target first: if the final acknowledgement fails after the
+    // session save, reset/clear can recognize that this attempt already landed.
+    const acknowledged: ConeIdentity = {
+      ...carry,
+      established: coneIdentity ? true : carry.established,
+      pendingCreateTrayId: session.trayId,
+    };
+    if (!(await this.identityStore.compareAndSwap(carry, acknowledged))) {
+      throw new Error('Webhook identity changed during tray creation');
+    }
+    this.identity = acknowledged;
     // An attach failure must retry this exact tray, not create another one.
     await this.store.save(session);
+    await this.finishPendingCreate(session);
     return session;
   }
 
@@ -1144,6 +1279,13 @@ class LeaderTrayHttpError extends Error {
       );
     }
   }
+}
+
+function isDefinitiveRotationRefusal(error: unknown): boolean {
+  return (
+    error instanceof LeaderTrayHttpError &&
+    [400, 401, 403, 404, 405, 410, 422].includes(error.status)
+  );
 }
 
 function shouldRecreateTray(error: unknown): boolean {

@@ -265,8 +265,13 @@ export interface PreviewRecord {
     { key: string; size: number; mime: string; etag: string; sha256?: string }
   >;
   totalBytes?: number;
-  /** Authorized writes not yet known to have settled; retained through revoke/expiry. */
+  /** Legacy keys, migrated to timestamped leases on first use. */
   pendingUploadKeys?: string[];
+  pendingUploads?: { objectKey: string; leasedAt: number }[];
+  /** Expired leases may still materialize in R2; never infer cancellation from timeout. */
+  hasUnsettledUploads?: boolean;
+  /** Fixed cleanup horizon, independent of the next sweep's expiresAt. */
+  cleanupUntil?: number;
 }
 
 /**

@@ -169,13 +169,21 @@ export async function handlePreviewUpload(
     sha256?: string;
     allowReplay: boolean;
   } = { previewToken, uploadToken, relativePath, size: declaredSize ?? 0, allowReplay: true };
-  const authorized = await trayStub.fetch(
-    new Request('https://internal/internal/preview/upload-authorize', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(uploadBody),
-    })
-  );
+  let authorized: Response;
+  try {
+    authorized = await withPreviewDeadline(
+      trayStub.fetch(
+        new Request('https://internal/internal/preview/upload-authorize', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(uploadBody),
+        })
+      )
+    );
+  } catch {
+    // The owner may have leased a key before the response disappeared.
+    return jsonResponse({ error: 'Upload authorization unavailable; retry the same file' }, 503);
+  }
   if (!authorized.ok) return authorized;
   const { objectKey, uploaded, leased } = (await authorized.json()) as {
     objectKey: string;
@@ -185,7 +193,9 @@ export async function handlePreviewUpload(
   const release = () => releasePreviewUpload(trayStub, previewToken, objectKey, leased);
   let bytes: ArrayBuffer;
   try {
+    request.signal.throwIfAborted();
     bytes = await readPreviewUploadBody(request);
+    request.signal.throwIfAborted();
   } catch (err) {
     await release(); // No R2 write was started.
     return previewUploadBodyError(err);
@@ -215,18 +225,20 @@ export async function handlePreviewUpload(
     uploadBody.etag = object.etag;
     uploadBody.objectKey = objectKey;
   } catch {
-    // Rejection/timeout can be an ambiguous R2 outcome. Keep the durable lease
-    // so repeated tombstone sweeps catch even a write that completes much later.
+    // Rejection/timeout can be an ambiguous R2 outcome. Do not release: lease
+    // expiry reclaims concurrency, prefix sweeps/lifecycle reclaim late bytes.
     return jsonResponse({ error: 'persistent preview upload failed' }, 502);
   }
   let committed: Response;
   try {
-    committed = await trayStub.fetch(
-      new Request('https://internal/internal/preview/upload-commit', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(uploadBody),
-      })
+    committed = await withPreviewDeadline(
+      trayStub.fetch(
+        new Request('https://internal/internal/preview/upload-commit', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(uploadBody),
+        })
+      )
     );
   } catch {
     return jsonResponse({ error: 'Upload outcome unknown; retry the same file' }, 503);
@@ -277,7 +289,7 @@ async function previewUploadCommitResponse(
     // replay reconciles by digest, and the owner's archive-prefix expiry
     // cleanup bounds orphan lifetime if no commit was actually stored.
     if (committed.status >= 400 && committed.status < 500) {
-      await bucket.delete(key).catch(() => {});
+      await withPreviewDeadline(bucket.delete(key)).catch(() => {});
     }
     return committed;
   }

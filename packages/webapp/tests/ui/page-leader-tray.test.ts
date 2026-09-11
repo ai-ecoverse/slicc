@@ -37,6 +37,11 @@ vi.mock('../../src/scoops/db.js', () => ({
   setState: vi.fn(async (key: string, value: string) => {
     privateState.set(key, value);
   }),
+  compareAndSetState: vi.fn(async (key: string, expected: string | null, value: string) => {
+    if ((privateState.get(key) ?? null) !== expected) return false;
+    privateState.set(key, value);
+    return true;
+  }),
 }));
 beforeEach(() => privateState.clear());
 

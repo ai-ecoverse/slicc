@@ -221,16 +221,29 @@ export class PreviewContinuity {
       if (!namespace) return busy();
       const confirmed = await boundedFetch(
         namespace.get(namespace.idFromName(body.targetTrayId)).fetch(
-          new Request('https://internal/internal/confirm-controller', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ controllerToken: body.targetControllerToken }),
-            signal: AbortSignal.timeout(30_000),
-          })
+          // A frozen pair cannot be retargeted: some locators may already have
+          // moved. Retained controller ownership lets that SAME pair finish
+          // after target expiry, then the expired owner can rove normally.
+          new Request(
+            `https://internal/internal/confirm-controller${previous ? '-ownership' : ''}`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ controllerToken: body.targetControllerToken }),
+              signal: AbortSignal.timeout(30_000),
+            }
+          )
         )
       );
-      if (!confirmed.ok || ((await confirmed.json()) as { confirmed?: boolean }).confirmed !== true)
-        return forbidden();
+      if (!confirmed.ok) return busy();
+      if (((await confirmed.json()) as { confirmed?: boolean }).confirmed !== true) {
+        return previous
+          ? forbidden()
+          : jsonResponse(
+              { error: 'Preview target unavailable', code: 'PREVIEW_TARGET_UNAVAILABLE' },
+              410
+            );
+      }
       const transfer = (tray.previewTransfer ??= {
         id: crypto.randomUUID(),
         targetTrayId: body.targetTrayId,
@@ -298,15 +311,15 @@ export class PreviewContinuity {
       await this.deps.imported();
       return jsonResponse({ imported: true }, 200);
     }
-    if (
-      tray.previewTransfer ||
-      tray.expiredAt ||
-      !body.sourceTrayId ||
-      !body.id ||
-      !Array.isArray(body.records)
-    )
+    if (tray.previewTransfer || !body.sourceTrayId || !body.id || !Array.isArray(body.records))
       return conflict();
-    if (Object.keys(tray.previews ?? {}).length + body.records.length > 10) return conflict();
+    // Internal import follows source-side target confirmation + durable freeze.
+    // Expiry between those steps must not strand the frozen source. Import does
+    // not revive the target's controller/leader session.
+    const activeCount = [...Object.values(tray.previews ?? {}), ...body.records].filter(
+      (record) => record.state !== 'cleanup'
+    ).length;
+    if (activeCount > 10) return conflict();
     for (const record of body.records) {
       if (
         !parseCapabilityToken(record.previewToken) ||

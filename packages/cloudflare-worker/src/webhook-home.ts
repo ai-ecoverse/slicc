@@ -57,16 +57,17 @@ export const WEBHOOK_HOME_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
  * replayed to the current tray on the next successful forward or a rebind
  * (#2812). Semantics, chosen deliberately per the issue's open question:
  *
- *   - **At-least-once.** A queued delivery is removed only after the tray
- *     explicitly acknowledges delivery or filtering. A crash mid-drain replays it — a webhook consumer must
+ *   - **At-least-once.** Until acknowledged or explicitly rejected, a queued
+ *     delivery is retained. A crash mid-drain replays it — a webhook consumer must
  *     already tolerate a retry, so at-least-once beats the silent loss it
  *     replaces.
- *   - **Ordered.** Oldest-first, FIFO, so a consumer sees events in arrival
- *     order.
+ *   - **Ordered per ID.** Explicit rejection backoff can be bypassed by another
+ *     ID, never by a later delivery of the same ID.
  *   - **Bounded.** Count and encoded-storage byte limits reject NEW requests
  *     with backpressure. Accepted events are never evicted or aged out.
  *   - **Durable retry.** An alarm retries even if bind precedes leader connect.
- *     A poison event blocks later events until its registration is repaired.
+ *     Repeated explicit registration failures terminate in a bounded dead-letter
+ *     archive; transient or ambiguous failures never exhaust a retry budget.
  */
 export const WEBHOOK_QUEUE_MAX = 100;
 /** Legacy horizon, retained for migration tests only; accepted events no longer expire. */
@@ -74,6 +75,22 @@ export const WEBHOOK_QUEUE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 /** Below the DO's 128 KiB per-value ceiling, including base64 and JSON overhead. */
 export const WEBHOOK_QUEUE_MAX_BYTES = 120 * 1024;
 export const WEBHOOK_QUEUE_RETRY_MS = 30_000;
+export const WEBHOOK_QUEUE_REJECTION_MAX = 3;
+/** Terminal outcomes only: oldest archived details are replaced, never pending events. */
+export const WEBHOOK_DEAD_LETTER_MAX = 100;
+/** Reserve per-entry retry metadata and room for the outcome counter. */
+const QUEUE_RETRY_METADATA_BYTES = 256;
+
+type RegistrationFailure = 'WEBHOOK_NOT_REGISTERED' | 'WEBHOOK_TARGET_UNRESOLVED';
+
+export interface WebhookDeadLetter {
+  sequence: number;
+  outcome: 'rejected';
+  reason: RegistrationFailure;
+  attempts: number;
+  failedAt: string;
+  delivery: QueuedDelivery;
+}
 
 /** One delivery held for replay. The body is stored base64 so it round-trips any payload. */
 export interface QueuedDelivery {
@@ -83,6 +100,7 @@ export interface QueuedDelivery {
   /** The sender's forwardable headers (the tray relay filters them again on delivery). */
   headers: Record<string, string>;
   enqueuedAt: string;
+  rejection?: { attempts: number; retryAt: number };
 }
 
 /** Persisted home record. Never contains the raw secret — only its SHA-256. */
@@ -104,11 +122,15 @@ export interface WebhookHomeRecord {
   queue?: QueuedDelivery[];
   /** Historical count written by the former drop-oldest queue; never incremented now. */
   droppedCount?: number;
+  /** Lifetime terminal outcomes; details retain only the last WEBHOOK_DEAD_LETTER_MAX. */
+  deadLetterCount?: number;
 }
 
 export interface WebhookHomeStorageLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+  /** DO multi-key puts are atomic: archive outcome and queue removal commit together. */
+  put(entries: Record<string, WebhookHomeRecord | WebhookDeadLetter>): Promise<void>;
   setAlarm(scheduledTime: number): Promise<void>;
 }
 
@@ -441,7 +463,9 @@ export class WebhookHomeDurableObject {
     const next = { ...this.home, queue: [...queue, delivery] };
     if (
       queue.length >= WEBHOOK_QUEUE_MAX ||
-      new TextEncoder().encode(JSON.stringify(next)).byteLength > WEBHOOK_QUEUE_MAX_BYTES
+      new TextEncoder().encode(JSON.stringify(next)).byteLength +
+        next.queue.length * QUEUE_RETRY_METADATA_BYTES >
+        WEBHOOK_QUEUE_MAX_BYTES
     ) {
       return false;
     }
@@ -453,20 +477,48 @@ export class WebhookHomeDurableObject {
   }
 
   /**
-   * Replay queued deliveries to the current tray, oldest first. Stops at the
-   * first delivery the tray does not accept (leader dropped again mid-drain),
-   * leaving it and everything after it queued — at-least-once, in order.
+   * Replay oldest eligible delivery, bypassing only explicit rejection backoff.
+   * An ambiguous outcome remains blocking; same-ID arrival order is preserved.
+   * Explicit registration rejections get three spaced attempts before dead-lettering.
    * One event per invocation bounds request lifetime; the alarm continues the FIFO.
    */
   private async drainQueue(): Promise<void> {
     if (!this.home?.queue?.length) return;
     if (this.home.revokedAt) return;
     await this.state.storage.setAlarm(this.now() + WEBHOOK_QUEUE_RETRY_MS);
-    const next = this.home.queue[0]!;
+    const next = this.nextEligibleDelivery();
+    if (!next) return;
     if (await this.isRegistrationRevoked(next.webhookId)) {
-      await this.removeQueueHead();
+      await this.removeQueuedDelivery(next);
       return;
     }
+    const result = await this.attemptDelivery(next);
+    if (result === 'acknowledged') {
+      await this.removeQueuedDelivery(next);
+    } else if (result) {
+      await this.recordRejection(next, result);
+      if (this.nextEligibleDelivery()) await this.state.storage.setAlarm(this.now() + 1_000);
+    } else if (next.rejection) {
+      // An ambiguous attempt breaks the rejection streak; it can never be the
+      // attempt that spends the terminal budget.
+      delete next.rejection;
+      await this.state.storage.put(HOME_STORAGE_KEY, this.home);
+    }
+  }
+
+  private nextEligibleDelivery(): QueuedDelivery | undefined {
+    const blockedIds = new Set<string>();
+    for (const entry of this.home?.queue ?? []) {
+      if (blockedIds.has(entry.webhookId)) continue;
+      if (!entry.rejection || entry.rejection.retryAt <= this.now()) return entry;
+      blockedIds.add(entry.webhookId);
+    }
+    return undefined;
+  }
+
+  private async attemptDelivery(
+    next: QueuedDelivery
+  ): Promise<RegistrationFailure | 'acknowledged' | null> {
     try {
       const forwarded = await this.forwardToTray(
         next.webhookId,
@@ -474,18 +526,68 @@ export class WebhookHomeDurableObject {
         next.headers
       );
       const ack = forwarded.headers.get('x-slicc-webhook-ack');
-      void forwarded.body?.cancel().catch(() => {});
-      if (forwarded.status >= 300 || (ack !== 'delivered' && ack !== 'filtered')) return;
+      if (forwarded.status < 300 && (ack === 'delivered' || ack === 'filtered')) {
+        void forwarded.body?.cancel().catch(() => {});
+        return 'acknowledged';
+      }
+      if (forwarded.status !== 404 && forwarded.status !== 422) {
+        void forwarded.body?.cancel().catch(() => {});
+        return null;
+      }
+      const body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(forwarded))
+      ) as { accepted?: boolean; code?: string } | null;
+      if (body?.accepted !== false) return null;
+      if (forwarded.status === 404 && body.code === 'WEBHOOK_NOT_REGISTERED') {
+        return 'WEBHOOK_NOT_REGISTERED';
+      }
+      if (forwarded.status === 422 && body.code === 'WEBHOOK_TARGET_UNRESOLVED') {
+        return 'WEBHOOK_TARGET_UNRESOLVED';
+      }
     } catch {
-      // Network exceptions/timeouts are ambiguous: retain for at-least-once replay.
-      return;
+      // Transport, body-read and parse failures are ambiguous; retain for replay.
     }
-    await this.removeQueueHead();
+    return null;
   }
 
-  private async removeQueueHead(): Promise<void> {
+  private async recordRejection(
+    delivery: QueuedDelivery,
+    reason: RegistrationFailure
+  ): Promise<void> {
+    const attempts = (delivery.rejection?.attempts ?? 0) + 1;
+    if (attempts < WEBHOOK_QUEUE_REJECTION_MAX) {
+      delivery.rejection = { attempts, retryAt: this.now() + WEBHOOK_QUEUE_RETRY_MS };
+      await this.state.storage.put(HOME_STORAGE_KEY, this.home!);
+      return;
+    }
+    const sequence = (this.home!.deadLetterCount ?? 0) + 1;
+    const archive: WebhookDeadLetter = {
+      sequence,
+      outcome: 'rejected',
+      reason,
+      attempts,
+      failedAt: this.isoNow(),
+      delivery,
+    };
+    const home: WebhookHomeRecord = {
+      ...this.home!,
+      deadLetterCount: sequence,
+      queue: this.home!.queue!.filter((entry) => entry !== delivery),
+    };
+    if (!home.queue!.length) delete home.queue;
+    // A single atomic multi-key put prevents both loss and a contradictory
+    // terminal receipt followed by replay after a crash.
+    await this.state.storage.put({
+      [HOME_STORAGE_KEY]: home,
+      [`webhook-dead-letter:${(sequence - 1) % WEBHOOK_DEAD_LETTER_MAX}`]: archive,
+    });
+    this.home = home;
+    if (home.queue?.length) await this.state.storage.setAlarm(this.now() + 1_000);
+  }
+
+  private async removeQueuedDelivery(delivery: QueuedDelivery): Promise<void> {
     if (!this.home?.queue) return;
-    this.home.queue.shift();
+    this.home.queue = this.home.queue.filter((entry) => entry !== delivery);
     if (this.home.queue.length === 0) delete this.home.queue;
     await this.state.storage.put(HOME_STORAGE_KEY, this.home);
     if (this.home.queue?.length) await this.state.storage.setAlarm(this.now() + 1_000);

@@ -1303,8 +1303,11 @@ async function handleWebhookRotate(
   }
   let body: { oldConeId?: string; oldSecret?: string; oldRebindSecret?: string };
   try {
-    body = await request.json();
-  } catch {
+    body = JSON.parse(new TextDecoder().decode(await readBoundedWebhookBody(request)));
+  } catch (error) {
+    if (error instanceof WebhookBodyError) {
+      return jsonResponse({ error: error.message, code: 'WEBHOOK_BODY_REJECTED' }, error.status);
+    }
     return jsonResponse({ error: 'invalid body', code: 'INVALID_BODY' }, 400);
   }
   if (
@@ -1414,31 +1417,26 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   // A stable cone identity (#2812). The leader mints `coneId` + the two cone
   // secrets ONCE, persists them, and sends the same three back on every reset
   // so the webhook home — and the external-facing URL under it — stays byte-for-
-  // byte identical while the tray roves. A first-run leader (or an older one)
-  // sends none, and gets a fresh set it should persist.
+  // byte identical while the tray roves. Identity-less clients stay on the
+  // legacy URL: they cannot persist/rebind a stable home during recovery.
   const coneIdentity = parseConeIdentity(rawBody);
   if (coneIdentity === 'invalid') {
     return jsonResponse(
-      { error: 'coneId/coneSecret/rebindSecret must be non-empty strings', code: 'INVALID_BODY' },
+      { error: 'Invalid cone identity or createAttemptId', code: 'INVALID_BODY' },
       400
     );
   }
-  const coneId = coneIdentity?.coneId ?? crypto.randomUUID();
-  // On a rebind the leader supplies the ORIGINAL secrets so the delivery URL is
-  // unchanged and the rebind is authenticated; on a first bind we mint them.
-  const coneSecret = coneIdentity?.coneSecret ?? createCapabilityToken(coneId).split('.')[1]!;
-  const rebindSecret = coneIdentity?.rebindSecret ?? createCapabilityToken(coneId).split('.')[1]!;
 
   const url = new URL(request.url);
-  const trayId = crypto.randomUUID();
-  const payload: CreateTrayRequest = {
+  const trayId = coneIdentity ? await trayIdForCreateAttempt(coneIdentity) : crypto.randomUUID();
+  let payload: CreateTrayRequest = {
     trayId,
     createdAt: new Date().toISOString(),
     joinToken: createCapabilityToken(trayId),
     controllerToken: createCapabilityToken(trayId),
     // Legacy tray-scoped webhook token: still minted so an already-cached
     // `/webhook/<trayId>...` URL keeps working (and its 308 migration path),
-    // but new registrations hand out the stable `/wh/<coneId>...` shape below.
+    // while stable-aware clients receive `/wh/<coneId>...` below.
     webhookToken: createCapabilityToken(trayId),
     kind,
   };
@@ -1455,23 +1453,28 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   if (initResponse.status >= 400) {
     return initResponse;
   }
+  // The DO returns its original record on retry, including all capabilities
+  // and createdAt. Never return the newly minted (uninstalled) retry tokens.
+  payload = (await initResponse.json()) as CreateTrayRequest;
 
   // Bind (or rebind) the cone's webhook home to this fresh tray. The home
   // confirms `controllerToken` against the tray before it points deliveries
   // here, so a first bind claims the home and a rebind proves both the rebind
   // secret and control of the target tray. Never silently replace a stable
   // identity with a legacy URL on failure: the caller must retain and retry it.
-  const bind = await bindWebhookHome(env, url, {
-    coneId,
-    secret: coneSecret,
-    rebindSecret,
-    trayId,
-    controllerToken: payload.controllerToken,
-  });
+  const bind = coneIdentity
+    ? await bindWebhookHome(env, url, {
+        coneId: coneIdentity.coneId,
+        secret: coneIdentity.coneSecret,
+        rebindSecret: coneIdentity.rebindSecret,
+        trayId,
+        controllerToken: payload.controllerToken,
+      })
+    : { ok: true };
   if (!bind.ok) {
     return jsonResponse(
       {
-        error: 'Webhook home bind failed; retry with the same cone identity',
+        error: 'Webhook home bind failed; retry with the same cone identity and createAttemptId',
         code: 'WEBHOOK_HOME_BIND_FAILED',
       },
       503,
@@ -1482,7 +1485,7 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   return jsonResponse(
     {
       trayId,
-      coneId,
+      ...(coneIdentity ? { coneId: coneIdentity.coneId } : {}),
       createdAt: payload.createdAt,
       capabilities: {
         join: {
@@ -1493,13 +1496,16 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
           token: payload.controllerToken,
           url: `${url.origin}/controller/${payload.controllerToken}`,
         },
-        webhook: {
-          token: `${coneId}.${coneSecret}`,
-          url: `${url.origin}/wh/${coneId}.${coneSecret}`,
-          // The rebind capability the leader persists and presents on every
-          // later reset. Never logged, never a lick — it steers deliveries.
-          rebindToken: `${coneId}.${rebindSecret}`,
-        },
+        webhook: coneIdentity
+          ? {
+              token: `${coneIdentity.coneId}.${coneIdentity.coneSecret}`,
+              url: `${url.origin}/wh/${coneIdentity.coneId}.${coneIdentity.coneSecret}`,
+              rebindToken: `${coneIdentity.coneId}.${coneIdentity.rebindSecret}`,
+            }
+          : {
+              token: payload.webhookToken,
+              url: `${url.origin}/webhook/${payload.webhookToken}`,
+            },
       },
     },
     201
@@ -1510,36 +1516,81 @@ interface ConeIdentity {
   coneId: string;
   coneSecret: string;
   rebindSecret: string;
+  createAttemptId: string;
+}
+
+/**
+ * An authenticated, opaque attempt address. Knowing the public trayId or coneId
+ * cannot retrieve a tray's capabilities: reproducing this address also requires
+ * the private rebind secret. A new persisted attempt makes a deliberate reset
+ * distinct; retries after bind failure or a lost response reuse the same DO.
+ */
+async function trayIdForCreateAttempt(identity: ConeIdentity): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(
+      JSON.stringify([
+        'tray-create-v1',
+        identity.coneId,
+        identity.rebindSecret,
+        identity.createAttemptId,
+      ])
+    )
+  );
+  // Keep the existing 128-bit UUID-shaped tray grammar. Preview DNS labels
+  // encode its 32 hex digits; a full SHA-256 hex ID cannot round-trip there.
+  const hex = Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-');
 }
 
 /**
  * The cone identity from the create body: the triple when present and valid,
- * `undefined` when absent (a fresh identity is minted for a first-run leader),
+ * `undefined` when absent (legacy clients have no webhook home dependency),
  * `'invalid'` when malformed or partial.
  *
  * All three travel together — a rebind needs the delivery secret (so the URL
  * is unchanged) AND the rebind secret (to authenticate). A body that supplies
- * some but not all is a client bug, refused rather than silently half-applied.
+ * some but not all, or omits the persisted creation attempt, is refused rather
+ * than silently half-applied.
  */
 function parseConeIdentity(rawBody: string): ConeIdentity | undefined | 'invalid' {
   if (rawBody.trim() === '') return undefined;
-  let body: { coneId?: unknown; coneSecret?: unknown; rebindSecret?: unknown };
+  let body: {
+    coneId?: unknown;
+    coneSecret?: unknown;
+    rebindSecret?: unknown;
+    createAttemptId?: unknown;
+  };
   try {
     body = JSON.parse(rawBody) as typeof body;
   } catch {
     return 'invalid';
   }
   const present = [body.coneId, body.coneSecret, body.rebindSecret].filter((v) => v !== undefined);
-  if (present.length === 0) return undefined;
+  if (present.length === 0) return body.createAttemptId === undefined ? undefined : 'invalid';
   if (present.length !== 3) return 'invalid';
-  const { coneId, coneSecret, rebindSecret } = body;
-  const ok = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
-  // `.` is the token delimiter — a coneId carrying one would corrupt the
-  // `<coneId>.<secret>` grammar the delivery route parses.
-  if (!ok(coneId) || coneId.includes('.') || !ok(coneSecret) || !ok(rebindSecret)) {
+  const { coneId, coneSecret, rebindSecret, createAttemptId } = body;
+  // Every component is embedded in a URL capability: exclude delimiters,
+  // whitespace, path/query syntax and escaping, not only dots in coneId.
+  const ok = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+  if (
+    !ok(coneId) ||
+    !ok(coneSecret) ||
+    !ok(rebindSecret) ||
+    !ok(createAttemptId) ||
+    createAttemptId.length < 32
+  ) {
     return 'invalid';
   }
-  return { coneId, coneSecret, rebindSecret };
+  return { coneId, coneSecret, rebindSecret, createAttemptId };
 }
 
 /** Bind or rebind a cone's webhook home to `trayId`. */

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handlePreviewRequest } from '../src/preview-handler.js';
 import { handlePreviewUpload } from '../src/preview-routes.js';
-import type { TrayRecord } from '../src/shared.js';
+import {
+  PREVIEW_CLEANUP_HORIZON_MS,
+  PREVIEW_UPLOAD_LEASE_MS,
+} from '../src/session-tray-preview.js';
+import { TRAY_RECLAIM_TTL_MS, type TrayRecord } from '../src/shared.js';
 import { createTestEnv, setupConnectedLeader } from './preview-bridge-harness.js';
 
 const base = 'https://www.sliccy.ai';
@@ -61,7 +65,7 @@ function memoryBucket() {
   return { objects, implementation: bucket, bucket: bucket as unknown as R2Bucket };
 }
 
-async function harness(persistent = false) {
+async function harness(persistent = false, ttlMs = 60_000) {
   const r2 = memoryBucket();
   const clock = { now: Date.now() };
   const { env, namespace } = createTestEnv({ previewStorage: r2.bucket, now: () => clock.now });
@@ -79,7 +83,7 @@ async function harness(persistent = false) {
       entryPath: '/site/index.html',
       allowLive: true,
       workerBaseUrl: base,
-      ...(persistent ? { ttlMs: 60_000 } : {}),
+      ...(persistent ? { ttlMs } : {}),
     })
   );
   expect(minted.status).toBe(200);
@@ -143,6 +147,89 @@ function failPutOnce(leader: Leader, predicate: (tray: TrayRecord) => boolean) {
 }
 
 describe('preview continuity durable failure recovery', () => {
+  async function expireTarget(h: Awaited<ReturnType<typeof harness>>) {
+    const socket = h.target.state.getWebSockets('leader')[0];
+    socket.close();
+    await h.target.stub.webSocketClose(socket);
+    h.clock.now += TRAY_RECLAIM_TTL_MS + 1;
+    const response = await h.target.stub.fetch(
+      new Request('https://internal/internal/confirm-controller', {
+        method: 'POST',
+        body: JSON.stringify({ controllerToken: h.target.controllerToken }),
+      })
+    );
+    expect(await response.json()).toEqual({ confirmed: false });
+    expect((await h.target.storage.get<TrayRecord>('tray'))?.expiredAt).toBeDefined();
+  }
+
+  it('explicitly permits replacing an expired target only before the source freezes', async () => {
+    const h = await harness();
+    await expireTarget(h);
+    const refused = await h.transfer();
+    expect(refused.status).toBe(410);
+    expect(await refused.json()).toMatchObject({ code: 'PREVIEW_TARGET_UNAVAILABLE' });
+    expect((await h.source.storage.get<TrayRecord>('tray'))?.previewTransfer).toBeUndefined();
+    const next = await h.newLeader();
+    expect((await h.transfer(h.source, next)).status).toBe(200);
+    expect(
+      (await h.source.stub.fetch(resolve(h.preview.previewToken))).headers.get(
+        'x-slicc-preview-tray'
+      )
+    ).toBe(next.session.trayId);
+  });
+
+  it.each(['import', 'relocate', 'activate'])(
+    'finishes a frozen pair after real target expiry at %s, then roves from that owner',
+    async (stage) => {
+      const h = await harness();
+      const failing = stage === 'relocate' ? h.source.stub : h.target.stub;
+      const fetch = failing.fetch.bind(failing);
+      let failed = false;
+      const spy = vi.spyOn(failing, 'fetch').mockImplementation(async (request) => {
+        if (!failed && new URL(request.url).pathname === `/internal/preview/${stage}`) {
+          failed = true;
+          // Exercise no import receipt, a partially moved locator, and lost
+          // activation acknowledgement independently.
+          if (stage !== 'import') await fetch(request);
+          return new Response(null, { status: 503 });
+        }
+        return fetch(request);
+      });
+      expect((await h.transfer()).status).toBe(503);
+      spy.mockRestore();
+      await expireTarget(h);
+      const source = h.namespace.reconstruct(h.source.session.trayId);
+      const target = h.namespace.reconstruct(h.target.session.trayId);
+      const resume = await source.fetch(
+        post('transfer', {
+          controllerToken: h.source.controllerToken,
+          targetTrayId: h.target.session.trayId,
+          targetControllerToken: h.target.controllerToken,
+        })
+      );
+      expect(resume.status).toBe(200);
+      expect((await h.target.storage.get<TrayRecord>('tray'))?.expiredAt).toBeDefined();
+      const next = await h.newLeader();
+      expect(
+        (
+          await target.fetch(
+            post('transfer', {
+              controllerToken: h.target.controllerToken,
+              targetTrayId: next.session.trayId,
+              targetControllerToken: next.controllerToken,
+            })
+          )
+        ).status
+      ).toBe(200);
+      const resolved = await source.fetch(resolve(h.preview.previewToken));
+      expect(resolved.status).toBe(200);
+      expect(resolved.headers.get('x-slicc-preview-tray')).toBe(next.session.trayId);
+      expect(
+        (await next.storage.get<TrayRecord>('tray'))?.previews?.[h.preview.previewToken]
+      ).toMatchObject({ servedRoot: '/site', entryPath: '/site/index.html' });
+    }
+  );
+
   it.each([
     { end: 'expiry', failure: 'ambiguous commit' },
     { end: 'expiry', failure: 'failed delete' },
@@ -183,7 +270,7 @@ describe('preview continuity durable failure recovery', () => {
         h.preview.previewToken
       ];
       expect(tombstone.state).toBe('cleanup');
-      expect(tombstone.pendingUploadKeys).toHaveLength(1);
+      expect(tombstone.pendingUploads).toHaveLength(1);
       expect(h.r2.objects.size).toBe(0);
       if (failure === 'ambiguous commit') {
         const fetch = h.target.stub.fetch.bind(h.target.stub);
@@ -263,11 +350,81 @@ describe('preview continuity durable failure recovery', () => {
       expect(h.r2.implementation.put).not.toHaveBeenCalled();
       expect(
         (await h.source.storage.get<TrayRecord>('tray'))!.previews![h.preview.previewToken]
-          .pendingUploadKeys
+          .pendingUploads
       ).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('hands an arbitrarily late timed-out write to R2 lifecycle after bounded local cleanup', async () => {
+    const h = await harness(true);
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const put = h.r2.implementation.put.getMockImplementation()!;
+    let materializedAt = 0;
+    h.r2.implementation.put.mockImplementation(async (...args) => {
+      await paused;
+      materializedAt = h.clock.now;
+      return put(...args);
+    });
+    vi.useFakeTimers();
+    try {
+      const upload = h.upload();
+      await vi.waitFor(() => expect(h.r2.implementation.put).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect((await upload).status).toBe(502);
+      h.clock.now += 60_001;
+      await h.source.stub.alarm();
+      h.clock.now += PREVIEW_CLEANUP_HORIZON_MS;
+      await h.namespace.reconstruct(h.source.session.trayId).alarm();
+      expect(
+        (await h.source.storage.get<TrayRecord>('tray'))!.previews![h.preview.previewToken]
+      ).toBeUndefined();
+      expect(h.r2.objects.size).toBe(0);
+      resume(); // Backend may complete even AFTER the edge and local cleanup owner are gone.
+      await vi.waitFor(() => expect(h.r2.objects.size).toBe(1));
+      expect((await h.source.stub.fetch(resolve(h.preview.previewToken))).status).toBe(404);
+      // Model the independently deployed 90-day R2 age rule, measured from
+      // materialization, not lease time. This is explicitly not a DO callback.
+      const lifecycle = () => {
+        if (h.clock.now >= materializedAt + 90 * 86_400_000) h.r2.objects.clear();
+      };
+      lifecycle();
+      expect(h.r2.objects.size).toBe(1);
+      h.clock.now += 90 * 86_400_000;
+      lifecycle();
+      expect(h.r2.objects.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never overwrites or deletes a retry canonical object when an expired put completes late', async () => {
+    const h = await harness(true, 3_600_000);
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const put = h.r2.implementation.put.getMockImplementation()!;
+    h.r2.implementation.put.mockImplementationOnce(async (...args) => {
+      await paused;
+      return put(...args);
+    });
+    const oldUpload = h.upload('old!');
+    await vi.waitFor(() => expect(h.r2.implementation.put).toHaveBeenCalledTimes(1));
+    h.clock.now += PREVIEW_UPLOAD_LEASE_MS;
+    expect((await h.upload()).status).toBe(204);
+    const canonical = (await h.source.storage.get<TrayRecord>('tray'))!.previews![
+      h.preview.previewToken
+    ].uploadedFiles!['index.html'].key;
+    resume();
+    expect((await oldUpload).status).toBe(409);
+    expect([...h.r2.objects.keys()]).toEqual([canonical]);
+    expect(new TextDecoder().decode(h.r2.objects.get(canonical))).toBe('data');
+    expect((await h.finalize()).status).toBe(200);
   });
 
   it('bounds unresolved leases instead of permitting unlimited cleanup bookkeeping', async () => {
@@ -285,9 +442,175 @@ describe('preview continuity durable failure recovery', () => {
     expect((await authorize()).status).toBe(429);
     expect(
       (await h.source.storage.get<TrayRecord>('tray'))!.previews![h.preview.previewToken]
-        .pendingUploadKeys
+        .pendingUploads
     ).toHaveLength(8);
   });
+
+  it.each(['upload-authorize', 'upload-commit', 'upload-release'] as const)(
+    'bounds a stalled %s response without losing canonical bytes',
+    async (action) => {
+      const h = await harness(true, 3_600_000);
+      const fetch = h.source.stub.fetch.bind(h.source.stub);
+      let stalled = false;
+      const spy = vi.spyOn(h.source.stub, 'fetch').mockImplementation(async (request) => {
+        const response = await fetch(request);
+        if (new URL(request.url).pathname.endsWith(`/${action}`)) {
+          stalled = true;
+          return new Promise<Response>(() => {});
+        }
+        return response;
+      });
+      vi.useFakeTimers();
+      try {
+        const upload = h.upload();
+        await vi.waitFor(() => expect(stalled).toBe(true));
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect((await upload).status).toBe(action === 'upload-release' ? 204 : 503);
+        spy.mockRestore();
+        expect((await h.upload()).status).toBe(204);
+        expect(h.r2.implementation.put).toHaveBeenCalledTimes(1);
+        expect((await h.finalize()).status).toBe(200);
+        expect(await (await handlePreviewRequest(new Request(h.preview.url), h.env)).text()).toBe(
+          'data'
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each(['lost authorization', 'lost release', 'aborted edge'] as const)(
+    'recovers eight leaked leases after %s without reviving an old candidate',
+    async (failure) => {
+      const h = await harness(true, 3_600_000);
+      const fetch = h.source.stub.fetch.bind(h.source.stub);
+      const keys: string[] = [];
+      const spy = vi.spyOn(h.source.stub, 'fetch').mockImplementation(async (request) => {
+        const action = new URL(request.url).pathname;
+        if (action.endsWith('/upload-release')) throw new Error('release lost');
+        const response = await fetch(request);
+        if (action.endsWith('/upload-authorize') && response.ok) {
+          keys.push(((await response.clone().json()) as { objectKey: string }).objectKey);
+          if (failure === 'lost authorization') throw new Error('authorization response lost');
+        }
+        return response;
+      });
+      for (let i = 0; i < 8; i++) {
+        if (failure === 'aborted edge') {
+          // The edge disappears after authorization: no callback can execute.
+          expect(
+            (
+              await h.source.stub.fetch(
+                post('upload-authorize', {
+                  previewToken: h.preview.previewToken,
+                  uploadToken: h.preview.uploadToken,
+                  relativePath: 'index.html',
+                  size: 4,
+                })
+              )
+            ).status
+          ).toBe(200);
+        } else {
+          const abort = new AbortController();
+          abort.abort();
+          const response = await handlePreviewUpload(
+            new Request(`${base}/upload?path=index.html`, {
+              method: 'PUT',
+              headers: { authorization: `Bearer ${h.preview.uploadToken}` },
+              body: 'data',
+              signal: abort.signal,
+            }),
+            h.source.stub,
+            h.r2.bucket,
+            h.preview.previewToken
+          );
+          expect(response.status).toBe(failure === 'lost authorization' ? 503 : 400);
+        }
+      }
+      expect((await h.upload()).status).toBe(429);
+      spy.mockRestore();
+      h.clock.now += PREVIEW_UPLOAD_LEASE_MS;
+      h.namespace.reconstruct(h.source.session.trayId);
+      expect((await h.upload()).status).toBe(204);
+      const record = (await h.source.storage.get<TrayRecord>('tray'))!.previews![
+        h.preview.previewToken
+      ];
+      expect(record.pendingUploads).toEqual([]);
+      expect(record.hasUnsettledUploads).toBe(true);
+      // An abandoned candidate cannot acquire a different canonical path after expiry.
+      expect(
+        (
+          await h.source.stub.fetch(
+            post('upload-commit', {
+              previewToken: h.preview.previewToken,
+              uploadToken: h.preview.uploadToken,
+              relativePath: 'late.html',
+              size: 4,
+              objectKey: keys[0],
+              mime: 'text/html',
+              etag: 'late',
+            })
+          )
+        ).status
+      ).toBe(409);
+      expect((await h.finalize()).status).toBe(200);
+      expect(await (await handlePreviewRequest(new Request(h.preview.url), h.env)).text()).toBe(
+        'data'
+      );
+    }
+  );
+
+  it.each(['expiry', 'revoke'] as const)(
+    'bounds %s cleanup metadata independently of the live preview limit, even with failed sweeps',
+    async (end) => {
+      const h = await harness(true);
+      await h.source.stub.fetch(
+        post('upload-authorize', {
+          previewToken: h.preview.previewToken,
+          uploadToken: h.preview.uploadToken,
+          relativePath: 'index.html',
+          size: 4,
+        })
+      );
+      h.r2.implementation.list.mockRejectedValue(new Error('R2 unavailable'));
+      if (end === 'expiry') {
+        h.clock.now += 60_001;
+        await h.source.stub.alarm();
+      } else {
+        await h.source.stub.fetch(
+          post('stop', {
+            controllerToken: h.source.controllerToken,
+            previewToken: h.preview.previewToken,
+          })
+        );
+      }
+      const tombstone = (await h.source.storage.get<TrayRecord>('tray'))!.previews![
+        h.preview.previewToken
+      ];
+      expect(tombstone.state).toBe('cleanup');
+      for (let i = 0; i < 10; i++) {
+        expect(
+          (
+            await h.source.stub.fetch(
+              post('mint', {
+                controllerToken: h.source.controllerToken,
+                servedRoot: '/site',
+                entryPath: '/site/index.html',
+                allowLive: true,
+                workerBaseUrl: base,
+              })
+            )
+          ).status
+        ).toBe(200);
+      }
+      h.clock.now += PREVIEW_CLEANUP_HORIZON_MS;
+      await h.namespace.reconstruct(h.source.session.trayId).alarm();
+      expect(
+        (await h.source.storage.get<TrayRecord>('tray'))!.previews![h.preview.previewToken]
+      ).toBeUndefined();
+      expect(h.source.storage.deleteAlarm).toHaveBeenCalled();
+    }
+  );
 
   it('retries a failed A locator write during B to C before acknowledging, then survives restarting A', async () => {
     const h = await harness();

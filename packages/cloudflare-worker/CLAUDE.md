@@ -86,9 +86,13 @@ manager-private, worker-URL-scoped IndexedDB (not public session/status or the V
 sends the same three on every `POST /tray` so the worker REBINDS the home instead of minting
 a new URL. **Rebind is two-factor**: the home's own rebind secret AND the target tray
 confirming the controller token (`/internal/confirm-controller`), so a leaked coneId cannot
-steer deliveries at a tray the caller does not lead. The legacy `/webhook/<trayId>...` shape
-and its `supersededByWebhookUrl` 308 stay ONLY as the migration path for already-cached
-URLs; `supersededByJoinUrl` still drives the join surface. Ordering, `json=true` convention:
+steer deliveries at a tray the caller does not lead. Stable-aware creates also require a
+private `createAttemptId`, persisted before the request and retained until the returned session
+is durable. The cone ID, rebind secret and attempt derive an opaque tray address: failed binds
+and lost responses reuse the original tray/capabilities; deliberate resets mint a fresh attempt.
+Identity-less clients keep the legacy `/webhook/<trayId>...` shape with NO home dependency.
+Its `supersededByWebhookUrl` 308 remains for those clients and already-cached URLs;
+`supersededByJoinUrl` still drives the join surface. Ordering, `json=true` convention:
 [docs § Signaling](../../docs/cloudflare-worker-details.md#signaling).
 
 ### WebhookHome lifecycle
@@ -102,9 +106,14 @@ serve the old tray). Only secret HASHES are stored. A home self-expires after
 `env.staging` aligned.
 
 Every delivery is durably enqueued before forwarding or `202`; acceptance is not completed
-agent work. FIFO replay is at-least-once and removes a head only after an explicit
-`delivered|filtered` acknowledgement or registration revocation. A poison head blocks the
-queue until repair/revoke. Limits: 100 events, 120 KiB encoded home record, 64 KiB request
+agent work. Replay is at-least-once and removes an event only after an explicit
+`delivered|filtered` acknowledgement, registration revocation, or three explicit
+unknown-registration/unresolved-target rejections at least 30 seconds apart. Rejections
+atomically move to a separate latest-100 terminal archive with a durable lifetime counter;
+older terminal details may be replaced, never pending work. Ambiguous/transient responses
+retain the event and reset the rejection streak. Explicit rejection backoff permits other
+IDs to proceed, preserving FIFO within each ID. Limits: 100 events, 120 KiB encoded home
+record (including retry-metadata reservation), 64 KiB request
 body, eight pending requests; saturation rejects new work with `429`, never evicts accepted
 events. There is no accepted-event TTL. Durable alarms retry after 30 seconds when blocked,
 or one second after successful head removal with backlog.
@@ -169,6 +178,8 @@ gates it. `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys via
 npm run build -w @slicc/webapp   # build webapp first (static assets)
 CFG=packages/cloudflare-worker/wrangler.jsonc
 npx wrangler dev --config "$CFG"
+# Mandatory read-only prerequisite for any live deploy or secret mutation:
+node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
 npx wrangler deploy --env staging --config "$CFG"   # drop --env staging for prod
 cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
 ```
@@ -177,6 +188,14 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 
 `release-native.mjs --gate=worker` gates production. Hub + preview configs deploy as a
 pair (shared DO/token format); R2 uploads precede deploy; routes-only failures non-fatal.
+Bounded preview leases require an enabled `previews/` object-age lifecycle rule on
+`sliccy-now-basic-storage` (shared production/staging `PREVIEW_STORAGE`): provision
+90-day expiry before rollout. The read-only `verify-preview-lifecycle.mjs` gate fails
+deployment if absent/unsafe/unreadable; it never mutates bucket policy. The minimum
+safe age is >60 days (30d pending + 30d ready), the maximum accepted age is 90 days.
+This is separate from the asset archive's 14-day rule. Preserve the preview rule even
+after rollback so arbitrarily late R2 writes eventually expire; see the runbook for
+operator setup and permissions. Local dev/dry-run builds do not need the gate.
 Needs `CLOUDFLARE_API_TOKEN` (Workers Edit, R2 R/W, Zone Routes Edit) + account ID. Retry
 logic, staging deploy, `serve --bridge`:
 [deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md).

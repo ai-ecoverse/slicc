@@ -154,14 +154,35 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
     against arbitrary same-origin code. Existing private sessions migrate before publication.
     Every subsequent create presents the same identity and must confirm the stable binding.
     Old hubs may return legacy webhook URLs only before any stable binding is acknowledged.
+    Identity-less clients (including older/native leaders) receive the legacy `/webhook/`
+    capability and never access `WEBHOOK_HOMES`; their supersede redirect contract is unchanged.
+    Stable-aware creates additionally require a private `createAttemptId` (32–128 URL-safe
+    alphanumeric, `_` or `-` characters). Persist it before `POST /tray`, retain it across
+    errors/lost responses/reload until the returned session is durable, and mint a fresh one
+    for the next deliberate reset. The worker derives an opaque tray address from the cone ID,
+    rebind secret and attempt ID, so retries reuse the original DO, timestamp and capabilities
+    rather than leaking a tray on each failed bind. Knowing a public tray ID cannot replay
+    creation without the private credentials. Never use the cone ID alone as the retry key:
+    resets must create distinct trays. Cone IDs and both secrets accept only 1–128 URL-safe
+    alphanumeric, `_` or `-` characters; dots and URL delimiters are rejected before creation.
     Rotation first persists a private intent containing the old controller session. If its
     response is lost, reload replays the deterministic old-secret rotation before any
-    attach/rebind/reset. Only durable new credentials clear the intent; replay failure
-    blocks rebinding rather than abandoning the home with a stale delivery secret.
+    attach/rebind/reset. Ambiguous transport/server failures retain the intent and block
+    rebinding; definitive HTTP refusals (`400`/`401`/`403`/`404`/`405`/`410`/`422`) drop
+    the rejected intent so startup is not permanently blocked by stale authority.
+    Atomic IndexedDB compare-and-swap reconciles against the identity originally read:
+    late responses cannot restore a revoked secret or clear another tab's newer intent.
+    A newer pending rotation still blocks reconnect until its replay completes.
   - **Replacement is resumable.** `LeaderTrayManager.reset()` persists the source tray;
     the ordinary session store holds the newly created target before attach. Reset and
     stale-session recovery transfer previews before superseding the source. A failed
-    transfer retains both records and reload retries the same pair, never a third target.
+    transfer retains both records and reload retries the same pair. Only the source's
+    `410 PREVIEW_TARGET_UNAVAILABLE` proves no freeze occurred and permits a fresh target.
+    Generic `403`/`410` do not. A frozen pair instead confirms retained target controller
+    ownership and finishes the same import/locator/activation sequence after target expiry.
+    That does not revive the expired leader session: the manager persists the completed
+    target as its next source and attempts one bounded extra rove. Thus partially moved
+    locators are never abandoned by blindly replacing a frozen target.
   - **Rebind is two-factor (the strong option).** The home requires BOTH its own rebind
     secret AND the target tray confirming the presented controller token
     (`/internal/confirm-controller`, a round trip per rebind). A leaked `coneId` + rebind
@@ -174,20 +195,43 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
     the leader retains its identity for retry instead of silently falling back to a
     tray-scoped webhook URL.
   - **Durable acceptance, not completed work.** The home schedules an alarm and persists
-    every delivery before forwarding or returning `202`. FIFO replay removes a head only
+    every delivery before forwarding or returning `202`. Replay removes an event only
     on an explicit `x-slicc-webhook-ack: delivered|filtered` success response, or registration
-    revocation. Ambiguous responses, timeouts, missing registrations and unresolved targets
-    retain the head and block later events until repair or revocation. Delivery is
+    revocation, or bounded explicit rejection. Missing registrations (`404` with JSON
+    `accepted: false, code: WEBHOOK_NOT_REGISTERED`) and unresolved targets (`422` with
+    `accepted: false, code: WEBHOOK_TARGET_UNRESOLVED`) get three consecutive explicit
+    rejection attempts, at least 30 seconds apart, then terminate as dead letters.
+    Registration repair during this grace period allows normal delivery. Arrivals cannot
+    accelerate the budget. While an explicitly rejected ID waits for retry, other IDs may
+    proceed; later events for that same ID cannot bypass it. Scheduling scans the bounded
+    queue, with no separate partition registry or cursor. Ambiguous responses, generic errors, malformed response bodies
+    and timeouts retain the head indefinitely and reset any rejection streak. Delivery is
     at-least-once: a lost acknowledgement or crash can replay an event; this does not
     guarantee exactly-once agent work or downstream side effects.
   - **Backpressure, never eviction.** Limits are 100 events and 120 KiB for the encoded
-    home record (including base64/JSON overhead), 64 KiB per request body, and eight
+    home record (including base64/JSON overhead and 256 bytes per event reserved for retry metadata),
+    64 KiB per request body, and eight
     pending home requests. Queue saturation returns `429 WEBHOOK_QUEUE_FULL`; request
     saturation returns `429 WEBHOOK_HOME_BUSY` (both `Retry-After: 30`); oversized bodies
     return `413`. Accepted events have no queue TTL and are never dropped to admit new
     work. The 90-day home admission expiry is not an event-retention TTL. An alarm retries
     every 30 seconds while blocked, including when bind precedes leader connect; successful
     head removal schedules remaining backlog after one second.
+  - **Bounded terminal archive.** Queue removal and the full dead-letter receipt commit
+    in one atomic DO multi-key put. `webhook-home.deadLetterCount` records the lifetime
+    total; `webhook-dead-letter:0` through `:99` retain the latest 100 terminal receipts,
+    each with sequence, `outcome: rejected`, reason, failure time and original delivery.
+    Once full, new terminal outcomes replace the oldest terminal details, not pending
+    work. This is at most about 12 MiB separate from queue capacity; archived outcomes
+    cannot starve admission. These are operator-only DO records, not public responses or
+    automatic replay: inspect/export them with privileged storage tooling before retention
+    wraps, repair the registration and explicitly resubmit if needed. Do not replay a
+    revoked registration. `202` is durable acceptance, not guaranteed eventual delivery.
+    Bounded rejection plus backoff bypass preserves per-ID FIFO without a full partition
+    scheduler: unrelated work can proceed on the next drain while a typo retries.
+    After explicit rejection, eligible backlog schedules a one-second alarm; otherwise
+    retry remains 30 seconds. A burst still receives normal bounded-queue backpressure.
+    Partitioning alone would not reclaim the 100 slots consumed by unknown IDs.
   - **Rotation and deletion.** Rotation atomically changes the delivery-secret hash and
     retry receipt on the same home, preserving identity, rebind authority, registrations
     and queued events. Exact authenticated retries are safe even after the source tray
@@ -221,13 +265,26 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
   Bridge sockets close with retryable `1012` and reconnect to the new owner. Persistent
   snapshots move their existing R2 keys and expiry unchanged: no byte copy, TTL renewal,
   or source-side cleanup after transfer. The new owner retains expiry/revoke cleanup.
-  Persistent upload authorization first records a durable write lease (at most eight
-  unresolved writes per preview). Expiry/revoke retains a non-serving cleanup tombstone
-  while any write outcome is unknown, repeatedly sweeping its prefix even if a delayed
-  R2 write lands after the first sweep. Settled writes release their leases; ambiguous
-  R2 outcomes retain bounded bookkeeping rather than abandoning bytes. Upload body and
-  R2-put waits are bounded to 30 seconds. A permanently ambiguous write can retain its
-  tombstone/preview slot until operational reconciliation; it never renews serving TTL.
+  Persistent upload authorization records a timestamped 120-second lease (at most
+  eight active writes per preview). Lost authorization/release responses and vanished
+  edges recover concurrency on the next authorization after expiry. Expired candidates
+  cannot commit; every retry uses a fresh R2 key, never overwriting canonical bytes.
+  Legacy string leases migrate once on first use. Expired keys collapse into one
+  unresolved-write flag, rather than accumulating unbounded key bookkeeping.
+  Expiry/revoke sweeps the prefix and retains a non-serving cleanup tombstone for at
+  most 24 hours; cleanup records do not consume the ten active preview slots. Neither
+  retries nor releases extend that horizon or the serving TTL. Body, R2 put, upload
+  authorization, commit and release waits have 30-second deadlines.
+  An unfinished transfer intentionally retains its non-serving locator-recovery ledger
+  beyond this operational cleanup horizon until the same transfer is retried. That
+  ledger does not consume active preview slots or permit uploads/serving; it is not
+  evidence that an old R2 write was cancelled.
+  **Lease timeout is not R2 cancellation.** Independent, mandatory R2 lifecycle
+  expiration on `previews/` catches writes materializing after local cleanup ends,
+  including edge eviction and indefinitely failing prefix deletion. The 90-day
+  object-age backstop allows the full 30-day pending window plus 30-day finalized
+  retention, and measures age from object creation, not lease authorization. See the
+  worker deployment skill for provisioning and the fail-closed deployment gate.
 
 ## <a name="static-assets"></a>Static Asset Serving — full rules
 

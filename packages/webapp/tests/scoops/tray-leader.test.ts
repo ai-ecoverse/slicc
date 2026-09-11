@@ -18,6 +18,11 @@ vi.mock('../../src/scoops/db.js', () => ({
   setState: vi.fn(async (key: string, value: string) => {
     privateState.set(key, value);
   }),
+  compareAndSetState: vi.fn(async (key: string, expected: string | null, value: string) => {
+    if ((privateState.get(key) ?? null) !== expected) return false;
+    privateState.set(key, value);
+    return true;
+  }),
 }));
 beforeEach(() => privateState.clear());
 
@@ -1803,6 +1808,15 @@ describe('subscribeToLeaderTrayRuntimeStatus', () => {
 });
 
 describe('parseConeWebhookIdentity (#2812)', () => {
+  it.each(['sec.ret', 'sec%2Fret', 'sec%3Fret'])(
+    'rejects delivery secrets that corrupt the capability grammar: %s',
+    (secret) => {
+      expect(
+        parseConeWebhookIdentity(`https://tray.example.com/wh/cone-1.${secret}`, 'cone-1.rebind')
+      ).toBeNull();
+    }
+  );
+
   it('recovers coneId, coneSecret and rebindSecret from the stable shape', () => {
     expect(
       parseConeWebhookIdentity('https://tray.example.com/wh/cone-1.deadbeef', 'cone-1.rebindcafe')

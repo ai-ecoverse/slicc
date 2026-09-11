@@ -19,6 +19,24 @@ interface ControllerAttachResponse {
 const workerBaseUrl = process.env.WORKER_BASE_URL;
 const describeIfConfigured = workerBaseUrl ? describe : describe.skip;
 
+/** Opt in only for home-queue probes; legacy smoke flows must stay identity-less. */
+async function createStableTray(baseUrl: URL): Promise<CreateTrayResponse> {
+  const response = await fetch(new URL('/tray', baseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      coneId: crypto.randomUUID(),
+      coneSecret: crypto.randomUUID().replace(/-/g, ''),
+      rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+      createAttemptId: crypto.randomUUID(),
+    }),
+  });
+  expect(response.status).toBe(201);
+  const created = (await response.json()) as CreateTrayResponse;
+  expect(new URL(created.capabilities.webhook.url).pathname.startsWith('/wh/')).toBe(true);
+  return created;
+}
+
 describeIfConfigured('deployed tray worker', () => {
   it('exercises the phase 1 flow against a deployed worker', async () => {
     const baseUrl = new URL(workerBaseUrl!);
@@ -299,7 +317,8 @@ describeIfConfigured('deployed tray worker', () => {
     expect(body.trayId).toBeTruthy();
     expect(body.capabilities.join.url).toBeTruthy();
     expect(body.capabilities.controller.url).toBeTruthy();
-    expect(body.capabilities.webhook.url).toBeTruthy();
+    expect(new URL(body.capabilities.webhook.url).pathname.startsWith('/webhook/')).toBe(true);
+    expect(body.capabilities.webhook).not.toHaveProperty('rebindToken');
   }, 15_000);
 
   it('POST /tray with no body still creates a desktop tray (back-compat)', async () => {
@@ -311,7 +330,8 @@ describeIfConfigured('deployed tray worker', () => {
     expect(body.trayId).toBeTruthy();
     expect(body.capabilities.join.url).toBeTruthy();
     expect(body.capabilities.controller.url).toBeTruthy();
-    expect(body.capabilities.webhook.url).toBeTruthy();
+    expect(new URL(body.capabilities.webhook.url).pathname.startsWith('/webhook/')).toBe(true);
+    expect(body.capabilities.webhook).not.toHaveProperty('rebindToken');
   }, 15_000);
 
   // Hibernation regression guard. With the WebSocket Hibernation API the runtime
@@ -409,9 +429,7 @@ describeIfConfigured('deployed tray worker', () => {
   // liveness probe, and polling it would enqueue duplicate events.
   it('drops leader liveness on close and replays a queued webhook after reconnect', async () => {
     const baseUrl = new URL(workerBaseUrl!);
-    const created = (await (
-      await fetch(new URL('/tray', baseUrl), { method: 'POST' })
-    ).json()) as CreateTrayResponse;
+    const created = await createStableTray(baseUrl);
     const controller = (await (
       await fetch(created.capabilities.controller.url, {
         method: 'POST',

@@ -467,6 +467,28 @@ export async function setState(key: string, value: string): Promise<void> {
   });
 }
 
+/** Compare and replace one state value atomically across same-origin tabs. */
+export async function compareAndSetState(
+  key: string,
+  expected: string | null,
+  value: string
+): Promise<boolean> {
+  const store = await getStore(STORES.STATE, 'readwrite');
+  return new Promise((resolve, reject) => {
+    let replaced = false;
+    const tx = store.transaction;
+    tx.oncomplete = () => resolve(replaced);
+    tx.onabort = () => reject(tx.error ?? new Error('State transaction aborted'));
+    tx.onerror = () => reject(tx.error);
+    const req = store.get(key);
+    req.onsuccess = () => {
+      if ((req.result?.value ?? null) !== expected) return;
+      store.put({ key, value });
+      replaced = true;
+    };
+  });
+}
+
 export async function initDB(): Promise<void> {
   await openDB();
 }

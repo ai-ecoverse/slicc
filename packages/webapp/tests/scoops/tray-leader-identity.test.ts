@@ -51,9 +51,14 @@ describe('durable leader-session webhook management identity', () => {
     fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       const path = new URL(String(url)).pathname;
       if (path === '/tray') {
-        const identity = JSON.parse(String(init?.body)) as ConeIdentity;
+        const { createAttemptId, ...identity } = JSON.parse(String(init?.body)) as ConeIdentity & {
+          createAttemptId: string;
+        };
         // Verify the credential survived durable storage before going on the wire.
-        expect(await identityStore.load()).toMatchObject(identity);
+        expect(await identityStore.load()).toMatchObject({
+          ...identity,
+          pendingCreateAttemptId: createAttemptId,
+        });
         creates.push(identity);
         if (bindFails) return new Response('secret-bearing upstream error', { status: 503 });
         const trayId = `tray-${creates.length}`;
@@ -130,7 +135,12 @@ describe('durable leader-session webhook management identity', () => {
     bindFails = false;
     const session = await manager().start();
     expect(creates[1]).toEqual(creates[0]);
-    expect(await identityStore.load()).toMatchObject({ ...saved, established: true });
+    expect(await identityStore.load()).toMatchObject({
+      coneId: saved!.coneId,
+      coneSecret: saved!.coneSecret,
+      rebindSecret: saved!.rebindSecret,
+      established: true,
+    });
     expect(session).not.toHaveProperty('rebindSecret');
     expect(session).not.toHaveProperty('coneSecret');
     expect(await store.load()).not.toHaveProperty('rebindSecret');
@@ -167,6 +177,57 @@ describe('durable leader-session webhook management identity', () => {
     expect(await db.getState(`leader-tray-replacement:${base}`)).toBe('');
   });
 
+  it('replaces a rejected target only with an explicit pre-freeze refusal', async () => {
+    const first = manager();
+    await first.start();
+    transferFails = true;
+    await expect(first.reset()).rejects.toThrow('(503)');
+    first.stop();
+    transferFails = false;
+    fetchImpl.mockResolvedValueOnce(
+      Response.json({ code: 'PREVIEW_TARGET_UNAVAILABLE' }, { status: 410 })
+    );
+    const next = await manager().start();
+    expect(next.trayId).toBe('tray-3');
+    expect(creates).toHaveLength(3);
+    expect(JSON.parse(transfers.at(-1)!)).toMatchObject({ targetTrayId: 'tray-3' });
+  });
+
+  it('completes a frozen expired owner then durably roves from it rather than retargeting the source', async () => {
+    const first = manager();
+    await first.start();
+    transferFails = true;
+    await expect(first.reset()).rejects.toThrow('(503)');
+    first.stop();
+    transferFails = false;
+    const fetch = fetchImpl.getMockImplementation()!;
+    const sources: string[] = [];
+    fetchImpl.mockImplementation(async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/preview-transfer')) sources.push(path.split('/')[3]);
+      if (path === '/controller/tray-2.ct') return new Response(null, { status: 410 });
+      return fetch(url, init);
+    });
+    expect((await manager().start()).trayId).toBe('tray-3');
+    expect(sources).toEqual(['tray-1', 'tray-2']);
+    expect(creates).toHaveLength(3);
+  });
+
+  it.each([403, 410])(
+    'does not discard a potentially frozen target on generic %s',
+    async (status) => {
+      const first = manager();
+      await first.start();
+      transferFails = true;
+      await expect(first.reset()).rejects.toThrow('(503)');
+      first.stop();
+      fetchImpl.mockResolvedValueOnce(new Response(null, { status }));
+      await expect(manager().start()).rejects.toThrow(`(${status})`);
+      expect(creates).toHaveLength(2);
+      expect((await store.load())?.trayId).toBe('tray-2');
+    }
+  );
+
   it('supports old hubs only before a stable capability is established', async () => {
     legacyHub = true;
     const first = manager();
@@ -186,6 +247,9 @@ describe('durable leader-session webhook management identity', () => {
   it('fails before any network call when identity persistence fails', async () => {
     const failingStore = {
       load: async () => null,
+      compareAndSwap: async () => {
+        throw new Error('private storage unavailable');
+      },
       save: async () => {
         throw new Error('private storage unavailable');
       },
@@ -245,10 +309,11 @@ describe('durable leader-session webhook management identity', () => {
     const reset = first.reset();
     expect(creates).toHaveLength(1);
     const newUrl = `${base}/wh/${identity.coneId}.newsecret`;
-    const save = vi.spyOn(identityStore, 'save');
-    save.mockImplementationOnce(async (next) => {
+    const compareAndSwap = identityStore.compareAndSwap.bind(identityStore);
+    const save = vi.spyOn(identityStore, 'compareAndSwap');
+    save.mockImplementationOnce(async (expected, next) => {
       expect(getLeaderTrayRuntimeStatus().session?.webhookUrl).toBe(old.webhookUrl);
-      await new IndexedDbLeaderWebhookIdentityStore(base).save(next);
+      return compareAndSwap(expected, next);
     });
     await vi.waitFor(() => expect(resolveRotation).toBeTypeOf('function'));
     resolveRotation(
@@ -313,17 +378,105 @@ describe('durable leader-session webhook management identity', () => {
     expect(creates[1].coneSecret).toBe('newsecret');
   });
 
-  it('keeps a pending rotation fail-closed when replay fails on reload', async () => {
+  it.each([400, 401, 403, 404, 410, 422])(
+    'drops a definitively refused rotation on replay (%s) without bricking start',
+    async (status) => {
+      const first = manager();
+      await first.start();
+      fetchImpl.mockRejectedValueOnce(new Error('lost response'));
+      await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
+      first.stop();
+      fetchImpl.mockResolvedValueOnce(new Response(null, { status }));
+      const next = manager();
+      expect((await next.start()).trayId).toBe('tray-1');
+      expect((await identityStore.load())?.pendingRotation).toBeUndefined();
+      await next.clearSession();
+    }
+  );
+
+  it.each([403, 200])(
+    'never overwrites another tab identity with a late rotation response (%s)',
+    async (status) => {
+      const first = manager();
+      const old = await first.start();
+      const identity = (await identityStore.load())!;
+      let reply!: (response: Response) => void;
+      fetchImpl.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            reply = resolve;
+          })
+      );
+      const rotating = first.rotateWebhook();
+      await vi.waitFor(() => expect(reply).toBeTypeOf('function'));
+      const newer = { ...identity, coneSecret: 'newer-tab-secret' };
+      await new IndexedDbLeaderWebhookIdentityStore(base).save(newer);
+      await store.save({
+        ...old,
+        trayId: 'tray-newer',
+        webhookUrl: `${base}/wh/${identity.coneId}.newer-tab-secret`,
+      });
+      reply(
+        status === 403
+          ? new Response(null, { status })
+          : Response.json({
+              coneId: identity.coneId,
+              webhook: {
+                url: `${base}/wh/${identity.coneId}.late-secret`,
+                rebindToken: `${identity.coneId}.${identity.rebindSecret}`,
+              },
+            })
+      );
+      await expect(rotating).rejects.toThrow(status === 403 ? '(403)' : 'another tab');
+      expect(await identityStore.load()).toEqual(newer);
+      expect((await store.load())?.trayId).toBe('tray-newer');
+    }
+  );
+
+  it('atomically admits only one identity writer across two IndexedDB stores', async () => {
+    await manager().start();
+    const otherStore = new IndexedDbLeaderWebhookIdentityStore(base);
+    const a = (await identityStore.load())!;
+    const b = (await otherStore.load())!;
+    const results = await Promise.all([
+      identityStore.compareAndSwap(a, { ...a, coneSecret: 'writer-a' }),
+      otherStore.compareAndSwap(b, { ...b, coneSecret: 'writer-b' }),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect((await identityStore.load())?.coneSecret).toBe(results[0] ? 'writer-a' : 'writer-b');
+  });
+
+  it('keeps reconnect fail-closed when refusal races a newer pending rotation', async () => {
     const first = manager();
-    await first.start();
-    fetchImpl.mockRejectedValueOnce(new Error('lost rotation response'));
+    const session = await first.start();
+    fetchImpl.mockRejectedValueOnce(new Error('lost response'));
     await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
     first.stop();
-    fetchImpl.mockResolvedValueOnce(new Response(null, { status: 503 }));
-    await expect(manager().start()).rejects.toThrow('(503)');
+    const identity = (await identityStore.load())!;
+    const newer = { ...identity, pendingRotation: { ...session, trayId: 'tray-newer' } };
+    fetchImpl.mockImplementationOnce(async () => {
+      await new IndexedDbLeaderWebhookIdentityStore(base).save(newer);
+      return new Response(null, { status: 403 });
+    });
+    await expect(manager().start()).rejects.toThrow('another tab');
+    expect(await identityStore.load()).toEqual(newer);
     expect(creates).toHaveLength(1);
-    expect((await identityStore.load())?.pendingRotation).toBeDefined();
   });
+
+  it.each([408, 409, 429, 500, 503])(
+    'keeps a pending rotation fail-closed on ambiguous replay (%s)',
+    async (status) => {
+      const first = manager();
+      await first.start();
+      fetchImpl.mockRejectedValueOnce(new Error('lost rotation response'));
+      await expect(first.rotateWebhook()).rejects.toThrow('transport unavailable');
+      first.stop();
+      fetchImpl.mockResolvedValueOnce(new Response(null, { status }));
+      await expect(manager().start()).rejects.toThrow(`(${status})`);
+      expect(creates).toHaveLength(1);
+      expect((await identityStore.load())?.pendingRotation).toBeDefined();
+    }
+  );
 
   it.each([true, false])(
     'replays pending rotation before rebinding an expired source (server committed: %s)',

@@ -1,4 +1,4 @@
-import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
+import { buildPreviewUrl, TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, {
   buildKnownGoodDmgUrl,
@@ -11,6 +11,7 @@ import worker, {
   type WorkerEnv,
 } from '../src/index.js';
 import knownGoodMacos from '../src/known-good-macos.json';
+import { previewTokenFromHost } from '../src/preview-host.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
   type CreateTrayRequest,
@@ -178,20 +179,43 @@ function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
   };
 }
 
+function stableCreateIdentity() {
+  return {
+    coneId: 'persistent-cone',
+    coneSecret: 'delivery',
+    rebindSecret: 'management',
+    createAttemptId: crypto.randomUUID(),
+  };
+}
+
 describe('tray worker skeleton', () => {
-  it('fails tray creation rather than silently falling back when a stable identity cannot bind', async () => {
+  it('keeps idempotent tray IDs compatible with preview DNS token routing', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/tray', {
+        method: 'POST',
+        body: JSON.stringify(stableCreateIdentity()),
+      }),
+      env
+    );
+    expect(response.status).toBe(201);
+    const { trayId } = (await response.json()) as { trayId: string };
+    const token = `${trayId}.${'a'.repeat(20)}`;
+    const preview = new URL(buildPreviewUrl('http://localhost:8787', token, '/'));
+    expect(preview.hostname.split('.')[0].length).toBeLessThanOrEqual(63);
+    expect(previewTokenFromHost(preview.host)?.token).toBe(token);
+  });
+
+  it.each([403, 429, 503])('retries a stable home bind failure (%s)', async (status) => {
     const { env } = createTestHarness();
     const get = env.WEBHOOK_HOMES.get.bind(env.WEBHOOK_HOMES);
     const stubSpy = vi.spyOn(env.WEBHOOK_HOMES, 'get').mockImplementation((id) => {
       const stub = get(id);
-      vi.spyOn(stub, 'fetch').mockResolvedValue(new Response('unavailable', { status: 503 }));
+      vi.spyOn(stub, 'fetch').mockResolvedValue(new Response('unavailable', { status }));
       return stub;
     });
-    const identity = {
-      coneId: 'persistent-cone',
-      coneSecret: 'delivery',
-      rebindSecret: 'management',
-    };
+    const identity = stableCreateIdentity();
+    const trayIds = vi.spyOn(env.TRAY_HUB, 'idFromName');
     const create = () =>
       handleWorkerRequest(
         new Request('https://tray.test/tray', {
@@ -203,6 +227,7 @@ describe('tray worker skeleton', () => {
     const failed = await create();
     expect(failed.status).toBe(503);
     expect(await failed.json()).toMatchObject({ code: 'WEBHOOK_HOME_BIND_FAILED' });
+    expect((await create()).status).toBe(503);
     stubSpy.mockRestore();
     const retried = await create();
     expect(retried.status).toBe(201);
@@ -210,7 +235,100 @@ describe('tray worker skeleton', () => {
       coneId: identity.coneId,
       capabilities: { webhook: { url: 'https://tray.test/wh/persistent-cone.delivery' } },
     });
+    expect(new Set(trayIds.mock.calls.map(([id]) => id)).size).toBe(1);
   });
+
+  it('replays a lost create response but gives deliberate reset a new tray', async () => {
+    const { env, readTray } = createTestHarness();
+    const identity = stableCreateIdentity();
+    const create = (createAttemptId = identity.createAttemptId) =>
+      handleWorkerRequest(
+        new Request('https://tray.test/tray', {
+          method: 'POST',
+          body: JSON.stringify({ ...identity, createAttemptId }),
+        }),
+        env
+      );
+    const original = (await (await create()).json()) as {
+      trayId: string;
+      capabilities: { controller: { token: string }; webhook: { url: string } };
+    };
+    expect(await (await create()).json()).toEqual(original);
+    const concurrent = await Promise.all([create(), create()]);
+    expect(await concurrent[0]!.json()).toEqual(original);
+    expect(await concurrent[1]!.json()).toEqual(original);
+    const reset = (await (await create(crypto.randomUUID())).json()) as typeof original;
+    expect(reset.trayId).not.toBe(original.trayId);
+    expect(reset.capabilities.webhook).toEqual(original.capabilities.webhook);
+    expect(await readTray(original.trayId)).toMatchObject({
+      controllerToken: original.capabilities.controller.token,
+    });
+  });
+
+  it('does not disclose an existing attempt to a caller with the wrong rebind secret', async () => {
+    const { env } = createTestHarness();
+    const identity = stableCreateIdentity();
+    const create = (rebindSecret: string) =>
+      handleWorkerRequest(
+        new Request('https://tray.test/tray', {
+          method: 'POST',
+          body: JSON.stringify({ ...identity, rebindSecret }),
+        }),
+        env
+      );
+    expect((await create(identity.rebindSecret)).status).toBe(201);
+    const trayIds = vi.spyOn(env.TRAY_HUB, 'idFromName');
+    const denied = await create('wrong-secret');
+    expect(denied.status).toBe(503);
+    expect(await denied.json()).not.toHaveProperty('capabilities');
+    expect((await create('wrong-secret')).status).toBe(503);
+    expect(new Set(trayIds.mock.calls.map(([id]) => id)).size).toBe(1);
+  });
+
+  it.each([
+    { coneId: 'dotted.id' },
+    { coneSecret: 'dotted.secret' },
+    { rebindSecret: 'dotted.secret' },
+    { coneSecret: 'bad/secret' },
+    { coneSecret: 'bad?secret' },
+    { createAttemptId: undefined },
+    { createAttemptId: 'too-short' },
+  ])('rejects invalid stable capability grammar before creating a tray: %j', async (override) => {
+    const { env } = createTestHarness();
+    const get = vi.spyOn(env.TRAY_HUB, 'get');
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/tray', {
+        method: 'POST',
+        body: JSON.stringify({ ...stableCreateIdentity(), ...override }),
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '', '{}', '{"kind":"hosted"}'])(
+    'keeps identity-less clients independent of webhook home availability (%s)',
+    async (body) => {
+      const { env } = createTestHarness();
+      const home = vi.spyOn(env.WEBHOOK_HOMES, 'get').mockImplementation(() => {
+        throw new Error('home unavailable');
+      });
+      const response = await handleWorkerRequest(
+        new Request('https://tray.test/tray', { method: 'POST', body }),
+        env
+      );
+      expect(response.status).toBe(201);
+      const session = (await response.json()) as {
+        trayId: string;
+        capabilities: { webhook: { url: string } };
+      };
+      expect(session.capabilities.webhook.url).toContain(`/webhook/${session.trayId}.`);
+      expect(session.capabilities.webhook).not.toHaveProperty('rebindToken');
+      expect(session).not.toHaveProperty('coneId');
+      expect(home).not.toHaveBeenCalled();
+    }
+  );
 
   it('creates a tray at /tray and rejects removed create aliases', async () => {
     const { env } = createTestHarness();
@@ -232,12 +350,9 @@ describe('tray worker skeleton', () => {
     };
     expect(body.capabilities.join.url).toContain(`/join/${body.trayId}.`);
     expect(body.capabilities.controller.url).toContain(`/controller/${body.trayId}.`);
-    // The webhook capability is the STABLE cone-scoped shape (#2812): the URL
-    // names the CONE, not the tray instance, so it survives a rove.
-    expect(body.coneId).toBeTruthy();
-    expect(body.capabilities.webhook.url).toContain(`/wh/${body.coneId}.`);
-    expect(body.capabilities.webhook.url).not.toContain(`/wh/${body.trayId}.`);
-    expect(body.capabilities.webhook.rebindToken).toContain(`${body.coneId}.`);
+    expect(body.coneId).toBeUndefined();
+    expect(body.capabilities.webhook.url).toContain(`/webhook/${body.trayId}.`);
+    expect(body.capabilities.webhook.rebindToken).toBeUndefined();
 
     for (const legacyPath of ['/session', '/trays']) {
       const legacy = await handleWorkerRequest(
@@ -995,7 +1110,10 @@ describe('tray worker skeleton', () => {
     // than dropping it (#2812). The tray itself still buffers nothing.
     const { env, readTray, alarmHome } = createTestHarness();
     const created = await handleWorkerRequest(
-      new Request('https://tray.test/tray', { method: 'POST' }),
+      new Request('https://tray.test/tray', {
+        method: 'POST',
+        body: JSON.stringify(stableCreateIdentity()),
+      }),
       env
     );
     const session = (await created.json()) as {
@@ -1169,7 +1287,10 @@ describe('tray worker skeleton', () => {
     /** Attach a leader + control socket and return the webhook capability URL. */
     async function connectLeader(env: ReturnType<typeof makeEnv>) {
       const created = await handleWorkerRequest(
-        new Request('https://tray.test/tray', { method: 'POST' }),
+        new Request('https://tray.test/tray', {
+          method: 'POST',
+          body: JSON.stringify(stableCreateIdentity()),
+        }),
         env
       );
       const session = (await created.json()) as {
@@ -2151,7 +2272,10 @@ describe('POST /api/tray/:trayId/supersede', () => {
 
     // Tray A + live leader.
     const createdA = await handleWorkerRequest(
-      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        body: JSON.stringify(stableCreateIdentity()),
+      }),
       env
     );
     const a = (await createdA.json()) as {
@@ -2184,7 +2308,12 @@ describe('POST /api/tray/:trayId/supersede', () => {
       new Request('https://www.sliccy.ai/tray', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ coneId: a.coneId, coneSecret, rebindSecret }),
+        body: JSON.stringify({
+          coneId: a.coneId,
+          coneSecret,
+          rebindSecret,
+          createAttemptId: crypto.randomUUID(),
+        }),
       }),
       env
     );

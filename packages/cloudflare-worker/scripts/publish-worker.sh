@@ -17,6 +17,10 @@
 #   SLICC_LAST_RELEASE_TAG (empty means first release and always deploys).
 set -euo pipefail
 
+# Hard prerequisite, before even secret uploads (which can activate a version).
+# Read-only: an operator must provision the prefix-scoped lifecycle first.
+node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+
 WRANGLER_CONFIG="packages/cloudflare-worker/wrangler.jsonc"
 PREVIEW_WRANGLER_CONFIG="packages/cloudflare-worker/wrangler-preview.jsonc"
 MAX_ATTEMPTS=6

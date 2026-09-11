@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest, type WorkerEnv } from '../src/index.js';
+import { WEBHOOK_BODY_MAX_BYTES, WEBHOOK_IO_TIMEOUT_MS } from '../src/webhook-body.js';
 import { WebhookHomeDurableObject } from '../src/webhook-home.js';
 import { FakeDurableObjectState } from './fake-do-state.js';
 import { makeEnv } from './helpers/fake-env.js';
@@ -24,6 +25,66 @@ describe('public webhook rotation', () => {
     const get = vi.spyOn(env.WEBHOOK_HOMES, 'get');
     expect((await handleWorkerRequest(request(credentials, ''), env)).status).toBe(401);
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized rotation input before consulting either authority', async () => {
+    const env = makeEnv();
+    const home = vi.spyOn(env.WEBHOOK_HOMES, 'get');
+    const tray = vi.spyOn(env.TRAY_HUB, 'get');
+    const response = await handleWorkerRequest(
+      request({ ...credentials, padding: 'x'.repeat(WEBHOOK_BODY_MAX_BYTES) }),
+      env
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: 'WEBHOOK_BODY_REJECTED' });
+    expect(home).not.toHaveBeenCalled();
+    expect(tray).not.toHaveBeenCalled();
+  });
+
+  it('counts actual chunked bytes and cancels oversized input without Content-Length', async () => {
+    const env = makeEnv();
+    const home = vi.spyOn(env.WEBHOOK_HOMES, 'get');
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(WEBHOOK_BODY_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel,
+    });
+    const streamed = new Request(`${origin}/api/tray/tray/webhook/rotate`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer untrusted' },
+      body,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    expect(streamed.headers.has('content-length')).toBe(false);
+    const response = await handleWorkerRequest(streamed, env);
+    expect(response.status).toBe(413);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(home).not.toHaveBeenCalled();
+  });
+
+  it('bounds a stalled rotation body and cancels the reader', async () => {
+    vi.useFakeTimers();
+    try {
+      const env = makeEnv();
+      const home = vi.spyOn(env.WEBHOOK_HOMES, 'get');
+      const cancel = vi.fn();
+      const stalled = new Request(`${origin}/api/tray/tray/webhook/rotate`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer untrusted' },
+        body: new ReadableStream<Uint8Array>({ cancel }),
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+      const pending = handleWorkerRequest(stalled, env);
+      await vi.advanceTimersByTimeAsync(WEBHOOK_IO_TIMEOUT_MS + 1);
+      expect((await pending).status).toBe(408);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(home).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('derives the same replacement for retried credentials without changing cone identity', async () => {
