@@ -20,7 +20,7 @@ let package = Package(
         .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.5.20260903"),
         .package(
             url: "https://github.com/huggingface/swift-huggingface",
-            .upToNextMinor(from: "0.9.0")),
+            .upToNextMinor(from: "0.10.0")),
         .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "152.0.0")),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-trayfollower"),
