@@ -51,6 +51,32 @@ describe('preview lifecycle prerequisite', () => {
     expect(() => verifyRules({ rules: [rule(days)] })).toThrow();
   });
 
+  it('accepts the live API default multipart rule with omitted prefix without mutating it', () => {
+    const result = {
+      rules: [
+        {
+          id: 'Default Multipart Abort Rule',
+          enabled: true,
+          conditions: {},
+          abortMultipartUploadsTransition: {
+            condition: { type: 'Age', maxAge: 7 * DAY_SECONDS },
+          },
+        },
+        rule(),
+      ],
+    };
+    const before = structuredClone(result);
+    verifyRules(result);
+    expect(result).toEqual(before);
+  });
+
+  it('treats omitted prefix as bucket-wide for object expiration safety', () => {
+    expect(() => verifyRules({ rules: [rule(), { ...rule(14), conditions: {} }] })).toThrow(
+      'Conflicting'
+    );
+    expect(() => verifyRules({ rules: [{ ...rule(), conditions: {} }] })).toThrow('Missing');
+  });
+
   it.each(['', 'pre', 'previews/', 'previews/one/'])(
     'rejects earlier overlapping expiration %s',
     (prefix) => {
@@ -79,7 +105,7 @@ describe('preview lifecycle prerequisite', () => {
       dateRule,
       null,
       {},
-      { ...rule(), conditions: {} },
+      { ...rule(), conditions: { prefix: null } },
       { ...rule(), deleteObjectsTransition: {} },
     ]) {
       expect(() => verifyRules({ rules: [rule(), invalid] })).toThrow();

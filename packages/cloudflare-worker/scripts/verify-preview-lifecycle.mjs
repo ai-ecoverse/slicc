@@ -19,7 +19,9 @@ export function verifyRules(result) {
       throw new Error('Malformed lifecycle rule status');
     }
     if (!rule.enabled) continue;
-    const prefix = rule.conditions?.prefix;
+    // Cloudflare omits prefix for bucket-wide rules (including its default
+    // multipart-abort rule). Treat omission as broad scope, not malformed data.
+    const prefix = rule.conditions?.prefix === undefined ? '' : rule.conditions.prefix;
     if (typeof prefix !== 'string') throw new Error('Malformed lifecycle rule prefix');
     const overlaps = PREVIEW_PREFIX.startsWith(prefix) || prefix.startsWith(PREVIEW_PREFIX);
     if (!overlaps || !rule.deleteObjectsTransition) continue;
