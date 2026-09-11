@@ -37,11 +37,13 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   the store and the addressing. Keep the recipe's commands on `GELATIERE_ALLOWED_COMMANDS` (a child
   escalates anything else) and its cross-pass memory in `/shared/.gelatiere/notes.md`. Design:
   `docs/gelatiere.md`.
-- `shared/sprinkles/welcome/welcome.shtml` is the wizard on first run and the gelatiere's
-  suggestion stream afterwards (one `.sprinkle-action-card` per open suggestion, read through the
-  dip bridge's `slicc.readFile`). The card buttons lick `gelatiere-install` / `gelatiere-try`
-  (settled page-side, then the cone acts per `workspace/skills/gelatiere/SKILL.md`) and
-  `gelatiere-dismiss` (settled page-side).
+- `shared/sprinkles/suggestions/suggestions.shtml` is the gelatiere's suggestion stream (flat
+  entries read through the dip bridge's `slicc.readFile`), split from the onboarding-only
+  `shared/sprinkles/welcome/welcome.shtml` so follower/extension handling of the welcome dip can
+  never mask or restart the stream. The cone re-posts it as a dip on every delivery (per
+  `workspace/skills/gelatiere/SKILL.md`) and it is rail-pickable under Memory v2. The card buttons
+  lick `gelatiere-install` / `gelatiere-try` (settled page-side, then the cone acts per the skill)
+  and `gelatiere-dismiss` (settled page-side).
 
 ### Memory curator
 

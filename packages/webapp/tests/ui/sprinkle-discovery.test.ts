@@ -25,7 +25,7 @@ describe('discoverSprinkles', () => {
     initFeatureFlags('standalone');
   });
 
-  it('hides the welcome sprinkle until Memory v2 makes it the suggestion stream', async () => {
+  it('hides onboarding sprinkles always; the suggestions stream only until Memory v2', async () => {
     // Flag overrides live in localStorage, absent under the node test env.
     const store = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -33,21 +33,27 @@ describe('discoverSprinkles', () => {
       setItem: (k: string, v: string) => void store.set(k, v),
       removeItem: (k: string) => void store.delete(k),
     });
-    await vfs.writeFile(
-      '/shared/sprinkles/welcome/welcome.shtml',
-      '<title>Welcome</title><link rel="icon" href="ice-cream-cone">'
-    );
+    await vfs.writeFile('/shared/sprinkles/welcome/welcome.shtml', '<title>Welcome</title>');
     await vfs.writeFile('/shared/sprinkles/connect-llm/connect-llm.shtml', '<div>x</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/suggestions/suggestions.shtml',
+      '<title>Suggestions</title><link rel="icon" href="ice-cream-cone">'
+    );
     initFeatureFlags('standalone');
 
     const hidden = await discoverSprinkles(vfs);
     expect(hidden.has('welcome')).toBe(false);
     expect(hidden.has('connect-llm')).toBe(false);
+    expect(hidden.has('suggestions')).toBe(false);
 
     setFeatureFlagOverride('memory-v2', 'on');
     const shown = await discoverSprinkles(vfs);
-    expect(shown.get('welcome')?.icon).toBe('ice-cream-cone');
-    // connect-llm is onboarding-only regardless of the flag.
+    // The gelatiere's stream becomes rail-pickable, wearing its cone.
+    expect(shown.get('suggestions')?.icon).toBe('ice-cream-cone');
+    // The onboarding sprinkles stay hidden regardless of the flag — the
+    // stream was split out of welcome.shtml precisely so the wizard is
+    // never re-openable (and never mirrors to follower rails).
+    expect(shown.has('welcome')).toBe(false);
     expect(shown.has('connect-llm')).toBe(false);
   });
 

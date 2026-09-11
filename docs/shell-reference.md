@@ -1061,7 +1061,7 @@ gelatiere status                      # unit, nightly schedule, last pass / deli
 - `deliver` addresses every root cone except the gelatiere by folder, or one `--scoop <target>`;
   nothing new since the last delivery → no lick unless `--force`.
 - Store: `/shared/.gelatiere/suggestions.json` (every suggestion with `dismissedAt` when answered),
-  `/shared/.gelatiere/state.json` (pass + delivery ledger). The welcome card renders the open ones.
+  `/shared/.gelatiere/state.json` (pass + delivery ledger). The suggestions sprinkle renders the open ones.
 
 ---
 

@@ -57,7 +57,7 @@ const HELP = `usage: gelatiere <command> [options]
 The gelatiere is SLICC's resident advisor: a persistent unit no cone owns that
 reviews your archived sessions — nightly, and after a chat ends — and suggests
 skills to install, use cases to try, and habits to change. Suggestions show up
-as cards in the welcome sprinkle and every cone gets a lick.
+as cards in the suggestions sprinkle and every cone gets a lick.
 
 Commands:
   init [--reset]       Create the gelatiere unit and its nightly crontask (idempotent);
@@ -132,7 +132,7 @@ async function handleInit(args: string[], fs: VirtualFS): Promise<CommandResult>
     dropped +
       `${unit.created ? 'Created' : 'Found'} the gelatiere (${unit.jid}, folder ${unit.folder})\n` +
       `${nightly.created ? 'Registered' : 'Found'} nightly pass: cron "${nightly.cron}" (${nightly.id})\n` +
-      'Suggestions render in the welcome card; `gelatiere run` asks for a pass now.\n'
+      'Suggestions render in the suggestions card; `gelatiere run` asks for a pass now.\n'
   );
 }
 
@@ -148,7 +148,7 @@ async function handleRun(env: LickTargetEnv): Promise<CommandResult> {
   const requester = defaultLickTarget(undefined, env) ?? 'the default cone';
   host.lick(unit.folder, { action: 'run', data: { reason: 'manual', requestedBy: requester } });
   return ok(
-    `Asked the gelatiere (${unit.jid}) for a pass. Suggestions land in the welcome card.\n`
+    `Asked the gelatiere (${unit.jid}) for a pass. Suggestions land in the suggestions card.\n`
   );
 }
 

@@ -63,6 +63,15 @@ describe('makeGelatiereCardFallback (cherry / hosted-leader floats)', () => {
     }
   });
 
+  it("settles a dismiss from the rail-opened stream ('suggestions' sprinkleName)", async () => {
+    const vfs = fakeVfs({ [GELATIERE_SUGGESTIONS_PATH]: storeWith('tip-scoops') });
+    const intercept = makeGelatiereCardFallback({ openVfs: async () => vfs, log });
+    expect(
+      intercept({ ...cardLick('gelatiere-dismiss', 'tip-scoops'), sprinkleName: 'suggestions' })
+    ).toBe(true);
+    await settled(vfs, 'dismissedAt');
+  });
+
   it('ignores everything that is not a gelatiere card lick', () => {
     const vfs = fakeVfs();
     const intercept = makeGelatiereCardFallback({ openVfs: async () => vfs, log });

@@ -292,6 +292,20 @@ describe('gelatiere card licks', () => {
     expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
   });
 
+  it("settles a dismiss from the rail-opened stream ('suggestions' sprinkleName)", async () => {
+    const vfs = { writeFile: vi.fn() };
+    const intercept = createWelcomeLickInterceptor(makeDeps({ vfs: vfs as never }));
+    const railLick: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'suggestions',
+      timestamp: new Date().toISOString(),
+      body: { action: 'gelatiere-dismiss', data: { id: 'skill-github' } },
+    };
+    expect(intercept(railLick)).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockDismissGelatiereSuggestion).toHaveBeenCalledWith(vfs, 'skill-github');
+  });
+
   it('swallows a malformed dismiss without touching the store', () => {
     const intercept = createWelcomeLickInterceptor(makeDeps());
     expect(intercept(welcomeLick('gelatiere-dismiss', {}))).toBe(true);

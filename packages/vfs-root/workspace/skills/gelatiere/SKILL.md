@@ -6,7 +6,7 @@ description: |
   delivered suggestions: skills to install, use cases to try, habits to
   change — or an inline dip lick with `action: 'gelatiere-install'`,
   `'gelatiere-try'` or `'gelatiere-dismiss'` from a suggestion card in the
-  welcome sprinkle. Also use it when YOU are the gelatiere (your system prompt
+  suggestions sprinkle. Also use it when YOU are the gelatiere (your system prompt
   says so) and a `[Cron Event: gelatiere-nightly]`, a `[Sprinkle Event:
   gelatiere]` or a user asks for a pass. Covers the `gelatiere` shell command
   (`init`, `run`, `suggest`, `deliver`, `list`, `dismiss`, `status`) and how
@@ -16,7 +16,7 @@ allowed-tools: bash
 
 # Gelatiere
 
-The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-only tab; the user cannot prompt it). Nightly, and after a chat ends, it reviews the archived sessions, the durable memory, the installed skills, the skill catalog at `https://www.sliccy.com/skills/catalog.json` and the man-page sitemap, and folds a handful of suggestions into `/shared/.gelatiere/suggestions.json`. The welcome sprinkle (`/shared/sprinkles/welcome/welcome.shtml`) shows the open ones as a stream of cards after onboarding, and every other cone receives one lick per delivery. Feature flag **Memory v2** under Settings → Experimental creates the unit at boot; `gelatiere init` does it by hand.
+The gelatiere is a persistent scoop no cone owns (folder `gelatiere`, a read-only tab; the user cannot prompt it). Nightly, and after a chat ends, it reviews the archived sessions, the durable memory, the installed skills, the skill catalog at `https://www.sliccy.com/skills/catalog.json` and the man-page sitemap, and folds a handful of suggestions into `/shared/.gelatiere/suggestions.json`. The suggestions sprinkle (`/shared/sprinkles/suggestions/suggestions.shtml`) shows the open ones as a stream of cards, and every other cone receives one lick per delivery. Feature flag **Memory v2** under Settings → Experimental creates the unit at boot; `gelatiere init` does it by hand.
 
 ## If you are a cone: `gelatiere-suggestions` arrived
 
@@ -55,7 +55,7 @@ Reply with **one short sentence** — how many suggestions arrived and the gist 
 ```markdown
 The gelatiere left 2 new suggestions; the GitHub skill would have saved the PR detour from Tuesday.
 
-![Suggestions](/shared/sprinkles/welcome/welcome.shtml)
+![Suggestions](/shared/sprinkles/suggestions/suggestions.shtml)
 ```
 
 Do not repeat the list in prose, do not install anything, and do not edit `/shared/CLAUDE.md`. The cards carry their own **Install** / **Try it** / **Not now** buttons.
@@ -96,7 +96,7 @@ The user customizes the pass, the interval and the nightly schedule in `/shared/
 
 ## Showing one suggestion as a dip
 
-The welcome sprinkle renders the whole stream. To show a single suggestion inline — say the user asks "what was that GitHub thing again?" — read it from the store and inline the same card as a dip:
+The suggestions sprinkle renders the whole stream. To show a single suggestion inline — say the user asks "what was that GitHub thing again?" — read it from the store and inline the same card as a dip:
 
 ```bash
 jq '.[] | select(.id == "skill-github")' /shared/.gelatiere/suggestions.json

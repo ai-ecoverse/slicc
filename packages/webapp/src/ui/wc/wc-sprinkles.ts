@@ -7,7 +7,6 @@
  * legacy renderer/bridge stack, reused verbatim) against the zone.
  */
 
-import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { SprinkleSendTarget } from '../../shell/sprinkle-manager-handle.js';
@@ -619,10 +618,11 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       // Extension etiquette: auto-open sprinkles pulse for attention instead
       // of overlaying the chat mid-flow.
       ...(isExtension ? { autoOpenBehavior: 'attention' as const } : {}),
-      // `welcome` backs the inline onboarding dip and normally never appears
-      // as a panel sprinkle — except under Memory v2, where it doubles as the
-      // gelatiere's rail-resident suggestion stream (see sprinkle-discovery).
-      inlineSprinkles: new Set(isFeatureEnabled('memory-v2') ? [] : ['welcome']),
+      // `welcome` backs the inline onboarding dip and never appears as a
+      // panel sprinkle. The gelatiere's rail-resident suggestion stream is
+      // its own sprinkle (`suggestions`, see sprinkle-discovery), so the
+      // lock no longer depends on the Memory v2 flag.
+      inlineSprinkles: new Set(['welcome']),
       execHandler,
       onAttachImage: onAttachImage ?? (() => {}),
     }

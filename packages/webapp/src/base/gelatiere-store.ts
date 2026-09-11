@@ -381,7 +381,7 @@ function optionalText(value: unknown, max: number): string | undefined {
 
 /**
  * `url` is the one agent-authored field that renders as an ATTRIBUTE (the
- * welcome card's "Read more" href), not text — and the pass recipe has the
+ * suggestion card's "Read more" href), not text — and the pass recipe has the
  * unit read external catalogs, so a crafted `javascript:` URL could ride a
  * suggestion into a same-origin click. Only http(s) survives this boundary.
  */
@@ -614,8 +614,8 @@ function describeSuggestionsLick(action: string, bag: GelatiereLickData): Gelati
   const open = typeof bag.open === 'number' ? bag.open : titles.length;
   const headline =
     added === 0
-      ? `Nothing new — ${open} open ${open === 1 ? 'suggestion' : 'suggestions'} in the welcome card.`
-      : `${added} new ${added === 1 ? 'suggestion' : 'suggestions'} (${open} open) — the cards are in the welcome sprinkle.`;
+      ? `Nothing new — ${open} open ${open === 1 ? 'suggestion' : 'suggestions'} in the suggestions card.`
+      : `${added} new ${added === 1 ? 'suggestion' : 'suggestions'} (${open} open) — the cards are in the suggestions sprinkle.`;
   return { action, headline, titles };
 }
 

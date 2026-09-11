@@ -497,12 +497,12 @@ describe('describeGelatiereLick', () => {
     );
     expect(describeGelatiereLick(fenced(body))).toEqual({
       action: GELATIERE_SUGGESTIONS_ACTION,
-      headline: '1 new suggestion (2 open) — the cards are in the welcome sprinkle.',
+      headline: '1 new suggestion (2 open) — the cards are in the suggestions sprinkle.',
       titles: ['Install GitHub', 'Save the loop as a workflow'],
     });
     const nothing = buildGelatiereLickBody([], [suggestion({ id: 'a' })]);
     expect(describeGelatiereLick(fenced(nothing))?.headline).toBe(
-      'Nothing new — 1 open suggestion in the welcome card.'
+      'Nothing new — 1 open suggestion in the suggestions card.'
     );
   });
 

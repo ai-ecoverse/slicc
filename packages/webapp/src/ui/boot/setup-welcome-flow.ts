@@ -214,8 +214,13 @@ export function createWelcomeLickInterceptor(
 
   return (event: LickEvent): boolean => {
     if (event.type !== 'sprinkle') return false;
+    // 'suggestions' is the gelatiere stream opened as a RAIL sprinkle
+    // (`/shared/sprinkles/suggestions/suggestions.shtml`); its card licks
+    // carry the sprinkle's own name instead of 'inline'.
     const welcomeAction =
-      event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
+      event.sprinkleName === 'welcome' ||
+      event.sprinkleName === 'inline' ||
+      event.sprinkleName === 'suggestions'
         ? ((event.body as WelcomeLickBody | null)?.action as string | undefined)
         : undefined;
     if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {

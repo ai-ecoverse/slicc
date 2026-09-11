@@ -1,7 +1,7 @@
 /**
  * Gelatiere card settlement for floats WITHOUT the onboarding interceptor.
  *
- * The welcome stream's card licks (`gelatiere-dismiss` / `-install` / `-try`)
+ * The suggestion stream's card licks (`gelatiere-dismiss` / `-install` / `-try`)
  * are normally settled by `setup-welcome-flow.ts`, which `wc-live` wires only
  * outside the `cherry` and `hosted-leader` runtime modes — onboarding has no
  * business there, but the suggestion cards still render. Without this
@@ -41,7 +41,16 @@ export function makeGelatiereCardFallback(
 ): (event: LickEvent) => boolean {
   return (event: LickEvent): boolean => {
     if (event.type !== 'sprinkle') return false;
-    if (event.sprinkleName !== 'welcome' && event.sprinkleName !== 'inline') return false;
+    // 'inline' is the stream rendered as a chat dip; 'suggestions' is the
+    // same stream opened as a rail sprinkle; 'welcome' predates the split
+    // (the stream used to live inside the onboarding sprinkle).
+    if (
+      event.sprinkleName !== 'welcome' &&
+      event.sprinkleName !== 'inline' &&
+      event.sprinkleName !== 'suggestions'
+    ) {
+      return false;
+    }
     const body = event.body as { action?: unknown; data?: unknown } | null;
     const action = typeof body?.action === 'string' ? body.action : '';
     const handling = CARD_ACTIONS[action];

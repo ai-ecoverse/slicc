@@ -2,7 +2,7 @@
 
 SLICC's resident advisor: a persistent work unit that no cone owns, that reviews how the user
 works — nightly and after a chat session ends — and suggests skills to install, use cases to try,
-and habits to change. Suggestions render as cards in the welcome sprinkle and every other cone
+and habits to change. Suggestions render as cards in the suggestions sprinkle and every other cone
 receives a lick when new ones land.
 
 Feature flag: `memory-v2` (Settings → Experimental features, off by default; also in both
@@ -33,21 +33,21 @@ and `/tmp/`.
 
 ## Pieces
 
-| Piece                                                                  | Role                                                                                                                                                                     |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/vfs-root/shared/GELATIERE.md`                                | User-editable pass instructions + config block (`intervalHours`, `nightly`, `maxSuggestions`), seeded to `/shared/GELATIERE.md` when absent; the unit `cat`s it per pass |
-| `packages/webapp/src/base/instruction-frontmatter.ts`                  | The strict YAML subset `MEMORY.md` and `GELATIERE.md` share                                                                                                              |
-| `packages/webapp/src/base/gelatiere-store.ts`                          | The deterministic half: config, suggestion store (id-keyed merge, dismissal ledger), pass/delivery ledger, lick body. `base/` so shell and ui can both use it            |
-| `packages/webapp/src/scoops/gelatiere-unit.ts`                         | The unit: charter, allow-list and path grants, `ensureGelatiereUnit`, the `GelatiereSeam` the host publishes on `globalThis.__slicc_gelatiere`, `bootGelatiere`          |
-| `packages/webapp/src/kernel/host.ts` (`publishGelatiere`)              | Publishes the seam after the lick manager; under the flag boots the unit + nightly crontask (fire-and-forget, store module loaded lazily)                                |
-| `packages/webapp/src/shell/supplemental-commands/gelatiere-command.ts` | `gelatiere init / run / suggest / deliver / list / dismiss / status`                                                                                                     |
-| `packages/webapp/src/ui/new-session.ts` (`onSessionSettled`)           | Fired once per freeze after the archive is durable and any background pass (curator or enrichment) is done                                                               |
-| `packages/webapp/src/ui/wc/wc-gelatiere.ts`                            | The session-end hook: if the flag is on, the unit exists and a pass is due, lick the unit with `session-settled`                                                         |
-| `packages/webapp/src/ui/wc/wc-message-view.ts` (`lickCardEl`)          | Gelatiere licks render with their own kind and icon (`ice-cream-cone`) and a readable body (`describeGelatiereLick`) instead of the JSON the cone reads                  |
-| `packages/webapp/src/ui/boot/setup-welcome-flow.ts`                    | `gelatiere-dismiss` / `-install` / `-try` card clicks settle the store page-side; install/try go on to the cone                                                          |
-| `packages/webapp/src/ui/wc/wc-gelatiere-fallback.ts`                   | The same card settlement for floats without the onboarding interceptor (cherry, hosted-leader) — `wc-live.ts` wires it wherever `wireWcWelcome` is skipped               |
-| `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml`             | After onboarding the welcome sprinkle renders the open suggestions as flat `.gelatiere-entry` rows (hairline separators, no nested card chrome)                          |
-| `packages/vfs-root/workspace/skills/gelatiere/SKILL.md`                | What a cone does with the lick and the card buttons; what the gelatiere does with its licks; the reusable single-suggestion dip                                          |
+| Piece                                                                  | Role                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/vfs-root/shared/GELATIERE.md`                                | User-editable pass instructions + config block (`intervalHours`, `nightly`, `maxSuggestions`), seeded to `/shared/GELATIERE.md` when absent; the unit `cat`s it per pass                                                          |
+| `packages/webapp/src/base/instruction-frontmatter.ts`                  | The strict YAML subset `MEMORY.md` and `GELATIERE.md` share                                                                                                                                                                       |
+| `packages/webapp/src/base/gelatiere-store.ts`                          | The deterministic half: config, suggestion store (id-keyed merge, dismissal ledger), pass/delivery ledger, lick body. `base/` so shell and ui can both use it                                                                     |
+| `packages/webapp/src/scoops/gelatiere-unit.ts`                         | The unit: charter, allow-list and path grants, `ensureGelatiereUnit`, the `GelatiereSeam` the host publishes on `globalThis.__slicc_gelatiere`, `bootGelatiere`                                                                   |
+| `packages/webapp/src/kernel/host.ts` (`publishGelatiere`)              | Publishes the seam after the lick manager; under the flag boots the unit + nightly crontask (fire-and-forget, store module loaded lazily)                                                                                         |
+| `packages/webapp/src/shell/supplemental-commands/gelatiere-command.ts` | `gelatiere init / run / suggest / deliver / list / dismiss / status`                                                                                                                                                              |
+| `packages/webapp/src/ui/new-session.ts` (`onSessionSettled`)           | Fired once per freeze after the archive is durable and any background pass (curator or enrichment) is done                                                                                                                        |
+| `packages/webapp/src/ui/wc/wc-gelatiere.ts`                            | The session-end hook: if the flag is on, the unit exists and a pass is due, lick the unit with `session-settled`                                                                                                                  |
+| `packages/webapp/src/ui/wc/wc-message-view.ts` (`lickCardEl`)          | Gelatiere licks render with their own kind and icon (`ice-cream-cone`) and a readable body (`describeGelatiereLick`) instead of the JSON the cone reads                                                                           |
+| `packages/webapp/src/ui/boot/setup-welcome-flow.ts`                    | `gelatiere-dismiss` / `-install` / `-try` card clicks settle the store page-side; install/try go on to the cone                                                                                                                   |
+| `packages/webapp/src/ui/wc/wc-gelatiere-fallback.ts`                   | The same card settlement for floats without the onboarding interceptor (cherry, hosted-leader) — `wc-live.ts` wires it wherever `wireWcWelcome` is skipped                                                                        |
+| `packages/vfs-root/shared/sprinkles/suggestions/suggestions.shtml`     | The stream: open suggestions as flat `.gelatiere-entry` rows (hairline separators, no nested card chrome). Split from the onboarding-only `welcome.shtml` so follower/extension welcome-dip handling can never mask or restart it |
+| `packages/vfs-root/workspace/skills/gelatiere/SKILL.md`                | What a cone does with the lick and the card buttons; what the gelatiere does with its licks; the reusable single-suggestion dip                                                                                                   |
 
 ## How a pass runs
 
@@ -82,7 +82,7 @@ and `/tmp/`.
    (unless `--force`). An explicit `--scoop <target>` must resolve against the roster (folder, name
    or jid) — an unknown target fails before the delivery ledger is stamped, so the suggestions stay
    "new" for the next attempt. Suggestion `url` fields survive only as `http(s)` (they render as a
-   live `href` in the welcome card; every other agent-authored field renders as text), and `install`
+   live `href` in the suggestions card; every other agent-authored field renders as text), and `install`
    only as a plain `upskill` invocation — bare tokens, no shell metacharacters — because the cone
    executes it verbatim after one click and the pass reads third-party content.
 5. It updates its notes file and replies in one line. Compaction trims its conversation while it
@@ -103,7 +103,7 @@ One `sprinkle` lick per root cone, `sprinkleName: 'gelatiere'`, `targetScoop` = 
 body `{ action: 'gelatiere-suggestions', data: { added, open, suggestions, path, skill } }` (at most
 5 suggestions ride in the body). The body carries no prose hint: `skill` points at
 `/workspace/skills/gelatiere/SKILL.md`, whose description names the event, so the instruction lives
-in the skill index rather than in every lick. The welcome card does not depend on the lick — it reads
+in the skill index rather than in every lick. The suggestions card does not depend on the lick — it reads
 the store through the dip bridge and renders whatever is open. Its buttons emit:
 
 | lick                | who handles it                                                                  |
@@ -121,10 +121,16 @@ waved away. Copy contract (`GELATIERE.md`): `title` is the WHAT (imperative, ≤
 the WHY (1–2 grounded sentences, no title restatement); `evidence` rides the lick for cones and is
 not rendered on the entry.
 
-Under Memory v2 the welcome sprinkle also stays in the rail after onboarding (it is hidden
-onboarding-only furniture otherwise): `sprinkle-discovery.ts` un-hides it when the flag is on, and it
-wears the gelatiere's `ice-cream-cone` glyph so the stream has a place the user can reopen when a
-lick announces new cards.
+Under Memory v2 the suggestions sprinkle is rail-pickable (`sprinkle-discovery.ts` un-hides it when
+the flag is on; without the flag there is nothing to stream) and wears the gelatiere's
+`ice-cream-cone` glyph, so the stream has a place the user can reopen when a lick announces new
+cards. The cone also re-posts it as a chat dip on every delivery, per the skill. The stream lived
+inside `welcome.shtml` originally; it was split out (Grok #4, PR #3005) because every surface that
+special-cases onboarding took the stream down with it — follower floats restarted the wizard (the
+follower sprinkle bridge hard-codes `exists()` false, so the welcomed-marker probe failed) and the
+extension side panel swapped everything under the welcome src prefix for a "Set up SLICC" hand-off
+card. Followers now drop the stream dip outright (it reads leader-local state) and use its presence
+in the transcript as proof the leader finished onboarding, retracting a stale hand-off card.
 
 ## Why these choices
 

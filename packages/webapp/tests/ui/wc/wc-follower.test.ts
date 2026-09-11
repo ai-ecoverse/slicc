@@ -1399,6 +1399,100 @@ describe('bootFollowerFloat', () => {
     expect(app.querySelector('.wc-signin-redirect')).toBeNull();
   });
 
+  it('every follower drops the gelatiere suggestions dip instead of hydrating it', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    // A general cherry embed — the follower kind that hydrates OTHER dips
+    // normally — must still drop the suggestion stream: it reads
+    // /shared/.gelatiere/suggestions.json, which lives on the leader, so a
+    // follower-side render could only ever show its empty state.
+    setCherryLocation('https://third-party.example');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'delivery-msg',
+          role: 'assistant',
+          content:
+            'The gelatiere left 2 suggestions.\n\n![Suggestions](/shared/sprinkles/suggestions/suggestions.shtml)',
+          timestamp: 1000,
+        },
+      ],
+      'cone'
+    );
+
+    // The cone's one-line summary stays; the dip img is gone before hydration
+    // (no `.msg__dip` mount) and nothing replaced it.
+    await vi.waitFor(() => {
+      expect(app.textContent).toContain('The gelatiere left 2 suggestions.');
+    });
+    expect(app.querySelector('img[src^="/shared/sprinkles/suggestions/"]')).toBeNull();
+    expect(app.querySelector('.msg__dip')).toBeNull();
+    expect(app.querySelector('.wc-signin-redirect')).toBeNull();
+  });
+
+  it('extension side panel: a suggestions dip retracts the stale welcome hand-off card', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    setCherryLocation('chrome-extension://abcdef');
+    const { bootFollowerFloat } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await bootFollowerFloat(app, bootLog(), 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    // The leader finished onboarding long ago: its transcript carries the old
+    // welcome dip AND a later gelatiere delivery (the cone posts the stream
+    // dip on every delivery). The stream dip only ever exists after the
+    // welcome flow completed, so the "Set up SLICC" card built from the older
+    // welcome dip is provably stale and must come down.
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'welcome-msg',
+          role: 'assistant',
+          content: '![Welcome](/shared/sprinkles/welcome/welcome.shtml)',
+          timestamp: 1000,
+        },
+        {
+          id: 'delivery-msg',
+          role: 'assistant',
+          content: '![Suggestions](/shared/sprinkles/suggestions/suggestions.shtml)',
+          timestamp: 2000,
+        },
+      ],
+      'cone'
+    );
+
+    await vi.waitFor(() => {
+      expect(app.querySelector('img[src^="/shared/sprinkles/"]')).toBeNull();
+    });
+    expect(app.querySelector('.wc-signin-redirect--welcome')).toBeNull();
+
+    // And once onboarding is proven done, a re-rendered welcome dip (history
+    // replay) must not resurrect the card.
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'welcome-msg',
+          role: 'assistant',
+          content: '![Welcome](/shared/sprinkles/welcome/welcome.shtml)',
+          timestamp: 1000,
+        },
+      ],
+      'cone'
+    );
+    await vi.waitFor(() => {
+      expect(app.querySelector('img[src^="/shared/sprinkles/welcome/"]')).toBeNull();
+    });
+    expect(app.querySelector('.wc-signin-redirect--welcome')).toBeNull();
+  });
+
   it('reads ?ui-only=1 and suppresses CDP advertisement via startPageFollowerTray when cherry', async () => {
     // Change the URL to include ui-only=1
     Object.defineProperty(window, 'location', {

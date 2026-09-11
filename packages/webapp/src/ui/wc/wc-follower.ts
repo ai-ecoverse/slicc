@@ -33,6 +33,7 @@ import {
   buildWelcomeHandoffCard,
   isLoginDipAction,
   showSignInRedirect,
+  WELCOME_HANDOFF_CARD_CLASS,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
 
@@ -42,6 +43,10 @@ const log = createLogger('wc-follower');
  *  `connect-llm.shtml`) posted by the onboarding orchestrator as
  *  `![…](/shared/sprinkles/welcome/…)` image references. */
 const WELCOME_DIP_SRC_PREFIX = '/shared/sprinkles/welcome/';
+
+/** Source-path prefix of the gelatiere suggestion-stream dip
+ *  (`suggestions.shtml`), posted by the cone on every gelatiere delivery. */
+const SUGGESTIONS_DIP_SRC_PREFIX = '/shared/sprinkles/suggestions/';
 
 /**
  * Resolve a host-supplied sessionId string to a TranscriptExportSelector.
@@ -439,13 +444,33 @@ export async function bootFollowerFloat(
     welcomeImgs.forEach((img, i) => {
       // One card per message — replace the first welcome dip, drop the rest so
       // duplicate cards don't stack within a single message.
-      if (i === 0) {
+      if (i === 0 && !leaderOnboardingDone) {
         img.replaceWith(buildWelcomeHandoffCard(host.ownerDocument, { onOpenTab: focusLeaderTab }));
       } else {
         img.remove();
       }
     });
     return true;
+  };
+  // The gelatiere suggestion stream reads `/shared/.gelatiere/suggestions.json`,
+  // which lives on the LEADER — a follower-rendered copy could only ever show
+  // its empty state right under a cone message announcing new suggestions.
+  // Drop the dip (the cone's one-line summary stays) instead of rendering a
+  // card that contradicts the message above it. Its presence in the transcript
+  // also proves the leader finished onboarding — the cone only posts the
+  // stream after a delivery — so any earlier "Set up SLICC" hand-off card
+  // rendered from the (older) welcome dip is stale and comes down with it.
+  let leaderOnboardingDone = false;
+  const removeSuggestionStreamDips = (host: HTMLElement): void => {
+    const streamImgs = host.querySelectorAll<HTMLImageElement>(
+      `img[src^="${SUGGESTIONS_DIP_SRC_PREFIX}"]`
+    );
+    if (streamImgs.length === 0) return;
+    for (const img of streamImgs) img.remove();
+    leaderOnboardingDone = true;
+    for (const card of boot.refs.thread.querySelectorAll(`.${WELCOME_HANDOFF_CARD_CLASS}`)) {
+      card.remove();
+    }
   };
 
   // ONE mount path (#2382 D2b). This float's transport is the tray: a
@@ -546,6 +571,9 @@ export async function bootFollowerFloat(
         },
         addressableUnitId: () => addressableUnitId(),
         onMessageRendered: (messageHost) => {
+          // On every follower, drop gelatiere suggestion-stream dips before
+          // hydration — they read leader-local state (see the helper).
+          removeSuggestionStreamDips(messageHost);
           // In the extension side panel, swap onboarding welcome dips for a leader
           // hand-off card before hydration (removing them so `hydrateDips` skips
           // them); other dips still hydrate normally.
