@@ -1,8 +1,5 @@
+import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  EXTENSION_BRIDGE_PORT_NAME,
-  EXTENSION_BRIDGE_PROTOCOL_VERSION,
-} from '../../webapp/src/cdp/extension-bridge-protocol.js';
 import {
   __clearWelcomedLeaderPortsForTest,
   BRIDGE_ALLOWED_ORIGINS,

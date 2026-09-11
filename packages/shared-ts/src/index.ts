@@ -9,6 +9,7 @@ export * from './content-type.js';
 export * from './discovery-link.js';
 export * from './electron-overlay-route.js';
 export * from './extension-bridge-protocol.js';
+export * from './extension-message.js';
 export * from './fetch-proxy-protocol.js';
 export * from './form-body-unmask.js';
 export * from './handoff-link.js';

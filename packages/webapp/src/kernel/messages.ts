@@ -8,7 +8,12 @@
  * to its primary consumers.
  */
 
-import type { CDPPayload, ToolProgressEvent, WebhookDeliveryDisposition } from '@slicc/shared-ts';
+import {
+  type CDPPayload,
+  isExtensionMessage as isExtensionMessageEnvelope,
+  type ToolProgressEvent,
+  type WebhookDeliveryDisposition,
+} from '@slicc/shared-ts';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -1587,11 +1592,5 @@ export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorker
 
 /** Type guard for extension messages. */
 export function isExtensionMessage(msg: unknown): msg is ExtensionMessage {
-  return (
-    typeof msg === 'object' &&
-    msg !== null &&
-    'source' in msg &&
-    'payload' in msg &&
-    typeof (msg as ExtensionMessage).source === 'string'
-  );
+  return isExtensionMessageEnvelope(msg);
 }
