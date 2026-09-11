@@ -168,6 +168,8 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(spawn.mock.calls[0][0]).toMatchObject({
       persistSession: true,
       name: 'memory-curator',
+      // The dreamer over the same file must not be in flight (bridge `exclusiveWith`).
+      exclusiveWith: ['memory-dreamer'],
       // Shipped MEMORY.md sets timeoutSeconds: 1200 → a 20-minute wall-clock
       // ceiling, generous enough that a slow pass is not killed mid-write
       // and left over budget (#2263).

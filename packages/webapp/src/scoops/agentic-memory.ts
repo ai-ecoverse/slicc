@@ -172,6 +172,14 @@ export interface MemoryPassInstructions {
    * must collide; different files must not).
    */
   nameFor(folder: string): string;
+  /**
+   * Agent names of the OTHER passes that rewrite the same memory file, for
+   * the bridge's `exclusiveWith`: the curator and the dreamer of one cone
+   * each snapshot a base and three-way-merge a draft, so two of them in
+   * flight at once would have the later one discard the earlier one's
+   * rewrite. Optional; defaults to none.
+   */
+  rivalsFor?(folder: string): string[];
 }
 
 export interface RunAgenticMemoryPassOptions {
@@ -230,7 +238,19 @@ export const CURATOR_INSTRUCTIONS: MemoryPassInstructions = {
   path: MEMORY_INSTRUCTIONS_PATH,
   fallback: DEFAULT_MEMORY_MD,
   nameFor: curatorAgentName,
+  rivalsFor: (folder) => [dreamerAgentName(folder)],
 };
+
+/**
+ * Agent name of the memory dreamer for `folder` (`scoops/memory-dreaming.ts`
+ * re-exports it) — defined beside the curator's so each can name the other
+ * as its rival without a module cycle. Per cone for the same reason as
+ * {@link curatorAgentName}: two dreams over the SAME memory file must
+ * collide; different cones' dreams must not block each other.
+ */
+export function dreamerAgentName(folder: string): string {
+  return folder === PRIMARY_CONE_FOLDER ? 'memory-dreamer' : `memory-dreamer-${folder}`;
+}
 
 /**
  * `agent` name tokens are `[a-z][a-z0-9]*` joined by single dashes, which is
@@ -244,6 +264,14 @@ export const CURATOR_INSTRUCTIONS: MemoryPassInstructions = {
 function safeAgentName(instructions: MemoryPassInstructions, folder: string): string {
   const name = instructions.nameFor(folder);
   return SPAWNABLE_NAME.test(name) ? name : instructions.nameFor(PRIMARY_CONE_FOLDER);
+}
+
+/** The rivals of a pass, under the same primary-name fallback as its own name. */
+function safeRivalNames(instructions: MemoryPassInstructions, folder: string): string[] {
+  const safeFolder = SPAWNABLE_NAME.test(instructions.nameFor(folder))
+    ? folder
+    : PRIMARY_CONE_FOLDER;
+  return instructions.rivalsFor?.(safeFolder) ?? [];
 }
 
 /** Mirror of the agent bridge's `AGENT_NAME_PATTERN` (a legal down-edge away). */
@@ -578,6 +606,10 @@ function buildSpawnOptions(
     // survives a new chat, so a curator run stays auditable for humans.
     persistSession: true,
     name: safeAgentName(instructions, cone?.folder ?? PRIMARY_CONE_FOLDER),
+    // The other pass over this memory file (dreamer for a curator and vice
+    // versa) must not be in flight: both snapshot a base and merge a draft,
+    // and the later merge would discard the earlier rewrite.
+    exclusiveWith: safeRivalNames(instructions, cone?.folder ?? PRIMARY_CONE_FOLDER),
     // Parent the run to the cone it curates so escalations and model
     // inheritance follow that cone, not the oldest root (#2271).
     ...(cone?.jid ? { parentJid: cone.jid } : {}),

@@ -1095,6 +1095,12 @@ memory dream [--cone <folder>] [--all] [--wait]      # memory-dreamer refactorin
   typo, a dropped cone or a path fragment fails here instead of steering a pass at the wrong
   file. `curate` defaults to the cone the archive was frozen from (the index entry's `cone`); an
   archive whose cone is gone needs an explicit `--cone`.
+- `dream --all` runs the cones one after another even when detached: every dreamer may write
+  the shared wiki (`/shared/wiki/index.md`, `log.md`, the same page), and those writes are not
+  staged like the memory draft. A dream and a curator over the same cone never run at once — the
+  agent bridge rejects the second (`name already in use`, via `exclusiveWith`): a "New chat"
+  during the nightly leaves that archive pending for the boot catch-up; a nightly during a
+  curator skips that cone until the next night.
 - `curate` runs the same pass the session freezer runs — snapshot → curator scoop → three-way
   merge onto the cone's memory file — through the kernel host's seam. A pass on an archive that
   was still `memoryPending` resolves at the next boot catch-up via the bridge's receipt; it never

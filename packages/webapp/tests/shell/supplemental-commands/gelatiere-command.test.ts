@@ -321,6 +321,10 @@ describe('gelatiere command', () => {
     expect(result.stdout).toContain('session ends do not trigger passes');
   });
 
+  // Every fetch carries a wall clock: these verbs are the unattended nightly
+  // pass's whole web surface, and a stalled host must not hang it.
+  const TIMED = expect.objectContaining({ signal: expect.any(AbortSignal) });
+
   it('catalog and man fetch only the pinned host; man rejects non-slug names', async () => {
     const fetchMock = vi.fn(async (url: string) => ({
       ok: true,
@@ -332,12 +336,15 @@ describe('gelatiere command', () => {
     const catalog = await run(memoryFs(), ['catalog']);
     expect(catalog.exitCode).toBe(0);
     expect(catalog.stdout).toContain('"name":"github"');
-    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/skills/catalog.json');
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/skills/catalog.json', TIMED);
 
     const man = await run(memoryFs(), ['man', 'gelatiere']);
     expect(man.exitCode).toBe(0);
     expect(man.stdout).toContain('man page');
-    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/man/gelatiere.plain.html');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://www.sliccy.com/man/gelatiere.plain.html',
+      TIMED
+    );
 
     // The name lands in the URL path: no traversal, no scheme smuggling.
     for (const bad of ['../secrets', 'a/b', 'x?y=1', 'UPPER', '']) {
@@ -358,7 +365,7 @@ describe('gelatiere command', () => {
     const result = await run(memoryFs(), ['commands']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('alpha zeta\n');
-    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/sitemap.xml');
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/sitemap.xml', TIMED);
 
     vi.stubGlobal(
       'fetch',

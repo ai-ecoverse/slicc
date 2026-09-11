@@ -235,6 +235,58 @@ describe('session search ranking', () => {
     });
   });
 
+  // The on-disk index is a plain object (`MiniSearch.toJSON()` output, JSON-
+  // parsed back), so it loads through `loadJS`; a search with an unchanged
+  // fingerprint must read the cache, not every archive again.
+  it('serves a repeat search from the persisted index without re-reading the archives', async () => {
+    const filename = '2026-09-11T09-00-00-000Z-weather.md';
+    await vfs.writeFile(
+      `${SESSIONS_DIR}/${filename}`,
+      formatArchiveAsMarkdown({
+        id: 'cone-1',
+        title: 'Weather chat',
+        frozenAt: '2026-09-11T09:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages: [msg('user', 'nice weather today', 'u1')],
+      })
+    );
+    await vfs.writeFile(
+      '/sessions/index.json',
+      JSON.stringify([
+        {
+          filename,
+          title: 'Weather chat',
+          frozenAt: '2026-09-11T09:00:00.000Z',
+          messageCount: 1,
+          sessionId: 'cone-1',
+        },
+      ])
+    );
+    const reads: string[] = [];
+    const counting = new Proxy(vfs, {
+      get(target, prop) {
+        if (prop === 'readFile') {
+          return (path: string, options?: unknown) => {
+            reads.push(path);
+            return target.readFile(path, options as never);
+          };
+        }
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as VirtualFS;
+
+    expect((await searchSessions(counting, 'weather')).length).toBeGreaterThan(0);
+    expect(reads).toContain(`${SESSIONS_DIR}/${filename}`);
+
+    reads.length = 0;
+    expect((await searchSessions(counting, 'weather')).length).toBeGreaterThan(0);
+    expect(reads).toContain('/sessions/.search-index.json');
+    expect(reads).not.toContain(`${SESSIONS_DIR}/${filename}`);
+  });
+
   it('indexes scoop session snapshots under /scoops/<folder>/sessions/<jid>/', async () => {
     // Cone archive with unrelated content.
     const coneFile = '2026-09-11T09-00-00-000Z-weather.md';

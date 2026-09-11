@@ -56,8 +56,56 @@ describe('runMemoryHealthCheck', () => {
       sessions: 3,
       curation: { curated: 1, failed: 0, pending: 1, skipped: 1, none: 0 },
       primaryMemoryChars: memory.length,
+      cones: [{ folder: 'cone', curated: 1, chars: memory.length }],
       failures: [],
     });
+  });
+
+  // The lying-memory check is per cone: an archive's `cone` names the file its
+  // curation grew. Checking only the primary flagged a healthy extra-cone
+  // setup with no primary memory, and missed an extra cone whose file vanished.
+  it('checks each cone against its own memory file, not everything against the primary', async () => {
+    const withReadDir = (files: Record<string, string>, cones: string[]) => ({
+      ...fakeFs(files),
+      readDir: async () => cones.map((name) => ({ name, type: 'directory' })),
+    });
+    const entries = index([
+      { filename: 'r1.md', cone: 'cone-research', memoryCuratedAt: '2026-09-10T00:00:00Z' },
+      { filename: 'r2.md', cone: 'cone-research', memoryCuratedAt: '2026-09-10T01:00:00Z' },
+    ]);
+    // All the work is on the research cone and its memory is growing; the
+    // primary never curated anything — healthy, not a lie.
+    const healthy = await runMemoryHealthCheck(
+      withReadDir(
+        { '/sessions/index.json': entries, '/cones/cone-research/CLAUDE.md': '- fact\n' },
+        ['cone-research']
+      ),
+      NOW
+    );
+    expect(healthy.failures).toEqual([]);
+    expect(healthy.cones).toEqual([
+      { folder: 'cone', curated: 0, chars: null },
+      { folder: 'cone-research', curated: 2, chars: 7 },
+    ]);
+
+    // The research cone's file is gone while its archives claim curation.
+    const lying = await runMemoryHealthCheck(
+      withReadDir({ '/sessions/index.json': entries, '/workspace/CLAUDE.md': 'ok' }, [
+        'cone-research',
+      ]),
+      NOW
+    );
+    expect(lying.failures).toEqual([
+      '2 archive(s) from cone "cone-research" report successful curation but its memory file is missing or empty',
+    ]);
+
+    // A dropped cone took its memory file with it — not a lie.
+    const dropped = await runMemoryHealthCheck(
+      withReadDir({ '/sessions/index.json': entries, '/workspace/CLAUDE.md': 'ok' }, []),
+      NOW
+    );
+    expect(dropped.failures).toEqual([]);
+    expect(dropped.cones.map((c) => c.folder)).toEqual(['cone']);
   });
 
   it('treats a missing index as a fresh system, not a failure', async () => {

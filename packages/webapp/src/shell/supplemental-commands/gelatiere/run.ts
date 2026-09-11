@@ -259,9 +259,17 @@ const MAN_BYTE_CAP = 16_000;
 /** Catalog / sitemap cap — generous, but bounded against a hijacked CDN. */
 const FETCH_BYTE_CAP = 512_000;
 const MAN_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+/**
+ * Wall clock per fetch. These verbs are the unattended nightly pass's whole
+ * web surface; without this a stalled host would hang the pass until its
+ * run timeout, and the byte caps only apply once a body arrives.
+ */
+const FETCH_TIMEOUT_MS = 15_000;
 
 async function fetchSliccy(path: string, cap: number): Promise<string> {
-  const response = await fetch(`${GELATIERE_FETCH_ORIGIN}${path}`);
+  const response = await fetch(`${GELATIERE_FETCH_ORIGIN}${path}`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   const text = await response.text();
   return text.length > cap ? text.slice(0, cap) : text;

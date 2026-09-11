@@ -111,7 +111,7 @@ type MiniSearchCtor = new (opts: {
   idField: string;
   processTerm?: (term: string) => string | null;
   searchOptions?: { boost?: Record<string, number>; prefix?: boolean };
-}) => MiniSearchLike & { constructor: { loadJSON(json: unknown, opts: unknown): MiniSearchLike } };
+}) => MiniSearchLike & { constructor: { loadJS(js: unknown, opts: unknown): MiniSearchLike } };
 
 const INDEX_OPTIONS = {
   fields: ['title', 'body'],

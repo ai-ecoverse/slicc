@@ -98,6 +98,8 @@ Dream over {{MEMORY_PATH}}: {{SESSION_COUNT}} sessions, budget {{BUDGET_CHARS}},
     const options = spawn.mock.calls[0][0];
     expect(options).toMatchObject({
       name: 'memory-dreamer',
+      // A curator over the same file must not be in flight (bridge `exclusiveWith`).
+      exclusiveWith: ['memory-curator'],
       // The staged draft substitutes for the live memory file; the bridge
       // three-way-merges it back onto CONE_MEMORY_PATH on exit 0.
       writablePaths: [curationDraftPath(STATE_PATH)],

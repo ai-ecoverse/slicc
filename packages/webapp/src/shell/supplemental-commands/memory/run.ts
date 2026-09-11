@@ -236,7 +236,15 @@ async function buildStatusReport(fs: VirtualFS): Promise<MemoryStatusReport> {
     cones.push({ folder, path, chars: content === null ? null : content.length });
   }
   const curation = { curated: 0, failed: 0, pending: 0, skipped: 0, none: 0 };
-  for (const entry of index) curation[entryState(entry)]++;
+  const curatedPerCone = new Map<string, number>();
+  for (const entry of index) {
+    const state = entryState(entry);
+    curation[state]++;
+    if (state === 'curated') {
+      const folder = entry.cone ?? PRIMARY_CONE_FOLDER;
+      curatedPerCone.set(folder, (curatedPerCone.get(folder) ?? 0) + 1);
+    }
+  }
 
   const checks: string[] = [];
   if (curation.failed > 0) {
@@ -244,12 +252,17 @@ async function buildStatusReport(fs: VirtualFS): Promise<MemoryStatusReport> {
       `${curation.failed} archive(s) whose last curation attempt failed — see \`memory log\``
     );
   }
-  // The "memory system that lies" shape: curation reports success, but the
-  // file the user believes is accumulating memory is missing or empty.
-  const primary = cones.find((cone) => cone.folder === PRIMARY_CONE_FOLDER);
-  if (curation.curated > 0 && (primary?.chars ?? 0) === 0) {
+  // The "memory system that lies" shape, per cone: curation reports success,
+  // but the file that cone's user believes is accumulating memory is missing
+  // or empty. Archives from a cone that no longer exists are not a lie — its
+  // memory file went with it.
+  for (const cone of cones) {
+    const curated = curatedPerCone.get(cone.folder) ?? 0;
+    if (curated === 0 || (cone.chars ?? 0) > 0) continue;
     checks.push(
-      `${curation.curated} archive(s) report successful curation but the primary memory file is missing or empty`
+      cone.folder === PRIMARY_CONE_FOLDER
+        ? `${curated} archive(s) report successful curation but the primary memory file is missing or empty`
+        : `${curated} archive(s) from cone "${cone.folder}" report successful curation but its memory file (${cone.path}) is missing or empty`
     );
   }
   return {
@@ -416,10 +429,20 @@ async function handleDream(args: string[], fs: VirtualFS): Promise<CommandResult
     host.dream(folder === PRIMARY_CONE_FOLDER ? {} : { cone: { folder } });
 
   if (!parsed.bools.has('--wait')) {
-    for (const folder of folders) {
-      // Detached: the outcome lands in the pass's status.json either way.
-      void request(folder).catch(() => {});
-    }
+    // Detached, but one cone AFTER another: every dreamer may write the shared
+    // wiki (`/shared/wiki/index.md`, `log.md`, the same page), and those
+    // writes are not staged like the memory draft — parallel dreamers would
+    // race on last-write-wins. The outcome lands in each pass's status.json.
+    void folders.reduce(
+      (chain, folder) =>
+        chain
+          .then(() => request(folder))
+          .then(
+            () => undefined,
+            () => undefined
+          ),
+      Promise.resolve()
+    );
     const lines = folders.map((folder) => `  ${folder.padEnd(14)}${dreamStatusPath(folder)}`);
     return ok(
       `Dreaming started for ${folders.length} cone(s); outcomes land in:\n${lines.join('\n')}\n`

@@ -17,6 +17,8 @@ import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import {
   type AgenticMemoryPassResult,
   type CuratorConeRef,
+  curatorAgentName,
+  dreamerAgentName,
   type MemoryPassInstructions,
   type RunAgenticMemoryPassOptions,
   runAgenticMemoryPass,
@@ -26,19 +28,17 @@ export { DEFAULT_DREAMING_MD };
 
 export const DREAMING_INSTRUCTIONS_PATH = '/shared/DREAMING.md';
 
-/**
- * Agent name of the dreamer for `folder` — per cone for the same reason as
- * `curatorAgentName`: two dreams over the SAME memory file must collide on
- * the fixed name; different cones' dreams must not block each other.
- */
-export function dreamerAgentName(folder: string): string {
-  return folder === PRIMARY_CONE_FOLDER ? 'memory-dreamer' : `memory-dreamer-${folder}`;
-}
+// Defined beside `curatorAgentName` so each pass can name the other as its
+// rival without a module cycle; re-exported here for callers and tests.
+export { dreamerAgentName };
 
 export const DREAMER_INSTRUCTIONS: MemoryPassInstructions = {
   path: DREAMING_INSTRUCTIONS_PATH,
   fallback: DEFAULT_DREAMING_MD,
   nameFor: dreamerAgentName,
+  // A curator over the same file (a "New chat" while the nightly dreams)
+  // must not run at the same time — see `MemoryPassInstructions.rivalsFor`.
+  rivalsFor: (folder) => [curatorAgentName(folder)],
 };
 
 /**

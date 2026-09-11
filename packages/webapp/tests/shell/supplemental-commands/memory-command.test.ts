@@ -439,11 +439,23 @@ describe('memory dream', () => {
         ],
       }
     );
+    // Detached but sequential: every dreamer may write the shared wiki, whose
+    // index/log are not staged — the second cone starts only when the first
+    // pass has settled.
+    let releaseFirst!: () => void;
+    seam.dream.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = () => resolve({ ok: true, report: '' });
+        })
+    );
     const result = await run(fs, ['dream', '--all']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('2 cone(s)');
-    expect(seam.dream).toHaveBeenCalledTimes(2);
+    expect(seam.dream).toHaveBeenCalledTimes(1);
     expect(seam.dream).toHaveBeenCalledWith({});
+    releaseFirst();
+    await vi.waitFor(() => expect(seam.dream).toHaveBeenCalledTimes(2));
     expect(seam.dream).toHaveBeenCalledWith({ cone: { folder: 'cone-side' } });
   });
 

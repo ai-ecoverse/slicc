@@ -21,7 +21,7 @@ import {
   type FrozenSessionIndexEntry,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
-import { workspaceFor } from '../work-unit/descriptor.js';
+import { EXTRA_CONE_HOME_ROOT, workspaceFor } from '../work-unit/descriptor.js';
 import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 
 /**
@@ -42,6 +42,21 @@ export interface MemoryHealthFs {
   readFile(path: string, options?: { encoding?: 'utf-8' }): Promise<string | Uint8Array>;
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  /**
+   * Optional: lists `/cones` so archives of a cone that no longer exists are
+   * not counted as lying (its memory file went with it). Without it every
+   * cone named by an archive is checked.
+   */
+  readDir?(path: string): Promise<Array<{ name: string; type: string }>>;
+}
+
+/** One cone's side of the lying-memory check. */
+export interface ConeMemoryHealth {
+  folder: string;
+  /** Archives from this cone that report successful curation. */
+  curated: number;
+  /** Memory file size in chars; null when missing. */
+  chars: number | null;
 }
 
 export interface MemoryHealthReport {
@@ -51,8 +66,31 @@ export interface MemoryHealthReport {
   curation: { curated: number; failed: number; pending: number; skipped: number; none: number };
   /** Primary memory file size in chars; null when missing. */
   primaryMemoryChars: number | null;
+  /** Every cone with curated archives, and the primary always. */
+  cones: ConeMemoryHealth[];
   /** Human-readable failure lines; empty means healthy. */
   failures: string[];
+}
+
+/** Read a memory file's size; null when missing. Any other error propagates. */
+async function memoryChars(fs: MemoryHealthFs, folder: string): Promise<number | null> {
+  try {
+    return (await readText(fs, workspaceFor({ parentJid: null, folder }).memoryPath)).length;
+  } catch (err) {
+    if (isEnoent(err)) return null;
+    throw err;
+  }
+}
+
+/** Folders of the extra cones that exist, or null when the FS cannot list them. */
+async function liveExtraCones(fs: MemoryHealthFs): Promise<Set<string> | null> {
+  if (!fs.readDir) return null;
+  try {
+    const entries = await fs.readDir(EXTRA_CONE_HOME_ROOT);
+    return new Set(entries.filter((e) => e.type === 'directory').map((e) => e.name));
+  } catch {
+    return new Set();
+  }
 }
 
 function isEnoent(err: unknown): boolean {
@@ -103,6 +141,53 @@ function entryState(
   return 'none';
 }
 
+/** Curated-archive counts per cone (the primary always present, maybe at 0). */
+function curatedPerCone(entries: FrozenSessionIndexEntry[]): Map<string, number> {
+  const counts = new Map<string, number>([[PRIMARY_CONE_FOLDER, 0]]);
+  for (const entry of entries) {
+    if (entryState(entry) !== 'curated') continue;
+    // An archive's `cone` names the memory file its curation was supposed to
+    // grow (absent = the primary).
+    const folder = entry.cone ?? PRIMARY_CONE_FOLDER;
+    counts.set(folder, (counts.get(folder) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Each cone's curated count beside its memory file size. A cone that was
+ * dropped took its memory file with it — not a lie — so extra cones are
+ * checked only when they still exist (when the FS can tell).
+ */
+async function collectConeHealth(
+  fs: MemoryHealthFs,
+  entries: FrozenSessionIndexEntry[]
+): Promise<ConeMemoryHealth[]> {
+  const live = await liveExtraCones(fs);
+  const cones: ConeMemoryHealth[] = [];
+  for (const [folder, curated] of curatedPerCone(entries)) {
+    if (folder !== PRIMARY_CONE_FOLDER && live && !live.has(folder)) continue;
+    cones.push({ folder, curated, chars: await memoryChars(fs, folder) });
+  }
+  return cones;
+}
+
+/**
+ * The "memory system that lies" shape, per cone: curation reports success
+ * but the file that cone's user believes is accumulating memory is missing
+ * or empty. Checking only the primary would flag a healthy extra-cone setup
+ * with no primary memory, and miss an extra cone whose file vanished.
+ */
+function lyingMemoryFailures(cones: ConeMemoryHealth[]): string[] {
+  return cones
+    .filter((cone) => cone.curated > 0 && (cone.chars ?? 0) === 0)
+    .map((cone) =>
+      cone.folder === PRIMARY_CONE_FOLDER
+        ? `${cone.curated} archive(s) report successful curation but the primary memory file is missing or empty`
+        : `${cone.curated} archive(s) from cone "${cone.folder}" report successful curation but its memory file is missing or empty`
+    );
+}
+
 /** Run the two lying-memory checks plus the tooling self-check. Never throws. */
 export async function runMemoryHealthCheck(
   fs: MemoryHealthFs,
@@ -113,6 +198,7 @@ export async function runMemoryHealthCheck(
     sessions: 0,
     curation: { curated: 0, failed: 0, pending: 0, skipped: 0, none: 0 },
     primaryMemoryChars: null,
+    cones: [],
     failures: [],
   };
   try {
@@ -126,32 +212,22 @@ export async function runMemoryHealthCheck(
     for (const entry of entries) report.curation[entryState(entry)]++;
 
     try {
-      const primary = await readText(
-        fs,
-        workspaceFor({ parentJid: null, folder: PRIMARY_CONE_FOLDER }).memoryPath
-      );
-      report.primaryMemoryChars = primary.length;
+      report.cones = await collectConeHealth(fs, entries);
     } catch (err) {
-      if (!isEnoent(err)) {
-        report.failures.push(
-          `primary memory file unreadable: ${err instanceof Error ? err.message : String(err)}`
-        );
-        return report;
-      }
+      report.failures.push(
+        `memory file unreadable: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return report;
     }
+    report.primaryMemoryChars =
+      report.cones.find((cone) => cone.folder === PRIMARY_CONE_FOLDER)?.chars ?? null;
 
     if (report.curation.failed > 0) {
       report.failures.push(
         `${report.curation.failed} archive(s) whose last curation attempt failed`
       );
     }
-    // The "memory system that lies" shape: curation reports success but the
-    // file the user believes is accumulating memory is missing or empty.
-    if (report.curation.curated > 0 && (report.primaryMemoryChars ?? 0) === 0) {
-      report.failures.push(
-        `${report.curation.curated} archive(s) report successful curation but the primary memory file is missing or empty`
-      );
-    }
+    report.failures.push(...lyingMemoryFailures(report.cones));
   } catch (err) {
     // Criterion (c): a broken checker is a failure, never silence.
     report.failures.push(
