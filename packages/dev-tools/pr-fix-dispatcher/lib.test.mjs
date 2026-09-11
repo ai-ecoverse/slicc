@@ -460,13 +460,25 @@ describe('classifyFailures', () => {
     expect(out.reason).not.toMatch(/aggregator/i);
   });
 
-  it('prefers a non-aggregator unknown over the aggregator sentence', () => {
+  // A job whose log named nothing is still a job that ran this repo's code, so
+  // the aggregator must not own the verdict. `changes` is the one sibling that
+  // genuinely proves nothing, and it keeps the unknown skip.
+  it('prefers a non-aggregator sibling over the aggregator sentence', () => {
     const out = classifyFailures([
       { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
       { name: 'mystery', logExcerpt: 'exit 7' },
     ]);
+    expect(out).toMatchObject({ kind: 'code', category: 'mystery' });
+    expect(out.reason).not.toMatch(/aggregator/i);
+  });
+
+  it('still skips when every failing job is a non-code job', () => {
+    const out = classifyFailures([
+      { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+      { name: 'changes', logExcerpt: 'exit 7' },
+    ]);
     expect(out.kind).toBe('unknown');
-    expect(out.reason).toMatch(/mystery/);
+    expect(out.reason).toMatch(/changes/);
     expect(out.reason).not.toMatch(/aggregator/i);
   });
 
@@ -498,12 +510,34 @@ describe('aggregator job helpers', () => {
     expect(isCiAggregatorJob('CI / lint')).toBe(false);
   });
 
-  it('maps well-known code jobs, including swift-*', () => {
+  it('maps code jobs, including swift-* and names it has never seen', () => {
     expect(wellKnownCodeCategory('lint')).toBe('lint');
     expect(wellKnownCodeCategory('typecheck')).toBe('types');
     expect(wellKnownCodeCategory('webapp')).toBe('webapp');
     expect(wellKnownCodeCategory('swift-optel')).toBe('build');
-    expect(wellKnownCodeCategory('mystery')).toBeNull();
+    // Allow-by-default: the jobs the old allow-list forgot, plus a job that does
+    // not exist in `ci.yml` yet, all count as code.
+    for (const name of ['slicc-cli', 'go-optel', 'cloudflare-worker', 'node-server', 'mystery']) {
+      expect(wellKnownCodeCategory(name), name).toBe(name);
+    }
+  });
+
+  it('returns null for the jobs that evaluate no code', () => {
+    for (const name of ['ci', 'CI / ci', 'changes', '', '   ']) {
+      expect(wellKnownCodeCategory(name), name).toBeNull();
+    }
+  });
+
+  // GitHub appends the matrix leg to the check-run name. Before this strip,
+  // `node-matrix-tests` could never match its own entry.
+  it('strips the matrix leg before matching a job name', () => {
+    expect(wellKnownCodeCategory('node-matrix-tests (26)')).toBe('node-matrix-tests');
+    expect(wellKnownCodeCategory('CI / node-matrix-tests (24)')).toBe('node-matrix-tests');
+    expect(wellKnownCodeCategory('slicc-cli (ubuntu-latest)')).toBe('slicc-cli');
+    expect(wellKnownCodeCategory('lint (24)')).toBe('lint');
+    expect(wellKnownCodeCategory('swift-server (macos-15)')).toBe('build');
+    // The aggregator stays non-code however it is spelled.
+    expect(wellKnownCodeCategory('ci (merge_group)')).toBeNull();
   });
 
   it('fetches non-aggregator jobs before the ci aggregator', () => {
@@ -786,7 +820,7 @@ describe('decidePrAction — rubric', () => {
       ['ci', 'The token has expired'],
       ['ci', 'schema migration failed'],
       ['release', 'anything at all'],
-      ['ci', 'npm ERR! ERESOLVE unable to resolve dependency tree'],
+      ['ci', 'npm ERR! engine node is incompatible with this module'],
       ['ci', 'Invalid workflow file: .github/workflows/ci.yml'],
     ];
     for (const [name, log] of cases) {
@@ -796,11 +830,60 @@ describe('decidePrAction — rubric', () => {
     }
   });
 
-  it('skips when it cannot name a plausible cause', () => {
-    const out = decidePrAction(withFailure('exit code 7', 'mystery'));
+  it('skips when the only failing job evaluates no code', () => {
+    const out = decidePrAction(withFailure('exit code 7', 'changes'));
     expect(out.action).toBe('skip');
     expect(out.announce).toBe(true);
     expect(out.reason).toMatch(/no plausible cause/i);
+  });
+});
+
+// A dependency conflict is the expected, mechanical failure of a version bump —
+// regenerate the lockfile or widen a sibling range. Hard-skipping it made the
+// dispatcher blind on its most common candidate (PR #2964).
+describe('decidePrAction — the dependency-resolution waiver', () => {
+  const ERESOLVE = 'npm ERR! ERESOLVE unable to resolve dependency tree';
+  const withBranch = (headRef, logExcerpt = ERESOLVE) => {
+    const failing = [{ name: 'cloudflare-worker', logExcerpt }];
+    const input = candidate({
+      failing,
+      checks: { failing, pending: false, newestFailureAt: minutesAgo(60) },
+    });
+    input.pr.headRef = headRef;
+    return input;
+  };
+
+  it('dispatches an ERESOLVE on a renovate branch', () => {
+    expect(decidePrAction(withBranch('renovate/codemirror'))).toMatchObject({
+      action: 'dispatch',
+      category: 'dependency-resolution',
+    });
+  });
+
+  it('still hard-skips an ERESOLVE on a non-dependency automation branch', () => {
+    for (const ref of ['automation/backlog/issue-2209', 'rum-fix/boot-timeout']) {
+      expect(decidePrAction(withBranch(ref)), ref).toMatchObject({
+        action: 'skip',
+        category: 'dependency-resolution',
+      });
+    }
+  });
+
+  it('waives only that one category — a sibling hard skip still wins', () => {
+    expect(
+      decidePrAction(
+        withBranch(
+          'renovate/codemirror',
+          `${ERESOLVE}\nInvalid workflow file: .github/workflows/ci.yml`
+        )
+      )
+    ).toMatchObject({ action: 'skip', category: 'ci-config-change' });
+  });
+
+  it('keeps the engine mismatch hard on a renovate branch', () => {
+    expect(
+      decidePrAction(withBranch('renovate/node-24', 'npm ERR! Unsupported engine for foo@1.0.0'))
+    ).toMatchObject({ action: 'skip', category: 'engine-mismatch' });
   });
 });
 
@@ -834,13 +917,20 @@ describe('formatFailuresForMatrix', () => {
 
 describe('extractLogExcerpt', () => {
   it('strips Actions timestamps and keeps the interesting tail', () => {
+    const stamp = (n, line) => `2025-01-15T11:59:${String(n).padStart(2, '0')}.1234567Z ${line}`;
     const log = [
-      '2025-01-15T11:59:00.1234567Z ##[group]Run npm run lint',
-      '2025-01-15T11:59:01.1234567Z boring output',
-      '2025-01-15T11:59:02.1234567Z biome found 2 errors',
+      ...Array.from({ length: 6 }, (_, i) => stamp(i, `boring output ${i}`)),
+      stamp(9, 'biome found 2 errors'),
     ].join('\n');
     const out = extractLogExcerpt(log);
-    expect(out).toBe('biome found 2 errors');
+    expect(out).not.toMatch(/2025-01-15T/);
+    // The failure line, plus CONTEXT_BEFORE lines of lead-in — and nothing older.
+    expect(out.split('\n')).toEqual([
+      'boring output 3',
+      'boring output 4',
+      'boring output 5',
+      'biome found 2 errors',
+    ]);
   });
 
   it('falls back to the raw tail when no line looks interesting', () => {
@@ -870,9 +960,23 @@ describe('extractLogExcerpt', () => {
     const out = extractLogExcerpt(log);
     expect(out).toContain('packages/chrome-extension/src/fetch-proxy-shared.ts');
     expect(out).toContain('Fix: in this same PR');
-    // The passing chatter that preceded the failure is still dropped.
-    expect(out).not.toContain('##[group]');
-    expect(out).not.toContain('Checked 12 changed file(s)');
+  });
+
+  // `make` prints its own `*** Error 1` AFTER the recipe's summary, so the one
+  // actionable line sits above the nearest failure-ish line. This is the PR
+  // #3045 shape, reduced: with trailing context only, `go mod tidy` never
+  // reached the excerpt and `slicc-cli` classified as `unknown`.
+  it('keeps the detail that PRECEDES a failure line', () => {
+    const log = [
+      ...Array.from({ length: 12 }, (_, i) => `go: downloading example.com/pkg v1.${i}.0`),
+      "go.mod/go.sum are not tidy — run 'go mod tidy'",
+      'make[1]: *** [Makefile:48: tidy-check] Error 1',
+      '##[error]Process completed with exit code 2.',
+    ].join('\n');
+    const out = extractLogExcerpt(log);
+    expect(out).toContain('go mod tidy');
+    // And the noise further above it is still dropped.
+    expect(out).not.toContain('example.com/pkg v1.0.0');
   });
 
   it('still respects the size cap once context lines are kept', () => {
@@ -952,5 +1056,79 @@ describe('regression: PR #3008 — lint + aggregator, empty lint excerpt', () =>
     expect(out.reason).toMatch(/lint/);
     expect(out.reason).not.toMatch(/aggregator/i);
     expect(out.reason).not.toMatch(/"ci" is the CI aggregator/i);
+  });
+});
+
+// PR #3045 (`renovate/github.com-pion-webrtc-v4-4.x`) failed `slicc-cli` on
+// `make tidy-check`, whose log says `go.mod/go.sum are not tidy — run 'go mod
+// tidy'` in so many words. The dispatcher skipped it as `unknown` and a human
+// pushed `chore: go mod tidy after pion/webrtc v4.2.20 bump` by hand. Three
+// independent gaps each caused the skip, so the excerpt below is the verbatim
+// interleaving from the real job log and each `it` pins one gap shut.
+describe('regression: PR #3045 — a Go tidy-check failure on a Renovate bump', () => {
+  const TIDY_CHECK_LOG = [
+    'go: downloading github.com/pion/webrtc/v4 v4.2.20',
+    'go: downloading github.com/pion/turn/v5 v5.1.0',
+    'make[1]: *** [Makefile:48: tidy-check] Error 1',
+    'make: *** [Makefile:73: check] Error 2',
+    '-github.com/pion/stun/v3 v3.1.7 h1:uRXMTlGLf89WgItGNyZ6aR5jMTX0NBbybXADpQCzn+E=',
+    '-github.com/pion/transport/v3 v3.1.1 h1:Tr684+fnnKlhPceU+ICdrw6KKkTms+5qHMgw6bIkYOM=',
+    ' github.com/pion/transport/v4 v4.1.0 h1:8S+nF2reM2cJuqC6g78OVy2BBgmbdns+acx3jA97BvQ=',
+    '-github.com/pion/webrtc/v4 v4.2.19 h1:2usG6s7eXMF08tqqoP3A4CX5XHArZsi1qeXDIIvXMeE=',
+    ' github.com/pion/webrtc/v4 v4.2.20 h1:NYiNhBTFArA8aoP18a30y4LN0dyqSrF65HxU7KnhNOo=',
+    ' github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=',
+    "go.mod/go.sum are not tidy — run 'go mod tidy'",
+    "make[1]: Leaving directory '/home/runner/work/slicc/slicc/packages/slicc-cli'",
+    '##[error]Process completed with exit code 2.',
+  ].join('\n');
+
+  const excerpt = extractLogExcerpt(TIDY_CHECK_LOG);
+  const failing = [
+    { name: 'slicc-cli (ubuntu-latest)', conclusion: 'failure', logExcerpt: excerpt },
+    { name: 'ci', conclusion: 'failure', logExcerpt: AGGREGATOR_EXCERPT },
+  ];
+  const input = candidate({
+    pr: {
+      number: 3045,
+      title: 'fix(deps): update module github.com/pion/webrtc/v4 to v4.2.20',
+      headRef: 'renovate/github.com-pion-webrtc-v4-4.x',
+      headSha: SHA,
+      labels: [],
+      user: { type: 'Bot', login: 'renovate[bot]' },
+    },
+    failing,
+    checks: { failing, pending: false, newestFailureAt: minutesAgo(90) },
+  });
+
+  // Gap 1: the prescription sits two lines ABOVE `##[error]` and nine below the
+  // nearest `Error 1`, so trailing-only context dropped it.
+  it('carries the prescription into the excerpt', () => {
+    expect(excerpt).toContain("run 'go mod tidy'");
+  });
+
+  // Gap 2: `generated-artifact` knew `package-lock.json` but no Go idiom.
+  it('reads the tidy-check failure as a stale generated manifest', () => {
+    expect(
+      classifyFailure({ jobName: 'slicc-cli (ubuntu-latest)', logExcerpt: excerpt })
+    ).toMatchObject({ kind: 'code', category: 'generated-artifact' });
+  });
+
+  // Gap 3: even with an empty log, `slicc-cli` was not on the allow-list, so the
+  // unknown fallback could not promote it either.
+  it('promotes the job on its name alone when the log is unavailable', () => {
+    expect(
+      classifyFailures([
+        { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+        { name: 'slicc-cli (ubuntu-latest)', logExcerpt: '' },
+      ])
+    ).toMatchObject({ kind: 'code', category: 'slicc-cli' });
+  });
+
+  it('dispatches a fixer instead of skipping', () => {
+    expect(screenPr(input)).toBeNull();
+    const out = decidePrAction(input);
+    expect(out.action).toBe('dispatch');
+    expect(out.reason).toMatch(/slicc-cli/);
+    expect(out.reason).not.toMatch(/no plausible cause/i);
   });
 });

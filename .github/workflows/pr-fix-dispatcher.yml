@@ -14,8 +14,11 @@ name: PR Fix Dispatcher
 #              checkout and its own Claude turn budget.
 #   • skip     everything else, plus the hard overrides (auth/secrets/billing,
 #              schema migrations, release/publish jobs, an infra failure that
-#              recurred after a re-run, anything needing a dependency, version,
-#              or CI-config change) → label + ONE short comment.
+#              recurred after a re-run, anything needing a new dependency, a Node
+#              engine bump, or a CI-config change) → label + ONE short comment.
+#              An npm resolution failure (ERESOLVE / peer dep) is a hard override
+#              only OFF a `renovate/` branch: on one, resolving the tree for a
+#              version Renovate already picked is the PR's whole content.
 #
 # The dispatcher never edits code, never pushes, and never merges. Its only
 # non-label, non-comment write is `rerun-failed-jobs`.
