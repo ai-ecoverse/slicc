@@ -47,9 +47,43 @@
 
 import { jsonResponse } from './shared.js';
 import { timingSafeEqual } from './timing-safe-equal.js';
+import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
 
 /** How long a home stays resolvable with no rebind before it self-expires. */
 export const WEBHOOK_HOME_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
+/**
+ * Bounded queue that holds deliveries arriving while no leader is connected,
+ * replayed to the current tray on the next successful forward or a rebind
+ * (#2812). Semantics, chosen deliberately per the issue's open question:
+ *
+ *   - **At-least-once.** A queued delivery is removed only after the tray
+ *     explicitly acknowledges delivery or filtering. A crash mid-drain replays it — a webhook consumer must
+ *     already tolerate a retry, so at-least-once beats the silent loss it
+ *     replaces.
+ *   - **Ordered.** Oldest-first, FIFO, so a consumer sees events in arrival
+ *     order.
+ *   - **Bounded.** Count and encoded-storage byte limits reject NEW requests
+ *     with backpressure. Accepted events are never evicted or aged out.
+ *   - **Durable retry.** An alarm retries even if bind precedes leader connect.
+ *     A poison event blocks later events until its registration is repaired.
+ */
+export const WEBHOOK_QUEUE_MAX = 100;
+/** Legacy horizon, retained for migration tests only; accepted events no longer expire. */
+export const WEBHOOK_QUEUE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+/** Below the DO's 128 KiB per-value ceiling, including base64 and JSON overhead. */
+export const WEBHOOK_QUEUE_MAX_BYTES = 120 * 1024;
+export const WEBHOOK_QUEUE_RETRY_MS = 30_000;
+
+/** One delivery held for replay. The body is stored base64 so it round-trips any payload. */
+export interface QueuedDelivery {
+  webhookId: string;
+  /** Base64 of the raw request body. */
+  bodyB64: string;
+  /** The sender's forwardable headers (the tray relay filters them again on delivery). */
+  headers: Record<string, string>;
+  enqueuedAt: string;
+}
 
 /** Persisted home record. Never contains the raw secret — only its SHA-256. */
 export interface WebhookHomeRecord {
@@ -58,17 +92,24 @@ export interface WebhookHomeRecord {
   secretHash: string;
   /** SHA-256 hex of the rebind secret handed to the cone owner on first bind. */
   rebindSecretHash: string;
+  /** Hash of the last committed rotation request; permits exact no-mutation retries. */
+  rotationReceiptHash?: string;
   /** The tray a delivery is currently forwarded to. */
   currentTrayId: string;
   createdAt: string;
   lastReboundAt: string;
   /** ISO tombstone. Once set the home answers a permanent 410 and never resolves. */
   revokedAt?: string;
+  /** Deliveries awaiting a live leader, oldest first. Absent = empty. */
+  queue?: QueuedDelivery[];
+  /** Historical count written by the former drop-oldest queue; never incremented now. */
+  droppedCount?: number;
 }
 
 export interface WebhookHomeStorageLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+  setAlarm(scheduledTime: number): Promise<void>;
 }
 
 export interface WebhookHomeStateLike {
@@ -89,6 +130,21 @@ export interface WebhookHomeEnv {
 
 const HOME_STORAGE_KEY = 'webhook-home';
 
+/** Base64-encode raw bytes (for queue persistence — round-trips any payload). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Decode base64 back to bytes. */
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /** SHA-256 hex of a UTF-8 string. */
 async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -107,6 +163,8 @@ async function sha256Hex(value: string): Promise<string> {
  */
 export class WebhookHomeDurableObject {
   private home: WebhookHomeRecord | null = null;
+  private operation: Promise<unknown> = Promise.resolve();
+  private pendingRequests = 0;
 
   constructor(
     private readonly state: WebhookHomeStateLike,
@@ -127,7 +185,43 @@ export class WebhookHomeDurableObject {
     this.home = (await this.state.storage.get<WebhookHomeRecord>(HOME_STORAGE_KEY)) ?? null;
   }
 
-  async fetch(request: Request): Promise<Response> {
+  /** Serialize across external awaits; DO input gates alone do not prevent races. */
+  private exclusive<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.operation.then(run).catch((error: unknown) => {
+      // Never let failed persistence leave a successful-looking in-memory mutation.
+      this.home = null;
+      throw error;
+    });
+    this.operation = next.catch(() => {});
+    return next;
+  }
+
+  fetch(request: Request): Promise<Response> {
+    // Bound waiters as well as durable storage; slow external I/O cannot turn
+    // the serialization chain into an unbounded in-memory request queue.
+    if (this.pendingRequests >= 8) {
+      void request.body?.cancel().catch(() => {});
+      return Promise.resolve(
+        jsonResponse({ error: 'Webhook home busy; retry later', code: 'WEBHOOK_HOME_BUSY' }, 429, {
+          'retry-after': '30',
+          'access-control-allow-origin': '*',
+        })
+      );
+    }
+    this.pendingRequests++;
+    return this.exclusive(() => this.dispatch(request)).finally(() => {
+      this.pendingRequests--;
+    });
+  }
+
+  alarm(): Promise<void> {
+    return this.exclusive(async () => {
+      await this.load();
+      await this.drainQueue();
+    });
+  }
+
+  private async dispatch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     await this.load();
     if (url.pathname === '/internal/home/bind' && request.method === 'POST') {
@@ -138,6 +232,12 @@ export class WebhookHomeDurableObject {
     }
     if (url.pathname === '/internal/home/revoke' && request.method === 'POST') {
       return this.handleRevoke(request);
+    }
+    if (url.pathname === '/internal/home/rotate' && request.method === 'POST') {
+      return this.handleRotate(request);
+    }
+    if (url.pathname === '/internal/home/revoke-registration' && request.method === 'POST') {
+      return this.handleRevokeRegistration(request);
     }
     return jsonResponse({ error: 'Not found', code: 'NOT_FOUND' }, 404);
   }
@@ -162,33 +262,43 @@ export class WebhookHomeDurableObject {
       controllerToken?: string;
     };
     try {
-      body = (await request.json()) as typeof body;
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
     } catch {
       return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
     }
-    const { coneId, secret, rebindSecret, trayId, controllerToken } = body;
-    if (!coneId || !secret || !rebindSecret || !trayId || !controllerToken) {
+    const { coneId, secret, rebindSecret, trayId, controllerToken } = body ?? {};
+    if (
+      ![coneId, secret, rebindSecret, trayId, controllerToken].every(
+        (v) => typeof v === 'string' && v.length > 0
+      )
+    ) {
       return jsonResponse({ error: 'Missing required field', code: 'INVALID_BODY' }, 400);
-    }
-
-    if (this.home?.revokedAt) {
-      // A revoked home never resurrects — a tombstoned coneId is dead for good.
-      return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410);
     }
 
     // Rebind must present the matching rebind secret. First bind has none stored.
     if (this.home) {
-      const presentedHash = await sha256Hex(rebindSecret);
+      const presentedHash = await sha256Hex(rebindSecret!);
       if (!timingSafeEqual(presentedHash, this.home.rebindSecretHash)) {
         return jsonResponse({ error: 'Invalid rebind capability', code: 'INVALID_REBIND' }, 403);
       }
+    }
+    if (this.home?.revokedAt) {
+      return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410);
+    }
+    if (this.home && !timingSafeEqual(await sha256Hex(secret!), this.home.secretHash)) {
+      return jsonResponse(
+        { error: 'Stale delivery capability', code: 'INVALID_WEBHOOK_CAPABILITY' },
+        403
+      );
     }
 
     // Both binds require the TARGET tray to confirm the controller token: the
     // caller must actually lead the tray it is pointing the home at. This is
     // the second factor — a leaked coneId + rebind secret cannot redirect
     // deliveries to a tray the attacker does not control.
-    const confirmed = await this.confirmControllerOfTray(trayId, controllerToken);
+    const confirmed = await this.confirmControllerOfTray(trayId!, controllerToken!);
     if (!confirmed) {
       return jsonResponse(
         { error: 'Target tray did not confirm controller', code: 'CONTROLLER_UNCONFIRMED' },
@@ -197,20 +307,30 @@ export class WebhookHomeDurableObject {
     }
 
     if (this.home) {
-      this.home.currentTrayId = trayId;
+      this.home.currentTrayId = trayId!;
       this.home.lastReboundAt = this.isoNow();
     } else {
       this.home = {
-        coneId,
-        secretHash: await sha256Hex(secret),
-        rebindSecretHash: await sha256Hex(rebindSecret),
-        currentTrayId: trayId,
+        coneId: coneId!,
+        secretHash: await sha256Hex(secret!),
+        rebindSecretHash: await sha256Hex(rebindSecret!),
+        currentTrayId: trayId!,
         createdAt: this.isoNow(),
         lastReboundAt: this.isoNow(),
       };
     }
     await this.state.storage.put(HOME_STORAGE_KEY, this.home);
-    return jsonResponse({ coneId: this.home.coneId, currentTrayId: this.home.currentTrayId }, 200);
+    // Bind normally precedes leader connect. Try once here; the durable alarm
+    // keeps retrying after connect even when no further webhook request arrives.
+    await this.drainQueue();
+    return jsonResponse(
+      {
+        coneId: this.home.coneId,
+        currentTrayId: this.home.currentTrayId,
+        queued: this.home.queue?.length ?? 0,
+      },
+      200
+    );
   }
 
   /**
@@ -237,12 +357,6 @@ export class WebhookHomeDurableObject {
         cors
       );
     }
-    if (this.home.revokedAt) {
-      return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410, cors);
-    }
-    if (this.isExpired()) {
-      return jsonResponse({ error: 'Webhook home expired', code: 'HOME_EXPIRED' }, 410, cors);
-    }
     const presentedHash = await sha256Hex(secret);
     if (!timingSafeEqual(presentedHash, this.home.secretHash)) {
       return jsonResponse(
@@ -251,42 +365,270 @@ export class WebhookHomeDurableObject {
         cors
       );
     }
+    if (this.home.revokedAt) {
+      return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410, cors);
+    }
+    if (this.isExpired()) {
+      return jsonResponse({ error: 'Webhook home expired', code: 'HOME_EXPIRED' }, 410, cors);
+    }
+    if (await this.isRegistrationRevoked(webhookId)) {
+      return jsonResponse(
+        { error: 'Webhook registration revoked', code: 'WEBHOOK_REVOKED' },
+        410,
+        cors
+      );
+    }
 
-    // Internal forward to the current tray. No redirect, no capability leaves
-    // the worker — the tray answers as if the delivery arrived on its own
-    // webhook token, and we relay that answer straight back to the sender.
-    // Buffer the body rather than stream it: webhook payloads are small, and a
-    // streamed body would need `duplex: 'half'` (workerd-only) on the forward.
-    const forwardBody = await request.arrayBuffer();
-    const stub = this.env.TRAY_HUB.get(this.env.TRAY_HUB.idFromName(this.home.currentTrayId));
-    const forwardUrl = new URL(request.url);
-    forwardUrl.pathname = `/internal/webhook/${encodeURIComponent(webhookId)}`;
-    forwardUrl.search = '';
-    const forwarded = await stub.fetch(
-      new Request(forwardUrl, {
-        method: 'POST',
-        headers: forwardableDeliveryHeaders(request),
-        body: forwardBody,
-      })
+    let forwardBody: Uint8Array;
+    try {
+      forwardBody = await readBoundedWebhookBody(request);
+    } catch (error) {
+      if (!(error instanceof WebhookBodyError)) throw error;
+      return jsonResponse(
+        { error: error.message, code: 'WEBHOOK_BODY_REJECTED' },
+        error.status,
+        cors
+      );
+    }
+    const headers = forwardableDeliveryHeaders(request);
+    const delivery: QueuedDelivery = {
+      webhookId,
+      bodyB64: bytesToBase64(forwardBody),
+      headers,
+      enqueuedAt: this.isoNow(),
+    };
+    if (!(await this.enqueue(delivery))) {
+      return jsonResponse(
+        { error: 'Webhook queue full; retry later', code: 'WEBHOOK_QUEUE_FULL' },
+        429,
+        { ...cors, 'retry-after': '30' }
+      );
+    }
+    await this.drainQueue();
+    return jsonResponse(
+      { ok: true, accepted: true, queued: this.home.queue?.includes(delivery) ?? false },
+      202,
+      cors
     );
-    // Preserve the tray's status + body; ensure the CORS header the public
-    // surface promises is present.
-    const headers = new Headers(forwarded.headers);
-    headers.set('access-control-allow-origin', '*');
-    return new Response(forwarded.body, { status: forwarded.status, headers });
+  }
+
+  /** Forward one delivery to the current tray's internal webhook entrypoint. */
+  private async forwardToTray(
+    webhookId: string,
+    body: ArrayBuffer | Uint8Array,
+    headers: Record<string, string>
+  ): Promise<Response> {
+    const trayId = this.home!.currentTrayId;
+    const stub = this.env.TRAY_HUB.get(this.env.TRAY_HUB.idFromName(trayId));
+    const controller = new AbortController();
+    return withWebhookTimeout(
+      stub.fetch(
+        new Request(`https://internal/internal/webhook/${encodeURIComponent(webhookId)}`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'content-type': 'application/json', ...headers },
+          body,
+        })
+      ),
+      () => controller.abort()
+    );
+  }
+
+  /** Persist before sending or accepting; never evict an already accepted event. */
+  private async enqueue(delivery: QueuedDelivery): Promise<boolean> {
+    if (!this.home) return false;
+    const queue = this.home.queue ?? [];
+    const next = { ...this.home, queue: [...queue, delivery] };
+    if (
+      queue.length >= WEBHOOK_QUEUE_MAX ||
+      new TextEncoder().encode(JSON.stringify(next)).byteLength > WEBHOOK_QUEUE_MAX_BYTES
+    ) {
+      return false;
+    }
+    // Schedule BEFORE persisting: a crash between the two cannot strand accepted work.
+    await this.state.storage.setAlarm(this.now() + WEBHOOK_QUEUE_RETRY_MS);
+    await this.state.storage.put(HOME_STORAGE_KEY, next);
+    this.home = next;
+    return true;
+  }
+
+  /**
+   * Replay queued deliveries to the current tray, oldest first. Stops at the
+   * first delivery the tray does not accept (leader dropped again mid-drain),
+   * leaving it and everything after it queued — at-least-once, in order.
+   * One event per invocation bounds request lifetime; the alarm continues the FIFO.
+   */
+  private async drainQueue(): Promise<void> {
+    if (!this.home?.queue?.length) return;
+    if (this.home.revokedAt) return;
+    await this.state.storage.setAlarm(this.now() + WEBHOOK_QUEUE_RETRY_MS);
+    const next = this.home.queue[0]!;
+    if (await this.isRegistrationRevoked(next.webhookId)) {
+      await this.removeQueueHead();
+      return;
+    }
+    try {
+      const forwarded = await this.forwardToTray(
+        next.webhookId,
+        base64ToBytes(next.bodyB64),
+        next.headers
+      );
+      const ack = forwarded.headers.get('x-slicc-webhook-ack');
+      void forwarded.body?.cancel().catch(() => {});
+      if (forwarded.status >= 300 || (ack !== 'delivered' && ack !== 'filtered')) return;
+    } catch {
+      // Network exceptions/timeouts are ambiguous: retain for at-least-once replay.
+      return;
+    }
+    await this.removeQueueHead();
+  }
+
+  private async removeQueueHead(): Promise<void> {
+    if (!this.home?.queue) return;
+    this.home.queue.shift();
+    if (this.home.queue.length === 0) delete this.home.queue;
+    await this.state.storage.put(HOME_STORAGE_KEY, this.home);
+    if (this.home.queue?.length) await this.state.storage.setAlarm(this.now() + 1_000);
+  }
+
+  private async isRegistrationRevoked(webhookId: string): Promise<boolean> {
+    return (
+      (await this.state.storage.get(`revoked-registration:${await sha256Hex(webhookId)}`)) !==
+      undefined
+    );
+  }
+
+  /** Tombstones use separate keys and are never evicted to make room for events. */
+  private async handleRevokeRegistration(request: Request): Promise<Response> {
+    let body: {
+      webhookId?: string;
+      rebindSecret?: string;
+      trayId?: string;
+      controllerToken?: string;
+    };
+    try {
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
+    } catch {
+      return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
+    }
+    const { webhookId, rebindSecret, trayId, controllerToken } = body ?? {};
+    if (
+      ![webhookId, rebindSecret, trayId, controllerToken].every(
+        (v) => typeof v === 'string' && v.length > 0
+      ) ||
+      webhookId!.length > 1024
+    ) {
+      return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
+    }
+    if (
+      !this.home ||
+      !timingSafeEqual(await sha256Hex(rebindSecret!), this.home.rebindSecretHash)
+    ) {
+      return jsonResponse({ error: 'Invalid rebind capability', code: 'INVALID_REBIND' }, 403);
+    }
+    if (
+      this.home.currentTrayId !== trayId ||
+      !(await this.confirmControllerOfTray(trayId!, controllerToken!))
+    ) {
+      return jsonResponse(
+        { error: 'Target tray did not confirm controller', code: 'CONTROLLER_UNCONFIRMED' },
+        403
+      );
+    }
+    // Persist revocation before removing queue entries: a crash cannot replay
+    // a deleted registration. The drain also checks the tombstone after restart.
+    await this.state.storage.put(
+      `revoked-registration:${await sha256Hex(webhookId!)}`,
+      this.isoNow()
+    );
+    if (this.home.queue) {
+      this.home.queue = this.home.queue.filter((entry) => entry.webhookId !== webhookId);
+      if (this.home.queue.length === 0) delete this.home.queue;
+      await this.state.storage.put(HOME_STORAGE_KEY, this.home);
+    }
+    return jsonResponse({ webhookId, revoked: true }, 200);
+  }
+
+  /** Retry-safe rotation changes only the delivery hash, never identity or queued work. */
+  private async handleRotate(request: Request): Promise<Response> {
+    let body: {
+      oldSecret?: string;
+      secret?: string;
+      rebindSecret?: string;
+      trayId?: string;
+      controllerToken?: string;
+    };
+    try {
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
+    } catch {
+      return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
+    }
+    const { oldSecret, secret, rebindSecret, trayId, controllerToken } = body ?? {};
+    if (
+      ![oldSecret, secret, rebindSecret, trayId, controllerToken].every(
+        (v) => typeof v === 'string' && v.length > 0
+      )
+    ) {
+      return jsonResponse({ error: 'Missing required field', code: 'INVALID_BODY' }, 400);
+    }
+    if (
+      !this.home ||
+      !timingSafeEqual(await sha256Hex(rebindSecret!), this.home.rebindSecretHash)
+    ) {
+      return jsonResponse({ error: 'Invalid rebind capability', code: 'INVALID_REBIND' }, 403);
+    }
+    if (this.home.revokedAt) {
+      return jsonResponse({ error: 'Webhook home revoked', code: 'HOME_REVOKED' }, 410);
+    }
+    const replacement = await sha256Hex(secret!);
+    const receipt = await sha256Hex(JSON.stringify({ oldSecret, secret, trayId, controllerToken }));
+    if (
+      timingSafeEqual(this.home.secretHash, replacement) &&
+      this.home.rotationReceiptHash &&
+      timingSafeEqual(this.home.rotationReceiptHash, receipt)
+    ) {
+      // A lost response must be recoverable after source-tray expiry or a rebind.
+      // This exact authenticated request already committed: no mutation or rebind.
+      return jsonResponse({ coneId: this.home.coneId, rotated: true }, 200);
+    }
+    if (
+      this.home.currentTrayId !== trayId ||
+      !(await this.confirmControllerOfTray(trayId!, controllerToken!, true))
+    ) {
+      return jsonResponse(
+        { error: 'Target tray did not confirm controller', code: 'CONTROLLER_UNCONFIRMED' },
+        403
+      );
+    }
+    if (!timingSafeEqual(this.home.secretHash, await sha256Hex(oldSecret!))) {
+      return jsonResponse(
+        { error: 'Invalid webhook capability', code: 'INVALID_WEBHOOK_CAPABILITY' },
+        403
+      );
+    }
+    this.home.secretHash = replacement;
+    this.home.rotationReceiptHash = receipt;
+    await this.state.storage.put(HOME_STORAGE_KEY, this.home);
+    return jsonResponse({ coneId: this.home.coneId, rotated: true }, 200);
   }
 
   private async handleRevoke(request: Request): Promise<Response> {
     let body: { rebindSecret?: string };
     try {
-      body = (await request.json()) as typeof body;
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
     } catch {
       return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
     }
     if (!this.home) {
       return jsonResponse({ error: 'No such home', code: 'NOT_FOUND' }, 404);
     }
-    if (!body.rebindSecret) {
+    if (typeof body?.rebindSecret !== 'string' || !body.rebindSecret) {
       return jsonResponse({ error: 'Missing rebind capability', code: 'INVALID_BODY' }, 400);
     }
     const presentedHash = await sha256Hex(body.rebindSecret);
@@ -309,19 +651,38 @@ export class WebhookHomeDurableObject {
    * any error) is a refusal, never an accept, so a tray outage fails the rebind
    * closed rather than open.
    */
-  private async confirmControllerOfTray(trayId: string, controllerToken: string): Promise<boolean> {
+  private async confirmControllerOfTray(
+    trayId: string,
+    controllerToken: string,
+    ownershipOnly = false
+  ): Promise<boolean> {
     try {
       const stub = this.env.TRAY_HUB.get(this.env.TRAY_HUB.idFromName(trayId));
-      const res = await stub.fetch(
-        new Request('https://internal/internal/confirm-controller', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ controllerToken }),
-        })
+      const controller = new AbortController();
+      return await withWebhookTimeout(
+        (async () => {
+          const res = await stub.fetch(
+            new Request(
+              `https://internal/internal/${ownershipOnly ? 'confirm-controller-ownership' : 'confirm-controller'}`,
+              {
+                method: 'POST',
+                signal: controller.signal,
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ controllerToken }),
+              }
+            )
+          );
+          if (res.status !== 200) {
+            void res.body?.cancel().catch(() => {});
+            return false;
+          }
+          const parsed = JSON.parse(
+            new TextDecoder().decode(await readBoundedWebhookBody(res))
+          ) as { confirmed?: boolean };
+          return parsed.confirmed === true;
+        })(),
+        () => controller.abort()
       );
-      if (res.status !== 200) return false;
-      const parsed = (await res.json()) as { confirmed?: boolean };
-      return parsed.confirmed === true;
     } catch {
       return false;
     }
@@ -333,17 +694,33 @@ export class WebhookHomeDurableObject {
  * Cloudflare-internal and hop-by-hop headers; the tray relay applies its own
  * `forwardableHeaders` filter on top (stripping the reserved preview headers),
  * so this is a coarse first pass that keeps `content-type` and the sender's
- * own headers intact.
+ * own headers intact. Returned as a plain record so a queued delivery can
+ * persist it across a rove and replay it byte-for-byte.
  */
-function forwardableDeliveryHeaders(request: Request): Headers {
-  const out = new Headers();
+function forwardableDeliveryHeaders(request: Request): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const [key, value] of request.headers.entries()) {
-    if (key.startsWith('cf-') || key === 'host' || key === 'content-length') continue;
+    if (
+      key.startsWith('cf-') ||
+      [
+        'host',
+        'content-length',
+        'connection',
+        'keep-alive',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'te',
+        'trailer',
+        'transfer-encoding',
+        'upgrade',
+      ].includes(key)
+    )
+      continue;
     // Reserved routing headers stop here — the delivery secret and id are for
     // the home, never the leader or the cone.
     if (key === 'x-slicc-cone-secret' || key === 'x-slicc-webhook-id') continue;
-    out.set(key, value);
+    out[key] = value;
   }
-  out.set('content-type', request.headers.get('content-type') ?? 'application/json');
+  out['content-type'] = request.headers.get('content-type') ?? 'application/json';
   return out;
 }

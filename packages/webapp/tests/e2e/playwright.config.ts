@@ -104,15 +104,12 @@ export default defineConfig({
       // exactly as the production worker does. The webapp must be built
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
       // CI `e2e` job builds it before the E2E step.
-      // `--route` overrides the config's production routes
-      // (`www.sliccy.ai/*`), which `wrangler dev` otherwise SIMULATES: the
-      // worker would see `request.url` on the production host and mint
-      // absolute URLs pointing there. That is invisible for asset serving but
-      // fatal for the tray — `POST /tray` returns `capabilities.*.url`, and a
-      // leader that then dials `https://www.sliccy.ai/controller/<token>`
-      // reaches the real hub, which has never heard of the tray it just
-      // created (`TRAY_NOT_INITIALIZED`, HTTP 500). Pinning the route to the
-      // harness origin keeps every URL the worker hands out local.
+      // Staging has routes: [], so workerd preserves the incoming local Host
+      // instead of simulating production routes. --route localhost is NOT
+      // equivalent: it rewrites token.localhost previews into the app origin.
+      // --local uses real local DO/R2 storage, never the deployed staging hub.
+      // Staging and production have identical feature flags and DO bindings;
+      // their OAuth IDs and cloud-dashboard origins are not exercised here.
       //
       // wrangler runs under `wrangler-server.ts`, a supervisor, rather than
       // being spawned directly: Playwright never revives a `webServer`, and
@@ -120,7 +117,7 @@ export default defineConfig({
       // to fail every remaining spec with `ERR_CONNECTION_REFUSED`. The
       // supervisor re-spawns workerd and exposes `POST /restart`, which the
       // `leaderAlive` fixture in `fixtures.ts` drives.
-      command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/wrangler-server.ts')} -- dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1 --route ${LEADER_ORIGIN}/*`,
+      command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/wrangler-server.ts')} -- dev --local --env staging --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1`,
       env: {
         // Wrangler 4.118 enables local observability by default. Its extra
         // collector can disconnect Miniflare during this long-running suite.

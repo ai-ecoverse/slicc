@@ -20,7 +20,7 @@ interface TrayStub {
   fetch(request: Request): Promise<Response>;
 }
 
-function extractBearer(request: Request): string | null {
+export function extractBearer(request: Request): string | null {
   const auth = request.headers.get('authorization') ?? '';
   if (!auth.startsWith('Bearer ')) return null;
   const token = auth.slice('Bearer '.length).trim();
@@ -28,10 +28,36 @@ function extractBearer(request: Request): string | null {
 }
 
 class PreviewUploadTooLargeError extends Error {}
+class PreviewUploadTimeoutError extends Error {}
+
+async function withPreviewDeadline<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new PreviewUploadTimeoutError()), 30_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function readPreviewUploadBody(request: Request): Promise<ArrayBuffer> {
   const reader = request.body?.getReader();
   if (!reader) return new ArrayBuffer(0);
+  try {
+    return await withPreviewDeadline(collectPreviewUploadBody(reader));
+  } catch (error) {
+    void reader.cancel().catch(() => {});
+    throw error;
+  }
+}
+
+async function collectPreviewUploadBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): Promise<ArrayBuffer> {
   const chunks: Uint8Array[] = [];
   let size = 0;
   while (true) {
@@ -39,7 +65,6 @@ async function readPreviewUploadBody(request: Request): Promise<ArrayBuffer> {
     if (done) break;
     size += value.byteLength;
     if (size > MAX_PREVIEW_FILE_BYTES) {
-      await reader.cancel().catch(() => {});
       throw new PreviewUploadTooLargeError();
     }
     chunks.push(value);
@@ -141,7 +166,9 @@ export async function handlePreviewUpload(
     mime?: string;
     etag?: string;
     objectKey?: string;
-  } = { previewToken, uploadToken, relativePath, size: declaredSize ?? 0 };
+    sha256?: string;
+    allowReplay: boolean;
+  } = { previewToken, uploadToken, relativePath, size: declaredSize ?? 0, allowReplay: true };
   const authorized = await trayStub.fetch(
     new Request('https://internal/internal/preview/upload-authorize', {
       method: 'POST',
@@ -150,44 +177,141 @@ export async function handlePreviewUpload(
     })
   );
   if (!authorized.ok) return authorized;
-  const { objectKey } = (await authorized.json()) as { objectKey: string };
+  const { objectKey, uploaded, leased } = (await authorized.json()) as {
+    objectKey: string;
+    uploaded?: { size: number; mime: string; sha256?: string };
+    leased?: boolean;
+  };
+  const release = () => releasePreviewUpload(trayStub, previewToken, objectKey, leased);
   let bytes: ArrayBuffer;
   try {
     bytes = await readPreviewUploadBody(request);
   } catch (err) {
-    return err instanceof PreviewUploadTooLargeError
-      ? jsonResponse({ error: 'preview file exceeds 25 MiB limit' }, 413)
-      : jsonResponse({ error: 'invalid upload body' }, 400);
+    await release(); // No R2 write was started.
+    return previewUploadBodyError(err);
   }
   if (declaredSize !== null && bytes.byteLength !== declaredSize) {
+    await release();
     return jsonResponse({ error: 'content-length does not match upload body' }, 400);
   }
   uploadBody.size = bytes.byteLength;
+  uploadBody.sha256 = await previewUploadHash(bytes);
+  uploadBody.mime = request.headers.get('content-type') ?? 'application/octet-stream';
+  if (uploaded) {
+    // Reconcile a committed-but-unacknowledged upload before writing anything.
+    // Never overwrite or delete the canonical object on a mismatching replay.
+    return reconcilePreviewUpload(bucket, objectKey, uploaded, uploadBody);
+  }
   const key = objectKey;
   try {
-    const object = await bucket.put(key, bytes, {
-      httpMetadata: {
-        contentType: request.headers.get('content-type') ?? 'application/octet-stream',
-      },
-    });
+    const object = await withPreviewDeadline(
+      bucket.put(key, bytes, {
+        httpMetadata: {
+          contentType: request.headers.get('content-type') ?? 'application/octet-stream',
+        },
+      })
+    );
     uploadBody.mime = request.headers.get('content-type') ?? 'application/octet-stream';
     uploadBody.etag = object.etag;
     uploadBody.objectKey = objectKey;
   } catch {
+    // Rejection/timeout can be an ambiguous R2 outcome. Keep the durable lease
+    // so repeated tombstone sweeps catch even a write that completes much later.
     return jsonResponse({ error: 'persistent preview upload failed' }, 502);
   }
-  const committed = await trayStub.fetch(
-    new Request('https://internal/internal/preview/upload-commit', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(uploadBody),
-    })
-  );
+  let committed: Response;
+  try {
+    committed = await trayStub.fetch(
+      new Request('https://internal/internal/preview/upload-commit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(uploadBody),
+      })
+    );
+  } catch {
+    return jsonResponse({ error: 'Upload outcome unknown; retry the same file' }, 503);
+  } finally {
+    // R2 put resolved before commit began. Even if the commit outcome is
+    // unknown, there is now no future writer behind this lease.
+    await release();
+  }
+  return previewUploadCommitResponse(committed, bucket, key);
+}
+
+function previewUploadBodyError(error: unknown): Response {
+  if (error instanceof PreviewUploadTooLargeError) {
+    return jsonResponse({ error: 'preview file exceeds 25 MiB limit' }, 413);
+  }
+  if (error instanceof PreviewUploadTimeoutError) {
+    return jsonResponse({ error: 'preview upload body timed out' }, 408);
+  }
+  return jsonResponse({ error: 'invalid upload body' }, 400);
+}
+
+async function releasePreviewUpload(
+  trayStub: TrayStub,
+  previewToken: string,
+  objectKey: string,
+  leased?: boolean
+): Promise<void> {
+  if (!leased) return;
+  // Failure leaves a bounded lease/tombstone, not an unowned R2 prefix.
+  await withPreviewDeadline(
+    trayStub.fetch(
+      new Request('https://internal/internal/preview/upload-release', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ previewToken, objectKey }),
+      })
+    )
+  ).catch(() => {});
+}
+
+async function previewUploadCommitResponse(
+  committed: Response,
+  bucket: R2Bucket,
+  key: string
+): Promise<Response> {
   if (!committed.ok) {
-    await bucket.delete(key).catch(() => {});
+    // A 5xx/timeout may follow a successful durable commit. Keep its bytes;
+    // replay reconciles by digest, and the owner's archive-prefix expiry
+    // cleanup bounds orphan lifetime if no commit was actually stored.
+    if (committed.status >= 400 && committed.status < 500) {
+      await bucket.delete(key).catch(() => {});
+    }
     return committed;
   }
   return new Response(null, { status: 204 });
+}
+
+async function previewUploadHash(bytes: ArrayBuffer): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function reconcilePreviewUpload(
+  bucket: R2Bucket,
+  key: string,
+  uploaded: { size: number; mime: string; sha256?: string },
+  incoming: { size: number; mime?: string; sha256?: string }
+): Promise<Response> {
+  if (uploaded.size !== incoming.size || uploaded.mime !== incoming.mime) {
+    return jsonResponse({ error: 'Upload replay does not match the original file' }, 409);
+  }
+  let hash = uploaded.sha256;
+  if (!hash) {
+    // Records minted before digest support remain immutable too.
+    try {
+      const object = await bucket.get(key);
+      if (!object) return jsonResponse({ error: 'Original upload is unavailable' }, 503);
+      hash = await previewUploadHash(await new Response(object.body).arrayBuffer());
+    } catch {
+      return jsonResponse({ error: 'Original upload is unavailable' }, 503);
+    }
+  }
+  return hash === incoming.sha256
+    ? new Response(null, { status: 204 })
+    : jsonResponse({ error: 'Upload replay does not match the original file' }, 409);
 }
 
 export async function handlePreviewFinalize(

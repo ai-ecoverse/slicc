@@ -6,9 +6,11 @@
  * verification, the internal forward, the rebind two-factor gate, revocation,
  * and expiry are all exercised end to end without a workerd runtime.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   WEBHOOK_HOME_TTL_MS,
+  WEBHOOK_QUEUE_MAX,
+  WEBHOOK_QUEUE_TTL_MS,
   WebhookHomeDurableObject,
   type WebhookHomeEnv,
   type WebhookHomeStateLike,
@@ -19,8 +21,12 @@ const HOST = 'https://www.sliccy.ai';
 
 class FakeHomeStorage implements WebhookHomeStorageLike {
   private readonly data = new Map<string, unknown>();
+  alarmAt = 0;
+  async setAlarm(time: number): Promise<void> {
+    this.alarmAt = time;
+  }
   async get<T>(key: string): Promise<T | undefined> {
-    return this.data.get(key) as T | undefined;
+    return structuredClone(this.data.get(key)) as T | undefined;
   }
   async put<T>(key: string, value: T): Promise<void> {
     // Structured-clone the value, like the real DO storage, so a test holding a
@@ -32,10 +38,13 @@ class FakeHomeStorage implements WebhookHomeStorageLike {
 interface TrayBehavior {
   /** controllerToken the tray will confirm. Any other token is refused. */
   controllerToken: string;
+  active?: boolean;
   /** Status the tray's internal webhook delivery answers with. */
   deliverStatus?: number;
   /** Body the tray's internal webhook delivery answers with. */
   deliverBody?: unknown;
+  ack?: string | null;
+  failure?: 'throw' | 'hang';
 }
 
 /**
@@ -45,6 +54,7 @@ interface TrayBehavior {
  */
 function makeEnv(trays: Record<string, TrayBehavior>): {
   env: WebhookHomeEnv;
+  trays: Record<string, TrayBehavior>;
   confirmCalls: Array<{ trayId: string; token: string }>;
   deliverCalls: Array<{ trayId: string; webhookId: string; headers: Headers; body: string }>;
 } {
@@ -65,10 +75,17 @@ function makeEnv(trays: Record<string, TrayBehavior>): {
           fetch: async (input: Request | string | URL, init?: RequestInit) => {
             const req = input instanceof Request ? input : new Request(input, init);
             const url = new URL(req.url);
-            if (url.pathname === '/internal/confirm-controller') {
+            if (
+              url.pathname === '/internal/confirm-controller' ||
+              url.pathname === '/internal/confirm-controller-ownership'
+            ) {
               const { controllerToken } = (await req.json()) as { controllerToken?: string };
               confirmCalls.push({ trayId, token: controllerToken ?? '' });
-              const confirmed = !!behavior && controllerToken === behavior.controllerToken;
+              const confirmed =
+                !!behavior &&
+                controllerToken === behavior.controllerToken &&
+                (url.pathname === '/internal/confirm-controller-ownership' ||
+                  behavior.active !== false);
               return new Response(JSON.stringify({ confirmed }), { status: 200 });
             }
             const deliverMatch = url.pathname.match(/^\/internal\/webhook\/([^/]+)$/);
@@ -81,8 +98,14 @@ function makeEnv(trays: Record<string, TrayBehavior>): {
                 body,
               });
               if (!behavior) return new Response('no tray', { status: 500 });
+              if (behavior.failure === 'throw') throw new Error('transport failure');
+              if (behavior.failure === 'hang') return new Promise<Response>(() => {});
               return new Response(JSON.stringify(behavior.deliverBody ?? { ok: true }), {
                 status: behavior.deliverStatus ?? 202,
+                headers:
+                  behavior.ack === null
+                    ? {}
+                    : { 'x-slicc-webhook-ack': behavior.ack ?? 'delivered' },
               });
             }
             return new Response('unexpected', { status: 404 });
@@ -91,7 +114,7 @@ function makeEnv(trays: Record<string, TrayBehavior>): {
       },
     },
   };
-  return { env, confirmCalls, deliverCalls };
+  return { env, trays, confirmCalls, deliverCalls };
 }
 
 function makeHome(
@@ -139,7 +162,11 @@ describe('WebhookHome — bind', () => {
       })
     );
     expect(res.status).toBe(200);
-    expect((await res.json()) as unknown).toEqual({ coneId: 'cone-1', currentTrayId: 'tray-1' });
+    expect((await res.json()) as unknown).toEqual({
+      coneId: 'cone-1',
+      currentTrayId: 'tray-1',
+      queued: 0,
+    });
     expect(confirmCalls).toEqual([{ trayId: 'tray-1', token: 'ctrl-1' }]);
   });
 
@@ -220,7 +247,11 @@ describe('WebhookHome — bind', () => {
       })
     );
     expect(ok.status).toBe(200);
-    expect((await ok.json()) as unknown).toEqual({ coneId: 'cone-1', currentTrayId: 'tray-2' });
+    expect((await ok.json()) as unknown).toEqual({
+      coneId: 'cone-1',
+      currentTrayId: 'tray-2',
+      queued: 0,
+    });
   });
 });
 
@@ -249,7 +280,7 @@ describe('WebhookHome — deliver', () => {
 
     const res = await home.fetch(deliverReq('sec', 'wh-render', { event: 'done' }));
     expect(res.status).toBe(202);
-    expect((await res.json()) as unknown).toEqual({ ok: true });
+    expect((await res.json()) as unknown).toEqual({ ok: true, accepted: true, queued: false });
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
 
     expect(deliverCalls).toHaveLength(1);
@@ -299,13 +330,13 @@ describe('WebhookHome — deliver', () => {
     expect(res.status).toBe(403);
   });
 
-  it('relays the tray answer verbatim (a dropped delivery is not laundered to 202)', async () => {
+  it('retains a refused delivery durably until registration is repaired', async () => {
     const clock = { now: Date.now() };
     const made = makeEnv({
       'tray-1': {
         controllerToken: 'ctrl-1',
-        deliverStatus: 410,
-        deliverBody: { code: 'NO_LIVE_LEADER' },
+        deliverStatus: 404,
+        deliverBody: { code: 'WEBHOOK_NOT_REGISTERED' },
       },
     });
     const { home } = makeHome(made.env, clock);
@@ -319,12 +350,437 @@ describe('WebhookHome — deliver', () => {
       })
     );
     const res = await home.fetch(deliverReq('sec', 'wh', {}));
-    expect(res.status).toBe(410);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: 'NO_LIVE_LEADER' });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ accepted: true, queued: true });
+  });
+});
+
+describe('WebhookHome — queue on no live leader (#2812)', () => {
+  /** Bind a home to a tray whose leader is currently DOWN (410 NO_LIVE_LEADER). */
+  async function homeWithLeaderlessTray(clock: { now: number }) {
+    const made = makeEnv({
+      'tray-1': {
+        controllerToken: 'ctrl-1',
+        deliverStatus: 410,
+        deliverBody: { code: 'NO_LIVE_LEADER' },
+      },
+    });
+    const { home, storage } = makeHome(made.env, clock);
+    await home.fetch(
+      bindReq({
+        coneId: 'cone-1',
+        secret: 'sec',
+        rebindSecret: 'reb',
+        trayId: 'tray-1',
+        controllerToken: 'ctrl-1',
+      })
+    );
+    return { home, storage, ...made };
+  }
+
+  it('queues a delivery instead of losing it, answering 202 queued', async () => {
+    const clock = { now: Date.now() };
+    const { home } = await homeWithLeaderlessTray(clock);
+
+    const res = await home.fetch(deliverReq('sec', 'wh-render', { event: 'held' }));
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { queued?: boolean; code?: string };
+    expect(body.queued).toBe(true);
+  });
+
+  it('replays queued deliveries in order when the leader returns (via a later delivery)', async () => {
+    const clock = { now: Date.now() };
+    const { home, trays, deliverCalls } = await homeWithLeaderlessTray(clock);
+
+    // Two deliveries arrive while the leader is down — both queued.
+    await home.fetch(deliverReq('sec', 'wh-1', { n: 1 }));
+    await home.fetch(deliverReq('sec', 'wh-2', { n: 2 }));
+
+    // Leader reconnects: the tray now accepts deliveries.
+    trays['tray-1']!.deliverStatus = 202;
+    trays['tray-1']!.deliverBody = { ok: true };
+
+    // Fresh arrivals never jump ahead of accepted deliveries.
+    const res = await home.fetch(deliverReq('sec', 'wh-3', { n: 3 }));
+    expect(res.status).toBe(202);
+    await home.alarm();
+    await home.alarm();
+
+    // All three reached the tray; the two queued ones replayed in FIFO order.
+    const ids = deliverCalls.map((c) => c.webhookId);
+    expect(ids).toEqual(['wh-1', 'wh-1', 'wh-1', 'wh-2', 'wh-3']);
+  });
+
+  it('drains the queue on a rebind (the fresh tray has a live leader)', async () => {
+    const clock = { now: Date.now() };
+    const made = makeEnv({
+      'tray-1': {
+        controllerToken: 'ctrl-1',
+        deliverStatus: 410,
+        deliverBody: { code: 'NO_LIVE_LEADER' },
+      },
+      'tray-2': { controllerToken: 'ctrl-2', deliverStatus: 202, deliverBody: { ok: true } },
+    });
+    const { home } = makeHome(made.env, clock);
+    await home.fetch(
+      bindReq({
+        coneId: 'cone-1',
+        secret: 'sec',
+        rebindSecret: 'reb',
+        trayId: 'tray-1',
+        controllerToken: 'ctrl-1',
+      })
+    );
+    await home.fetch(deliverReq('sec', 'wh-queued', { held: true }));
+
+    // Rebind to a fresh, live tray — the queue drains to it immediately.
+    const rebind = await home.fetch(
+      bindReq({
+        coneId: 'cone-1',
+        secret: 'sec',
+        rebindSecret: 'reb',
+        trayId: 'tray-2',
+        controllerToken: 'ctrl-2',
+      })
+    );
+    expect(rebind.status).toBe(200);
+
+    const drained = made.deliverCalls.filter((c) => c.trayId === 'tray-2');
+    expect(drained.map((c) => c.webhookId)).toEqual(['wh-queued']);
+    expect(JSON.parse(drained[0]!.body)).toEqual({ held: true });
+  });
+
+  it('bounds the queue with backpressure, never dropping an accepted delivery', async () => {
+    const clock = { now: Date.now() };
+    const { home, storage } = await homeWithLeaderlessTray(clock);
+
+    for (let i = 0; i < WEBHOOK_QUEUE_MAX + 5; i++) {
+      const res = await home.fetch(deliverReq('sec', `wh-${i}`, { n: i }));
+      expect(res.status).toBe(i < WEBHOOK_QUEUE_MAX ? 202 : 429);
+    }
+    const record = (await storage.get('webhook-home')) as {
+      queue?: unknown[];
+      droppedCount?: number;
+    };
+    expect(record.queue).toHaveLength(WEBHOOK_QUEUE_MAX);
+    expect(record.droppedCount).toBeUndefined();
+    expect(record.queue?.[0]).toMatchObject({ webhookId: 'wh-0' });
+  });
+
+  it('never ages out an accepted delivery', async () => {
+    const clock = { now: Date.now() };
+    const { home, trays, deliverCalls } = await homeWithLeaderlessTray(clock);
+    await home.fetch(deliverReq('sec', 'wh-stale', { old: true }));
+
+    // Age past the TTL, then bring the leader back and deliver something fresh.
+    clock.now += WEBHOOK_QUEUE_TTL_MS + 1000;
+    trays['tray-1']!.deliverStatus = 202;
+    trays['tray-1']!.deliverBody = { ok: true };
+    await home.fetch(deliverReq('sec', 'wh-fresh', { fresh: true }));
+    await home.alarm();
+
+    const delivered = deliverCalls.filter((c) => c.webhookId === 'wh-stale');
+    expect(delivered).toHaveLength(2);
+    expect(deliverCalls.some((c) => c.webhookId === 'wh-fresh')).toBe(true);
   });
 });
 
 describe('WebhookHome — lifecycle', () => {
+  const identity = {
+    coneId: 'cone-1',
+    secret: 'sec',
+    rebindSecret: 'reb',
+    trayId: 'tray-1',
+    controllerToken: 'ctrl-1',
+  };
+
+  it('persists per-registration revocation before removing queued deliveries and never replays them', async () => {
+    const { env, trays, deliverCalls } = makeEnv({
+      'tray-1': { controllerToken: 'ctrl-1', ack: null },
+    });
+    const clock = { now: Date.now() };
+    const { home, storage } = makeHome(env, clock);
+    await home.fetch(bindReq(identity));
+    await home.fetch(deliverReq('sec', 'deleted', {}));
+    await home.fetch(deliverReq('sec', 'keep', {}));
+    const revoke = (overrides = {}) =>
+      home.fetch(
+        new Request(`${HOST}/internal/home/revoke-registration`, {
+          method: 'POST',
+          body: JSON.stringify({ ...identity, webhookId: 'deleted', ...overrides }),
+        })
+      );
+    for (const overrides of [
+      { rebindSecret: 'bad' },
+      { controllerToken: 'bad' },
+      { trayId: 'other' },
+    ]) {
+      expect((await revoke(overrides)).status).toBe(403);
+    }
+    // Simulate a crash after tombstone persistence but before queue cleanup.
+    const put = storage.put.bind(storage);
+    vi.spyOn(storage, 'put').mockImplementation(async (key, value) => {
+      if (key === 'webhook-home') throw new Error('queue write failed');
+      return put(key, value);
+    });
+    await expect(revoke()).rejects.toThrow('queue write failed');
+    vi.mocked(storage.put).mockRestore();
+    const restarted = new WebhookHomeDurableObject({ storage }, env, { now: () => clock.now });
+    trays['tray-1']!.ack = 'delivered';
+    deliverCalls.length = 0;
+    await Promise.all([restarted.alarm(), restarted.alarm()]);
+    expect(deliverCalls.map((call) => call.webhookId)).toEqual(['keep']);
+    expect((await restarted.fetch(deliverReq('bad', 'deleted', {}))).status).toBe(403);
+    expect((await restarted.fetch(deliverReq('sec', 'deleted', {}))).status).toBe(410);
+    expect((await revoke()).status).toBe(200);
+    expect(await storage.get('webhook-home')).not.toHaveProperty('queue');
+  });
+
+  it('replays accepted events after home expiry, but never after whole-home revocation', async () => {
+    const clock = { now: Date.now() };
+    const { env, trays, deliverCalls } = makeEnv({
+      'tray-1': { controllerToken: 'ctrl-1', ack: null },
+    });
+    const { home } = makeHome(env, clock);
+    await home.fetch(bindReq(identity));
+    await home.fetch(deliverReq('sec', 'before-expiry', {}));
+    await home.fetch(deliverReq('sec', 'never-replay', {}));
+    clock.now += WEBHOOK_HOME_TTL_MS + 1;
+    trays['tray-1']!.ack = 'delivered';
+    deliverCalls.length = 0;
+    await home.alarm();
+    expect(deliverCalls.map((call) => call.webhookId)).toEqual(['before-expiry']);
+    await home.fetch(
+      new Request(`${HOST}/internal/home/revoke`, {
+        method: 'POST',
+        body: JSON.stringify({ rebindSecret: 'reb' }),
+      })
+    );
+    await home.alarm();
+    expect(deliverCalls).toHaveLength(1);
+  });
+
+  it('fails closed if scheduling replay fails before acceptance', async () => {
+    const { env, deliverCalls } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1' } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    vi.spyOn(storage, 'setAlarm').mockRejectedValueOnce(new Error('alarm unavailable'));
+    await expect(home.fetch(deliverReq('sec', 'wh', {}))).rejects.toThrow('alarm unavailable');
+    expect(await storage.get('webhook-home')).not.toHaveProperty('queue');
+    expect(deliverCalls).toHaveLength(0);
+  });
+
+  it('replays exact binary bytes and signature headers after storage reconstruction', async () => {
+    const { env } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1', ack: null } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    const bytes = new Uint8Array([0, 255, 128, 1, 239, 187, 191]);
+    await home.fetch(
+      new Request(`${HOST}/internal/home/deliver`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'x-signature': 'signature-over-original-bytes',
+          'x-slicc-cone-secret': 'sec',
+          'x-slicc-webhook-id': 'binary',
+        },
+        body: bytes,
+      })
+    );
+    const replay = vi.fn(async (input: Request | string | URL) => {
+      const request = input as Request;
+      expect(new Uint8Array(await request.arrayBuffer())).toEqual(bytes);
+      expect(request.headers.get('content-type')).toBe('application/octet-stream');
+      expect(request.headers.get('x-signature')).toBe('signature-over-original-bytes');
+      expect(request.headers.has('x-slicc-cone-secret')).toBe(false);
+      return new Response(null, { status: 202, headers: { 'x-slicc-webhook-ack': 'delivered' } });
+    });
+    vi.spyOn(env.TRAY_HUB, 'get').mockReturnValue({ fetch: replay });
+    await new WebhookHomeDurableObject({ storage }, env).alarm();
+    expect(replay).toHaveBeenCalledOnce();
+    expect(await storage.get('webhook-home')).not.toHaveProperty('queue');
+  });
+
+  it('rotates atomically and retries without changing identity or queued work', async () => {
+    const { env, trays } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1', ack: null } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    await home.fetch(deliverReq('sec', 'wh', {}));
+    const before = await storage.get('webhook-home');
+    const rotate = (overrides = {}) =>
+      home.fetch(
+        new Request(`${HOST}/internal/home/rotate`, {
+          method: 'POST',
+          body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new', ...overrides }),
+        })
+      );
+    for (const overrides of [
+      { rebindSecret: 'bad' },
+      { controllerToken: 'bad' },
+      { trayId: 'other' },
+      { oldSecret: 'bad' },
+    ]) {
+      expect((await rotate(overrides)).status).toBe(403);
+      expect(await storage.get('webhook-home')).toEqual(before);
+    }
+    expect((await rotate()).status).toBe(200);
+    const rotated = await storage.get('webhook-home');
+    expect((await rotate()).status).toBe(200);
+    expect(await storage.get('webhook-home')).toEqual(rotated);
+    expect((await home.fetch(deliverReq('sec', 'wh', {}))).status).toBe(403);
+    expect((await home.fetch(bindReq(identity))).status).toBe(403);
+    trays['tray-1']!.ack = 'delivered';
+    await home.alarm();
+    expect((await home.fetch(deliverReq('new', 'wh', {}))).status).toBe(202);
+  });
+
+  it('finishes uncommitted rotation on an expired source but cannot bind to that expired target', async () => {
+    const { env, trays } = makeEnv({
+      'tray-1': { controllerToken: 'ctrl-1' },
+    });
+    const { home } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    trays['tray-1']!.active = false;
+    expect(
+      (
+        await home.fetch(
+          new Request(`${HOST}/internal/home/rotate`, {
+            method: 'POST',
+            body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new' }),
+          })
+        )
+      ).status
+    ).toBe(200);
+    expect((await home.fetch(bindReq({ ...identity, secret: 'new' }))).status).toBe(403);
+  });
+
+  it('recovers an exact committed receipt after rebind without consulting the expired source, but refuses stale mutations', async () => {
+    const { env, trays } = makeEnv({
+      'tray-1': { controllerToken: 'ctrl-1' },
+      'tray-2': { controllerToken: 'ctrl-2' },
+    });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    const rotate = (overrides = {}) =>
+      new Request(`${HOST}/internal/home/rotate`, {
+        method: 'POST',
+        body: JSON.stringify({ ...identity, oldSecret: 'sec', secret: 'new', ...overrides }),
+      });
+    await home.fetch(bindReq(identity));
+    expect((await home.fetch(rotate())).status).toBe(200);
+    expect(
+      (
+        await home.fetch(
+          bindReq({
+            ...identity,
+            secret: 'new',
+            trayId: 'tray-2',
+            controllerToken: 'ctrl-2',
+          })
+        )
+      ).status
+    ).toBe(200);
+    trays['tray-1']!.active = false;
+    const before = await storage.get('webhook-home');
+    const lookup = vi.spyOn(env.TRAY_HUB, 'get').mockImplementation(() => {
+      throw new Error('old source unavailable');
+    });
+    const restarted = new WebhookHomeDurableObject({ storage }, env);
+    expect((await restarted.fetch(rotate())).status).toBe(200);
+    expect(lookup).not.toHaveBeenCalled();
+    for (const overrides of [
+      { oldSecret: 'wrong' },
+      { controllerToken: 'wrong' },
+      { rebindSecret: 'wrong' },
+      { oldSecret: 'new', secret: 'third' },
+    ]) {
+      expect((await restarted.fetch(rotate(overrides))).status).toBe(403);
+    }
+    expect(await storage.get('webhook-home')).toEqual(before);
+  });
+
+  it('does not disclose revoked or expired state to an invalid secret', async () => {
+    const clock = { now: Date.now() };
+    const { env } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1' } });
+    const { home } = makeHome(env, clock);
+    await home.fetch(bindReq(identity));
+    clock.now += WEBHOOK_HOME_TTL_MS + 1;
+    expect((await home.fetch(deliverReq('bad', 'wh', {}))).status).toBe(403);
+    await home.fetch(
+      new Request(`${HOST}/internal/home/revoke`, {
+        method: 'POST',
+        body: JSON.stringify({ rebindSecret: 'reb' }),
+      })
+    );
+    expect((await home.fetch(deliverReq('bad', 'wh', {}))).status).toBe(403);
+    expect((await home.fetch(bindReq({ ...identity, rebindSecret: 'bad' }))).status).toBe(403);
+  });
+
+  it('replays from independent storage after restart, including legacy 202 and transport failures', async () => {
+    const clock = { now: Date.now() };
+    const { env, trays, deliverCalls } = makeEnv({
+      'tray-1': { controllerToken: 'ctrl-1', ack: null },
+    });
+    const { home, storage } = makeHome(env, clock);
+    await home.fetch(bindReq(identity));
+    await home.fetch(deliverReq('sec', 'one', { n: 1 }));
+    await home.fetch(deliverReq('sec', 'two', { n: 2 }));
+    expect(storage.alarmAt).toBeGreaterThan(clock.now);
+    const restarted = new WebhookHomeDurableObject({ storage }, env, { now: () => clock.now });
+    trays['tray-1']!.failure = 'throw';
+    await restarted.alarm();
+    trays['tray-1']!.failure = undefined;
+    trays['tray-1']!.ack = 'filtered';
+    deliverCalls.length = 0;
+    await Promise.all([restarted.alarm(), restarted.alarm()]);
+    expect(deliverCalls.map((c) => c.webhookId)).toEqual(['one', 'two']);
+    expect(await storage.get('webhook-home')).not.toHaveProperty('queue');
+  });
+
+  it('does not accept a failed persistence write or retain its phantom mutation', async () => {
+    const { env, deliverCalls } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1' } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    vi.spyOn(storage, 'put').mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(home.fetch(deliverReq('sec', 'lost', {}))).rejects.toThrow('storage unavailable');
+    await home.alarm();
+    expect(deliverCalls).toHaveLength(0);
+  });
+
+  it('bounds a hung forward and retries without treating a legacy receipt as acknowledgement', async () => {
+    vi.useFakeTimers();
+    try {
+      const { env, trays, deliverCalls } = makeEnv({
+        'tray-1': { controllerToken: 'ctrl-1', failure: 'hang' },
+      });
+      const { home, storage } = makeHome(env, { now: Date.now() });
+      await home.fetch(bindReq(identity));
+      const accepted = home.fetch(deliverReq('sec', 'wh', {}));
+      // WebCrypto runs outside fake timers: wait until the forward has begun.
+      await vi.waitFor(() => expect(deliverCalls).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect((await accepted).status).toBe(202);
+      trays['tray-1']!.failure = undefined;
+      trays['tray-1']!.ack = null;
+      await home.alarm();
+      expect(await storage.get('webhook-home')).toHaveProperty('queue');
+      trays['tray-1']!.ack = 'delivered';
+      await home.alarm();
+      expect(await storage.get('webhook-home')).not.toHaveProperty('queue');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds raw bodies and encoded queue bytes with backpressure', async () => {
+    const { env } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1', ack: null } });
+    const { home, storage } = makeHome(env, { now: Date.now() });
+    await home.fetch(bindReq(identity));
+    expect((await home.fetch(deliverReq('sec', 'huge', 'x'.repeat(65_536)))).status).toBe(413);
+    expect((await home.fetch(deliverReq('sec', 'first', 'x'.repeat(60_000)))).status).toBe(202);
+    expect((await home.fetch(deliverReq('sec', 'second', 'x'.repeat(60_000)))).status).toBe(429);
+    expect((await storage.get<{ queue: unknown[] }>('webhook-home'))!.queue).toHaveLength(1);
+  });
+
   it('revokes with the rebind secret, then answers a permanent 410 and never resurrects', async () => {
     const { env } = makeEnv({ 'tray-1': { controllerToken: 'ctrl-1' } });
     const { home } = makeHome(env, { now: Date.now() });

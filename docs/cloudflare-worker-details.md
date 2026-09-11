@@ -10,34 +10,48 @@ live here.
 Every route below must also appear in `src/index.ts`, `tests/index.test.ts`, and
 `tests/deployed.test.ts` per the routes-mirror rule in the guide.
 
-| Route                                  | Description                                                                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /tray`                           | Create a tray; return join/controller/webhook capability URLs                                                                              |
-| `GET /handoff`                         | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                   |
-| `GET /install-cli`                     | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                 |
-| `GET /install-cli.ps1`                 | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH |
-| `GET /download/slicc-cli/:target`      | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; real HTTP errors, no SPA fallback   |
-| `GET /.well-known/api-catalog`         | RFC 9264 linkset for all public routes                                                                                                     |
-| `GET /llms.txt`                        | LLM markdown digest                                                                                                                        |
-| `GET\|HEAD /privacy`                   | 301 to www.sliccy.com/privacy (App Store Connect link)                                                                                     |
-| `GET\|HEAD /status`                    | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                     |
-| `GET /rel/:name`                       | Dereferenceable docs for SLICC rel URIs (`handoff`, `upskill`, `successor-version`)                                                        |
-| `GET\|POST /join/:token`               | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                         |
-| `GET\|POST /controller/:token`         | Leader attach and WS upgrade                                                                                                               |
-| `POST /webhook/:token/:webhookId`      | Forward webhook events into the live leader                                                                                                |
-| `POST /api/tray/:trayId/preview`       | Mint a preview token; body `{ path, bridge?, maxTabs?, quiet?, webhookId? }`; response `{ previewToken, url }`                             |
-| `POST /api/tray/:trayId/preview/stop`  | Revoke a preview token; body `{ previewToken }`                                                                                            |
-| `GET /api/tray/:trayId/previews`       | List active previews for a tray                                                                                                            |
-| `POST /api/tray/:trayId/biscotto`      | Mint a guest seat; body `{ label, ttlMs?, gates? }`; response `{ id, url, label, expiresAt?, gates }`                                      |
-| `POST /api/tray/:trayId/biscotto/stop` | Revoke a seat; body `{ id }`. Idempotent; keeps the first `revokedAt`                                                                      |
-| `GET /api/tray/:trayId/biscotti`       | List seats for a tray. **Never returns seat tokens** — a listing of live capabilities would be a set of working guest URLs                 |
-| `GET <token>.sliccy.now/*`             | Preview HTTP pipe — streams file from leader via DO; 30s timeout; bridge mode injects the preview-bridge script                            |
-| `GET __slicc/preview-bridge.js`        | Bundled preview bootstrap (bridge-enabled previews only; build-generated, not committed)                                                   |
-| `WS __slicc/bridge`                    | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit`; hibernated via `setWebSocketAutoResponse`          |
-| `POST __slicc/emit`                    | Fallback beacon relay for `window.slicc.emit` on page unload                                                                               |
-| `GET /auth/callback`                   | OAuth callback relay; capture hop for the cloud dashboard (no `state` → `postMessage` to opener)                                           |
-| `GET /auth/mcp-callback`               | MCP OAuth capture hop; preserves opaque `state` and posts the untouched callback URL to the same-origin opener                             |
-| `GET /api/flags`                       | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                |
+`POST /api/tray/:trayId/preview-transfer` transfers previews through the source
+tray's `/internal/preview/transfer`. Authorization is `Bearer <source controllerToken>`;
+JSON contains `targetTrayId` and `targetControllerToken`. Only these three fields
+reach the owner. The edge caps the body at 8 KiB with a 10-second read deadline,
+and bounds the owner request at 60 seconds. Neither capability is logged.
+Success is `{ transferred: true, count }`; owner errors remain `403` (ownership),
+`409` (conflict), or `503` (pending/unavailable). A timeout returns `503`:
+retain both credentials and retry the same source and target, since the durable
+operation may still complete and identical retries are idempotent.
+
+| Route                                      | Description                                                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /tray`                               | Create a tray; return join/controller/webhook capability URLs                                                                              |
+| `GET /handoff`                             | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                   |
+| `GET /install-cli`                         | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                 |
+| `GET /install-cli.ps1`                     | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH |
+| `GET /download/slicc-cli/:target`          | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; real HTTP errors, no SPA fallback   |
+| `GET /.well-known/api-catalog`             | RFC 9264 linkset for all public routes                                                                                                     |
+| `GET /llms.txt`                            | LLM markdown digest                                                                                                                        |
+| `GET\|HEAD /privacy`                       | 301 to www.sliccy.com/privacy (App Store Connect link)                                                                                     |
+| `GET\|HEAD /status`                        | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                     |
+| `GET /rel/:name`                           | Dereferenceable docs for SLICC rel URIs (`handoff`, `upskill`, `successor-version`)                                                        |
+| `GET\|POST /join/:token`                   | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                         |
+| `GET\|POST /controller/:token`             | Leader attach and WS upgrade                                                                                                               |
+| `POST /webhook/:token/:webhookId`          | Forward webhook events into the live leader                                                                                                |
+| `POST /wh/:token/:webhookId`               | Durably accept a stable-home webhook delivery; explicit acknowledgement or alarm replay                                                    |
+| `POST /api/tray/:trayId/webhook/rotate`    | Rotate the stable delivery capability on the same home; authenticated, retry-safe                                                          |
+| `POST /webhooks/:coneId/:webhookId/revoke` | Permanently revoke a registration before deleting its local definition                                                                     |
+| `POST /api/tray/:trayId/preview`           | Mint a preview token; body `{ path, bridge?, maxTabs?, quiet?, webhookId? }`; response `{ previewToken, url }`                             |
+| `POST /api/tray/:trayId/preview/stop`      | Revoke a preview token; body `{ previewToken }`                                                                                            |
+| `POST /api/tray/:trayId/preview-transfer`  | Transfer previews to `targetTrayId` using source Bearer plus `targetControllerToken`; retain credentials and retry on `503`                |
+| `GET /api/tray/:trayId/previews`           | List active previews for a tray                                                                                                            |
+| `POST /api/tray/:trayId/biscotto`          | Mint a guest seat; body `{ label, ttlMs?, gates? }`; response `{ id, url, label, expiresAt?, gates }`                                      |
+| `POST /api/tray/:trayId/biscotto/stop`     | Revoke a seat; body `{ id }`. Idempotent; keeps the first `revokedAt`                                                                      |
+| `GET /api/tray/:trayId/biscotti`           | List seats for a tray. **Never returns seat tokens** — a listing of live capabilities would be a set of working guest URLs                 |
+| `GET <token>.sliccy.now/*`                 | Preview HTTP pipe — streams file from leader via DO; 30s timeout; bridge mode injects the preview-bridge script                            |
+| `GET __slicc/preview-bridge.js`            | Bundled preview bootstrap (bridge-enabled previews only; build-generated, not committed)                                                   |
+| `WS __slicc/bridge`                        | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit`; hibernated via `setWebSocketAutoResponse`          |
+| `POST __slicc/emit`                        | Fallback beacon relay for `window.slicc.emit` on page unload                                                                               |
+| `GET /auth/callback`                       | OAuth callback relay; capture hop for the cloud dashboard (no `state` → `postMessage` to opener)                                           |
+| `GET /auth/mcp-callback`                   | MCP OAuth capture hop; preserves opaque `state` and posts the untouched callback URL to the same-origin opener                             |
+| `GET /api/flags`                           | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                |
 
 ## <a name="cone-configuration"></a>Cone Configuration flow
 
@@ -104,19 +118,20 @@ start/resume flows:
     revocable seat on _this_ cone's transcript and dies with the tray by design, so
     forwarding it would silently promote a guest to a full follower of the new tray (a
     guest→full escalation). `handleJoin` branches on `capability.trust` — a guest on a
-    superseded tray gets a terminal `410 TRAY_SUPERSEDED` with no `Location`, no link, and
-    no `joinUrl` in the body, indistinguishable from any other dead-seat answer. The
-    `FollowerAttachResult` union carries a `TRAY_SUPERSEDED` `fail` variant WITHOUT
-    `joinUrl` for this case; iOS/Go model the successor as optional and treat its absence
-    as terminal, so no follower change was needed.
+    superseded tray gets the existing terminal `410 TRAY_EXPIRED` with no `Location`,
+    no link, and no `joinUrl` in the body. Browser and iOS wire validators reject
+    `TRAY_SUPERSEDED` without a `joinUrl`; an optional field in a decoded native model
+    does not make that response compatible. Reusing `TRAY_EXPIRED` needs no Swift or Go
+    protocol change. Revoked and invalid capabilities still receive `403` before this gate.
   - `Access-Control-Expose-Headers: Link` is set on the capability CORS surface so a
     cross-origin follower can read the link. Note that `applySliccLinks` skips 3xx, so
     a supersede response carries the successor link **without** the standard rel set.
   - Shipped pre-#1957 followers degrade rather than break: their platforms follow the
     308 and re-POST, so they connect to the replacement but do not persist it, and
     re-walk the redirect on each reconnect until updated.
-- **Webhook deliveries are cone-stable, not tray-superseded (#2812).** The webhook URL is
-  `POST /wh/<coneId>.<secret>/<webhookId>` — the id names the CONE, not the tray instance,
+- **Webhook deliveries are session-lineage-stable, not tray-superseded (#2812).** The webhook URL is
+  `POST /wh/<coneId>.<secret>/<webhookId>` — `coneId` names the leader-session lineage shared
+  by its WorkUnits, not an individual agent cone or the tray instance,
   so it survives every rove. It routes to `WEBHOOK_HOMES.idFromName(coneId)`, a
   `WebhookHomeDurableObject` (`src/webhook-home.ts`) that verifies the secret against a
   stored hash and INTERNAL-FORWARDS the delivery to whichever tray it is currently bound to
@@ -130,12 +145,23 @@ start/resume flows:
 lastReboundAt }` in DO storage, never KV** — the read matters the instant after a
     rebind, which is exactly when KV would still serve the tray that just died. Only secret
     HASHES are stored, so a leaked storage does not leak a working capability.
-  - **The leader owns the cone identity.** It mints `coneId` + the delivery secret + the
-    rebind secret once, persists all three on the `LeaderTraySession`, and sends them back
-    on every `POST /tray` (reset via `pageLeaderTray.reset()` →
-    `carryConeIdentityFrom`; stale-session recovery via `shouldRecreateTray` inline) so the
-    worker REBINDS the home to the fresh tray rather than minting a new URL. A first-run or
-    pre-#2812 leader sends none and gets a fresh identity to persist.
+  - **The leader owns the management identity privately.** Before its first `POST /tray`,
+    it generates and durably persists `coneId`, delivery secret, and rebind secret in
+    manager-private IndexedDB state scoped to the worker URL (trailing slashes normalized).
+    This record is independent of `LeaderTraySession`: clear/reset, failed creates, lost
+    responses, retries, and reloads retain it. The rebind secret never enters the VFS,
+    public status, localStorage mirrors, or follower messages; this is not a defense
+    against arbitrary same-origin code. Existing private sessions migrate before publication.
+    Every subsequent create presents the same identity and must confirm the stable binding.
+    Old hubs may return legacy webhook URLs only before any stable binding is acknowledged.
+    Rotation first persists a private intent containing the old controller session. If its
+    response is lost, reload replays the deterministic old-secret rotation before any
+    attach/rebind/reset. Only durable new credentials clear the intent; replay failure
+    blocks rebinding rather than abandoning the home with a stale delivery secret.
+  - **Replacement is resumable.** `LeaderTrayManager.reset()` persists the source tray;
+    the ordinary session store holds the newly created target before attach. Reset and
+    stale-session recovery transfer previews before superseding the source. A failed
+    transfer retains both records and reload retries the same pair, never a third target.
   - **Rebind is two-factor (the strong option).** The home requires BOTH its own rebind
     secret AND the target tray confirming the presented controller token
     (`/internal/confirm-controller`, a round trip per rebind). A leaked `coneId` + rebind
@@ -144,9 +170,32 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
     controller ownership of the initial tray.
   - **Lifecycle.** A home self-expires after `WEBHOOK_HOME_TTL_MS` (90d) with no rebind
     (`410 HOME_EXPIRED`); `revoke` (rebind-secret-gated) tombstones it permanently
-    (`410 HOME_REVOKED`, never resurrects). A bind failure at create time is non-fatal:
-    the tray still comes up and the create response falls back to the legacy tray-scoped
-    webhook URL.
+    (`410 HOME_REVOKED`, never resurrects). A bind failure at create time fails the create;
+    the leader retains its identity for retry instead of silently falling back to a
+    tray-scoped webhook URL.
+  - **Durable acceptance, not completed work.** The home schedules an alarm and persists
+    every delivery before forwarding or returning `202`. FIFO replay removes a head only
+    on an explicit `x-slicc-webhook-ack: delivered|filtered` success response, or registration
+    revocation. Ambiguous responses, timeouts, missing registrations and unresolved targets
+    retain the head and block later events until repair or revocation. Delivery is
+    at-least-once: a lost acknowledgement or crash can replay an event; this does not
+    guarantee exactly-once agent work or downstream side effects.
+  - **Backpressure, never eviction.** Limits are 100 events and 120 KiB for the encoded
+    home record (including base64/JSON overhead), 64 KiB per request body, and eight
+    pending home requests. Queue saturation returns `429 WEBHOOK_QUEUE_FULL`; request
+    saturation returns `429 WEBHOOK_HOME_BUSY` (both `Retry-After: 30`); oversized bodies
+    return `413`. Accepted events have no queue TTL and are never dropped to admit new
+    work. The 90-day home admission expiry is not an event-retention TTL. An alarm retries
+    every 30 seconds while blocked, including when bind precedes leader connect; successful
+    head removal schedules remaining backlog after one second.
+  - **Rotation and deletion.** Rotation atomically changes the delivery-secret hash and
+    retry receipt on the same home, preserving identity, rebind authority, registrations
+    and queued events. Exact authenticated retries are safe even after the source tray
+    expires or the home rebinds; private pending intent provides reload recovery.
+    Registration deletion writes a permanent `revoked-registration:<sha256(webhookId)>`
+    tombstone before removing that ID's queued events. Valid-secret deliveries then return
+    `410 WEBHOOK_REVOKED`; tombstones are not aged out or evicted. The manager removes the
+    local definition only after hub acknowledgement; failure leaves it available to retry.
 - **Legacy tray-scoped webhook (`/webhook/:token/:webhookId`) — migration only.** Retained
   so an already-cached pre-#2812 URL keeps working. On a superseded tray it answers `308` +
   `Location: <replacement webhook URL>/:webhookId` + `code: "TRAY_SUPERSEDED"`, driven by
@@ -161,6 +210,24 @@ lastReboundAt }` in DO storage, never KV** — the read matters the instant afte
   `bridge.cdp.request`/`bridge.cdp.response` between leader and each bridge socket,
   keyed by `connId`. On leader (re)connect the DO replays `bridge.connected` for every
   live bridge socket. Hibernated via `setWebSocketAutoResponse`.
+- Preview continuity (`preview-continuity.ts`) uses authenticated transfer, not a public
+  redirect: the source and target controller capabilities authorize moving the original
+  preview records intact. Each token's original tray remains its durable locator, updated
+  directly to the newest owner on every rove (no growing forwarding chain). The URL,
+  served root, entry path, bridge flag, tab cap and webhook scope do not change. Old
+  controllers can list/stop only their transferred previews, not new target previews.
+  A durable pending transfer fails closed with `503` until the same source/target pair
+  is retried; import receipts prevent replay from resurrecting revoked previews.
+  Bridge sockets close with retryable `1012` and reconnect to the new owner. Persistent
+  snapshots move their existing R2 keys and expiry unchanged: no byte copy, TTL renewal,
+  or source-side cleanup after transfer. The new owner retains expiry/revoke cleanup.
+  Persistent upload authorization first records a durable write lease (at most eight
+  unresolved writes per preview). Expiry/revoke retains a non-serving cleanup tombstone
+  while any write outcome is unknown, repeatedly sweeping its prefix even if a delayed
+  R2 write lands after the first sweep. Settled writes release their leases; ambiguous
+  R2 outcomes retain bounded bookkeeping rather than abandoning bytes. Upload body and
+  R2-put waits are bounded to 30 seconds. A permanently ambiguous write can retain its
+  tombstone/preview slot until operational reconciliation; it never renews serving TTL.
 
 ## <a name="static-assets"></a>Static Asset Serving — full rules
 

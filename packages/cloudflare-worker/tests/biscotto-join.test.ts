@@ -193,6 +193,14 @@ describe('biscotto join path', () => {
     const seat = await mintSeat(t);
 
     // Same shape as `notifyTraySuperseded`: a replacement tray's full join URL.
+    const revoked = await mintSeat(t, 'Revoked');
+    await t.durable.fetch(
+      new Request(`${HOST}/internal/biscotto/stop`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerToken: t.controllerToken, id: revoked.id }),
+      })
+    );
     const successorToken = createCapabilityToken(crypto.randomUUID());
     const successorJoinUrl = `${HOST}/join/${successorToken}`;
     const superseded = await t.durable.fetch(
@@ -204,21 +212,46 @@ describe('biscotto join path', () => {
     );
     expect(superseded.status).toBe(200);
 
-    // A full follower still gets the redirect — it holds the tray join token.
-    const ownerRes = await join(t, t.joinToken, 'owner-device');
-    expect(ownerRes.status).toBe(308);
-    expect(ownerRes.headers.get('Location')).toBe(`${successorJoinUrl}?json=true`);
+    for (const method of ['GET', 'POST']) {
+      for (const manual of [false, true]) {
+        const request = (token: string) =>
+          new Request(`${HOST}/join/${token}?json=true${manual ? '&redirect=manual' : ''}`, {
+            method,
+            ...(method === 'POST'
+              ? {
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ controllerId: 'device', action: 'attach' }),
+                }
+              : {}),
+          });
+        // Full followers retain both redirect contracts.
+        const ownerRes = await t.durable.fetch(request(t.joinToken));
+        expect(ownerRes.status).toBe(manual ? 409 : 308);
+        expect(ownerRes.headers.get('Location')).toBe(
+          manual ? null : `${successorJoinUrl}?json=true`
+        );
+        expect(ownerRes.headers.get('Link')).toBe(`<${successorJoinUrl}>; rel="successor-version"`);
 
-    // The guest is turned away, terminally, with no trace of the successor.
-    const guestRes = await join(t, seat.token, 'guest-device');
-    expect(guestRes.status).toBe(410);
-    expect(guestRes.headers.get('Location')).toBeNull();
-    const guestRaw = await guestRes.text();
-    expect(guestRaw).not.toContain(successorToken);
-    const guestBody = JSON.parse(guestRaw) as {
-      result?: { code?: string; joinUrl?: string };
-    };
-    expect(guestBody.result?.code).toBe('TRAY_SUPERSEDED');
-    expect(guestBody.result?.joinUrl).toBeUndefined();
+        for (const [token, status, code] of [
+          [seat.token, 410, 'TRAY_EXPIRED'],
+          [revoked.token, 403, 'INVALID_JOIN_CAPABILITY'],
+          [createCapabilityToken(t.trayId), 403, 'INVALID_JOIN_CAPABILITY'],
+        ] as const) {
+          const res = await t.durable.fetch(request(token));
+          expect(res.status).toBe(status);
+          expect(res.headers.get('Location')).toBeNull();
+          expect(res.headers.get('Link')).toBeNull();
+          const raw = await res.text();
+          expect(raw).not.toContain(successorToken);
+          const body = JSON.parse(raw) as {
+            code?: string;
+            result?: { action: string; code: string };
+          };
+          expect(method === 'POST' ? body.result?.code : body.code).toBe(code);
+          if (method === 'POST') expect(body.result?.action).toBe('fail');
+          expect(raw).not.toContain('joinUrl');
+        }
+      }
+    }
   });
 });

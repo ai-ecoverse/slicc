@@ -8,6 +8,11 @@ import type { DurableObjectStateLike } from '../src/shared.js';
 
 export class FakeStorage {
   private readonly data = new Map<string, unknown>();
+  alarmAt: number | undefined;
+
+  async setAlarm(time: number): Promise<void> {
+    this.alarmAt = time;
+  }
 
   async get<T>(key: string): Promise<T | undefined> {
     return this.data.get(key) as T | undefined;

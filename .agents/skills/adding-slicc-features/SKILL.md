@@ -42,6 +42,30 @@ Use these common extension points:
 
 ## 1. Add a Supplemental Shell Command
 
+`webhook rotate` is a leader-panel RPC operation (`tray-webhook-rotate`):
+wire it through `ui/boot/setup-standalone-panel-rpc.ts`, never expose the home's
+rebind secret in shell output or follower status. Rotation replaces the delivery
+hash atomically in the existing home; retries of the same old identity return
+the same replacement. A non-2xx home response must never report success.
+
+For tray webhook lifecycle changes, management credentials belong only to
+`LeaderTrayManager`'s private IndexedDB identity store, scoped to the worker URL.
+Persist before create; never put rebind secrets on `LeaderTraySession`, public status,
+localStorage mirrors, follower messages, or the VFS. `coneId` names a leader-session
+lineage shared by WorkUnits, not per-agent isolation. Reset callers must use the
+manager's resumable `reset()` rather than clear-and-start: failed preview transfer
+retains the same source/target pair across reloads. See
+[`docs/cloudflare-worker-details.md`](../../../docs/cloudflare-worker-details.md).
+
+`webhook delete` uses `tray-webhook-revoke` before local removal. The private
+leader manager sends management identity to `POST /webhooks/:coneId/:webhookId/revoke`;
+the home authenticates the rebind secret plus current tray/controller. Revoked
+IDs have permanent hashed per-registration tombstones (constant-size each,
+never TTL-evicted); queue drain checks them even after interrupted cleanup.
+Total authorized metadata grows with deleted registrations until home retirement;
+bounding the total requires a coordinated lifetime registration quota, not eviction
+that resurrects IDs. Failed/lost revocation responses retain the local retry handle.
+
 **When**: To register a new bash command (e.g., `convert`, `webhook`, `crontask`).
 
 **Files to modify**:

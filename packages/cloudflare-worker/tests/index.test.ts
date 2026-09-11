@@ -94,6 +94,10 @@ class FakeNamespace {
 class FakeHomeNamespace {
   private readonly instances = new Map<string, WebhookHomeDurableObject>();
 
+  async alarm(coneId: string): Promise<void> {
+    await this.instances.get(coneId)?.alarm();
+  }
+
   constructor(
     private readonly now: () => number,
     private readonly trayNamespace: FakeNamespace
@@ -154,6 +158,7 @@ function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
   env: ReturnType<typeof makeEnv>;
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
+  alarmHome: (coneId: string) => Promise<void>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
@@ -169,10 +174,44 @@ function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
       now += ms;
     },
     readTray: (trayId: string) => namespace.readTray(trayId),
+    alarmHome: (coneId: string) => homeNamespace.alarm(coneId),
   };
 }
 
 describe('tray worker skeleton', () => {
+  it('fails tray creation rather than silently falling back when a stable identity cannot bind', async () => {
+    const { env } = createTestHarness();
+    const get = env.WEBHOOK_HOMES.get.bind(env.WEBHOOK_HOMES);
+    const stubSpy = vi.spyOn(env.WEBHOOK_HOMES, 'get').mockImplementation((id) => {
+      const stub = get(id);
+      vi.spyOn(stub, 'fetch').mockResolvedValue(new Response('unavailable', { status: 503 }));
+      return stub;
+    });
+    const identity = {
+      coneId: 'persistent-cone',
+      coneSecret: 'delivery',
+      rebindSecret: 'management',
+    };
+    const create = () =>
+      handleWorkerRequest(
+        new Request('https://tray.test/tray', {
+          method: 'POST',
+          body: JSON.stringify(identity),
+        }),
+        env
+      );
+    const failed = await create();
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toMatchObject({ code: 'WEBHOOK_HOME_BIND_FAILED' });
+    stubSpy.mockRestore();
+    const retried = await create();
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toMatchObject({
+      coneId: identity.coneId,
+      capabilities: { webhook: { url: 'https://tray.test/wh/persistent-cone.delivery' } },
+    });
+  });
+
   it('creates a tray at /tray and rejects removed create aliases', async () => {
     const { env } = createTestHarness();
 
@@ -949,8 +988,12 @@ describe('tray worker skeleton', () => {
     expect(socket.received[0]).toContain('leader.connected');
   });
 
-  it('rejects webhooks without a live leader and does not buffer payload state', async () => {
-    const { env, readTray } = createTestHarness();
+  it('queues a stable webhook delivery when no leader is connected, without buffering on the tray', async () => {
+    // The stable /wh/ delivery reaches the home, which forwards to the tray;
+    // the tray has no live leader (controller attached but no WS), so it answers
+    // 410 NO_LIVE_LEADER — and the HOME queues the delivery for replay rather
+    // than dropping it (#2812). The tray itself still buffers nothing.
+    const { env, readTray, alarmHome } = createTestHarness();
     const created = await handleWorkerRequest(
       new Request('https://tray.test/tray', { method: 'POST' }),
       env
@@ -960,7 +1003,7 @@ describe('tray worker skeleton', () => {
       capabilities: { controller: { url: string }; webhook: { url: string } };
     };
 
-    await handleWorkerRequest(
+    const attached = await handleWorkerRequest(
       new Request(session.capabilities.controller.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -969,7 +1012,7 @@ describe('tray worker skeleton', () => {
       env
     );
 
-    const rejected = await handleWorkerRequest(
+    const queued = await handleWorkerRequest(
       new Request(`${session.capabilities.webhook.url}/test-webhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -978,10 +1021,44 @@ describe('tray worker skeleton', () => {
       env
     );
 
-    expect(rejected.status).toBe(410);
+    expect(queued.status).toBe(202);
+    expect(await queued.json()).toMatchObject({
+      accepted: true,
+      queued: true,
+    });
     const tray = await readTray(session.trayId);
     expect(tray?.leader?.connected).toBe(false);
+    // The queue lives on the HOME, never on the tray record.
     expect(Object.keys(tray ?? {})).not.toContain('pendingWebhooks');
+    expect(Object.keys(tray ?? {})).not.toContain('queue');
+
+    // Bind preceded the actual connection. No further delivery or rebind is
+    // needed: a durable alarm alone starts replay after the WebSocket connects.
+    const leader = (await attached.json()) as { websocket: { url: string } };
+    const connected = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    const socket = (connected as unknown as { webSocket: FakeWebSocket }).webSocket;
+    const coneId = session.capabilities.webhook.url.split('/wh/')[1]!.split('.')[0]!;
+    const replay = alarmHome(coneId);
+    await vi.waitFor(() =>
+      expect(socket.received.some((raw) => raw.includes('"webhook.event"'))).toBe(true)
+    );
+    const event = socket.received
+      .map((raw) => JSON.parse(raw) as { type: string; deliveryId?: string })
+      .find((message) => message.type === 'webhook.event');
+    socket.send(
+      JSON.stringify({
+        type: 'webhook.delivery',
+        deliveryId: event!.deliveryId,
+        disposition: 'delivered',
+      })
+    );
+    await replay;
+    const count = socket.received.length;
+    await alarmHome(coneId);
+    expect(socket.received).toHaveLength(count);
   });
 
   it('returns 400 when webhook POST has no webhookId suffix', async () => {
@@ -1144,31 +1221,29 @@ describe('tray worker skeleton', () => {
       return pending;
     }
 
-    it('answers 422 when the leader reports an unresolvable target', async () => {
+    it('durably queues an unresolvable target until it can be repaired', async () => {
       const response = await postAndAck('unresolved-target');
-      expect(response.status).toBe(422);
+      expect(response.status).toBe(202);
       expect(await response.json()).toMatchObject({
-        ok: false,
-        accepted: false,
-        code: 'WEBHOOK_TARGET_UNRESOLVED',
+        accepted: true,
+        queued: true,
       });
     });
 
-    it('answers 404 when the leader has no such webhook registered', async () => {
+    it('keeps an unregistered event queued rather than silently dropping it', async () => {
       const response = await postAndAck('unknown-webhook');
-      expect(response.status).toBe(404);
-      expect(await response.json()).toMatchObject({ ok: false, code: 'WEBHOOK_NOT_REGISTERED' });
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({ accepted: true, queued: true });
     });
 
     it.each(['delivered', 'filtered'])('keeps 202 for a %s delivery', async (disposition) => {
       const response = await postAndAck(disposition);
       expect(response.status).toBe(202);
-      expect(await response.json()).toEqual({ ok: true, accepted: true });
+      expect(await response.json()).toEqual({ ok: true, accepted: true, queued: false });
     });
 
-    // A leader older than #2524 never acks. Silence is not evidence of a drop, so
-    // the receipt stays exactly what it was before this change.
-    it('falls back to 202 when the leader never reports a disposition', async () => {
+    // A legacy 202 says forwarded, not acknowledged: keep it for replay.
+    it('keeps the event queued when the leader never reports a disposition', async () => {
       const { env } = createTestHarness();
       const { webhookUrl } = await connectLeader(env);
       const response = await handleWorkerRequest(
@@ -1180,7 +1255,7 @@ describe('tray worker skeleton', () => {
         env
       );
       expect(response.status).toBe(202);
-      expect(await response.json()).toEqual({ ok: true, accepted: true });
+      expect(await response.json()).toEqual({ ok: true, accepted: true, queued: true });
     });
   });
 
@@ -1397,10 +1472,13 @@ describe('tray worker skeleton', () => {
         'POST /api/tray/:trayId/preview/:previewToken/finalize',
         'POST /api/tray/:trayId/preview/stop',
         'GET /api/tray/:trayId/previews',
+        'POST /api/tray/:trayId/preview-transfer',
         'POST /api/tray/:trayId/biscotto',
         'POST /api/tray/:trayId/biscotto/stop',
         'GET /api/tray/:trayId/biscotti',
         'POST /api/tray/:trayId/supersede',
+        'POST /api/tray/:trayId/webhook/rotate',
+        'POST /webhooks/:coneId/:webhookId/revoke',
         'GET /auth/callback',
         'GET /auth/mcp-callback',
         'POST /oauth/token',

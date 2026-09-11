@@ -25,17 +25,17 @@
  * |------------------------|------------------------------|----------------------|
  * | join, full token       | 308 → new join URL           | 410 TRAY_EXPIRED     |
  * | join, ?redirect=manual | 409 + successor-version link | 410 TRAY_EXPIRED     |
- * | join, biscotto seat    | 410 TRAY_SUPERSEDED, no URL  | 410 TRAY_EXPIRED     |
+ * | join, biscotto seat    | 410 TRAY_EXPIRED, no URL     | 410 TRAY_EXPIRED     |
  * | join, invalid token    | 403 (no redirect leaked)     | 403                  |
  * | webhook (legacy) valid | 308 → new webhook URL        | 410, delivery lost   |
  * | webhook (legacy) no fwd| 410 NO_LIVE_LEADER, lost     | 410, delivery lost   |
  * | webhook (legacy) bad   | 403 (no redirect leaked)     | 403                  |
- * | live preview URL       | HOLE: no forwarding surface  | 404 (resolve = null) |
+ * | live preview URL       | internal forward after transfer | 404 unless transferred |
  * | supersede after expiry | n/a                          | accepted (recovery)  |
  *
- * The `live preview URL` HOLE remains — previews are a separate surface with
- * its own token family and no forwarding indirection; out of scope for #2812
- * and tracked for follow-up.
+ * Authenticated preview transfer is covered by `preview-continuity.test.ts`:
+ * the original token tray points directly to the current owner across repeated
+ * roves. Legacy supersede ALONE does not authorize moving preview capabilities.
  *
  * Not in the matrix because they are structural rather than behavioral:
  * push registrations (`TrayRecord.pushTokens`) die with the tray record, and
@@ -329,7 +329,7 @@ describe('roving trays — superseded rove (leader left a forwarding address)', 
     expect(raw).not.toContain(b.joinToken);
     const body = JSON.parse(raw) as AttachBody;
     expect(body.result?.action).toBe('fail');
-    expect(body.result?.code).toBe('TRAY_SUPERSEDED');
+    expect(body.result?.code).toBe('TRAY_EXPIRED');
     expect(body.result?.joinUrl).toBeUndefined();
   });
 
@@ -374,12 +374,11 @@ describe('roving trays — superseded rove (leader left a forwarding address)', 
     expect(body.code).toBe('NO_LIVE_LEADER');
   });
 
-  it('HOLE: live preview URLs have no forwarding surface at all', async () => {
-    // The preview host resolves `<token>.sliccy.now` through the OLD tray's
-    // DO. After a rove the record still resolves (the tray is superseded, not
-    // expired), but serving needs the leader socket — which will never
-    // reconnect here. There is no `supersededByPreviewUrl`; every shared
-    // preview link dies with a 502, silently.
+  it('legacy supersede alone does not authorize a preview transfer', async () => {
+    // Supersede proves only source ownership. Moving a preview also requires
+    // the target controller capability; never infer authority from a join URL.
+    // The authenticated path (including repeated roves) lives in
+    // preview-continuity.test.ts. This legacy-only request must not use it.
     const clock = { now: Date.parse('2026-08-27T12:00:00.000Z') };
     const { a, preview } = await rovedPair(clock);
 
@@ -400,7 +399,7 @@ describe('roving trays — superseded rove (leader left a forwarding address)', 
         }),
       })
     );
-    expect(fetchRes.status).toBe(502); // leader gone for good — no redirect, no recovery
+    expect(fetchRes.status).toBe(502); // no authenticated preview transfer was requested
   });
 
   it('does not flatten redirect chains: each rove adds one client-side hop', async () => {

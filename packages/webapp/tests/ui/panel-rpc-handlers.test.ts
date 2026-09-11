@@ -43,6 +43,28 @@ function leaderStatus(): LeaderTrayRuntimeStatus {
   };
 }
 
+describe('createStandalonePanelRpcHandlers — webhook revocation', () => {
+  it('forwards only the registration ID and acknowledges completion', async () => {
+    const revokeWebhook = vi.fn().mockResolvedValue(undefined);
+    const handlers = createStandalonePanelRpcHandlers({ revokeWebhook });
+    expect(await handlers['tray-webhook-revoke']!({ webhookId: 'wh-1' })).toEqual({ ok: true });
+    expect(revokeWebhook).toHaveBeenCalledWith('wh-1');
+  });
+
+  it('refuses without a trusted manager and propagates failures', async () => {
+    const missing = createStandalonePanelRpcHandlers({});
+    await expect(missing['tray-webhook-revoke']!({ webhookId: 'wh-1' })).rejects.toThrow();
+    const failed = createStandalonePanelRpcHandlers({
+      revokeWebhook: async () => {
+        throw new Error('unavailable');
+      },
+    });
+    await expect(failed['tray-webhook-revoke']!({ webhookId: 'wh-1' })).rejects.toThrow(
+      'unavailable'
+    );
+  });
+});
+
 describe('createStandalonePanelRpcHandlers — tray-reset', () => {
   it('calls the resetTray callback and returns its result', async () => {
     let invocations = 0;

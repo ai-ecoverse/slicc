@@ -67,6 +67,14 @@ export interface StandalonePanelRpcHandlerOptions {
    */
   resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
   /**
+   * Rotate the cone's stable webhook capability (#2812) and return the new
+   * webhook base URL. Wired by `mainStandaloneWorker` to
+   * `pageLeaderTray.leader.rotateWebhook()` when a leader is active; left
+   * undefined otherwise.
+   */
+  rotateWebhook?: () => Promise<{ webhookUrl: string }>;
+  revokeWebhook?: (webhookId: string) => Promise<void>;
+  /**
    * Mint a preview URL via the worker, broadcast preview.open to all
    * followers, and return the URL + follower count. Wired by
    * `mainStandaloneWorker` to a closure that reads `pageLeaderTray.currentLeaderSync`
@@ -714,6 +722,19 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('host reset: no active tray session to reset');
       }
       return await options.resetTray();
+    },
+
+    'tray-webhook-rotate': async () => {
+      if (!options.rotateWebhook) {
+        throw new Error('webhook rotate: no active leader tray');
+      }
+      return await options.rotateWebhook();
+    },
+
+    'tray-webhook-revoke': async (payload) => {
+      if (!options.revokeWebhook) throw new Error('webhook delete: no active leader tray');
+      await options.revokeWebhook(payload.webhookId);
+      return { ok: true };
     },
 
     'tray-open-preview': async (payload) => {

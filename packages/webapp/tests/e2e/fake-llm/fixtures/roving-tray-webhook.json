@@ -11,6 +11,16 @@
       "whenUserMessageMatches": "marker-two",
       "content": "Rove event two received.",
       "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "marker-three",
+      "content": "Rotated event received.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "marker-four",
+      "content": "Queued event received.",
+      "contentChunkSize": 64
     }
   ]
 }

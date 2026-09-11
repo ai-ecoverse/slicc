@@ -36,6 +36,7 @@ import {
 import { handlePreviewRequest } from './preview-handler.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
+  extractBearer,
   handlePreviewFinalize,
   handlePreviewList,
   handlePreviewMint,
@@ -43,6 +44,7 @@ import {
   handlePreviewUpload,
   handleTraySupersede,
 } from './preview-routes.js';
+import { handlePreviewTransfer } from './preview-transfer-route.js';
 import { buildPrivacyResponse } from './privacy.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
@@ -54,7 +56,9 @@ import {
   parseCapabilityToken,
   wantsJSON,
 } from './shared.js';
+import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
 import { WebhookHomeDurableObject } from './webhook-home.js';
+import { handleWebhookRevoke } from './webhook-revoke-route.js';
 
 const SLICC_HOSTED_HOSTNAME = new URL(SLICC_HOSTED_ORIGIN).hostname;
 
@@ -627,10 +631,13 @@ const ROUTES_INDEX_BODY = {
     'POST /api/tray/:trayId/preview/:previewToken/finalize',
     'POST /api/tray/:trayId/preview/stop',
     'GET /api/tray/:trayId/previews',
+    'POST /api/tray/:trayId/preview-transfer',
     'POST /api/tray/:trayId/biscotto',
     'POST /api/tray/:trayId/biscotto/stop',
     'GET /api/tray/:trayId/biscotti',
     'POST /api/tray/:trayId/supersede',
+    'POST /api/tray/:trayId/webhook/rotate',
+    'POST /webhooks/:coneId/:webhookId/revoke',
     'GET /auth/callback',
     'GET /auth/mcp-callback',
     'POST /oauth/token',
@@ -954,6 +961,12 @@ async function tryHandleCapabilityRoutes(
 ): Promise<Response | null> {
   // Unified-preview mint/revoke/list HTTP routes.
   // Bearer = controllerToken; the worker forwards to the DO via its fetch() surface.
+  const transferMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview-transfer$/);
+  if (transferMatch && request.method === 'POST') {
+    return handlePreviewTransfer(request, transferMatch[1], () =>
+      env.TRAY_HUB.get(env.TRAY_HUB.idFromName(transferMatch[1]))
+    );
+  }
   const previewMintMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview$/);
   if (previewMintMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewMintMatch[1]));
@@ -983,10 +996,30 @@ async function tryHandleCapabilityRoutes(
   }
   const biscotto = await tryHandleBiscottoRoutes(url, request, env);
   if (biscotto) return biscotto;
+  return tryHandleSessionCapabilityRoutes(url, request, env);
+}
+
+/** Session lifecycle and token routes, separate from preview management. */
+async function tryHandleSessionCapabilityRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
   const supersedeMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/supersede$/);
   if (supersedeMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(supersedeMatch[1]));
     return handleTraySupersede(request, stub);
+  }
+
+  const rotateMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/webhook\/rotate$/);
+  if (rotateMatch && request.method === 'POST') {
+    return handleWebhookRotate(request, env, url, rotateMatch[1]!);
+  }
+
+  const revokeMatch = url.pathname.match(/^\/webhooks\/([^/]+)\/([^/]+)\/revoke$/);
+  if (revokeMatch) {
+    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    return handleWebhookRevoke(request, env, revokeMatch[1]!, revokeMatch[2]!);
   }
 
   // Stable cone-scoped webhook delivery (#2812): `/wh/<coneId>.<secret>/<id>`.
@@ -1233,8 +1266,112 @@ async function handleConeWebhookRoute(
   const headers = new Headers(request.headers);
   headers.set('x-slicc-cone-secret', parsed.secret);
   headers.set('x-slicc-webhook-id', webhookId);
-  const forwardBody = await request.arrayBuffer();
+  let forwardBody: Uint8Array;
+  try {
+    forwardBody = await readBoundedWebhookBody(request);
+  } catch (error) {
+    if (!(error instanceof WebhookBodyError)) throw error;
+    return jsonResponse(
+      { error: error.message, code: 'WEBHOOK_BODY_REJECTED' },
+      error.status,
+      cors
+    );
+  }
   return home.fetch(new Request(forwardUrl, { method: 'POST', headers, body: forwardBody }));
+}
+
+/**
+ * `POST /api/tray/:trayId/webhook/rotate` — Bearer = the tray's controllerToken.
+ *
+ * Atomically replace the delivery secret in the same cone's home. The
+ * deterministic replacement lets a client retry after a lost response without
+ * storing raw capabilities in the home or leaving two live capabilities.
+ *
+ * Body: `{ oldConeId, oldSecret, oldRebindSecret }`.
+ * The controller token authenticates against the tray (the same authority that
+ * minted the home); the old rebind secret authenticates the revoke.
+ */
+async function handleWebhookRotate(
+  request: Request,
+  env: WorkerEnv,
+  url: URL,
+  trayId: string
+): Promise<Response> {
+  const controllerToken = extractBearer(request);
+  if (!controllerToken) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  let body: { oldConeId?: string; oldSecret?: string; oldRebindSecret?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid body', code: 'INVALID_BODY' }, 400);
+  }
+  if (
+    !body ||
+    typeof body.oldConeId !== 'string' ||
+    !body.oldConeId ||
+    typeof body.oldSecret !== 'string' ||
+    !body.oldSecret ||
+    typeof body.oldRebindSecret !== 'string' ||
+    !body.oldRebindSecret
+  ) {
+    return jsonResponse(
+      { error: 'oldConeId, oldSecret and oldRebindSecret are required', code: 'INVALID_BODY' },
+      400
+    );
+  }
+
+  const coneId = body.oldConeId;
+  const rebindSecret = body.oldRebindSecret;
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`slicc-webhook-rotate-v1:${body.oldSecret}:${rebindSecret}`)
+  );
+  const coneSecret = Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, '0')
+  ).join('');
+  try {
+    const oldHome = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.oldConeId));
+    const rotated = await oldHome.fetch(
+      new Request(new URL('/internal/home/rotate', url), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({
+          oldSecret: body.oldSecret,
+          secret: coneSecret,
+          rebindSecret,
+          trayId,
+          controllerToken,
+        }),
+      })
+    );
+    if (!rotated.ok) {
+      return jsonResponse(
+        { error: 'Webhook rotation refused', code: 'ROTATE_FAILED' },
+        rotated.status === 403 ? 403 : 502
+      );
+    }
+  } catch {
+    return jsonResponse(
+      { error: 'Webhook rotation failed; retry safely', code: 'ROTATE_FAILED' },
+      502
+    );
+  }
+
+  return jsonResponse(
+    {
+      coneId,
+      webhook: {
+        token: `${coneId}.${coneSecret}`,
+        url: `${url.origin}/wh/${coneId}.${coneSecret}`,
+        rebindToken: `${coneId}.${rebindSecret}`,
+      },
+    },
+    200,
+    { 'cache-control': 'no-store' }
+  );
 }
 
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
@@ -1242,7 +1379,13 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   // Tolerate three back-compat shapes: no content-length header at all
   // (legacy clients), content-length: 0, and an empty-string body. Only
   // attempt JSON parse when there's actually a body to parse.
-  const rawBody = await request.text();
+  let rawBody: string;
+  try {
+    rawBody = new TextDecoder().decode(await readBoundedWebhookBody(request));
+  } catch (error) {
+    if (!(error instanceof WebhookBodyError)) throw error;
+    return jsonResponse({ error: error.message, code: 'INVALID_BODY' }, error.status);
+  }
   if (rawBody.trim() !== '') {
     try {
       const body = JSON.parse(rawBody) as { kind?: unknown };
@@ -1316,8 +1459,8 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   // Bind (or rebind) the cone's webhook home to this fresh tray. The home
   // confirms `controllerToken` against the tray before it points deliveries
   // here, so a first bind claims the home and a rebind proves both the rebind
-  // secret and control of the target tray. A bind failure is fatal to the
-  // stable-webhook feature but not to the tray: fall back to no stable URL.
+  // secret and control of the target tray. Never silently replace a stable
+  // identity with a legacy URL on failure: the caller must retain and retry it.
   const bind = await bindWebhookHome(env, url, {
     coneId,
     secret: coneSecret,
@@ -1325,6 +1468,16 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     trayId,
     controllerToken: payload.controllerToken,
   });
+  if (!bind.ok) {
+    return jsonResponse(
+      {
+        error: 'Webhook home bind failed; retry with the same cone identity',
+        code: 'WEBHOOK_HOME_BIND_FAILED',
+      },
+      503,
+      { 'retry-after': '30' }
+    );
+  }
 
   return jsonResponse(
     {
@@ -1340,20 +1493,13 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
           token: payload.controllerToken,
           url: `${url.origin}/controller/${payload.controllerToken}`,
         },
-        webhook: bind.ok
-          ? {
-              token: `${coneId}.${coneSecret}`,
-              url: `${url.origin}/wh/${coneId}.${coneSecret}`,
-              // The rebind capability the leader persists and presents on every
-              // later reset. Never logged, never a lick — it steers deliveries.
-              rebindToken: `${coneId}.${rebindSecret}`,
-            }
-          : {
-              // Home bind failed: fall back to the legacy tray-scoped URL so
-              // webhooks still work (rove-fragile, but functional).
-              token: payload.webhookToken,
-              url: `${url.origin}/webhook/${payload.webhookToken}`,
-            },
+        webhook: {
+          token: `${coneId}.${coneSecret}`,
+          url: `${url.origin}/wh/${coneId}.${coneSecret}`,
+          // The rebind capability the leader persists and presents on every
+          // later reset. Never logged, never a lick — it steers deliveries.
+          rebindToken: `${coneId}.${rebindSecret}`,
+        },
       },
     },
     201
@@ -1410,12 +1556,14 @@ async function bindWebhookHome(
 ): Promise<{ ok: boolean }> {
   try {
     const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.coneId));
-    const res = await home.fetch(
-      new Request(new URL('/internal/home/bind', url), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+    const res = await withWebhookTimeout(
+      home.fetch(
+        new Request(new URL('/internal/home/bind', url), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      )
     );
     return { ok: res.status === 200 };
   } catch {

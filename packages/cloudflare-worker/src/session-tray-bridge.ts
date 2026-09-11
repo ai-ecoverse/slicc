@@ -314,7 +314,7 @@ export class BridgeRelay {
   }
 
   /** Tear down every visitor socket bridged to a preview that was just revoked. */
-  closeSocketsForPreview(previewToken: string): void {
+  closeSocketsForPreview(previewToken: string, transferred = false): void {
     for (const ws of this.socketsForPreview(previewToken)) {
       // A server-initiated `ws.close()` does NOT re-invoke webSocketClose in
       // workerd, so notify the leader and evict per-conn state HERE. Otherwise the
@@ -323,7 +323,10 @@ export class BridgeRelay {
       // fire, is a harmless no-op on the leader's `if (!entry) return` path.)
       const { connId } = attachmentOf(ws);
       if (connId) this.forget(connId);
-      ws.close(1000, 'preview revoked');
+      ws.close(
+        transferred ? 1012 : 1000,
+        transferred ? 'preview moved; reconnect' : 'preview revoked'
+      );
     }
   }
 

@@ -10,6 +10,8 @@ webapp as static assets. Deep reference:
 - `src/index.ts` — entry + public HTTP routing
 - `src/session-tray.ts` — `SessionTrayDurableObject`: controller WS (leader), follower
   WebRTC signaling, preview bridge WS
+- `src/preview-continuity.ts` — dual-controller preview transfer; original token trays
+  remain direct locators across roves, with durable retry receipts and unchanged R2 expiry
 - `src/webhook-home.ts` — `WebhookHomeDurableObject`: stable cone-scoped webhook
   indirection (#2812); keyed by `coneId`, resolves to the current tray, forwards deliveries
 - `src/turn-credentials.ts` — TURN fetcher
@@ -68,18 +70,19 @@ itself, after the capability token and the supersede check.
 **Only a FULL follower is redirected on `/join`.** The successor URL carries the
 replacement tray's full join token; a `biscotto` guest seat has no claim on it, so
 `handleJoin` branches on `capability.trust` and answers a guest on a superseded tray with a
-terminal `410 TRAY_SUPERSEDED` (no `Location`, no link, no `joinUrl`) rather than forwarding
+terminal `410 TRAY_EXPIRED` (no `Location`, no link, no `joinUrl`) rather than forwarding
 it — otherwise the redirect would silently promote a guest to a full follower of the new
-tray. The `FollowerAttachResult` union carries a `TRAY_SUPERSEDED` `fail` variant WITHOUT
-`joinUrl` for exactly this case; iOS/Go model the successor as optional and treat its
-absence as terminal, so no follower change is needed.
+tray. Reuse the existing terminal `TRAY_EXPIRED` contract: browser and iOS wire validators
+reject `TRAY_SUPERSEDED` without a `joinUrl`, even if a native decoded model makes that
+field optional. No Swift or Go protocol change is needed.
 
-**The webhook surface no longer supersedes — it is cone-stable (#2812).** A webhook URL is
+**The webhook surface is session-lineage-stable (#2812), not per-WorkUnit.** A webhook URL is
 `/wh/<coneId>.<secret>/<id>`, routed to `WEBHOOK_HOMES.idFromName(coneId)` — a
 `WebhookHomeDurableObject` that verifies the secret and INTERNAL-FORWARDS to whichever tray
 is current (`/internal/webhook/:id` on the tray, which runs the relay minus the public token
 check). No redirect, no capability in a response header: a rove is invisible to an external
-sender. The leader mints `coneId` + the delivery + rebind secrets once, persists them, and
+sender. The leader mints `coneId` + the delivery + rebind secrets once, persists them in
+manager-private, worker-URL-scoped IndexedDB (not public session/status or the VFS), and
 sends the same three on every `POST /tray` so the worker REBINDS the home instead of minting
 a new URL. **Rebind is two-factor**: the home's own rebind secret AND the target tray
 confirming the controller token (`/internal/confirm-controller`), so a leaked coneId cannot
@@ -97,6 +100,21 @@ serve the old tray). Only secret HASHES are stored. A home self-expires after
 (`revokedAt` → 410, never resurrects). New DO class means a `wrangler.jsonc` binding
 (`WEBHOOK_HOMES`) + migration tag (`v3-webhook-homes`, `new_sqlite_classes`), prod +
 `env.staging` aligned.
+
+Every delivery is durably enqueued before forwarding or `202`; acceptance is not completed
+agent work. FIFO replay is at-least-once and removes a head only after an explicit
+`delivered|filtered` acknowledgement or registration revocation. A poison head blocks the
+queue until repair/revoke. Limits: 100 events, 120 KiB encoded home record, 64 KiB request
+body, eight pending requests; saturation rejects new work with `429`, never evicts accepted
+events. There is no accepted-event TTL. Durable alarms retry after 30 seconds when blocked,
+or one second after successful head removal with backlog.
+
+Rotation atomically replaces the delivery hash and retry receipt on the same home, retaining
+identity and queued work. The manager persists private pending rotation intent before the
+request and recovers it before rebinding. Registration deletion persists permanent hashed-ID
+tombstones before discarding that ID's queue; local definitions are removed only after hub
+acknowledgement. See [lifecycle details](../../docs/cloudflare-worker-details.md#signaling)
+for error semantics and limits.
 
 ### Biscotti (guest seats)
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getLeaderTrayRuntimeStatus,
   LeaderTrayManager,
@@ -11,6 +11,15 @@ import {
   subscribeToLeaderTrayRuntimeStatus,
   TrayProxyFetchError,
 } from '../../src/scoops/tray-leader.js';
+
+const privateState = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../src/scoops/db.js', () => ({
+  getState: vi.fn(async (key: string) => privateState.get(key) ?? null),
+  setState: vi.fn(async (key: string, value: string) => {
+    privateState.set(key, value);
+  }),
+}));
+beforeEach(() => privateState.clear());
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -1309,7 +1318,7 @@ describe('LeaderTrayManager — onLeaderReady callback', () => {
       onLeaderReady,
     });
 
-    await expect(manager.start()).rejects.toThrow('network down');
+    await expect(manager.start()).rejects.toThrow('transport unavailable');
     expect(onLeaderReady).not.toHaveBeenCalled();
 
     manager.stop();
@@ -1690,7 +1699,7 @@ describe('LeaderTrayManager — kind in POST /tray body', () => {
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/tray');
     expect(init.method).toBe('POST');
-    expect(init.body).toBe(JSON.stringify({ kind: 'hosted' }));
+    expect(JSON.parse(String(init.body))).toMatchObject({ kind: 'hosted' });
     expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
 
     manager.stop();
@@ -1856,7 +1865,15 @@ describe('cone identity carry across a rove (#2812)', () => {
     });
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(stableCreate('tray-1', 'cone-1'), { status: 201 }))
+      .mockImplementationOnce(async (_url, init) => {
+        const identity = JSON.parse(String(init?.body));
+        const response = JSON.parse(stableCreate('tray-1', identity.coneId));
+        response.capabilities.webhook = {
+          url: `https://tray.example.com/wh/${identity.coneId}.${identity.coneSecret}`,
+          rebindToken: `${identity.coneId}.${identity.rebindSecret}`,
+        };
+        return new Response(JSON.stringify(response), { status: 201 });
+      })
       .mockResolvedValueOnce(new Response(attachOk('tray-1'), { status: 200 }));
 
     const manager = new LeaderTrayManager({
@@ -1875,11 +1892,14 @@ describe('cone identity carry across a rove (#2812)', () => {
     socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
     const session = await startPromise;
 
-    expect(session.coneId).toBe('cone-1');
-    expect(session.coneSecret).toBe('sec');
-    expect(session.rebindSecret).toBe('reb');
-    // The create POST had no body (fresh mint), so the worker minted the identity.
-    expect(fetchImpl.mock.calls[0]?.[1]?.body).toBeUndefined();
+    const sent = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(session.coneId).toBe(sent.coneId);
+    expect(session).not.toHaveProperty('coneSecret');
+    expect(session).not.toHaveProperty('rebindSecret');
+    expect(JSON.stringify(getLeaderTrayRuntimeStatus())).not.toContain(sent.rebindSecret);
+    expect(privateState.get('leader-webhook-identity:https://tray.example.com')).toContain(
+      sent.rebindSecret
+    );
     manager.stop();
   });
 
@@ -1887,7 +1907,7 @@ describe('cone identity carry across a rove (#2812)', () => {
     // A stored session with a cone identity fails to attach (stale tray), so the
     // manager mints a fresh tray — and must send the SAME cone identity so the
     // worker rebinds the same webhook home rather than minting a new URL.
-    const stored: LeaderTraySession = {
+    const stored: LeaderTraySession & { coneSecret: string; rebindSecret: string } = {
       workerBaseUrl: 'https://tray.example.com',
       trayId: 'stale-tray',
       createdAt: '2026-03-11T00:00:00.000Z',
@@ -1916,6 +1936,7 @@ describe('cone identity carry across a rove (#2812)', () => {
       )
       // 2: create a fresh tray, carrying the cone identity.
       .mockResolvedValueOnce(new Response(stableCreate('tray-2', 'cone-1'), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transferred: true }), { status: 200 }))
       // 3: attach the fresh tray.
       .mockResolvedValueOnce(new Response(attachOk('tray-2'), { status: 200 }))
       // 4: best-effort supersede of the stale tray.

@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../base/lick-urls.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getLickManagerSurface } from './lick-surface.js';
 import { explicitLickTargetError } from './lick-target-check.js';
@@ -30,6 +31,7 @@ Commands:
   create [--scoop <name>] [--name <name>] [--filter <code>]  Create a new webhook endpoint
   list                                                         List all active webhooks
   delete <id>                                                  Delete a webhook by ID
+  rotate                                                       Replace the cone's delivery secret (all webhook URLs)
 
 Options:
   --scoop <target>  Scoop name, cone name, or folder. Omit for your own cone.
@@ -100,6 +102,32 @@ function notInitializedError(subcommand: string) {
 }
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+async function handleRotate(args: string[]): Promise<CommandResult> {
+  if (args.length !== 1) {
+    return { stdout: '', stderr: 'webhook rotate: takes no arguments\n', exitCode: 1 };
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
+    return { stdout: '', stderr: 'webhook rotate: no leader panel connected\n', exitCode: 1 };
+  }
+  try {
+    await rpc.call('tray-webhook-rotate', undefined);
+    return {
+      stdout:
+        'Rotated webhook delivery secret. Old URLs no longer work; run webhook list for replacement URLs.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  } catch {
+    // Transport errors can include request URLs and capabilities; do not echo them.
+    return {
+      stdout: '',
+      stderr: 'webhook rotate: rotation failed; reconnect the leader and retry\n',
+      exitCode: 1,
+    };
+  }
+}
 
 async function handleCreate(
   args: string[],
@@ -211,12 +239,18 @@ async function handleList(
   };
 }
 
-async function handleDelete(args: string[]): Promise<CommandResult> {
+async function handleDelete(
+  args: string[],
+  options: Required<WebhookCommandOptions>
+): Promise<CommandResult> {
   const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) {
     return { stdout: '', stderr: `webhook delete: ${parsed.error}\n`, exitCode: 1 };
   }
   const id = parsed.positionals[0];
+  if (parsed.positionals.length > 1) {
+    return { stdout: '', stderr: 'webhook delete: requires exactly one ID\n', exitCode: 1 };
+  }
   if (!id) {
     return {
       stdout: '',
@@ -227,6 +261,25 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
 
   const lm = await getLickManagerSurface();
   if (!lm) return notInitializedError('delete');
+  // Ask the private leader manager even while its tray is disconnected: it
+  // knows whether this cone has a stable home. Never erase the retry handle
+  // until the home has durably revoked this registration.
+  const rpc = getPanelRpcClient();
+  try {
+    if (rpc) {
+      const result = await rpc.call('tray-webhook-revoke', { webhookId: id });
+      if (result?.ok !== true) throw new Error('revocation not acknowledged');
+    } else if (options.getLeaderStatus().session?.webhookUrl?.includes('/wh/')) {
+      throw new Error('no leader panel');
+    }
+  } catch {
+    return {
+      stdout: '',
+      stderr:
+        'webhook delete: revocation failed; registration retained, reconnect the leader and retry\n',
+      exitCode: 1,
+    };
+  }
   const ok = await lm.deleteWebhook(id);
 
   if (!ok) {
@@ -335,7 +388,9 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
         case 'list':
           return await handleList(args, options);
         case 'delete':
-          return await handleDelete(args);
+          return await handleDelete(args, options);
+        case 'rotate':
+          return await handleRotate(args);
         default:
           return {
             stdout: '',

@@ -46,6 +46,7 @@ import {
 } from './apns-provider-token.js';
 import { prefersManualRedirect, supersededLinkHeaders, supersededLocation } from './links.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
+import { PreviewContinuity } from './preview-continuity.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type BiscottoDeps, dispatchBiscottoRoute } from './session-tray-biscotto.js';
 import { BootstrapCoordinator, type BootstrapDeps } from './session-tray-bootstrap.js';
@@ -92,6 +93,7 @@ import {
 } from './shared.js';
 import { timingSafeEqual } from './timing-safe-equal.js';
 import { fetchTURNCredentials, TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
+import { readBoundedWebhookBody } from './webhook-body.js';
 
 export interface SessionTrayEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
@@ -177,11 +179,13 @@ export class SessionTrayDurableObject {
   // when the matching `preview.response` arrives (single chunk today, future-
   // proof for chunked binary).
   private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+  private previewMutation: Promise<unknown> = Promise.resolve();
 
   // Extracted concerns. Each holds only its own state; anything durable lives
   // on the tray record so it survives hibernation.
   private readonly bootstrap: BootstrapCoordinator;
   private readonly bridge: BridgeRelay;
+  private readonly previewContinuity: PreviewContinuity;
   private readonly webhooks: WebhookRelay;
   private readonly push: PushCoordinator;
 
@@ -236,6 +240,27 @@ export class SessionTrayDurableObject {
 
     this.bootstrap = new BootstrapCoordinator(this.bootstrapDeps());
     this.bridge = new BridgeRelay(this.bridgeDeps());
+    this.previewContinuity = new PreviewContinuity({
+      namespace: typedEnv.TRAY_HUB,
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      matchesToken: (received, expected) => this.matchesToken(received, expected),
+      revoke: async (token) => {
+        const result = await this.revokePreview(token);
+        this.bridge.closeSocketsForPreview(token);
+        return result;
+      },
+      transferred: async (tokens) => {
+        for (const token of tokens) this.bridge.closeSocketsForPreview(token, true);
+        failAllPendingPreviews(this.pendingPreviews);
+        await this.state.storage.deleteAlarm?.();
+      },
+      imported: async () => {
+        await expirePersistentPreviews(this.previewDeps());
+        if (this.leaderSocket) this.replayPreviewStatesToLeader(this.leaderSocket);
+      },
+    });
     this.webhooks = new WebhookRelay(this.webhookDeps(), options.webhookDeliveryWaitMs);
     this.push = new PushCoordinator(this.pushDeps());
   }
@@ -357,6 +382,11 @@ export class SessionTrayDurableObject {
     if (url.pathname === '/internal/confirm-controller' && request.method === 'POST') {
       return this.handleConfirmController(request);
     }
+    // Rotation of the SAME home mapping may finish after the source tray
+    // expires. This proves retained ownership, never eligibility as a new target.
+    if (url.pathname === '/internal/confirm-controller-ownership' && request.method === 'POST') {
+      return this.handleConfirmController(request, true);
+    }
     // Internal webhook delivery forwarded by a WebhookHome DO after it verified
     // the cone-scoped delivery secret (#2812). Runs the same relay a public
     // delivery runs, minus the public token check — the home already
@@ -380,16 +410,26 @@ export class SessionTrayDurableObject {
    * `{ confirmed: false }`), so a caller learns nothing beyond "you do not
    * control this tray".
    */
-  private async handleConfirmController(request: Request): Promise<Response> {
+  private async handleConfirmController(
+    request: Request,
+    ownershipOnly = false
+  ): Promise<Response> {
     let body: { controllerToken?: string };
     try {
-      body = (await request.json()) as { controllerToken?: string };
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
     } catch {
       return jsonResponse({ confirmed: false }, 200);
     }
-    const token = body.controllerToken ?? '';
+    const token = typeof body?.controllerToken === 'string' ? body.controllerToken : '';
     const confirmed = this.tray ? this.matchesToken(token, this.tray.controllerToken) : false;
-    return jsonResponse({ confirmed }, 200);
+    if (!confirmed || ownershipOnly) return jsonResponse({ confirmed }, 200);
+    const unavailable =
+      this.tray?.supersededByJoinUrl ||
+      this.tray?.supersededByWebhookUrl ||
+      (await this.ensureTrayIsActive());
+    return jsonResponse({ confirmed: !unavailable }, 200);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -590,7 +630,15 @@ export class SessionTrayDurableObject {
     if (!this.tray) {
       return;
     }
-    await this.state.storage.put(TRAY_STORAGE_KEY, this.tray);
+    try {
+      await this.state.storage.put(TRAY_STORAGE_KEY, this.tray);
+    } catch (error) {
+      // Mutators edit the cached record before writing. A rejected write must
+      // not leave an uncommitted receipt/phase/locator eligible for an
+      // idempotent success on the next request. Reload durable truth instead.
+      this.tray = null;
+      throw error;
+    }
   }
 
   private requireTray(): TrayRecord {
@@ -676,29 +724,28 @@ export class SessionTrayDurableObject {
     // a biscotto is a revocable seat on THIS cone's live transcript, it dies
     // with this tray by design, and handing its holder the successor's join
     // capability would silently promote a guest to a full follower of the new
-    // tray (a guest→full escalation). A superseded tray therefore ends a
-    // guest's access with the same 403 a revoked seat gets — the redirect is
-    // for followers that legitimately hold the tray join token.
+    // tray (a guest→full escalation). End that access with the existing
+    // terminal 410 TRAY_EXPIRED contract; shipped browser and iOS validators
+    // require a successor URL whenever the code is TRAY_SUPERSEDED.
     if (tray.supersededByJoinUrl && capability.trust === 'full') {
       return await this.supersededResponse(tray.supersededByJoinUrl, joinRequest, url);
     }
     if (tray.supersededByJoinUrl) {
-      // A live guest seat on a superseded tray: no successor to offer, and the
-      // leader is gone. Terminal, and indistinguishable from any other
-      // dead-seat answer so it leaks nothing about the replacement.
+      // No successor capability may be offered to this guest. Explain that
+      // the seat ended without disclosing any address of the replacement.
       if (joinRequest) {
         return await this.buildFollowerAttachResponse(
           joinRequestControllerId(joinRequest),
           {
             action: 'fail',
-            code: 'TRAY_SUPERSEDED',
+            code: 'TRAY_EXPIRED',
             error: 'This guest session ended when the tray was replaced',
           },
           410
         );
       }
       return jsonResponse(
-        { error: 'This guest session ended when the tray was replaced', code: 'TRAY_SUPERSEDED' },
+        { error: 'This guest session ended when the tray was replaced', code: 'TRAY_EXPIRED' },
         410
       );
     }
@@ -1230,6 +1277,7 @@ export class SessionTrayDurableObject {
         pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
         return false;
       case 'preview.state.update': {
+        if (this.tray?.previewTransfer) return false;
         const record = this.tray?.previews?.[message.previewToken];
         if (record) record.announced = message.announced;
         return true;
@@ -1410,6 +1458,24 @@ export class SessionTrayDurableObject {
   // ──────────────────────────────────────────────────────────────────────
 
   private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    // Network awaits (R2 cleanup/DO import) release the runtime's input gate.
+    // Serialize preview mutations, but never queue transfer locator callbacks
+    // or the long-poll file response behind the transfer that is awaiting them.
+    const concurrent = /\/(?:fetch|emit|relocate|activate)$/.test(url.pathname);
+    return concurrent
+      ? this.dispatchInternalPreviewRoute(url, request)
+      : this.withPreviewMutation(() => this.dispatchInternalPreviewRoute(url, request));
+  }
+
+  private withPreviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.previewMutation.then(operation, operation);
+    this.previewMutation = result.catch(() => {});
+    return result;
+  }
+
+  private async dispatchInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    const continuity = await this.previewContinuity.route(url, request);
+    if (continuity) return continuity;
     // For the stop route, we need to close bridge sockets after the preview is revoked.
     // dispatchPreviewRoute consumes request.json(), so clone it first to extract previewToken.
     if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
@@ -1455,7 +1521,7 @@ export class SessionTrayDurableObject {
   }
 
   async alarm(): Promise<void> {
-    await expirePersistentPreviews(this.previewDeps());
+    await this.withPreviewMutation(() => expirePersistentPreviews(this.previewDeps()));
   }
 
   // ──────────────────────────────────────────────────────────────────────

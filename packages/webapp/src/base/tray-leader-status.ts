@@ -27,17 +27,11 @@ export interface LeaderTraySession {
   leaderWebSocketUrl?: string | null;
   runtime: string;
   /**
-   * Stable cone identity for the tray-independent webhook home (#2812). Minted
-   * once by the worker on first `POST /tray`, persisted here, and sent back on
-   * every reset so the external-facing webhook URL survives a rove unchanged.
-   * Absent when the hub predates the feature or the home bind failed — the
-   * session then falls back to the legacy tray-scoped `webhookUrl`.
+   * Stable webhook identity for this leader-session lineage, not a WorkUnit
+   * isolation boundary. Management secrets live in the manager's private store,
+   * never in the status mirrored to other realms.
    */
   coneId?: string;
-  /** The `<secret>` half of the cone webhook delivery token. Never logged. */
-  coneSecret?: string;
-  /** The `<secret>` half of the cone rebind token — steers deliveries. Never logged. */
-  rebindSecret?: string;
 }
 
 export interface LeaderTrayRuntimeStatus {
@@ -53,10 +47,30 @@ let leaderTrayRuntimeStatus: LeaderTrayRuntimeStatus = {
   error: null,
 };
 
+/** Allowlist status fields so legacy or richer manager records cannot leak secrets. */
+function statusSession(session: LeaderTraySession | null): LeaderTraySession | null {
+  if (!session) return null;
+  return {
+    workerBaseUrl: session.workerBaseUrl,
+    trayId: session.trayId,
+    createdAt: session.createdAt,
+    controllerId: session.controllerId,
+    controllerUrl: session.controllerUrl,
+    joinUrl: session.joinUrl,
+    webhookUrl: session.webhookUrl,
+    runtime: session.runtime,
+    ...(session.leaderKey !== undefined ? { leaderKey: session.leaderKey } : {}),
+    ...(session.leaderWebSocketUrl !== undefined
+      ? { leaderWebSocketUrl: session.leaderWebSocketUrl }
+      : {}),
+    ...(session.coneId !== undefined ? { coneId: session.coneId } : {}),
+  };
+}
+
 export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
   return {
     ...leaderTrayRuntimeStatus,
-    session: leaderTrayRuntimeStatus.session ? { ...leaderTrayRuntimeStatus.session } : null,
+    session: statusSession(leaderTrayRuntimeStatus.session),
   };
 }
 
@@ -88,7 +102,9 @@ export function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
     );
     if (stored) {
       const parsed = JSON.parse(stored) as LeaderTrayRuntimeStatus;
-      if (parsed?.state && parsed.state !== 'inactive') return parsed;
+      if (parsed?.state && parsed.state !== 'inactive') {
+        return { ...parsed, session: statusSession(parsed.session) };
+      }
     }
   } catch {
     // ignore parse errors
@@ -127,7 +143,7 @@ export function subscribeToLeaderTrayRuntimeStatus(
 export function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
   leaderTrayRuntimeStatus = {
     ...status,
-    session: status.session ? { ...status.session } : null,
+    session: statusSession(status.session),
   };
   if (leaderTrayRuntimeStatusListeners.size === 0) return;
   for (const listener of [...leaderTrayRuntimeStatusListeners]) {

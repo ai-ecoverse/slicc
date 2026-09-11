@@ -218,6 +218,55 @@ synchronous) `webSocketClose` is a no-op and can't clear the freshly-accepted le
 The preview bridge (`serve --bridge`) lets the leader drive a visited page as a
 synthetic CDP target over a WebSocket hosted by the Durable Object.
 
+### Continuity across tray resets and roves
+
+`POST /api/tray/:trayId/preview-transfer` authenticates the source controller
+with Bearer and accepts JSON `{ targetTrayId, targetControllerToken }`. The edge
+forwards only those fields plus `controllerToken` to the source owner's
+`/internal/preview/transfer`. Request bodies are capped at 8 KiB / 10 seconds;
+the owner call is bounded at 60 seconds. A `503` is ambiguous: retain the same
+source and target credentials and retry idempotently, not with a new target.
+Never log either capability. Contract and error meanings:
+[`docs/cloudflare-worker-details.md`](../../../docs/cloudflare-worker-details.md#public-routes).
+
+The transfer imports original preview records and
+updates each token's original-tray locator directly to the current owner. The public
+URL, root/entry jail, bridge scope, tab cap and webhook identity stay unchanged across
+repeated roves; no controller secret appears in a redirect. Both hub and dedicated
+preview worker resolve the locator before serving content, bridge sockets or emits.
+
+Persist the source/target pair before starting this handoff; a failed or interrupted
+transfer returns `503` and must retry the SAME pair before old-tray reset. The source
+is frozen until completion. Durable import receipts prevent a retry from resurrecting
+revoked previews. Existing bridge sockets close with `1012` and reconnect (new connId).
+Persistent snapshots keep their existing R2 keys, upload credentials and expiry; only
+the new owner cleans up expired/revoked archives. Do not renew the TTL during roves.
+Upload authorization durably leases the candidate R2 key (up to eight unresolved writes
+per preview). Body reads and R2 puts have 30-second deadlines. Cleanup retains a
+non-serving tombstone and repeats prefix sweeps until all writes definitively settle;
+an ambiguous R2 outcome can retain a preview slot rather than risk orphaned bytes.
+Run `preview-continuity.test.ts` for local multi-DO continuity and failure regressions.
+
+### Stable webhook lifecycle
+
+Preview webhook identity follows the leader-session lineage, not individual WorkUnits.
+Management secrets live in manager-private IndexedDB, outside public session/status,
+VFS and follower messages. Rotation replaces the delivery hash atomically on the same
+home with a retry receipt; private pending intent resumes lost responses before rebind.
+Deletion persists a permanent hashed registration tombstone before discarding that ID's
+queue, and removes its local definition only after hub acknowledgement.
+
+The home durably enqueues before forwarding or `202`. Acceptance is not completed agent
+work: replay is at-least-once and requires explicit delivery/filter acknowledgement.
+Missing registrations and unresolved targets block the FIFO until repair or revocation.
+Accepted events have no queue TTL or eviction. Limits: 100 events, 120 KiB encoded home
+record, 64 KiB body, eight pending requests. Capacity returns `429` with `Retry-After: 30`;
+oversized bodies return `413`. Alarms retry blocked heads after 30 seconds and remaining
+backlog after successful removal after one second. The 90-day home admission expiry is
+separate from event retention. See
+[`docs/cloudflare-worker-details.md`](../../../docs/cloudflare-worker-details.md#signaling)
+for the lifecycle contract.
+
 ### Wire format
 
 The bridge tab connects over `WS <token>.sliccy.now|dev/__slicc/bridge`

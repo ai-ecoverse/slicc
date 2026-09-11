@@ -26,7 +26,8 @@ export async function handleBridgeRoute(
   url: URL,
   env: BridgeEnv,
   previewToken: string,
-  bridge: boolean
+  bridge: boolean,
+  servingTrayId?: string
 ): Promise<Response | null> {
   // Only handle /__slicc/* paths, and only for bridged previews.
   if (!url.pathname.startsWith('/__slicc/') || !bridge) {
@@ -38,7 +39,7 @@ export async function handleBridgeRoute(
     return new Response('Invalid preview token', { status: 403 });
   }
 
-  const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
+  const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(servingTrayId ?? parsed.trayId));
 
   // Route 1: GET /__slicc/preview-bridge.js — serve the embedded bootstrap IIFE
   if (url.pathname === '/__slicc/preview-bridge.js' && request.method === 'GET') {

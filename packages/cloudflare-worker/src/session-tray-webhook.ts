@@ -14,6 +14,7 @@
 
 import type { LeaderWebhookDelivery, WebhookDeliveryDisposition } from '@slicc/shared-ts';
 import { jsonResponse, type TrayRecord } from './shared.js';
+import { readBoundedWebhookBody, WebhookBodyError } from './webhook-body.js';
 
 /**
  * How long a webhook POST waits for the leader's `webhook.delivery` before the
@@ -101,7 +102,13 @@ export function webhookDeliveryResponse(
       cors
     );
   }
-  return jsonResponse({ ok: true, accepted: true }, 202, cors);
+  return jsonResponse(
+    { ok: true, accepted: true },
+    202,
+    disposition === 'delivered' || disposition === 'filtered'
+      ? { ...cors, 'x-slicc-webhook-ack': disposition }
+      : cors
+  );
 }
 
 /**
@@ -109,19 +116,21 @@ export function webhookDeliveryResponse(
  * so a plain-text or form payload still reaches the cone instead of 400ing.
  */
 async function readWebhookBody(request: Request): Promise<unknown> {
+  const bytes = await readBoundedWebhookBody(request);
+  let text: string;
   try {
-    const contentType = request.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      return await request.json();
-    }
-    const text = await request.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { raw: text };
-    }
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
-    return {};
+    // JSON control messages cannot carry arbitrary bytes directly. Base64 is
+    // lossless (unlike the replacement characters from Request.text()).
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return { raw: btoa(binary), encoding: 'base64' };
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
   }
 }
 
@@ -243,7 +252,17 @@ export class WebhookRelay {
       );
     }
 
-    const body = await readWebhookBody(request);
+    let body: unknown;
+    try {
+      body = await readWebhookBody(request);
+    } catch (error) {
+      if (!(error instanceof WebhookBodyError)) throw error;
+      return jsonResponse(
+        { error: error.message, code: 'WEBHOOK_BODY_REJECTED' },
+        error.status,
+        cors
+      );
+    }
     const headers = forwardableHeaders(request);
 
     // Forward to leader via the control WebSocket, asking for the disposition
@@ -323,9 +342,15 @@ export class WebhookRelay {
     deliveryId: string,
     settled: Promise<WebhookDeliveryDisposition | null>
   ): Promise<WebhookDeliveryDisposition | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([
       settled,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), this.waitMs)),
-    ]).finally(() => this.pending.delete(deliveryId));
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.waitMs);
+      }),
+    ]).finally(() => {
+      clearTimeout(timer);
+      this.pending.delete(deliveryId);
+    });
   }
 }
