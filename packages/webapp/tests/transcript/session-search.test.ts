@@ -235,6 +235,160 @@ describe('session search ranking', () => {
     });
   });
 
+  it('indexes scoop session snapshots under /scoops/<folder>/sessions/<jid>/', async () => {
+    // Cone archive with unrelated content.
+    const coneFile = '2026-09-11T09-00-00-000Z-weather.md';
+    await vfs.writeFile(
+      `${SESSIONS_DIR}/${coneFile}`,
+      formatArchiveAsMarkdown({
+        id: 'cone-1',
+        title: 'Weather chat',
+        frozenAt: '2026-09-11T09:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages: [msg('user', 'nice weather today', 'u1')],
+      })
+    );
+    await vfs.writeFile(
+      '/sessions/index.json',
+      JSON.stringify([
+        {
+          filename: coneFile,
+          title: 'Weather chat',
+          frozenAt: '2026-09-11T09:00:00.000Z',
+          messageCount: 1,
+          sessionId: 'cone-1',
+        },
+      ])
+    );
+
+    // Scoop snapshot: the fact lives ONLY here.
+    const scoopDir = '/scoops/zesty-custard/sessions/agent_zesty_custard';
+    const scoopFile = 'live-zesty-abc.md';
+    await vfs.mkdir(scoopDir, { recursive: true });
+    await vfs.writeFile(
+      `${scoopDir}/${scoopFile}`,
+      formatArchiveAsMarkdown({
+        id: 'scoop-1',
+        title: 'Zesty research',
+        frozenAt: '2026-09-11T10:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages: [msg('assistant', 'The kumquat quota is forty-two crates.', 'a1')],
+      })
+    );
+    await vfs.writeFile(
+      `${scoopDir}/index.json`,
+      JSON.stringify([
+        {
+          filename: scoopFile,
+          title: 'Zesty research',
+          frozenAt: '2026-09-11T10:00:00.000Z',
+          messageCount: 1,
+          sessionId: 'scoop-1',
+        },
+      ])
+    );
+
+    const built = await rebuildSessionSearchIndex(vfs);
+    expect(built.archives).toBe(2);
+
+    const hits = await searchSessions(vfs, 'kumquat quota', { limit: 5 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].sessionId).toBe('scoop-1');
+    expect(hits[0].path).toBe(`${scoopDir}/${scoopFile}`);
+
+    // session read must resolve the scoop entry too.
+    const page = await readSessionHit(vfs, hits[0].id, { count: 1 });
+    expect(page).not.toBeNull();
+    expect(page!.hit.path).toBe(`${scoopDir}/${scoopFile}`);
+    expect(page!.text).toContain('forty-two crates');
+  });
+
+  it('rebuilds a stale index when a scoop snapshot appears after the last build', async () => {
+    await vfs.writeFile('/sessions/index.json', JSON.stringify([]));
+    await rebuildSessionSearchIndex(vfs);
+    expect(await searchSessions(vfs, 'gooseberry', { limit: 5 })).toHaveLength(0);
+
+    const scoopDir = '/scoops/late-scoop/sessions/agent_late_scoop';
+    await vfs.mkdir(scoopDir, { recursive: true });
+    await vfs.writeFile(
+      `${scoopDir}/live-late.md`,
+      formatArchiveAsMarkdown({
+        id: 'late-1',
+        title: 'Late scoop',
+        frozenAt: '2026-09-11T11:00:00.000Z',
+        createdAt: 1,
+        updatedAt: 2,
+        messageCount: 1,
+        messages: [msg('assistant', 'gooseberry inventory counted', 'a1')],
+      })
+    );
+    await vfs.writeFile(
+      `${scoopDir}/index.json`,
+      JSON.stringify([
+        {
+          filename: 'live-late.md',
+          title: 'Late scoop',
+          frozenAt: '2026-09-11T11:00:00.000Z',
+          messageCount: 1,
+          sessionId: 'late-1',
+        },
+      ])
+    );
+
+    // No manual rebuild: the fingerprint mismatch must trigger one.
+    const hits = await searchSessions(vfs, 'gooseberry', { limit: 5 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].sessionId).toBe('late-1');
+  });
+
+  it('degrades to first-dir-wins when a cone archive and scoop snapshot share a sessionId', async () => {
+    const shared = {
+      frozenAt: '2026-09-11T12:00:00.000Z',
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 1,
+    };
+    await vfs.writeFile(
+      `${SESSIONS_DIR}/dup.md`,
+      formatArchiveAsMarkdown({
+        ...shared,
+        id: 'dup-1',
+        title: 'Cone copy',
+        messages: [msg('user', 'tamarind ledger cone copy', 'm1')],
+      })
+    );
+    await vfs.writeFile(
+      '/sessions/index.json',
+      JSON.stringify([{ filename: 'dup.md', title: 'Cone copy', ...shared, sessionId: 'dup-1' }])
+    );
+    const scoopDir = '/scoops/dup/sessions/agent_dup';
+    await vfs.mkdir(scoopDir, { recursive: true });
+    await vfs.writeFile(
+      `${scoopDir}/dup.md`,
+      formatArchiveAsMarkdown({
+        ...shared,
+        id: 'dup-1',
+        title: 'Scoop copy',
+        messages: [msg('user', 'tamarind ledger scoop copy', 'm1')],
+      })
+    );
+    await vfs.writeFile(
+      `${scoopDir}/index.json`,
+      JSON.stringify([{ filename: 'dup.md', title: 'Scoop copy', ...shared, sessionId: 'dup-1' }])
+    );
+
+    // Must not throw (MiniSearch rejects duplicate ids); cone wins.
+    const built = await rebuildSessionSearchIndex(vfs);
+    expect(built.archives).toBe(2);
+    const hits = await searchSessions(vfs, 'tamarind ledger', { limit: 5 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].path).toBe(`${SESSIONS_DIR}/dup.md`);
+  });
+
   it('weights title matches above body-only matches', () => {
     const titleHit = docsFromArchive({
       sessionId: 's1',

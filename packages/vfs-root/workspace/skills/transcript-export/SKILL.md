@@ -35,9 +35,11 @@ The **default output path** is `/workspace/slicc-transcript-<session-id>.zip`.
 ## Memory v2 — search then read (feature flag)
 
 When the `memory-v2` flag is **on** (Settings → Experimental, or a central
-override), `session` also exposes keyword search over `/sessions` archives.
-Prefer this over `rg` / `cat` on archives: legacy markdown embeds the whole
-session JSON on one line, so grep counts and line dumps are misleading.
+override), `session` also exposes keyword search over `/sessions` archives
+and every scoop session snapshot (`/scoops/<folder>/sessions/<jid>/`), so a
+dropped scoop's transcript is still findable. Prefer this over `rg` / `cat`
+on archives: legacy markdown embeds the whole session JSON on one line, so
+grep counts and line dumps are misleading.
 
 ```bash
 # Bounded keyword search (title weighted above body; original content above

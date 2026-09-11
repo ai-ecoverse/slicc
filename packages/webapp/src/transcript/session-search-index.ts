@@ -39,6 +39,23 @@ export const SESSION_SEARCH_MAX_LIMIT = 20;
 export interface SessionSearchVfs {
   readFile(path: string, options?: { encoding?: string }): Promise<string | Uint8Array>;
   writeFile(path: string, content: string): Promise<void>;
+  /**
+   * Optional (either shape): enables scoop-archive discovery under
+   * `/scoops/<folder>/sessions/<jid>/`. The shell fs exposes `readdir`
+   * (names), `VirtualFS` exposes `readDir` (DirEntry rows). A vfs with
+   * neither still indexes the cone's `/sessions/` fully.
+   */
+  readdir?(path: string): Promise<string[]>;
+  readDir?(path: string): Promise<Array<{ name: string }>>;
+}
+
+/** Directory names at `path` via whichever listing method the vfs has. */
+async function listDirNames(vfs: SessionSearchVfs, path: string): Promise<string[]> {
+  if (typeof vfs.readdir === 'function') return vfs.readdir(path);
+  if (typeof vfs.readDir === 'function') {
+    return (await vfs.readDir(path)).map((entry) => entry.name);
+  }
+  return [];
 }
 
 export type SessionEchoKind = 'original' | 'summary' | 'echo';
@@ -171,8 +188,10 @@ export function docsFromArchive(args: {
   sessionTitle: string;
   filename: string;
   messages: readonly ChatMessage[];
+  /** Directory the archive lives in; defaults to the cone's `/sessions`. */
+  sessionsDir?: string;
 }): SessionSearchDoc[] {
-  const path = `${SESSIONS_DIR}/${args.filename}`;
+  const path = `${args.sessionsDir ?? SESSIONS_DIR}/${args.filename}`;
   const docs: SessionSearchDoc[] = [];
   args.messages.forEach((message, messageIndex) => {
     const messageId = message.id || `i${messageIndex}`;
@@ -204,33 +223,102 @@ export function docsFromArchive(args: {
   return docs;
 }
 
+/** One index row plus the sessions directory it was found in. */
+interface LocatedEntry {
+  entry: FrozenSessionIndexEntry;
+  sessionsDir: string;
+}
+
+const SCOOPS_DIR = '/scoops';
+
+/**
+ * Every sessions directory holding scoop snapshots:
+ * `/scoops/<folder>/sessions/<jid>/`, each with its own `index.json`
+ * (see `scoops/live-session-snapshot.ts`). Sorted for a stable fingerprint.
+ * A vfs without `readdir`, or one without a `/scoops` tree, yields none.
+ */
+async function discoverScoopSessionDirs(vfs: SessionSearchVfs): Promise<string[]> {
+  let folders: string[];
+  try {
+    folders = await listDirNames(vfs, SCOOPS_DIR);
+  } catch {
+    return [];
+  }
+  const dirs: string[] = [];
+  for (const folder of folders) {
+    try {
+      const jids = await listDirNames(vfs, `${SCOOPS_DIR}/${folder}/sessions`);
+      for (const jid of jids) dirs.push(`${SCOOPS_DIR}/${folder}/sessions/${jid}`);
+    } catch {
+      // Scoop without snapshots — nothing to index there.
+    }
+  }
+  return dirs.sort();
+}
+
+/** Cone `/sessions` rows plus every scoop snapshot dir's rows. */
+async function collectLocatedEntries(vfs: SessionSearchVfs): Promise<LocatedEntry[]> {
+  const located: LocatedEntry[] = (await readSessionsIndex(vfs as never)).map((entry) => ({
+    entry,
+    sessionsDir: SESSIONS_DIR,
+  }));
+  for (const sessionsDir of await discoverScoopSessionDirs(vfs)) {
+    for (const entry of await readIndexEntriesAt(vfs, sessionsDir)) {
+      located.push({ entry, sessionsDir });
+    }
+  }
+  return located;
+}
+
+/** Read one scoop dir's `index.json`; missing or malformed is empty. */
+async function readIndexEntriesAt(
+  vfs: SessionSearchVfs,
+  sessionsDir: string
+): Promise<FrozenSessionIndexEntry[]> {
+  try {
+    const raw = await vfs.readFile(`${sessionsDir}/index.json`, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as FrozenSessionIndexEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function rebuildSessionSearchIndex(vfs: SessionSearchVfs): Promise<{
   docs: number;
   archives: number;
 }> {
   const MiniSearch = (await import('minisearch')).default as unknown as MiniSearchCtor;
-  const entries = await readSessionsIndex(vfs as never);
+  const located = await collectLocatedEntries(vfs);
   const docs: SessionSearchDoc[] = [];
-  for (const entry of entries) {
-    const archiveDocs = await docsForEntry(vfs, entry);
-    docs.push(...archiveDocs);
+  // MiniSearch throws on a duplicate id; a sessionId shared between a cone
+  // archive and a scoop snapshot must degrade to "first dir wins", not fail
+  // the whole rebuild.
+  const seen = new Set<string>();
+  for (const { entry, sessionsDir } of located) {
+    for (const doc of await docsForEntry(vfs, entry, sessionsDir)) {
+      if (seen.has(doc.id)) continue;
+      seen.add(doc.id);
+      docs.push(doc);
+    }
   }
   const mini = new MiniSearch(INDEX_OPTIONS);
   if (docs.length) mini.addAll(docs);
   const meta: IndexMeta = {
     version: 1,
     builtAt: Date.now(),
-    archiveCount: entries.length,
-    fingerprint: fingerprintEntries(entries),
+    archiveCount: located.length,
+    fingerprint: fingerprintLocatedEntries(located),
   };
   await vfs.writeFile(SESSION_SEARCH_INDEX_PATH, JSON.stringify({ meta, index: mini.toJSON() }));
-  return { docs: docs.length, archives: entries.length };
+  return { docs: docs.length, archives: located.length };
 }
 
 export async function ensureSessionSearchIndex(vfs: SessionSearchVfs): Promise<MiniSearchLike> {
   const MiniSearch = (await import('minisearch')).default as unknown as MiniSearchCtor;
-  const entries = await readSessionsIndex(vfs as never);
-  const wanted = fingerprintEntries(entries);
+  const located = await collectLocatedEntries(vfs);
+  const wanted = fingerprintLocatedEntries(located);
   try {
     const raw = await vfs.readFile(SESSION_SEARCH_INDEX_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
@@ -309,12 +397,13 @@ export async function readSessionHit(
 } | null> {
   const parsed = parseHitId(hitId);
   if (!parsed) return null;
-  const entries = await readSessionsIndex(vfs as never);
-  const entry =
-    entries.find((e) => e.sessionId === parsed.sessionId) ??
-    entries.find((e) => e.filename.replace(/\.md$/i, '') === parsed.sessionId);
-  if (!entry) return null;
-  const messages = await loadMessagesForEntry(vfs, entry);
+  const located = await collectLocatedEntries(vfs);
+  const found =
+    located.find(({ entry: e }) => e.sessionId === parsed.sessionId) ??
+    located.find(({ entry: e }) => e.filename.replace(/\.md$/i, '') === parsed.sessionId);
+  if (!found) return null;
+  const { entry, sessionsDir } = found;
+  const messages = await loadMessagesForEntry(vfs, entry, sessionsDir);
   const anchor = messages.findIndex((m, i) => (m.id || `i${i}`) === parsed.messageId);
   const from = Math.max(0, options.from ?? Math.max(0, anchor));
   const requested = Math.max(1, options.count ?? 3);
@@ -337,7 +426,7 @@ export async function readSessionHit(
       sessionId: entry.sessionId ?? parsed.sessionId,
       messageId: parsed.messageId,
       sessionTitle: entry.title,
-      path: `${SESSIONS_DIR}/${entry.filename}`,
+      path: `${sessionsDir}/${entry.filename}`,
     },
     messages: page,
     from,
@@ -351,35 +440,44 @@ export async function readSessionHit(
 
 async function docsForEntry(
   vfs: SessionSearchVfs,
-  entry: FrozenSessionIndexEntry
+  entry: FrozenSessionIndexEntry,
+  sessionsDir: string = SESSIONS_DIR
 ): Promise<SessionSearchDoc[]> {
-  const messages = await loadMessagesForEntry(vfs, entry);
+  const messages = await loadMessagesForEntry(vfs, entry, sessionsDir);
   const sessionId = entry.sessionId ?? entry.filename.replace(/\.md$/i, '');
   return docsFromArchive({
     sessionId,
     sessionTitle: entry.title,
     filename: entry.filename,
     messages,
+    sessionsDir,
   });
 }
 
 async function loadMessagesForEntry(
   vfs: SessionSearchVfs,
-  entry: FrozenSessionIndexEntry
+  entry: FrozenSessionIndexEntry,
+  sessionsDir: string = SESSIONS_DIR
 ): Promise<ChatMessage[]> {
   try {
-    const raw = await vfs.readFile(`${SESSIONS_DIR}/${entry.filename}`, { encoding: 'utf-8' });
+    const path = `${sessionsDir}/${entry.filename}`;
+    const raw = await vfs.readFile(path, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    const archive = await loadFrozenArchive(vfs as never, text, entry.filename);
+    // Pass the full path so a Memory v2 sidecar resolves inside the same
+    // directory (the bare filename would default to the cone's /sessions).
+    const archive = await loadFrozenArchive(vfs as never, text, path);
     return archive.messages;
   } catch {
     return [];
   }
 }
 
-function fingerprintEntries(entries: readonly FrozenSessionIndexEntry[]): string {
-  return entries
-    .map((e) => `${e.filename}:${e.messageCount}:${e.frozenAt}:${e.sessionId ?? ''}`)
+function fingerprintLocatedEntries(located: readonly LocatedEntry[]): string {
+  return located
+    .map(
+      ({ entry: e, sessionsDir }) =>
+        `${sessionsDir}/${e.filename}:${e.messageCount}:${e.frozenAt}:${e.sessionId ?? ''}`
+    )
     .sort()
     .join('|');
 }
