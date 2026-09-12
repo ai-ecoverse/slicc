@@ -1,3 +1,4 @@
+import { scanGithubReleases } from '@slicc/shared-ts';
 import { accessSync, chmodSync, constants, mkdirSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { delimiter, join } from 'path';
 
@@ -8,31 +9,14 @@ import { delimiter, join } from 'path';
  * Release binaries are attached to GitHub releases as bare
  * `slicc-<os>-<arch>[.exe]` assets, but only on releases where
  * `packages/slicc-cli/` actually changed (see release-native.mjs) — so the
- * newest release does not necessarily carry them. The installer scans releases
- * newest→oldest for the first one with this platform's asset, mirroring the
- * cloudflare-worker's /download/slicc.dmg scan.
+ * newest release does not necessarily carry them. `scanGithubReleases` walks
+ * newest→oldest for the first carrier (same helper as the worker DMG and CLI
+ * download routes).
  */
 
-const RELEASES_PER_PAGE = 100;
-const RELEASES_API = `https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=${RELEASES_PER_PAGE}`;
-// Bounded pagination (5 × 100 releases ≈ months of releases even at the
-// current cadence) so a rate-limited or looping API can't hang the installer;
-// the sparse-release gap this must absorb is bounded by how often
-// packages/slicc-cli actually changes.
-const MAX_RELEASE_PAGES = 5;
 const USER_AGENT = 'sliccy-install-cli';
 const API_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 180_000;
-
-interface GithubReleaseAsset {
-  name: string;
-  browser_download_url: string;
-}
-
-interface GithubRelease {
-  tag_name: string;
-  assets?: GithubReleaseAsset[];
-}
 
 export interface ResolvedCliAsset {
   version: string;
@@ -96,40 +80,26 @@ export function resolveInstallDir(
 
 /**
  * Scan releases newest→oldest for the first one carrying `assetName`.
- * Returns null when no release within MAX_RELEASE_PAGES pages has it.
+ * Returns null when no release within the shared page cap has it.
  */
 export async function resolveLatestCliAsset(
   assetName: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<ResolvedCliAsset | null> {
-  for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
-    const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      throw new Error(`GitHub releases API responded ${res.status} for page ${page}`);
-    }
-    const releases = (await res.json()) as GithubRelease[];
-    if (!Array.isArray(releases) || releases.length === 0) {
-      return null;
-    }
-    for (const release of releases) {
-      const asset = release.assets?.find((candidate) => candidate.name === assetName);
-      if (asset) {
-        return {
-          version: release.tag_name,
-          assetName,
-          downloadUrl: asset.browser_download_url,
-        };
-      }
-    }
-    // Fewer than a full page means we've reached the last page — stop early.
-    if (releases.length < RELEASES_PER_PAGE) {
-      return null;
-    }
+  const hit = await scanGithubReleases(fetchImpl, {
+    userAgent: USER_AGENT,
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    assetPredicate: (asset) =>
+      asset.name === assetName && typeof asset.browser_download_url === 'string',
+  });
+  if (!hit || typeof hit.asset.browser_download_url !== 'string') {
+    return null;
   }
-  return null;
+  return {
+    version: hit.release.tag_name ?? '',
+    assetName,
+    downloadUrl: hit.asset.browser_download_url,
+  };
 }
 
 function isDirOnPath(dir: string, env: NodeJS.ProcessEnv): boolean {

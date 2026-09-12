@@ -1,4 +1,8 @@
-import { ELECTRON_OVERLAY_APP_PATH, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import {
+  ELECTRON_OVERLAY_APP_PATH,
+  SLICC_HOSTED_ORIGIN,
+  scanGithubReleases,
+} from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
 import { buildAppSiteAssociationResponse } from './apple-app-site-association.js';
 import { matchHashedAssetPath, mimeForAssetPath } from './asset-archive.mjs';
@@ -1063,27 +1067,10 @@ async function tryHandleSessionCapabilityRoutes(
 }
 
 const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
-const RELEASES_API = 'https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=30';
-const RELEASES_PER_PAGE = 30;
-// Cap the release-list pagination so a long streak of binary-less releases can't
-// trigger unbounded GitHub API calls / rate-limit exhaustion (5 × 30 = up to 150
-// releases scanned before we give up and fall back to the releases page).
-const MAX_RELEASE_PAGES = 5;
 // Mirrors the tolerant macOS-asset filtering in the Swift updater
 // (`hasViableMacOSAsset`); the website download wants the `.dmg` specifically.
 const DMG_ASSET_PATTERN = /^sliccstart-v.+\.dmg$/i;
-
-interface GithubReleaseAsset {
-  name?: string;
-  browser_download_url?: string;
-}
-
-interface GithubRelease {
-  draft?: boolean;
-  prerelease?: boolean;
-  tag_name?: string;
-  assets?: GithubReleaseAsset[];
-}
+const GITHUB_RELEASES_CF_CACHE = { cacheTtl: 300, cacheEverything: true };
 
 interface KnownGoodPointer {
   version?: unknown;
@@ -1124,47 +1111,15 @@ export function compareReleaseVersions(a: string, b: string): number {
   return 0;
 }
 
-// Scan one page of releases newest→oldest for a viable macOS DMG. Returns the
-// asset download URL for the first non-draft/non-prerelease release that ships a
-// `sliccstart-v<version>.dmg`. When a valid pointer version is supplied, a
-// binary-less release at or below it is the pagination floor: everything older is
-// stale, so we return `fallback` (the guaranteed-valid known-good DMG). Returns
-// null when nothing matched on this page and pagination should continue.
-function scanReleasesForDmg(
-  releases: GithubRelease[],
-  pointerVersion: string | null,
-  fallback: string
-): string | null {
-  for (const release of releases) {
-    if (release.draft || release.prerelease) {
-      continue;
-    }
-    const asset = release.assets?.find(
-      (candidate) => typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
-    );
-    if (asset?.browser_download_url) {
-      return asset.browser_download_url;
-    }
-    if (
-      pointerVersion &&
-      typeof release.tag_name === 'string' &&
-      compareReleaseVersions(release.tag_name, pointerVersion) <= 0
-    ) {
-      return fallback;
-    }
-  }
-  return null;
-}
-
 // Redirect to the newest published release that actually ships a
-// `sliccstart-v<version>.dmg` asset, paginating newest→oldest. With a valid
-// bundled known-good pointer the scan stops as soon as it reaches a binary-less
-// release at or below the known-good version (the pagination floor) and 302s to
-// the guaranteed-valid known-good DMG — never a 404. `MAX_RELEASE_PAGES` remains
-// an absolute backstop so unparseable tags can't drive unbounded GitHub calls.
-// If the pointer is missing/malformed we retain the old bounded search and fall
-// back to `releases/latest` on exhaustion (existing behavior). On any failure
-// (network throw, non-2xx, unparseable/empty JSON) we 302 to the same fallback.
+// `sliccstart-v<version>.dmg` asset, paginating newest→oldest via
+// `scanGithubReleases`. With a valid bundled known-good pointer the scan stops
+// as soon as it reaches a binary-less release at or below the known-good version
+// (the pagination floor) and 302s to the guaranteed-valid known-good DMG — never
+// a 404. The shared max-pages backstop still bounds unparseable tags. If the
+// pointer is missing/malformed we retain the old bounded search and fall back to
+// `releases/latest` on exhaustion (existing behavior). On any failure (network
+// throw, non-2xx, unparseable/empty JSON) we 302 to the same fallback.
 export async function handleDmgDownload(
   fetchImpl: typeof fetch,
   pointer: KnownGoodPointer = knownGoodMacos
@@ -1174,31 +1129,27 @@ export async function handleDmgDownload(
     knownGoodUrl && typeof pointer.version === 'string' ? pointer.version : null;
   const fallback = knownGoodUrl ?? RELEASES_FALLBACK;
   try {
-    for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
-      const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
-        headers: { 'User-Agent': 'slicc-tray-hub' },
-        cf: { cacheTtl: 300, cacheEverything: true },
-      });
-      if (!res.ok) {
-        return Response.redirect(fallback, 302);
-      }
-      let releases: unknown;
-      try {
-        releases = await res.json();
-      } catch {
-        return Response.redirect(fallback, 302);
-      }
-      if (!Array.isArray(releases) || releases.length === 0) {
-        break;
-      }
-      const hit = scanReleasesForDmg(releases as GithubRelease[], pointerVersion, fallback);
-      if (hit) {
-        return Response.redirect(hit, 302);
-      }
-      // Fewer than a full page means we've reached the last page — stop early.
-      if (releases.length < RELEASES_PER_PAGE) {
-        break;
-      }
+    const hit = await scanGithubReleases(fetchImpl, {
+      userAgent: 'slicc-tray-hub',
+      requestInit: { cf: GITHUB_RELEASES_CF_CACHE },
+      assetPredicate: (asset, githubRelease) =>
+        !githubRelease.draft &&
+        !githubRelease.prerelease &&
+        typeof asset.name === 'string' &&
+        DMG_ASSET_PATTERN.test(asset.name) &&
+        Boolean(asset.browser_download_url),
+      shouldStop: (githubRelease) => {
+        if (!pointerVersion || githubRelease.draft || githubRelease.prerelease) {
+          return false;
+        }
+        return (
+          typeof githubRelease.tag_name === 'string' &&
+          compareReleaseVersions(githubRelease.tag_name, pointerVersion) <= 0
+        );
+      },
+    });
+    if (hit?.asset.browser_download_url) {
+      return Response.redirect(hit.asset.browser_download_url, 302);
     }
     return Response.redirect(fallback, 302);
   } catch {

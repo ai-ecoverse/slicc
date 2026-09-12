@@ -7,8 +7,8 @@
  * `GET /download/slicc-cli/:target` — 302 to the newest GitHub release asset
  * for that target (`darwin-arm64`, `linux-amd64`, …). Release binaries are
  * sparse: they only attach to releases where `packages/slicc-cli` changed, so
- * the scan walks releases newest→oldest for the first carrier (same bounded
- * pagination as `/download/slicc.dmg` in `index.ts`).
+ * `scanGithubReleases` walks newest→oldest for the first carrier (same helper
+ * as `/download/slicc.dmg` in `index.ts`).
  *
  * Unlike the DMG route — which 302s to the releases *page* on failure, fine
  * for a human in a browser — failures here return real HTTP errors so the
@@ -16,11 +16,13 @@
  * binary.
  */
 
-const RELEASES_PER_PAGE = 100;
-const RELEASES_API = `https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=${RELEASES_PER_PAGE}`;
-// Bounded pagination (5 × 100 releases ≈ months of sparse releases) mirroring
-// the DMG route's guard against rate-limit exhaustion.
-const MAX_RELEASE_PAGES = 5;
+import {
+  GithubReleasesHttpError,
+  GithubReleasesParseError,
+  scanGithubReleases,
+} from '@slicc/shared-ts';
+
+const GITHUB_RELEASES_CF_CACHE = { cacheTtl: 300, cacheEverything: true };
 
 /** Targets cross-compiled by packages/slicc-cli/Makefile (`PLATFORMS`). */
 export const CLI_TARGETS = [
@@ -31,17 +33,6 @@ export const CLI_TARGETS = [
   'windows-amd64',
   'windows-arm64',
 ] as const;
-
-interface GithubReleaseAsset {
-  name?: string;
-  browser_download_url?: string;
-}
-
-interface GithubRelease {
-  draft?: boolean;
-  prerelease?: boolean;
-  assets?: GithubReleaseAsset[];
-}
 
 /** PURE: release-asset name for a target, or null for an unknown target. */
 export function cliAssetNameForTarget(target: string): string | null {
@@ -74,42 +65,29 @@ export async function handleCliDownload(
     );
   }
   try {
-    for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
-      const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
-        headers: { 'User-Agent': 'slicc-tray-hub' },
-        cf: { cacheTtl: 300, cacheEverything: true },
-      });
-      if (!res.ok) {
-        return textResponse(`GitHub releases API responded ${res.status}\n`, 502);
-      }
-      let releases: unknown;
-      try {
-        releases = await res.json();
-      } catch {
-        return textResponse('GitHub releases API returned unparseable JSON\n', 502);
-      }
-      if (!Array.isArray(releases) || releases.length === 0) {
-        break;
-      }
-      for (const release of releases as GithubRelease[]) {
-        if (release.draft || release.prerelease) {
-          continue;
-        }
-        const asset = release.assets?.find((candidate) => candidate.name === assetName);
-        if (asset?.browser_download_url) {
-          return Response.redirect(asset.browser_download_url, 302);
-        }
-      }
-      // Fewer than a full page means we've reached the last page — stop early.
-      if (releases.length < RELEASES_PER_PAGE) {
-        break;
-      }
+    const hit = await scanGithubReleases(fetchImpl, {
+      userAgent: 'slicc-tray-hub',
+      requestInit: { cf: GITHUB_RELEASES_CF_CACHE },
+      assetPredicate: (asset, githubRelease) =>
+        !githubRelease.draft &&
+        !githubRelease.prerelease &&
+        asset.name === assetName &&
+        Boolean(asset.browser_download_url),
+    });
+    if (hit?.asset.browser_download_url) {
+      return Response.redirect(hit.asset.browser_download_url, 302);
     }
     return textResponse(
       `No recent release carries ${assetName} — CLI binaries only attach to releases where packages/slicc-cli changed.\n`,
       404
     );
   } catch (error) {
+    if (error instanceof GithubReleasesHttpError) {
+      return textResponse(`GitHub releases API responded ${error.status}\n`, 502);
+    }
+    if (error instanceof GithubReleasesParseError) {
+      return textResponse('GitHub releases API returned unparseable JSON\n', 502);
+    }
     return textResponse(`Could not reach the GitHub releases API: ${String(error)}\n`, 502);
   }
 }

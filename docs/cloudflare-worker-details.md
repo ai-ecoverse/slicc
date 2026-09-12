@@ -26,7 +26,8 @@ operation may still complete and identical retries are idempotent.
 | `GET /handoff`                             | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                   |
 | `GET /install-cli`                         | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                 |
 | `GET /install-cli.ps1`                     | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH |
-| `GET /download/slicc-cli/:target`          | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; real HTTP errors, no SPA fallback   |
+| `GET /download/slicc.dmg`                  | 302 to the newest `sliccstart-v*.dmg`; `scanGithubReleases` (`@slicc/shared-ts`, `per_page=100` × 5) with a known-good pointer floor       |
+| `GET /download/slicc-cli/:target`          | 302 to the newest CLI asset (`darwin-arm64`, …) via the same helper; real HTTP errors, no SPA fallback                                     |
 | `GET /.well-known/api-catalog`             | RFC 9264 linkset for all public routes                                                                                                     |
 | `GET /llms.txt`                            | LLM markdown digest                                                                                                                        |
 | `GET\|HEAD /privacy`                       | 301 to www.sliccy.com/privacy (App Store Connect link)                                                                                     |
