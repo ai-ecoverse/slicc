@@ -37,6 +37,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 - `discovery-link.ts` — ARD `ai-catalog` `Link`-rel extractor, `discoveryFingerprint`.
 - `well-known-probe.ts` — `/.well-known/ai-catalog.json` / `/llms.txt` probe (credential-free, non-redirect-following — SSO-hijack guard).
 - `handoff-link.ts` — SLICC `handoff`/`upskill` `Link`-rel extractor, with shell-injection-defense allowlists (`isSafeUpskillBranch`/`isSafeUpskillPath`) for values riding to the cone as `upskill` args.
+- `github-releases.ts` — bounded newest→oldest GitHub releases scan (`scanGithubReleases`) plus `GithubRelease` types. One `per_page=100` × 5-page cap (GitHub's max page size; 500-release backstop) shared by the worker DMG/CLI download routes and node-server `--install-cli`. Callers supply the asset predicate and failure policy. Go/Swift twins of the walk are out of scope.
 - `cdp-target-info.ts` — `TargetInfo` (`Target.getTargets` result shape), the one export from webapp's `cdp/types.ts` the extension needs; the rest stays internal.
 - `iframe-repaint.ts` — Chromium nested-iframe first-paint workaround (`nudgeIframeRepaint`, `isNestedInAnotherFrame`); needed by both webapp's `ui/sprinkle-renderer.ts` and the extension's `sidepanel-entry.ts`. `tsconfig.json` includes the `DOM` lib.
 

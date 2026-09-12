@@ -1,8 +1,8 @@
+import { GITHUB_RELEASES_MAX_PAGES, GITHUB_RELEASES_PER_PAGE } from '@slicc/shared-ts';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
 import {
   cliAssetName,
   resolveInstallDir,
@@ -113,7 +113,9 @@ describe('resolveLatestCliAsset', () => {
   });
 
   const fullBinarylessPage = () =>
-    Array.from({ length: 100 }, (_, i) => release(`v5.${i}.0`, [`sliccy-5.${i}.0.tgz`]));
+    Array.from({ length: GITHUB_RELEASES_PER_PAGE }, (_, i) =>
+      release(`v5.${i}.0`, [`sliccy-5.${i}.0.tgz`])
+    );
 
   it('paginates past a full page of binary-less releases', async () => {
     const fetchImpl = vi
@@ -153,7 +155,7 @@ describe('resolveLatestCliAsset', () => {
       .mockImplementation(async () => jsonResponse(fullBinarylessPage()));
 
     expect(await resolveLatestCliAsset('slicc-darwin-arm64', fetchImpl)).toBeNull();
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(fetchImpl).toHaveBeenCalledTimes(GITHUB_RELEASES_MAX_PAGES);
   });
 
   it('throws on a non-OK API response', async () => {

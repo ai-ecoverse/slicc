@@ -12,6 +12,7 @@ export * from './extension-bridge-protocol.js';
 export * from './extension-message.js';
 export * from './fetch-proxy-protocol.js';
 export * from './form-body-unmask.js';
+export * from './github-releases.js';
 export * from './handoff-link.js';
 export * from './iframe-repaint.js';
 export * from './leader-ext-id.js';

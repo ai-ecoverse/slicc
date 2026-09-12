@@ -1,4 +1,9 @@
-import { buildPreviewUrl, TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
+import {
+  buildPreviewUrl,
+  GITHUB_RELEASES_MAX_PAGES,
+  GITHUB_RELEASES_PER_PAGE,
+  TRAY_BOOTSTRAP_TIMEOUT_MS,
+} from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, {
   buildKnownGoodDmgUrl,
@@ -3235,7 +3240,7 @@ describe('GET /download/slicc.dmg', () => {
 
   it('paginates past a full first page of binary-less releases to find a .dmg on page 2', async () => {
     const { env } = createTestHarness();
-    const page1 = Array.from({ length: 30 }, () => ({
+    const page1 = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, () => ({
       draft: false,
       prerelease: false,
       assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
@@ -3263,9 +3268,8 @@ describe('GET /download/slicc.dmg', () => {
   });
 
   it('stops at the MAX_RELEASE_PAGES backstop and redirects to the known-good DMG when tags are unparseable', async () => {
-    const MAX_RELEASE_PAGES = 5;
     const { env } = createTestHarness();
-    const fullBinaryLessPage = Array.from({ length: 30 }, () => ({
+    const fullBinaryLessPage = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, () => ({
       draft: false,
       prerelease: false,
       assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
@@ -3279,7 +3283,7 @@ describe('GET /download/slicc.dmg', () => {
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
-    expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
+    expect(fetchImpl).toHaveBeenCalledTimes(GITHUB_RELEASES_MAX_PAGES);
   });
 
   it('redirects to the known-good DMG when no release has a .dmg asset', async () => {
@@ -3381,7 +3385,7 @@ describe('GET /download/slicc.dmg', () => {
     const { env } = createTestHarness();
     // A full page whose oldest entries drop to/below the pointer — the floor must
     // trigger mid-page so page 2 is never fetched.
-    const page1 = Array.from({ length: 30 }, (_unused, i) => ({
+    const page1 = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, (_unused, i) => ({
       draft: false,
       prerelease: false,
       tag_name: `v${kgMajor}.${kgMinor + 2 - i}.0`,
@@ -3398,8 +3402,7 @@ describe('GET /download/slicc.dmg', () => {
   });
 
   it('falls back to releases/latest with a malformed pointer (bounded search + exhaustion)', async () => {
-    const MAX_RELEASE_PAGES = 5;
-    const fullBinaryLessPage = Array.from({ length: 30 }, () => ({
+    const fullBinaryLessPage = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, () => ({
       draft: false,
       prerelease: false,
       tag_name: 'v5.40.0',
@@ -3414,7 +3417,7 @@ describe('GET /download/slicc.dmg', () => {
     const res = await handleDmgDownload(fetchImpl, { version: '' });
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
-    expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
+    expect(fetchImpl).toHaveBeenCalledTimes(GITHUB_RELEASES_MAX_PAGES);
   });
 
   it('falls back to releases/latest with a malformed pointer when the API fetch rejects', async () => {
@@ -4742,13 +4745,15 @@ describe('GET /download/slicc-cli/:target', () => {
     const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
     expect(res.status).toBe(404);
     expect(await res.text()).toContain('slicc-darwin-arm64');
-    // Short page (< 100 releases) means last page — no further pagination
+    // Short page (under GITHUB_RELEASES_PER_PAGE) means last page — no further pagination
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('paginates past a full page of binary-less releases', async () => {
     const { env } = createTestHarness();
-    const page1 = Array.from({ length: 100 }, () => cliRelease([{ name: 'notes.txt', url: 'x' }]));
+    const page1 = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, () =>
+      cliRelease([{ name: 'notes.txt', url: 'x' }])
+    );
     const page2 = [cliRelease([{ name: 'slicc-darwin-arm64', url: ASSET_URL }])];
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -4763,7 +4768,7 @@ describe('GET /download/slicc-cli/:target', () => {
 
   it('gives up after the page cap with a 404 instead of unbounded GitHub calls', async () => {
     const { env } = createTestHarness();
-    const fullPage = Array.from({ length: 100 }, () =>
+    const fullPage = Array.from({ length: GITHUB_RELEASES_PER_PAGE }, () =>
       cliRelease([{ name: 'notes.txt', url: 'x' }])
     );
     const fetchImpl = vi
@@ -4772,7 +4777,7 @@ describe('GET /download/slicc-cli/:target', () => {
 
     const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
     expect(res.status).toBe(404);
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(fetchImpl).toHaveBeenCalledTimes(GITHUB_RELEASES_MAX_PAGES);
   });
 
   it('502s when the GitHub API responds non-OK so curl -f fails loudly', async () => {
