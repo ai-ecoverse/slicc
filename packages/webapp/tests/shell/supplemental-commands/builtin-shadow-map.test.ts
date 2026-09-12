@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { INSTALL_PACKAGES } from '../../../src/shell/supplemental-commands/biome-command.js';
 import {
@@ -61,5 +64,41 @@ describe('formatBuiltinShadowHint', () => {
     expect(hint).toMatch(/^ipx:/);
     expect(hint).toContain(`try: ${shadow.example}`);
     expect(hint).not.toContain('first run:');
+  });
+});
+
+describe('docs/shell-reference.md builtin-shadow-map table', () => {
+  // The doc names builtin-shadow-map.ts as authoritative and claims to list
+  // "exactly" these package names. Guard against drift so the two never diverge.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const doc = readFileSync(
+    join(here, '..', '..', '..', '..', '..', 'docs', 'shell-reference.md'),
+    'utf8'
+  );
+
+  // Collect every backtick-wrapped npm package name from the shadow-map table
+  // (left column) — the rows between the "npm package names" header and the
+  // first blank line that follows it.
+  const tableStart = doc.indexOf('| npm package names');
+  const tableSection = doc.slice(tableStart, doc.indexOf('\n\n', tableStart));
+  const documentedPackages = new Set<string>();
+  for (const row of tableSection.split('\n')) {
+    if (!row.startsWith('|') || row.includes('---') || row.includes('npm package names')) {
+      continue;
+    }
+    const [leftCell] = row.slice(1).split('|');
+    for (const match of leftCell.matchAll(/`([^`]+)`/g)) {
+      documentedPackages.add(match[1]);
+    }
+  }
+
+  it('locates the shadow-map table in the doc', () => {
+    expect(tableStart).toBeGreaterThan(-1);
+    expect(documentedPackages.size).toBeGreaterThan(0);
+  });
+
+  it('documents exactly the package names the code maps', () => {
+    const mapped = Object.keys(BUILTIN_SHADOW_MAP).sort();
+    expect([...documentedPackages].sort()).toEqual(mapped);
   });
 });
