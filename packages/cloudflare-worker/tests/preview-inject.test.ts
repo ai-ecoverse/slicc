@@ -4,6 +4,7 @@ import { injectBridge } from '../src/preview-bridge-routes.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
 import { makeEnv } from './helpers/fake-env.js';
+import { previewHomeBindings } from './helpers/preview-home.js';
 
 // Minimal fake infrastructure to test preview injection
 
@@ -152,6 +153,7 @@ function createTestHarness() {
       TRAY_HUB: namespace as unknown as Parameters<typeof handleWorkerRequest>[1]['TRAY_HUB'],
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
+      WEBHOOK_HOMES: previewHomeBindings,
     }),
     namespace,
   };
@@ -177,6 +179,7 @@ async function fakeEnv(opts: { bridge: boolean }): Promise<FakeEnvResult> {
     new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
     env
   );
+  expect(created.status).toBe(201);
   const session = (await created.json()) as {
     capabilities: { controller: { url: string } };
     trayId: string;

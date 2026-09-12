@@ -35,7 +35,7 @@ export default {
       return new Response('Invalid preview token', { status: 404 });
     }
 
-    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
+    let stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
 
     // Resolve the PreviewRecord FIRST — its `bridge` flag gates the `/__slicc/*`
     // routes below.
@@ -45,16 +45,30 @@ export default {
       )
     );
     if (resolveRes.status !== 200) {
-      return new Response('Preview not found', { status: 404 });
+      return new Response(
+        resolveRes.status >= 500 ? 'Preview temporarily unavailable' : 'Preview not found',
+        {
+          status: resolveRes.status >= 500 ? 503 : 404,
+        }
+      );
     }
     const record = (await resolveRes.json()) as PreviewRecord;
+    const servingTrayId = resolveRes.headers.get('x-slicc-preview-tray') ?? parsed.trayId;
+    stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(servingTrayId));
 
     if (record.mode === 'persistent') {
       return servePersistentPreview(request, url, record, env.PREVIEW_STORAGE);
     }
 
     // Bridge routes (bootstrap JS / emit / WS) are served only for bridged previews.
-    const bridged = await handleBridgeRoute(request, url, env, previewToken, record.bridge);
+    const bridged = await handleBridgeRoute(
+      request,
+      url,
+      env,
+      previewToken,
+      record.bridge,
+      servingTrayId
+    );
     if (bridged) return bridged;
 
     const path = url.pathname;
@@ -72,6 +86,7 @@ export default {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               reqId: crypto.randomUUID(),
+              previewToken,
               servedRoot: record.servedRoot,
               vfsPath,
               asText,

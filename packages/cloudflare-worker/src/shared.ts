@@ -235,8 +235,9 @@ export function normalizeBiscottoGate(gate: Partial<BiscottoGate> | undefined): 
 /**
  * One record per active `serve` invocation (many per tray). Stored in the
  * SessionTrayDurableObject's `tray.previews` map (added to TrayRecord below).
- * Live records die with the tray. Persistent records remain resolvable until
- * their own expiry and store immutable file bytes in R2.
+ * Authenticated roves move records intact to the new owner; without a transfer,
+ * live records expire with the tray. Persistent records retain their own expiry
+ * and immutable R2 file bytes.
  */
 export interface PreviewRecord {
   previewToken: string; // unguessable: trayId.<20-byte-hex> per createCapabilityToken
@@ -259,8 +260,18 @@ export interface PreviewRecord {
   retentionMs?: number;
   archivePrefix?: string;
   uploadToken?: string;
-  uploadedFiles?: Record<string, { key: string; size: number; mime: string; etag: string }>;
+  uploadedFiles?: Record<
+    string,
+    { key: string; size: number; mime: string; etag: string; sha256?: string }
+  >;
   totalBytes?: number;
+  /** Legacy keys, migrated to timestamped leases on first use. */
+  pendingUploadKeys?: string[];
+  pendingUploads?: { objectKey: string; leasedAt: number }[];
+  /** Expired leases may still materialize in R2; never infer cancellation from timeout. */
+  hasUnsettledUploads?: boolean;
+  /** Fixed cleanup horizon, independent of the next sweep's expiresAt. */
+  cleanupUntil?: number;
 }
 
 /**
@@ -288,6 +299,16 @@ export interface TrayRecord {
   expiredAt?: string;
   kind?: TrayKind;
   previews?: Record<string, PreviewRecord>;
+  /** Original token trays remain durable locators; only internal requests follow these IDs. */
+  previewForwarding?: Record<string, string>;
+  /** Durable, retryable handoff. Never re-copy a completed import (it may have been revoked). */
+  previewTransfer?: {
+    id: string;
+    targetTrayId: string;
+    tokens: string[];
+    phase: 'pending' | 'forwarded' | 'complete';
+  };
+  previewImports?: Record<string, { id: string; activated: boolean }>;
   /**
    * Set by the leader (via `POST /api/tray/:trayId/supersede`, Bearer =
    * controllerToken) when it abandons this tray and mints a fresh one on

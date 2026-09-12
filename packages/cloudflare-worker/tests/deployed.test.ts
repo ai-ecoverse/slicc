@@ -19,6 +19,24 @@ interface ControllerAttachResponse {
 const workerBaseUrl = process.env.WORKER_BASE_URL;
 const describeIfConfigured = workerBaseUrl ? describe : describe.skip;
 
+/** Opt in only for home-queue probes; legacy smoke flows must stay identity-less. */
+async function createStableTray(baseUrl: URL): Promise<CreateTrayResponse> {
+  const response = await fetch(new URL('/tray', baseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      coneId: crypto.randomUUID(),
+      coneSecret: crypto.randomUUID().replace(/-/g, ''),
+      rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+      createAttemptId: crypto.randomUUID(),
+    }),
+  });
+  expect(response.status).toBe(201);
+  const created = (await response.json()) as CreateTrayResponse;
+  expect(new URL(created.capabilities.webhook.url).pathname.startsWith('/wh/')).toBe(true);
+  return created;
+}
+
 describeIfConfigured('deployed tray worker', () => {
   it('exercises the phase 1 flow against a deployed worker', async () => {
     const baseUrl = new URL(workerBaseUrl!);
@@ -42,15 +60,19 @@ describeIfConfigured('deployed tray worker', () => {
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'POST /wh/:token/:webhookId',
         'POST /api/tray/:trayId/preview',
         'PUT /api/tray/:trayId/preview/:previewToken/file',
         'POST /api/tray/:trayId/preview/:previewToken/finalize',
         'POST /api/tray/:trayId/preview/stop',
         'GET /api/tray/:trayId/previews',
+        'POST /api/tray/:trayId/preview-transfer',
         'POST /api/tray/:trayId/biscotto',
         'POST /api/tray/:trayId/biscotto/stop',
         'GET /api/tray/:trayId/biscotti',
         'POST /api/tray/:trayId/supersede',
+        'POST /api/tray/:trayId/webhook/rotate',
+        'POST /webhooks/:coneId/:webhookId/revoke',
         'GET /auth/callback',
         'GET /auth/mcp-callback',
         'POST /oauth/token',
@@ -295,7 +317,8 @@ describeIfConfigured('deployed tray worker', () => {
     expect(body.trayId).toBeTruthy();
     expect(body.capabilities.join.url).toBeTruthy();
     expect(body.capabilities.controller.url).toBeTruthy();
-    expect(body.capabilities.webhook.url).toBeTruthy();
+    expect(new URL(body.capabilities.webhook.url).pathname.startsWith('/webhook/')).toBe(true);
+    expect(body.capabilities.webhook).not.toHaveProperty('rebindToken');
   }, 15_000);
 
   it('POST /tray with no body still creates a desktop tray (back-compat)', async () => {
@@ -307,7 +330,8 @@ describeIfConfigured('deployed tray worker', () => {
     expect(body.trayId).toBeTruthy();
     expect(body.capabilities.join.url).toBeTruthy();
     expect(body.capabilities.controller.url).toBeTruthy();
-    expect(body.capabilities.webhook.url).toBeTruthy();
+    expect(new URL(body.capabilities.webhook.url).pathname.startsWith('/webhook/')).toBe(true);
+    expect(body.capabilities.webhook).not.toHaveProperty('rebindToken');
   }, 15_000);
 
   // Hibernation regression guard. With the WebSocket Hibernation API the runtime
@@ -400,14 +424,12 @@ describeIfConfigured('deployed tray worker', () => {
     }
   }, 30_000);
 
-  // After the leader socket closes, the runtime delivers webSocketClose on a
-  // possibly-fresh instance. Liveness must drop so webhooks are rejected with
-  // NO_LIVE_LEADER instead of being silently dropped against a dead socket.
-  it('drops leader liveness after the socket closes so webhooks are rejected', async () => {
+  // Probe liveness separately from delivery: stable webhook homes accept and
+  // persist events even when no leader is connected. A webhook POST is not a
+  // liveness probe, and polling it would enqueue duplicate events.
+  it('drops leader liveness on close and replays a queued webhook after reconnect', async () => {
     const baseUrl = new URL(workerBaseUrl!);
-    const created = (await (
-      await fetch(new URL('/tray', baseUrl), { method: 'POST' })
-    ).json()) as CreateTrayResponse;
+    const created = await createStableTray(baseUrl);
     const controller = (await (
       await fetch(created.capabilities.controller.url, {
         method: 'POST',
@@ -424,24 +446,70 @@ describeIfConfigured('deployed tray worker', () => {
       socket.close();
     });
 
-    // webSocketClose is processed asynchronously by the runtime; poll until the
-    // tray no longer reports a live leader.
-    let rejected = false;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-closed`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ phase: 'after-close' }),
+    // webSocketClose is processed asynchronously; the read-only join probe
+    // must independently report that the old leader is no longer live.
+    await expect
+      .poll(
+        async () => {
+          const response = await fetch(`${created.capabilities.join.url}?json=true`, {
+            signal: AbortSignal.timeout(5_000),
+          });
+          const body = (await response.json()) as {
+            code?: string;
+            leader?: { connected?: boolean };
+          };
+          return {
+            status: response.status,
+            code: body.code,
+            connected: body.leader?.connected,
+          };
+        },
+        { timeout: 15_000, interval: 1_000 }
+      )
+      .toEqual({ status: 409, code: 'FOLLOWER_JOIN_NOT_READY', connected: false });
+
+    // Send exactly once while disconnected. Acceptance must mean durable
+    // queueing, not a redirect or a false receipt of delivery to a dead socket.
+    const webhookResponse = await fetch(`${created.capabilities.webhook.url}/ci-hook-closed`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ phase: 'after-close' }),
+    });
+    expect(webhookResponse.status).toBe(202);
+    expect(webhookResponse.headers.get('location')).toBeNull();
+    await expect(webhookResponse.json()).resolves.toMatchObject({
+      ok: true,
+      accepted: true,
+      queued: true,
+    });
+
+    // Reconnect using the existing authority. No second POST triggers replay:
+    // the home's durable retry alarm must deliver the accepted event.
+    const reconnected = await openWebSocket(controller.websocket!.url);
+    try {
+      expect(await reconnected.nextMessage()).toMatchObject({ type: 'leader.connected' });
+      const replay = await reconnected.nextMessage(60_000);
+      expect(replay).toMatchObject({
+        type: 'webhook.event',
+        webhookId: 'ci-hook-closed',
+        body: { phase: 'after-close' },
       });
-      if (webhookResponse.status === 410) {
-        await expect(webhookResponse.json()).resolves.toMatchObject({ code: 'NO_LIVE_LEADER' });
-        rejected = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(typeof replay.deliveryId).toBe('string');
+      reconnected.socket.send(
+        JSON.stringify({
+          type: 'webhook.delivery',
+          deliveryId: replay.deliveryId,
+          disposition: 'delivered',
+        })
+      );
+      reconnected.socket.send(JSON.stringify({ type: 'ping' }));
+      expect(await reconnected.nextMessage()).toMatchObject({ type: 'pong' });
+    } finally {
+      reconnected.socket.close();
     }
-    expect(rejected).toBe(true);
-  }, 30_000);
+  }, 90_000);
 });
 
 describe('static assets + R2 archive', () => {
@@ -632,9 +700,10 @@ describe('cloud routes smoke', () => {
   });
 });
 
-function openWebSocket(
-  url: string
-): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
+function openWebSocket(url: string): Promise<{
+  socket: WebSocket;
+  nextMessage: (timeoutMs?: number) => Promise<Record<string, unknown>>;
+}> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const queue: Record<string, unknown>[] = [];
@@ -652,12 +721,12 @@ function openWebSocket(
       }
     });
 
-    const nextMessage = (): Promise<Record<string, unknown>> => {
+    const nextMessage = (timeoutMs = 15_000): Promise<Record<string, unknown>> => {
       if (queue.length > 0) {
         return Promise.resolve(queue.shift()!);
       }
       return new Promise((res, rej) => {
-        const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), 15_000);
+        const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), timeoutMs);
         waiters.push((msg) => {
           clearTimeout(timeout);
           res(msg);

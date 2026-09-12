@@ -1,15 +1,30 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getLeaderTrayRuntimeStatus,
   LeaderTrayManager,
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
+  parseConeWebhookIdentity,
   parseLeaderTraySession,
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
   TrayProxyFetchError,
 } from '../../src/scoops/tray-leader.js';
+
+const privateState = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../src/scoops/db.js', () => ({
+  getState: vi.fn(async (key: string) => privateState.get(key) ?? null),
+  setState: vi.fn(async (key: string, value: string) => {
+    privateState.set(key, value);
+  }),
+  compareAndSetState: vi.fn(async (key: string, expected: string | null, value: string) => {
+    if ((privateState.get(key) ?? null) !== expected) return false;
+    privateState.set(key, value);
+    return true;
+  }),
+}));
+beforeEach(() => privateState.clear());
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -517,6 +532,83 @@ describe('tray-leader', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('supersedePreviousSession points the old tray at the replacement (host reset)', async () => {
+    // `host reset` abandons a tray deliberately, so it must leave the same
+    // forwarding address the stale-session recovery path leaves — otherwise a
+    // cached webhook URL POSTs into the reset tray and 410s, losing the event
+    // silently (#1957, reachable through the reset button).
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store: new MemorySessionStore(),
+      fetchImpl,
+      webSocketFactory: () => new FakeWebSocket(),
+      pingIntervalMs: 60_000,
+    });
+
+    const previous: LeaderTraySession = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'old-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-old',
+      controllerUrl: 'https://tray.example.com/controller/old-token',
+      joinUrl: 'https://tray.example.com/join/old-token',
+      webhookUrl: 'https://tray.example.com/webhook/old-token',
+      runtime: 'slicc-standalone',
+    };
+
+    manager.supersedePreviousSession(previous, {
+      joinUrl: 'https://tray.example.com/join/new-token',
+      webhookUrl: 'https://tray.example.com/webhook/new-token',
+    });
+    // Fire-and-forget: let the internal best-effort POST settle.
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      'https://tray.example.com/api/tray/old-tray/supersede'
+    );
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer old-token');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      joinUrl: 'https://tray.example.com/join/new-token',
+      webhookUrl: 'https://tray.example.com/webhook/new-token',
+    });
+
+    manager.stop();
+  });
+
+  it('supersedePreviousSession is a no-op when the replacement equals the old tray', async () => {
+    // A mis-sequenced caller must never make a tray redirect to its own join
+    // URL — that would be an infinite self-supersede.
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store: new MemorySessionStore(),
+      fetchImpl,
+      webSocketFactory: () => new FakeWebSocket(),
+      pingIntervalMs: 60_000,
+    });
+    const same: LeaderTraySession = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'c',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      runtime: 'slicc-standalone',
+    };
+    manager.supersedePreviousSession(same, {
+      joinUrl: same.joinUrl,
+      webhookUrl: same.webhookUrl,
+    });
+    await Promise.resolve();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    manager.stop();
   });
 
   it('produces a different join URL after stop → clearSession → start (host reset)', async () => {
@@ -1231,7 +1323,7 @@ describe('LeaderTrayManager — onLeaderReady callback', () => {
       onLeaderReady,
     });
 
-    await expect(manager.start()).rejects.toThrow('network down');
+    await expect(manager.start()).rejects.toThrow('transport unavailable');
     expect(onLeaderReady).not.toHaveBeenCalled();
 
     manager.stop();
@@ -1612,7 +1704,7 @@ describe('LeaderTrayManager — kind in POST /tray body', () => {
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/tray');
     expect(init.method).toBe('POST');
-    expect(init.body).toBe(JSON.stringify({ kind: 'hosted' }));
+    expect(JSON.parse(String(init.body))).toMatchObject({ kind: 'hosted' });
     expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
 
     manager.stop();
@@ -1712,5 +1804,181 @@ describe('subscribeToLeaderTrayRuntimeStatus', () => {
     unsubscribeBad();
     unsubscribeGood();
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+});
+
+describe('parseConeWebhookIdentity (#2812)', () => {
+  it.each(['sec.ret', 'sec%2Fret', 'sec%3Fret'])(
+    'rejects delivery secrets that corrupt the capability grammar: %s',
+    (secret) => {
+      expect(
+        parseConeWebhookIdentity(`https://tray.example.com/wh/cone-1.${secret}`, 'cone-1.rebind')
+      ).toBeNull();
+    }
+  );
+
+  it('recovers coneId, coneSecret and rebindSecret from the stable shape', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/wh/cone-1.deadbeef', 'cone-1.rebindcafe')
+    ).toEqual({ coneId: 'cone-1', coneSecret: 'deadbeef', rebindSecret: 'rebindcafe' });
+  });
+
+  it('returns null for the legacy tray-scoped shape (no rebind token)', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/webhook/tray-1.deadbeef', undefined)
+    ).toBeNull();
+  });
+
+  it('returns null when the rebind token names a different cone', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/wh/cone-1.deadbeef', 'cone-2.rebindcafe')
+    ).toBeNull();
+  });
+
+  it('returns null for a non-/wh/ path even with a rebind token', () => {
+    expect(
+      parseConeWebhookIdentity('https://tray.example.com/webhook/cone-1.deadbeef', 'cone-1.reb')
+    ).toBeNull();
+  });
+});
+
+describe('cone identity carry across a rove (#2812)', () => {
+  /** Build a create response for a stable-webhook tray. */
+  function stableCreate(trayId: string, coneId: string): string {
+    return JSON.stringify({
+      trayId,
+      coneId,
+      createdAt: '2026-03-11T00:00:00.000Z',
+      capabilities: {
+        join: { url: `https://tray.example.com/join/${trayId}.jt` },
+        controller: { url: `https://tray.example.com/controller/${trayId}.ct` },
+        webhook: {
+          url: `https://tray.example.com/wh/${coneId}.sec`,
+          rebindToken: `${coneId}.reb`,
+        },
+      },
+    });
+  }
+
+  function attachOk(trayId: string): string {
+    return JSON.stringify({
+      trayId,
+      controllerId: `controller-${trayId}`,
+      role: 'leader',
+      leaderKey: `key-${trayId}`,
+      websocket: { url: `wss://tray.example.com/controller/${trayId}.ct` },
+    });
+  }
+
+  it('persists the cone identity minted on first start', async () => {
+    const store = new MemorySessionStore();
+    const socket = new FakeWebSocket();
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async (_url, init) => {
+        const identity = JSON.parse(String(init?.body));
+        const response = JSON.parse(stableCreate('tray-1', identity.coneId));
+        response.capabilities.webhook = {
+          url: `https://tray.example.com/wh/${identity.coneId}.${identity.coneSecret}`,
+          rebindToken: `${identity.coneId}.${identity.rebindSecret}`,
+        };
+        return new Response(JSON.stringify(response), { status: 201 });
+      })
+      .mockResolvedValueOnce(new Response(attachOk('tray-1'), { status: 200 }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await ready;
+    socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+    const session = await startPromise;
+
+    const sent = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(session.coneId).toBe(sent.coneId);
+    expect(session).not.toHaveProperty('coneSecret');
+    expect(session).not.toHaveProperty('rebindSecret');
+    expect(JSON.stringify(getLeaderTrayRuntimeStatus())).not.toContain(sent.rebindSecret);
+    expect(privateState.get('leader-webhook-identity:https://tray.example.com')).toContain(
+      sent.rebindSecret
+    );
+    manager.stop();
+  });
+
+  it('carries the stale tray cone identity into the fresh mint on recovery', async () => {
+    // A stored session with a cone identity fails to attach (stale tray), so the
+    // manager mints a fresh tray — and must send the SAME cone identity so the
+    // worker rebinds the same webhook home rather than minting a new URL.
+    const stored: LeaderTraySession & { coneSecret: string; rebindSecret: string } = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'stale-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-stale',
+      controllerUrl: 'https://tray.example.com/controller/stale-tray.ct',
+      joinUrl: 'https://tray.example.com/join/stale-tray.jt',
+      webhookUrl: 'https://tray.example.com/wh/cone-1.sec',
+      runtime: 'slicc-standalone',
+      coneId: 'cone-1',
+      coneSecret: 'sec',
+      rebindSecret: 'reb',
+    };
+    const store = new MemorySessionStore();
+    await store.save(stored);
+
+    const socket = new FakeWebSocket();
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      // 1: attach against the stale controller URL fails 410 (tray gone).
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'TRAY_EXPIRED' }), { status: 410 })
+      )
+      // 2: create a fresh tray, carrying the cone identity.
+      .mockResolvedValueOnce(new Response(stableCreate('tray-2', 'cone-1'), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transferred: true }), { status: 200 }))
+      // 3: attach the fresh tray.
+      .mockResolvedValueOnce(new Response(attachOk('tray-2'), { status: 200 }))
+      // 4: best-effort supersede of the stale tray.
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await ready;
+    socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+    await startPromise;
+
+    // The 2nd call is the fresh-tray create; its body must carry the identity.
+    const createBody = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
+    expect(createBody).toMatchObject({
+      coneId: 'cone-1',
+      coneSecret: 'sec',
+      rebindSecret: 'reb',
+    });
+    manager.stop();
   });
 });

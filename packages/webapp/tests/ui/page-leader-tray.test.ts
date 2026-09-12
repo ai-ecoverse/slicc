@@ -31,6 +31,20 @@ import type { TrayDataChannelLike, TrayPeerConnectionLike } from '../../src/scoo
 import { startPageLeaderTray } from '../../src/ui/page-leader-tray.js';
 import type { AgentEvent } from '../../src/ui/types.js';
 
+const privateState = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../src/scoops/db.js', () => ({
+  getState: vi.fn(async (key: string) => privateState.get(key) ?? null),
+  setState: vi.fn(async (key: string, value: string) => {
+    privateState.set(key, value);
+  }),
+  compareAndSetState: vi.fn(async (key: string, expected: string | null, value: string) => {
+    if ((privateState.get(key) ?? null) !== expected) return false;
+    privateState.set(key, value);
+    return true;
+  }),
+}));
+beforeEach(() => privateState.clear());
+
 // ---------------------------------------------------------------------------
 // Shared fakes
 // ---------------------------------------------------------------------------
@@ -617,7 +631,7 @@ describe('startPageLeaderTray', () => {
       const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, store }));
 
       // ready should reject
-      await expect(handle.ready).rejects.toThrow(/network down/);
+      await expect(handle.ready).rejects.toThrow(/transport unavailable/);
 
       // The fire-and-forget branch should also have logged the error
       await vi.waitFor(() =>

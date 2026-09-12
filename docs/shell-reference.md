@@ -966,6 +966,14 @@ codebase:sweep --wait
 
 ## webhook and crontask topology behavior
 
+**Credential rotation:** `webhook rotate` takes no arguments and freshly randomizes the
+delivery and private management secrets for every webhook on the connected cone's stable tray home.
+Run `webhook list` afterward and update external senders: old URLs no longer
+authenticate. Cone identity, webhook registrations, and queued events remain.
+The operation uses the leader panel RPC in standalone and hosted extension
+leaders; local-only node URLs cannot be rotated this way. Lost responses can be
+retried safely. Neither errors nor the rotation receipt print credentials.
+
 **Float discrimination:** Lick legs (`webhook`, `crontask`, the `/licks-ws` bridge) behave differently by float topology (`resolveFloatTopology()` in `packages/webapp/src/core/float-topology.ts`):
 
 - **`node-rest` topology** (standalone thin-bridge, Electron, hosted/cloud): `webhook` URLs come from the local node-server REST endpoints (`/api/webhooks/<id>`); `crontask` fires via the node-server-managed scheduler; lick events reach the kernel worker over the `/licks-ws` WebSocket bridge.

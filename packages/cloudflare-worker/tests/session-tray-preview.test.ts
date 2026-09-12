@@ -3,6 +3,7 @@ import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
 import { makeEnv } from './helpers/fake-env.js';
+import { previewHomeBindings } from './helpers/preview-home.js';
 
 class FakeStorage {
   private readonly data = new Map<string, unknown>();
@@ -169,6 +170,7 @@ function createTestHarness() {
       TRAY_HUB: namespace as unknown as Parameters<typeof handleWorkerRequest>[1]['TRAY_HUB'],
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
+      WEBHOOK_HOMES: previewHomeBindings,
     }),
     namespace,
   };
@@ -227,6 +229,7 @@ async function createTrayAttachLeaderWithSocket(
     new Request(`https://${host}/tray`, { method: 'POST' }),
     env
   );
+  expect(created.status).toBe(201);
   const session = (await created.json()) as {
     capabilities: { controller: { url: string } };
     trayId: string;

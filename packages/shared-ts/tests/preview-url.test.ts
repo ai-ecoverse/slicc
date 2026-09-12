@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { buildPreviewUrl, previewBaseHost } from '../src/preview-url.js';
 
 describe('previewBaseHost', () => {
+  it('preserves isolated local harness ports without matching lookalike hosts', () => {
+    expect(previewBaseHost('http://localhost:8909')).toBe('localhost:8909');
+    expect(previewBaseHost('http://localhost')).toBe('localhost');
+    expect(() => previewBaseHost('https://localhost.example:8909')).toThrow();
+  });
+
   it('maps production worker hosts to sliccy.now', () => {
     expect(previewBaseHost('https://www.sliccy.ai')).toBe('sliccy.now');
     expect(previewBaseHost('https://sliccy.ai')).toBe('sliccy.now');

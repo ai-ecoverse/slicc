@@ -301,6 +301,20 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       signalRemoteExec: remoteExec.signalRemoteExec,
       sliccSidecar: createSidecarBridge(),
       ...biscottoHandlers(),
+      rotateWebhook: async () => {
+        const leader = getLeader()?.leader;
+        if (!leader) throw new Error('webhook rotate: no active leader tray');
+        return leader.rotateWebhook();
+      },
+      revokeWebhook: async (webhookId) => {
+        const leader = getLeader()?.leader;
+        if (!leader) {
+          const { assertNoStableWebhookHome } = await import('../../scoops/tray-leader.js');
+          await assertNoStableWebhookHome(win.localStorage);
+          return;
+        }
+        await leader.revokeWebhook(webhookId);
+      },
       mintPreview: async (opts) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');

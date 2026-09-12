@@ -908,7 +908,11 @@ the UI:
   origin and the Playwright `baseURL`) with SPA fallback, exactly as the
   production worker does. Requires `npm run build -w @slicc/webapp` first.
   Runs under the supervisor in `wrangler-server.ts` — see "Survive a wrangler
-  crash" below.
+  crash" below. Uses `--local --env staging` because staging has `routes: []`:
+  the worker must preserve both `localhost:<port>` and preview
+  `<token>.localhost:<port>` hosts. Do not replace this with `--route localhost`;
+  that rewrites preview hosts into the app origin and returns the SPA instead.
+  Local mode runs DO/R2 in workerd, not the deployed staging hub.
 - **node-server `--serve-only --cdp-port=9222` on 5710** — the thin `/cdp`
   bridge + `/api` surface only. `SLICC_BRIDGE_TOKEN` arms the `/cdp` upgrade
   gate + cross-origin `/api` token check, and `BRIDGE_DEV_ALLOWED_ORIGINS`

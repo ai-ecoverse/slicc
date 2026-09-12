@@ -11,7 +11,11 @@ import {
 } from '../base/tray-leader-status.js';
 import { createTrayFetch, TrayProxyFetchError } from '../shell/tray-fetch.js';
 import * as db from './db.js';
-import { buildTrayWorkerUrl } from './tray-runtime-config.js';
+import {
+  buildTrayWorkerUrl,
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  TRAY_WORKER_STORAGE_KEY,
+} from './tray-runtime-config.js';
 
 /**
  * Mirrors TrayKind in packages/cloudflare-worker/src/shared.ts.
@@ -31,11 +35,18 @@ const NOTIFY_SUPERSEDED_TIMEOUT_MS = 10_000;
 
 interface CreateTrayResponse {
   trayId: string;
+  /** Stable cone identity echoed back by the worker (#2812); absent on old hubs. */
+  coneId?: string;
   createdAt: string;
   capabilities: {
     join: { url: string };
     controller: { url: string };
-    webhook: { url: string };
+    /**
+     * The webhook base URL. Stable cone-scoped (`/wh/<coneId>.<secret>`) when
+     * the home bind succeeded, else the legacy tray-scoped `/webhook/...`.
+     * `rebindToken` is present only on the stable shape.
+     */
+    webhook: { url: string; rebindToken?: string };
   };
 }
 
@@ -104,6 +115,10 @@ export interface LeaderTrayManagerOptions {
   workerBaseUrl: string;
   runtime: string;
   store?: LeaderTraySessionStore;
+  /** Private management credentials, never mirrored into runtime status or the VFS. */
+  identityStore?: LeaderWebhookIdentityStore;
+  /** Durable source tray for an unfinished replacement; the target lives in store. */
+  replacementStore?: LeaderTraySessionStore;
   fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => LeaderTrayWebSocket;
   onControlMessage?: (message: WorkerToLeaderControlMessage) => void;
@@ -143,11 +158,193 @@ export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
   }
 }
 
+/** A leader-session lineage, shared by its WorkUnits; not a per-agent cone identity. */
+export interface ConeIdentity {
+  coneId: string;
+  coneSecret: string;
+  rebindSecret: string;
+  /** False until a stable capability is acknowledged; permits old-hub bootstrap. */
+  established?: boolean;
+  /** Private write-ahead intent: exact fresh replacements survive reload and retry. */
+  pendingRotation?: LeaderTraySession & { secret: string; rebindSecret: string };
+  /** Private authenticated create intent, retained across transport/storage failure. */
+  pendingCreateAttemptId?: string;
+  /** Response target, recorded before saving the public session for reconciliation. */
+  pendingCreateTrayId?: string;
+}
+
+export interface LeaderWebhookIdentityStore {
+  load(): Promise<ConeIdentity | null>;
+  save(identity: ConeIdentity): Promise<void>;
+  compareAndSwap(expected: ConeIdentity | null, next: ConeIdentity): Promise<boolean>;
+}
+
+/**
+ * Management-only IndexedDB state, outside the agent-visible VFS and session
+ * status mirrors. This is not a boundary against arbitrary same-origin code.
+ * Deliberately has no clear operation: resetting a tray is not revocation.
+ */
+export class IndexedDbLeaderWebhookIdentityStore implements LeaderWebhookIdentityStore {
+  private readonly key: string;
+  private readonly snapshots = new WeakMap<ConeIdentity, string>();
+
+  constructor(workerBaseUrl: string) {
+    this.key = `leader-webhook-identity:${workerBaseUrl.replace(/\/+$/, '')}`;
+  }
+
+  async load(): Promise<ConeIdentity | null> {
+    const raw = await db.getState(this.key);
+    if (!raw) return null;
+    let parsed: Partial<ConeIdentity>;
+    try {
+      parsed = JSON.parse(raw) as Partial<ConeIdentity>;
+    } catch {
+      throw new Error('Stored webhook management identity is invalid');
+    }
+    if (
+      !parsed ||
+      typeof parsed.coneId !== 'string' ||
+      !parsed.coneId ||
+      typeof parsed.coneSecret !== 'string' ||
+      !parsed.coneSecret ||
+      typeof parsed.rebindSecret !== 'string' ||
+      !parsed.rebindSecret
+    ) {
+      throw new Error('Stored webhook management identity is invalid');
+    }
+    const pendingSession = parsed.pendingRotation
+      ? parseLeaderTraySession(JSON.stringify(parsed.pendingRotation))
+      : null;
+    const intent = parsed.pendingRotation;
+    if (
+      intent &&
+      (!pendingSession ||
+        typeof intent.secret !== 'string' ||
+        !/^[A-Za-z0-9_-]{32,128}$/.test(intent.secret) ||
+        typeof intent.rebindSecret !== 'string' ||
+        !/^[A-Za-z0-9_-]{32,128}$/.test(intent.rebindSecret) ||
+        intent.secret === parsed.coneSecret ||
+        intent.rebindSecret === parsed.rebindSecret ||
+        intent.secret === intent.rebindSecret)
+    ) {
+      // Legacy deterministic intents cannot establish whether the old operation
+      // committed. Preserve the record and refuse rather than silently rebind.
+      throw new Error('Stored webhook rotation intent is invalid');
+    }
+    const pendingRotation =
+      intent && pendingSession
+        ? { ...pendingSession, secret: intent.secret, rebindSecret: intent.rebindSecret }
+        : null;
+    if (
+      (parsed.pendingCreateAttemptId !== undefined &&
+        (typeof parsed.pendingCreateAttemptId !== 'string' ||
+          !/^[A-Za-z0-9_-]{32,128}$/.test(parsed.pendingCreateAttemptId))) ||
+      (parsed.pendingCreateTrayId !== undefined &&
+        (!parsed.pendingCreateAttemptId ||
+          typeof parsed.pendingCreateTrayId !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(parsed.pendingCreateTrayId)))
+    ) {
+      throw new Error('Stored tray creation intent is invalid');
+    }
+    const identity: ConeIdentity = {
+      coneId: parsed.coneId,
+      coneSecret: parsed.coneSecret,
+      rebindSecret: parsed.rebindSecret,
+      established: parsed.established !== false,
+      ...(pendingRotation ? { pendingRotation } : {}),
+      ...(parsed.pendingCreateAttemptId
+        ? { pendingCreateAttemptId: parsed.pendingCreateAttemptId }
+        : {}),
+      ...(parsed.pendingCreateTrayId ? { pendingCreateTrayId: parsed.pendingCreateTrayId } : {}),
+    };
+    this.snapshots.set(identity, raw);
+    return identity;
+  }
+
+  async save(identity: ConeIdentity): Promise<void> {
+    const raw = JSON.stringify(identity);
+    await db.setState(this.key, raw);
+    this.snapshots.set(identity, raw);
+  }
+
+  async compareAndSwap(expected: ConeIdentity | null, next: ConeIdentity): Promise<boolean> {
+    const snapshot = expected === null ? null : this.snapshots.get(expected);
+    if (snapshot === undefined) throw new Error('Webhook identity must be loaded before updating');
+    const raw = JSON.stringify(next);
+    const replaced = await db.compareAndSetState(this.key, snapshot, raw);
+    if (replaced) this.snapshots.set(next, raw);
+    return replaced;
+  }
+}
+
+/** A trusted no-leader deletion guard; never returns management credentials. */
+export async function assertNoStableWebhookHome(storage: Pick<Storage, 'getItem'>): Promise<void> {
+  const session = await new IndexedDbLeaderTraySessionStore().load();
+  const workerBaseUrl =
+    storage.getItem(TRAY_WORKER_STORAGE_KEY) ??
+    session?.workerBaseUrl ??
+    DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL;
+  const identity = await new IndexedDbLeaderWebhookIdentityStore(workerBaseUrl).load();
+  if ((identity && identity.established !== false) || (session && coneIdentityOf(session))) {
+    throw new Error('webhook delete: stable identity exists but leader is disconnected');
+  }
+}
+
+/**
+ * Recover the cone identity from a create response's stable webhook capability.
+ * The URL is `…/wh/<coneId>.<coneSecret>` and the rebind token is
+ * `<coneId>.<rebindSecret>`; returns null for the legacy tray-scoped shape
+ * (no rebind token) or anything that does not parse, so a caller falls back to
+ * the rove-fragile `webhookUrl`.
+ */
+export function parseConeWebhookIdentity(
+  webhookUrl: string,
+  rebindToken: string | undefined
+): ConeIdentity | null {
+  if (!rebindToken) return null;
+  let deliveryToken: string;
+  try {
+    const segments = new URL(webhookUrl).pathname.split('/').filter(Boolean);
+    if (segments.at(-2) !== 'wh') return null;
+    deliveryToken = decodeURIComponent(segments.at(-1) ?? '');
+  } catch {
+    return null;
+  }
+  const dot = deliveryToken.indexOf('.');
+  const rebindDot = rebindToken.indexOf('.');
+  if (dot <= 0 || rebindDot <= 0) return null;
+  const coneId = deliveryToken.slice(0, dot);
+  const coneSecret = deliveryToken.slice(dot + 1);
+  const rebindConeId = rebindToken.slice(0, rebindDot);
+  const rebindSecret = rebindToken.slice(rebindDot + 1);
+  // The rebind token must name the same cone — a mismatch is a malformed reply.
+  if (
+    ![coneId, coneSecret, rebindSecret].every((part) => /^[A-Za-z0-9_-]+$/.test(part)) ||
+    rebindConeId !== coneId
+  )
+    return null;
+  return { coneId, coneSecret, rebindSecret };
+}
+
+/** The carriable cone identity of a session, or null if it has none. */
+function coneIdentityOf(session: LeaderTraySession): ConeIdentity | null {
+  const legacy = session as LeaderTraySession & Partial<ConeIdentity>;
+  if (legacy.coneId && legacy.coneSecret && legacy.rebindSecret) {
+    return {
+      coneId: legacy.coneId,
+      coneSecret: legacy.coneSecret,
+      rebindSecret: legacy.rebindSecret,
+      established: true,
+    };
+  }
+  return null;
+}
+
 export function parseLeaderTraySession(raw: string | null): LeaderTraySession | null {
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as Partial<LeaderTraySession>;
+    const parsed = JSON.parse(raw) as Partial<LeaderTraySession & ConeIdentity>;
     if (
       typeof parsed.workerBaseUrl !== 'string' ||
       typeof parsed.trayId !== 'string' ||
@@ -173,6 +370,18 @@ export function parseLeaderTraySession(raw: string | null): LeaderTraySession | 
       leaderWebSocketUrl:
         typeof parsed.leaderWebSocketUrl === 'string' ? parsed.leaderWebSocketUrl : null,
       runtime: parsed.runtime,
+      ...(typeof parsed.coneId === 'string' ? { coneId: parsed.coneId } : {}),
+      // Stable cone identity (#2812). All three travel together — a partial set
+      // could not authenticate a rebind, so treat any missing field as absent.
+      ...(typeof parsed.coneId === 'string' &&
+      typeof parsed.coneSecret === 'string' &&
+      typeof parsed.rebindSecret === 'string'
+        ? {
+            coneId: parsed.coneId,
+            coneSecret: parsed.coneSecret,
+            rebindSecret: parsed.rebindSecret,
+          }
+        : {}),
     };
   } catch {
     return null;
@@ -181,6 +390,12 @@ export function parseLeaderTraySession(raw: string | null): LeaderTraySession | 
 
 export class LeaderTrayManager {
   private readonly store: LeaderTraySessionStore;
+  private readonly identityStore: LeaderWebhookIdentityStore;
+  private readonly replacementStore: LeaderTraySessionStore;
+  private identity: ConeIdentity | null = null;
+  private rotation: Promise<{ webhookUrl: string }> | null = null;
+  private starting: Promise<LeaderTraySession> | null = null;
+  private resetting: Promise<LeaderTraySession> | null = null;
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: (url: string) => LeaderTrayWebSocket;
   private readonly pingIntervalMs: number;
@@ -197,9 +412,15 @@ export class LeaderTrayManager {
   private stopped = false;
   private reconnecting = false;
   private reconnectGeneration = 0;
-
   constructor(private readonly options: LeaderTrayManagerOptions) {
     this.store = options.store ?? new IndexedDbLeaderTraySessionStore();
+    this.identityStore =
+      options.identityStore ?? new IndexedDbLeaderWebhookIdentityStore(options.workerBaseUrl);
+    this.replacementStore =
+      options.replacementStore ??
+      new IndexedDbLeaderTraySessionStore(
+        `leader-tray-replacement:${options.workerBaseUrl.replace(/\/+$/, '')}`
+      );
     this.fetchImpl = options.fetchImpl ?? createTrayFetch();
     this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
     this.pingIntervalMs = options.pingIntervalMs ?? LEADER_TRAY_PING_INTERVAL_MS;
@@ -217,6 +438,17 @@ export class LeaderTrayManager {
   }
 
   async start(): Promise<LeaderTraySession> {
+    if (this.starting !== null) return this.starting;
+    const operation = this.startOnce();
+    this.starting = operation;
+    try {
+      return await operation;
+    } finally {
+      this.starting = null;
+    }
+  }
+
+  private async startOnce(): Promise<LeaderTraySession> {
     this.stopped = false;
     if (this.currentSession && this.socket) {
       setLeaderTrayRuntimeStatus({ state: 'leader', session: this.currentSession, error: null });
@@ -289,11 +521,38 @@ export class LeaderTrayManager {
    * caller is responsible for surfacing errors.
    */
   private async connectOnce(): Promise<LeaderTraySession> {
+    if (this.rotation !== null) await this.rotation;
+    this.identity = await this.identityStore.load();
+    // Definitive refusals release their intent; ambiguous failures must replay
+    // before a rebind can accidentally use the revoked delivery secret.
+    if (this.identity?.pendingRotation) {
+      try {
+        await this.rotateWebhookOnce();
+      } catch (error) {
+        if (!isDefinitiveRotationRefusal(error)) throw error;
+        if (this.identity?.pendingRotation) {
+          throw new Error('Webhook rotation changed in another tab; retry before reconnecting');
+        }
+      }
+    }
     const storedSession = await this.store.load();
     const reusableSession =
-      storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
+      storedSession?.workerBaseUrl.replace(/\/+$/, '') ===
+      this.options.workerBaseUrl.replace(/\/+$/, '')
+        ? storedSession
+        : null;
 
-    const session = await this.attachWithRecovery(reusableSession);
+    const legacy = reusableSession && coneIdentityOf(reusableSession);
+    if (!this.identity && legacy) await this.saveIdentity(legacy);
+    // Persist migration before discarding any old copy of the management token.
+    const safeSession = reusableSession && this.publicSession(reusableSession);
+    if (safeSession && legacy) await this.store.save(safeSession);
+    await this.finishPendingCreate(safeSession);
+
+    const pendingSource = await this.replacementStore.load();
+    const session = pendingSource
+      ? await this.claimReplacement(pendingSource, safeSession)
+      : await this.attachWithRecovery(safeSession);
     this.currentSession = session;
     const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
     this.socket = socket;
@@ -391,7 +650,314 @@ export class LeaderTrayManager {
   }
 
   async clearSession(): Promise<void> {
+    if (this.rotation !== null) await this.rotation;
+    if (await this.replacementStore.load()) {
+      throw new Error('Tray replacement is pending; retry reset before clearing the session');
+    }
+    await this.finishPendingCreate(await this.store.load());
     await this.store.clear();
+  }
+
+  /** Resume the same durable source/target pair after any failed reset or reload. */
+  async reset(): Promise<LeaderTraySession> {
+    if (this.resetting !== null) return this.resetting;
+    const operation = this.resetOnce();
+    this.resetting = operation;
+    try {
+      return await operation;
+    } finally {
+      this.resetting = null;
+    }
+  }
+
+  private async resetOnce(): Promise<LeaderTraySession> {
+    if (this.starting !== null) await this.starting;
+    if (this.rotation !== null) await this.rotation;
+    const pending = await this.replacementStore.load();
+    if (!pending && this.currentSession) {
+      await this.replacementStore.save(this.currentSession);
+    }
+    this.stop();
+    return this.start();
+  }
+
+  private async claimReplacement(
+    source: LeaderTraySession,
+    target: LeaderTraySession | null,
+    recoverExpiredOwner = true
+  ): Promise<LeaderTraySession> {
+    let next = target && target.trayId !== source.trayId ? target : await this.createTraySession();
+    try {
+      await this.transferPreviousSession(source, next);
+    } catch (error) {
+      // Only this source-issued code proves no freeze/import/locator mutation
+      // occurred. A generic 403/410 or lost response cannot authorize retargeting.
+      if (!(error instanceof LeaderTrayHttpError) || error.code !== 'PREVIEW_TARGET_UNAVAILABLE') {
+        throw error;
+      }
+      await this.finishPendingCreate(await this.store.load());
+      await this.store.clear();
+      next = await this.createTraySession();
+      await this.transferPreviousSession(source, next);
+    }
+    let claimed: LeaderTraySession;
+    try {
+      claimed = await this.claimLeaderSession(next);
+    } catch (error) {
+      if (error instanceof LeaderTrayHttpError && [403, 404, 410].includes(error.status)) {
+        // Transfer completed even if its target expired while we were offline.
+        // Promote that owner to the durable source before permitting a new mint.
+        // Never change a partially frozen pair. Bound automatic recovery to one
+        // extra rove; a later failure still leaves the next start resumable.
+        await this.replacementStore.save(next);
+        await this.finishPendingCreate(await this.store.load());
+        await this.store.clear();
+        if (recoverExpiredOwner) return this.claimReplacement(next, null, false);
+      }
+      throw error;
+    }
+    // Only clear after transfer and target attach are durable. Lost responses retry
+    // the same pair; never mint a third tray while the source is frozen.
+    await this.replacementStore.clear();
+    void this.notifyTraySuperseded(source, claimed.joinUrl, claimed.webhookUrl);
+    return claimed;
+  }
+
+  async transferPreviousSession(
+    source: LeaderTraySession,
+    target: LeaderTraySession
+  ): Promise<void> {
+    if (source.trayId === target.trayId) return;
+    // Old hubs have no stable-home/preview-transfer protocol. Keep their legacy
+    // supersession path rather than pretending they support scope-safe transfer.
+    if (this.identity?.established === false) return;
+    const controllerToken = new URL(source.controllerUrl).pathname.split('/').pop();
+    const targetControllerToken = new URL(target.controllerUrl).pathname.split('/').pop();
+    if (!controllerToken || !targetControllerToken) {
+      throw new Error('Preview transfer requires controller credentials');
+    }
+    const result = await this.fetchJson<{ transferred: boolean }>(
+      buildTrayWorkerUrl(source.workerBaseUrl, `api/tray/${source.trayId}/preview-transfer`),
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ targetTrayId: target.trayId, targetControllerToken }),
+      }
+    );
+    if (result.transferred !== true) throw new Error('Hub did not confirm preview transfer');
+  }
+
+  private async saveIdentity(identity: ConeIdentity): Promise<void> {
+    await this.identityStore.save(identity);
+    this.identity = identity;
+  }
+
+  private publicSession(session: LeaderTraySession): LeaderTraySession {
+    const {
+      coneSecret: _secret,
+      rebindSecret: _rebind,
+      ...safe
+    } = session as LeaderTraySession & Partial<ConeIdentity>;
+    if (this.identity?.established && safe.coneId === this.identity.coneId) {
+      safe.webhookUrl = buildTrayWorkerUrl(
+        this.options.workerBaseUrl,
+        `wh/${this.identity.coneId}.${this.identity.coneSecret}`
+      );
+    }
+    return safe;
+  }
+
+  /** The session the manager is currently leading, or null. */
+  getCurrentSession(): LeaderTraySession | null {
+    return this.currentSession;
+  }
+
+  /**
+   * Rotate the cone's stable webhook capability (#2812): revoke the current
+   * webhook URL and issue a fresh one on the
+   * same tray. Used when the delivery secret may have leaked — the long-lived
+   * secret the stable address trades for is why this exists.
+   *
+   * Updates private management persistence before publishing the new delivery
+   * URL. The identity belongs to this leader-session lineage, not an individual
+   * WorkUnit. Legacy hubs have no stable capability to rotate.
+   */
+  async rotateWebhook(): Promise<{ webhookUrl: string }> {
+    if (this.resetting !== null || this.starting !== null || this.reconnecting) {
+      throw new Error('webhook rotate: tray transition in progress; retry when ready');
+    }
+    if (this.rotation !== null) return this.rotation;
+    const operation = this.rotateWebhookOnce();
+    this.rotation = operation;
+    try {
+      return await operation;
+    } finally {
+      this.rotation = null;
+    }
+  }
+
+  private async rotateWebhookOnce(): Promise<{ webhookUrl: string }> {
+    this.identity = await this.identityStore.load();
+    const session = this.identity?.pendingRotation ?? this.currentSession;
+    if (!session) {
+      throw new Error('webhook rotate: no active tray session');
+    }
+    let currentIdentity = this.identity;
+    if (!currentIdentity || currentIdentity.established === false) {
+      throw new Error(
+        'webhook rotate: this tray has no stable webhook identity to rotate (legacy hub)'
+      );
+    }
+    if (
+      session.workerBaseUrl.replace(/\/+$/, '') !== this.options.workerBaseUrl.replace(/\/+$/, '')
+    ) {
+      throw new Error('webhook rotate: pending identity belongs to a different hub');
+    }
+    const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop();
+    if (!controllerToken) {
+      throw new Error('webhook rotate: could not derive the controller token');
+    }
+    if (!currentIdentity.pendingRotation) {
+      const intent = {
+        ...currentIdentity,
+        pendingRotation: {
+          ...session,
+          secret: crypto.randomUUID().replace(/-/g, ''),
+          rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+        },
+      };
+      if (!(await this.identityStore.compareAndSwap(currentIdentity, intent))) {
+        throw new Error('webhook rotate: identity changed in another tab; retry');
+      }
+      this.identity = currentIdentity = intent;
+    }
+    const rotateUrl = buildTrayWorkerUrl(
+      session.workerBaseUrl,
+      `api/tray/${session.trayId}/webhook/rotate`
+    );
+    const rotated = await this.fetchJson<{
+      coneId: string;
+      webhook: { url: string; rebindToken: string };
+    }>(rotateUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${controllerToken}`,
+      },
+      body: JSON.stringify({
+        oldConeId: currentIdentity.coneId,
+        oldSecret: currentIdentity.coneSecret,
+        oldRebindSecret: currentIdentity.rebindSecret,
+        secret: currentIdentity.pendingRotation!.secret,
+        rebindSecret: currentIdentity.pendingRotation!.rebindSecret,
+      }),
+    }).catch(async (error: unknown) => {
+      if (isDefinitiveRotationRefusal(error)) {
+        const { pendingRotation: _pending, ...retained } = currentIdentity;
+        await this.identityStore.compareAndSwap(currentIdentity, retained);
+        this.identity = await this.identityStore.load();
+      }
+      throw error;
+    });
+
+    const identity = parseConeWebhookIdentity(rotated.webhook.url, rotated.webhook.rebindToken);
+    if (!identity) {
+      throw new Error('webhook rotate: hub returned an unparseable webhook capability');
+    }
+    if (
+      identity.coneId !== currentIdentity.coneId ||
+      identity.coneSecret !== currentIdentity.pendingRotation!.secret ||
+      identity.rebindSecret !== currentIdentity.pendingRotation!.rebindSecret
+    ) {
+      throw new Error('webhook rotate: hub changed the management identity');
+    }
+    const { pendingRotation: _pending, ...retained } = currentIdentity;
+    const completed = { ...retained, ...identity, established: true };
+    if (!(await this.identityStore.compareAndSwap(currentIdentity, completed))) {
+      this.identity = await this.identityStore.load();
+      throw new Error('webhook rotate: identity changed in another tab; retry');
+    }
+    this.identity = completed;
+    // Never spread the private rotation intent into public session/status state.
+    const publicSession = parseLeaderTraySession(JSON.stringify(session))!;
+    const next: LeaderTraySession = {
+      ...publicSession,
+      webhookUrl: rotated.webhook.url,
+      coneId: identity.coneId,
+    };
+    if ((await this.store.load())?.trayId === session.trayId) await this.store.save(next);
+    if (this.currentSession === session) {
+      this.currentSession = next;
+      setLeaderTrayRuntimeStatus({ state: 'leader', session: next, error: null });
+    }
+    return { webhookUrl: rotated.webhook.url };
+  }
+
+  /** Revoke one registration without exposing management credentials to callers. */
+  async revokeWebhook(webhookId: string): Promise<void> {
+    if (!webhookId) throw new Error('webhook delete: missing webhook id');
+    if (this.resetting !== null || this.starting !== null || this.reconnecting) {
+      throw new Error('webhook delete: tray transition in progress; retry when ready');
+    }
+    const session = this.currentSession;
+    const identity = this.identity ?? (await this.identityStore.load());
+    if (!identity || identity.established === false) return;
+    if (!session)
+      throw new Error('webhook delete: stable identity exists but leader is disconnected');
+    const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop();
+    if (!controllerToken) throw new Error('webhook delete: missing controller credentials');
+    await this.fetchJson(
+      buildTrayWorkerUrl(
+        session.workerBaseUrl,
+        `webhooks/${encodeURIComponent(identity.coneId)}/${encodeURIComponent(webhookId)}/revoke`
+      ),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          rebindSecret: identity.rebindSecret,
+          trayId: session.trayId,
+          controllerToken,
+        }),
+      }
+    );
+  }
+
+  /**
+   * Point followers and cached webhook URLs of an abandoned tray at their
+   * replacement. Public counterpart to the recovery path's internal call, for
+   * a caller that abandons a tray deliberately rather than on a stale-session
+   * error — `host reset` (`pageLeaderTray.reset()`).
+   *
+   * Without it, a reset re-mints the tray and leaves the old one with no
+   * forwarding address: followers dead-end on TRAY_EXPIRED and an external
+   * service's cached webhook URL POSTs into a tray that 410s, losing the event
+   * silently — the #1957 failure mode, reachable through the reset button as
+   * surely as through a crash. Best-effort and fire-and-forget, exactly like
+   * the recovery-path call: never awaited by the caller, every failure caught
+   * here, bounded by its own timeout.
+   */
+  supersedePreviousSession(
+    oldSession: LeaderTraySession,
+    next: { joinUrl: string; webhookUrl: string }
+  ): void {
+    // Superseding a tray with itself would make it redirect to its own join
+    // URL forever — guard the degenerate case a mis-sequenced caller could hit.
+    if (oldSession.trayId === '' || next.joinUrl === oldSession.joinUrl) return;
+    void this.notifyTraySuperseded(oldSession, next.joinUrl, next.webhookUrl);
+  }
+
+  /**
+   * Compatibility shim for older callers. Management identity is independent
+   * of the session cache now and must never be recovered from public status.
+   */
+  carryConeIdentityFrom(oldSession: LeaderTraySession): void {
+    // Compatibility with older reset callers. Identity is durable independently.
+    // Legacy migration happens in connectOnce before the first session is exposed.
+    void oldSession;
   }
 
   sendControlMessage(message: LeaderToWorkerControlMessage): void {
@@ -413,16 +979,10 @@ export class LeaderTrayManager {
         trayId: session.trayId,
         error: error instanceof Error ? error.message : String(error),
       });
+      await this.replacementStore.save(session);
+      await this.finishPendingCreate(await this.store.load());
       await this.store.clear();
-      const fresh = await this.claimLeaderSession(null);
-      // Best-effort, fire-and-forget: point any follower still holding the old
-      // join link at the new tray. Never awaited — notifyTraySuperseded already
-      // catches every error internally and bounds the request with its own
-      // timeout, so a hung/unreachable old tray can never stall the leader's
-      // reconnect. A crashed leader (no chance to run this at all) falls back
-      // to the existing TRAY_EXPIRED path once the old tray's reclaim TTL elapses.
-      void this.notifyTraySuperseded(session, fresh.joinUrl, fresh.webhookUrl);
-      return fresh;
+      return this.claimReplacement(session, null);
     }
   }
 
@@ -451,7 +1011,7 @@ export class LeaderTrayManager {
         oldSession.workerBaseUrl,
         `api/tray/${oldSession.trayId}/supersede`
       );
-      await this.fetchImpl(supersedeUrl, {
+      const response = await this.fetchImpl(supersedeUrl, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -463,10 +1023,15 @@ export class LeaderTrayManager {
         }),
         signal: AbortSignal.timeout(NOTIFY_SUPERSEDED_TIMEOUT_MS),
       });
-    } catch (error) {
+      if (!response.ok) {
+        log.warn('Old tray rejected supersession (best-effort)', {
+          oldTrayId: oldSession.trayId,
+          status: response.status,
+        });
+      }
+    } catch {
       log.warn('Failed to notify old tray of supersession (best-effort)', {
         oldTrayId: oldSession.trayId,
-        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -502,18 +1067,91 @@ export class LeaderTrayManager {
     return claimedSession;
   }
 
+  /** A failed acknowledgement must not make the next deliberate reset replay a completed create. */
+  private async finishPendingCreate(session: LeaderTraySession | null): Promise<void> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = await this.identityStore.load();
+      if (
+        !session ||
+        !current?.pendingCreateTrayId ||
+        current.pendingCreateTrayId !== session.trayId
+      )
+        return;
+      const next = { ...current };
+      delete next.pendingCreateAttemptId;
+      delete next.pendingCreateTrayId;
+      if (await this.identityStore.compareAndSwap(current, next)) {
+        this.identity = next;
+        return;
+      }
+    }
+    throw new Error('Webhook identity changed while acknowledging tray creation');
+  }
+
+  private async prepareCreateIdentity(): Promise<ConeIdentity> {
+    await this.finishPendingCreate(await this.store.load());
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = await this.identityStore.load();
+      if (current?.pendingRotation) {
+        throw new Error('Webhook rotation must finish before tray creation');
+      }
+      if (current?.pendingCreateAttemptId) return current;
+      const next: ConeIdentity = {
+        ...(current ?? {
+          coneId: crypto.randomUUID(),
+          coneSecret: crypto.randomUUID().replace(/-/g, ''),
+          rebindSecret: crypto.randomUUID().replace(/-/g, ''),
+          established: false,
+        }),
+        pendingCreateAttemptId: crypto.randomUUID(),
+      };
+      if (await this.identityStore.compareAndSwap(current, next)) return next;
+    }
+    throw new Error('Webhook identity changed while preparing tray creation');
+  }
+
   private async createTraySession(): Promise<LeaderTraySession> {
-    const body = this.options.kind ? JSON.stringify({ kind: this.options.kind }) : undefined;
+    // Persist one authenticated attempt before POST. Replays recover the same
+    // tray, but a later deliberate replacement gets an independent attempt.
+    const carry = await this.prepareCreateIdentity();
+    this.identity = carry;
+    const body = JSON.stringify({
+      ...(this.options.kind ? { kind: this.options.kind } : {}),
+      coneId: carry.coneId,
+      coneSecret: carry.coneSecret,
+      rebindSecret: carry.rebindSecret,
+      createAttemptId: carry.pendingCreateAttemptId,
+    });
     const created = await this.fetchJson<CreateTrayResponse>(
       buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
       {
         method: 'POST',
-        ...(body ? { headers: { 'content-type': 'application/json' } } : {}),
-        ...(body ? { body } : {}),
+        headers: { 'content-type': 'application/json' },
+        body,
       }
     );
 
-    return {
+    const coneIdentity = parseConeWebhookIdentity(
+      created.capabilities.webhook.url,
+      created.capabilities.webhook.rebindToken
+    );
+    if (coneIdentity) {
+      if (
+        coneIdentity.coneId !== carry.coneId ||
+        coneIdentity.coneSecret !== carry.coneSecret ||
+        coneIdentity.rebindSecret !== carry.rebindSecret
+      ) {
+        throw new Error('Hub returned a different webhook management identity');
+      }
+    } else if (
+      carry.established ||
+      created.capabilities.webhook.rebindToken ||
+      new URL(created.capabilities.webhook.url).pathname.includes('/wh/')
+    ) {
+      throw new Error('Hub did not confirm the stable webhook binding');
+    }
+
+    const session: LeaderTraySession = {
       workerBaseUrl: this.options.workerBaseUrl,
       trayId: created.trayId,
       createdAt: created.createdAt,
@@ -522,7 +1160,23 @@ export class LeaderTrayManager {
       joinUrl: created.capabilities.join.url,
       webhookUrl: created.capabilities.webhook.url,
       runtime: this.options.runtime,
+      ...(coneIdentity ? { coneId: coneIdentity.coneId } : {}),
     };
+    // Record the target first: if the final acknowledgement fails after the
+    // session save, reset/clear can recognize that this attempt already landed.
+    const acknowledged: ConeIdentity = {
+      ...carry,
+      established: coneIdentity ? true : carry.established,
+      pendingCreateTrayId: session.trayId,
+    };
+    if (!(await this.identityStore.compareAndSwap(carry, acknowledged))) {
+      throw new Error('Webhook identity changed during tray creation');
+    }
+    this.identity = acknowledged;
+    // An attach failure must retry this exact tray, not create another one.
+    await this.store.save(session);
+    await this.finishPendingCreate(session);
+    return session;
   }
 
   private async openLeaderSocket(url: string): Promise<LeaderTrayWebSocket> {
@@ -608,11 +1262,23 @@ export class LeaderTrayManager {
   }
 
   private async fetchJson<T>(url: string, init: RequestInit): Promise<T> {
-    const response = await this.fetchImpl(url, init);
+    const response = await this.fetchImpl(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(20_000),
+    }).catch((error: unknown) => {
+      if (error instanceof TrayProxyFetchError) {
+        throw new TrayProxyFetchError('Tray proxy transport unavailable');
+      }
+      throw new Error('Tray request failed (transport unavailable)');
+    });
     if (!response.ok) {
       throw await LeaderTrayHttpError.fromResponse(response);
     }
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new Error('Hub returned invalid JSON');
+    }
   }
 }
 
@@ -632,7 +1298,7 @@ class LeaderTrayHttpError extends Error {
       return new LeaderTrayHttpError(
         response.status,
         payload.code ?? null,
-        payload.error ?? `Tray request failed (${response.status})`
+        `Tray request failed (${response.status})`
       );
     } catch {
       return new LeaderTrayHttpError(
@@ -642,6 +1308,13 @@ class LeaderTrayHttpError extends Error {
       );
     }
   }
+}
+
+function isDefinitiveRotationRefusal(error: unknown): boolean {
+  return (
+    error instanceof LeaderTrayHttpError &&
+    [400, 401, 403, 404, 405, 410, 422].includes(error.status)
+  );
 }
 
 function shouldRecreateTray(error: unknown): boolean {

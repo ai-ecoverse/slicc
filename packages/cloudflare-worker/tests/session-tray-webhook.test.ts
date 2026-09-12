@@ -205,6 +205,41 @@ describe('WebhookRelay.handle', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'LEADER_SEND_FAILED' });
   });
 
+  it('marks only explicit delivered/filtered receipts as durable queue acknowledgements', async () => {
+    for (const disposition of ['delivered', 'filtered'] as const) {
+      const pending = h.relay.handleInternal('wh', post('{}'));
+      await ack(h, disposition);
+      expect((await pending).headers.get('x-slicc-webhook-ack')).toBe(disposition);
+    }
+    const legacy = await h.relay.handleInternal('wh', post('{}'));
+    expect(legacy.status).toBe(202);
+    expect(legacy.headers.get('x-slicc-webhook-ack')).toBeNull();
+  });
+
+  it('preserves non-UTF8 binary bytes as base64 with original headers', async () => {
+    const pending = h.relay.handleInternal(
+      'wh',
+      new Request('https://internal/internal/webhook/wh', {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'x-signature': 'sig' },
+        body: new Uint8Array([0, 255, 128, 1]),
+      })
+    );
+    await forwarded(h);
+    expect(h.sent.at(-1)).toMatchObject({
+      body: { raw: 'AP+AAQ==', encoding: 'base64' },
+      headers: { 'content-type': 'application/octet-stream', 'x-signature': 'sig' },
+    });
+    await ack(h, 'delivered');
+    await pending;
+  });
+
+  it('rejects oversized payloads without sending them to the leader', async () => {
+    const response = await h.relay.handleInternal('wh', post('x'.repeat(65_537)));
+    expect(response.status).toBe(413);
+    expect(h.sent).toHaveLength(0);
+  });
+
   it('parses a JSON body and forwards it with the webhook id', async () => {
     const pending = h.relay.handle(
       TOKEN,

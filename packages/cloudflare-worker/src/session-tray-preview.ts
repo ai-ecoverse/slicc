@@ -96,6 +96,8 @@ interface TrayState {
   previews?: Record<string, PreviewRecord>;
   trayId: string;
   expiredAt?: string;
+  previewTransfer?: { phase: 'pending' | 'forwarded' | 'complete' };
+  previewImports?: Record<string, { activated: boolean }>;
 }
 
 export interface PreviewDeps {
@@ -140,6 +142,7 @@ export function failAllPendingPreviews(pendingPreviews: Map<string, PreviewAssem
 export async function handlePreviewPurge(previewToken: string, deps: PreviewDeps): Promise<void> {
   await deps.loadTray();
   const tray = deps.getTray();
+  if (tray?.previewTransfer) return;
   const rec = tray?.previews?.[previewToken];
   if (!rec) return;
   rec.cacheVersion = (rec.cacheVersion ?? 1) + 1;
@@ -182,6 +185,9 @@ export async function dispatchPreviewRoute(
   }
   if (pathname === '/internal/preview/upload-commit' && method === 'POST') {
     return handlePreviewUploadCommit(request, deps);
+  }
+  if (pathname === '/internal/preview/upload-release' && method === 'POST') {
+    return handlePreviewUploadRelease(request, deps);
   }
   if (pathname === '/internal/preview/finalize' && method === 'POST') {
     return handlePreviewFinalize(request, deps);
@@ -276,6 +282,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
   }
   let body: {
     reqId: string;
+    previewToken?: string;
     servedRoot: string;
     vfsPath: string;
     asText: boolean;
@@ -284,6 +291,12 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
     body = (await request.json()) as typeof body;
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
+  }
+  if (body.previewToken) {
+    const record = await resolvePreview(body.previewToken, deps);
+    if (!record || record.servedRoot !== body.servedRoot) {
+      return jsonResponse({ error: 'Preview not found' }, 404);
+    }
   }
   const assembler = new PreviewAssembler();
   deps.pendingPreviews.set(body.reqId, assembler);
@@ -389,10 +402,12 @@ interface PreviewUploadBody {
   mime?: string;
   etag?: string;
   objectKey?: string;
+  sha256?: string;
+  allowReplay?: boolean;
 }
 
 function previewRouteError(err: unknown): Response {
-  const status = (err as { status?: number }).status ?? 400;
+  const status = (err as { status?: number }).status ?? (err instanceof SyntaxError ? 400 : 503);
   return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, status);
 }
 
@@ -418,6 +433,27 @@ async function handlePreviewUploadCommit(request: Request, deps: PreviewDeps): P
   }
 }
 
+async function handlePreviewUploadRelease(request: Request, deps: PreviewDeps): Promise<Response> {
+  try {
+    const body = (await request.json()) as { previewToken: string; objectKey: string };
+    await deps.loadTray();
+    const record = deps.getTray()?.previews?.[body.previewToken];
+    if (record) {
+      record.pendingUploadKeys = record.pendingUploadKeys?.filter((key) => key !== body.objectKey);
+      record.pendingUploads = record.pendingUploads?.filter(
+        (lease) => lease.objectKey !== body.objectKey
+      );
+      reclaimUploadLeases(record, deps.now());
+      if (record.state === 'cleanup') record.expiresAt = deps.isoNow();
+      await deps.persistTray();
+      await expirePersistentPreviews(deps);
+    }
+    return jsonResponse({ released: true }, 200);
+  } catch (err) {
+    return previewRouteError(err);
+  }
+}
+
 async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promise<Response> {
   try {
     const body = (await request.json()) as { previewToken: string; uploadToken: string };
@@ -433,6 +469,23 @@ async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promi
 
 const MAX_PREVIEWS_PER_TRAY = 10;
 const PREVIEW_CLEANUP_RETRY_MS = 60_000;
+export const PREVIEW_UPLOAD_LEASE_MS = 120_000;
+export const PREVIEW_CLEANUP_HORIZON_MS = 24 * 60 * 60 * 1000;
+
+/** Collapse abandoned keys into one cleanup obligation, not an ever-growing key list. */
+function reclaimUploadLeases(record: PreviewRecord, now: number): void {
+  if (record.pendingUploadKeys) {
+    (record.pendingUploads ??= []).push(
+      ...record.pendingUploadKeys.map((objectKey) => ({ objectKey, leasedAt: now }))
+    );
+    delete record.pendingUploadKeys;
+  }
+  record.pendingUploads = (record.pendingUploads ?? []).filter((lease) => {
+    if (lease.leasedAt + PREVIEW_UPLOAD_LEASE_MS > now) return true;
+    record.hasUnsettledUploads = true;
+    return false;
+  });
+}
 
 function routeError(message: string, status = 400): Error {
   return Object.assign(new Error(message), { status });
@@ -452,15 +505,25 @@ function isExpired(record: PreviewRecord, now: number): boolean {
 
 async function deletePersistentArchive(record: PreviewRecord, deps: PreviewDeps): Promise<boolean> {
   if (!record.archivePrefix) return true;
+  reclaimUploadLeases(record, deps.now());
+  record.cleanupUntil ??= deps.now() + PREVIEW_CLEANUP_HORIZON_MS;
   try {
     await deps.deleteArchivePrefix(record.archivePrefix);
-    return true;
+    // A timeout does NOT cancel R2. Sweep locally for a bounded grace period;
+    // the mandatory bucket lifecycle catches writes materializing even later.
+    if (
+      (!record.pendingUploads?.length && !record.hasUnsettledUploads) ||
+      deps.now() >= record.cleanupUntil
+    )
+      return true;
   } catch {
-    record.state = 'cleanup';
-    record.expiresAt = new Date(deps.now() + PREVIEW_CLEANUP_RETRY_MS).toISOString();
-    delete record.uploadToken;
-    return false;
+    // R2 lifecycle also bounds bytes when prefix deletion never succeeds.
+    if (deps.now() >= record.cleanupUntil) return true;
   }
+  record.state = 'cleanup';
+  record.expiresAt = new Date(deps.now() + PREVIEW_CLEANUP_RETRY_MS).toISOString();
+  delete record.uploadToken;
+  return false;
 }
 
 async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
@@ -476,6 +539,22 @@ export async function expirePersistentPreviews(deps: PreviewDeps): Promise<void>
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray?.previews) return;
+  if (tray.previewTransfer && tray.previewTransfer.phase !== 'complete') {
+    // A disconnected destination must not suspend snapshot retention forever.
+    // Expired bytes may be deleted safely even after an ambiguous import: the
+    // target has the same expiry. Keep the record as a non-serving tombstone so
+    // retry can still finish its original-token locator update.
+    for (const record of Object.values(tray.previews)) {
+      if (!isPersistent(record) || !isExpired(record, deps.now())) continue;
+      await deletePersistentArchive(record, deps);
+      record.state = 'cleanup';
+      delete record.uploadToken;
+      record.expiresAt = new Date(deps.now() + PREVIEW_CLEANUP_RETRY_MS).toISOString();
+    }
+    await deps.persistTray();
+    await scheduleNextPersistentExpiry(deps);
+    return;
+  }
   let changed = false;
   for (const [token, record] of Object.entries(tray.previews)) {
     if (!isPersistent(record) || !isExpired(record, deps.now())) continue;
@@ -587,7 +666,11 @@ export async function mintPreview(
   };
 
   tray.previews ??= {};
-  if (Object.keys(tray.previews).length >= MAX_PREVIEWS_PER_TRAY) {
+  await expirePersistentPreviews(deps);
+  if (
+    Object.values(tray.previews).filter((preview) => preview.state !== 'cleanup').length >=
+    MAX_PREVIEWS_PER_TRAY
+  ) {
     throw Object.assign(new Error('Preview limit reached'), {
       code: 'PREVIEW_LIMIT',
       status: 429,
@@ -618,17 +701,45 @@ async function persistentUploadRecord(
 export async function authorizePreviewUpload(
   body: PreviewUploadBody,
   deps: PreviewDeps
-): Promise<{ objectKey: string; relativePath: string }> {
+): Promise<{
+  objectKey: string;
+  relativePath: string;
+  uploaded?: { size: number; mime: string; sha256?: string };
+  leased?: boolean;
+}> {
   const record = await persistentUploadRecord(body, deps);
   const relativePath = normalizePreviewArchivePath(body.relativePath);
   if (!relativePath) throw routeError('invalid preview file path');
   if (!Number.isSafeInteger(body.size) || body.size < 0 || body.size > MAX_PREVIEW_FILE_BYTES) {
     throw routeError('preview file exceeds 25 MiB limit', 413);
   }
-  if (record.uploadedFiles?.[relativePath] !== undefined) {
+  const existing = record.uploadedFiles?.[relativePath];
+  if (existing !== undefined) {
+    if (body.allowReplay) {
+      return {
+        objectKey: existing.key,
+        relativePath,
+        uploaded: {
+          size: existing.size,
+          mime: existing.mime,
+          sha256: existing.sha256,
+        },
+      };
+    }
     throw routeError('duplicate preview file path', 409);
   }
-  return { objectKey: `${record.archivePrefix}objects/${crypto.randomUUID()}`, relativePath };
+  reclaimUploadLeases(record, deps.now());
+  // Only live leases consume concurrency. Expiry is not proof of R2 cancellation.
+  if ((record.pendingUploads?.length ?? 0) >= 8) {
+    // In particular, persist legacy migration even when its eight leases fill
+    // the window; eviction must not restart their migration grace period.
+    await deps.persistTray();
+    throw routeError('too many unresolved preview uploads', 429);
+  }
+  const objectKey = `${record.archivePrefix}objects/${crypto.randomUUID()}`;
+  (record.pendingUploads ??= []).push({ objectKey, leasedAt: deps.now() });
+  await deps.persistTray();
+  return { objectKey, relativePath, leased: true };
 }
 
 export async function commitPreviewUpload(
@@ -651,14 +762,23 @@ export async function commitPreviewUpload(
   if (!body.objectKey?.startsWith(`${record.archivePrefix}objects/`)) {
     throw routeError('invalid preview object key');
   }
+  reclaimUploadLeases(record, deps.now());
+  if (!record.pendingUploads?.some((lease) => lease.objectKey === body.objectKey)) {
+    await deps.persistTray();
+    throw routeError('preview upload lease expired; retry the same file', 409);
+  }
   files[relativePath] = {
     key: body.objectKey,
     size: body.size,
     mime: body.mime,
     etag: body.etag,
+    ...(body.sha256 ? { sha256: body.sha256 } : {}),
   };
   record.uploadedFiles = files;
   record.totalBytes = nextTotal;
+  record.pendingUploads = record.pendingUploads?.filter(
+    (lease) => lease.objectKey !== body.objectKey
+  );
   await deps.persistTray();
 }
 
@@ -687,6 +807,8 @@ export async function resolvePreview(
   const tray = deps.getTray();
   if (!tray) return null;
   const record = tray.previews?.[previewToken];
+  if (tray.previewTransfer) return null;
+  if (Object.values(tray.previewImports ?? {}).some((receipt) => !receipt.activated)) return null;
   if (!record || !isReady(record)) return null;
   if (isPersistent(record)) {
     if (isExpired(record, deps.now())) {

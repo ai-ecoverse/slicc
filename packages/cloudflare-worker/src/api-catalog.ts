@@ -17,6 +17,12 @@ interface CatalogEntry {
 
 const ENTRIES: CatalogEntry[] = [
   {
+    anchor: '/api/tray/:trayId/preview-transfer',
+    methods: ['POST'],
+    description:
+      'Transfer previews to another tray. Bearer is the source controller capability; JSON supplies targetTrayId and targetControllerToken. Retry the same target on 503.',
+  },
+  {
     anchor: '/tray',
     methods: ['POST'],
     description: 'Create a tray; returns join/controller/webhook capability URLs.',

@@ -7,6 +7,7 @@
  */
 
 import { buildPreviewUrl } from '@slicc/shared-ts';
+import { expect } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
@@ -15,6 +16,7 @@ import {
   type FakeWebSocket,
 } from './fake-do-state.js';
 import { makeEnv } from './helpers/fake-env.js';
+import { previewHomeBindings } from './helpers/preview-home.js';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Test environment setup (mirrors session-tray-preview.test.ts)
@@ -31,6 +33,8 @@ class FakeNamespace {
   readonly states = new Map<string, FakeDurableObjectState>();
   private readonly instances = new Map<string, SessionTrayDurableObject>();
 
+  constructor(private readonly options: { previewStorage?: R2Bucket; now?: () => number } = {}) {}
+
   idFromName(name: string): { toString: () => string } {
     return new FakeDurableObjectId(name);
   }
@@ -44,9 +48,9 @@ class FakeNamespace {
       instance = new SessionTrayDurableObject(
         // biome-ignore lint/suspicious/noExplicitAny: Test helper needs to construct DO with fake state
         state as any,
-        {},
+        { TRAY_HUB: this, PREVIEW_STORAGE: this.options.previewStorage },
         {
-          now: () => Date.now(),
+          now: this.options.now ?? (() => Date.now()),
           webSocketPairFactory: () => createFakeWebSocketPair(state),
         }
       );
@@ -61,9 +65,9 @@ class FakeNamespace {
     if (!state) throw new Error(`No Durable Object state for ${name}`);
     const instance = new SessionTrayDurableObject(
       state as never,
-      {},
+      { TRAY_HUB: this, PREVIEW_STORAGE: this.options.previewStorage },
       {
-        now: () => Date.now(),
+        now: this.options.now ?? (() => Date.now()),
         webSocketPairFactory: () => createFakeWebSocketPair(state),
       }
     );
@@ -88,14 +92,16 @@ const fakeCloudSessions = {
   }),
 };
 
-function createTestEnv() {
-  const namespace = new FakeNamespace();
+export function createTestEnv(options: { previewStorage?: R2Bucket; now?: () => number } = {}) {
+  const namespace = new FakeNamespace(options);
   return {
     env: makeEnv({
       // biome-ignore lint/suspicious/noExplicitAny: Test env type is complex and not fully typed
       TRAY_HUB: namespace as unknown as any,
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
+      WEBHOOK_HOMES: previewHomeBindings,
+      PREVIEW_STORAGE: options.previewStorage,
     }),
     namespace,
   };
@@ -318,7 +324,7 @@ export async function makeTrayWithConnectedLeader(opts: {
 
 /** Create a tray, attach + connect a leader, and resolve the pieces the harness
  *  needs (session, leaderKey, captured leader sends, controller token, DO). */
-async function setupConnectedLeader(
+export async function setupConnectedLeader(
   env: ReturnType<typeof createTestEnv>['env'],
   namespace: FakeNamespace,
   workerBaseUrl: string
@@ -334,6 +340,7 @@ async function setupConnectedLeader(
     new Request(`${workerBaseUrl}/tray`, { method: 'POST' }),
     env
   );
+  expect(created.status).toBe(201);
   const session = (await created.json()) as {
     capabilities: { controller: { url: string } };
     trayId: string;

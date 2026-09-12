@@ -14,6 +14,7 @@
 
 import type { LeaderWebhookDelivery, WebhookDeliveryDisposition } from '@slicc/shared-ts';
 import { jsonResponse, type TrayRecord } from './shared.js';
+import { readBoundedWebhookBody, WebhookBodyError } from './webhook-body.js';
 
 /**
  * How long a webhook POST waits for the leader's `webhook.delivery` before the
@@ -101,7 +102,13 @@ export function webhookDeliveryResponse(
       cors
     );
   }
-  return jsonResponse({ ok: true, accepted: true }, 202, cors);
+  return jsonResponse(
+    { ok: true, accepted: true },
+    202,
+    disposition === 'delivered' || disposition === 'filtered'
+      ? { ...cors, 'x-slicc-webhook-ack': disposition }
+      : cors
+  );
 }
 
 /**
@@ -109,19 +116,21 @@ export function webhookDeliveryResponse(
  * so a plain-text or form payload still reaches the cone instead of 400ing.
  */
 async function readWebhookBody(request: Request): Promise<unknown> {
+  const bytes = await readBoundedWebhookBody(request);
+  let text: string;
   try {
-    const contentType = request.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      return await request.json();
-    }
-    const text = await request.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { raw: text };
-    }
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
-    return {};
+    // JSON control messages cannot carry arbitrary bytes directly. Base64 is
+    // lossless (unlike the replacement characters from Request.text()).
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return { raw: btoa(binary), encoding: 'base64' };
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
   }
 }
 
@@ -136,6 +145,12 @@ function forwardableHeaders(request: Request): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of request.headers.entries()) {
     if (key.startsWith('cf-') || key === 'host' || key.startsWith('x-slicc-preview-')) {
+      continue;
+    }
+    // Reserved WebhookHome routing headers (#2812): the cone delivery secret
+    // and webhook id are consumed by the home, and must never reach the cone
+    // — a public POST carrying them would otherwise forge them onto the event.
+    if (key === 'x-slicc-cone-secret' || key === 'x-slicc-webhook-id') {
       continue;
     }
     headers[key] = value;
@@ -194,6 +209,38 @@ export class WebhookRelay {
     const superseded = this.supersededRedirect(request, webhookId, cors);
     if (superseded) return superseded;
 
+    return this.deliver(webhookId, request, cors);
+  }
+
+  /**
+   * Deliver a webhook forwarded INTERNALLY by a WebhookHome DO (#2812). The
+   * home already verified the cone-scoped delivery secret and resolved this
+   * tray as the current one, so there is no public token to check and no
+   * supersede redirect to answer — the home indirection replaces both. Runs
+   * the same expiry / live-leader / relay path a public delivery runs.
+   *
+   * Reachable only through the DO stub (the `/internal/*` routes never leave
+   * the worker), so skipping the token check does not widen the attack surface:
+   * an external caller can never address this route directly.
+   */
+  async handleInternal(webhookId: string, request: Request): Promise<Response> {
+    const cors = { 'access-control-allow-origin': '*' };
+    if (!webhookId) {
+      return jsonResponse(
+        { error: 'Webhook ID is required', code: 'WEBHOOK_ID_REQUIRED' },
+        400,
+        cors
+      );
+    }
+    return this.deliver(webhookId, request, cors);
+  }
+
+  /** Shared tail of `handle` and `handleInternal`: expiry → live-leader → relay. */
+  private async deliver(
+    webhookId: string,
+    request: Request,
+    cors: Record<string, string>
+  ): Promise<Response> {
     const expired = await this.deps.ensureTrayIsActive();
     if (expired) return expired;
 
@@ -205,7 +252,17 @@ export class WebhookRelay {
       );
     }
 
-    const body = await readWebhookBody(request);
+    let body: unknown;
+    try {
+      body = await readWebhookBody(request);
+    } catch (error) {
+      if (!(error instanceof WebhookBodyError)) throw error;
+      return jsonResponse(
+        { error: error.message, code: 'WEBHOOK_BODY_REJECTED' },
+        error.status,
+        cors
+      );
+    }
     const headers = forwardableHeaders(request);
 
     // Forward to leader via the control WebSocket, asking for the disposition
@@ -285,9 +342,15 @@ export class WebhookRelay {
     deliveryId: string,
     settled: Promise<WebhookDeliveryDisposition | null>
   ): Promise<WebhookDeliveryDisposition | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([
       settled,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), this.waitMs)),
-    ]).finally(() => this.pending.delete(deliveryId));
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.waitMs);
+      }),
+    ]).finally(() => {
+      clearTimeout(timer);
+      this.pending.delete(deliveryId);
+    });
   }
 }

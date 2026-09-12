@@ -660,9 +660,10 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     async reset(): Promise<LeaderTrayRuntimeStatus> {
       sync.stop();
       peers.stop();
-      leader.stop();
-      await leader.clearSession();
-      const session = await leader.start();
+      // The manager persists the source before minting a target, then resumes
+      // that same pair after failures/reloads. Never clear it here: preview
+      // transfer must succeed before the old tray is superseded.
+      const session = await leader.reset();
       updateUrlBar(session);
       return getLeaderTrayRuntimeStatus();
     },

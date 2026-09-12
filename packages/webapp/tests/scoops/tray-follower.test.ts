@@ -9,6 +9,38 @@ import {
 } from '../../src/scoops/tray-follower.js';
 
 describe('tray-follower', () => {
+  it('accepts a superseded guest terminal response through the wire validator', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'old-tray',
+          controllerId: 'guest',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: {
+            action: 'fail',
+            code: 'TRAY_EXPIRED',
+            error: 'This guest session ended when the tray was replaced',
+          },
+        }),
+        { status: 410, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    const plan = await attachTrayFollower({
+      joinUrl: 'https://tray.example.com/join/guest-seat',
+      controllerId: 'guest',
+      fetchImpl,
+    });
+    expect(plan).toMatchObject({
+      action: 'fail',
+      code: 'TRAY_EXPIRED',
+      error: 'This guest session ended when the tray was replaced',
+    });
+    expect(plan.supersededByJoinUrl).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('posts the follower join request and normalizes wait responses', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

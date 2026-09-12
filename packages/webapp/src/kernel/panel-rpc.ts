@@ -194,6 +194,20 @@ export type PanelRpcRequest =
       payload?: undefined;
     }
   | {
+      // Rotate the cone's stable webhook capability (#2812): revoke the current
+      // webhook URL and issue a fresh one on the same tray. Standalone bridges
+      // to the page because `webhook rotate` runs in the kernel worker but the
+      // cone identity + controller token live on the page-side leader. Result
+      // is the new webhook base URL. Handler throws when no leader tray is
+      // active or the tray has no stable webhook identity.
+      op: 'tray-webhook-rotate';
+      payload?: undefined;
+    }
+  | {
+      op: 'tray-webhook-revoke';
+      payload: { webhookId: string };
+    }
+  | {
       // Mint a preview URL for the given entry under servedRoot, broadcast
       // it to followers, and return the URL + follower count. Standalone
       // path ONLY — the extension agent uses the in-realm
@@ -760,6 +774,8 @@ export interface PanelRpcResults {
   'hear-status': HearRpcStatus;
   'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
+  'tray-webhook-rotate': { webhookUrl: string };
+  'tray-webhook-revoke': { ok: true };
   'tray-open-preview': { url: string; pushed: number; previewToken: string };
   'tray-revoke-preview': { revoked: boolean; webhookId?: string };
   'tray-list-previews': {

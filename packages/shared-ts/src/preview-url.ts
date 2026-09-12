@@ -29,12 +29,13 @@ const PREVIEW_BASE_BY_WORKER: Record<string, string> = {
   'sliccy.ai': 'sliccy.now',
   // Staging — sliccy.dev
   'slicc-tray-hub-staging.minivelos.workers.dev': 'sliccy.dev',
-  // Local dev
-  'localhost:8787': 'localhost:8787',
 };
 
 export function previewBaseHost(workerBaseUrl: string): string {
-  const host = new URL(workerBaseUrl).host.toLowerCase();
+  const url = new URL(workerBaseUrl);
+  const host = url.host.toLowerCase();
+  // Local harnesses use isolated ports; keep preview subdomains on that hub.
+  if (url.hostname.toLowerCase() === 'localhost') return host;
   const mapped = PREVIEW_BASE_BY_WORKER[host];
   if (!mapped) {
     throw new Error(`No preview base configured for worker host ${host}`);

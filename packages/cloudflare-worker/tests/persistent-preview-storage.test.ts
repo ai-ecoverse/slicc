@@ -14,6 +14,7 @@ import {
   expirePersistentPreviews,
   finalizePersistentPreview,
   mintPreview,
+  PREVIEW_UPLOAD_LEASE_MS,
   type PreviewDeps,
   resolvePreview,
   revokePreview,
@@ -163,6 +164,45 @@ describe('persistent preview publication', () => {
     await expirePersistentPreviews(deps);
     expect(deleted).toEqual([prefix]);
     expect(tray.previews?.[minted.previewToken]).toBeUndefined();
+  });
+
+  it('migrates legacy leases only once and expires them across subsequent authorization retries', async () => {
+    const { deps, tray, advance } = previewDeps();
+    const minted = await mintPreview(
+      {
+        controllerToken: 'controller',
+        servedRoot: '/site',
+        entryPath: '/site/index.html',
+        allowLive: false,
+        workerBaseUrl: 'https://www.sliccy.ai',
+        ttlMs: 3_600_000,
+      },
+      deps
+    );
+    const record = tray.previews![minted.previewToken];
+    record.pendingUploadKeys = Array.from(
+      { length: 8 },
+      (_, i) => `${record.archivePrefix}objects/${i}`
+    );
+    const upload = {
+      previewToken: minted.previewToken,
+      uploadToken: minted.uploadToken!,
+      relativePath: 'index.html',
+      size: 4,
+    };
+    const persisted: PreviewRecord[] = [];
+    deps.persistTray = async () => {
+      persisted.push(structuredClone(record));
+    };
+    await expect(authorizePreviewUpload(upload, deps)).rejects.toThrow('too many unresolved');
+    expect(persisted[0].pendingUploadKeys).toBeUndefined();
+    expect(persisted[0].pendingUploads).toHaveLength(8);
+    expect(record.pendingUploadKeys).toBeUndefined();
+    expect(record.pendingUploads).toHaveLength(8);
+    advance(PREVIEW_UPLOAD_LEASE_MS);
+    await expect(authorizePreviewUpload(upload, deps)).resolves.toMatchObject({ leased: true });
+    expect(record.pendingUploads).toHaveLength(1);
+    expect(record.hasUnsettledUploads).toBe(true);
   });
 
   it('retains an expired cleanup tombstone and retries failed R2 deletion', async () => {

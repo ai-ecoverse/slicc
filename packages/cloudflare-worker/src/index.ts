@@ -36,6 +36,7 @@ import {
 import { handlePreviewRequest } from './preview-handler.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
+  extractBearer,
   handlePreviewFinalize,
   handlePreviewList,
   handlePreviewMint,
@@ -43,6 +44,7 @@ import {
   handlePreviewUpload,
   handleTraySupersede,
 } from './preview-routes.js';
+import { handlePreviewTransfer } from './preview-transfer-route.js';
 import { buildPrivacyResponse } from './privacy.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
@@ -54,12 +56,17 @@ import {
   parseCapabilityToken,
   wantsJSON,
 } from './shared.js';
+import { readBoundedWebhookBody, WebhookBodyError, withWebhookTimeout } from './webhook-body.js';
+import { WebhookHomeDurableObject } from './webhook-home.js';
+import { handleWebhookRevoke } from './webhook-revoke-route.js';
 
 const SLICC_HOSTED_HOSTNAME = new URL(SLICC_HOSTED_ORIGIN).hostname;
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
   CLOUD_SESSIONS: DurableObjectNamespaceLike;
+  /** Stable cone-scoped webhook indirection (#2812). */
+  WEBHOOK_HOMES: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
   ASSET_ARCHIVE: R2Bucket;
   PREVIEW_STORAGE: R2Bucket;
@@ -618,15 +625,19 @@ const ROUTES_INDEX_BODY = {
     'GET|POST /join/:token',
     'GET|POST /controller/:token',
     'POST /webhook/:token/:webhookId',
+    'POST /wh/:token/:webhookId',
     'POST /api/tray/:trayId/preview',
     'PUT /api/tray/:trayId/preview/:previewToken/file',
     'POST /api/tray/:trayId/preview/:previewToken/finalize',
     'POST /api/tray/:trayId/preview/stop',
     'GET /api/tray/:trayId/previews',
+    'POST /api/tray/:trayId/preview-transfer',
     'POST /api/tray/:trayId/biscotto',
     'POST /api/tray/:trayId/biscotto/stop',
     'GET /api/tray/:trayId/biscotti',
     'POST /api/tray/:trayId/supersede',
+    'POST /api/tray/:trayId/webhook/rotate',
+    'POST /webhooks/:coneId/:webhookId/revoke',
     'GET /auth/callback',
     'GET /auth/mcp-callback',
     'POST /oauth/token',
@@ -950,6 +961,12 @@ async function tryHandleCapabilityRoutes(
 ): Promise<Response | null> {
   // Unified-preview mint/revoke/list HTTP routes.
   // Bearer = controllerToken; the worker forwards to the DO via its fetch() surface.
+  const transferMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview-transfer$/);
+  if (transferMatch && request.method === 'POST') {
+    return handlePreviewTransfer(request, transferMatch[1], () =>
+      env.TRAY_HUB.get(env.TRAY_HUB.idFromName(transferMatch[1]))
+    );
+  }
   const previewMintMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview$/);
   if (previewMintMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewMintMatch[1]));
@@ -979,10 +996,41 @@ async function tryHandleCapabilityRoutes(
   }
   const biscotto = await tryHandleBiscottoRoutes(url, request, env);
   if (biscotto) return biscotto;
+  return tryHandleSessionCapabilityRoutes(url, request, env);
+}
+
+/** Session lifecycle and token routes, separate from preview management. */
+async function tryHandleSessionCapabilityRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
   const supersedeMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/supersede$/);
   if (supersedeMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(supersedeMatch[1]));
     return handleTraySupersede(request, stub);
+  }
+
+  const rotateMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/webhook\/rotate$/);
+  if (rotateMatch && request.method === 'POST') {
+    return handleWebhookRotate(request, env, url, rotateMatch[1]!);
+  }
+
+  const revokeMatch = url.pathname.match(/^\/webhooks\/([^/]+)\/([^/]+)\/revoke$/);
+  if (revokeMatch) {
+    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    return handleWebhookRevoke(request, env, revokeMatch[1]!, revokeMatch[2]!);
+  }
+
+  // Stable cone-scoped webhook delivery (#2812): `/wh/<coneId>.<secret>/<id>`.
+  // The id in the path names a CONE, not a tray instance, so the URL survives
+  // every rove. Routes to the WebhookHome DO, which verifies the secret and
+  // internal-forwards to whichever tray is current — no redirect, no capability
+  // in a response header. The legacy `/webhook/<trayId>.<secret>/<id>` shape
+  // below stays for already-cached URLs (its 308 migration path is unchanged).
+  const coneWebhookMatch = url.pathname.match(/^\/wh\/([^/]+?)(?:\/([^/]+))?$/);
+  if (coneWebhookMatch) {
+    return handleConeWebhookRoute(request, env, coneWebhookMatch[1]!, coneWebhookMatch[2]);
   }
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
@@ -1158,12 +1206,200 @@ export async function handleDmgDownload(
   }
 }
 
+/**
+ * Stable cone-scoped webhook delivery (#2812). `POST /wh/<coneId>.<secret>/<id>`.
+ *
+ * Routes to the cone's WebhookHome DO (`idFromName(coneId)`), which verifies
+ * the secret against its stored hash and internal-forwards the delivery to
+ * whichever tray it is currently bound to. The URL names the cone, so it never
+ * dies when the tray roves; there is no redirect and no capability in any
+ * response header.
+ */
+async function handleConeWebhookRoute(
+  request: Request,
+  env: WorkerEnv,
+  token: string,
+  webhookId: string | undefined
+): Promise<Response> {
+  const cors = { 'access-control-allow-origin': '*' };
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'POST, OPTIONS',
+        'access-control-allow-headers': 'content-type',
+      },
+    });
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405, {
+      ...cors,
+      allow: 'POST, OPTIONS',
+    });
+  }
+  const parsed = parseCapabilityToken(token);
+  if (!parsed) {
+    return jsonResponse(
+      { error: 'Malformed webhook capability', code: 'MALFORMED_CAPABILITY' },
+      400,
+      cors
+    );
+  }
+  if (!webhookId) {
+    return jsonResponse(
+      {
+        error: 'Webhook ID is required. Use POST /wh/{coneId}.{secret}/{webhookId}',
+        code: 'WEBHOOK_ID_REQUIRED',
+      },
+      400,
+      cors
+    );
+  }
+  const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(parsed.trayId));
+  // Hand the home the secret + webhookId out of band (reserved headers) and the
+  // sender's body verbatim, so its verify-then-forward sees the original
+  // payload. Buffer the body rather than stream it: a streamed body would need
+  // `duplex: 'half'` (workerd-only) on the sub-request.
+  const forwardUrl = new URL(request.url);
+  forwardUrl.pathname = '/internal/home/deliver';
+  const headers = new Headers(request.headers);
+  headers.set('x-slicc-cone-secret', parsed.secret);
+  headers.set('x-slicc-webhook-id', webhookId);
+  let forwardBody: Uint8Array;
+  try {
+    forwardBody = await readBoundedWebhookBody(request);
+  } catch (error) {
+    if (!(error instanceof WebhookBodyError)) throw error;
+    return jsonResponse(
+      { error: error.message, code: 'WEBHOOK_BODY_REJECTED' },
+      error.status,
+      cors
+    );
+  }
+  return home.fetch(new Request(forwardUrl, { method: 'POST', headers, body: forwardBody }));
+}
+
+/**
+ * `POST /api/tray/:trayId/webhook/rotate` — Bearer = the tray's controllerToken.
+ *
+ * Atomically replace both secrets in the same cone's home. The client persists
+ * fresh replacements before sending; an exact receipt permits lost-response
+ * retries without storing raw capabilities or retaining old mutation authority.
+ *
+ * Body: `{ oldConeId, oldSecret, oldRebindSecret, secret, rebindSecret }`.
+ * The controller token authenticates against the tray (the same authority that
+ * minted the home); the old rebind secret authenticates the revoke.
+ */
+async function handleWebhookRotate(
+  request: Request,
+  env: WorkerEnv,
+  url: URL,
+  trayId: string
+): Promise<Response> {
+  const controllerToken = extractBearer(request);
+  if (!controllerToken) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  let body: {
+    oldConeId?: string;
+    oldSecret?: string;
+    oldRebindSecret?: string;
+    secret?: string;
+    rebindSecret?: string;
+  };
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBoundedWebhookBody(request)));
+  } catch (error) {
+    if (error instanceof WebhookBodyError) {
+      return jsonResponse({ error: error.message, code: 'WEBHOOK_BODY_REJECTED' }, error.status);
+    }
+    return jsonResponse({ error: 'invalid body', code: 'INVALID_BODY' }, 400);
+  }
+  if (
+    !body ||
+    typeof body.oldConeId !== 'string' ||
+    !body.oldConeId ||
+    typeof body.oldSecret !== 'string' ||
+    !body.oldSecret ||
+    typeof body.oldRebindSecret !== 'string' ||
+    !body.oldRebindSecret ||
+    typeof body.secret !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(body.secret) ||
+    typeof body.rebindSecret !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(body.rebindSecret) ||
+    body.secret === body.oldSecret ||
+    body.rebindSecret === body.oldRebindSecret ||
+    body.secret === body.rebindSecret
+  ) {
+    return jsonResponse(
+      {
+        error: 'Old identity and distinct fresh replacement secrets are required',
+        code: 'INVALID_BODY',
+      },
+      400
+    );
+  }
+
+  const coneId = body.oldConeId;
+  const rebindSecret = body.rebindSecret;
+  const coneSecret = body.secret;
+  try {
+    const oldHome = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.oldConeId));
+    const rotated = await oldHome.fetch(
+      new Request(new URL('/internal/home/rotate', url), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({
+          oldSecret: body.oldSecret,
+          secret: coneSecret,
+          oldRebindSecret: body.oldRebindSecret,
+          rebindSecret,
+          trayId,
+          controllerToken,
+        }),
+      })
+    );
+    if (!rotated.ok) {
+      return jsonResponse(
+        { error: 'Webhook rotation refused', code: 'ROTATE_FAILED' },
+        rotated.status === 403 ? 403 : 502
+      );
+    }
+  } catch {
+    return jsonResponse(
+      { error: 'Webhook rotation failed; retry safely', code: 'ROTATE_FAILED' },
+      502
+    );
+  }
+
+  return jsonResponse(
+    {
+      coneId,
+      webhook: {
+        token: `${coneId}.${coneSecret}`,
+        url: `${url.origin}/wh/${coneId}.${coneSecret}`,
+        rebindToken: `${coneId}.${rebindSecret}`,
+      },
+    },
+    200,
+    { 'cache-control': 'no-store' }
+  );
+}
+
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   let kind: 'desktop' | 'hosted' = 'desktop';
   // Tolerate three back-compat shapes: no content-length header at all
   // (legacy clients), content-length: 0, and an empty-string body. Only
   // attempt JSON parse when there's actually a body to parse.
-  const rawBody = await request.text();
+  let rawBody: string;
+  try {
+    rawBody = new TextDecoder().decode(await readBoundedWebhookBody(request));
+  } catch (error) {
+    if (!(error instanceof WebhookBodyError)) throw error;
+    return jsonResponse({ error: error.message, code: 'INVALID_BODY' }, error.status);
+  }
   if (rawBody.trim() !== '') {
     try {
       const body = JSON.parse(rawBody) as { kind?: unknown };
@@ -1189,13 +1425,29 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
     }
   }
 
+  // A stable cone identity (#2812). The leader mints `coneId` + the two cone
+  // secrets ONCE, persists them, and sends the same three back on every reset
+  // so the webhook home — and the external-facing URL under it — stays byte-for-
+  // byte identical while the tray roves. Identity-less clients stay on the
+  // legacy URL: they cannot persist/rebind a stable home during recovery.
+  const coneIdentity = parseConeIdentity(rawBody);
+  if (coneIdentity === 'invalid') {
+    return jsonResponse(
+      { error: 'Invalid cone identity or createAttemptId', code: 'INVALID_BODY' },
+      400
+    );
+  }
+
   const url = new URL(request.url);
-  const trayId = crypto.randomUUID();
-  const payload: CreateTrayRequest = {
+  const trayId = coneIdentity ? await trayIdForCreateAttempt(coneIdentity) : crypto.randomUUID();
+  let payload: CreateTrayRequest = {
     trayId,
     createdAt: new Date().toISOString(),
     joinToken: createCapabilityToken(trayId),
     controllerToken: createCapabilityToken(trayId),
+    // Legacy tray-scoped webhook token: still minted so an already-cached
+    // `/webhook/<trayId>...` URL keeps working (and its 308 migration path),
+    // while stable-aware clients receive `/wh/<coneId>...` below.
     webhookToken: createCapabilityToken(trayId),
     kind,
   };
@@ -1212,10 +1464,39 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
   if (initResponse.status >= 400) {
     return initResponse;
   }
+  // The DO returns its original record on retry, including all capabilities
+  // and createdAt. Never return the newly minted (uninstalled) retry tokens.
+  payload = (await initResponse.json()) as CreateTrayRequest;
+
+  // Bind (or rebind) the cone's webhook home to this fresh tray. The home
+  // confirms `controllerToken` against the tray before it points deliveries
+  // here, so a first bind claims the home and a rebind proves both the rebind
+  // secret and control of the target tray. Never silently replace a stable
+  // identity with a legacy URL on failure: the caller must retain and retry it.
+  const bind = coneIdentity
+    ? await bindWebhookHome(env, url, {
+        coneId: coneIdentity.coneId,
+        secret: coneIdentity.coneSecret,
+        rebindSecret: coneIdentity.rebindSecret,
+        trayId,
+        controllerToken: payload.controllerToken,
+      })
+    : { ok: true };
+  if (!bind.ok) {
+    return jsonResponse(
+      {
+        error: 'Webhook home bind failed; retry with the same cone identity and createAttemptId',
+        code: 'WEBHOOK_HOME_BIND_FAILED',
+      },
+      503,
+      { 'retry-after': '30' }
+    );
+  }
 
   return jsonResponse(
     {
       trayId,
+      ...(coneIdentity ? { coneId: coneIdentity.coneId } : {}),
       createdAt: payload.createdAt,
       capabilities: {
         join: {
@@ -1226,14 +1507,130 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
           token: payload.controllerToken,
           url: `${url.origin}/controller/${payload.controllerToken}`,
         },
-        webhook: {
-          token: payload.webhookToken,
-          url: `${url.origin}/webhook/${payload.webhookToken}`,
-        },
+        webhook: coneIdentity
+          ? {
+              token: `${coneIdentity.coneId}.${coneIdentity.coneSecret}`,
+              url: `${url.origin}/wh/${coneIdentity.coneId}.${coneIdentity.coneSecret}`,
+              rebindToken: `${coneIdentity.coneId}.${coneIdentity.rebindSecret}`,
+            }
+          : {
+              token: payload.webhookToken,
+              url: `${url.origin}/webhook/${payload.webhookToken}`,
+            },
       },
     },
     201
   );
+}
+
+interface ConeIdentity {
+  coneId: string;
+  coneSecret: string;
+  rebindSecret: string;
+  createAttemptId: string;
+}
+
+/**
+ * An authenticated, opaque attempt address. Knowing the public trayId or coneId
+ * cannot retrieve a tray's capabilities: reproducing this address also requires
+ * the private rebind secret. A new persisted attempt makes a deliberate reset
+ * distinct; retries after bind failure or a lost response reuse the same DO.
+ */
+async function trayIdForCreateAttempt(identity: ConeIdentity): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(
+      JSON.stringify([
+        'tray-create-v1',
+        identity.coneId,
+        identity.rebindSecret,
+        identity.createAttemptId,
+      ])
+    )
+  );
+  // Keep the existing 128-bit UUID-shaped tray grammar. Preview DNS labels
+  // encode its 32 hex digits; a full SHA-256 hex ID cannot round-trip there.
+  const hex = Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-');
+}
+
+/**
+ * The cone identity from the create body: the triple when present and valid,
+ * `undefined` when absent (legacy clients have no webhook home dependency),
+ * `'invalid'` when malformed or partial.
+ *
+ * All three travel together — a rebind needs the delivery secret (so the URL
+ * is unchanged) AND the rebind secret (to authenticate). A body that supplies
+ * some but not all, or omits the persisted creation attempt, is refused rather
+ * than silently half-applied.
+ */
+function parseConeIdentity(rawBody: string): ConeIdentity | undefined | 'invalid' {
+  if (rawBody.trim() === '') return undefined;
+  let body: {
+    coneId?: unknown;
+    coneSecret?: unknown;
+    rebindSecret?: unknown;
+    createAttemptId?: unknown;
+  };
+  try {
+    body = JSON.parse(rawBody) as typeof body;
+  } catch {
+    return 'invalid';
+  }
+  const present = [body.coneId, body.coneSecret, body.rebindSecret].filter((v) => v !== undefined);
+  if (present.length === 0) return body.createAttemptId === undefined ? undefined : 'invalid';
+  if (present.length !== 3) return 'invalid';
+  const { coneId, coneSecret, rebindSecret, createAttemptId } = body;
+  // Every component is embedded in a URL capability: exclude delimiters,
+  // whitespace, path/query syntax and escaping, not only dots in coneId.
+  const ok = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+  if (
+    !ok(coneId) ||
+    !ok(coneSecret) ||
+    !ok(rebindSecret) ||
+    !ok(createAttemptId) ||
+    createAttemptId.length < 32
+  ) {
+    return 'invalid';
+  }
+  return { coneId, coneSecret, rebindSecret, createAttemptId };
+}
+
+/** Bind or rebind a cone's webhook home to `trayId`. */
+async function bindWebhookHome(
+  env: WorkerEnv,
+  url: URL,
+  body: {
+    coneId: string;
+    secret: string;
+    rebindSecret: string;
+    trayId: string;
+    controllerToken: string;
+  }
+): Promise<{ ok: boolean }> {
+  try {
+    const home = env.WEBHOOK_HOMES.get(env.WEBHOOK_HOMES.idFromName(body.coneId));
+    const res = await withWebhookTimeout(
+      home.fetch(
+        new Request(new URL('/internal/home/bind', url), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      )
+    );
+    return { ok: res.status === 200 };
+  } catch {
+    return { ok: false };
+  }
 }
 
 const worker = {
@@ -1267,4 +1664,4 @@ const worker = {
 };
 
 export default worker;
-export { CloudSessionsDurableObject, SessionTrayDurableObject };
+export { CloudSessionsDurableObject, SessionTrayDurableObject, WebhookHomeDurableObject };
