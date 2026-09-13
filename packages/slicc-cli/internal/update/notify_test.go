@@ -34,7 +34,7 @@ type serverHandle struct {
 
 func newReleasesHandle(t *testing.T, tag string) serverHandle {
 	server, requests := releasesServer(t, map[int][]fakeRelease{
-		1: {carrier(tag, "slicc-darwin-arm64", "https://example.com/asset")},
+		1: {carrier(tag, "https://example.com/asset")},
 	})
 	return serverHandle{server: server, requests: requests}
 }

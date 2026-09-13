@@ -176,10 +176,10 @@ WebRTC using the platform shell as a line-eval stand-in.
 carrying this platform's `slicc-<os>-<arch>[.exe]` asset — releases are
 **sparse** (CLI binaries only attach when `packages/slicc-cli` changed), so
 `releases/latest` is not enough. Same bounded pagination as the worker's
-`/download/slicc-cli` route (30/page, 5 pages max). `Apply` downloads next
-to the executable, runs the staged binary's `--version` as a sanity gate,
-then atomically renames over the running binary (Windows: parks the old
-file at `.old`, swept on later runs).
+`/download/slicc-cli` route (100/page, 5 pages max — 500-release reach).
+`Apply` downloads next to the executable, runs the staged binary's
+`--version` as a sanity gate, then atomically renames over the running
+binary (Windows: parks the old file at `.old`, swept on later runs).
 
 Regular verbs call `startUpdateNotice()` (main-package `update.go`): the
 upgrade notice prints from a local cache

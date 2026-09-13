@@ -4,8 +4,9 @@
 // Release binaries are sparse: they only attach to GitHub releases where
 // packages/slicc-cli changed (release-native.mjs gating), so discovery scans
 // releases newest→oldest for the first one carrying this platform's
-// slicc-<os>-<arch>[.exe] asset — the same bounded pagination the tray hub
-// worker uses for /download/slicc.dmg and /download/slicc-cli/:target.
+// slicc-<os>-<arch>[.exe] asset — the same 100 × 5 (500-release) bounded
+// pagination the tray hub worker uses for /download/slicc.dmg and
+// /download/slicc-cli/:target.
 package update
 
 import (
@@ -25,9 +26,11 @@ import (
 const (
 	defaultAPIBase  = "https://api.github.com"
 	repoPath        = "ai-ecoverse/slicc"
-	releasesPerPage = 30
-	// Bounded pagination: 5 × 30 releases scanned before giving up, so a long
-	// streak of binary-less releases cannot drive unbounded GitHub API calls.
+	releasesPerPage = 100
+	// Bounded pagination: 5 × 100 = 500 releases scanned before giving up, so a
+	// long streak of binary-less releases cannot drive unbounded GitHub API
+	// calls. Matches GITHUB_RELEASES_PER_PAGE × GITHUB_RELEASES_MAX_PAGES in
+	// @slicc/shared-ts (worker DMG + CLI download, node-server --install-cli).
 	maxReleasePages = 5
 	userAgent       = "slicc-cli"
 )
