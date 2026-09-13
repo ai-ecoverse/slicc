@@ -65,8 +65,8 @@ type fakeAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func carrier(tag, assetName, url string) fakeRelease {
-	return fakeRelease{TagName: tag, Assets: []fakeAsset{{Name: assetName, BrowserDownloadURL: url}}}
+func carrier(tag, url string) fakeRelease {
+	return fakeRelease{TagName: tag, Assets: []fakeAsset{{Name: "slicc-darwin-arm64", BrowserDownloadURL: url}}}
 }
 
 func binaryless(tag string) fakeRelease {
@@ -108,7 +108,7 @@ func TestLatestCLIReleaseSkipsSparseDraftAndPrerelease(t *testing.T) {
 			binaryless("v5.72.0"),
 			{Draft: true, TagName: "v5.71.9", Assets: []fakeAsset{{Name: "slicc-darwin-arm64", BrowserDownloadURL: "draft"}}},
 			{Prerelease: true, TagName: "v5.71.8", Assets: []fakeAsset{{Name: "slicc-darwin-arm64", BrowserDownloadURL: "pre"}}},
-			carrier("v5.71.1", "slicc-darwin-arm64", "https://example.com/slicc-darwin-arm64"),
+			carrier("v5.71.1", "https://example.com/slicc-darwin-arm64"),
 		},
 	})
 	release, err := testChecker(server).LatestCLIRelease(context.Background())
@@ -131,10 +131,23 @@ func fullBinarylessPage() []fakeRelease {
 	return page
 }
 
+// paginateReleases chunks a newest→oldest list into GitHub-style pages of perPage.
+func paginateReleases(all []fakeRelease, perPage int) map[int][]fakeRelease {
+	pages := map[int][]fakeRelease{}
+	for i := 0; i < len(all); i += perPage {
+		end := i + perPage
+		if end > len(all) {
+			end = len(all)
+		}
+		pages[i/perPage+1] = all[i:end]
+	}
+	return pages
+}
+
 func TestLatestCLIReleasePaginates(t *testing.T) {
 	server, requests := releasesServer(t, map[int][]fakeRelease{
 		1: fullBinarylessPage(),
-		2: {carrier("v5.60.0", "slicc-darwin-arm64", "https://example.com/asset")},
+		2: {carrier("v5.60.0", "https://example.com/asset")},
 	})
 	release, err := testChecker(server).LatestCLIRelease(context.Background())
 	if err != nil {
@@ -157,6 +170,35 @@ func TestLatestCLIReleaseStopsAtShortPage(t *testing.T) {
 	}
 	if *requests != 1 {
 		t.Fatalf("requests = %d, want 1 (short page ends pagination)", *requests)
+	}
+}
+
+func TestLatestCLIReleaseFindsAssetPastOldThirtyPerPageCap(t *testing.T) {
+	// After #3064 the worker/node-server scan is 100 × 5 = 500. The old Go
+	// walk was 30 × 5 = 150, so an asset at index 180 was served by
+	// /download/slicc-cli and missed by `slicc update` (#3068).
+	if releasesPerPage != 100 {
+		t.Fatalf("releasesPerPage = %d, want 100 (GITHUB_RELEASES_PER_PAGE)", releasesPerPage)
+	}
+	const total = 200
+	const matchIndex = 180
+	all := make([]fakeRelease, total)
+	for i := range all {
+		all[i] = binaryless(fmt.Sprintf("v9.%d.0", i))
+	}
+	all[matchIndex] = carrier("v1.0.0", "https://example.com/deep")
+
+	server, requests := releasesServer(t, paginateReleases(all, releasesPerPage))
+	release, err := testChecker(server).LatestCLIRelease(context.Background())
+	if err != nil {
+		t.Fatalf("LatestCLIRelease: %v", err)
+	}
+	if release.Version != "v1.0.0" || release.AssetURL != "https://example.com/deep" {
+		t.Fatalf("got %+v", release)
+	}
+	wantPages := matchIndex/releasesPerPage + 1
+	if *requests != wantPages {
+		t.Fatalf("requests = %d, want %d", *requests, wantPages)
 	}
 }
 
