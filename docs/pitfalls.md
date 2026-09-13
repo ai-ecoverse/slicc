@@ -822,6 +822,42 @@ Use `chrome.debugger` API to control tabs directly.
 
 **Active Tab Detection**: BrowserAPI includes `active` field (boolean) only in extension mode, identifying the user's currently focused tab for intelligent tool auto-dispatch.
 
+## CDP Proxy: Chrome-Leg Drops Discard Every Session
+
+Chrome's browser-level socket drops on its own (`messageTooLarge`, inbound-queue
+overflow) and Chrome discards EVERY CDP session behind it.
+`packages/node-server/src/cdp-proxy/chrome-reconnect.ts` handles this at parity
+with swift-server's `CDPProxy`; the reconnect + buffer policy is identical in
+both servers.
+
+- `markChromeLegDown` clears the leg and buffers Client→Chrome frames (bounded
+  1,000, drop-oldest); `ChromeReconnectController` re-discovers the ws URL via
+  `/json/version` and re-dials, retrying indefinitely with a 1 s delay until
+  shutdown — no attempt cap.
+- Close codes (`close-codes.ts`) MUST stay in sync with
+  `packages/webapp/src/cdp/cdp-client.ts`: page-side `CDPClient` treats
+  `CDP_UPSTREAM_RESET_CLOSE_CODE` (4002) as "reset sessions and re-dial" and does
+  NOT latch, unlike 4001 (superseded). Close the active client with 4002 after
+  the 3rd consecutive failure so it does not hang on a dead leg.
+- Live frames from a client that no longer holds the slot (superseded, closed,
+  reset) are dropped before forwarding — same guard as swift-server's `receive`.
+
+**After a successful reconnect, reset the active client ONLY if it held the slot
+when the leg went down** — it owns the sessions Chrome discarded. A client that
+connected during the outage never had sessions on the dead leg; its buffered
+frames were flushed onto the replacement, so a 4002 would make the page retry
+commands that already ran (a sessionless `Target.createTarget` opens a duplicate
+tab).
+
+**Buffer generations.** `client-frame-buffer.ts` owns the transitions
+(`adoptClientSlot`, `takeClientFrameBuffer`, `releaseClientSlot` — unit-testable
+without booting a server). Every buffer is tagged `{chromeConnectionId,
+clientId}` and flushes only when both still match. Buffers from a dropped leg —
+and any left by a superseded or departed client — are dropped with a
+`[cdp-proxy] Dropped N buffered client frame(s) — <reason>` line, since
+replaying them would re-run duplicate-tab commands. Only initial-connect
+buffering (`chromeConnectionId: null`) still flushes.
+
 ## Leader Tray WebSocket: Extension Mode
 
 **The Problem**

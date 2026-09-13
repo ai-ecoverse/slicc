@@ -787,6 +787,21 @@ ports so they can run concurrently. Port-selection, reaping, and
 LaunchServices lifecycle are covered in
 [`docs/development.md`](development.md) § "Fresh Dev Harness Details".
 
+| Harness (script under `tools/`)              | Bridge             | CDP     | Notes                         |
+| -------------------------------------------- | ------------------ | ------- | ----------------------------- |
+| Standalone `dev-standalone-fresh.sh`         | `:$PORT` (`:5715`) | auto    | fails on occupied bridge      |
+| Swift `dev-swift-fresh.sh`                   | `:5720`            | `:9224` | native; auto-signs with cert  |
+| Extension `dev-extension-fresh.sh`           | (SW)               | `:9333` | MV3 extension IS the bridge   |
+| Electron-Node `dev-electron-node-fresh.sh`   | `:5730`            | `:9225` | external Electron app (Slack) |
+| Electron-Swift `dev-electron-swift-fresh.sh` | `:5740`            | `:9226` | Swift backend + Electron      |
+
+Run via `npm run dev:standalone:fresh` (also `dev:swift:fresh`,
+`dev:extension:fresh`, `dev:electron:{node,swift}:fresh`); override with
+`PORT`/`WRANGLER_PORT`/`ELECTRON_APP`. Darwin helpers:
+`clone-labeled-chrome.sh` (APFS COW-clone, distinct bundle name/id for
+⌘-Tab entries), `tools/setup-dev-cert.sh` (one-time self-signed
+`SLICC Dev Code Signing`).
+
 Reaping semantics (also enforced in the harness scripts):
 
 - The standalone harness fails if its selected bridge port is occupied

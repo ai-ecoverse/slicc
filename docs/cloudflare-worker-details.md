@@ -336,3 +336,17 @@ All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route 
 | `POST /api/cloud/kill`        | Kill a cone (idempotent)                                                    |
 | `POST /api/cloud/sign-out`    | Invalidate auth cache for the bearer                                        |
 | `GET /api/cloud/admin/stats`  | Admin-gated by `ADMIN_USER_IDS`                                             |
+
+## <a name="turn-push"></a>TURN Credentials & Follower Push
+
+- **TURN:** fetched with `CLOUDFLARE_TURN_KEY_ID` (`wrangler.jsonc`) +
+  `CLOUDFLARE_TURN_API_TOKEN` (secret). `session-tray.ts` caches ICE servers and refreshes
+  before TTL.
+- **APNS push (`src/apns.ts`):** ES256 JWT minted from `APNS_TEAM_ID` / `APNS_KEY_ID` /
+  `APNS_PRIVATE_KEY` (`.p8` PEM) to `api(.sandbox).push.apple.com` with `APNS_TOPIC`. The tray
+  DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`,
+  time-sensitive `sudo_request`, metadata only), dropping dead tokens; missing secret → push
+  off.
+- **Provider JWTs are minted by exactly one DO** (`src/apns-provider-token.ts`,
+  `idFromName('__apns_provider_token')`) — Apple throttles token creation per team+key, so
+  per-tray minting broke its 20-min floor.

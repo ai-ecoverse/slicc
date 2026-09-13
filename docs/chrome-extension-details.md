@@ -107,6 +107,32 @@ mode. Pure logic lives in `src/secrets-storage.ts` (tested by
 is bundled to `dist/extension/secrets.js` via the `build-secrets-page`
 esbuild plugin in `vite.config.ts`.
 
+## Import Boundary — shared modules and the type-only exception
+
+`src/` and `tests/` must not depend on `packages/webapp/src` at runtime, enforced
+zero-tolerance by `check-layer-back-edges.mjs`'s `findChromeExtensionWebappEscapes`
+(`npm run lint:layer-back-edges`), which scans `src`/`tests` for quoted,
+template-literal, and `+`-concatenated `import()`/`require()` specifiers plus TS
+triple-slash references.
+
+The pure protocol modules the extension needs live in `@slicc/shared-ts` (whose
+`tsconfig.json` includes `DOM`), and webapp keeps re-export shims at each original
+path so both sides import unchanged:
+
+- the CDP bridge envelope,
+- `LEADER_EXT_ID_QUERY_NAME`,
+- proxy-headers,
+- link extraction,
+- the `cdp/types` `TargetInfo` subset,
+- the `iframe-repaint.ts` DOM helper,
+- `isExtensionMessage`.
+
+Sole exception: a top-level
+`import type { ... } from '../../webapp/src/kernel/messages.js'` — a
+message-envelope union that compiles away. The guard allowlists only that exact
+path as a top-level `import type` clause; a value import, a mixed `{ type X, Y }`
+clause, or a type-only import of any OTHER webapp module all still fail.
+
 ## MV3 Remote Hosted Code Guard — Debugging
 
 `packages/dev-tools/tools/check-extension-rhc.sh` scans `dist/extension/`

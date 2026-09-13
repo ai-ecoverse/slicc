@@ -50,6 +50,19 @@ two routes, decided by whether the app allows renderer egress:
 
 `ElectronOverlayInjector.onEgressBlocked` fires once on first detection; `ServerCommand` starts the follower on that signal and stops it on shutdown. Mirrors node-server's `electron-tray-follower.ts` / `electron-federated-cdp.ts` (which use `werift`); the Swift path uses in-process `stasel/WebRTC`.
 
+## `/cdp` proxy — close codes, reconnect, and buffer generations
+
+`CDPProxy.swift` mirrors node-server; the webapp `cdp-client.ts` latches on both close codes.
+
+- **`4001` superseded**: a newer client took the single `/cdp` slot; the evicted tab stops re-dialing.
+- **`4002 upstream-reset`**: the Chrome leg dropped, so Chrome discarded every CDP session. The proxy closes the client **after** the reconnect loop has the leg back — closing earlier makes the reconnecting client race the reconnect. The webapp reconnects and resets its session state.
+
+Inbound-pump overflow warnings name the top event methods and how many distinct `sessionId`s they span, so a storm (usually leaked per-tab sessions) is attributable from the log alone.
+
+**Reconnect policy.** Retry indefinitely with a 1 s delay between attempts, until shutdown — no attempt cap. Close the active client with 4002 after the 3rd consecutive failure (`upstreamResetFailureThreshold`) so it never hangs on a proxy whose Chrome leg is gone. After a successful reconnect, reset the active client ONLY if it is the same client that held the slot when the leg went down — that is the one whose sessions Chrome discarded. A client that connected during the outage never had sessions on the dead leg and its buffered frames were just flushed onto the replacement connection, so closing it with 4002 would make the page retry commands that already ran (a sessionless `Target.createTarget` opens a duplicate tab). Never leave a clientless buffer around: buffered frames are dropped whenever the client that wrote them loses the slot.
+
+**Buffer generations.** Every `messageBuffer` carries the `ClientFrameBufferGeneration` (`{chromeConnectionID, clientID}`) its frames were written for, and is flushed only when both still match at flush time (`clientFrameBufferDropReason` is static + pure, so the policy is testable on its own). Frames buffered because the Chrome leg dropped name sessions the replacement connection never had, and a browser-level `Target.createTarget` among them would execute after its caller was already rejected with 4002, so the caller's retry opens a duplicate tab; those buffers are dropped with a `[cdp-proxy] Dropped N buffered client frame(s) — <reason>` line. A buffer left by a superseded or departed client is dropped the same way. Only the original initial-connect buffering (client connected before Chrome was ready, `chromeConnectionID: nil`) still flushes.
+
 ## Chrome launch flags
 
 Both launchers (`ChromeLauncher.buildLaunchArgs` here, node-server's
