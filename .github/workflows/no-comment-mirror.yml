@@ -1,0 +1,95 @@
+name: no-comment mirror
+
+# Derived benchmark branch: every push to main is stripped of comments and
+# developer documentation and committed onto `no-comment`. The stripper and
+# lint gate live on main; the mirrored tree carries a `.no-comment` marker so
+# `npm run lint:no-comments` becomes a hard fail if comments come back.
+#
+# Required repository secret:
+#   DEPLOY_KEY  SSH deploy key with contents write, same as coverage-ratchet
+#               and planning-artifact-cleanup. GITHUB_TOKEN cannot push a
+#               long-lived derived branch if the repo restricts default-token
+#               pushes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: no-comment-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: ./.github/actions/npm-ci
+
+      - name: Fetch existing no-comment branch
+        run: git fetch origin no-comment || true
+
+      - name: Strip comments and developer docs
+        run: node packages/dev-tools/no-comment/strip.mjs
+
+      - name: Format the stripped tree
+        run: |
+          set -euo pipefail
+          npx biome check --write .
+          npx prettier --write .
+
+      - name: Commit the stripped tree onto no-comment
+        run: |
+          set -euo pipefail
+          git add -A
+          TREE=$(git write-tree)
+          PARENT=""
+          if git rev-parse --verify origin/no-comment >/dev/null 2>&1; then
+            PARENT=$(git rev-parse origin/no-comment)
+            if [ "$(git rev-parse "${PARENT}^{tree}")" = "$TREE" ]; then
+              echo "no-comment tree unchanged; nothing to push"
+              exit 0
+            fi
+          fi
+
+          MAIN_SHA=$(git rev-parse HEAD)
+          SUBJECT=$(git log -1 --format=%s)
+          BODY=$(git log -1 --format=%b)
+          {
+            printf '%s\n' "$SUBJECT"
+            if [ -n "${BODY}" ]; then
+              printf '\n%s\n' "$BODY"
+            fi
+            printf '\nNo-Comment-Of: %s\n' "$MAIN_SHA"
+          } > /tmp/no-comment-msg
+
+          export GIT_AUTHOR_NAME
+          export GIT_AUTHOR_EMAIL
+          export GIT_AUTHOR_DATE
+          GIT_AUTHOR_NAME=$(git log -1 --format=%an)
+          GIT_AUTHOR_EMAIL=$(git log -1 --format=%ae)
+          GIT_AUTHOR_DATE=$(git log -1 --format=%aI)
+          export GIT_COMMITTER_NAME="github-actions[bot]"
+          export GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ -n "$PARENT" ]; then
+            COMMIT=$(git commit-tree "$TREE" -p "$PARENT" -F /tmp/no-comment-msg)
+          else
+            COMMIT=$(git commit-tree "$TREE" -F /tmp/no-comment-msg)
+          fi
+          git push origin "$COMMIT:refs/heads/no-comment"
+          echo "Pushed $COMMIT to no-comment (mirrors $MAIN_SHA)"

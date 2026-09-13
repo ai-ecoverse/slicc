@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -152,10 +152,13 @@ describe('findViolations', () => {
 // End-to-end over the real repo tree
 // ---------------------------------------------------------------------------
 
-describe('check-agents-symlinks: end-to-end over the real repo', () => {
-  it('passes (all packages with CLAUDE.md have a valid AGENTS.md symlink)', () => {
-    const { code, out } = runGuard();
-    expect(code).toBe(0);
-    expect(out).toMatch(/ok: all \d+ packages with CLAUDE\.md have a valid AGENTS\.md symlink/);
-  });
-});
+describe.skipIf(existsSync(resolve(repoRoot, '.no-comment')))(
+  'check-agents-symlinks: end-to-end over the real repo',
+  () => {
+    it('passes (all packages with CLAUDE.md have a valid AGENTS.md symlink)', () => {
+      const { code, out } = runGuard();
+      expect(code).toBe(0);
+      expect(out).toMatch(/ok: all \d+ packages with CLAUDE\.md have a valid AGENTS\.md symlink/);
+    });
+  }
+);

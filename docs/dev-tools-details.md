@@ -21,6 +21,37 @@ The `human-in-the-loop` label is sticky — once applied it is never
 removed. Pure logic lives in `lib.mjs` (vitest `dev-tools` project). See
 its `README.md` for label semantics and workflow behavior.
 
+## no-comment-mirror
+
+`packages/dev-tools/no-comment/` plus `.github/workflows/no-comment-mirror.yml`
+maintain `no-comment` as a derived, comment-free mirror of `main`. The branch
+is a benchmark: same code, no comments, no developer documentation, so we can
+measure whether those actually help agents write code. It is not a development
+branch and is not merged back.
+
+On every push to `main` the workflow:
+
+1. Checks out that commit
+2. Runs `node packages/dev-tools/no-comment/strip.mjs`
+3. Formats the result (`biome check --write`, `prettier --write`)
+4. Commits the stripped tree onto `no-comment` with a `No-Comment-Of: <sha>`
+   trailer, skipping the push when the stripped tree is unchanged (a
+   comment-only `main` commit)
+
+The stripper removes source comments (TS/JS, CSS, Swift, Go, shell, YAML, HTML,
+JSONC) and deletes developer docs (`CLAUDE.md`, `AGENTS.md`, `docs/*.md`,
+`.agents/skills`, Copilot instruction files, package READMEs). It keeps
+compiler/linter directives (`@ts-expect-error`, `biome-ignore`, `//go:build`,
+`swiftlint:`, shebangs, `/*#__PURE__*/`, …), `LICENSE`, and product markdown
+under `packages/vfs-root/`.
+
+It writes a `.no-comment` marker. `npm run lint:no-comments` (chained into
+`lint` / `lint:ci` / the pre-push gate) is a no-op without that marker and a
+hard fail with it, so agents working on the benchmark branch cannot put
+comments or developer docs back. Doc-size, doc-ref, AGENTS.md-symlink, and
+skill-router gates also no-op on a marked tree so the stripped branch can
+still `npm run lint`.
+
 ## scheduled-agentic-workflows
 
 Five scheduled agents that read repository or CI state, pick work, and hand it

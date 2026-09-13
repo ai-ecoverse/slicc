@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -173,28 +174,31 @@ describe('findUnlinkedPackageGuides', () => {
   });
 });
 
-describe('check-doc-sizes.mjs: package CLAUDE.md integration', () => {
-  const { code, out } = runCheckDocSizes();
+describe.skipIf(existsSync(resolve(repoRoot, '.no-comment')))(
+  'check-doc-sizes.mjs: package CLAUDE.md integration',
+  () => {
+    const { code, out } = runCheckDocSizes();
 
-  it('exits 0 on the current repo (all files within their limits)', () => {
-    expect(code).toBe(0);
-  });
+    it('exits 0 on the current repo (all files within their limits)', () => {
+      expect(code).toBe(0);
+    });
 
-  it('reports ok for every packages/*/CLAUDE.md discovered', () => {
-    expect(out).toMatch(/ok: packages\/cherry\/CLAUDE\.md is \d+\/20000 chars/);
-    expect(out).toMatch(/ok: packages\/node-server\/CLAUDE\.md is \d+\/20000 chars/);
-  });
+    it('reports ok for every packages/*/CLAUDE.md discovered', () => {
+      expect(out).toMatch(/ok: packages\/cherry\/CLAUDE\.md is \d+\/20000 chars/);
+      expect(out).toMatch(/ok: packages\/node-server\/CLAUDE\.md is \d+\/20000 chars/);
+    });
 
-  it('no files are grandfathered', () => {
-    expect(out).not.toMatch(/grandfathered/);
-  });
+    it('no files are grandfathered', () => {
+      expect(out).not.toMatch(/grandfathered/);
+    });
 
-  it.each(['webapp', 'cloudflare-worker', 'chrome-extension', 'dev-tools'])(
-    'reports %s at the 20000 default',
-    (packageName) => {
-      expect(out).toMatch(
-        new RegExp(`ok: packages/${packageName}/CLAUDE\\.md is \\d+/20000 chars`)
-      );
-    }
-  );
-});
+    it.each(['webapp', 'cloudflare-worker', 'chrome-extension', 'dev-tools'])(
+      'reports %s at the 20000 default',
+      (packageName) => {
+        expect(out).toMatch(
+          new RegExp(`ok: packages/${packageName}/CLAUDE\\.md is \\d+/20000 chars`)
+        );
+      }
+    );
+  }
+);

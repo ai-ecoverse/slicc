@@ -104,6 +104,15 @@ describe('check-skill-router-sync.sh', () => {
     expect(result.output).toContain('Claude skill differs from canonical developer skill: alpha');
   });
 
+  it('skips when the no-comment marker is present', () => {
+    const root = createFixture();
+    writeFileSync(join(root, '.no-comment'), '');
+    rmSync(join(root, 'AGENTS.md'));
+    const result = runCheck(root);
+    expect(result.status).toBe(0);
+    expect(result.output).toContain('no-comment');
+  });
+
   it('rejects a Claude symlink that points outside the canonical skill tree', () => {
     const root = createFixture();
     const outside = join(root, 'outside');

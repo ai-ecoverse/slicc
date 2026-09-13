@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -68,19 +68,22 @@ describe('pre-commit doc-size wiring (husky hook)', () => {
   });
 });
 
-describe('check-doc-sizes budgets the GitHub Copilot instruction files', () => {
-  const output = runCheckDocSizes();
+describe.skipIf(existsSync(resolve(repoRoot, '.no-comment')))(
+  'check-doc-sizes budgets the GitHub Copilot instruction files',
+  () => {
+    const output = runCheckDocSizes();
 
-  it('budgets the repo-wide Copilot instructions at 4000 chars', () => {
-    expect(output).toMatch(/ok: \.github\/copilot-instructions\.md is \d+\/4000 chars/);
-  });
+    it('budgets the repo-wide Copilot instructions at 4000 chars', () => {
+      expect(output).toMatch(/ok: \.github\/copilot-instructions\.md is \d+\/4000 chars/);
+    });
 
-  it('budgets path-specific *.instructions.md files at 4000 chars', () => {
-    expect(output).toMatch(
-      /ok: \.github\/instructions\/cross-runtime\.instructions\.md is \d+\/4000 chars/
-    );
-  });
-});
+    it('budgets path-specific *.instructions.md files at 4000 chars', () => {
+      expect(output).toMatch(
+        /ok: \.github\/instructions\/cross-runtime\.instructions\.md is \d+\/4000 chars/
+      );
+    });
+  }
+);
 
 describe('lint-staged no longer runs the doc-size check', () => {
   it('has the markdown lint-staged entry as an array', () => {

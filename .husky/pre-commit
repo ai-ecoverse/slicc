@@ -2,6 +2,11 @@ set -e
 
 npx lint-staged
 
+# On the no-comment benchmark branch, refuse comments and developer docs.
+if [ -f .no-comment ]; then
+  node packages/dev-tools/no-comment/check.mjs
+fi
+
 # Enforce instruction-file size budgets when a budgeted file is staged
 # (root/agent CLAUDE.md or a GitHub Copilot instruction file).
 # Runs once, after lint-staged formatting (race-free).

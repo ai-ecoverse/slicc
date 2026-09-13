@@ -12,6 +12,11 @@ ROUTER="$REPO_ROOT/AGENTS.md"
 AGENT_SKILLS="$REPO_ROOT/.agents/skills"
 CLAUDE_SKILLS="$REPO_ROOT/.claude/skills"
 
+if [[ -f "$REPO_ROOT/.no-comment" ]]; then
+  echo "ok: skipping skill-router sync on no-comment tree"
+  exit 0
+fi
+
 if [[ ! -f "$ROUTER" ]]; then
   echo "::error::Developer-skill router not found at $ROUTER" >&2
   exit 2
