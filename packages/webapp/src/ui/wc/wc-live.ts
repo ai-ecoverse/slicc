@@ -815,6 +815,16 @@ interface TerminalViewHolder {
   __slicc_terminal_view?: RemoteTerminalView;
 }
 
+/**
+ * Page-realm flag set only after `host.ready` / `kernel-worker-ready`, which
+ * the worker posts AFTER VfsRpcHost attaches. The earlier `onReady` callback
+ * (and therefore `onClientReady`) can fire mid-boot while VFS RPCs still
+ * vanish into nobody. Playwright waits on this instead of mounting Term.
+ */
+interface KernelReadyHolder {
+  __slicc_kernel_ready?: boolean;
+}
+
 async function mountWorkbenchTerminal(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1687,6 +1697,7 @@ export async function bootLeaderFloat(
   // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out
   // into nobody. Re-notify so boot reads (freezer rail) finally land.
   boot.wiring.notifyReady?.();
+  (globalThis as unknown as KernelReadyHolder).__slicc_kernel_ready = true;
   log.info('WC live shell ready', { scoops: kernel.client.getScoops().length });
   schedulePendingCatchup?.();
 

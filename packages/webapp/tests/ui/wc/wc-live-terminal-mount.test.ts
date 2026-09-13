@@ -62,3 +62,18 @@ describe('regression: mountTerminal is gated on kernel-ready', () => {
     expect(mountIdx).toBeLessThan(publishIdx);
   });
 });
+
+describe('regression: __slicc_kernel_ready is published after host.ready', () => {
+  const WC_LIVE = resolve(__dirname, '../../../src/ui/wc/wc-live.ts');
+  const src = readFileSync(WC_LIVE, 'utf8');
+
+  it('assigns __slicc_kernel_ready only after await kernel.ready', () => {
+    // The callbacks' onReady / first notifyReady can fire while VfsRpcHost
+    // is still attaching. E2E waits on this flag (not Term) so sprinkle
+    // refresh()/mkdir do not vanish into a 30s lost RPC.
+    const readyIdx = src.indexOf('await kernel.ready');
+    const publishIdx = src.lastIndexOf('__slicc_kernel_ready');
+    expect(readyIdx).toBeGreaterThan(-1);
+    expect(publishIdx).toBeGreaterThan(readyIdx);
+  });
+});

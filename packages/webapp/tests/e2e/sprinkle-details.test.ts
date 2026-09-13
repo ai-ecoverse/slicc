@@ -24,18 +24,26 @@ const DISCLOSURES = `
   </details>
 </div>`;
 
+declare global {
+  interface Window {
+    __slicc_kernel_ready?: boolean;
+  }
+}
+
 async function bootWithoutOpenSprinkles(page: Page): Promise<void> {
   await gotoLeader(page, '/?sprinkles=');
   await waitForSW(page);
   await page.waitForSelector('slicc-input-card');
-  // Kernel-ready for this spec is the sprinkle manager — the same seam
-  // sprinkle-fetch-iframe uses. Do not wait on `openTerminal`: Term is a
-  // lazy mount whose stall latch re-arms at TERMINAL_MOUNT_STALL_MS (45s),
-  // and a 20s wait cannot outlast a stalled first attempt. That timeout
-  // dropped #3065 from the merge queue (3/3 retries of "fragment / custom").
-  await page.waitForFunction(() => Boolean(window.__slicc_sprinkleManager), null, {
-    timeout: 20_000,
-  });
+  // Do not wait on `openTerminal`: Term is a lazy mount whose stall latch
+  // re-arms at TERMINAL_MOUNT_STALL_MS (45s), and a 20s wait cannot outlast
+  // a stalled first attempt (#3065 merge-queue drop). The sprinkle manager
+  // is published at wire-up, which can race VfsRpcHost — wait for the
+  // post-`kernel.ready` flag so refresh()/mkdir are not 30s lost RPCs.
+  await page.waitForFunction(
+    () => Boolean(window.__slicc_sprinkleManager && window.__slicc_kernel_ready),
+    null,
+    { timeout: 30_000 }
+  );
 }
 
 for (const { mode, kind } of [

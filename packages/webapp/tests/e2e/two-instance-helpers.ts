@@ -472,7 +472,8 @@ export async function execInTerminal(
  * 90s is sized for that. A 20s caller cannot recover from a stalled first
  * mount and will flake as `__slicc_terminal_view was never published`
  * (sprinkle-details / #3065). Specs that only need kernel-ready should wait
- * on the seam they actually use (e.g. `__slicc_sprinkleManager`), not Term.
+ * on `__slicc_kernel_ready` (set after `host.ready` / VfsRpcHost attach),
+ * not Term and not `__slicc_sprinkleManager` alone (published at wire-up).
  */
 export async function openTerminal(page: Page, timeoutMs = 90_000): Promise<void> {
   if (await page.evaluate(() => Boolean(window.__slicc_terminal_view))) return;

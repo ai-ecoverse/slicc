@@ -161,8 +161,9 @@ emits select (collapse-on-active is click-only), so re-firing is safe. The
 overall budget still has to outlast `TERMINAL_MOUNT_STALL_MS` (45s) plus one
 retry window: a 20s `openTerminal` in `sprinkle-details` could not, and dropped
 #3065 from the merge queue. Specs that do not drive the terminal should wait on
-the seam they actually use (`__slicc_sprinkleManager`, welcome text) instead of
-mounting Term as a generic kernel-ready proxy.
+`__slicc_kernel_ready` (published after `host.ready`, once VfsRpcHost is
+attached) instead of mounting Term or treating `__slicc_sprinkleManager` as
+ready — the manager is published at wire-up, before VFS RPCs have a listener.
 
 ## emscripten WASM Heap Views: Copy Inside the Callback
 
