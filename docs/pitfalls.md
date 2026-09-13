@@ -157,7 +157,13 @@ The shared `openTerminal` helper (`tests/e2e/two-instance-helpers.ts`) therefore
 RE-FIRES `selectItem('term')` on a `SELECT_RETRY_WINDOW_MS` cadence instead of
 selecting once and waiting out the budget: a re-armed latch only becomes a real
 retry if something activates the surface AGAIN. Programmatic `selectItem` always
-emits select (collapse-on-active is click-only), so re-firing is safe.
+emits select (collapse-on-active is click-only), so re-firing is safe. The
+overall budget still has to outlast `TERMINAL_MOUNT_STALL_MS` (45s) plus one
+retry window: a 20s `openTerminal` in `sprinkle-details` could not, and dropped
+#3065 from the merge queue. Specs that do not drive the terminal should wait on
+`__slicc_kernel_ready` (published after `host.ready`, once VfsRpcHost is
+attached) instead of mounting Term or treating `__slicc_sprinkleManager` as
+ready — the manager is published at wire-up, before VFS RPCs have a listener.
 
 ## emscripten WASM Heap Views: Copy Inside the Callback
 

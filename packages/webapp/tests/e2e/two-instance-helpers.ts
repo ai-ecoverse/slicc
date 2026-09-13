@@ -466,6 +466,14 @@ export async function execInTerminal(
  * emits select (collapse-on-active is click-only), so re-firing is safe.
  *
  * Idempotent, so callers can treat it as "make sure there is a terminal".
+ *
+ * `timeoutMs` must outlast `TERMINAL_MOUNT_STALL_MS` (45s in
+ * `ui/wc/wc-workbench.ts`) plus one `SELECT_RETRY_WINDOW_MS`. The default
+ * 90s is sized for that. A 20s caller cannot recover from a stalled first
+ * mount and will flake as `__slicc_terminal_view was never published`
+ * (sprinkle-details / #3065). Specs that only need kernel-ready should wait
+ * on `__slicc_kernel_ready` (set after `host.ready` / VfsRpcHost attach),
+ * not Term and not `__slicc_sprinkleManager` alone (published at wire-up).
  */
 export async function openTerminal(page: Page, timeoutMs = 90_000): Promise<void> {
   if (await page.evaluate(() => Boolean(window.__slicc_terminal_view))) return;

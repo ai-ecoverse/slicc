@@ -1,7 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
-import { openTerminal } from './two-instance-helpers.js';
 
 // Keep the collapsible body outside <summary>: Review once put all of a
 // source's explanation inside it, making a working disclosure look stuck.
@@ -25,14 +24,26 @@ const DISCLOSURES = `
   </details>
 </div>`;
 
+declare global {
+  interface Window {
+    __slicc_kernel_ready?: boolean;
+  }
+}
+
 async function bootWithoutOpenSprinkles(page: Page): Promise<void> {
   await gotoLeader(page, '/?sprinkles=');
   await waitForSW(page);
   await page.waitForSelector('slicc-input-card');
-  // Unlike the first-run welcome, the terminal's kernel-ready signal
-  // survives a reload (the same readiness gate used by speech recovery).
-  await openTerminal(page, 20_000);
-  await page.waitForFunction(() => Boolean(window.__slicc_sprinkleManager));
+  // Do not wait on `openTerminal`: Term is a lazy mount whose stall latch
+  // re-arms at TERMINAL_MOUNT_STALL_MS (45s), and a 20s wait cannot outlast
+  // a stalled first attempt (#3065 merge-queue drop). The sprinkle manager
+  // is published at wire-up, which can race VfsRpcHost — wait for the
+  // post-`kernel.ready` flag so refresh()/mkdir are not 30s lost RPCs.
+  await page.waitForFunction(
+    () => Boolean(window.__slicc_sprinkleManager && window.__slicc_kernel_ready),
+    null,
+    { timeout: 30_000 }
+  );
 }
 
 for (const { mode, kind } of [
