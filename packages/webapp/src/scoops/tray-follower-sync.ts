@@ -1,43 +1,37 @@
 /**
  * Follower sync manager — receives agent events from the leader over WebRTC
  * and provides an AgentHandle for the follower's ChatPanel.
+ *
+ * Collaborators under `tray-follower/` own sprinkle cache, remote CDP, tab
+ * teleport, fs routing, OAuth popups, transcript export, and sudo prompts.
+ * This file is the `AgentHandle` + keepalive/disconnect owner and the
+ * `handleLeaderMessage` dispatcher.
  */
 
-import type {
-  CDPPayload,
-  TranscriptExportErrorCode,
-  TranscriptExportProgress,
-  TranscriptExportSelector,
-  TraySudoAttestation,
-  TraySudoDecision,
-  TraySudoKind,
-} from '@slicc/shared-ts';
-import {
-  reassembleCDPResponse,
-  sendCDPResponse,
-  TranscriptExportError,
-  VALID_EXPORT_ERROR_CODES,
-} from '@slicc/shared-ts';
+import type { TranscriptExportProgress, TranscriptExportSelector } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
-import type { CDPTransport } from '../cdp/transport.js';
+import type { RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { AgentEvent, AgentHandle } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { ExportSpool } from '../transcript/export-spool.js';
-import { makeExportSpool } from '../transcript/export-spool.js';
 import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import type { LickEvent } from './lick-manager.js';
+import type { FollowerSyncContext } from './tray-follower/context.js';
+import { FollowerExportClient } from './tray-follower/export-client.js';
+import { FollowerFsBridge } from './tray-follower/fs-bridge.js';
+import { FollowerOAuthPopups } from './tray-follower/oauth-popups.js';
+import { FollowerRemoteCdp } from './tray-follower/remote-cdp.js';
+import { FollowerSprinkleCache } from './tray-follower/sprinkle-cache.js';
+import { FollowerSudoClient } from './tray-follower/sudo-client.js';
+import { FollowerTabTeleport } from './tray-follower/tab-teleport.js';
+import type { FollowerSyncManagerOptions, SudoApprovalVerdict } from './tray-follower/types.js';
 import {
   getFollowerTrayRuntimeStatus,
   setFollowerLastPingTime,
   setFollowerStalled,
   setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
-import { handleFsRequest } from './tray-fs-handler.js';
 import {
   createFollowerSyncChannel,
   type FollowerToLeaderMessage,
@@ -53,9 +47,6 @@ import {
   type TrayExecSignalMessage,
   type TrayFsRequest,
   type TrayFsResponse,
-  type TrayModelCatalogEntry,
-  type TrayModelSelectionState,
-  type TraySyncCapabilities,
   type TraySyncChannel,
   type TrayTargetEntry,
   type TrayThinkingLevel,
@@ -63,153 +54,9 @@ import {
 } from './tray-sync-protocol.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
+export type { FollowerSyncManagerOptions, SudoApprovalVerdict };
+
 const log = createLogger('tray-follower-sync');
-
-export interface FollowerSyncManagerOptions {
-  /**
-   * A message this follower sent has moved through the leader's review gate.
-   * Only ever called on a biscotto (guest seat) — an ordinary follower IS the
-   * owner and its messages are not reviewed.
-   */
-  onBiscottoMessageState?: (
-    messageId: string,
-    state: 'pending' | 'approved' | 'rejected' | 'unanswered'
-  ) => void;
-  /** Called when the leader sends a snapshot (full state replacement). */
-  onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
-  /** Called when the leader echoes a user message (local or from any follower). */
-  onUserMessage?: (
-    text: string,
-    messageId: string,
-    scoopJid: string,
-    attachments?: MessageAttachment[]
-  ) => void;
-  /** Called when the leader sends a status update. scoopJid is absent for legacy leaders. */
-  onStatus?: (scoopStatus: string, scoopJid?: string) => void;
-  /** Called when the leader sends an updated target registry. */
-  onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
-  /** Optional CDP transport for executing local CDP commands (follower's browser). */
-  browserTransport?: CDPTransport;
-  /** Optional BrowserAPI instance for session-aware browser commands (e.g. cookie capture). */
-  browserAPI?: BrowserAPI;
-  /** Called when the leader data channel is considered dead (missed keepalive pongs). */
-  onDead?: () => void;
-  /** Called after the connection has been cleaned up due to keepalive death or channel failure. Higher-level code can use this to trigger reconnection. */
-  onDisconnect?: (reason: string) => void;
-  /**
-   * Called with `true` when the leader stops answering keepalive pings while
-   * its data channel is still open, and `false` when it answers again. The
-   * connection is intact throughout — the leader is busy, not gone — so this
-   * is a transient hint for connection UX, NOT a disconnect. Distinct from
-   * `onDisconnect`, which fires only once the connection is really finished.
-   */
-  onLeaderStalled?: (stalled: boolean) => void;
-  /** VirtualFS instance for handling remote fs requests targeting this follower. */
-  vfs?: VirtualFS;
-  /** Called when local browser targets may have changed (e.g. after a tab is opened or closed). */
-  onTargetsChanged?: () => void;
-  /** Called when the leader sends an updated sprinkle list. */
-  onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
-  /** Called when the leader sends an updated scoop list (nav bar / scoop picker). */
-  onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
-  /** Called when a v5+ leader sends its credential-free selectable model catalog. */
-  onModelsList?: (models: TrayModelCatalogEntry[]) => void;
-  /** Called when a v5+ leader broadcasts the selected model and scoop thinking state. */
-  onModelState?: (state: TrayModelSelectionState) => void;
-  /** Called when the leader applies or clears its active theme. */
-  onThemeApply?: (themeJson: string | null) => void;
-  /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
-  onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
-  /** Called when the leader signals that a sprinkle's content has been reloaded (file changed). */
-  onSprinkleReloaded?: (sprinkleName: string) => void;
-  /**
-   * Called when the leader sends a `cherry.slicc_event` (cone → host page). Only
-   * a cherry follower wires this — it forwards the event to the host SDK via
-   * `CherryHostTransport.emitSliccEventToHost`. Non-cherry followers leave it
-   * unset, so the event falls through harmlessly. The wire `targetId` is not
-   * forwarded: a cherry follower owns exactly one host transport, so the event
-   * has only one destination.
-   */
-  onCherrySliccEvent?: (name: string, detail?: unknown) => void;
-  /**
-   * This follower's own runtime id, stamped onto outbound `cherry.host_event`
-   * messages (host page → cone) so the cone-side lick records which cherry
-   * runtime emitted it. The leader routes the event by connection identity, not
-   * by this field, so it is informational only. Only a cherry follower sets it.
-   */
-  selfRuntimeId?: string;
-  /**
-   * Capabilities to advertise on the `hello` handshake (e.g. `browser: true`
-   * for a follower whose local CDP transport can host teleported tabs).
-   */
-  helloCapabilities?: TraySyncCapabilities;
-  /**
-   * Show a leader-delegated OAuth login here (#1915) and resolve with the
-   * terminal callback URL, or null when the human cancelled. Wired only by
-   * floats with a window and a permissions surface; its presence is what
-   * `capabilities.oauthPopup` advertises.
-   */
-  onOAuthPopupRequest?: (url: string, signal: AbortSignal) => Promise<string | null>;
-  /**
-   * Bound on every `fetchSprinkleContent` call. If the leader never
-   * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
-   * transfer abandoned, leader still connected but stuck), the
-   * follower would otherwise hang the controller's `opening` lock
-   * forever. Defaults to 15 s. Pass `0` to disable this timer entirely,
-   * or any positive value to override the default; non-positive /
-   * non-finite inputs throw at construction.
-   */
-  sprinkleFetchTimeoutMs?: number;
-  /**
-   * Factory for creating export spools. Defaults to `makeExportSpool` which
-   * returns an OpfsSpool in production and a MemorySpool as fallback.
-   * Inject `() => new MemorySpool()` in tests for a deterministic, fast spool.
-   */
-  makeExportSpool?: (requestId: string) => ExportSpool;
-  /**
-   * Render a delegated sudo approval on behalf of the leader (issue #2062):
-   * the leader is headless (hosted / cloud), or its human is driving from
-   * here. Resolve the human's verdict; `pattern` only matters for `always`
-   * (and the leader accepts `always` only from biometric-gated followers).
-   *
-   * When unset, or when it rejects, the follower replies `deny` — the gate is
-   * fail-closed. `signal` aborts when the leader withdraws the prompt
-   * (`sudo.approve.cancel`: someone else answered, or it timed out) or the
-   * channel closes; implementations MUST close the dialog on abort.
-   */
-  onSudoApprovalRequest?: (request: {
-    requestId: string;
-    kind: TraySudoKind;
-    detail: string;
-    /** Leader-derived identity of the asker; chrome, not part of `detail`. */
-    requester?: string;
-    suggestedPattern?: string;
-    scoopName?: string;
-    expiresAt: number;
-    signal: AbortSignal;
-  }) => Promise<SudoApprovalVerdict> | SudoApprovalVerdict;
-}
-
-/** A follower-rendered sudo verdict. */
-export interface SudoApprovalVerdict {
-  decision: TraySudoDecision;
-  pattern?: string;
-  attestation?: TraySudoAttestation;
-}
-
-const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
-/** Client-side cap; sits outside the leader router's own 45 s budget. */
-const TAB_TELEPORT_CLIENT_TIMEOUT_MS = 60_000;
-
-/** Internal buffer for chunked sprinkle.content reassembly. Mirrors the
- *  `SprinkleFetchBuffer` Swift struct nested inside the `AppState` class in
- *  `packages/ios-app/SliccFollower/App/AppState.swift` (declared with the
- *  `private` access modifier, i.e. type-scoped to `AppState`). */
-interface SprinkleFetchBuffer {
-  sprinkleName: string;
-  chunks: Map<number, string>;
-  totalChunks: number;
-}
 
 /** Legacy unscoped statuses apply; scoped statuses apply only to the viewed scoop. */
 export function shouldApplyFollowerStatus(
@@ -232,99 +79,21 @@ export class FollowerSyncManager implements AgentHandle {
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
   private targetEntries: TrayTargetEntry[] = [];
-  /** Active RemoteCDPTransport instances keyed by requestId prefix for response routing. */
-  private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
-  /** Chunk buffers for reassembling chunked CDP responses from the leader. */
-  private readonly cdpChunkBuffers = new Map<
-    string,
-    { chunks: string[]; received: number; totalChunks: number }
-  >();
-  /** Buffer for reassembling chunked snapshots from the leader. */
   private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null =
     null;
-  /** CDP sessions initiated by remote requests (leader attached to follower tabs). Events for these sessions are forwarded. */
-  private readonly remoteCDPSessions = new Set<string>();
-  /** Cleanup functions for CDP event listeners registered on the local transport. */
-  private readonly cdpEventCleanups: Array<() => void> = [];
-  /** Abort handles for in-flight delegated OAuth popups, keyed by requestId. */
-  private readonly oauthPopupAborts = new Map<string, AbortController>();
-  /** Resolvers for outgoing tab.open requests. */
-  private readonly tabOpenResolvers = new Map<
-    string,
-    { resolve: (targetId: string) => void; reject: (err: Error) => void }
-  >();
-  /** Resolvers for outgoing fs requests. */
-  private readonly fsResolvers = new Map<
-    string,
-    {
-      resolve: (responses: TrayFsResponse[]) => void;
-      reject: (err: Error) => void;
-      responses: TrayFsResponse[];
-    }
-  >();
   /** Tray sync protocol version from the leader's `hello`; undefined until it arrives. */
   private leaderProtocolVersion?: number;
   /** True once the no-hello legacy-leader diagnosis has been logged. */
   private legacyLeaderLogged = false;
-  /** Latest sprinkle summaries received from the leader (most-recent `sprinkles.list`). */
-  private latestSprinkles: SprinkleSummary[] = [];
-  /** Cache of resolved sprinkle .shtml content by name. Cleared on explicit invalidate. */
-  private readonly sprinkleContentCache = new Map<string, string>();
-  /** In-flight `sprinkle.fetch` request buffers, keyed by requestId. */
-  private readonly pendingSprinkleFetches = new Map<string, SprinkleFetchBuffer>();
-  /** Map of sprinkleName → requestId for the in-flight fetch (used to dedupe concurrent calls). */
-  private readonly inflightSprinkleByName = new Map<string, string>();
-  /** Waiters awaiting a sprinkle.content reply, keyed by sprinkleName.
-   *  Each waiter carries a fresh `symbol` id so the timeout path can
-   *  identify exactly one entry to splice out without relying on
-   *  reference equality on a closure (which a future refactor that
-   *  wraps `resolve`/`reject` once more would silently break). */
-  private readonly sprinkleContentWaiters = new Map<
-    string,
-    Array<{
-      readonly id: symbol;
-      resolve: (content: string) => void;
-      reject: (err: Error) => void;
-    }>
-  >();
-  /**
-   * Monotonic counter incremented on every `sprinkles.list` arrival.
-   * In-flight fetches are stamped with the current value at issue time;
-   * `handleSprinkleContent` only writes to `sprinkleContentCache` when the
-   * stamp still matches. Closes the cache-write-races-list race
-   * (R3-IMP): if a fetch's content reply lands AFTER a list barrier,
-   * it's content from the pre-barrier world and must not be cached.
-   */
-  private cacheEpoch = 0;
-  /** Per-requestId epoch stamp captured at `fetchSprinkleContent` time. */
-  private readonly fetchEpoch = new Map<string, number>();
+  private disconnected = false;
 
-  /**
-   * In-flight transcript export requests keyed by requestId.
-   *
-   * Wave 4 (bounded-memory): `chunks: Uint8Array[]` is replaced by a
-   * spool that writes bytes through the ExportSpool interface. No chunk
-   * array is retained in this map; the spool accumulates bytes externally
-   * (OPFS in production, memory in tests via the injected factory).
-   * Byte count is tracked incrementally for progress reporting only;
-   * integrity verification (SHA-256 + byte count) is delegated to the spool.
-   */
-  private readonly activeExportRequests = new Map<
-    string,
-    {
-      resolve: (blob: Blob) => void;
-      reject: (err: Error) => void;
-      spool: ExportSpool;
-      nextExpectedIndex: number;
-      totalBytes: number;
-      signal: AbortSignal;
-      onAbort: () => void;
-      onProgress?: (progress: TranscriptExportProgress) => void;
-    }
-  >();
-
-  /** Open delegated sudo prompts keyed by requestId; aborted on cancel / close. */
-  private readonly openSudoPrompts = new Map<string, AbortController>();
+  private readonly sprinkles: FollowerSprinkleCache;
+  private readonly remoteCdp: FollowerRemoteCdp;
+  private readonly tabTeleport: FollowerTabTeleport;
+  private readonly fsBridge: FollowerFsBridge;
+  private readonly oauthPopups: FollowerOAuthPopups;
+  private readonly exportClient: FollowerExportClient;
+  private readonly sudoClient: FollowerSudoClient;
 
   constructor(
     channel: TrayDataChannelLike,
@@ -343,6 +112,18 @@ export class FollowerSyncManager implements AgentHandle {
       );
     }
     this.sync = createFollowerSyncChannel(channel);
+    const context: FollowerSyncContext = {
+      options: this.options,
+      log,
+      send: (message) => this.sync.send(message),
+    };
+    this.sprinkles = new FollowerSprinkleCache(context);
+    this.remoteCdp = new FollowerRemoteCdp(context);
+    this.tabTeleport = new FollowerTabTeleport(context);
+    this.fsBridge = new FollowerFsBridge(context);
+    this.oauthPopups = new FollowerOAuthPopups(context);
+    this.exportClient = new FollowerExportClient(context);
+    this.sudoClient = new FollowerSudoClient(context);
     this.unsubscribe = this.sync.onMessage((message: LeaderToFollowerMessage) => {
       this.handleLeaderMessage(message);
     });
@@ -393,6 +174,9 @@ export class FollowerSyncManager implements AgentHandle {
     channel.addEventListener('error', () => {
       log.warn('Data channel error');
       this.handleDisconnect('Data channel error');
+    });
+    Object.defineProperties(this, {
+      activeExportRequests: { get: () => this.exportClient.activeExportRequests },
     });
   }
 
@@ -524,7 +308,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.unsubscribe();
     this.sync.close();
     this.eventListeners.clear();
-    this.cleanupCDPEventForwarding();
+    this.remoteCdp.cleanupEventForwarding();
     this.rejectPendingRequests('Follower sync closed');
     log.info('Follower sync closed');
   }
@@ -534,47 +318,19 @@ export class FollowerSyncManager implements AgentHandle {
    * associated buffers. Called from both `close()` (caller-initiated
    * shutdown) and `handleDisconnect()` (channel drop / keepalive death).
    *
-   * Before this method existed, only `sprinkleContentWaiters` got drained
-   * on disconnect — `tabOpenResolvers`, `fsResolvers`, in-flight
-   * `cdpChunkBuffers`, and active `remoteTransports` all leaked. Any
-   * caller awaiting `openRemoteTab()`, `sendFsRequest()`, or a
-   * `RemoteCDPTransport.send()` past a disconnect would hang forever,
-   * because a fresh `FollowerSyncManager` is constructed on reconnect
-   * and the original resolvers never resolve.
-   *
-   * `RemoteCDPTransport.disconnect()` rejects its own pending
-   * request/response promises and clears them, so we don't need to
-   * walk into each transport's internals. (Per-event `once()` waiters
-   * fall back to their individual timeouts; they're not drained here.)
+   * Order is load-bearing: sprinkle waiters first, then OAuth/sudo aborts,
+   * then tab/fs rejects, then CDP transports, then export spool cancel.
+   * A fresh `FollowerSyncManager` is constructed on reconnect, so any
+   * resolver left pending here hangs forever.
    */
   private rejectPendingRequests(reason: string): void {
-    this.rejectPendingSprinkleFetches(reason);
-    // A delegated OAuth popup outlives nothing: the leader that asked for it
-    // is gone, so abort the surface rather than leaving a prompt on screen
-    // whose answer can never be delivered.
-    for (const controller of this.oauthPopupAborts.values()) controller.abort();
-    this.oauthPopupAborts.clear();
-    // A delegated sudo prompt cannot outlive its channel: the leader will
-    // deny on disconnect, so a later "Allow" here would land nowhere.
-    for (const controller of this.openSudoPrompts.values()) controller.abort();
-    this.openSudoPrompts.clear();
-    const err = new Error(reason);
-    for (const { reject } of this.tabOpenResolvers.values()) reject(err);
-    this.tabOpenResolvers.clear();
-    for (const { reject } of this.fsResolvers.values()) reject(err);
-    this.fsResolvers.clear();
-    this.cdpChunkBuffers.clear();
-    for (const transport of this.remoteTransports.values()) transport.disconnect();
-    this.remoteTransports.clear();
-    // Reject all in-flight transcript export requests with transfer-aborted.
-    // Remove each AbortSignal listener, cancel the spool (releasing OPFS
-    // temp files and memory), and clear the map.
-    for (const [, entry] of this.activeExportRequests) {
-      entry.signal.removeEventListener('abort', entry.onAbort);
-      void entry.spool.cancel();
-      entry.reject(new TranscriptExportError('transfer-aborted'));
-    }
-    this.activeExportRequests.clear();
+    this.sprinkles.rejectPending(reason);
+    this.oauthPopups.abortAll();
+    this.sudoClient.abortAll();
+    this.tabTeleport.rejectPending(reason);
+    this.fsBridge.rejectPending(reason);
+    this.remoteCdp.rejectPending();
+    this.exportClient.rejectPending();
   }
 
   /** Advertise local browser targets to the leader. */
@@ -602,15 +358,9 @@ export class FollowerSyncManager implements AgentHandle {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Sprinkle sync — mirrors `packages/ios-app/SliccFollower/App/AppState.swift`
-  // (refreshSprinkles / fetchSprinkleContent / sendSprinkleLick / chunked
-  // sprinkle.content reassembly + concurrent-fetch dedupe via waiter list).
-  // ---------------------------------------------------------------------------
-
   /** Latest sprinkle list received from the leader. */
   getSprinkles(): SprinkleSummary[] {
-    return this.latestSprinkles;
+    return this.sprinkles.getSprinkles();
   }
 
   /** Ask the leader to re-broadcast the sprinkle list. */
@@ -618,79 +368,8 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync.send({ type: 'sprinkles.refresh' });
   }
 
-  /**
-   * Fetch the raw .shtml content for a sprinkle. Returns cached content when
-   * available, otherwise sends `sprinkle.fetch` and awaits the reassembled
-   * `sprinkle.content` response. Concurrent calls for the same sprinkle name
-   * share a single inflight request and resolve together.
-   */
   fetchSprinkleContent(sprinkleName: string): Promise<string> {
-    const cached = this.sprinkleContentCache.get(sprinkleName);
-    if (cached !== undefined) return Promise.resolve(cached);
-
-    const timeoutMs = this.options.sprinkleFetchTimeoutMs ?? DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS;
-
-    return new Promise<string>((resolve, reject) => {
-      // Per-waiter timer — when this fetch's caller times out, only this
-      // waiter rejects; siblings that joined the same in-flight request
-      // keep waiting (or get cancelled together when the LAST waiter
-      // gives up, since `cancelSprinkleFetch` drains them all).
-      const waiterId = Symbol('sprinkle-waiter');
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const wrapResolve = (content: string) => {
-        if (timer !== undefined) clearTimeout(timer);
-        resolve(content);
-      };
-      const wrapReject = (err: Error) => {
-        if (timer !== undefined) clearTimeout(timer);
-        reject(err);
-      };
-
-      const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
-      waiters.push({ id: waiterId, resolve: wrapResolve, reject: wrapReject });
-      this.sprinkleContentWaiters.set(sprinkleName, waiters);
-
-      if (timeoutMs > 0) {
-        timer = setTimeout(() => {
-          // Drop just this caller's waiter; the in-flight fetch lives
-          // on for the others. If we were the last waiter, cancel the
-          // whole fetch so the three lockstep maps don't leak. The
-          // symbol id (not the closure reference) is what identifies
-          // us — a future refactor that wraps `wrapResolve` once more
-          // would otherwise silently miss the match.
-          const list = this.sprinkleContentWaiters.get(sprinkleName);
-          if (list) {
-            const idx = list.findIndex((w) => w.id === waiterId);
-            if (idx >= 0) list.splice(idx, 1);
-            if (list.length === 0) {
-              this.sprinkleContentWaiters.delete(sprinkleName);
-              this.cancelSprinkleFetch(
-                sprinkleName,
-                `Sprinkle fetch for "${sprinkleName}" timed out after ${timeoutMs}ms`
-              );
-            }
-          }
-          reject(new Error(`Sprinkle fetch for "${sprinkleName}" timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }
-
-      // Only one in-flight request per name. Subsequent calls latch onto the
-      // same waiter list.
-      if (this.inflightSprinkleByName.has(sprinkleName)) return;
-
-      const requestId = `sprinkle-fetch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      this.inflightSprinkleByName.set(sprinkleName, requestId);
-      this.pendingSprinkleFetches.set(requestId, {
-        sprinkleName,
-        chunks: new Map(),
-        totalChunks: 1,
-      });
-      // Stamp this fetch with the current cache epoch. If the epoch
-      // advances (via a `sprinkles.list` broadcast) before the reply
-      // lands, the cache write at reassembly time will be skipped.
-      this.fetchEpoch.set(requestId, this.cacheEpoch);
-      this.sync.send({ type: 'sprinkle.fetch', requestId, sprinkleName });
-    });
+    return this.sprinkles.fetchSprinkleContent(sprinkleName);
   }
 
   /** Forward a sprinkle lick (from a follower-rendered sprinkle) to the leader. */
@@ -724,46 +403,12 @@ export class FollowerSyncManager implements AgentHandle {
 
   /** Invalidate the cached .shtml content for one sprinkle (or all). */
   clearSprinkleCache(sprinkleName?: string): void {
-    if (sprinkleName === undefined) this.sprinkleContentCache.clear();
-    else this.sprinkleContentCache.delete(sprinkleName);
+    this.sprinkles.clearSprinkleCache(sprinkleName);
   }
 
-  /**
-   * Cancel any in-flight `sprinkle.fetch` for the named sprinkle. Rejects
-   * all current waiters so callers don't accumulate across retries when
-   * the panel-side proxy gave up on the original fetch (R2-IMP-2).
-   *
-   * Clears the requestId from `pendingSprinkleFetches`, the
-   * `inflightSprinkleByName` lookup, and the `fetchEpoch` stamp — every
-   * site that removes a `pendingSprinkleFetches` entry must keep the
-   * three Maps in lockstep, otherwise an orphan epoch stamp could
-   * mis-classify a future re-used requestId. A late `sprinkle.content`
-   * reply for the cancelled requestId then falls into the
-   * unknown-requestId branch in `handleSprinkleContent` and is silently
-   * dropped — that's what prevents the cache from being poisoned by a
-   * stale post-cancel reply. The next `fetchSprinkleContent(sprinkleName)`
-   * call goes back on the wire cleanly instead of latching onto an
-   * orphan requestId.
-   */
   cancelSprinkleFetch(sprinkleName: string, reason = 'fetch cancelled'): void {
-    const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
-    this.sprinkleContentWaiters.delete(sprinkleName);
-    const requestId = this.inflightSprinkleByName.get(sprinkleName);
-    if (requestId !== undefined) {
-      this.inflightSprinkleByName.delete(sprinkleName);
-      this.pendingSprinkleFetches.delete(requestId);
-      this.fetchEpoch.delete(requestId);
-    }
-    if (waiters.length === 0) return;
-    const err = new Error(reason);
-    for (const waiter of waiters) waiter.reject(err);
+    this.sprinkles.cancelSprinkleFetch(sprinkleName, reason);
   }
-
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-
-  private disconnected = false;
 
   /**
    * Handle a detected disconnect (keepalive dead, channel close/error).
@@ -779,41 +424,28 @@ export class FollowerSyncManager implements AgentHandle {
    * events (genuine agent errors) still forward via `handleLeaderMessage`.
    */
   private handleDisconnect(reason: string): void {
-    if (this.disconnected) return; // prevent duplicate cleanup
+    if (this.disconnected) return;
     this.disconnected = true;
 
-    // `error` (not `warn`): the prod log level is ERROR, and a real transport
-    // drop previously produced no console signal at all — only the UI knew
-    // (#1707). An EXPECTED stall stays `warn` per #1698; an unexpected drop
-    // is precisely the thing an operator console should show.
     log.error('Follower sync disconnected', { reason });
 
-    // Update follower runtime status to error
     const current = getFollowerTrayRuntimeStatus();
     setFollowerTrayRuntimeStatus({
       ...current,
       state: 'error',
       error: reason,
-      // The connection is over; a lingering "busy" overlay would outlive the
-      // thing it described.
       stalled: false,
     });
 
-    // Clean up keepalive, CDP event forwarding, and sync channel
     this.keepalive.stop();
-    this.cleanupCDPEventForwarding();
+    this.remoteCdp.cleanupEventForwarding();
     this.unsubscribe();
     this.sync.close();
     this.rejectPendingRequests(`Follower sync disconnected: ${reason}`);
 
-    // Notify higher-level code for potential reconnection
     this.options.onDisconnect?.(reason);
   }
 
-  /**
-   * Record the leader's `hello`. Warn when the leader is newer than this
-   * build — the skew otherwise surfaces only as silently missing features.
-   */
   /** Keepalive bookkeeping for the leader's ping/pong. */
   private handleKeepaliveMessage(type: 'ping' | 'pong'): void {
     if (type === 'ping') {
@@ -885,7 +517,7 @@ export class FollowerSyncManager implements AgentHandle {
     message: LeaderToFollowerMessage
   ): message is Extract<LeaderToFollowerMessage, { type: 'theme.apply' }> {
     if (message.type !== 'theme.apply') return false;
-    this.applyLeaderTheme(message.themeJson);
+    this.options.onThemeApply?.(message.themeJson);
     return true;
   }
 
@@ -896,83 +528,64 @@ export class FollowerSyncManager implements AgentHandle {
       case 'snapshot':
         this.handleSnapshot(message.messages, message.scoopJid);
         break;
-
       case 'snapshot_chunk':
         this.handleSnapshotChunk(message);
         break;
-
       case 'agent_event':
         this.emitEvent(message.event);
         break;
-
       case 'user_message_echo':
         this.handleUserMessageEcho(message);
         break;
-
       case 'status':
         this.options.onStatus?.(message.scoopStatus, message.scoopJid);
         break;
-
       case 'error':
         log.warn('Error from leader', { error: message.error });
         this.emitEvent({ type: 'error', error: message.error });
         break;
-
       case 'targets.registry':
         log.info('Target registry received from leader', { targetCount: message.targets.length });
         this.targetEntries = message.targets;
         this.options.onTargetsUpdated?.(this.targetEntries);
         break;
-
-      case 'cdp.request': {
-        const { requestId, localTargetId, method, params, sessionId } = message;
-        void this.executeLocalCDP(requestId, localTargetId, method, params, sessionId);
+      case 'cdp.request':
+        void this.remoteCdp.executeLocalCDP(
+          message.requestId,
+          message.localTargetId,
+          message.method,
+          message.params,
+          message.sessionId
+        );
         break;
-      }
-      case 'cdp.response': {
-        this.routeCDPResponse(message);
+      case 'cdp.response':
+        this.remoteCdp.routeCDPResponse(message);
         break;
-      }
-      case 'cdp.event': {
-        this.routeCDPEvent(message);
+      case 'cdp.event':
+        this.remoteCdp.routeCDPEvent(message);
         break;
-      }
       // tab.open and preview.open share executeLocalTabOpen for Phase 1 —
       // preview-vs-tab is informational, deferring the distinction to Phase 2
       // when an injected bridge channel might want preview-specific behavior.
       case 'tab.open':
-      case 'preview.open': {
-        void this.executeLocalTabOpen(message.requestId, message.url);
+      case 'preview.open':
+        void this.tabTeleport.executeLocalTabOpen(message.requestId, message.url);
         break;
-      }
-      case 'tab.opened': {
-        const resolver = this.tabOpenResolvers.get(message.requestId);
-        if (resolver) {
-          this.tabOpenResolvers.delete(message.requestId);
-          resolver.resolve(message.targetId);
-        }
+      case 'tab.opened':
+        this.tabTeleport.handleOpened(message.requestId, message.targetId);
         break;
-      }
-      case 'tab.open.error': {
-        const resolver = this.tabOpenResolvers.get(message.requestId);
-        if (resolver) {
-          this.tabOpenResolvers.delete(message.requestId);
-          resolver.reject(new Error(message.error));
-        }
+      case 'tab.open.error':
+        this.tabTeleport.handleOpenError(message.requestId, message.error);
         break;
-      }
-      case 'fs.request': {
-        void this.executeLocalFs(message.requestId, message.request);
+      case 'fs.request':
+        void this.fsBridge.executeLocalFs(message.requestId, message.request);
         break;
-      }
-      case 'fs.response': {
-        this.routeFsResponse(message.requestId, message.response);
+      case 'fs.response':
+        this.fsBridge.routeFsResponse(message.requestId, message.response);
         break;
-      }
-      case 'scoops.list': {
+      case 'scoops.list':
         this.handleScoopsList(message.scoops, message.activeScoopJid);
         break;
-      }
       case 'models.list':
         this.options.onModelsList?.(message.models);
         break;
@@ -980,42 +593,34 @@ export class FollowerSyncManager implements AgentHandle {
         this.options.onModelState?.(message.state);
         break;
       case 'sprinkles.list':
-        this.handleSprinklesList(message.sprinkles);
+        this.sprinkles.handleList(message.sprinkles);
         break;
-
       case 'sprinkle.content':
-        this.handleSprinkleContent(message);
+        this.sprinkles.handleContent(message);
         break;
-
       case 'sprinkle.update':
         this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
         break;
       case 'sprinkle.reloaded':
-        this.handleSprinkleReloaded(message.sprinkleName);
+        this.sprinkles.handleReloaded(message.sprinkleName);
         break;
-
       case 'cherry.slicc_event':
-        // Cone → host page event. A cherry follower forwards it to the host
-        // SDK; non-cherry followers leave `onCherrySliccEvent` unset and it
-        // falls through harmlessly.
         this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
-
-      // Transcript export messages — all routed to the export sub-handler
       case 'transcript.export.pending':
       case 'transcript.export.denied':
       case 'transcript.export.start':
       case 'transcript.export.chunk':
       case 'transcript.export.complete':
       case 'transcript.export.error':
-        this.handleExportLeaderMessage(message);
+        this.exportClient.handleLeaderMessage(message);
         break;
       case 'sudo.approve.request':
       case 'sudo.approve.cancel':
-        this.handleSudoLeaderMessage(message);
+        this.sudoClient.handleLeaderMessage(message);
         break;
       case 'oauth.popup.request':
-        void this.handleOAuthPopupRequest(message.requestId, message.url);
+        void this.oauthPopups.handleRequest(message.requestId, message.url);
         break;
       case 'ping':
       case 'pong':
@@ -1034,14 +639,8 @@ export class FollowerSyncManager implements AgentHandle {
         this.handleExecMessage(message);
         break;
       default: {
-        // Exhaustiveness guard: a new LeaderToFollowerMessage variant fails
-        // compile here until this dispatcher decides (mirrors the iOS
-        // `.unknown` case in AppState.swift). At runtime this branch means a
-        // version-skewed leader — log loudly, never throw.
         const unknown = unhandledProtocolMessage(message);
-        log.warn('Unknown leader message type — skewed leader?', {
-          type: unknown.type,
-        });
+        log.warn('Unknown leader message type — skewed leader?', { type: unknown.type });
         break;
       }
     }
@@ -1071,21 +670,6 @@ export class FollowerSyncManager implements AgentHandle {
     }
   }
 
-  /**
-   * Apply a `sprinkles.list` broadcast. Every list is a content-invalidation
-   * barrier: the leader has no per-file change signal, so a stable `.shtml`
-   * re-invalidates its cache on each (~5 s) tick. Bumping `cacheEpoch` also
-   * discards any in-flight fetch reply that lands after this barrier (see
-   * `handleSprinkleContent`) so a late pre-barrier reply can't poison the cache.
-   */
-  private handleSprinklesList(sprinkles: SprinkleSummary[]): void {
-    log.info('Sprinkles list received from leader', { sprinkleCount: sprinkles.length });
-    this.sprinkleContentCache.clear();
-    this.cacheEpoch++;
-    this.latestSprinkles = sprinkles;
-    this.options.onSprinklesList?.(sprinkles);
-  }
-
   private handleUserMessageEcho(
     message: LeaderToFollowerMessage & { type: 'user_message_echo' }
   ): void {
@@ -1111,141 +695,6 @@ export class FollowerSyncManager implements AgentHandle {
     this.options.onScoopsList?.(scoops, activeScoopJid);
   }
 
-  /**
-   * Reassemble chunked `sprinkle.content` responses and resolve the waiting
-   * fetchers. Mirrors `handleSprinkleContent` in iOS `AppState.swift` — same
-   * chunk-buffer + ordered-join + waiter-resolve flow, plus error rejection.
-   */
-  private handleSprinkleReloaded(sprinkleName: string): void {
-    this.sprinkleContentCache.delete(sprinkleName);
-    this.options.onSprinkleReloaded?.(sprinkleName);
-  }
-
-  private handleSprinkleContent(
-    message: LeaderToFollowerMessage & { type: 'sprinkle.content' }
-  ): void {
-    const { requestId, sprinkleName, content, chunkIndex, totalChunks, error } = message;
-
-    if (error) {
-      log.warn('sprinkle.content error from leader', { sprinkleName, error });
-      this.pendingSprinkleFetches.delete(requestId);
-      this.inflightSprinkleByName.delete(sprinkleName);
-      // Mirror the cancel/reject/success paths: every removal from
-      // `pendingSprinkleFetches` must drop the matching `fetchEpoch`
-      // stamp too. Without this, leader-returned errors leak one Map
-      // entry per error for the session lifetime (R4 hygiene fix).
-      this.fetchEpoch.delete(requestId);
-      const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
-      this.sprinkleContentWaiters.delete(sprinkleName);
-      for (const waiter of waiters) waiter.reject(new Error(error));
-      return;
-    }
-
-    // Both chunked and non-chunked paths require an outstanding fetch — a
-    // delivery for an unknown requestId is either a late post-disconnect
-    // arrival or a misbehaving leader. Drop silently in both cases; the
-    // previous chunked-branch behavior (auto-create a buffer) could let an
-    // unsolicited payload poison `sprinkleContentCache`.
-    if (!this.pendingSprinkleFetches.has(requestId)) {
-      log.debug('Dropping sprinkle.content for unknown requestId', {
-        sprinkleName,
-        requestId,
-      });
-      return;
-    }
-
-    let assembled: string | null = null;
-
-    if (chunkIndex !== undefined && totalChunks !== undefined) {
-      // Reject obviously-malformed chunk indices instead of accepting them
-      // into the buffer (a chunkIndex >= totalChunks would otherwise grow
-      // the buffer beyond the assembly threshold without ever satisfying
-      // the strict equality below).
-      if (chunkIndex < 0 || chunkIndex >= totalChunks) {
-        log.warn('Dropping sprinkle.content with out-of-range chunkIndex', {
-          sprinkleName,
-          chunkIndex,
-          totalChunks,
-        });
-        return;
-      }
-      const buffer = this.pendingSprinkleFetches.get(requestId)!;
-      buffer.totalChunks = totalChunks;
-      // Idempotent against duplicate chunks: only the FIRST delivery for a
-      // given index advances the completion count. A retry race or
-      // misbehaving leader sending two payloads for the same index does
-      // not falsely trigger early assembly.
-      if (!buffer.chunks.has(chunkIndex)) {
-        buffer.chunks.set(chunkIndex, content);
-      } else {
-        log.warn('Dropping duplicate sprinkle.content chunk', {
-          sprinkleName,
-          chunkIndex,
-        });
-      }
-      if (buffer.chunks.size >= totalChunks) {
-        const ordered: string[] = [];
-        for (let i = 0; i < totalChunks; i++) {
-          const chunk = buffer.chunks.get(i);
-          if (chunk === undefined) {
-            log.warn('Chunked sprinkle.content missing chunk after assembly', {
-              sprinkleName,
-              missingIndex: i,
-            });
-            return; // Wait for the missing chunk.
-          }
-          ordered.push(chunk);
-        }
-        assembled = ordered.join('');
-        this.pendingSprinkleFetches.delete(requestId);
-      }
-    } else {
-      // Non-chunked single response — request is known (checked above).
-      assembled = content;
-      this.pendingSprinkleFetches.delete(requestId);
-    }
-
-    if (assembled === null) return;
-
-    // Only cache if the fetch was issued in the current cache epoch — a
-    // `sprinkles.list` arriving mid-fetch advances the epoch and signals
-    // the content is from before the cache barrier. Waiters still get
-    // resolved with the content so the original caller isn't penalised
-    // (they asked for this content; the leader's later list broadcast
-    // can't retroactively unsay it). The NEXT fetch goes back on the
-    // wire instead of returning a stale cache hit.
-    const fetchedEpoch = this.fetchEpoch.get(requestId);
-    this.fetchEpoch.delete(requestId);
-    if (fetchedEpoch === this.cacheEpoch) {
-      this.sprinkleContentCache.set(sprinkleName, assembled);
-    }
-    this.inflightSprinkleByName.delete(sprinkleName);
-    const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
-    this.sprinkleContentWaiters.delete(sprinkleName);
-    for (const waiter of waiters) waiter.resolve(assembled);
-  }
-
-  /**
-   * Reject every pending sprinkle fetch with the given reason. Also clears
-   * the `fetchEpoch` map — without this, a future fetch with the same
-   * requestId (e.g. across a reconnect with stale clock collisions) could
-   * see a leftover epoch stamp and write stale content to the cache.
-   */
-  private rejectPendingSprinkleFetches(reason: string): void {
-    const err = new Error(reason);
-    for (const [, waiters] of this.sprinkleContentWaiters) {
-      for (const waiter of waiters) waiter.reject(err);
-    }
-    this.sprinkleContentWaiters.clear();
-    this.pendingSprinkleFetches.clear();
-    this.inflightSprinkleByName.clear();
-    this.fetchEpoch.clear();
-  }
-
-  private applyLeaderTheme(themeJson: string | null): void {
-    this.options.onThemeApply?.(themeJson);
-  }
-
   private emitEvent(event: AgentEvent): void {
     for (const cb of this.eventListeners) {
       try {
@@ -1259,92 +708,20 @@ export class FollowerSyncManager implements AgentHandle {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // CDP routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Create a RemoteCDPTransport that routes CDP commands to a remote runtime
-   * via the leader data channel.
-   */
   createRemoteTransport(targetRuntimeId: string, localTargetId: string): RemoteCDPTransport {
-    const sender: RemoteCDPSender = {
-      sendCDPRequest: (requestId, method, params, sessionId) => {
-        this.sync.send({
-          type: 'cdp.request',
-          requestId,
-          targetRuntimeId,
-          localTargetId,
-          method,
-          params,
-          sessionId,
-        });
-      },
-    };
-    const transport = new RemoteCDPTransport(sender);
-    this.remoteTransports.set(`${targetRuntimeId}:${localTargetId}`, transport);
-    return transport;
+    return this.remoteCdp.createRemoteTransport(targetRuntimeId, localTargetId);
   }
 
-  /**
-   * Remove a remote transport when no longer needed.
-   */
   removeRemoteTransport(targetRuntimeId: string, localTargetId: string): void {
-    const key = `${targetRuntimeId}:${localTargetId}`;
-    const transport = this.remoteTransports.get(key);
-    if (transport) {
-      transport.disconnect();
-      this.remoteTransports.delete(key);
-    }
+    this.remoteCdp.removeRemoteTransport(targetRuntimeId, localTargetId);
   }
 
-  /**
-   * Open a tab on a remote runtime via the leader.
-   * Returns a promise that resolves with the composite targetId ("{runtimeId}:{localTargetId}").
-   */
   openRemoteTab(targetRuntimeId: string, url: string): Promise<string> {
-    const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<string>((resolve, reject) => {
-      this.tabOpenResolvers.set(requestId, { resolve, reject });
-      this.sync.send({ type: 'tab.open', requestId, targetRuntimeId, url });
-    });
+    return this.tabTeleport.openRemoteTab(targetRuntimeId, url);
   }
 
-  /**
-   * Ask the leader to teleport an existing tray tab HERE — a foreground copy
-   * carrying the source tab's cookies + web storage. Resolves with the local
-   * composite targetId. The leader replies on the shared `tab.opened` /
-   * `tab.open.error` legs, so this reuses `tabOpenResolvers` (already drained
-   * on disconnect by `rejectPendingRequests`).
-   */
   requestTabTeleport(sourceTargetId: string): Promise<string> {
-    const requestId = `tab-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (!this.tabOpenResolvers.delete(requestId)) return;
-        reject(new Error('tab teleport timed out'));
-      }, TAB_TELEPORT_CLIENT_TIMEOUT_MS);
-      const settle = <T>(fn: (value: T) => void) => {
-        return (value: T): void => {
-          clearTimeout(timer);
-          fn(value);
-        };
-      };
-      this.tabOpenResolvers.set(requestId, {
-        resolve: settle(resolve),
-        reject: settle(reject),
-      });
-      const sent = this.sync.send({
-        type: 'tab.teleport.request',
-        requestId,
-        targetId: sourceTargetId,
-      });
-      if (sent === false) {
-        clearTimeout(timer);
-        this.tabOpenResolvers.delete(requestId);
-        reject(new Error('not connected to a leader'));
-      }
-    });
+    return this.tabTeleport.requestTabTeleport(sourceTargetId);
   }
 
   /** The leader's advertised protocol version, when it sent a `hello`. */
@@ -1352,475 +729,16 @@ export class FollowerSyncManager implements AgentHandle {
     return this.leaderProtocolVersion;
   }
 
-  /**
-   * Run the visible half of a leader-delegated OAuth login here (#1915) and
-   * report the terminal callback URL. Fail-closed: a float with no handler
-   * wired, a throwing handler, and an aborted attempt all send a single
-   * `oauth.popup.response` so the leader never waits out its full timeout.
-   */
-  private async handleOAuthPopupRequest(requestId: string, url: string): Promise<void> {
-    const handler = this.options.onOAuthPopupRequest;
-    if (!handler) {
-      log.warn('Leader delegated an OAuth popup, but this float cannot show one', { requestId });
-      this.sync.send({
-        type: 'oauth.popup.response',
-        requestId,
-        error: 'this follower cannot show an interactive login',
-      });
-      return;
-    }
-    const controller = new AbortController();
-    this.oauthPopupAborts.set(requestId, controller);
-    try {
-      const redirectUrl = await handler(url, controller.signal);
-      // A disconnect mid-login aborts the controller above, so this resolves
-      // with null and the send lands on a closed channel — a silent no-op.
-      // That is fine and deliberate: the leader does not wait on it, because
-      // `OAuthPopupDelegation` settles every waiter for a departed follower
-      // from its own `onFollowerRemoved` hook.
-      this.sync.send({
-        type: 'oauth.popup.response',
-        requestId,
-        ...(redirectUrl ? { redirectUrl } : {}),
-      });
-    } catch (err) {
-      log.warn('Delegated OAuth popup failed', { requestId, error: String(err) });
-      this.sync.send({
-        type: 'oauth.popup.response',
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      this.oauthPopupAborts.delete(requestId);
-    }
-  }
-
-  /**
-   * Execute a tab.open on the follower's local browser transport.
-   * Sends tab.opened or tab.open.error back to the leader.
-   */
-  private async executeLocalTabOpen(requestId: string, url: string): Promise<void> {
-    const transport = this.options.browserTransport;
-    if (!transport) {
-      this.sync.send({
-        type: 'tab.open.error',
-        requestId,
-        error: 'Follower has no browser transport',
-      });
-      return;
-    }
-
-    try {
-      const result = await transport.send('Target.createTarget', { url, background: true });
-      const targetId = result['targetId'];
-      // Some CDP versions / target denial paths can return without a usable
-      // targetId. Surface a meaningful error instead of forwarding "undefined"
-      // and letting the leader fail later attaching to a junk id.
-      if (typeof targetId !== 'string' || targetId.length === 0) {
-        this.sync.send({
-          type: 'tab.open.error',
-          requestId,
-          error: 'Target.createTarget did not return a usable targetId',
-        });
-        return;
-      }
-      this.sync.send({ type: 'tab.opened', requestId, targetId });
-      this.options.onTargetsChanged?.();
-    } catch (err) {
-      this.sync.send({
-        type: 'tab.open.error',
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
-   * Execute a CDP command on the follower's local browser transport.
-   * Sends the response back to the leader, chunking if necessary.
-   *
-   * When a `Target.attachToTarget` command succeeds, the resulting sessionId
-   * is tracked as a remote-initiated session so that CDP events for that
-   * session are forwarded to the leader.
-   */
-  private async executeLocalCDP(
-    requestId: string,
-    // Unused: the wire message carries the follower-local target id for
-    // symmetry, but the transport routes by sessionId/method alone.
-    _localTargetId: string,
-    method: string,
-    params: CDPPayload | undefined,
-    sessionId: string | undefined
-  ): Promise<void> {
-    const transport = this.options.browserTransport;
-    if (!transport) {
-      this.sync.send({
-        type: 'cdp.response',
-        requestId,
-        error: 'Follower has no browser transport',
-      });
-      return;
-    }
-
-    try {
-      const result = await transport.send(method, params, sessionId);
-
-      // Track sessions created by remote CDP requests so we can forward events
-      if (method === 'Target.attachToTarget' && result['sessionId']) {
-        const remoteSessionId = result['sessionId'] as string;
-        this.remoteCDPSessions.add(remoteSessionId);
-        this.setupCDPEventForwarding(transport, remoteSessionId);
-        log.debug('Tracking remote CDP session', { remoteSessionId });
-      }
-
-      // Clean up session tracking when detached
-      if (
-        method === 'Target.detachFromTarget' &&
-        sessionId &&
-        this.remoteCDPSessions.has(sessionId)
-      ) {
-        this.remoteCDPSessions.delete(sessionId);
-        log.debug('Removed remote CDP session on detach', { sessionId });
-      }
-
-      sendCDPResponse(this.sync, requestId, result);
-    } catch (err) {
-      this.sync.send({
-        type: 'cdp.response',
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
-   * Register CDP event listeners on the local transport for a remote-initiated session.
-   * Events matching the sessionId are forwarded to the leader via `cdp.event`.
-   */
-  private setupCDPEventForwarding(transport: CDPTransport, remoteSessionId: string): void {
-    // Events we care about forwarding to the leader
-    const events = [
-      'Page.frameNavigated',
-      'Page.loadEventFired',
-      'Page.domContentEventFired',
-      'Network.responseReceived',
-      'Network.loadingFinished',
-      'Network.requestWillBeSent',
-      'Runtime.executionContextCreated',
-      'Runtime.executionContextDestroyed',
-      'Runtime.executionContextsCleared',
-    ];
-
-    for (const eventName of events) {
-      const listener = (params: CDPPayload) => {
-        // Only forward events that belong to our remote session
-        if (params['sessionId'] !== remoteSessionId) return;
-        if (!this.remoteCDPSessions.has(remoteSessionId)) return;
-        // Strip sessionId from forwarded params — the leader routes by sessionId at the message level
-        const { sessionId: _sid, ...forwardedParams } = params;
-        this.sync.send({
-          type: 'cdp.event',
-          method: eventName,
-          params: forwardedParams,
-          sessionId: remoteSessionId,
-        });
-      };
-      transport.on(eventName, listener);
-      this.cdpEventCleanups.push(() => transport.off(eventName, listener));
-    }
-  }
-
-  /** Remove all CDP event listeners and clear session tracking. */
-  private cleanupCDPEventForwarding(): void {
-    for (const cleanup of this.cdpEventCleanups) cleanup();
-    this.cdpEventCleanups.length = 0;
-    this.remoteCDPSessions.clear();
-  }
-
-  /**
-   * Route a CDP response from the leader to the appropriate RemoteCDPTransport.
-   * Handles chunked responses by reassembling before delivery.
-   */
-  private routeCDPResponse(message: LeaderToFollowerMessage & { type: 'cdp.response' }): void {
-    const assembled = reassembleCDPResponse(this.cdpChunkBuffers, message);
-    if (!assembled) return; // Still waiting for more chunks
-
-    // Find the transport that has this pending request by checking all transports
-    for (const transport of this.remoteTransports.values()) {
-      transport.handleResponse(message.requestId, assembled.result, assembled.error);
-    }
-  }
-
-  /** Route a leader CDP event to remote transports, restoring its flattened session identity. */
-  private routeCDPEvent(message: LeaderToFollowerMessage & { type: 'cdp.event' }): void {
-    const params = message.sessionId
-      ? { ...message.params, sessionId: message.sessionId }
-      : message.params;
-    for (const transport of this.remoteTransports.values()) {
-      transport.handleEvent(message.method, params);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // FS routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute an fs request on the follower's local VFS.
-   * Sends the response(s) back to the leader.
-   */
-  private async executeLocalFs(requestId: string, request: TrayFsRequest): Promise<void> {
-    const vfs = this.options.vfs;
-    if (!vfs) {
-      this.sync.send({
-        type: 'fs.response',
-        requestId,
-        response: { ok: false, error: 'Follower has no VFS' },
-      });
-      return;
-    }
-
-    // Mirror the executeLocalCDP / executeLocalTabOpen pattern: any rejection
-    // from `handleFsRequest` (broken VFS, permission error, malformed path)
-    // becomes an `fs.response` with `ok: false` instead of an unhandled async
-    // rejection — otherwise the leader's `fsResolvers` entry would never
-    // resolve, hanging any caller awaiting the response.
-    let responses;
-    try {
-      responses = await handleFsRequest(vfs, request);
-    } catch (err) {
-      this.sync.send({
-        type: 'fs.response',
-        requestId,
-        response: { ok: false, error: err instanceof Error ? err.message : String(err) },
-      });
-      return;
-    }
-    for (const response of responses) {
-      this.sync.send({ type: 'fs.response', requestId, response });
-    }
-  }
-
-  /**
-   * Route an fs response from the leader to the appropriate pending resolver.
-   * Handles chunked responses by accumulating until all chunks arrive.
-   */
-  private routeFsResponse(requestId: string, response: TrayFsResponse): void {
-    const resolver = this.fsResolvers.get(requestId);
-    if (!resolver) return;
-
-    resolver.responses.push(response);
-    const totalChunks = (response.ok && response.totalChunks) || 1;
-    if (resolver.responses.length >= totalChunks) {
-      this.fsResolvers.delete(requestId);
-      resolver.resolve(resolver.responses);
-    }
-  }
-
-  /**
-   * Send an fs request to a remote runtime via the leader.
-   * Returns a promise that resolves with the response(s).
-   *
-   * This is the public API that the rsync shell command will call.
-   */
   sendFsRequest(targetRuntimeId: string, request: TrayFsRequest): Promise<TrayFsResponse[]> {
-    const requestId = `fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<TrayFsResponse[]>((resolve, reject) => {
-      this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
-      this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
-    });
+    return this.fsBridge.sendFsRequest(targetRuntimeId, request);
   }
 
-  // ---------------------------------------------------------------------------
-  // Transcript export (follower side)
-  // ---------------------------------------------------------------------------
-
-  private handleExportLeaderMessage(
-    message: Extract<
-      LeaderToFollowerMessage,
-      {
-        type:
-          | 'transcript.export.pending'
-          | 'transcript.export.denied'
-          | 'transcript.export.start'
-          | 'transcript.export.chunk'
-          | 'transcript.export.complete'
-          | 'transcript.export.error';
-      }
-    >
-  ): void {
-    switch (message.type) {
-      case 'transcript.export.pending':
-        log.debug('Transcript export pending', { requestId: message.requestId });
-        this.activeExportRequests.get(message.requestId)?.onProgress?.({
-          phase: 'collecting',
-        });
-        break;
-      case 'transcript.export.denied':
-        this.handleExportDenied(message.requestId);
-        break;
-      case 'transcript.export.start':
-        // Log without filename to avoid leaking session title before leader approval.
-        log.debug('Transcript export start', { requestId: message.requestId });
-        this.activeExportRequests.get(message.requestId)?.onProgress?.({
-          phase: 'packaging',
-        });
-        break;
-      case 'transcript.export.chunk':
-        void this.handleExportChunkAsync(message.requestId, message.index, message.data);
-        break;
-      case 'transcript.export.complete':
-        void this.handleExportComplete(
-          message.requestId,
-          message.chunks,
-          message.byteLength,
-          message.sha256
-        );
-        break;
-      case 'transcript.export.error':
-        this.handleExportError(message.requestId, message.code);
-        break;
-      default: {
-        // Exhaustiveness guard: a new export message variant fails compile here
-        // until this dispatcher decides. At runtime this means a version-skewed
-        // leader — log and discard, never throw.
-        const unknown = unhandledProtocolMessage(message);
-        log.warn('Unknown transcript export leader message — skewed leader?', {
-          type: unknown.type,
-        });
-        break;
-      }
-    }
-  }
-
-  /**
-   * Request a transcript export from the leader.
-   * Returns a Promise<Blob> with the verified ZIP, or rejects with
-   * TranscriptExportError on denial, corruption, or abort.
-   *
-   * @param onProgress Optional callback invoked as the leader advances through
-   *   export phases. Phases are forwarded without leaking filename, sha256,
-   *   or byte counts until the verified Blob is returned.
-   */
   requestTranscriptExport(
     selector: TranscriptExportSelector,
     signal: AbortSignal,
     onProgress?: (progress: TranscriptExportProgress) => void
   ): Promise<Blob> {
-    if (signal.aborted) {
-      return Promise.reject(new TranscriptExportError('transfer-aborted'));
-    }
-
-    const requestId = `te-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const spoolFactory = this.options.makeExportSpool ?? makeExportSpool;
-    const spool = spoolFactory(requestId);
-
-    return new Promise<Blob>((resolve, reject) => {
-      const onAbort = (): void => {
-        const entry = this.activeExportRequests.get(requestId);
-        if (!entry) return;
-        this.sync.send({ type: 'transcript.export.cancel', requestId });
-        this.activeExportRequests.delete(requestId);
-        void entry.spool.cancel();
-        reject(new TranscriptExportError('transfer-aborted'));
-      };
-
-      if (signal.aborted) {
-        void spool.cancel();
-        reject(new TranscriptExportError('transfer-aborted'));
-        return;
-      }
-
-      signal.addEventListener('abort', onAbort, { once: true });
-
-      this.activeExportRequests.set(requestId, {
-        resolve,
-        reject,
-        spool,
-        nextExpectedIndex: 0,
-        totalBytes: 0,
-        signal,
-        onAbort,
-        onProgress,
-      });
-
-      this.sync.send({
-        type: 'transcript.export.request',
-        requestId,
-        selector,
-      });
-    });
-  }
-
-  /** Route the delegated-sudo pair: open a prompt, or withdraw an open one. */
-  private handleSudoLeaderMessage(
-    message: Extract<
-      LeaderToFollowerMessage,
-      { type: 'sudo.approve.request' | 'sudo.approve.cancel' }
-    >
-  ): void {
-    if (message.type === 'sudo.approve.cancel') {
-      this.openSudoPrompts.get(message.requestId)?.abort();
-      return;
-    }
-    void this.handleSudoApprovalRequest(message);
-  }
-
-  /**
-   * Render a delegated sudo prompt and reply with the human's verdict
-   * (issue #2062). Fail-closed: no handler, a handler that throws, or a prompt
-   * withdrawn before the human answered all reply `deny`. A verdict that lands
-   * after `sudo.approve.cancel` is reported as `deny` too — the leader ignores
-   * it either way, but a stale "Allow" must never read as consent.
-   */
-  private async handleSudoApprovalRequest(
-    message: Extract<LeaderToFollowerMessage, { type: 'sudo.approve.request' }>
-  ): Promise<void> {
-    const { requestId } = message;
-    const reply = (verdict: SudoApprovalVerdict): void => {
-      this.sync.send({
-        type: 'sudo.approve.response',
-        requestId,
-        decision: verdict.decision,
-        ...(verdict.decision === 'always' && verdict.pattern ? { pattern: verdict.pattern } : {}),
-        ...(verdict.attestation ? { attestation: verdict.attestation } : {}),
-      });
-    };
-    const handler = this.options.onSudoApprovalRequest;
-    if (!handler) {
-      log.warn('No sudo approval handler wired — denying delegated prompt', { requestId });
-      reply({ decision: 'deny' });
-      return;
-    }
-    if (this.openSudoPrompts.has(requestId)) return;
-    const abort = new AbortController();
-    this.openSudoPrompts.set(requestId, abort);
-    let verdict: SudoApprovalVerdict = { decision: 'deny' };
-    try {
-      verdict = await handler({
-        requestId,
-        kind: message.kind,
-        detail: message.detail,
-        ...(message.suggestedPattern ? { suggestedPattern: message.suggestedPattern } : {}),
-        ...(message.scoopName ? { scoopName: message.scoopName } : {}),
-        ...(message.requester ? { requester: message.requester } : {}),
-        expiresAt: message.expiresAt,
-        signal: abort.signal,
-      });
-    } catch (err) {
-      log.warn('Sudo approval dialog failed — denying', {
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      verdict = { decision: 'deny' };
-    } finally {
-      this.openSudoPrompts.delete(requestId);
-    }
-    if (abort.signal.aborted) {
-      reply({ decision: 'deny' });
-      return;
-    }
-    reply(verdict);
+    return this.exportClient.requestTranscriptExport(selector, signal, onProgress);
   }
 
   /**
@@ -1834,140 +752,5 @@ export class FollowerSyncManager implements AgentHandle {
     environment: 'sandbox' | 'production';
   }): boolean {
     return this.sync.send({ type: 'push.register', ...registration });
-  }
-
-  private handleExportDenied(requestId: string): void {
-    const entry = this.activeExportRequests.get(requestId);
-    if (!entry) return;
-    entry.signal.removeEventListener('abort', entry.onAbort);
-    this.activeExportRequests.delete(requestId);
-    void entry.spool.cancel();
-    entry.reject(new TranscriptExportError('permission-denied'));
-  }
-
-  /**
-   * Async chunk handler (Wave 4 bounded-memory).
-   *
-   * Decodes the base64 payload and appends to the spool (which may be an
-   * async OPFS write in production). `nextExpectedIndex` and `totalBytes`
-   * are updated SYNCHRONOUSLY before the async spool write so that a
-   * `complete` message arriving concurrently (legacy non-ack-gated path)
-   * sees the correct counts. The ack is sent AFTER the spool write resolves
-   * so that it reflects true durability (OPFS in production, synchronous
-   * push in MemorySpool).
-   */
-  private async handleExportChunkAsync(
-    requestId: string,
-    index: number,
-    data: string
-  ): Promise<void> {
-    const entry = this.activeExportRequests.get(requestId);
-    if (!entry) return;
-
-    if (index !== entry.nextExpectedIndex) {
-      log.warn('Transcript export chunk out of order', {
-        requestId,
-        expected: entry.nextExpectedIndex,
-        got: index,
-      });
-      entry.signal.removeEventListener('abort', entry.onAbort);
-      this.activeExportRequests.delete(requestId);
-      this.sync.send({ type: 'transcript.export.cancel', requestId });
-      void entry.spool.cancel();
-      entry.reject(new TranscriptExportError('transfer-corrupt'));
-      return;
-    }
-
-    // Decode base64 payload
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-    // Update running state SYNCHRONOUSLY before the async spool write so that
-    // concurrent complete handlers see the correct nextExpectedIndex.
-    entry.totalBytes += bytes.byteLength;
-    entry.nextExpectedIndex++;
-    entry.onProgress?.({ phase: 'transferring', processedBytes: entry.totalBytes });
-
-    // Write to spool. For MemorySpool: parts.push is synchronous inside append,
-    // one microtask tick later the await resolves. For OpfsSpool: genuine async
-    // OPFS write — the ack below confirms durability to the leader.
-    try {
-      await entry.spool.append(bytes, index);
-    } catch (err) {
-      if (!this.activeExportRequests.has(requestId)) return;
-      entry.signal.removeEventListener('abort', entry.onAbort);
-      this.activeExportRequests.delete(requestId);
-      this.sync.send({ type: 'transcript.export.cancel', requestId });
-      void entry.spool.cancel();
-      entry.reject(new TranscriptExportError('transfer-corrupt'));
-      log.warn('Transcript export spool append failed', {
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-
-    // Re-check: entry may be gone if complete arrived before spool write resolved.
-    if (!this.activeExportRequests.has(requestId)) return;
-
-    // Send durable-write ack to leader. The leader's bounded window (=1) waits
-    // for this before sending the next chunk, providing application-level backpressure.
-    this.sync.send({ type: 'transcript.export.ack', requestId, index });
-  }
-
-  private async handleExportComplete(
-    requestId: string,
-    expectedChunks: number,
-    expectedByteLength: number,
-    expectedSha256: string
-  ): Promise<void> {
-    const entry = this.activeExportRequests.get(requestId);
-    if (!entry) return;
-    entry.signal.removeEventListener('abort', entry.onAbort);
-    this.activeExportRequests.delete(requestId);
-
-    // Verify chunk count against received index counter
-    if (entry.nextExpectedIndex !== expectedChunks) {
-      log.warn('Transcript export chunk count mismatch', {
-        requestId,
-        expected: expectedChunks,
-        got: entry.nextExpectedIndex,
-      });
-      void entry.spool.cancel();
-      entry.reject(new TranscriptExportError('transfer-corrupt'));
-      return;
-    }
-
-    // Delegate integrity checks (byte length + SHA-256) to the spool.
-    // The spool's hasher and byte counter are updated incrementally as
-    // chunks arrive, so no second pass over the data is needed.
-    let blob: Blob;
-    try {
-      blob = await entry.spool.finalize(expectedChunks, expectedByteLength, expectedSha256);
-    } catch (err) {
-      log.warn('Transcript export spool finalize failed', {
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      entry.reject(new TranscriptExportError('transfer-corrupt'));
-      return;
-    }
-
-    entry.resolve(blob);
-  }
-
-  private handleExportError(requestId: string, code: TranscriptExportErrorCode): void {
-    const entry = this.activeExportRequests.get(requestId);
-    if (!entry) return;
-    entry.signal.removeEventListener('abort', entry.onAbort);
-    this.activeExportRequests.delete(requestId);
-    void entry.spool.cancel();
-    const safeCode: TranscriptExportErrorCode = VALID_EXPORT_ERROR_CODES.has(
-      code as TranscriptExportErrorCode
-    )
-      ? (code as TranscriptExportErrorCode)
-      : 'transfer-corrupt';
-    entry.reject(new TranscriptExportError(safeCode));
   }
 }
