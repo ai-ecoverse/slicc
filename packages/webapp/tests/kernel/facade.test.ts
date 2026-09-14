@@ -12,7 +12,6 @@
  *   - `tool-ui-action` routing
  *   - `agent-event` `text_delta` ordering preserved through the facade emit
  *   - follower-sync `user-message` diversion
- *   - `sprinkle-op-response` routing into the proxy handler
  *
  * The test mocks chrome.runtime (so the existing transport adapter binds)
  * and runs both bridge and client against the same listener fan-out — when
@@ -72,14 +71,13 @@ const mockChrome = {
 // import shapes.
 // ---------------------------------------------------------------------------
 
-const { mockSessionStore, mockHandleAction, mockHandleSprinkleOpResponse } = vi.hoisted(() => ({
+const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockSessionStore: vi.fn(function (this: Record<string, Mock>) {
     this.init = vi.fn().mockResolvedValue(undefined);
     this.saveMessages = vi.fn().mockResolvedValue(undefined);
     this.delete = vi.fn().mockResolvedValue(undefined);
   }),
   mockHandleAction: vi.fn().mockResolvedValue(undefined),
-  mockHandleSprinkleOpResponse: vi.fn(),
 }));
 
 vi.mock('../../src/scoops/chat-session-store.js', () => ({
@@ -95,10 +93,6 @@ vi.mock('../../src/tools/tool-ui.js', () => ({
     markMounted: vi.fn(),
   },
   TOOL_UI_MOUNTED_ACTION: '__mounted',
-}));
-
-vi.mock('../../src/scoops/sprinkle-manager-proxy.js', () => ({
-  handleSprinkleOpResponse: mockHandleSprinkleOpResponse,
 }));
 
 const { Bridge } = await import('../../src/kernel/facade.js');
@@ -597,32 +591,5 @@ describe('Kernel facade parity', () => {
     expect(followerSendMessage).toHaveBeenCalledWith('follower hi', 'msg-follower-1', undefined);
     // The local orchestrator must NOT have seen the message in follower mode.
     expect(orchestrator.handleMessage).not.toHaveBeenCalled();
-  });
-
-  // 8. sprinkle-op-response routes to the proxy handler instead of being
-  //    handed to handlePanelMessage
-  it('sprinkle-op-response payloads route to handleSprinkleOpResponse', async () => {
-    for (const listener of messageListeners) {
-      listener(
-        {
-          source: 'panel',
-          payload: {
-            type: 'sprinkle-op-response',
-            id: 'req-1',
-            result: { ok: true },
-          },
-        },
-        {},
-        () => {}
-      );
-    }
-    await tick();
-
-    expect(mockHandleSprinkleOpResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'sprinkle-op-response', id: 'req-1' })
-    );
-    // And handlePanelMessage didn't see it (no orchestrator side-effects).
-    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
-    expect(orchestrator.unregisterScoop).not.toHaveBeenCalled();
   });
 });

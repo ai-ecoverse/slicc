@@ -25,7 +25,6 @@ import { type CompactionRowAction, CompactionRowTracker } from '../scoops/compac
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
-import { handleSprinkleOpResponse } from '../scoops/sprinkle-manager-proxy.js';
 import {
   capTranscriptToolInput,
   capTranscriptToolResultForBuffer,
@@ -241,8 +240,8 @@ export class Bridge implements KernelFacade {
    * standalone DedicatedWorker). A `MessageChannel`-backed transport
    * can be passed into the constructor so the same `Bridge`
    * runs worker-side. The transport delivers raw `ExtensionMessage`
-   * envelopes either way so the existing source filter and
-   * sprinkle-op-response peek (in `setupMessageListener`) stay intact.
+   * envelopes either way so the existing source filter
+   * (in `setupMessageListener`) stays intact.
    */
   private _transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> | null;
   /**
@@ -1870,17 +1869,6 @@ export class Bridge implements KernelFacade {
     return this.transport.onMessage((msg) => {
       // Only handle messages from the panel (relayed by service worker)
       if (msg.source !== 'panel') return;
-
-      // Route sprinkle-op-response to the proxy's pending request map.
-      // The sprinkle-op-response shape isn't part of `PanelToOffscreenMessage`
-      // (it's a panel→offscreen reply to a sprinkle-op the offscreen sent),
-      // so we reach for the proxy's typed handler via `unknown`.
-      if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
-        handleSprinkleOpResponse(
-          msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
-        );
-        return;
-      }
 
       this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
         console.error('[kernel-bridge] handlePanelMessage error:', err);

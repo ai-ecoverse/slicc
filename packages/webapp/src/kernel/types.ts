@@ -58,9 +58,8 @@ export type { KernelTransport as KernelTransportRaw } from './transport.js';
 
 /**
  * `In` is instantiated as the raw `ExtensionMessage` envelope on both
- * sides so the bridge can keep its source-filter and
- * sprinkle-op-response peek logic. The defaults here are convenience
- * for callers that don't override them.
+ * sides so the bridge can keep its source-filter. The defaults here
+ * are convenience for callers that don't override them.
  */
 export type KernelTransport<
   In = PanelToOffscreenMessage,

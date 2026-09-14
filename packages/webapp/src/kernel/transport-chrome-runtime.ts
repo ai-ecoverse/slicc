@@ -3,7 +3,7 @@
  *
  * Both adapters deliver the **raw envelope** (`ExtensionMessage`) to their
  * onMessage handler so the bridge / client can keep their `msg.source`
- * filter and the bridge can keep its `sprinkle-op-response` peek logic.
+ * filter.
  * The MessageChannel transport (`transport-message-channel.ts`) follows
  * the same shape.
  *
