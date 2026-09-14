@@ -170,6 +170,20 @@ export function writeFeatureFlagOverrides(overrides: Readonly<FeatureFlagValues>
   }
 }
 
+/**
+ * Whether a local user override for `id` would be honoured on the active
+ * float — i.e. whether {@link setFeatureFlagOverride} would do anything.
+ *
+ * The Experimental dialog stages toggles in memory and only writes them when
+ * the user confirms the reload, so it can no longer learn "that was refused"
+ * by writing and re-reading. It asks here instead, and a switch it cannot
+ * actually apply never pretends otherwise.
+ */
+export function canOverrideFlag(id: FeatureFlagId): boolean {
+  const definition = FEATURE_FLAGS_BY_ID.get(id);
+  return definition !== undefined && canOverride(definition, activeFloat);
+}
+
 export function setFeatureFlagOverride(id: FeatureFlagId, value: string | undefined): void {
   const definition = FEATURE_FLAGS_BY_ID.get(id);
   if (!definition || !canOverride(definition, activeFloat)) return;

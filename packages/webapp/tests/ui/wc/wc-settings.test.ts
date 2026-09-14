@@ -323,9 +323,13 @@ describe('showExperimentalSettings', () => {
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
 
-    expect(isFeatureEnabled('panel-layouts')).toBe(true);
+    // Staged, not written: nothing reaches storage before the reload.
+    expect(isFeatureEnabled('panel-layouts')).toBe(false);
+
     clickFooter(dialog, 'Reload now');
     await result;
+    expect(isFeatureEnabled('panel-layouts')).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('shows the compact-on-idle flag without tunable fields', async () => {
@@ -351,10 +355,11 @@ describe('showExperimentalSettings', () => {
     expect(toggle.checked).toBe(false);
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
+    expect(isFeatureEnabled('agentic-memory')).toBe(false); // staged only
 
-    expect(isFeatureEnabled('agentic-memory')).toBe(true);
     clickFooter(dialog, 'Reload now');
     await result;
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
   it('does not mount when called directly while the central flag is off', async () => {
@@ -414,10 +419,8 @@ describe('showExperimentalSettings', () => {
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
 
-    // The flag is persisted but inert until boot, so the dialog says so and
-    // offers the two ways to finish: apply it, or put it back.
     expect(reloadNotice(dialog)?.hidden).toBe(false);
-    expect(reloadNotice(dialog)?.textContent).toContain('wired when SLICC boots');
+    expect(reloadNotice(dialog)?.textContent).toContain('Nothing is saved until you reload');
     expect(footerButton(dialog, 'Done')).toBeNull();
     expect(footerButton(dialog, 'Reload now')).not.toBeNull();
     expect(footerButton(dialog, 'Revert')?.hidden).toBe(false);
@@ -427,7 +430,29 @@ describe('showExperimentalSettings', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it('reloads on an Esc/backdrop dismissal too — the override is already on disk', async () => {
+  it('writes the override only as part of the reload, never before it', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const order: string[] = [];
+    const recordingReload = vi.fn(() => {
+      order.push(`reload:${localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)}`);
+    });
+    const result = showExperimentalSettings(log, { reload: recordingReload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    order.push(`toggled:${localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)}`);
+
+    clickFooter(dialog, 'Reload now');
+    await result;
+
+    // The write lands with the reload, not at toggle time — so no live consumer
+    // (compaction, archive) can act on a value the user has not committed to.
+    expect(order).toEqual(['toggled:null', 'reload:{"agentic-memory":"on"}']);
+  });
+
+  it('discards staged toggles on an Esc/backdrop dismissal', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
@@ -435,12 +460,13 @@ describe('showExperimentalSettings', () => {
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
-    // No footer click at all: the dialog just goes away.
-    closeDialog(dialog);
+    closeDialog(dialog); // no footer click at all
 
     await result;
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(isFeatureEnabled('agentic-memory')).toBe(true);
+    // Nothing was ever written, so there is nothing half-applied to rescue.
+    expect(reload).not.toHaveBeenCalled();
+    expect(isFeatureEnabled('agentic-memory')).toBe(false);
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
   });
 
   it('drops the pending state when a flag is toggled back to where it started', async () => {
@@ -461,9 +487,38 @@ describe('showExperimentalSettings', () => {
     clickDone(dialog);
     await result;
     expect(reload).not.toHaveBeenCalled();
+    // Toggling on then off must not pin an explicit `off` onto a flag that was
+    // only riding its default — that would block a later central rollout.
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
   });
 
-  it('reverts a change and closes without a reload', async () => {
+  it('restores the raw override for a touched flag that ends where it started', async () => {
+    localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'panel-layouts': 'on' }));
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const panel = findPanelLayoutsToggle(dialog) as HTMLInputElement;
+    const agentic = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    // panel-layouts goes off and back on; agentic-memory is a real change.
+    panel.checked = false;
+    panel.dispatchEvent(new Event('change'));
+    panel.checked = true;
+    panel.dispatchEvent(new Event('change'));
+    agentic.checked = true;
+    agentic.dispatchEvent(new Event('change'));
+
+    clickFooter(dialog, 'Reload now');
+    await result;
+
+    // `panel-layouts` keeps the explicit `on` it opened with, not a rewrite.
+    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toEqual({
+      'panel-layouts': 'on',
+      'agentic-memory': 'on',
+    });
+  });
+
+  it('reverts staged changes and closes without a reload or a write', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
@@ -471,44 +526,21 @@ describe('showExperimentalSettings', () => {
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
-    expect(isFeatureEnabled('agentic-memory')).toBe(true);
 
     footerButton(dialog, 'Revert')?.click();
 
-    expect(isFeatureEnabled('agentic-memory')).toBe(false);
     expect(toggle.checked).toBe(false);
+    expect(isFeatureEnabled('agentic-memory')).toBe(false);
     expect(reloadNotice(dialog)?.hidden).toBe(true);
     expect(footerButton(dialog, 'Done')).not.toBeNull();
 
     clickDone(dialog);
     await result;
     expect(reload).not.toHaveBeenCalled();
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
   });
 
-  it('reverting a flag that had no override removes it rather than pinning it', async () => {
-    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const result = showExperimentalSettings(log, { reload });
-    const dialog = await openDialog();
-    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
-
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event('change'));
-    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toHaveProperty(
-      'agentic-memory'
-    );
-
-    footerButton(dialog, 'Revert')?.click();
-
-    // Writing `off` back would pin a flag that was only riding its default —
-    // a later change to that default would then silently not reach this user.
-    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).not.toHaveProperty(
-      'agentic-memory'
-    );
-    clickDone(dialog);
-    await result;
-  });
-
-  it('leaves an override the dialog did not touch alone when reverting', async () => {
+  it('leaves an override the dialog did not touch alone', async () => {
     localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'panel-layouts': 'on' }));
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const result = showExperimentalSettings(log, { reload });
@@ -517,13 +549,11 @@ describe('showExperimentalSettings', () => {
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change'));
-    footerButton(dialog, 'Revert')?.click();
+    clickFooter(dialog, 'Reload now');
+    await result;
 
     expect(isFeatureEnabled('panel-layouts')).toBe(true);
-    expect(isFeatureEnabled('agentic-memory')).toBe(false);
-    clickDone(dialog);
-    await result;
-    expect(reload).not.toHaveBeenCalled();
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
   it('ignores a stale persisted override after worker initialization', async () => {

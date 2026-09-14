@@ -10,13 +10,12 @@
 import { slugify } from '@slicc/shared-ts';
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
 import {
+  canOverrideFlag,
   type FeatureFlagId,
-  type FeatureFlagValues,
   isFeatureEnabled,
   listFlags,
   readFeatureFlagOverrides,
   setFeatureFlagOverride,
-  writeFeatureFlagOverrides,
 } from '../../core/feature-flags.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
@@ -451,16 +450,23 @@ function buildKeyboardModeSection(
 }
 
 /**
- * The experimental-features list, plus the handle the dialog needs to undo it.
+ * The experimental-features list, plus the handles the dialog drives it with.
  *
- * A flag write is inert until the next boot (see {@link showExperimentalSettings}),
- * so the dialog has to know both *whether* anything changed and how to put it
- * back when the user declines the reload.
+ * Toggles are staged in memory and reach `localStorage` only via
+ * {@link ExperimentalSection.commit}, which the dialog calls as it reloads.
+ * That is what makes `revert` honest: flag consumers are NOT uniformly
+ * boot-scoped — `scoops/scoop-context/session-helpers.ts` re-reads
+ * `agentic-memory` at every compaction and `ui/session-freezer.ts` re-reads
+ * `memory-v2` for every archive — so a persisted-then-reverted flag could
+ * already have changed a compaction or an archive that no storage rewrite can
+ * put back. Staging removes the window instead of trying to undo it.
  */
 interface ExperimentalSection {
   element: HTMLElement;
-  /** Restore every toggle — and the persisted overrides — to the opened state. */
+  /** Drop every staged toggle and put the switches back to the opened state. */
   revert(): void;
+  /** Persist the staged toggles. Only ever called together with a reload. */
+  commit(): void;
 }
 
 function buildExperimentalSection(deps: {
@@ -475,14 +481,18 @@ function buildExperimentalSection(deps: {
     section.append(div('wcset__empty', 'No experimental features are available right now.'));
   }
   // Snapshot both the resolved values (what "changed" means to the user) and
-  // the raw override bag (what `revert` has to put back). Restoring resolved
-  // values would pin a flag that was merely riding its bundled/central default.
+  // the raw override bag. `commit` restores the raw entry for any flag the
+  // user ended up putting back, rather than writing the resolved value out:
+  // pinning an explicit `off` onto a flag that was only riding its bundled or
+  // central default would block a later central rollout from ever reaching it.
   const openedValues = new Map(flags.map((flag) => [flag.id, isFeatureEnabled(flag.id)]));
   const openedOverrides = readFeatureFlagOverrides();
   const checks = new Map<FeatureFlagId, HTMLInputElement>();
+  /** Staged desired value per flag the user actually touched. Never persisted until `commit`. */
+  const staged = new Map<FeatureFlagId, boolean>();
 
   const notePending = (): void => {
-    deps.onPendingChange([...openedValues].some(([id, was]) => isFeatureEnabled(id) !== was));
+    deps.onPendingChange([...staged].some(([id, want]) => want !== openedValues.get(id)));
   };
 
   for (const flag of flags) {
@@ -497,16 +507,19 @@ function buildExperimentalSection(deps: {
     label.textContent = flag.label;
     info.append(label, div('wcset__detail', flag.description));
     check.addEventListener('change', () => {
-      try {
-        setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
-        deps.setStatus('Saved — reload to apply.');
-      } catch (err) {
-        deps.log.error('Experimental settings update failed', { flagId: flag.id, err });
-        deps.setStatus('Unable to save this feature setting.', true);
+      // Asked up front rather than learned by writing and re-reading: nothing
+      // is written yet, so a switch the float refuses must snap back here.
+      if (!canOverrideFlag(flag.id)) {
+        check.checked = openedValues.get(flag.id) ?? false;
+        deps.setStatus('This feature cannot be changed on this runtime.', true);
+        return;
       }
-      // Re-read rather than trust the click: a flag the active float refuses to
-      // override (`canOverride`) snaps straight back, and so must the checkbox.
-      check.checked = isFeatureEnabled(flag.id);
+      staged.set(flag.id, check.checked);
+      deps.setStatus(
+        check.checked === openedValues.get(flag.id)
+          ? 'Back to the current setting.'
+          : 'Not applied yet — reload to apply.'
+      );
       notePending();
     });
     checks.set(flag.id, check);
@@ -517,15 +530,21 @@ function buildExperimentalSection(deps: {
   return {
     element: section,
     revert: () => {
-      const overrides: FeatureFlagValues = { ...readFeatureFlagOverrides() };
-      for (const flag of flags) {
-        const opened = openedOverrides[flag.id];
-        if (opened === undefined) delete overrides[flag.id];
-        else overrides[flag.id] = opened;
-      }
-      writeFeatureFlagOverrides(overrides);
-      for (const [id, check] of checks) check.checked = isFeatureEnabled(id);
+      staged.clear();
+      for (const [id, check] of checks) check.checked = openedValues.get(id) ?? false;
       notePending();
+    },
+    commit: () => {
+      for (const [id, want] of staged) {
+        try {
+          // Back where it started: restore the raw entry (absent stays absent)
+          // instead of pinning the value the switch happens to show.
+          if (want === openedValues.get(id)) setFeatureFlagOverride(id, openedOverrides[id]);
+          else setFeatureFlagOverride(id, want ? 'on' : 'off');
+        } catch (err) {
+          deps.log.error('Experimental settings update failed', { flagId: id, err });
+        }
+      }
     },
   };
 }
@@ -1144,7 +1163,7 @@ const EXPERIMENTAL_RELOAD_LABEL = 'Reload now';
 /** The other answer to that confirm: put the flags back and stay. */
 const EXPERIMENTAL_REVERT_LABEL = 'Revert';
 const EXPERIMENTAL_RELOAD_NOTICE =
-  'Experimental features are wired when SLICC boots, so this change has no effect yet. Reload this tab to apply it, or revert.';
+  'Experimental features take effect when SLICC boots. Nothing is saved until you reload — reload this tab to apply your changes, or revert.';
 
 export interface ExperimentalSettingsOpts {
   /** Reload the page. Defaults to `location.reload()`; injected by tests. */
@@ -1154,16 +1173,23 @@ export interface ExperimentalSettingsOpts {
 /**
  * Open the centrally gated standalone experimental-features dialog.
  *
- * Every flag-gated subsystem resolves its flag ONCE, while the kernel host
- * boots (`kernel/host.ts` — `publishGelatiere`, `publishMemoryCuration`, the
- * layout gate, …), and nothing re-reads it afterwards. A toggle here therefore
- * persists but stays inert until the next boot, which used to leave the user
- * staring at a flag that reads `on` and a feature that never appeared.
+ * The subsystems behind these flags are mostly wired ONCE, while the kernel
+ * host boots (`kernel/host.ts` — `publishGelatiere`, `publishMemoryCuration`,
+ * the layout gate), and never re-read afterwards. Writing the override and
+ * saying "Saved." therefore left the user staring at a flag that reads `on`
+ * and a feature that never appeared — turn `memory-v2` on in a running tab and
+ * no gelatiere unit is ever registered.
  *
- * So a change is not finished until the tab reloads: the footer turns into a
- * `Reload now` / `Revert` confirm, and EVERY exit path honours it — dismissing
- * with Esc or the backdrop reloads too, because the override is already on
- * disk and leaving it half-applied is the bug.
+ * A few consumers DO re-read live (`agentic-memory` at every compaction,
+ * `memory-v2` at every archive), and the dialog has no way to tell the two
+ * apart. So it does the one thing that is correct for both: a toggle is staged
+ * in memory, the footer becomes a `Reload now` / `Revert` confirm, and the
+ * override is written only as part of the reload that makes it take effect.
+ *
+ * That ordering is the point. Persisting on toggle would open a window in
+ * which a live consumer acts on the new value while the modal is still
+ * open — after which `Revert` could rewrite storage but could not put back the
+ * compaction or archive that already went the other way.
  */
 export async function showExperimentalSettings(
   log: SettingsLogger,
@@ -1191,7 +1217,15 @@ export async function showExperimentalSettings(
     const hide = (): void => {
       (dialog as HTMLElement & { hide?: () => void }).hide?.();
     };
-    const confirmBtn = button('wcset__btn wcset__btn--primary', EXPERIMENTAL_DONE_LABEL, hide);
+    const confirmBtn = button('wcset__btn wcset__btn--primary', EXPERIMENTAL_DONE_LABEL, () => {
+      // Commit and reload are one action: the only way a staged toggle ever
+      // reaches storage is the reload that makes it take effect.
+      if (pending) {
+        section.commit();
+        reload();
+      }
+      hide();
+    });
     confirmBtn.setAttribute('slot', 'footer');
     // Only meaningful while a change is pending, so it starts out hidden
     // rather than absent — the footer must not reflow as toggles are flipped.
@@ -1217,9 +1251,10 @@ export async function showExperimentalSettings(
     body.append(section.element, notice, status);
     dialog.append(body, revertBtn, confirmBtn);
 
+    // Esc / backdrop / the close affordance discard: nothing was written, so
+    // there is nothing half-applied to rescue and nothing to reload for.
     dialog.addEventListener('slicc-dialog-close', () => {
       dialog.remove();
-      if (pending) reload();
       resolve();
     });
 

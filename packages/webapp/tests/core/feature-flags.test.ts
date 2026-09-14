@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyHostFlagOverrides,
+  canOverrideFlag,
   coerceFeatureFlagValue,
   FEATURE_FLAG_STORAGE_KEY,
   getFeatureValue,
@@ -266,6 +267,27 @@ describe('feature flag registry', () => {
     setFeatureFlagOverride('experimental-settings', 'off');
     expect(readFeatureFlagOverrides()).toEqual({});
     expect(getFeatureValue('experimental-settings')).toBe('on');
+  });
+
+  it('reports which flags a local override can actually reach', () => {
+    // The Experimental dialog stages toggles, so it can no longer discover a
+    // refusal by writing and re-reading — it asks this instead.
+    expect(canOverrideFlag('agentic-memory')).toBe(true);
+    expect(canOverrideFlag('memory-v2')).toBe(true);
+    // Worker-controlled: the dialog it gates must never offer a switch.
+    expect(canOverrideFlag('experimental-settings')).toBe(false);
+    // Graduated out of Settings, so no longer user-toggleable.
+    expect(canOverrideFlag('multiple-cones')).toBe(false);
+    expect(canOverrideFlag('not-a-flag' as never)).toBe(false);
+  });
+
+  it('agrees with setFeatureFlagOverride about what is refused', () => {
+    for (const flag of listFlags()) {
+      const before = readFeatureFlagOverrides();
+      setFeatureFlagOverride(flag.id, 'on');
+      const wrote = readFeatureFlagOverrides()[flag.id] !== before[flag.id];
+      expect(wrote).toBe(canOverrideFlag(flag.id));
+    }
   });
 
   it('does not persist an override for cherry', () => {
