@@ -153,6 +153,14 @@ describe('applyCdpUnmask', () => {
     expect(r.output).toBe('not-json{');
   });
 
+  it('forwards valid JSON that is not a CDP method frame', () => {
+    const tracker = seededTracker();
+    for (const input of ['null', '42', JSON.stringify({ id: 1 })]) {
+      const result = applyCdpUnmask(input, { tracker, pipeline });
+      expect(result).toEqual({ output: input, changed: false, skipped: 'no-method' });
+    }
+  });
+
   it('no-ops when the pipeline has no secrets', async () => {
     const empty = new SecretsPipeline({ sessionId: 's', source: source([]) });
     await empty.reload();

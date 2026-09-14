@@ -1,7 +1,8 @@
 import express from 'express';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildHostedBootstrapPayload,
+  readHostedConeConfig,
   registerHostedBootstrapEndpoint,
 } from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
@@ -51,6 +52,36 @@ async function getEndpoint(secretStore: SecretStore, addr: string): Promise<Resp
 }
 
 describe('GET /api/hosted-bootstrap', () => {
+  it('logs unexpected cone-config read failures but treats a missing file as normal', () => {
+    const warn = vi.fn();
+    const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+    expect(
+      readHostedConeConfig(
+        '/config',
+        () => {
+          throw denied;
+        },
+        warn
+      )
+    ).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      '[hosted-bootstrap] failed to read cone-config.json:',
+      denied
+    );
+
+    warn.mockClear();
+    expect(
+      readHostedConeConfig(
+        '/missing',
+        () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+        warn
+      )
+    ).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('returns the Adobe token when present in the secret store', async () => {
     const store = new FakeSecretStore({
       ADOBE_IMS_TOKEN: {

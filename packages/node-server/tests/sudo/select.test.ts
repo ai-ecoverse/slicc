@@ -3,7 +3,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { type SudoEnv, selectSudoBackend } from '../../src/sudo/select.js';
+import {
+  defaultWhich,
+  detectSudoEnv,
+  type SudoEnv,
+  selectSudoBackend,
+} from '../../src/sudo/select.js';
 
 function env(overrides: Partial<SudoEnv>): SudoEnv {
   return {
@@ -17,6 +22,13 @@ function env(overrides: Partial<SudoEnv>): SudoEnv {
 }
 
 describe('selectSudoBackend', () => {
+  it('detects the live environment and probes commands on PATH', () => {
+    const detected = detectSudoEnv();
+    expect(detected.platform).toBe(process.platform);
+    expect(detected.which('node')).toBe(true);
+    expect(defaultWhich('definitely-not-a-real-slicc-command')).toBe(false);
+  });
+
   it('prefers Electron above everything', () => {
     expect(selectSudoBackend(env({ isElectron: true, platform: 'darwin' })).name).toBe('electron');
   });

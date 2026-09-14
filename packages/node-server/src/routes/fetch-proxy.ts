@@ -33,6 +33,21 @@ export interface FetchProxyDeps {
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }
 
+export function attachUpstreamAbort(res: Response): {
+  controller: AbortController;
+  detach: () => void;
+} {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.on('close', onClose);
+  return {
+    controller,
+    detach: () => res.off('close', onClose),
+  };
+}
+
 /** Pick the first value of a possibly-multi-valued request header. */
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -40,7 +55,7 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
 }
 
 /** Get the body — either from express.json()'s parsed body or raw chunks. */
-async function collectRawBody(req: Request): Promise<Buffer> {
+export async function collectRawBody(req: Request): Promise<Buffer> {
   if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
     // Body was already parsed by express.json() — re-serialize it.
     return Buffer.from(JSON.stringify(req.body), 'utf-8');
@@ -58,7 +73,7 @@ async function collectRawBody(req: Request): Promise<Buffer> {
  * could not send via fetch(). `accept-encoding` is skipped so undici
  * negotiates gzip/br and decompresses transparently (#3037).
  */
-function buildForwardHeaders(req: Request, targetUrl: string): Record<string, string> {
+export function buildForwardHeaders(req: Request, targetUrl: string): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (!FETCH_PROXY_SKIP_HEADERS.has(key) && typeof value === 'string') {
@@ -117,7 +132,7 @@ interface ForbiddenSecret {
  * URL carried credentials. Returns the forbidden descriptor when a masked
  * secret is used against a domain it is not scoped to, else the cleaned URL.
  */
-function injectRequestSecrets(
+export function injectRequestSecrets(
   secretProxy: SecretProxyManager,
   headers: Record<string, string>,
   targetUrl: string,
@@ -254,7 +269,7 @@ function forwardUpstreamHeaders(
  * boundary aren't corrupted (fatal for CJK/emoji model output). Pass-through
  * when the body is non-text or no secrets are configured.
  */
-function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Transform {
+export function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Transform {
   const utf8Decoder = new StringDecoder('utf8');
   return new Transform({
     transform(chunk, _enc, cb) {
@@ -294,7 +309,7 @@ function createScrubStream(secretProxy: SecretProxyManager, isText: boolean): Tr
 }
 
 /** Stream the upstream body to the client through the secret-scrub transform. */
-function streamUpstreamBody(
+export function streamUpstreamBody(
   res: Response,
   upstream: globalThis.Response,
   secretProxy: SecretProxyManager,
@@ -416,12 +431,9 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
       // streams (LLM SSE completions) are torn down promptly. Listen on
       // `res.on('close')`, not `req.on('close')` — Node fires req close as soon
       // as the request body is consumed, which would abort before fetch starts.
-      const abortController = new AbortController();
-      onClientClose = () => {
-        if (!res.writableEnded) abortController.abort();
-      };
-      res.on('close', onClientClose);
-      fetchInit.signal = abortController.signal;
+      const upstreamAbort = attachUpstreamAbort(res);
+      onClientClose = upstreamAbort.detach;
+      fetchInit.signal = upstreamAbort.controller.signal;
 
       const upstream = await fetch(injection.cleanedUrl, fetchInit);
       logger.log(`[fetch-proxy] ${req.method} ${targetUrl} ← ${upstream.status}`);

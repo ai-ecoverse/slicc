@@ -13,6 +13,10 @@ beforeEach(async () => {
 });
 
 describe('FileRegistry', () => {
+  it('builds the default registry path from the user home', () => {
+    expect(FileRegistry.defaultPath()).toMatch(/[\\/]\.slicc[\\/]cloud-sessions\.json$/);
+  });
+
   it('returns an empty list when the file is missing', async () => {
     const reg = new FileRegistry(file);
     expect(await reg.list()).toEqual([]);
@@ -102,6 +106,10 @@ describe('FileRegistry', () => {
     await fs.writeFile(file, JSON.stringify({ notSessions: [] }));
     const reg = new FileRegistry(file);
     expect(await reg.list()).toEqual([]);
+  });
+
+  it('propagates registry read errors other than a missing file', async () => {
+    await expect(new FileRegistry(dir).list()).rejects.toThrow();
   });
 
   it('findByNameOrId resolves both name and sandboxId', async () => {

@@ -970,6 +970,8 @@ export interface ProbeCdpAliveOptions {
    * for ours.
    */
   expectedWebSocketPath?: string | null;
+  /** Test seam for synchronous request-construction failures. */
+  requestImpl?: typeof httpRequest;
 }
 
 /**
@@ -995,6 +997,7 @@ export interface ProbeCdpAliveOptions {
 export function probeCdpAlive(port: number, options: ProbeCdpAliveOptions = {}): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? 500;
   const expectedWebSocketPath = options.expectedWebSocketPath ?? null;
+  const requestImpl = options.requestImpl ?? httpRequest;
   return new Promise((resolve) => {
     let resolved = false;
     const settle = (alive: boolean) => {
@@ -1015,7 +1018,7 @@ export function probeCdpAlive(port: number, options: ProbeCdpAliveOptions = {}):
 
     let req;
     try {
-      req = httpRequest(
+      req = requestImpl(
         {
           host: '127.0.0.1',
           port,

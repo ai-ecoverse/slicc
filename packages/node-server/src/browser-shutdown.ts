@@ -8,20 +8,31 @@ export interface LaunchedBrowserHandle {
   launchedBrowserLabel: string;
 }
 
+export interface BrowserShutdownDependencies {
+  fetchImpl?: typeof fetch;
+  createWebSocket?: (url: string) => WebSocket;
+}
+
 /** Best-effort graceful close of the launched browser, escalating to SIGKILL. */
 export async function closeLaunchedBrowserGracefully(
   state: LaunchedBrowserHandle,
-  cdpPort: number
+  cdpPort: number,
+  dependencies: BrowserShutdownDependencies = {}
 ): Promise<void> {
   const browser = state.launchedBrowserProcess;
   if (!browser) return;
 
   try {
-    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
-      signal: AbortSignal.timeout(500),
-    });
+    const res = await (dependencies.fetchImpl ?? fetch)(
+      `http://127.0.0.1:${cdpPort}/json/version`,
+      {
+        signal: AbortSignal.timeout(500),
+      }
+    );
     const json = (await res.json()) as { webSocketDebuggerUrl: string };
-    const browserWs = new WebSocket(json.webSocketDebuggerUrl);
+    const browserWs = (dependencies.createWebSocket ?? ((url) => new WebSocket(url)))(
+      json.webSocketDebuggerUrl
+    );
     await new Promise<void>((resolve, reject) => {
       browserWs.on('open', () => {
         try {

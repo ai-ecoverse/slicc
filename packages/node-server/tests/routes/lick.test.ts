@@ -145,6 +145,19 @@ describe('registerLickApiRoutes', () => {
     expect(await res.json()).toEqual({ error: 'No browser connected' });
   });
 
+  it('returns 503 when tray status or webhook deletion cannot reach the browser', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    expect((await fetch(`http://localhost:${server.port}/api/tray-status`)).status).toBe(503);
+    expect(
+      (
+        await fetch(`http://localhost:${server.port}/api/webhooks/missing`, {
+          method: 'DELETE',
+        })
+      ).status
+    ).toBe(503);
+  });
+
   it('maps an "Invalid" create_webhook error to 400', async () => {
     const sendLickRequest = vi.fn().mockRejectedValue(new Error('Invalid webhook id'));
     server = await startServer(stubBridge({ sendLickRequest }));
@@ -242,6 +255,17 @@ describe('registerLickApiRoutes', () => {
     expect(dropped.status).toBe(503);
   });
 
+  it('returns 503 when cron deletion cannot reach the browser', async () => {
+    server = await startServer(
+      stubBridge({ sendLickRequest: vi.fn().mockRejectedValue('browser gone') })
+    );
+    const response = await fetch(`http://localhost:${server.port}/api/crontasks/c1`, {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'Browser not connected' });
+  });
+
   it('answers the webhook CORS preflight with 204 + allow headers', async () => {
     server = await startServer(stubBridge());
     const res = await fetch(`http://localhost:${server.port}/webhooks/abc`, { method: 'OPTIONS' });
@@ -271,6 +295,23 @@ describe('registerLickApiRoutes', () => {
       webhookId: 'hook-1',
       body: { hello: 'world' },
     });
+  });
+
+  it('collects and parses webhook bodies that bypass express.json', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ disposition: 'delivered' });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    for (const [raw, expected] of [
+      ['{"rawJson":true}', { rawJson: true }],
+      ['not-json', { raw: 'not-json' }],
+    ] as const) {
+      const response = await fetch(`http://localhost:${server.port}/webhooks/raw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: raw,
+      });
+      expect(response.status).toBe(200);
+      expect(sendLickRequest.mock.calls.at(-1)?.[1]).toMatchObject({ body: expected });
+    }
   });
 
   // A `--filter` dropping an event is the filter working as configured, so the

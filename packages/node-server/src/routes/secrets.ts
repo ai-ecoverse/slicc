@@ -15,6 +15,8 @@ export interface SecretRoutesDeps {
   oauthStore: OauthSecretStore;
   /** When true, the full sign-and-forward error is logged for the local operator. */
   devMode: boolean;
+  handleS3?: typeof handleS3SignAndForward;
+  handleDa?: typeof handleDaSignAndForward;
 }
 
 /**
@@ -24,7 +26,7 @@ export interface SecretRoutesDeps {
  * the 500 they got with the server log; the detail goes to the file logger
  * (above DEBUG) only when devMode is on.
  */
-function respondSignAndForwardError(
+export function respondSignAndForwardError(
   res: Response,
   err: unknown,
   devMode: boolean,
@@ -54,7 +56,7 @@ function isStringArray(value: unknown): value is string[] {
  * Scope edit handler — updates allowed domains of an existing secret without
  * changing its value. Checks session store first, then falls back to persisted.
  */
-async function handleScopeEdit(
+export async function handleScopeEdit(
   res: Response,
   name: unknown,
   domains: unknown,
@@ -114,7 +116,7 @@ function handleRedactExport(
  * session shadow does not leak through after deletion, then falls back to the
  * persisted store. Reloads the masking pipeline either way.
  */
-async function handleDeleteSecret(
+export async function handleDeleteSecret(
   name: string | undefined,
   res: Response,
   secretStore: EnvSecretStore,
@@ -142,6 +144,39 @@ async function handleDeleteSecret(
   }
 }
 
+function registerOauthSecretRoutes(
+  app: Express,
+  oauthStore: OauthSecretStore,
+  secretProxy: SecretProxyManager
+): void {
+  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
+    const { providerId, accessToken, domains } = req.body ?? {};
+    if (
+      typeof providerId !== 'string' ||
+      typeof accessToken !== 'string' ||
+      !isStringArray(domains) ||
+      domains.length === 0
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    const name = `oauth.${providerId}.token`;
+    oauthStore.set(name, accessToken, domains);
+    await secretProxy.reload();
+    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
+    res.json({ providerId, name, maskedValue: masked, domains });
+  });
+
+  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
+    const name = `oauth.${req.params.providerId}.token`;
+    if (!oauthStore.list().some((e) => e.name === name)) {
+      return res.status(404).json({ error: 'not-found' });
+    }
+    oauthStore.delete(name);
+    await secretProxy.reload();
+    res.status(204).end();
+  });
+}
+
 /**
  * Secret management API — direct .env file access (no browser needed). The
  * `secretStore` is wired into `secretProxy` so the fetch-proxy and the
@@ -149,6 +184,8 @@ async function handleDeleteSecret(
  */
 export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void {
   const { secretStore, secretProxy, oauthStore, devMode } = deps;
+  const handleS3 = deps.handleS3 ?? handleS3SignAndForward;
+  const handleDa = deps.handleDa ?? handleDaSignAndForward;
 
   app.get('/api/secrets', (_req, res) => {
     try {
@@ -244,7 +281,7 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
   // never sees access_key_id / secret_access_key.
   app.post('/api/s3-sign-and-forward', async (req, res) => {
     try {
-      await handleS3SignAndForward(req, res, secretStore);
+      await handleS3(req, res, secretStore);
     } catch (err) {
       respondSignAndForwardError(res, err, devMode, 'S3');
     }
@@ -256,7 +293,7 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
   // to remove the browser exposure entirely.
   app.post('/api/da-sign-and-forward', async (req, res) => {
     try {
-      await handleDaSignAndForward(req, res);
+      await handleDa(req, res);
     } catch (err) {
       respondSignAndForwardError(res, err, devMode, 'DA');
     }
@@ -302,32 +339,6 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
     }
   });
 
-  // OAuth secret update — stores access token from OAuth login flow
-  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
-    const { providerId, accessToken, domains } = req.body ?? {};
-    if (
-      typeof providerId !== 'string' ||
-      typeof accessToken !== 'string' ||
-      !isStringArray(domains) ||
-      domains.length === 0
-    ) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    const name = `oauth.${providerId}.token`;
-    oauthStore.set(name, accessToken, domains);
-    await secretProxy.reload();
-    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
-    res.json({ providerId, name, maskedValue: masked, domains });
-  });
-
-  // OAuth secret deletion — removes access token on logout
-  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
-    const name = `oauth.${req.params.providerId}.token`;
-    if (!oauthStore.list().some((e) => e.name === name)) {
-      return res.status(404).json({ error: 'not-found' });
-    }
-    oauthStore.delete(name);
-    await secretProxy.reload();
-    res.status(204).end();
-  });
+  // OAuth update/deletion — stores access tokens after login and removes them on logout.
+  registerOauthSecretRoutes(app, oauthStore, secretProxy);
 }

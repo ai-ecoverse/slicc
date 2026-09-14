@@ -86,13 +86,11 @@ class MaybeGunzipTransform extends Transform {
         cb();
         return;
       }
-      this.#finishDecide((err) => {
-        if (err) {
-          cb(err);
-          return;
-        }
-        this.#endGunzipOrFinish(cb);
-      });
+      // A non-empty undecided head can only be one byte: two bytes decide in
+      // `_transform`. One byte cannot be gzip magic, so flush it directly.
+      this.#decided = true;
+      this.#onDecided?.(false);
+      cb(null, this.#head);
       return;
     }
     this.#endGunzipOrFinish(cb);

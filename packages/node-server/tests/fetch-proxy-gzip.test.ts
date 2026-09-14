@@ -99,4 +99,57 @@ describe('fetch-proxy gzip sniff', () => {
     );
     expect(decided).toEqual([false]);
   });
+
+  it('handles empty and one-byte plain bodies at EOF', async () => {
+    const emptyDecisions: boolean[] = [];
+    expect(
+      await collect(
+        Readable.from([]).pipe(
+          createMaybeGunzipStream({ onDecided: (value) => emptyDecisions.push(value) })
+        )
+      )
+    ).toEqual(Buffer.alloc(0));
+    expect(emptyDecisions).toEqual([false]);
+
+    const oneByte = await collect(pipeThrough(Readable.from([Buffer.from('x')])));
+    expect(oneByte.toString()).toBe('x');
+  });
+
+  it('handles additional chunks after deciding plain or gzip', async () => {
+    const plain = await collect(
+      pipeThrough(Readable.from([Buffer.from('pl'), Buffer.from('ain'), Buffer.from('!')]))
+    );
+    expect(plain.toString()).toBe('plain!');
+
+    const gz = gzipSync(PLAIN_JS);
+    const decoded = await collect(
+      pipeThrough(Readable.from([gz.subarray(0, 2), gz.subarray(2, 5), gz.subarray(5)]))
+    );
+    expect(decoded.toString()).toBe(PLAIN_JS);
+  });
+
+  it('propagates a gzip error encountered after the initial decision', async () => {
+    const corrupt = Buffer.concat([Buffer.from([GZIP_MAGIC_0, GZIP_MAGIC_1]), Buffer.alloc(12)]);
+    await expect(
+      collect(pipeThrough(Readable.from([corrupt.subarray(0, 2), corrupt.subarray(2)])))
+    ).rejects.toThrow();
+  });
+
+  it('pauses and resumes the inner gunzip when downstream applies backpressure', async () => {
+    const transform = createMaybeGunzipStream();
+    const originalPush = transform.push.bind(transform);
+    let forcedBackpressure = false;
+    transform.push = ((chunk: unknown, encoding?: BufferEncoding) => {
+      const accepted = originalPush(chunk, encoding);
+      if (chunk !== null && !forcedBackpressure) {
+        forcedBackpressure = true;
+        setImmediate(() => transform.resume());
+        return false;
+      }
+      return accepted;
+    }) as typeof transform.push;
+    const collected = collect(Readable.from([gzipSync(PLAIN_JS)]).pipe(transform));
+    expect((await collected).toString()).toBe(PLAIN_JS);
+    expect(forcedBackpressure).toBe(true);
+  });
 });

@@ -7,7 +7,12 @@ import {
   SLICC_HOSTED_ORIGIN,
   TRAY_QUERY_PARAM,
 } from '@slicc/shared-ts';
-import { type ChildProcess, execFile as nodeExecFile, spawn } from 'child_process';
+import {
+  type ChildProcess,
+  execFile as nodeExecFile,
+  type SpawnOptions,
+  spawn,
+} from 'child_process';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import * as http from 'http';
@@ -153,7 +158,7 @@ interface Win32CimProcessEntry {
 }
 
 /** Send a CDP command over a target WebSocket; returns the message id. */
-type CdpSend = (method: string, params?: CDPPayload) => number;
+export type CdpSend = (method: string, params?: CDPPayload) => number;
 
 /**
  * One element of a CDP `Network.Request.postDataEntries` array. `bytes` is the
@@ -239,7 +244,7 @@ export class ElectronAppAlreadyRunningError extends Error {
   }
 }
 
-function parseUnixProcessList(stdout: string): RunningProcessInfo[] {
+export function parseUnixProcessList(stdout: string): RunningProcessInfo[] {
   const processes: RunningProcessInfo[] = [];
 
   for (const rawLine of stdout.split('\n')) {
@@ -262,7 +267,7 @@ function parseUnixProcessList(stdout: string): RunningProcessInfo[] {
   return processes;
 }
 
-function parseWindowsProcessList(stdout: string): RunningProcessInfo[] {
+export function parseWindowsProcessList(stdout: string): RunningProcessInfo[] {
   const trimmed = stdout.trim();
   if (!trimmed) return [];
 
@@ -278,11 +283,12 @@ function parseWindowsProcessList(stdout: string): RunningProcessInfo[] {
     .filter((processInfo) => Number.isFinite(processInfo.pid) && processInfo.pid > 0);
 }
 
-async function listRunningProcesses(
-  platform: NodeJS.Platform = process.platform
+export async function listRunningProcesses(
+  platform: NodeJS.Platform = process.platform,
+  run: (command: string, args: string[]) => Promise<{ stdout: string }> = execFile
 ): Promise<RunningProcessInfo[]> {
   if (platform === 'win32') {
-    const { stdout } = await execFile('powershell', [
+    const { stdout } = await run('powershell', [
       '-NoProfile',
       '-Command',
       'Get-CimInstance Win32_Process | Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress',
@@ -290,55 +296,79 @@ async function listRunningProcesses(
     return parseWindowsProcessList(stdout);
   }
 
-  const { stdout } = await execFile('ps', ['-ax', '-o', 'pid=', '-o', 'command=']);
+  const { stdout } = await run('ps', ['-ax', '-o', 'pid=', '-o', 'command=']);
   return parseUnixProcessList(stdout);
 }
 
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(
+  pid: number,
+  signal: (pid: number, signal: 0) => void = process.kill.bind(process)
+): boolean {
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     return true;
   } catch {
     return false;
   }
 }
 
-async function waitForPidsToExit(pids: number[], timeoutMs = 5000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    if (pids.every((pid) => !isPidAlive(pid))) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  return pids.every((pid) => !isPidAlive(pid));
+interface ProcessLifecycle {
+  isAlive: (pid: number) => boolean;
+  kill: (pid: number, signal?: NodeJS.Signals) => void;
+  now: () => number;
+  sleep: (milliseconds: number) => Promise<void>;
 }
 
-async function terminateRunningApp(pids: number[]): Promise<void> {
+const defaultProcessLifecycle: ProcessLifecycle = {
+  isAlive: isPidAlive,
+  kill: (pid, signal) => process.kill(pid, signal),
+  now: Date.now,
+  sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+};
+
+export async function waitForPidsToExit(
+  pids: number[],
+  timeoutMs = 5000,
+  lifecycle: ProcessLifecycle = defaultProcessLifecycle
+): Promise<boolean> {
+  const deadline = lifecycle.now() + timeoutMs;
+
+  while (lifecycle.now() < deadline) {
+    if (pids.every((pid) => !lifecycle.isAlive(pid))) return true;
+    await lifecycle.sleep(100);
+  }
+
+  return pids.every((pid) => !lifecycle.isAlive(pid));
+}
+
+export async function terminateRunningApp(
+  pids: number[],
+  lifecycle: ProcessLifecycle = defaultProcessLifecycle
+): Promise<void> {
   for (const pid of pids) {
-    if (!isPidAlive(pid)) continue;
+    if (!lifecycle.isAlive(pid)) continue;
     try {
-      process.kill(pid);
+      lifecycle.kill(pid);
     } catch {
       // Ignore individual termination failures and fall back to force-kill below if needed.
     }
   }
 
-  if (await waitForPidsToExit(pids)) return;
+  if (await waitForPidsToExit(pids, 5000, lifecycle)) return;
 
   for (const pid of pids) {
-    if (!isPidAlive(pid)) continue;
+    if (!lifecycle.isAlive(pid)) continue;
     try {
-      process.kill(pid, 'SIGKILL');
+      lifecycle.kill(pid, 'SIGKILL');
     } catch {
       // Ignore final cleanup failures.
     }
   }
 
-  await waitForPidsToExit(pids, 3000);
+  await waitForPidsToExit(pids, 3000, lifecycle);
 }
 
-async function findRunningElectronAppPids(
+export async function findRunningElectronAppPids(
   appPath: string,
   platform: NodeJS.Platform = process.platform
 ): Promise<number[]> {
@@ -348,26 +378,35 @@ async function findRunningElectronAppPids(
   return findMatchingElectronAppPids(runningProcesses, processMatchPatterns);
 }
 
-export async function launchElectronApp(options: {
-  appPath: string;
-  cdpPort: number;
-  kill: boolean;
-  platform?: NodeJS.Platform;
-}): Promise<{ child: ChildProcess; displayName: string }> {
+export async function launchElectronApp(
+  options: {
+    appPath: string;
+    cdpPort: number;
+    kill: boolean;
+    platform?: NodeJS.Platform;
+  },
+  dependencies: {
+    exists?: (path: string) => boolean;
+    findRunningPids?: (appPath: string, platform?: NodeJS.Platform) => Promise<number[]>;
+    terminate?: (pids: number[]) => Promise<void>;
+    spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  } = {}
+): Promise<{ child: ChildProcess; displayName: string }> {
   const launchSpec = buildElectronAppLaunchSpec(options.appPath, {
     cdpPort: options.cdpPort,
     platform: options.platform,
   });
 
-  if (!existsSync(launchSpec.resolvedAppPath)) {
+  const exists = dependencies.exists ?? existsSync;
+  if (!exists(launchSpec.resolvedAppPath)) {
     throw new Error(`Electron app not found at ${launchSpec.resolvedAppPath}`);
   }
-  if (!existsSync(launchSpec.command)) {
+  if (!exists(launchSpec.command)) {
     throw new Error(
       `Electron executable not found at ${launchSpec.command}. Pass the app executable path directly if needed.`
     );
   }
-  const runningPids = await findRunningElectronAppPids(
+  const runningPids = await (dependencies.findRunningPids ?? findRunningElectronAppPids)(
     launchSpec.resolvedAppPath,
     options.platform
   );
@@ -381,16 +420,21 @@ export async function launchElectronApp(options: {
     );
   }
   if (runningPids.length > 0) {
-    await terminateRunningApp(runningPids);
+    await (dependencies.terminate ?? terminateRunningApp)(runningPids);
   }
 
+  const spawnProcess = dependencies.spawn ?? spawn;
   const child = isMacAppBundle
-    ? spawn('open', ['-n', '-a', launchSpec.resolvedAppPath, '-W', '--args', ...launchSpec.args], {
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: false,
-      })
-    : spawn(launchSpec.command, launchSpec.args, {
+    ? spawnProcess(
+        'open',
+        ['-n', '-a', launchSpec.resolvedAppPath, '-W', '--args', ...launchSpec.args],
+        {
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: false,
+        }
+      )
+    : spawnProcess(launchSpec.command, launchSpec.args, {
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
@@ -576,7 +620,10 @@ export function computeAverageLuminance(
  * a CDP screenshot and analyzing the average luminance.
  * Returns 'light' or 'dark'.
  */
-function detectAppThemeFromScreenshot(ws: WebSocket, send: CdpSend): Promise<'light' | 'dark'> {
+export function detectAppThemeFromScreenshot(
+  ws: WebSocket,
+  send: CdpSend
+): Promise<'light' | 'dark'> {
   return new Promise((resolve) => {
     // Take a small JPEG screenshot for speed — we only need luminance
     const screenshotId = send('Page.captureScreenshot', {
@@ -764,7 +811,7 @@ function buildProxyRequestHeaders(
  * actually-buffered body length. Returns whether any CSP header was stripped
  * so the caller can log it.
  */
-function buildFulfillResponseHeaders(
+export function buildFulfillResponseHeaders(
   rawHeaders: http.IncomingHttpHeaders,
   contentLength: number
 ): { responseHeaders: Array<{ name: string; value: string }>; strippedCSP: boolean } {
@@ -816,6 +863,19 @@ export interface ThinBootstrapSet {
    */
   status: string;
 }
+
+export function logOverlayReinjectionFailure(context: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[electron-float] ${context} re-injection failed: ${message}`);
+}
+
+export const logPresenceReinjectionFailure = (error: unknown): void => {
+  logOverlayReinjectionFailure('Presence-check', error);
+};
+
+export const logNavigationReinjectionFailure = (error: unknown): void => {
+  logOverlayReinjectionFailure('Navigation', error);
+};
 
 /**
  * Empty-viewport message shown by the status-only overlay for an app that
@@ -945,6 +1005,9 @@ export class ElectronOverlayInjector {
   private readonly onEgressBlocked?: (targetUrl: string) => void;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
+  private readonly runScheduledSync = async (): Promise<void> => {
+    await this.syncTargets();
+  };
 
   private constructor(
     cdpPort: number,
@@ -1092,6 +1155,36 @@ export class ElectronOverlayInjector {
     this.egressBlockedTargets.add(url);
   }
 
+  /** Test-only: seed a connection so sync/stop cleanup can be driven deterministically. */
+  _testingSeedConnection(targetId: string, connection: Pick<WebSocket, 'close'>): void {
+    this.connections.set(targetId, connection as WebSocket);
+  }
+
+  /** Test-only: drive the identity-guarded connection cleanup. */
+  _testingDropConnection(targetId: string, connection: WebSocket): void {
+    this.dropConnectionIfCurrent(targetId, connection);
+  }
+
+  /** Test-only: invoke the same callback installed by `start()`. */
+  async _testingRunScheduledSync(): Promise<void> {
+    await this.runScheduledSync();
+  }
+
+  /** Test-only: exercise the overlay-loaded timeout classifier directly. */
+  _testingProbeOverlayIframeLoaded(ws: WebSocket, send: CdpSend): Promise<boolean> {
+    return this.probeOverlayIframeLoaded(ws, send);
+  }
+
+  /** Test-only: exercise the overlay-eviction timeout classifier directly. */
+  _testingProbeOverlayEvicted(ws: WebSocket, send: CdpSend): Promise<boolean> {
+    return this.probeOverlayEvicted(ws, send);
+  }
+
+  /** Test-only: drive a paused Fetch event without requiring the full escalation flow. */
+  _testingHandleFetchRequestPaused(ws: WebSocket, send: CdpSend, msg: unknown): void {
+    this.handleFetchRequestPaused(ws, send, msg as CdpFetchRequestPausedEvent);
+  }
+
   /** Test-only: drive a single `syncTargets` pass without `start()`'s interval. */
   async _testingSyncTargets(): Promise<void> {
     await this.syncTargets();
@@ -1111,9 +1204,7 @@ export class ElectronOverlayInjector {
 
   async start(): Promise<void> {
     await this.syncTargets();
-    this.syncTimer = setInterval(() => {
-      void this.syncTargets();
-    }, ELECTRON_OVERLAY_SYNC_INTERVAL_MS);
+    this.syncTimer = setInterval(this.runScheduledSync, ELECTRON_OVERLAY_SYNC_INTERVAL_MS);
   }
 
   stop(): void {
@@ -1190,6 +1281,12 @@ export class ElectronOverlayInjector {
       console.error('[electron-float] Overlay sync failed:', message);
     } finally {
       this.syncing = false;
+    }
+  }
+
+  private dropConnectionIfCurrent(targetId: string, connection: WebSocket): void {
+    if (this.connections.get(targetId) === connection) {
+      this.connections.delete(targetId);
     }
   }
 
@@ -1744,10 +1841,7 @@ export class ElectronOverlayInjector {
     ws.on('open', () => {
       this.handleSocketOpen(ws, send, target, state);
       presenceTimer = setInterval(() => {
-        void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(`[electron-float] Presence-check re-injection failed: ${message}`);
-        });
+        void this.reinjectIfEvicted(ws, send, target, state).catch(logPresenceReinjectionFailure);
       }, this.presenceCheckIntervalMs);
     });
 
@@ -1770,10 +1864,9 @@ export class ElectronOverlayInjector {
         const isMainFrameNavigated =
           msg.method === 'Page.frameNavigated' && !msg.params?.frame?.parentId;
         if (msg.method === 'Page.navigatedWithinDocument' || isMainFrameNavigated) {
-          void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[electron-float] Navigation re-injection failed: ${message}`);
-          });
+          void this.reinjectIfEvicted(ws, send, target, state).catch(
+            logNavigationReinjectionFailure
+          );
         }
 
         if (msg.method === 'Fetch.requestPaused' && state.fetchProxyActive) {
@@ -1792,9 +1885,7 @@ export class ElectronOverlayInjector {
 
     ws.on('close', () => {
       clearPresenceTimer();
-      if (this.connections.get(targetId) === ws) {
-        this.connections.delete(targetId);
-      }
+      this.dropConnectionIfCurrent(targetId, ws);
     });
 
     ws.on('error', (error) => {
@@ -1804,9 +1895,7 @@ export class ElectronOverlayInjector {
         `[electron-float] Overlay target connection failed for ${target.url}:`,
         message
       );
-      if (this.connections.get(targetId) === ws) {
-        this.connections.delete(targetId);
-      }
+      this.dropConnectionIfCurrent(targetId, ws);
     });
   }
 }

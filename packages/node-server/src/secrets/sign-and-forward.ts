@@ -41,7 +41,7 @@ export type { DaSignAndForwardEnvelope, S3SignAndForwardEnvelope } from '@slicc/
  * is a bad gateway (502); an internal error is 500. The `never` default makes
  * a future addition to `SignAndForwardErrorCode` fail the typecheck here.
  */
-function statusForErrorCode(code: SignAndForwardErrorCode): number {
+export function statusForErrorCode(code: SignAndForwardErrorCode): number {
   switch (code) {
     case 'invalid_profile':
     case 'invalid_request':
