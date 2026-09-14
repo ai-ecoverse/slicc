@@ -33,7 +33,6 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 import { captureSprinkleScreenshot } from './sprinkle-screenshot.js';
 
@@ -458,9 +457,16 @@ export function iframeFetchResponseSource(): string {
  */
 export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
+export interface SprinkleLickRequest {
+  action: string;
+  data?: unknown;
+  /** Cone or scoop alias that takes precedence over the configured route. */
+  target?: string;
+}
+
 export interface SprinkleBridgeAPI {
-  /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
-  lick(event: { action: string; data?: unknown } | string): void;
+  /** Send a lick event to the agent. Accepts {action, data, target} or a plain action string. */
+  lick(event: SprinkleLickRequest | string): void;
   /** Listen for updates from the agent */
   on(event: 'update', callback: (data: unknown) => void): void;
   /** Remove an update listener */
@@ -970,14 +976,15 @@ export class SprinkleBridge {
   private createLickHandler(
     sprinkleName: string,
     getOriginUnitId: () => string | undefined
-  ): (event: { action: string; data?: unknown } | string) => void {
+  ): (event: SprinkleLickRequest | string) => void {
     return (event) => {
       const action = typeof event === 'string' ? event : event.action;
       const data = typeof event === 'string' ? undefined : event.data;
+      const targetScoop = typeof event === 'string' ? undefined : event.target;
       const lickEvent: LickEvent = {
         type: 'sprinkle',
         sprinkleName,
-        targetScoop: getSprinkleRoute(sprinkleName),
+        targetScoop,
         timestamp: new Date().toISOString(),
         body: { action, data },
       };

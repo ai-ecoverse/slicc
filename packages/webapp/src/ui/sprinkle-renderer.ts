@@ -118,6 +118,7 @@ interface SprinkleInboundMessage {
   id?: unknown;
   action?: string;
   data?: unknown;
+  target?: string;
   path?: string;
   content?: string;
   cmd?: string;
@@ -205,7 +206,7 @@ function createSharedBridgeHandlers(
 ): Record<string, BridgeMessageHandler> {
   return {
     'sprinkle-lick': (_iframe, msg) =>
-      bridge.lick({ action: msg.action as string, data: msg.data }),
+      bridge.lick({ action: msg.action as string, data: msg.data, target: msg.target }),
     'sprinkle-set-state': (_iframe, msg) => bridge.setState(msg.data),
     'sprinkle-close': () => bridge.close(),
     'sprinkle-minimize': () => bridge.minimize(),
@@ -562,9 +563,9 @@ export class SprinkleRenderer {
 
   var api = {
     lick: function(event) {
-      var action, data;
-      if (typeof event === 'string') { action = event; } else { action = event.action; data = event.data; }
-      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data }, '*');
+      var action, data, target;
+      if (typeof event === 'string') { action = event; } else { action = event.action; data = event.data; target = event.target; }
+      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data, target: target }, '*');
     },
     on: function(event, callback) { if (event === 'update') _updateListeners.add(callback); },
     off: function(event, callback) { if (event === 'update') _updateListeners.delete(callback); },

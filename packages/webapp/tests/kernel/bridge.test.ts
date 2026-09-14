@@ -1731,11 +1731,24 @@ describe('Bridge.routeSprinkleLick', () => {
     );
   });
 
-  it('falls back to the cone when targetScoop does not match any scoop', async () => {
-    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'unknown');
-    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ chatJid: 'cone-1' })
-    );
+  it('falls back visibly when targetScoop does not match any scoop', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'unknown');
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatJid: 'cone-1',
+          content: expect.stringContaining('explicit target "unknown" could not be resolved'),
+        })
+      );
+      expect(warn).toHaveBeenCalledWith(
+        '[kernel-bridge]',
+        'Sprinkle lick target could not be resolved; using fallback',
+        expect.objectContaining({ fallbackJid: 'cone-1' })
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('matches targetScoop by folder with a "-scoop" suffix', async () => {
@@ -1812,14 +1825,31 @@ describe('Bridge.routeSprinkleLick', () => {
   it('prefers an explicit targetScoop over the configured route', async () => {
     await withRouteStorage(async () => {
       setSprinkleRoute('welcome', 'helper');
-      await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'nope-not-a-scoop');
-      // Explicit target wins; it matches nothing, so the cone fallback applies
-      // rather than the route silently overriding the caller.
+      await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'cone');
       expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
         expect.objectContaining({ chatJid: 'cone-1' })
       );
       clearSprinkleRoute('welcome');
     });
+  });
+
+  it('falls through to the configured route when an explicit target is stale', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await withRouteStorage(async () => {
+        setSprinkleRoute('welcome', 'helper');
+        await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'closed-cone');
+        expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            chatJid: 'scoop-2',
+            content: expect.stringContaining('explicit target "closed-cone" could not be resolved'),
+          })
+        );
+        clearSprinkleRoute('welcome');
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('is a no-op when no orchestrator is bound', async () => {
@@ -1898,14 +1928,26 @@ describe('Bridge.routeSprinkleLick', () => {
       );
     });
 
-    it('keeps the default-root fallback for an origin the roster no longer knows', async () => {
-      // A closed cone or a stale panel must not silence the lick.
-      await bridge.routeSprinkleLick('inline', { action: 'go' }, undefined, {
-        unitJid: 'cone-gone',
-      });
-      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ chatJid: 'cone-1' })
-      );
+    it('keeps a closed-cone target visible when falling back to the oldest root', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await bridge.routeSprinkleLick('inline', { action: 'go' }, 'cone-gone', {
+          unitJid: 'cone-gone',
+        });
+        expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            chatJid: 'cone-1',
+            content: expect.stringContaining('explicit target "cone-gone" could not be resolved'),
+          })
+        );
+        expect(warn).toHaveBeenCalledWith(
+          '[kernel-bridge]',
+          'Sprinkle lick target could not be resolved; using fallback',
+          expect.objectContaining({ fallbackJid: 'cone-1' })
+        );
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('prefers an explicit targetScoop over the raising unit', async () => {
