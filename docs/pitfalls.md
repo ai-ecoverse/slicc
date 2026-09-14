@@ -1659,13 +1659,13 @@ if (toggle) {
 }
 ```
 
-The sprinkle subsystem is the canonical reference for full bidirectional dispatch: a `globalThis.__slicc_sprinkleManager` proxy is published in both realms and dispatches `sprinkle-op` request/response RPCs over the kernel transport.
+The sprinkle subsystem is the canonical reference for full bidirectional dispatch: a `globalThis.__slicc_sprinkleManager` proxy is published on the kernel worker and dispatches `sprinkle-op-request` / `sprinkle-op-response` RPCs over a same-origin BroadcastChannel (`sprinkle-bridge-channel.ts`). CLI, Electron, hosted, and the Chrome-extension leader tab share that path.
 
 **Related Files**
 
-- `packages/webapp/src/scoops/sprinkle-manager-proxy.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
-- `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the page-side handler is registered)
-- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
+- `packages/webapp/src/scoops/sprinkle-bridge-channel.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager`, plus the page-side handler)
+- `packages/webapp/src/kernel/kernel-worker.ts` (publishes the proxy on the worker)
+- `packages/webapp/src/ui/wc/wc-sprinkles.ts` (`installSprinkleManagerHandlerOverChannel` — where the page-side handler is registered)
 
 Historical note: prior to the thin-bridge release the equivalent split was the chrome-extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
 

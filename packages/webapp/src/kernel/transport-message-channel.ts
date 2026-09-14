@@ -91,8 +91,8 @@ export interface MessagePortLike {
 //
 // The standalone kernel-worker uses a `Bridge` over a
 // `MessageChannel` instead of `chrome.runtime`. The bridge code expects
-// raw `ExtensionMessage` envelopes (because it filters by `source` and
-// peeks for `sprinkle-op-response`). These helpers wrap a `MessagePort`
+// raw `ExtensionMessage` envelopes (because it filters by `source`).
+// These helpers wrap a `MessagePort`
 // into a transport that:
 //   - Receives raw envelopes (passthrough — the page wraps before
 //     posting; the worker sees what the page sent).

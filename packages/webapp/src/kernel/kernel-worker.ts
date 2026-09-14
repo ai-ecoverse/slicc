@@ -475,9 +475,9 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // scoped by `instanceId` (page-generated, threaded through
     // `kernel-worker-init`) so two SLICC tabs on the same origin don't
     // cross-talk. The page bootstrap (`mainStandaloneWorker`) installs
-    // the matching handler under the same id. Extension offscreen has
-    // its own chrome.runtime-based proxy in `offscreen.ts` and never
-    // goes through this path.
+    // the matching handler under the same id. Every float that runs this
+    // worker — CLI, Electron, hosted, and the Chrome-extension leader
+    // tab — uses this path.
     const { createSprinkleManagerProxyOverChannel } = await import(
       '../scoops/sprinkle-bridge-channel.js'
     );

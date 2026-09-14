@@ -19,13 +19,12 @@
  *    dispatches to the real `SprinkleManager`, posting responses back
  *    on the same channel.
  *
- * Extension mode keeps using its existing chrome.runtime-based proxy
- * (`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`); that route is
- * intentionally untouched here.
+ * CLI, Electron, hosted, and the Chrome-extension leader tab all use
+ * this BroadcastChannel path. The kernel worker publishes the proxy;
+ * the page installs the matching handler under the same `instanceId`.
  *
- * The wire vocabulary mirrors the extension proxy's so debugging
- * across floats reads the same: `op` ∈ `list | opened | refresh |
- * open | close | send | openNewAutoOpen`.
+ * The wire vocabulary is `op` ∈ `list | opened | refresh | open |
+ * close | send | openNewAutoOpen`.
  */
 
 import type {
