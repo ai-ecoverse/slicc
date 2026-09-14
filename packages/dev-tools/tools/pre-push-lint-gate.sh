@@ -64,6 +64,7 @@ run_check "prettier" "$BIN/prettier" --check .
 # spawning 8 separate npm processes for sub-second scripts.
 run_check "custom-lints" bash -c '
   npm run lint:docs --silent &&
+  npm run lint:no-comments --silent &&
   npm run lint:skills --silent -- --strict &&
   npm run lint:skill-router --silent &&
   npm run lint:no-innerhtml --silent &&

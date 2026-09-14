@@ -41,6 +41,13 @@ Runtime-specific guides:
 
 Use ice cream terms in review comments and docs when they match the domain (e.g., `feed_scoop` not `delegate_to_scoop`).
 
+## Benchmark branch
+
+`no-comment` is a comment-free mirror of `main`, rebuilt on every `main` push
+by `.github/workflows/no-comment-mirror.yml`. Use it to benchmark whether
+comments and developer docs help agents; do not merge it back. Tooling:
+`packages/dev-tools/no-comment/`.
+
 ## Git Conventions
 
 - Keep commits focused and package-local when possible.

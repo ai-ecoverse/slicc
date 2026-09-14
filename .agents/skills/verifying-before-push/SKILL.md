@@ -66,7 +66,8 @@ grandfathered debt that lint alone misses. See the section below for details.
 
 Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
-then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
+then `lint:docs` (CLAUDE.md size limits), `lint:no-comments` (no-op on `main`; hard
+fail on the `no-comment` benchmark branch), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up the layer stack — baseline-ratcheted;
 fix the layering, never grow `layer-back-edge-baseline.json`),

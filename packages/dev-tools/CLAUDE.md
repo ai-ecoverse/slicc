@@ -16,6 +16,7 @@ Bare script names live under `tools/`, bare dir names under `packages/dev-tools/
 - **Bedrock model scout** (weekly canary, no Claude): `model-scout/` + `.yml` — probes `*_BEDROCK_MODEL` IDs, files an issue on a dead one. [details](../../docs/dev-tools-details.md#model-scout).
 - **e2b template**: `e2b-template/` — hosted-leader cloud float sandbox (`packages/cloud-core/CLAUDE.md`).
 - **AI comment detection**: `ai-comment-detection/` + `.yml` — labels `ai-generated`/`human-in-the-loop`. [details](../../docs/dev-tools-details.md#ai-comment-detection).
+- **no-comment mirror**: `no-comment/` + `no-comment-mirror.yml` — strips comments and developer docs onto the `no-comment` benchmark branch on every `main` push. `npm run lint:no-comments` is a no-op on `main` and a hard gate on that branch. [details](../../docs/dev-tools-details.md#no-comment-mirror).
 - **Hugging Face caching mirror** (`tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror; e2e CI caches `.cache/hf-mirror` + sets `HF_ENDPOINT` for warm Kokoro weights.
 - **Doc gates** (`npm run lint:docs`): `tools/check-doc-sizes.mjs` + `check-doc-refs.mjs` (+ `-lib` each). [details](../../docs/dev-tools-details.md#doc-dead-reference-gate).
 - **Linear-history check**: `bash tools/check-linear-history.sh [base] [head]` (`linear-history` job).
