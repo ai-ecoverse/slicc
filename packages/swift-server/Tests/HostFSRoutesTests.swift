@@ -249,6 +249,7 @@ final class HostFSRoutesTests: XCTestCase {
         for header in [nil, "", "bytes=", "items=0-1", "bytes=0-1, 5-6", "bytes=a-b"] {
             XCTAssertEqual(HostFSRoutes.parseByteRange(header, size: 100), .whole, "\(header ?? "nil")")
         }
+        XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=-", size: 100), .whole)
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=100-200", size: 100), .unsatisfiable)
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=-0", size: 100), .unsatisfiable)
         XCTAssertEqual(HostFSRoutes.parseByteRange("bytes=9-3", size: 100), .unsatisfiable)
@@ -303,6 +304,13 @@ final class HostFSRoutesTests: XCTestCase {
             [.posixPermissions: 0o755], ofItemAtPath: root + "/hello.txt")
         var info = stat()
         XCTAssertEqual(stat(root + "/hello.txt", &info), 0)
+        let inode = Double(info.st_ino)
+        let uid = Double(info.st_uid)
+        let gid = Double(info.st_gid)
+        let fullMode = Double(info.st_mode)
+        let ctimeMs =
+            Double(info.st_ctimespec.tv_sec) * 1000
+            + Double(info.st_ctimespec.tv_nsec) / 1_000_000
         try await makeApp().test(.router) { client in
             try await client.execute(
                 uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get
@@ -310,19 +318,16 @@ final class HostFSRoutesTests: XCTestCase {
                 guard case .object(let body) = try self.decode(response.body) else {
                     return XCTFail("bad stat shape")
                 }
-                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
-                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
-                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
+                XCTAssertEqual(body["ino"], .number(inode))
+                XCTAssertEqual(body["uid"], .number(uid))
+                XCTAssertEqual(body["gid"], .number(gid))
                 // Full st_mode, so the executable bit survives instead of
                 // being flattened to 100644.
-                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+                XCTAssertEqual(body["mode"], .number(fullMode))
                 guard case .number(let mode)? = body["mode"] else { return XCTFail("no mode") }
                 XCTAssertEqual(mode_t(mode) & 0o777, 0o755)
                 // Unrounded: rounding a .9996 s stat up would push it into
                 // the next second and leave the file permanently stale.
-                let ctimeMs =
-                    Double(info.st_ctimespec.tv_sec) * 1000
-                    + Double(info.st_ctimespec.tv_nsec) / 1_000_000
                 XCTAssertEqual(body["ctime"], .number(ctimeMs))
             }
             try await client.execute(
@@ -337,8 +342,8 @@ final class HostFSRoutesTests: XCTestCase {
                     return true
                 }
                 guard case .object(let e)? = hello else { return XCTFail("no hello.txt entry") }
-                XCTAssertEqual(e["ino"], .number(Double(info.st_ino)))
-                XCTAssertEqual(e["mode"], .number(Double(info.st_mode)))
+                XCTAssertEqual(e["ino"], .number(inode))
+                XCTAssertEqual(e["mode"], .number(fullMode))
             }
             // The stable dispatcher shares `statResponse`, so a webapp on the
             // preflight-cacheable transport must see the same enriched payload.
@@ -349,10 +354,10 @@ final class HostFSRoutesTests: XCTestCase {
                 guard case .object(let body) = try self.decode(response.body) else {
                     return XCTFail("bad stat shape")
                 }
-                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
-                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
-                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
-                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+                XCTAssertEqual(body["ino"], .number(inode))
+                XCTAssertEqual(body["uid"], .number(uid))
+                XCTAssertEqual(body["gid"], .number(gid))
+                XCTAssertEqual(body["mode"], .number(fullMode))
             }
         }
     }
@@ -667,5 +672,111 @@ final class HostFSRoutesTests: XCTestCase {
             try HostFSRoutes.resolveWithinRoot(root: root, relPath: "a/b"), root + "/a/b")
         XCTAssertThrowsError(try HostFSRoutes.resolveWithinRoot(root: root, relPath: "../x"))
         XCTAssertThrowsError(try HostFSRoutes.resolveWithinRoot(root: root, relPath: "a/../../x"))
+    }
+
+    func testReadWindowAndIfRangeDateValidation() throws {
+        let path = root + "/window.txt"
+        try "0123456789".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try HostFSRoutes.readWindow(path: path, start: 3, length: 4), Data("3456".utf8))
+
+        let validator = HostFSRoutes.cacheValidator(path: path, size: 10, mtimeMs: 1_000_000)
+        var headers = HTTPFields()
+        headers[HostFSRoutes.ifRangeHeader] = validator.lastModified
+        XCTAssertTrue(HostFSRoutes.ifRangeAllowsRange(headers, validator))
+
+        headers = HTTPFields()
+        headers[HostFSRoutes.ifModifiedSinceHeader] = "not-a-date"
+        XCTAssertFalse(HostFSRoutes.isNotModified(headers, validator))
+        headers = HTTPFields()
+        headers[HostFSRoutes.ifRangeHeader] = "not-a-date"
+        XCTAssertFalse(HostFSRoutes.ifRangeAllowsRange(headers, validator))
+    }
+
+    func testLargeWholeFileDirectoryWriteAndMissingRemoveReturnSpecificErrors() async throws {
+        let sparsePath = root + "/oversized.pack"
+        FileManager.default.createFile(atPath: sparsePath, contents: Data())
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: sparsePath))
+        try handle.truncate(atOffset: UInt64(HostFSRoutes.maxBodyBytes + 1))
+        try handle.close()
+
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/read?mount=%2Fmnt%2Fproj&path=oversized.pack",
+                method: .get
+            ) { response in
+                XCTAssertEqual(response.status, .contentTooLarge)
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad oversized response")
+                }
+                XCTAssertEqual(body["code"], .string("EFBIG"))
+            }
+            try await client.execute(
+                uri: "/api/hostfs/write?mount=%2Fmnt%2Fproj&path=sub",
+                method: .put,
+                body: ByteBuffer(string: "cannot replace directory")
+            ) { response in
+                XCTAssertEqual(response.status, .conflict)
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad directory response")
+                }
+                XCTAssertEqual(body["code"], .string("EISDIR"))
+            }
+            try await client.execute(
+                uri: "/api/hostfs/remove?mount=%2Fmnt%2Fproj&path=missing",
+                method: .delete
+            ) { response in
+                XCTAssertEqual(response.status, .notFound)
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad missing response")
+                }
+                XCTAssertEqual(body["code"], .string("ENOENT"))
+            }
+        }
+
+        XCTAssertTrue(
+            HostFSRoutes.resolveRoots(
+                mounts: [.init(hostPath: root + "/absent", path: "/mnt/absent")]
+            ).isEmpty
+        )
+    }
+
+    func testErrnoMappingPreservesKnownFailuresAndMapsSystemErrors() throws {
+        let expected: [(Int, String)] = [
+            (Int(ENOENT), "ENOENT"),
+            (Int(EACCES), "EACCES"),
+            (Int(EPERM), "EACCES"),
+            (Int(EISDIR), "EISDIR"),
+            (Int(ENOTDIR), "ENOTDIR"),
+            (Int(ENOTEMPTY), "ENOTEMPTY"),
+            (Int(EEXIST), "EEXIST"),
+            (Int(EIO), "EIO"),
+        ]
+        for (code, expectedCode) in expected {
+            XCTAssertThrowsError(
+                try HostFSRoutes.wrapErrno { () in
+                    throw NSError(domain: NSPOSIXErrorDomain, code: code)
+                }
+            ) { error in
+                guard case HostFSRoutes.FsFailure.code(let actual, _, _) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertEqual(actual, expectedCode)
+            }
+        }
+
+        let underlying = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
+        XCTAssertThrowsError(
+            try HostFSRoutes.wrapErrno { () in
+                throw NSError(domain: NSCocoaErrorDomain, code: 1, userInfo: [NSUnderlyingErrorKey: underlying])
+            }
+        )
+        XCTAssertThrowsError(
+            try HostFSRoutes.wrapErrno { () in
+                throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+            }
+        )
+
+        let original = HostFSRoutes.FsFailure.code("ORIGINAL", .badRequest, "kept")
+        XCTAssertThrowsError(try HostFSRoutes.wrapErrno { () in throw original })
     }
 }

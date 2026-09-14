@@ -17,6 +17,20 @@ import XCTest
 /// resolution, URL construction, and the upstream-failure path.
 final class SignAndForwardTests: XCTestCase {
 
+    func testSigV4MethodsMapToNIO() {
+        let mappings: [(SigV4Method, HTTPMethod)] = [
+            (.GET, .GET),
+            (.PUT, .PUT),
+            (.POST, .POST),
+            (.DELETE, .DELETE),
+            (.HEAD, .HEAD),
+        ]
+
+        for (method, expected) in mappings {
+            XCTAssertEqual(method.nioHTTPMethod, expected)
+        }
+    }
+
     // Per-run profile name keeps Keychain state isolated when these tests run
     // alongside `SecretAPIRoutesTests` (or against a developer's real Keychain).
     private let profilePrefix = "SAF_TEST_\(UUID().uuidString.prefix(8))_"
@@ -290,7 +304,8 @@ final class SignAndForwardTests: XCTestCase {
             registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
-                let body = "{\"profile\":\"\(name)\",\"method\":\"GET\",\"bucket\":\"b\",\"key\":\"x\"}"
+                let encoded = Data("payload".utf8).base64EncodedString()
+                let body = "{\"profile\":\"\(name)\",\"method\":\"PUT\",\"bucket\":\"b\",\"key\":\"x\",\"bodyBase64\":\"\(encoded)\"}"
                 try await client.execute(
                     uri: "/api/s3-sign-and-forward",
                     method: .post,
@@ -300,6 +315,41 @@ final class SignAndForwardTests: XCTestCase {
                     XCTAssertEqual(response.status, .badGateway)
                     let envelope = try self.decodeJSONObject(from: response.body)
                     XCTAssertEqual(envelope["errorCode"], .string("fetch_failed"))
+                }
+            }
+        }
+    }
+
+    func testS3HandlerRejectsMalformedMissingAndInvalidEndpointInputs() async throws {
+        let name = makeProfileName()
+        try SecretStore.set(name: "s3.\(name).access_key_id", value: "AKID", domains: ["*"])
+        try SecretStore.set(name: "s3.\(name).secret_access_key", value: "SECRET", domains: ["*"])
+        try SecretStore.set(name: "s3.\(name).endpoint", value: "http://[", domains: ["*"])
+
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            SignAndForward.registerRoutes(router: router, httpClient: httpClient)
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                let cases: [(String, String)] = [
+                    ("{", "invalid_request"),
+                    (#"{"profile":"default","method":"GET","bucket":"b"}"#, "invalid_request"),
+                    (#"{"profile":"missing","method":"GET","bucket":"b","key":"k"}"#, "profile_not_configured"),
+                    ("{\"profile\":\"\(name)\",\"method\":\"GET\",\"bucket\":\"b\",\"key\":\"k\"}", "invalid_request"),
+                ]
+                for (body, errorCode) in cases {
+                    try await client.execute(
+                        uri: "/api/s3-sign-and-forward",
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: body)
+                    ) { response in
+                        XCTAssertEqual(response.status, .badRequest)
+                        XCTAssertEqual(
+                            try self.decodeJSONObject(from: response.body)["errorCode"],
+                            .string(errorCode)
+                        )
+                    }
                 }
             }
         }
@@ -383,6 +433,61 @@ final class SignAndForwardTests: XCTestCase {
                     XCTAssertEqual(response.status, .badRequest)
                     let envelope = try self.decodeJSONObject(from: response.body)
                     XCTAssertTrue(envelope["error"]?.stringValue?.contains("imsToken") ?? false)
+                }
+            }
+        }
+    }
+
+    func testHandlersRejectMalformedBase64UrlAndBoundedBodies() async throws {
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            SignAndForward.registerRoutes(
+                router: router,
+                httpClient: httpClient,
+                daOrigin: "http://["
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                for body in [
+                    "{",
+                    #"{"imsToken":"t","method":"GET","path":"/ok"}"#,
+                    #"{"imsToken":"t","method":"PUT","path":"/ok","bodyBase64":"a"}"#,
+                ] {
+                    try await client.execute(
+                        uri: "/api/da-sign-and-forward",
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: body)
+                    ) { response in
+                        XCTAssertEqual(response.status, .badRequest)
+                        XCTAssertEqual(
+                            try self.decodeJSONObject(from: response.body)["errorCode"],
+                            .string("invalid_request")
+                        )
+                    }
+                }
+            }
+
+            let boundedRouter = Router()
+            SignAndForward.registerRoutes(
+                router: boundedRouter,
+                httpClient: httpClient,
+                maxBodyBytes: 4
+            )
+            let boundedApp = Application(responder: boundedRouter.buildResponder())
+            try await boundedApp.test(.router) { client in
+                for uri in ["/api/s3-sign-and-forward", "/api/da-sign-and-forward"] {
+                    try await client.execute(
+                        uri: uri,
+                        method: .post,
+                        body: ByteBuffer(string: "12345")
+                    ) { response in
+                        XCTAssertEqual(response.status, .contentTooLarge)
+                        XCTAssertEqual(
+                            try self.decodeJSONObject(from: response.body)["errorCode"],
+                            .string("body_too_large")
+                        )
+                    }
                 }
             }
         }
@@ -472,6 +577,110 @@ final class SignAndForwardTests: XCTestCase {
                     XCTAssertEqual(envelope["errorCode"], .string("invalid_request"))
                     XCTAssertTrue(envelope["error"]?.stringValue?.contains("evil.example") ?? false)
                 }
+            }
+        }
+    }
+
+    func testDaHandlerForwardsBodyHeadersQueryAndWrapsLiveUpstreamResponse() async throws {
+        let upstreamRouter = Router()
+        upstreamRouter.put("/content") { request, _ in
+            let body = try await request.body.collect(upTo: 1024)
+            XCTAssertEqual(String(buffer: body), "request bytes")
+            XCTAssertEqual(request.headers[.authorization], "Bearer ims-fixture-token")
+            XCTAssertEqual(request.headers[HTTPField.Name("X-Custom")!], "forwarded")
+            XCTAssertEqual(request.uri.queryParameters.get("a"), "1")
+            return Response(
+                status: .created,
+                headers: [HTTPField.Name("X-Upstream")!: "yes"],
+                body: .init(byteBuffer: ByteBuffer(string: "response bytes"))
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        try await withHTTPClient { httpClient in
+            try await upstreamApp.test(.live) { upstreamClient in
+                let port = try XCTUnwrap(upstreamClient.port)
+                let proxyRouter = Router()
+                SignAndForward.registerRoutes(
+                    router: proxyRouter,
+                    httpClient: httpClient,
+                    daOrigin: "http://localhost:\(port)"
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                let requestBytes = Data("request bytes".utf8).base64EncodedString()
+                let envelope = """
+                    {"imsToken":"ims-fixture-token","method":"PUT","path":"/content",\
+                    "query":{"a":"1"},"headers":{"X-Custom":"forwarded"},\
+                    "bodyBase64":"\(requestBytes)"}
+                    """
+                try await proxyApp.test(.router) { client in
+                    try await client.execute(
+                        uri: "/api/da-sign-and-forward",
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: envelope)
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                        let result = try self.decodeJSONObject(from: response.body)
+                        XCTAssertEqual(result["ok"], .bool(true))
+                        XCTAssertEqual(result["status"], .number(201))
+                        XCTAssertEqual(
+                            result["bodyBase64"],
+                            .string(Data("response bytes".utf8).base64EncodedString())
+                        )
+                        guard case .object(let headers) = result["headers"] else {
+                            return XCTFail("expected response headers")
+                        }
+                        XCTAssertEqual(headers["X-Upstream"], .string("yes"))
+                    }
+                }
+            }
+        }
+    }
+
+    func testDirectForwardCoversBodylessRequestAndLiveResponse() async throws {
+        let upstreamRouter = Router()
+        upstreamRouter.get("/bodyless") { request, _ in
+            XCTAssertEqual(request.headers[HTTPField.Name("X-Dropped-Host")!], "kept")
+            return Response(status: .noContent)
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        try await withHTTPClient { httpClient in
+            try await upstreamApp.test(.live) { upstreamClient in
+                let port = try XCTUnwrap(upstreamClient.port)
+                let response = await SignAndForward.forward(
+                    url: URL(string: "http://localhost:\(port)/bodyless")!,
+                    method: .GET,
+                    headers: ["Host": "discarded", "X-Dropped-Host": "kept"],
+                    body: nil,
+                    httpClient: httpClient,
+                    failureLabel: "fixture"
+                )
+                XCTAssertEqual(response.status, .ok)
+            }
+        }
+    }
+
+    func testForwardRejectsAnOversizedLiveResponse() async throws {
+        let upstreamRouter = Router()
+        upstreamRouter.get("/large") { _, _ in String(repeating: "x", count: 32) }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        try await withHTTPClient { httpClient in
+            try await upstreamApp.test(.live) { upstreamClient in
+                let port = try XCTUnwrap(upstreamClient.port)
+                let response = await SignAndForward.forward(
+                    url: URL(string: "http://localhost:\(port)/large")!,
+                    method: .GET,
+                    headers: [:],
+                    body: nil,
+                    httpClient: httpClient,
+                    failureLabel: "fixture",
+                    maxResponseBytes: 4
+                )
+                XCTAssertEqual(response.status, .badGateway)
+                XCTAssertNotEqual(response.body.contentLength, 0)
             }
         }
     }

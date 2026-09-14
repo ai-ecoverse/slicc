@@ -82,19 +82,25 @@ final class ElectronLauncher {
     private let session: URLSession
     private let logger: Logger
     private let environment: [String: String]
+    private let processFactory: @Sendable () -> Process
+    private let launchServicesExecutablePath: String
 
     init(
         workspace: NSWorkspace = .shared,
         fileManager: FileManager = .default,
         session: URLSession = .shared,
         logger: Logger = Logger(label: "slicc.browser.electron-launcher"),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        processFactory: @escaping @Sendable () -> Process = { Process() },
+        launchServicesExecutablePath: String = "/usr/bin/open"
     ) {
         self.workspace = workspace
         self.fileManager = fileManager
         self.session = session
         self.logger = logger
         self.environment = environment
+        self.processFactory = processFactory
+        self.launchServicesExecutablePath = launchServicesExecutablePath
     }
 
     func resolveAppPath(_ appPath: String) throws -> String {
@@ -149,13 +155,13 @@ final class ElectronLauncher {
             try await terminateRunningApp(appPath: appPath)
         }
 
-        let process = Process()
+        let process = processFactory()
         process.environment = environment
         process.standardOutput = Pipe()
         process.standardError = Pipe()
 
         if let bundleURL = resolved.bundleURL {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.executableURL = URL(fileURLWithPath: launchServicesExecutablePath)
             process.arguments = [
                 "-n", "-a", bundleURL.path,
                 "-W", "--args",
@@ -278,7 +284,7 @@ final class ElectronLauncher {
         return URL(fileURLWithPath: bundlePath).standardizedFileURL
     }
 
-    private func waitForApplicationsToTerminate(
+    func waitForApplicationsToTerminate(
         _ applications: [NSRunningApplication],
         timeoutNanoseconds: UInt64
     ) async -> Bool {
@@ -306,7 +312,7 @@ final class ElectronLauncher {
     }
 }
 
-private func waitForCDPAvailability(
+func waitForCDPAvailability(
     cdpPort: Int,
     session: URLSession,
     logger: Logger,
@@ -510,7 +516,7 @@ private func safeOverlayOrigin(for target: ElectronInspectableTarget) -> String 
     return "\(scheme)://\(host)"
 }
 
-private func scoreOverlayTarget(_ target: ElectronInspectableTarget) -> Int {
+func scoreOverlayTarget(_ target: ElectronInspectableTarget) -> Int {
     var score = min(target.title?.count ?? 0, 120)
     if target.url.contains("isMinimized=") || target.url.contains("deepLink=") {
         score -= 200
@@ -640,7 +646,11 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     init(
         _testingServePort servePort: Int,
         cdpPort: Int = 9223,
-        thinBootstraps: ThinBootstrapSet? = nil,
+        thinBootstraps: ThinBootstrapSet? = ThinBootstrapSet(
+            leader: "/* test-leader */",
+            follower: "/* test-follower */",
+            status: "/* test-status */"
+        ),
         bridgeToken: String = "test-bridge-token",
         probeDelayNanoseconds: UInt64 = 20_000_000,
         session: URLSession = .shared,
@@ -655,10 +665,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.thinBridge = nil
         self.bridgeToken = bridgeToken
         self.trayJoinUrl = nil
-        self.testingThinBootstraps =
-            thinBootstraps
-            ?? ThinBootstrapSet(
-                leader: "/* test-leader */", follower: "/* test-follower */", status: "/* test-status */")
+        self.testingThinBootstraps = thinBootstraps
     }
 
     func start() {
@@ -884,7 +891,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
     }
 
-    private func syncTargets() async throws {
+    func syncTargets() async throws {
         let bootstraps = try loadBootstrapScripts()
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(cdpPort)/json/list")!)
         request.timeoutInterval = 2

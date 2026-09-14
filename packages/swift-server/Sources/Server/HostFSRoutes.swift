@@ -157,7 +157,7 @@ enum HostFSRoutes {
     }
 
     /// Read `length` bytes from `start` without materializing the whole file.
-    private static func readWindow(path: String, start: Int, length: Int) throws -> Data {
+    static func readWindow(path: String, start: Int, length: Int) throws -> Data {
         try wrapErrno {
             let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
             defer { try? handle.close() }
@@ -649,7 +649,7 @@ enum HostFSRoutes {
     }
 
     /// Map Cocoa/POSIX errors to the shared `{ code, message }` failure shape.
-    private static func wrapErrno<T>(_ body: () throws -> T) throws -> T {
+    static func wrapErrno<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()
         } catch let failure as FsFailure {

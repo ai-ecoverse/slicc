@@ -4,6 +4,37 @@ import XCTest
 @testable import slicc_server
 
 final class ServerCommandTests: XCTestCase {
+    func testStartupFailureBoxAndLatchPreserveFirstSignal() async throws {
+        struct FixtureError: Error {}
+
+        let failureBox = StartupFailureBox()
+        let initialError = await failureBox.get()
+        XCTAssertNil(initialError)
+        await failureBox.set(FixtureError())
+        let storedError = await failureBox.get()
+        XCTAssertNotNil(storedError)
+
+        let latch = ServerStartupLatch()
+        let waiter = Task { await latch.waitUntilStarted() }
+        await Task.yield()
+        await latch.signalStarted()
+        await waiter.value
+        await latch.signalStarted()
+        await latch.waitUntilStarted()
+    }
+
+    func testNonPositiveCDPPortFallsBackToDefault() throws {
+        let parsed = try ServerCommand.parseAsRoot(["--cdp-port", "0"])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: ["slicc-server", "--cdp-port", "0"]
+        )
+
+        XCTAssertEqual(config.cdpPort, ServerConfig.defaultCliCdpPort)
+        XCTAssertFalse(config.explicitCdpPort)
+    }
+
     func testElectronDefaultsToElectronAttachPort() throws {
         let parsed = try ServerCommand.parseAsRoot(["--electron"])
         let command = try XCTUnwrap(parsed as? ServerCommand)
@@ -552,6 +583,57 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertNil(ServerCommand.normalizeTrayWorkerBaseURL(nil))
     }
 
+    func testLaunchURLHelpersCoverPromptValidationAndExistingTrayQueryItems() throws {
+        let parsed = try ServerCommand.parseAsRoot(["--prompt", "review this"])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: ["slicc-server", "--prompt", "review this"]
+        )
+        XCTAssertEqual(
+            try ServerCommand.resolveBrowserLaunchURL(
+                serveOrigin: "http://localhost:5710",
+                config: config,
+                environment: [:]
+            ),
+            "http://localhost:5710?prompt=review%20this"
+        )
+
+        XCTAssertNil(ServerCommand.parseTrayJoinURL(nil))
+        XCTAssertNil(ServerCommand.parseTrayJoinURL("  "))
+        XCTAssertNil(ServerCommand.parseTrayJoinURL("https://tray.example.test/not-a-join/token.secret"))
+        XCTAssertNil(ServerCommand.parseTrayJoinURL("https://tray.example.test/join/missing-dot"))
+        XCTAssertThrowsError(
+            try ServerCommand.buildTrayJoinLaunchURL(
+                locationHref: "https://www.sliccy.ai",
+                joinURL: "https://tray.example.test/join/missing-dot"
+            )
+        )
+
+        let canonical = try ServerCommand.buildCanonicalTrayLaunchURL(
+            locationHref: "https://www.sliccy.ai/path?lead=1&tray=old&trayWorkerUrl=old&keep=yes",
+            trayValue: "https://tray.example.test/join/new.secret"
+        )
+        XCTAssertEqual(
+            canonical,
+            "https://www.sliccy.ai/path?keep=yes&tray=https://tray.example.test/join/new.secret"
+        )
+
+        XCTAssertThrowsError(
+            try ServerCommand.buildCanonicalTrayLaunchURL(
+                locationHref: "http://[",
+                trayValue: "tray"
+            )
+        )
+        XCTAssertThrowsError(
+            try ServerCommand.appendQueryItem(
+                urlString: "http://[",
+                name: "prompt",
+                value: "x"
+            )
+        )
+    }
+
     func testParseEnvFileSecretsReadsTheSameSyntaxAsTheKeychainBlob() throws {
         let url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("slicc-env-\(UUID().uuidString).env")
@@ -622,6 +704,7 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/"))
         XCTAssertNil(ServerConfig.parseMountMapping("rel:/mnt/x"))
         XCTAssertNil(ServerConfig.parseMountMapping("/a:rel"))
+        XCTAssertNil(ServerConfig.parseMountMapping(":/mnt/x"))
         XCTAssertNil(ServerConfig.parseMountMapping("/mnt/only-target"))
         // Non-canonical targets (dot/empty segments) are rejected, not resolved.
         XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt/a/../b"))

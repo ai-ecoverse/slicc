@@ -69,6 +69,18 @@ final class SudoApproveTests: XCTestCase {
         XCTAssertEqual(decision, SudoApprove.Decision(decision: "deny", pattern: nil))
     }
 
+    func testDefaultRunnerCapturesStdoutAndReportsNonZeroExit() async throws {
+        let output = try await SudoApprove.defaultRunner(["-e", #"return "coverage""#])
+        XCTAssertTrue(output.contains("coverage"))
+
+        do {
+            _ = try await SudoApprove.defaultRunner(["-e", "this is not valid AppleScript !!!"])
+            XCTFail("invalid AppleScript must fail")
+        } catch SudoApprove.SudoApproveError.nonZeroExit(let code) {
+            XCTAssertNotEqual(code, 0)
+        }
+    }
+
     // MARK: - script contents
 
     func testScriptContainsButtonsAndTitle() async {
@@ -124,6 +136,29 @@ final class SudoApproveTests: XCTestCase {
             body: #"{"kind":"command","detail":"ls"}"#,
             expectInvalid: false
         )
+    }
+
+    func testHandlerIncludesPatternForAlwaysDecision() async throws {
+        let router = Router()
+        SudoApprove.registerRoutes(router: router) { _ in
+            "button returned:Always, text returned:git status"
+        }
+        let app = Application(responder: router.buildResponder())
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/api/sudo-approve",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"kind":"command","detail":"git status"}"#)
+            ) { response in
+                let obj = try JSONDecoder().decode(
+                    LickSystem.JSONObject.self,
+                    from: Data(String(buffer: response.body).utf8)
+                )
+                XCTAssertEqual(obj["decision"], .string("always"))
+                XCTAssertEqual(obj["pattern"], .string("git status"))
+            }
+        }
     }
 
     private func runEnvelope(body: String, expectInvalid: Bool) async throws {

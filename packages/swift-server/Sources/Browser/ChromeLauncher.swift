@@ -5,7 +5,7 @@ import Logging
 private let defaultChromeUserDataDirName = "browser-coding-agent-chrome"
 private let defaultServePort = 5710
 private let defaultChromeLaunchTimeout: TimeInterval = 15
-private let chromePidDiscoveryTimeout: TimeInterval = 5
+private let defaultChromePidDiscoveryTimeout: TimeInterval = 5
 private let chromePidDiscoveryPollIntervalNanos: UInt64 = 100_000_000
 private let cdpPortRegex = try! NSRegularExpression(
     pattern: #"DevTools listening on ws://[^:]+:(\d+)/"#,
@@ -125,6 +125,8 @@ struct ChromeLauncher: Sendable {
     private let currentDirectoryProvider: @Sendable () -> String
     private let homeDirectoryProvider: @Sendable () -> String
     private let processFactory: @Sendable () -> Process
+    private let launchServicesExecutablePath: String
+    private let chromePidDiscoveryTimeout: TimeInterval
     private let fetchData: @Sendable (URL) async throws -> (Data, URLResponse)
     /// Snapshot the PIDs of every running app whose bundle URL matches
     /// `bundleURL` (canonical Chrome.app, Chrome for Testing.app, etc.).
@@ -144,6 +146,8 @@ struct ChromeLauncher: Sendable {
             FileManager.default.homeDirectoryForCurrentUser.path
         },
         processFactory: @escaping @Sendable () -> Process = { Process() },
+        launchServicesExecutablePath: String = "/usr/bin/open",
+        chromePidDiscoveryTimeout: TimeInterval = defaultChromePidDiscoveryTimeout,
         fetchData: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
             // Bound every internal HTTP probe (CDP pre-flight, waitForCDP)
             // with an explicit 2 s request timeout. Without this the default
@@ -177,6 +181,8 @@ struct ChromeLauncher: Sendable {
         self.currentDirectoryProvider = currentDirectoryProvider
         self.homeDirectoryProvider = homeDirectoryProvider
         self.processFactory = processFactory
+        self.launchServicesExecutablePath = launchServicesExecutablePath
+        self.chromePidDiscoveryTimeout = chromePidDiscoveryTimeout
         self.fetchData = fetchData
         self.runningPidsForBundle = runningPidsForBundle
     }
@@ -531,7 +537,7 @@ struct ChromeLauncher: Sendable {
             // responsible process and the canonical
             // "/Applications/Google Chrome.app" privacy grant applies as
             // users expect.
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.executableURL = URL(fileURLWithPath: launchServicesExecutablePath)
             process.arguments = buildOpenLaunchArgs(
                 appBundlePath: appBundlePath,
                 chromeArgs: chromeArgs
@@ -554,6 +560,16 @@ struct ChromeLauncher: Sendable {
             usesLaunchServices = false
             chromeBundleURL = nil
             preexistingChromePids = []
+        }
+
+        let outputMonitor = ChromeOutputMonitor(
+            process: process,
+            stdout: stdoutPipe.fileHandleForReading,
+            stderr: stderrPipe.fileHandleForReading,
+            logger: logger
+        )
+        if !usesLaunchServices {
+            outputMonitor.start(timeout: config.launchTimeout)
         }
 
         try process.run()
@@ -589,13 +605,7 @@ struct ChromeLauncher: Sendable {
                 chromePid = nil
             }
         } else {
-            let outputMonitor = ChromeOutputMonitor(
-                process: process,
-                stdout: stdoutPipe.fileHandleForReading,
-                stderr: stderrPipe.fileHandleForReading,
-                logger: logger
-            )
-            actualPort = try await outputMonitor.awaitPort(timeout: config.launchTimeout)
+            actualPort = try await outputMonitor.awaitPort()
             _ = try await waitForCDP(port: actualPort)
             chromePid = nil
         }
@@ -641,7 +651,10 @@ struct ChromeLauncher: Sendable {
             if !process.isRunning {
                 let exitCode = process.terminationStatus
                 if exitCode != 0 {
-                    throw ChromeLauncherError.openLaunchFailed(exitCode: exitCode, executable: "/usr/bin/open")
+                    throw ChromeLauncherError.openLaunchFailed(
+                        exitCode: exitCode,
+                        executable: launchServicesExecutablePath
+                    )
                 }
                 // `open` exits 0 once LaunchServices has handed off; keep polling.
             }
@@ -864,76 +877,99 @@ private final class ChromeOutputMonitor: @unchecked Sendable {
     private var stdoutBuffer = ""
     private var stderrBuffer = ""
     private var parsedPort: Int?
+    private var processExitStatus: Int32?
+    private var stderrReachedEOF = false
     private var settled = false
-    private var continuation: CheckedContinuation<Int, Error>?
+    private let portStream: AsyncThrowingStream<Int, any Error>
+    private let portContinuation: AsyncThrowingStream<Int, any Error>.Continuation
 
     init(process: Process, stdout: FileHandle, stderr: FileHandle, logger: Logger) {
+        let (portStream, portContinuation) = AsyncThrowingStream<Int, any Error>.makeStream()
         self.process = process
         self.stdout = stdout
         self.stderr = stderr
         self.logger = logger
+        self.portStream = portStream
+        self.portContinuation = portContinuation
     }
 
-    func awaitPort(timeout: TimeInterval) async throws -> Int {
-        return try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                self.continuation = continuation
-                self.startReading()
-                self.queue.asyncAfter(deadline: .now() + timeout) {
-                    self.finish(with: .failure(.timedOutWaitingForPort(timeout)))
-                }
+    func start(timeout: TimeInterval) {
+        process.terminationHandler = { [weak self] process in
+            let status = process.terminationStatus
+            self?.queue.async {
+                self?.processExitStatus = status
+                self?.finishIfExitedWithoutPort()
             }
         }
+        startReading()
+        queue.asyncAfter(deadline: .now() + timeout) {
+            self.finish(with: .failure(.timedOutWaitingForPort(timeout)))
+        }
+    }
+
+    func awaitPort() async throws -> Int {
+        defer { withExtendedLifetime(self) {} }
+        var iterator = portStream.makeAsyncIterator()
+        guard let port = try await iterator.next() else {
+            preconditionFailure("Chrome output monitor finished without a port or error")
+        }
+        return port
     }
 
     private func startReading() {
+        armStdoutReader()
+        armStderrReader()
+    }
+
+    private func armStdoutReader() {
         stdout.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            // Detach synchronously on EOF: if `self` has already been released,
-            // the async hop inside `consumeStdout` becomes a no-op and the
-            // handler would otherwise stay armed, busy-looping on the
-            // NSFileHandle.fd_monitoring queue.
-            if data.isEmpty {
-                handle.readabilityHandler = nil
+            handle.readabilityHandler = nil
+            guard let self else { return }
+            self.queue.async {
+                self.consumeStdout(handle.availableData)
             }
-            self?.consumeStdout(data)
         }
+    }
+
+    private func armStderrReader() {
         stderr.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
+            handle.readabilityHandler = nil
+            guard let self else { return }
+            self.queue.async {
+                self.consumeStderr(handle.availableData)
             }
-            self?.consumeStderr(data)
         }
     }
 
     private func consumeStdout(_ data: Data) {
-        queue.async {
-            if data.isEmpty {
-                self.stdout.readabilityHandler = nil
-                self.logBufferedStdout(final: true)
-                return
-            }
-
-            self.stdoutBuffer += String(decoding: data, as: UTF8.self)
-            self.logBufferedStdout(final: false)
+        if data.isEmpty {
+            stdout.readabilityHandler = nil
+            logBufferedStdout(final: true)
+            return
         }
+
+        stdoutBuffer += String(decoding: data, as: UTF8.self)
+        logBufferedStdout(final: false)
+        armStdoutReader()
     }
 
     private func consumeStderr(_ data: Data) {
-        queue.async {
-            if data.isEmpty {
-                self.stderr.readabilityHandler = nil
-                self.processStderrBuffer(final: true)
-                if self.parsedPort == nil {
-                    self.finish(with: .failure(.chromeExitedBeforeReportingPort(self.process.terminationStatus)))
-                }
-                return
-            }
-
-            self.stderrBuffer += String(decoding: data, as: UTF8.self)
-            self.processStderrBuffer(final: false)
+        if data.isEmpty {
+            stderr.readabilityHandler = nil
+            processStderrBuffer(final: true)
+            stderrReachedEOF = true
+            finishIfExitedWithoutPort()
+            return
         }
+
+        stderrBuffer += String(decoding: data, as: UTF8.self)
+        processStderrBuffer(final: false)
+        armStderrReader()
+    }
+
+    private func finishIfExitedWithoutPort() {
+        guard parsedPort == nil, stderrReachedEOF, let processExitStatus else { return }
+        finish(with: .failure(.chromeExitedBeforeReportingPort(processExitStatus)))
     }
 
     private func processStderrBuffer(final: Bool) {
@@ -976,14 +1012,13 @@ private final class ChromeOutputMonitor: @unchecked Sendable {
     private func finish(with result: Result<Int, ChromeLauncherError>) {
         guard !settled else { return }
         settled = true
-        let continuation = continuation
-        self.continuation = nil
 
         switch result {
         case .success(let port):
-            continuation?.resume(returning: port)
+            portContinuation.yield(port)
+            portContinuation.finish()
         case .failure(let error):
-            continuation?.resume(throwing: error)
+            portContinuation.finish(throwing: error)
         }
     }
 }

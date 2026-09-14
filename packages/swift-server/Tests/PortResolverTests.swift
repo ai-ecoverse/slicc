@@ -120,6 +120,31 @@ final class PortResolverTests: XCTestCase {
         XCTAssertFalse(description.contains("operation couldn"), "got: \(description)")
     }
 
+    func testRemainingErrorsDescribeTheirPortAndCause() {
+        XCTAssertTrue(PortResolverError.invalidPort(-1).localizedDescription.contains("-1"))
+        XCTAssertTrue(PortResolverError.noAvailablePorts(startingFrom: 65_535).localizedDescription.contains("65535"))
+        let socketDescription = PortResolverError.socketFailure(
+            code: EACCES,
+            host: "127.0.0.1",
+            port: 80
+        ).localizedDescription
+        XCTAssertTrue(socketDescription.contains("127.0.0.1:80"))
+        XCTAssertTrue(socketDescription.contains("errno="))
+    }
+
+    func testRejectsInvalidPortsAndLetsKernelChoose() async throws {
+        for invalid in [-1, 65_536] {
+            do {
+                _ = try await findAvailablePort(startingFrom: invalid)
+                XCTFail("expected invalidPort for \(invalid)")
+            } catch PortResolverError.invalidPort(let value) {
+                XCTAssertEqual(value, invalid)
+            }
+        }
+        let assigned = try await findAvailablePort(startingFrom: 0)
+        XCTAssertTrue((1...65_535).contains(assigned))
+    }
+
     private func makeReservedSocket() throws -> (fd: Int32, port: Int) {
         let socket = try makeListeningSocket(port: 0)
         return socket

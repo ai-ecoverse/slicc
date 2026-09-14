@@ -13,6 +13,9 @@ actor ConsoleForwarder {
     private let logger: Logger
     private let output: @Sendable (String) -> Void
     private let logDedup: CliLogDedup
+    private let pollAttempts: Int
+    private let pollDelayNanoseconds: UInt64
+    private let reconnectDelayNanoseconds: UInt64
 
     private var runID = UUID()
     private var loopTask: Task<Void, Never>?
@@ -21,11 +24,17 @@ actor ConsoleForwarder {
     init(
         session: URLSession = .shared,
         logger: Logger = Logger(label: "slicc.browser.console-forwarder"),
-        output: @escaping @Sendable (String) -> Void = { print($0) }
+        output: @escaping @Sendable (String) -> Void = { print($0) },
+        pollAttempts: Int = consoleForwarderPollAttempts,
+        pollDelayNanoseconds: UInt64 = consoleForwarderPollDelayNanoseconds,
+        reconnectDelayNanoseconds: UInt64 = consoleForwarderReconnectDelayNanoseconds
     ) {
         self.session = session
         self.logger = logger
         self.output = output
+        self.pollAttempts = pollAttempts
+        self.pollDelayNanoseconds = pollDelayNanoseconds
+        self.reconnectDelayNanoseconds = reconnectDelayNanoseconds
         self.logDedup = CliLogDedup(prefix: "[page]", sink: output)
     }
 
@@ -72,7 +81,7 @@ actor ConsoleForwarder {
             guard isCurrentRun(runID), !Task.isCancelled else { break }
 
             do {
-                try await Task.sleep(nanoseconds: consoleForwarderReconnectDelayNanoseconds)
+                try await Task.sleep(nanoseconds: reconnectDelayNanoseconds)
             } catch {
                 break
             }
@@ -82,7 +91,7 @@ actor ConsoleForwarder {
     private func discoverPageTarget(cdpPort: Int, pageUrl: String) async throws -> ConsolePageTarget? {
         let listURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/list")!
 
-        for attempt in 0..<consoleForwarderPollAttempts {
+        for attempt in 0..<pollAttempts {
             try Task.checkCancellation()
 
             do {
@@ -109,15 +118,15 @@ actor ConsoleForwarder {
                     ])
             }
 
-            if attempt + 1 < consoleForwarderPollAttempts {
-                try await Task.sleep(nanoseconds: consoleForwarderPollDelayNanoseconds)
+            if attempt + 1 < pollAttempts {
+                try await Task.sleep(nanoseconds: pollDelayNanoseconds)
             }
         }
 
         return nil
     }
 
-    private func forwardConsoleMessages(to webSocketDebuggerURL: String, runID: UUID) async throws {
+    func forwardConsoleMessages(to webSocketDebuggerURL: String, runID: UUID) async throws {
         guard let url = URL(string: webSocketDebuggerURL) else {
             throw ConsoleForwarderError.invalidWebSocketURL(webSocketDebuggerURL)
         }
@@ -151,9 +160,7 @@ actor ConsoleForwarder {
 
     private func send(message: [String: Any], over socket: URLSessionWebSocketTask) async throws {
         let data = try JSONSerialization.data(withJSONObject: message)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.coderInvalidValue)
-        }
+        let text = String(decoding: data, as: UTF8.self)
         try await socket.send(.string(text))
     }
 
@@ -260,7 +267,6 @@ enum ConsoleJSONValue: Decodable, Equatable, Sendable {
         case .null:
             return "null"
         case .object, .array:
-            guard JSONSerialization.isValidJSONObject(jsonObject) else { return "<unserializable>" }
             let data = try? JSONSerialization.data(withJSONObject: jsonObject)
             return data.flatMap { String(data: $0, encoding: .utf8) } ?? "<unserializable>"
         }

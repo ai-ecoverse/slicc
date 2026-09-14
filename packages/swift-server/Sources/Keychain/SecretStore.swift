@@ -95,6 +95,32 @@ enum SecretStore {
         SecKeychainSetUserInteractionAllowed(allowed)
     }
 
+    /// Narrow seams around Security.framework so failure handling can be
+    /// verified without mutating a developer's real Keychain item.
+    static var keychainRead: ([String: Any]) -> (OSStatus, AnyObject?) = { query in
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return (status, result)
+    }
+    static var keychainUpdate: ([String: Any], [String: Any]) -> OSStatus = { query, attributes in
+        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    }
+    static var keychainAdd: ([String: Any]) -> OSStatus = { query in
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    static func resetKeychainOperations() {
+        keychainRead = { query in
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            return (status, result)
+        }
+        keychainUpdate = { query, attributes in
+            SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        }
+        keychainAdd = { query in SecItemAdd(query as CFDictionary, nil) }
+    }
+
     /// Run `body` with the legacy Keychain's ACL dialog suppressed whenever
     /// `SLICC_KEYCHAIN_NONINTERACTIVE=1`.
     ///
@@ -183,10 +209,7 @@ enum SecretStore {
         if nonInteractive {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
-        var result: AnyObject?
-        let status = withInteractionSuppressed {
-            SecItemCopyMatching(query as CFDictionary, &result)
-        }
+        let (status, result) = withInteractionSuppressed { keychainRead(query) }
         if status == errSecItemNotFound {
             return ""
         }
@@ -215,10 +238,7 @@ enum SecretStore {
         ]
 
         let updateStatus = withInteractionSuppressed {
-            SecItemUpdate(
-                searchQuery as CFDictionary,
-                [kSecValueData as String: valueData] as CFDictionary
-            )
+            keychainUpdate(searchQuery, [kSecValueData as String: valueData])
         }
 
         if updateStatus == errSecSuccess {
@@ -228,7 +248,7 @@ enum SecretStore {
         if updateStatus == errSecItemNotFound {
             var addQuery = searchQuery
             addQuery[kSecValueData as String] = valueData
-            let addStatus = withInteractionSuppressed { SecItemAdd(addQuery as CFDictionary, nil) }
+            let addStatus = withInteractionSuppressed { keychainAdd(addQuery) }
             guard addStatus == errSecSuccess else {
                 throw SecretStoreError.keychainError(status: addStatus)
             }

@@ -17,6 +17,8 @@ import Logging
 /// `packages/node-server/src/electron-controller.ts` so swift-server reaches
 /// parity inside CSP-bearing Electron apps (e.g. AEM Desktop).
 final class OverlayTargetSession: @unchecked Sendable {
+    typealias CommandHandler = (String, [String: Any]?, Bool) async -> [String: Any]?
+
     private let target: ElectronInspectableTarget
     private let bootstrapScript: String
     /// Status-only overlay bootstrap (no iframe) shown when the app blocks the
@@ -34,6 +36,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     private let isAlreadyEgressBlocked: @Sendable (String) -> Bool
     private let recordEgressBlocked: @Sendable (String) -> Void
     private let onClose: @Sendable (String) -> Void
+    private let commandHandler: CommandHandler?
 
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-session")
     private var socket: URLSessionWebSocketTask?
@@ -71,7 +74,8 @@ final class OverlayTargetSession: @unchecked Sendable {
         recordBypassed: @escaping @Sendable (String) -> Void,
         isAlreadyEgressBlocked: @escaping @Sendable (String) -> Bool,
         recordEgressBlocked: @escaping @Sendable (String) -> Void,
-        onClose: @escaping @Sendable (String) -> Void
+        onClose: @escaping @Sendable (String) -> Void,
+        commandHandler: CommandHandler? = nil
     ) {
         self.target = target
         self.bootstrapScript = bootstrapScript
@@ -88,6 +92,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         self.isAlreadyEgressBlocked = isAlreadyEgressBlocked
         self.recordEgressBlocked = recordEgressBlocked
         self.onClose = onClose
+        self.commandHandler = commandHandler
     }
 
     func start() {
@@ -177,7 +182,7 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     // MARK: Connection flow
 
-    private func runConnectFlow() async {
+    func runConnectFlow() async {
         let alreadyBypassed = isAlreadyBypassed(target.url)
         logger.info(
             "Overlay target connection opening",
@@ -244,7 +249,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         stateQueue.sync { egressBlocked }
     }
 
-    private func handlePostProbe(loaded: Bool) async {
+    func handlePostProbe(loaded: Bool) async {
         // Egress-blocked apps deny the overlay's document request beneath the
         // layer setBypassCSP / the Fetch proxy operate at, so escalation cannot
         // help. The probe's throw-based "loaded" can't tell this apart from a
@@ -317,7 +322,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
     }
 
-    private func handleEvent(method: String, params: [String: Any]?) async {
+    func handleEvent(method: String, params: [String: Any]?) async {
         switch method {
         case "Page.loadEventFired":
             await handleLoadEventFired()
@@ -349,7 +354,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// network-layer denial, mark the target egress-blocked, stop the Network
     /// stream, and record it so escalation is skipped. Mirrors node-server's
     /// `handleNetworkEventForEgressBlock`.
-    private func applyNetworkSignal(method: String, params: [String: Any]?) async {
+    func applyNetworkSignal(method: String, params: [String: Any]?) async {
         let currentIDs = stateQueue.sync { overlayRequestIDs }
         let signal = ElectronOverlayInjector.classifyNetworkEvent(
             method: method,
@@ -387,7 +392,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// `Page.addScriptToEvaluateOnNewDocument` hook so it survives app reloads
     /// (it runs after the role hook, so the idempotent launcher ends up
     /// status-only). Mirrors node-server's `injectStatusOverlay`.
-    private func injectStatusOverlay() async {
+    func injectStatusOverlay() async {
         _ = await sendCommand(
             method: "Page.addScriptToEvaluateOnNewDocument",
             params: ["source": statusBootstrapScript])
@@ -396,7 +401,7 @@ final class OverlayTargetSession: @unchecked Sendable {
             params: ["expression": statusBootstrapScript, "awaitPromise": false])
     }
 
-    private func handleLoadEventFired() async {
+    func handleLoadEventFired() async {
         let snapshot: (reload: Bool, escalation: Bool) = stateQueue.sync {
             let r = pendingReload
             let e = pendingCspEscalation
@@ -449,7 +454,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
     }
 
-    private func activateFetchProxy() async {
+    func activateFetchProxy() async {
         // For file:// (or other no-http-origin) targets, fall back to the
         // overlay iframe's own http origin — Fetch.enable patterns must be
         // http(s) and the iframe is what we ultimately need unblocked.
@@ -474,7 +479,7 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     // MARK: Fetch-proxy escalation
 
-    private func handleFetchRequestPaused(params: [String: Any]) async {
+    func handleFetchRequestPaused(params: [String: Any]) async {
         let isActive = stateQueue.sync { fetchProxyActive }
         guard isActive else { return }
         guard let requestId = params["requestId"] as? String else {
@@ -545,14 +550,14 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
     }
 
-    private struct ProxiedResponse {
+    struct ProxiedResponse {
         let statusCode: Int
         let headers: [[String: String]]
         let bodyBase64: String
         let strippedCSP: Bool
     }
 
-    private func fetchAndStripCSP(
+    func fetchAndStripCSP(
         urlString: String,
         method: String,
         headers: [String: String],
@@ -608,7 +613,7 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     // MARK: Helpers
 
-    private func sendBootstrap() async {
+    func sendBootstrap() async {
         _ = await sendCommand(
             method: "Runtime.evaluate",
             params: [
@@ -621,7 +626,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// (after an initial interval, matching node-server's `setInterval` cadence)
     /// re-inject the overlay if it was evicted. Covers SPAs that re-render their
     /// DOM root without firing any navigation event the handler could hook.
-    private func runPresenceCheckLoop() async {
+    func runPresenceCheckLoop() async {
         while !Task.isCancelled && !isClosed() {
             try? await Task.sleep(nanoseconds: presenceCheckIntervalNanoseconds)
             if Task.isCancelled || isClosed() { return }
@@ -638,7 +643,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// escalation owns injection (`pendingReload`). Re-uses this session's
     /// existing role bootstrap, so no leader/follower re-election occurs.
     /// Mirrors node-server's `reinjectIfEvicted`.
-    private func reinjectIfEvicted() async {
+    func reinjectIfEvicted() async {
         let before: (closed: Bool, pendingReload: Bool) = stateQueue.sync { (closed, pendingReload) }
         guard
             ElectronOverlayInjector.shouldAttemptEvictionReinject(
@@ -662,7 +667,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// the overlay marker is present but the host element is gone — the
     /// SPA-DOM-root eviction case re-injection must repair. Mirrors
     /// node-server's `probeOverlayEvicted`.
-    private func probeOverlayEvicted() async -> Bool {
+    func probeOverlayEvicted() async -> Bool {
         let result = await sendCommand(
             method: "Runtime.evaluate",
             params: [
@@ -679,7 +684,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// ones the host app's own bootstrap may create after our reload (the
     /// AEM Desktop case where the re-evaluate after `Page.loadEventFired`
     /// would otherwise race a fresh document and not stick).
-    private func registerNewDocumentScript() async {
+    func registerNewDocumentScript() async {
         let currentIdentifier = stateQueue.sync { addedScriptIdentifier }
         if ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: currentIdentifier) {
             logger.debug(
@@ -717,7 +722,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// execution context the bootstrap script ran in) shows up in the logs
     /// instead of only being detected later by the iframe probe.
     @discardableResult
-    private func verifyOverlayPresent(context: String) async -> Bool {
+    func verifyOverlayPresent(context: String) async -> Bool {
         let expression = """
             (function() {
               try {
@@ -756,7 +761,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         return stuck
     }
 
-    private func probeOverlayLoaded() async -> Bool {
+    func probeOverlayLoaded() async -> Bool {
         // Mirrors node-server's `probeOverlayIframeLoaded`: walks the
         // `<slicc-launcher>` host → (open) shadowRoot → iframe and only reports
         // success when the iframe actually navigated away from `about:blank`.
@@ -777,7 +782,10 @@ final class OverlayTargetSession: @unchecked Sendable {
     }
 
     @discardableResult
-    private func sendCommand(method: String, params: [String: Any]? = nil, awaitResponse: Bool = false) async -> [String: Any]? {
+    func sendCommand(method: String, params: [String: Any]? = nil, awaitResponse: Bool = false) async -> [String: Any]? {
+        if let commandHandler {
+            return await commandHandler(method, params, awaitResponse)
+        }
         let id: Int = stateQueue.sync {
             messageIdCounter += 1
             return messageIdCounter
@@ -793,6 +801,9 @@ final class OverlayTargetSession: @unchecked Sendable {
                     return socket
                 }
                 guard let activeSocket else {
+                    stateQueue.sync {
+                        _ = responseWaiters.removeValue(forKey: id)
+                    }
                     cont.resume(returning: nil)
                     return
                 }
@@ -823,9 +834,7 @@ final class OverlayTargetSession: @unchecked Sendable {
                 Task { [weak self] in
                     do {
                         let data = try JSONSerialization.data(withJSONObject: msg)
-                        guard let text = String(data: data, encoding: .utf8) else {
-                            throw CocoaError(.coderInvalidValue)
-                        }
+                        let text = String(decoding: data, as: UTF8.self)
                         try await activeSocket.send(.string(text))
                     } catch {
                         guard let self else { return }
@@ -875,6 +884,20 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// Test-only: current count of registered response waiters.
     func _testing_pendingWaiterCount() -> Int {
         stateQueue.sync { responseWaiters.count }
+    }
+
+    func _testing_setState(
+        pendingReload: Bool? = nil,
+        pendingCspEscalation: Bool? = nil,
+        fetchProxyActive: Bool? = nil,
+        egressBlocked: Bool? = nil
+    ) {
+        stateQueue.sync {
+            if let pendingReload { self.pendingReload = pendingReload }
+            if let pendingCspEscalation { self.pendingCspEscalation = pendingCspEscalation }
+            if let fetchProxyActive { self.fetchProxyActive = fetchProxyActive }
+            if let egressBlocked { self.egressBlocked = egressBlocked }
+        }
     }
 
     static func overlayOrigin(for urlString: String) -> String? {

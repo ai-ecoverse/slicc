@@ -1289,6 +1289,15 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertTrue(bootstraps.follower.contains(Self.thinBridge.bridgeToken))
     }
 
+    func testStoppingInjectorGracefullyStopsConnectedSessions() throws {
+        let injector = makeThinInjector()
+        let session = try injector._testing_connectToTarget(
+            thinTarget(url: "https://example.test/", debuggerURL: "ws://127.0.0.1:1/devtools/page/x")
+        )
+        injector.stop()
+        session.stop()
+    }
+
     /// Regression: the overlay bootstrap must ALWAYS point the iframe at the
     /// hosted-leader thin-bridge origin, never the retired bundled-UI URL
     /// (`http://localhost:<servePort>/electron`). Guards the Path A removal.

@@ -134,6 +134,49 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
             ) { response in
                 XCTAssertEqual(response.status, .notFound)
             }
+            for body in ["not-json", "{}"] {
+                try await client.execute(
+                    uri: "/api/secrets/scope",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: body)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
+    func testPersistedMutationFailuresReturnInternalServerError() async throws {
+        let existing = Secret(name: "SAVED", value: "persisted-fixture-value", domains: ["old.example"])
+        let access = SecretStoreAccess(
+            loadAll: { [existing] },
+            save: { _, _, _ in throw PersistedFixtureError.failed },
+            remove: { _ in throw PersistedFixtureError.failed }
+        )
+        let injector = SecretInjector(sessionId: "persisted-error-fixture", persistedStore: access)
+
+        try await withApp(injector: injector) { client in
+            try await client.execute(
+                uri: "/api/secrets",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(
+                    string: #"{"name":"NEW","value":"new-fixture-value","domains":["api.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .internalServerError)
+            }
+            try await client.execute(uri: "/api/secrets/SAVED", method: .delete) { response in
+                XCTAssertEqual(response.status, .internalServerError)
+            }
+            try await client.execute(
+                uri: "/api/secrets/scope",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(string: #"{"name":"SAVED","domains":["new.example"]}"#)
+            ) { response in
+                XCTAssertEqual(response.status, .internalServerError)
+            }
         }
     }
 
@@ -426,6 +469,10 @@ final class SessionSecretAPIRoutesTests: XCTestCase {
             logDir: nil, logDirectoryURL: nil, prompt: nil, envFile: nil, envFileURL: nil
         )
     }
+}
+
+private enum PersistedFixtureError: Error {
+    case failed
 }
 
 private final class InMemoryPersistedSecrets: @unchecked Sendable {
