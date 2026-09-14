@@ -57,6 +57,8 @@ function findAgenticMemoryToggle(dialog: HTMLElement): HTMLInputElement | null {
 }
 
 const log = { error: vi.fn() };
+/** Injected in place of `location.reload()` — jsdom cannot navigate. */
+const reload = vi.fn();
 
 function seedAccounts(accounts: unknown[]): void {
   localStorage.setItem('slicc_accounts', JSON.stringify(accounts));
@@ -70,14 +72,39 @@ async function openDialog(): Promise<HTMLElement> {
   return document.querySelector('slicc-dialog') as HTMLElement;
 }
 
+/** The footer button carrying `label`, whatever slot the dialog puts it in. */
+function footerButton(dialog: HTMLElement, label: string): HTMLButtonElement | null {
+  return (
+    ([...dialog.querySelectorAll('button')].find((b) => b.textContent === label) as
+      | HTMLButtonElement
+      | undefined) ?? null
+  );
+}
+
+/**
+ * The stubbed dialog may not implement hide(); fire the close event the real
+ * component dispatches. This is also how an Esc / backdrop dismissal arrives.
+ */
+function closeDialog(dialog: HTMLElement): void {
+  dialog.dispatchEvent(new CustomEvent('slicc-dialog-close', { bubbles: true }));
+}
+
+/** Click a footer button and let the close event resolve the promise. */
+function clickFooter(dialog: HTMLElement, label: string): void {
+  const btn = footerButton(dialog, label);
+  expect(btn, `footer button "${label}"`).toBeTruthy();
+  btn?.click();
+  closeDialog(dialog);
+}
+
 /** Click the Done button and let the close event resolve the promise. */
 function clickDone(dialog: HTMLElement): void {
-  const done = [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Done');
-  expect(done).toBeTruthy();
-  done?.click();
-  // The stubbed dialog may not implement hide(); fire the close event the
-  // real component dispatches.
-  dialog.dispatchEvent(new CustomEvent('slicc-dialog-close', { bubbles: true }));
+  clickFooter(dialog, 'Done');
+}
+
+/** The pending-reload notice, present only once a toggle is waiting on a boot. */
+function reloadNotice(dialog: HTMLElement): HTMLElement | null {
+  return dialog.querySelector('.wcset__notice');
 }
 
 afterEach(() => {
@@ -85,6 +112,7 @@ afterEach(() => {
   localStorage.removeItem('slicc_show_timestamps');
   localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
   initFeatureFlags('standalone');
+  reload.mockClear();
   document.body.replaceChildren();
 });
 
@@ -264,7 +292,7 @@ describe('showWcSettings', () => {
 describe('showExperimentalSettings', () => {
   it('lists each user-toggleable flag, and never the worker-controlled gate', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const result = showExperimentalSettings(log);
+    const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
 
     expect(dialog.getAttribute('heading')).toBe('Experimental');
@@ -287,7 +315,7 @@ describe('showExperimentalSettings', () => {
 
   it('persists a panel-layouts toggle, so panels survive the next boot', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const result = showExperimentalSettings(log);
+    const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
     const toggle = findPanelLayoutsToggle(dialog) as HTMLInputElement;
 
@@ -296,13 +324,13 @@ describe('showExperimentalSettings', () => {
     toggle.dispatchEvent(new Event('change'));
 
     expect(isFeatureEnabled('panel-layouts')).toBe(true);
-    clickDone(dialog);
+    clickFooter(dialog, 'Reload now');
     await result;
   });
 
   it('shows the compact-on-idle flag without tunable fields', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const result = showExperimentalSettings(log);
+    const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
     try {
       expect(dialog.querySelector('#wcset-feature-compact-on-idle')).not.toBeNull();
@@ -316,7 +344,7 @@ describe('showExperimentalSettings', () => {
 
   it('persists an agentic-memory toggle', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const result = showExperimentalSettings(log);
+    const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
     const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
 
@@ -325,14 +353,14 @@ describe('showExperimentalSettings', () => {
     toggle.dispatchEvent(new Event('change'));
 
     expect(isFeatureEnabled('agentic-memory')).toBe(true);
-    clickDone(dialog);
+    clickFooter(dialog, 'Reload now');
     await result;
   });
 
   it('does not mount when called directly while the central flag is off', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'off' });
 
-    await expect(showExperimentalSettings(log)).resolves.toBeUndefined();
+    await expect(showExperimentalSettings(log, { reload })).resolves.toBeUndefined();
     expect(document.querySelector('slicc-dialog')).toBeNull();
   });
 
@@ -341,7 +369,7 @@ describe('showExperimentalSettings', () => {
     setFeatureFlagOverride('experimental-settings', 'on');
 
     expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
-    await showExperimentalSettings(log);
+    await showExperimentalSettings(log, { reload });
     expect(document.querySelector('slicc-dialog')).toBeNull();
   });
 
@@ -349,18 +377,153 @@ describe('showExperimentalSettings', () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     setFeatureFlagOverride('experimental-settings', 'off');
 
-    const firstResult = showExperimentalSettings(log);
+    const firstResult = showExperimentalSettings(log, { reload });
     const firstDialog = await openDialog();
     clickDone(firstDialog);
     await firstResult;
 
-    const reopenedResult = showExperimentalSettings(log);
+    const reopenedResult = showExperimentalSettings(log, { reload });
     const reopenedDialog = await openDialog();
     // The local `off` override was ignored, so the dialog still opens and renders.
     expect(reopenedDialog.getAttribute('heading')).toBe('Experimental');
     expect(findPanelLayoutsToggle(reopenedDialog)).not.toBeNull();
     clickDone(reopenedDialog);
     await reopenedResult;
+  });
+
+  it('leaves the footer on Done and never reloads when nothing was touched', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+
+    expect(reloadNotice(dialog)?.hidden).toBe(true);
+    expect(footerButton(dialog, 'Done')).not.toBeNull();
+    expect(footerButton(dialog, 'Revert')?.hidden).toBe(true);
+
+    clickDone(dialog);
+    await result;
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('turns the footer into a reload confirm the moment a flag changes', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    // The flag is persisted but inert until boot, so the dialog says so and
+    // offers the two ways to finish: apply it, or put it back.
+    expect(reloadNotice(dialog)?.hidden).toBe(false);
+    expect(reloadNotice(dialog)?.textContent).toContain('wired when SLICC boots');
+    expect(footerButton(dialog, 'Done')).toBeNull();
+    expect(footerButton(dialog, 'Reload now')).not.toBeNull();
+    expect(footerButton(dialog, 'Revert')?.hidden).toBe(false);
+
+    clickFooter(dialog, 'Reload now');
+    await result;
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads on an Esc/backdrop dismissal too — the override is already on disk', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    // No footer click at all: the dialog just goes away.
+    closeDialog(dialog);
+
+    await result;
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
+  });
+
+  it('drops the pending state when a flag is toggled back to where it started', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    expect(footerButton(dialog, 'Reload now')).not.toBeNull();
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+
+    expect(reloadNotice(dialog)?.hidden).toBe(true);
+    expect(footerButton(dialog, 'Done')).not.toBeNull();
+    clickDone(dialog);
+    await result;
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('reverts a change and closes without a reload', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
+
+    footerButton(dialog, 'Revert')?.click();
+
+    expect(isFeatureEnabled('agentic-memory')).toBe(false);
+    expect(toggle.checked).toBe(false);
+    expect(reloadNotice(dialog)?.hidden).toBe(true);
+    expect(footerButton(dialog, 'Done')).not.toBeNull();
+
+    clickDone(dialog);
+    await result;
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('reverting a flag that had no override removes it rather than pinning it', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toHaveProperty(
+      'agentic-memory'
+    );
+
+    footerButton(dialog, 'Revert')?.click();
+
+    // Writing `off` back would pin a flag that was only riding its default —
+    // a later change to that default would then silently not reach this user.
+    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).not.toHaveProperty(
+      'agentic-memory'
+    );
+    clickDone(dialog);
+    await result;
+  });
+
+  it('leaves an override the dialog did not touch alone when reverting', async () => {
+    localStorage.setItem(FEATURE_FLAG_STORAGE_KEY, JSON.stringify({ 'panel-layouts': 'on' }));
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log, { reload });
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    footerButton(dialog, 'Revert')?.click();
+
+    expect(isFeatureEnabled('panel-layouts')).toBe(true);
+    expect(isFeatureEnabled('agentic-memory')).toBe(false);
+    clickDone(dialog);
+    await result;
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('ignores a stale persisted override after worker initialization', async () => {
@@ -370,7 +533,7 @@ describe('showExperimentalSettings', () => {
     );
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
 
-    const result = showExperimentalSettings(log);
+    const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
     expect(dialog.getAttribute('heading')).toBe('Experimental');
     clickDone(dialog);

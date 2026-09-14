@@ -9,7 +9,15 @@
 
 import { slugify } from '@slicc/shared-ts';
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
-import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
+import {
+  type FeatureFlagId,
+  type FeatureFlagValues,
+  isFeatureEnabled,
+  listFlags,
+  readFeatureFlagOverrides,
+  setFeatureFlagOverride,
+  writeFeatureFlagOverrides,
+} from '../../core/feature-flags.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {
@@ -103,6 +111,8 @@ slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
 .wcset__radio-row__body{flex:1;min-width:0;}
 .wcset__radio-row__title{font-size:12.5px;font-weight:600;}
 .wcset__radio-row__detail{font-size:11px;color:var(--txt-3);margin-top:2px;line-height:1.4;}
+.wcset__notice{font-size:11.5px;line-height:1.45;color:var(--ink);background:var(--ghost);border:1px solid var(--line);border-left:3px solid var(--ctx);border-radius:8px;padding:8px 10px;}
+.wcset__notice[hidden]{display:none;}
 `;
 
 function ensureSettingsStyle(doc: Document): void {
@@ -440,15 +450,41 @@ function buildKeyboardModeSection(
   return section;
 }
 
+/**
+ * The experimental-features list, plus the handle the dialog needs to undo it.
+ *
+ * A flag write is inert until the next boot (see {@link showExperimentalSettings}),
+ * so the dialog has to know both *whether* anything changed and how to put it
+ * back when the user declines the reload.
+ */
+interface ExperimentalSection {
+  element: HTMLElement;
+  /** Restore every toggle — and the persisted overrides — to the opened state. */
+  revert(): void;
+}
+
 function buildExperimentalSection(deps: {
   log: SettingsLogger;
   setStatus(text: string, isError?: boolean): void;
-}): HTMLElement {
+  /** Called after every toggle with whether the dialog now differs from its opened state. */
+  onPendingChange(pending: boolean): void;
+}): ExperimentalSection {
   const section = div('wcset__list');
   const flags = listFlags().filter((candidate) => candidate.userToggleable);
   if (flags.length === 0) {
     section.append(div('wcset__empty', 'No experimental features are available right now.'));
   }
+  // Snapshot both the resolved values (what "changed" means to the user) and
+  // the raw override bag (what `revert` has to put back). Restoring resolved
+  // values would pin a flag that was merely riding its bundled/central default.
+  const openedValues = new Map(flags.map((flag) => [flag.id, isFeatureEnabled(flag.id)]));
+  const openedOverrides = readFeatureFlagOverrides();
+  const checks = new Map<FeatureFlagId, HTMLInputElement>();
+
+  const notePending = (): void => {
+    deps.onPendingChange([...openedValues].some(([id, was]) => isFeatureEnabled(id) !== was));
+  };
+
   for (const flag of flags) {
     const row = div('wcset__toggle-row');
     const info = div('wcset__info');
@@ -463,17 +499,35 @@ function buildExperimentalSection(deps: {
     check.addEventListener('change', () => {
       try {
         setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
-        check.checked = isFeatureEnabled(flag.id);
-        deps.setStatus('Saved.');
+        deps.setStatus('Saved — reload to apply.');
       } catch (err) {
         deps.log.error('Experimental settings update failed', { flagId: flag.id, err });
         deps.setStatus('Unable to save this feature setting.', true);
       }
+      // Re-read rather than trust the click: a flag the active float refuses to
+      // override (`canOverride`) snaps straight back, and so must the checkbox.
+      check.checked = isFeatureEnabled(flag.id);
+      notePending();
     });
+    checks.set(flag.id, check);
     row.append(info, check);
     section.append(row);
   }
-  return section;
+
+  return {
+    element: section,
+    revert: () => {
+      const overrides: FeatureFlagValues = { ...readFeatureFlagOverrides() };
+      for (const flag of flags) {
+        const opened = openedOverrides[flag.id];
+        if (opened === undefined) delete overrides[flag.id];
+        else overrides[flag.id] = opened;
+      }
+      writeFeatureFlagOverrides(overrides);
+      for (const [id, check] of checks) check.checked = isFeatureEnabled(id);
+      notePending();
+    },
+  };
 }
 
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
@@ -1083,10 +1137,41 @@ export async function showThemeSettings(
   });
 }
 
-/** Open the centrally gated standalone experimental-features dialog. */
-export async function showExperimentalSettings(log: SettingsLogger): Promise<void> {
+/** Footer label while nothing has changed. */
+const EXPERIMENTAL_DONE_LABEL = 'Done';
+/** Footer label once a toggle is waiting on a boot — the confirm step. */
+const EXPERIMENTAL_RELOAD_LABEL = 'Reload now';
+/** The other answer to that confirm: put the flags back and stay. */
+const EXPERIMENTAL_REVERT_LABEL = 'Revert';
+const EXPERIMENTAL_RELOAD_NOTICE =
+  'Experimental features are wired when SLICC boots, so this change has no effect yet. Reload this tab to apply it, or revert.';
+
+export interface ExperimentalSettingsOpts {
+  /** Reload the page. Defaults to `location.reload()`; injected by tests. */
+  reload?(): void;
+}
+
+/**
+ * Open the centrally gated standalone experimental-features dialog.
+ *
+ * Every flag-gated subsystem resolves its flag ONCE, while the kernel host
+ * boots (`kernel/host.ts` — `publishGelatiere`, `publishMemoryCuration`, the
+ * layout gate, …), and nothing re-reads it afterwards. A toggle here therefore
+ * persists but stays inert until the next boot, which used to leave the user
+ * staring at a flag that reads `on` and a feature that never appeared.
+ *
+ * So a change is not finished until the tab reloads: the footer turns into a
+ * `Reload now` / `Revert` confirm, and EVERY exit path honours it — dismissing
+ * with Esc or the backdrop reloads too, because the override is already on
+ * disk and leaving it half-applied is the bug.
+ */
+export async function showExperimentalSettings(
+  log: SettingsLogger,
+  opts: ExperimentalSettingsOpts = {}
+): Promise<void> {
   if (!isFeatureEnabled('experimental-settings')) return;
   ensureSettingsStyle(document);
+  const reload = opts.reload ?? ((): void => location.reload());
 
   return new Promise((resolve) => {
     const dialog = document.createElement('slicc-dialog');
@@ -1099,17 +1184,42 @@ export async function showExperimentalSettings(log: SettingsLogger): Promise<voi
       status.textContent = text;
       status.toggleAttribute('data-error', isError);
     };
-    body.append(buildExperimentalSection({ log, setStatus }), status);
-    dialog.append(body);
 
-    const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
+    const notice = div('wcset__notice', EXPERIMENTAL_RELOAD_NOTICE);
+    notice.hidden = true;
+
+    const hide = (): void => {
       (dialog as HTMLElement & { hide?: () => void }).hide?.();
+    };
+    const confirmBtn = button('wcset__btn wcset__btn--primary', EXPERIMENTAL_DONE_LABEL, hide);
+    confirmBtn.setAttribute('slot', 'footer');
+    // Only meaningful while a change is pending, so it starts out hidden
+    // rather than absent — the footer must not reflow as toggles are flipped.
+    const revertBtn = button('wcset__btn', EXPERIMENTAL_REVERT_LABEL, () => {
+      section.revert();
+      setStatus('Reverted.');
     });
-    done.setAttribute('slot', 'footer');
-    dialog.append(done);
+    revertBtn.setAttribute('slot', 'footer');
+    revertBtn.hidden = true;
+
+    let pending = false;
+    const section = buildExperimentalSection({
+      log,
+      setStatus,
+      onPendingChange: (next) => {
+        pending = next;
+        notice.hidden = !next;
+        revertBtn.hidden = !next;
+        confirmBtn.textContent = next ? EXPERIMENTAL_RELOAD_LABEL : EXPERIMENTAL_DONE_LABEL;
+      },
+    });
+
+    body.append(section.element, notice, status);
+    dialog.append(body, revertBtn, confirmBtn);
 
     dialog.addEventListener('slicc-dialog-close', () => {
       dialog.remove();
+      if (pending) reload();
       resolve();
     });
 

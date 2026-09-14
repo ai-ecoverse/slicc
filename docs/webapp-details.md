@@ -174,6 +174,7 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - Add IDs to `FeatureFlagId`/`FEATURE_FLAGS` in `core/feature-flags.ts` and both `wrangler.jsonc` `FEATURE_FLAGS` lists. User-toggleable flags live in the standalone **Experimental features…** avatar dialog (`listFlags()`), not Account settings.
 - Parse with `isFeatureEnabled`/`coerceFeatureFlagValue` (trimmed, case-insensitive `on`/`true`/`1`). With `overridableFloats`, precedence is local → remote → bundled. `experimental-settings` is worker-controlled (`userToggleable: false`).
 - `setupFeatureFlagsForPage` loads the isolated cache synchronously, then non-blocking `/api/flags?float=<float>` refresh; later config needs reload.
+- **Flags are boot-scoped.** Every flag-gated subsystem resolves its flag ONCE while the kernel host boots (`kernel/host.ts` — `publishGelatiere`, `publishMemoryCuration`, …) and never re-reads it, so a mid-session toggle persists but stays inert. `showExperimentalSettings` therefore treats a change as unfinished until the tab reloads: the footer becomes a **Reload now** / **Revert** confirm, and every exit path (including Esc and the backdrop) reloads while a change is pending. Revert restores the raw override bag captured at open — never the resolved values, which would pin a flag that was only riding its default. A new flag needs no dialog wiring for this; it is driven by `listFlags()`.
 
 ## Budget-mode cost surfaces
 
