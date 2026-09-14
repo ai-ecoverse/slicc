@@ -36,7 +36,7 @@ there.
 
 The kernel bridge and its proxies now live entirely in the webapp package
 (`packages/webapp/src/kernel/facade.ts`,
-`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`, and
+`packages/webapp/src/scoops/sprinkle-bridge-channel.ts`, and
 `packages/webapp/src/base/lick-manager-proxy.ts`); no code in this package
 is consumed by the webapp's kernel-worker or its crontask / webhook commands.
 

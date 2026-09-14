@@ -19,13 +19,11 @@
  *    dispatches to the real `SprinkleManager`, posting responses back
  *    on the same channel.
  *
- * Extension mode keeps using its existing chrome.runtime-based proxy
- * (`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`); that route is
- * intentionally untouched here.
+ * This BroadcastChannel bridge is the only sprinkle proxy route today —
+ * it superseded the earlier chrome.runtime/offscreen proxy in PR #607.
  *
- * The wire vocabulary mirrors the extension proxy's so debugging
- * across floats reads the same: `op` ∈ `list | opened | refresh |
- * open | close | send | openNewAutoOpen`.
+ * The wire vocabulary: `op` ∈ `list | opened | refresh | open | close |
+ * send | openNewAutoOpen`.
  */
 
 import type {

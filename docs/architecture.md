@@ -982,7 +982,7 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/dip.ts` |
 | Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                    |
 | Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                   |
-| Change extension sprinkle message proxy   | `packages/webapp/src/scoops/sprinkle-manager-proxy.ts`                         |
+| Change the sprinkle worker↔page bridge    | `packages/webapp/src/scoops/sprinkle-bridge-channel.ts`                        |
 | Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`          |
 | Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                          |
 

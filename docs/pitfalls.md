@@ -1663,7 +1663,7 @@ The sprinkle subsystem is the canonical reference for full bidirectional dispatc
 
 **Related Files**
 
-- `packages/webapp/src/scoops/sprinkle-manager-proxy.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
+- `packages/webapp/src/scoops/sprinkle-bridge-channel.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
 - `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the page-side handler is registered)
 - `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
 
