@@ -13,7 +13,10 @@ import {
   writeOpenSprinklesToUrl,
 } from '../../src/ui/sprinkle-manager.js';
 
-const rendererState = vi.hoisted(() => ({ closeOnActivate: false }));
+const rendererState = vi.hoisted(() => ({
+  closeOnActivate: false,
+  renderHook: undefined as (() => Promise<void>) | undefined,
+}));
 
 vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
   SprinkleRenderer: class {
@@ -21,7 +24,9 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
       _c: unknown,
       private readonly api: { close(): void }
     ) {}
-    async render() {}
+    async render() {
+      await rendererState.renderHook?.();
+    }
     activateBridgeLifecycle() {
       if (rendererState.closeOnActivate) this.api.close();
     }
@@ -84,6 +89,7 @@ describe('SprinkleManager', () => {
 
   beforeEach(async () => {
     rendererState.closeOnActivate = false;
+    rendererState.renderHook = undefined;
     vi.stubGlobal('localStorage', makeMemoryStorage());
     vi.stubGlobal('document', makeFakeDocument());
     // Reset the URL to a known state so URL-persistence tests start
@@ -1238,6 +1244,67 @@ describe('SprinkleManager', () => {
   });
 
   describe('reload', () => {
+    it('waits for an in-flight open before re-rendering the same container', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      const readFile = vi.spyOn(vfs, 'readFile');
+      readFile.mockClear();
+
+      let releaseOpen!: () => void;
+      const openGate = new Promise<void>((resolve) => {
+        releaseOpen = resolve;
+      });
+      let renderCount = 0;
+      rendererState.renderHook = async () => {
+        renderCount += 1;
+        if (renderCount === 1) await openGate;
+      };
+
+      const opening = mgr.open('dash');
+      await vi.waitFor(() => expect(renderCount).toBe(1));
+      expect(readFile).toHaveBeenCalledTimes(1);
+
+      const reloading = mgr.reload('dash');
+      // A watcher reload can arrive while `sprinkle open` is awaiting its
+      // iframe. It must not even begin a second read/render in that window.
+      expect(readFile).toHaveBeenCalledTimes(1);
+
+      releaseOpen();
+      await Promise.all([opening, reloading]);
+      expect(readFile).toHaveBeenCalledTimes(2);
+      expect(renderCount).toBe(2);
+    });
+
+    it('serializes overlapping reloads for one sprinkle', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      const readFile = vi.spyOn(vfs, 'readFile');
+      readFile.mockClear();
+
+      let releaseReload!: () => void;
+      const reloadGate = new Promise<void>((resolve) => {
+        releaseReload = resolve;
+      });
+      let renderCount = 0;
+      rendererState.renderHook = async () => {
+        renderCount += 1;
+        if (renderCount === 1) await reloadGate;
+      };
+
+      const first = mgr.reload('dash');
+      await vi.waitFor(() => expect(renderCount).toBe(1));
+      expect(readFile).toHaveBeenCalledTimes(1);
+
+      const second = mgr.reload('dash');
+      expect(readFile).toHaveBeenCalledTimes(1);
+
+      releaseReload();
+      await Promise.all([first, second]);
+      expect(readFile).toHaveBeenCalledTimes(2);
+      expect(renderCount).toBe(2);
+    });
+
     it('re-renders an open sprinkle with fresh VFS content', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
       await mgr.refresh();

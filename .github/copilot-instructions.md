@@ -14,8 +14,8 @@ signing, DA `origin` allow-list / `aem://` #2811), browser ↔ extension (mounts
 
 ## 3. UI state preservation
 
-DOM rebuilds (`innerHTML`, `replaceChildren`, reflow) must preserve live state.
-Sprinkle activation must clear attention state and place the parked container.
+Preserve state across DOM rebuilds. Sprinkle activation places its parked container; serialize
+open/reload per sprinkle so watcher and command renders cannot overlap.
 
 ## 4. CDP / Chrome edge cases
 
