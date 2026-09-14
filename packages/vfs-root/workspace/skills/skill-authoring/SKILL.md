@@ -7,7 +7,7 @@ description: |
   reliably, native `/workspace/skills/` vs compatibility `.agents/` /
   `.claude/skills/` discovery, and when to ship companion files like `.jsh`
   scripts or `.bsh` browser hooks.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Skill authoring
@@ -41,7 +41,7 @@ description: |
   Use this when ...
   ... (1–3 sentences explaining trigger conditions, what's covered, and what's
   NOT covered if there's a sibling skill that handles related topics.)
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Title (matches `name`)
@@ -55,7 +55,7 @@ allowed-tools: bash, read_file, write_file, edit_file
 - **`description`** — the trigger string. The agent uses this to decide whether to load the skill. Get this right; everything else is secondary.
 - **`allowed-tools`** — comma-separated list of tools the skill needs. Without this, the agent may load the skill but find it can't execute the steps. Common values:
   - `bash` — almost every skill.
-  - `read_file, write_file, edit_file` — for skills that author files (sprinkles, config edits, three-way merges).
+  - `read_file, write_file, edit` — for skills that author files (sprinkles, config edits, three-way merges).
   - Omit only for purely informational skills.
 
 ### Writing a good description

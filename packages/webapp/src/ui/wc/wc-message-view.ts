@@ -304,6 +304,8 @@ export const BASH_ICONS: Readonly<Record<string, string>> = {
 export const TOOL_ICONS: Readonly<Record<string, string>> = {
   read_file: 'file-text',
   write_file: 'file-plus',
+  edit: 'file-pen',
+  // Kept for persisted transcripts created before the Pi tool alignment.
   edit_file: 'file-pen',
   send_message: 'message-circle',
   list_scoops: 'ice-cream-cone',
@@ -348,6 +350,7 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
       return path ? `Read ${basenameOf(path)}` : 'Read a file';
     case 'write_file':
       return path ? `Write ${basenameOf(path)}` : 'Write a file';
+    case 'edit':
     case 'edit_file':
       return path ? `Edit ${basenameOf(path)}` : 'Edit a file';
     case 'send_message':
@@ -711,6 +714,47 @@ function bashBody(call: ToolCall): HTMLElement {
   return body;
 }
 
+function appendEditPair(body: HTMLElement, oldText: string, newText: string): void {
+  const oldStr = el('div', { class: 'del' });
+  oldStr.textContent = cap(oldText);
+  const newStr = el('div', { class: 'add' });
+  newStr.textContent = cap(newText);
+  body.append(oldStr, newStr);
+}
+
+interface PiEditInputView {
+  edits?: unknown;
+}
+
+interface PiEditPairView {
+  oldText?: unknown;
+  newText?: unknown;
+}
+
+/** Render both Pi's edits array and the shape retained in older transcripts. */
+function appendEditBody(body: HTMLElement, call: ToolCall): void {
+  if (call.name !== 'edit' || typeof call.input !== 'object' || call.input === null) {
+    appendEditPair(
+      body,
+      inputField(call.input, 'old_string'),
+      inputField(call.input, 'new_string')
+    );
+    return;
+  }
+
+  const edits = (call.input as PiEditInputView).edits;
+  if (!Array.isArray(edits)) return;
+  for (const pair of edits) {
+    if (typeof pair !== 'object' || pair === null) continue;
+    const fields = pair as PiEditPairView;
+    appendEditPair(
+      body,
+      typeof fields.oldText === 'string' ? fields.oldText : '',
+      typeof fields.newText === 'string' ? fields.newText : ''
+    );
+  }
+}
+
 /** Expanded body for a tool row — every tool shows SOMETHING useful. */
 function toolBody(call: ToolCall): HTMLElement | null {
   ensureWcmsgStyle();
@@ -729,12 +773,8 @@ function toolBody(call: ToolCall): HTMLElement | null {
     body.append(content);
     return body;
   }
-  if (call.name === 'edit_file') {
-    const oldStr = el('div', { class: 'del' });
-    oldStr.textContent = cap(inputField(call.input, 'old_string'));
-    const newStr = el('div', { class: 'add' });
-    newStr.textContent = cap(inputField(call.input, 'new_string'));
-    body.append(oldStr, newStr);
+  if (call.name === 'edit' || call.name === 'edit_file') {
+    appendEditBody(body, call);
     return body;
   }
   if (call.name === 'read_file') {

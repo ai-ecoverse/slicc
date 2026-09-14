@@ -210,7 +210,7 @@ export const ToneGithubDiff: Story = {
     variant: 'tool',
     icon: 'file-diff',
     tone: 'gh',
-    title: 'edit_file · hero.css',
+    title: 'edit · hero.css',
     body: () => [
       line('del', del(), ' background:#0b1120;'),
       '\n',
@@ -257,7 +257,7 @@ export const Pr: Story = {
 /**
  * TOOL CLUSTER — several tool affordances grouped vertically as they appear in a
  * single chat turn, composed by tag: two expandable `<slicc-action-row>`s (an
- * `edit_file` diff and a `vitest` run with pass lines), then three
+ * `edit` diff and a `vitest` run with pass lines), then three
  * `<slicc-action-card>`s — a dark terminal/git `.tcard`, a light `.tcard`, and
  * the resulting PR card with the green Open status pill and the +/- deltas.
  * Every glyph (chips, prompts, ticks, diff markers) is a lucide `<svg>`.
@@ -267,7 +267,7 @@ export const ToolCluster: Story = {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'max-width:520px;display:flex;flex-direction:column;';
 
-    // ── Expandable row 1: an edit_file diff (open) with a .vlink filename. ──
+    // ── Expandable row 1: an edit diff (open) with a .vlink filename. ──
     const editRow = document.createElement('slicc-action-row');
     editRow.style.width = '100%';
     editRow.setAttribute('open', '');
@@ -276,7 +276,7 @@ export const ToolCluster: Story = {
     const editLabel = h(
       'span',
       null,
-      'edit_file · ',
+      'edit · ',
       h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css')
     );
     editRow.appendChild(editLabel);

@@ -10,12 +10,12 @@ description: |
   page, the right `mount --source` invocation per intent, and common errors
   (EACCES on missing credentials, EBUSY on concurrent edits, EFBIG on
   oversized files).
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Mount
 
-The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit_file`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
+The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
 
 | Backend | Source URI                    | Auth                                                   |
 | ------- | ----------------------------- | ------------------------------------------------------ |
@@ -143,7 +143,7 @@ Treat the mount path like any other VFS directory:
 ls /mnt/da
 read_file /mnt/da/index.html
 write_file /mnt/da/new-page.html "<html>..."
-edit_file /mnt/da/index.html       # via the standard edit_file tool
+edit /mnt/da/index.html            # via the standard edit tool
 rm /mnt/da/old.html
 ```
 

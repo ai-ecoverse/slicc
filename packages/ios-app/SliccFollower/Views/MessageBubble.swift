@@ -463,7 +463,7 @@ extension MessageBubble {
     fileprivate func toolPreview(for tc: ToolCall) -> String? {
         guard let input = tc.input?.value as? [String: Any] else { return nil }
         switch tc.name {
-        case "read_file", "write_file", "edit_file":
+        case "read_file", "write_file", "edit", "edit_file":
             return input["path"] as? String
         case "bash":
             if let cmd = input["command"] as? String {

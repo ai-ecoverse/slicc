@@ -88,7 +88,7 @@ Your memory is organized hierarchically:
 - **${isRoot ? 'Cone' : 'Scoop'} memory** (${workspace.memoryPath}): Your private memory
 
 When you learn something important:
-- Use your memory for context-specific notes (edit with write_file or edit_file)
+- Use your memory for context-specific notes (edit with write_file or edit)
 ${policy.canWriteSharedMemory ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
 
 ${

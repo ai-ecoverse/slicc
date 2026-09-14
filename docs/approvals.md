@@ -53,7 +53,7 @@ dispatch.
 | Layer             | Where                                       | Matches               |
 | ----------------- | ------------------------------------------- | --------------------- |
 | Filesystem reads  | `read_file` tool + shell file reads         | `Read <glob>` rules   |
-| Filesystem writes | `write_file`/`edit_file` + shell writes     | `Write <glob>` rules  |
+| Filesystem writes | `write_file`/`edit` + shell writes          | `Write <glob>` rules  |
 | Commands          | each top-level segment of a `bash` line     | `Cmnd <glob>` rules   |
 | Transcript export | a follower's / Cherry host's export request | `Export <glob>` rules |
 

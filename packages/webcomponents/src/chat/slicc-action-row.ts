@@ -10,7 +10,7 @@ import { hasIcon, iconEl } from '../internal/icons.js';
  *
  * Faithful to the prototype `.act` / `.acth` / `.actb` rules
  * (proto/StellarRubySwift.html): the quiet, feed-style expandable tool row used
- * for `edit_file`, `playwright`, `vitest`, `mcp`, `upskill`, … . The header is
+ * for `edit`, `playwright`, `vitest`, `mcp`, `upskill`, … . The header is
  * always visible; the monospace body expands when the host gains `[open]`
  * (prototype `.act.open`), rotating the chevron 90°. Everything is var-driven
  * (--txt-2/3 / --ink / --ghost / --line / --mono / --violet / --amber / --cyan)
@@ -140,7 +140,7 @@ const TONES = new Set(['ink', 'vi', 'am', 'cy', 'gh']);
  * chip (`.ic`), a label (`.al`, which may carry a `.vlink` filename), a
  * right-aligned result badge (`.ab`), and a chevron (`.acx`); below it a hidden
  * monospace command/diff body (`.actb`) that expands on click and rotates the
- * chevron 90°. Used for `edit_file`, `playwright`, `vitest`, `mcp`, `upskill`, …
+ * chevron 90°. Used for `edit`, `playwright`, `vitest`, `mcp`, `upskill`, …
  *
  * Light DOM (no shadow root): the host renders its own scaffold and relocates
  * light children into named regions so the host app can style it and slot rich

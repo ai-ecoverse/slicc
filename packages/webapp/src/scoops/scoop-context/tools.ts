@@ -117,9 +117,10 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
     onListSudoRequests: callbacks.onListSudoRequests,
   };
   const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
+  const fileTools = createFileTools(deps.gatedFs, unit.workspace.root);
 
   const legacyTools = [
-    ...createFileTools(deps.gatedFs),
+    ...fileTools,
     // Bash output truncation writes its overflow file via the UNGATED fs (an
     // internal, fixed-path write must never trip a sudo prompt) into a temp dir
     // the context can also read back: `/tmp` for the cone, the scoop's own

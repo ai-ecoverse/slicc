@@ -152,8 +152,12 @@ enum ChatFixture {
             isError: nil
         )
         let toolError = ToolCall(
-            id: "fx-tc-err", name: "edit_file",
-            input: AnyCodable(["path": "/workspace/missing.ts"] as [String: Any]),
+            id: "fx-tc-err", name: "edit",
+            input: AnyCodable(
+                [
+                    "path": "/workspace/missing.ts",
+                    "edits": [["oldText": "x", "newText": "y"]],
+                ] as [String: Any]),
             result: "ENOENT: no such file or directory, open \"/workspace/missing.ts\"",
             isError: true
         )

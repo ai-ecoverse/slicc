@@ -117,6 +117,24 @@ function stubPageRealmSpeechPlugin() {
   };
 }
 
+/**
+ * Preserve the edit leaf's duplicate module identity through its relative
+ * imports. Without the query marker on those children, Rolldown reunifies the
+ * lazy edit graph with Pi's eager root barrel and hoists the diff code at boot.
+ */
+function isolatePiEditToolPlugin() {
+  const marker = '?pi-edit-lazy';
+  return {
+    name: 'isolate-pi-edit-tool',
+    enforce: 'pre' as const,
+    resolveId(source: string, importer: string | undefined) {
+      if (!importer?.endsWith(marker) || !source.startsWith('.')) return undefined;
+      const cleanImporter = importer.slice(0, -marker.length);
+      return `${resolve(dirname(cleanImporter), source)}${marker}`;
+    },
+  };
+}
+
 /** esbuild plugin: strip ?raw suffix and load .svg files as text (matches Vite's ?raw). */
 function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
   return {
@@ -427,6 +445,13 @@ const MODULE_ALIASES: Record<string, string> = {
     workspaceRoot,
     'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
   ),
+  // Pi publishes createEditTool from its root barrel, which the worker already
+  // imports eagerly. Resolving the edit-only dynamic import to the leaf keeps
+  // its diff machinery out of that shared cold-start chunk until first use.
+  '@earendil-works/pi-agent-core/edit-tool': resolve(
+    workspaceRoot,
+    'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+  ),
   // `slicc-diff-entry.ts` registers `<diffs-container>` from a path that is
   // NOT in @pierre/diffs' exports map. esbuild resolved it straight off
   // disk; Rollup enforces the map, so point it at the file explicitly now
@@ -453,6 +478,7 @@ export default defineConfig(({ mode }) => ({
     stripOrtWasmAssetPlugin(),
     curatedShikiBundlePlugin(),
     stubPiNodeInternalsPlugin(),
+    isolatePiEditToolPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
     // into its wrapper-worker chunk. Same plugin the extension config uses
@@ -542,6 +568,7 @@ export default defineConfig(({ mode }) => ({
       curatedShikiBundlePlugin(),
       stubPiNodeInternalsPlugin(),
       stubPageRealmSpeechPlugin(),
+      isolatePiEditToolPlugin(),
     ],
   },
   build: {

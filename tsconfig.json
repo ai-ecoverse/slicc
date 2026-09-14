@@ -19,6 +19,9 @@
       ],
       "@earendil-works/pi-ai/dist/api/simple-options.js": [
         "./node_modules/@earendil-works/pi-ai/dist/api/simple-options.d.ts"
+      ],
+      "@earendil-works/pi-agent-core/edit-tool": [
+        "./node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.d.ts"
       ]
     }
   },

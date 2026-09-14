@@ -128,6 +128,10 @@ export default defineConfig({
               workspaceRoot,
               'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
             ),
+            '@earendil-works/pi-agent-core/edit-tool': resolve(
+              workspaceRoot,
+              'node_modules/@earendil-works/pi-agent-core/dist/harness/tools/edit.js?pi-edit-lazy'
+            ),
             '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
               workspaceRoot,
               'node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js'

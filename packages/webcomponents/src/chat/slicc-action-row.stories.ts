@@ -92,7 +92,7 @@ function buildRow({
   if (result != null) row.setAttribute('result', result);
 
   if (labelNodes) {
-    // Default-slot rich label (e.g. `edit_file · hero.css` with a clickable file).
+    // Default-slot rich label (e.g. `edit · hero.css` with a clickable file).
     const wrap = h('span');
     append(wrap, labelNodes());
     row.appendChild(wrap);
@@ -148,7 +148,7 @@ export const Closed: Story = {
   },
 };
 
-/** Open — body expanded, chevron rotated 90°. A diff edit_file with a `.vlink`. */
+/** Open — body expanded, chevron rotated 90°. A diff edit with a `.vlink`. */
 export const OpenDiff: Story = {
   args: {
     open: true,
@@ -156,7 +156,7 @@ export const OpenDiff: Story = {
     tone: 'vi',
     result: '4 changes',
     labelNodes: () => [
-      'edit_file · ',
+      'edit · ',
       h('a', { class: 'vlink', 'data-file': 'fcss', 'data-kind': 'css' }, 'hero.css'),
     ],
     body: () =>

@@ -5,7 +5,7 @@ description: |
   preset themes, create custom themes, adjust colors, toggle the animated
   background, or export/import theme files. Covers the theme shell command,
   full token reference, and the JSON format for programmatic theming.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Theme Personalization
