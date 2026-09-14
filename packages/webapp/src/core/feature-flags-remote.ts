@@ -1,8 +1,8 @@
 import {
   type FeatureFlagFloat,
   type FeatureFlagValues,
-  initFeatureFlags,
   type UntrustedFlagValues,
+  updateCentralFlagValues,
 } from './feature-flags.js';
 import {
   type FeatureFlagsRemoteStorage,
@@ -55,7 +55,12 @@ export async function refreshFeatureFlagsFromRemote(
     writeFeatureFlagsRemoteCache(storage, float, flags);
     // The response is an envelope. Its echoed `float` is informational and may
     // be "default"; the page's resolveUiRuntimeMode() result remains authoritative.
-    initFeatureFlags(float, flags);
+    //
+    // `updateCentralFlagValues`, not `initFeatureFlags`: this refresh can land
+    // after a Cherry host pushed session flags in its handshake (and, on the
+    // periodic re-read, long after), and those are session-lived. Re-running
+    // boot here would drop them.
+    updateCentralFlagValues(float, flags);
   } catch {
     // Remote configuration is best-effort; cached values/defaults stay active.
   }
