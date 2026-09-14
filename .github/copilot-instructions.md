@@ -1,7 +1,7 @@
 # SLICC — Copilot Code Review Instructions
 
-Review all five runtimes (`webapp`, extension, Node, Swift, iOS).
-Flag concrete risks. Catalog: `docs/review-patterns.md`.
+Review five runtimes (`webapp`, extension, Node, Swift, iOS). Flag concrete risks.
+Catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
@@ -24,11 +24,9 @@ Validate CDP target + port before trusting them; handle disconnects.
 
 ## 5. Native / macOS permissions
 
-Protected-resource access needs entitlements/usage descriptions, TCC checks,
-graceful denial. File Provider appexes must embed+sign every `@rpath` framework
-(host `Resources/` invisible) and declare transport network entitlements. No
-`keychain-access-groups` on the macOS File Provider — that restricted entitlement
-needs an appex-specific Developer ID profile, else AMFI refuses launch (error 2).
+Protected access needs entitlements/usage descriptions, TCC checks, and graceful denial.
+File Provider appexes must embed+sign every `@rpath` framework and declare network
+entitlements. Avoid `keychain-access-groups` without an appex-specific Developer ID profile.
 
 ## 6. Model metadata / provider pipeline
 
@@ -48,15 +46,16 @@ boot paths; preserve shared fallbacks; prefer capability checks to float names.
 ## 9. Origin / bridge routing contract (often Major)
 
 Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hardcoded
-origins, comparisons without slash normalization.
+origins, and comparisons without slash normalization. Also flag iframe/channel/relay
+messages or UI activation paths that lose routing ownership. Capture owner at the opening
+interaction, not later focus; test shell-open, rail-open, and attention promotion.
 
 ## 10. Layer import direction (Major)
 
-Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
-and relative imports out of `packages/webapp/src` (→ `@slicc/shared-ts`); move down,
-never grow baselines. chrome-extension (src+tests)→webapp (except `import type {` from
-kernel/messages.js) and webcomponents (src+tests)→webapp are zero-tolerance.
-`isExtensionRealm` in `scoops/`/`tools/`/`kernel/` (not `host.ts`) → `CapabilityBroker`.
+Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack and
+cross-package relative imports; move shared code down or to `@slicc/shared-ts`, never grow
+baselines. chrome-extension/webcomponents (src+tests)→webapp is zero-tolerance except the
+documented kernel-message type import. Runtime probes below `ui/` use `CapabilityBroker`.
 
 ## 11. Untyped string-keyed bags
 

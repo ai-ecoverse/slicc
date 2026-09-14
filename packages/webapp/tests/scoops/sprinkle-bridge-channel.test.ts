@@ -5,7 +5,10 @@ import {
   SPRINKLE_BRIDGE_CHANNEL,
   sprinkleBridgeChannelName,
 } from '../../src/scoops/sprinkle-bridge-channel.js';
-import type { SprinkleSendTarget } from '../../src/shell/sprinkle-manager-handle.js';
+import type {
+  SprinkleOpenOptions,
+  SprinkleSendTarget,
+} from '../../src/shell/sprinkle-manager-handle.js';
 import type { Sprinkle } from '../../src/ui/sprinkle-discovery.js';
 import type { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
 
@@ -84,8 +87,8 @@ function makeFakeManager(): SprinkleManager & {
       calls.push({ op: 'opened' });
       return opened;
     },
-    open: async (name: string) => {
-      calls.push({ op: 'open', args: [name] });
+    open: async (name: string, _zone?: string, options?: SprinkleOpenOptions) => {
+      calls.push({ op: 'open', args: options ? [name, options] : [name] });
     },
     close: (name: string) => {
       calls.push({ op: 'close', args: [name] });
@@ -162,6 +165,19 @@ describe('sprinkle bridge channel', () => {
 
     await proxy.open('demo');
     expect(manager.calls).toEqual(expect.arrayContaining([{ op: 'open', args: ['demo'] }]));
+    stop();
+  });
+
+  it('open() carries the invoking shell target to the page manager', async () => {
+    const manager = makeFakeManager();
+    const stop = installSprinkleManagerHandlerOverChannel(manager);
+    const proxy = createSprinkleManagerProxyOverChannel();
+
+    await proxy.open('demo', undefined, { lickOriginTarget: 'cone-research' });
+    expect(manager.calls).toContainEqual({
+      op: 'open',
+      args: ['demo', { lickOriginTarget: 'cone-research' }],
+    });
     stop();
   });
 

@@ -33,7 +33,6 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 import { captureSprinkleScreenshot } from './sprinkle-screenshot.js';
 
@@ -458,9 +457,16 @@ export function iframeFetchResponseSource(): string {
  */
 export type SprinkleExecHandler = (cmd: string) => Promise<SprinkleExecResult>;
 
+export interface SprinkleLickRequest {
+  action: string;
+  data?: unknown;
+  /** Cone or scoop alias that takes precedence over the configured route. */
+  target?: string;
+}
+
 export interface SprinkleBridgeAPI {
-  /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
-  lick(event: { action: string; data?: unknown } | string): void;
+  /** Send a lick event to the agent. Accepts {action, data, target} or a plain action string. */
+  lick(event: SprinkleLickRequest | string): void;
   /** Listen for updates from the agent */
   on(event: 'update', callback: (data: unknown) => void): void;
   /** Remove an update listener */
@@ -592,7 +598,7 @@ export type SprinkleIframePusher = (
 
 export class SprinkleBridge {
   private listeners = new Map<string, Set<UpdateCallback>>();
-  private lickHandler: (event: LickEvent) => void;
+  private lickHandler: (event: LickEvent, originUnitId?: string) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
   private minimizeHandler: (name: string) => void;
@@ -611,7 +617,7 @@ export class SprinkleBridge {
 
   constructor(
     fs: VirtualFS,
-    lickHandler: (event: LickEvent) => void,
+    lickHandler: (event: LickEvent, originUnitId?: string) => void,
     closeHandler: (name: string) => void,
     minimizeHandler: (name: string) => void,
     stopConeHandler: () => void,
@@ -968,19 +974,21 @@ export class SprinkleBridge {
    * LickEvent and forwards it to the lick handler.
    */
   private createLickHandler(
-    sprinkleName: string
-  ): (event: { action: string; data?: unknown } | string) => void {
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined
+  ): (event: SprinkleLickRequest | string) => void {
     return (event) => {
       const action = typeof event === 'string' ? event : event.action;
       const data = typeof event === 'string' ? undefined : event.data;
+      const targetScoop = typeof event === 'string' ? undefined : event.target;
       const lickEvent: LickEvent = {
         type: 'sprinkle',
         sprinkleName,
-        targetScoop: getSprinkleRoute(sprinkleName),
+        targetScoop,
         timestamp: new Date().toISOString(),
         body: { action, data },
       };
-      this.lickHandler(lickEvent);
+      this.lickHandler(lickEvent, getOriginUnitId());
     };
   }
 
@@ -1155,11 +1163,14 @@ export class SprinkleBridge {
     };
   }
 
-  /** Create a bridge API for a specific sprinkle. */
-  createAPI(sprinkleName: string): SprinkleBridgeAPI {
+  /** Create a bridge API whose lick origin can be updated without rebuilding the panel. */
+  createAPI(
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined = () => undefined
+  ): SprinkleBridgeAPI {
     const api: SprinkleBridgeAPI = {
       name: sprinkleName,
-      lick: this.createLickHandler(sprinkleName),
+      lick: this.createLickHandler(sprinkleName, getOriginUnitId),
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);

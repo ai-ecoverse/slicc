@@ -414,6 +414,61 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('.then(function(v) { return buildFetchResponse(v); })');
   });
 
+  it('posts an explicit lick target from the full-document iframe', async () => {
+    const renderer = new SprinkleRenderer(container, makeBridge('full-doc'));
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const srcdoc = container.querySelector('iframe')!.srcdoc;
+    const frameDom = new JSDOM(srcdoc, { runScripts: 'dangerously' });
+    const postMessage = vi.spyOn(frameDom.window, 'postMessage').mockImplementation(() => {});
+
+    (frameDom.window as unknown as { slicc: SprinkleBridgeAPI }).slicc.lick({
+      action: 'publish',
+      data: { id: 42 },
+      target: 'cone-reviewer',
+    });
+
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: 'sprinkle-lick',
+        action: 'publish',
+        data: { id: 42 },
+        target: 'cone-reviewer',
+      },
+      '*'
+    );
+  });
+
+  it('forwards an inbound iframe lick target to the bridge API', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    await renderer.render(
+      '<!DOCTYPE html><html><head><title>T</title></head><body></body></html>',
+      'full-doc'
+    );
+    const iframe = container.querySelector('iframe')!;
+
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent('message', {
+        data: {
+          type: 'sprinkle-lick',
+          action: 'publish',
+          data: { id: 42 },
+          target: 'cone-reviewer',
+        },
+        source: iframe.contentWindow,
+      })
+    );
+
+    expect(bridge.lick).toHaveBeenCalledWith({
+      action: 'publish',
+      data: { id: 42 },
+      target: 'cone-reviewer',
+    });
+  });
+
   it('handles bridge calls posted while the iframe is being appended', async () => {
     const bridge = makeBridge('full-doc');
     (bridge.readFile as ReturnType<typeof vi.fn>).mockResolvedValue('hydrated');

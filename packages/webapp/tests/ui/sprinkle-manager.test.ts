@@ -13,17 +13,22 @@ import {
   writeOpenSprinklesToUrl,
 } from '../../src/ui/sprinkle-manager.js';
 
-const rendererState = vi.hoisted(() => ({
-  closeOnActivate: false,
-  renderHook: undefined as (() => Promise<void>) | undefined,
-}));
+const rendererState = vi.hoisted(
+  (): {
+    closeOnActivate: boolean;
+    renderHook: (() => Promise<void>) | undefined;
+    lastApi: { close(): void; lick(event: string): void } | null;
+  } => ({ closeOnActivate: false, renderHook: undefined, lastApi: null })
+);
 
 vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
   SprinkleRenderer: class {
     constructor(
       _c: unknown,
       private readonly api: { close(): void }
-    ) {}
+    ) {
+      rendererState.lastApi = api as { close(): void; lick(event: string): void };
+    }
     async render() {
       await rendererState.renderHook?.();
     }
@@ -85,11 +90,14 @@ describe('SprinkleManager', () => {
   let registerSprinkle: ReturnType<typeof vi.fn>;
   let unregisterSprinkle: ReturnType<typeof vi.fn>;
   let closeSprinkleContent: ReturnType<typeof vi.fn>;
+  let resolvedLickOriginUnitId: string | undefined;
   let mgr: SprinkleManager;
 
   beforeEach(async () => {
     rendererState.closeOnActivate = false;
     rendererState.renderHook = undefined;
+    rendererState.lastApi = null;
+    resolvedLickOriginUnitId = 'cone-2';
     vi.stubGlobal('localStorage', makeMemoryStorage());
     vi.stubGlobal('document', makeFakeDocument());
     // Reset the URL to a known state so URL-persistence tests start
@@ -126,7 +134,13 @@ describe('SprinkleManager', () => {
         unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
         closeSprinkleContent: closeSprinkleContent as unknown as (name: string) => void,
       },
-      vi.fn()
+      vi.fn(),
+      {
+        resolveLickOriginUnitId: (target) => {
+          if (target === 'cone-research') return resolvedLickOriginUnitId;
+          return target === 'cone-primary' ? 'cone-1' : undefined;
+        },
+      }
     );
   });
 
@@ -145,6 +159,23 @@ describe('SprinkleManager', () => {
     expect(sprinkles.length).toBe(1);
     expect(sprinkles[0].name).toBe('dash');
     expect(sprinkles[0].title).toBe('Dashboard');
+  });
+
+  it('captures the opening unit when the panel is created', async () => {
+    await vfs.writeFile(
+      '/shared/sprinkles/dash/dash.shtml',
+      '<title>Dashboard</title><button>Go</button>'
+    );
+    await mgr.refresh();
+    await mgr.open('dash', undefined, { lickOriginTarget: 'cone-research' });
+    resolvedLickOriginUnitId = 'cone-1';
+
+    rendererState.lastApi?.lick('go');
+
+    expect(lickHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sprinkle', sprinkleName: 'dash' }),
+      'cone-2'
+    );
   });
 
   // Regression: under `slicc_opfs_vfs=opfs` the page-side `localFs` is
@@ -1201,45 +1232,65 @@ describe('SprinkleManager', () => {
       expect(removeSprinkle).toHaveBeenCalledWith('dash');
     });
 
-    it('activate opens a registered-but-closed sprinkle', async () => {
+    it('activate opens a registered-but-closed sprinkle with the rail-click origin', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
       await mgr.refresh();
       expect(mgr.opened()).not.toContain('dash');
 
-      await mgr.activate('dash');
+      await mgr.activate('dash', undefined, { lickOriginTarget: 'cone-research' });
+      resolvedLickOriginUnitId = 'cone-1';
+      rendererState.lastApi?.lick('go');
 
       expect(mgr.opened()).toContain('dash');
+      expect(lickHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sprinkle', sprinkleName: 'dash' }),
+        'cone-2'
+      );
     });
 
-    it('activate promotes and places an attention-mode sprinkle without recreating its content', async () => {
+    it('activate promotes an attention-mode sprinkle with the rail-click origin without recreating it', async () => {
       await vfs.writeFile('/shared/sprinkles/q/q.shtml', '<title>Q</title><div>hi</div>');
       await mgr.refresh();
       await mgr.open('q', undefined, { attention: true });
       expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual([]);
       const container = addSprinkle.mock.calls[0]?.[2];
+      const api = rendererState.lastApi;
       addSprinkle.mockClear();
 
-      await mgr.activate('q', 'left');
+      await mgr.activate('q', 'left', { lickOriginTarget: 'cone-research' });
+      resolvedLickOriginUnitId = 'cone-1';
+      api?.lick('go');
 
       expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual(['q']);
+      expect(rendererState.lastApi).toBe(api);
       expect(addSprinkle).toHaveBeenCalledExactlyOnceWith('q', 'Q', container, 'left', {
         icon: undefined,
       });
+      expect(lickHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sprinkle', sprinkleName: 'q' }),
+        'cone-2'
+      );
     });
 
-    it('activate re-places an already user-opened sprinkle (reopen after minimize)', async () => {
+    it('activate re-places a user-opened sprinkle without following the later selection', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
       await mgr.refresh();
-      await mgr.open('dash');
+      await mgr.open('dash', undefined, { lickOriginTarget: 'cone-research' });
+      const api = rendererState.lastApi;
       addSprinkle.mockClear();
 
-      await mgr.activate('dash');
+      await mgr.activate('dash', undefined, { lickOriginTarget: 'cone-primary' });
+      api?.lick('go');
 
       // Re-runs addSprinkle on the SAME container (no re-fetch/re-render) so a
       // minimized/parked sprinkle's leaf gets placed back into the layout;
       // idempotent when it was already shown.
       expect(addSprinkle).toHaveBeenCalledTimes(1);
       expect(addSprinkle.mock.calls[0]?.[0]).toBe('dash');
+      expect(lickHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sprinkle', sprinkleName: 'dash' }),
+        'cone-2'
+      );
     });
   });
 

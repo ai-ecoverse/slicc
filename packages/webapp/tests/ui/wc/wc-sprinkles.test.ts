@@ -31,6 +31,7 @@ import {
   wireWcSprinkles,
   zoneOfSurface,
 } from '../../../src/ui/wc/wc-sprinkles.js';
+import type { WorkUnitSummary } from '../../../src/work-unit/client/types.js';
 
 /**
  * A fake VFS for sprinkle discovery. Discovery reads DIRECTORIES
@@ -117,6 +118,20 @@ function dockItem(refs: WcShellRefs, id: string): { id: string; icon: string } |
   return items.find((i) => i.id === id);
 }
 
+function workUnit(overrides: Partial<WorkUnitSummary> = {}): WorkUnitSummary {
+  return {
+    id: 'cone-1',
+    parentId: null,
+    role: 'primary',
+    name: 'sliccy',
+    folder: 'cone',
+    assistantLabel: 'sliccy',
+    state: 'idle',
+    fill: 0,
+    ...overrides,
+  };
+}
+
 function treeSpies(refs: WcShellRefs) {
   return refs.dockTree as unknown as {
     setTree: ReturnType<typeof vi.fn>;
@@ -155,9 +170,14 @@ describe('wireWcSprinkles boot resilience', () => {
     } as unknown as BootStageLogger;
 
     const settled = await Promise.race([
-      wireWcSprinkles({ refs: makeRefs(), client, fs, getUnits: () => [], log }).then(
-        () => 'resolved' as const
-      ),
+      wireWcSprinkles({
+        refs: makeRefs(),
+        client,
+        fs,
+        getUnits: () => [],
+        getSelected: () => null,
+        log,
+      }).then(() => 'resolved' as const),
       new Promise<'blocked'>((resolve) => {
         setTimeout(() => resolve('blocked'), 1000);
       }),
@@ -186,6 +206,7 @@ describe('wireWcSprinkles boot resilience', () => {
       client,
       fs,
       getUnits: () => [],
+      getSelected: () => null,
       onAttachImage: handler,
       log,
     });
@@ -222,6 +243,17 @@ describe('makeSprinkleLickHandler', () => {
     const handler = makeSprinkleLickHandler({ sendSprinkleLick: send } as never);
     handler(lick('welcome'));
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the unit captured when the panel opened', () => {
+    const send = vi.fn();
+    const handler = makeSprinkleLickHandler({ sendSprinkleLick: send } as never);
+
+    handler(lick('dashboard'), 'cone-2');
+
+    expect(send).toHaveBeenCalledWith('dashboard', expect.anything(), undefined, {
+      unitJid: 'cone-2',
+    });
   });
 });
 
@@ -603,6 +635,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       client,
       fs,
       getUnits: () => [],
+      getSelected: () => null,
       log,
       onToolPanelActivate,
       onToolPanelDeactivate,
@@ -627,7 +660,15 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
     const onToolPanelDeactivate = vi.fn();
-    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log, onToolPanelDeactivate });
+    await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+      onToolPanelDeactivate,
+    });
 
     refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-collapse', { detail: { id: 'term' }, bubbles: true })
@@ -689,6 +730,51 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     expect(treeSpies(refs).setSurfaceSize).toHaveBeenCalledWith('files', { widthPercent: 40 });
   });
 
+  it('a dock select captures the cone owning the selected transcript for rail activation', async () => {
+    const refs = makeRefs();
+    const fs = fakeSprinkleFs([]);
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    const primary = workUnit();
+    const research = workUnit({
+      id: 'cone-2',
+      name: 'research',
+      folder: 'cone-research',
+      assistantLabel: 'research',
+    });
+    const researcher = workUnit({
+      id: 'scoop-2',
+      parentId: research.id,
+      role: 'child',
+      name: 'researcher',
+      folder: 'researcher-scoop',
+      assistantLabel: 'researcher',
+    });
+    let selected: WorkUnitSummary | null = researcher;
+    const handle = await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [primary, research, researcher],
+      getSelected: () => selected,
+      log,
+    });
+    const activate = vi.spyOn(handle.manager, 'activate').mockResolvedValue(undefined);
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { detail: { id: 'sprinkle:metrics' }, bubbles: true })
+    );
+    selected = primary;
+
+    expect(activate).toHaveBeenCalledExactlyOnceWith('metrics', undefined, {
+      lickOriginTarget: 'cone-research',
+    });
+  });
+
   it('a dock long-press rides the select-triggered activation (no second activate) and fullscreens the placed surface', async () => {
     // Regression #1: the pre-dock-tree gesture opened + activated the surface
     // before requestFullscreen; #1784 dropped the open/activate step, so
@@ -706,7 +792,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const handle = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
+    const handle = await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+    });
 
     // The select-triggered activation is what places the surface — model it
     // landing a couple of frames later, like a real (async) open would.
@@ -756,7 +849,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
+    await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+    });
 
     const surface = document.createElement('div');
     surface.setAttribute('surface-id', 'term');
@@ -802,7 +902,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
+    await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+    });
 
     const layout = document.createElement('div');
     layout.className = 'slicc-layout';
@@ -834,7 +941,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const handle = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
+    const handle = await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+    });
     vi.spyOn(handle.manager, 'activate').mockResolvedValue(undefined);
 
     // A parked surface EXISTS in the tree but is display:none — fullscreen
@@ -870,7 +984,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    const { manager } = await wireWcSprinkles({ refs, client, fs, getUnits: () => [], log });
+    const { manager } = await wireWcSprinkles({
+      refs,
+      client,
+      fs,
+      getUnits: () => [],
+      getSelected: () => null,
+      log,
+    });
     await manager.open('hero');
     treeSpies(refs).removeSurface.mockClear();
 

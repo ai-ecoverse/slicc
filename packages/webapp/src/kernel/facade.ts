@@ -755,11 +755,11 @@ export class Bridge implements KernelFacade {
 
   /**
    * Route a sprinkle-lick event into the orchestrator. Resolves
-   * `targetScoop` by name/folder/`${folder}-scoop`, falling back to the
-   * unit that RAISED the lick (`origin.unitJid`, resolved to its root
-   * owner) and only then to the default root. Builds a `ChannelMessage`,
-   * appends a buffered lick entry, persists, and dispatches via
-   * `orchestrator.handleMessage`.
+   * `targetScoop` by name/folder/`${folder}-scoop`, then tries the configured
+   * sprinkle route, the unit that RAISED the lick (`origin.unitJid`, resolved
+   * to its root owner), and finally the default root. Builds a
+   * `ChannelMessage`, appends a buffered lick entry, persists, and dispatches
+   * via `orchestrator.handleMessage`.
    *
    * Extracted from the `sprinkle-lick` envelope handler so leader-side
    * `onSprinkleLick` callbacks can share the same routing logic without
@@ -782,21 +782,26 @@ export class Bridge implements KernelFacade {
       void this.orchestrator.resolveNavigateHandoffByHuman(handoff.lickId, handoff.accepted);
     }
     const scoops = this.orchestrator.getScoops();
-    // Resolve the configured route when the caller didn't stamp one. Licks
-    // raised on the leader's own panel arrive pre-stamped by
-    // `ui/sprinkle-bridge.ts`, but licks forwarded from a follower
-    // deliberately carry no `targetScoop` — the follower has no route table
-    // and treats the leader as the route authority. Before this lookup
-    // nobody applied the route on that path, so a follower-mounted panel's
-    // licks went to the cone no matter what `sprinkle route` said, and the
-    // owning scoop never saw its own panel's events (issue #2166).
-    const resolvedTarget = targetScoop ?? getSprinkleRoute(sprinkleName);
-    // Same three ordered passes the lick pipeline uses, so `sprinkle route
-    // --scoop Research` resolves to the cone named `Research` whether or not a
-    // `Research-scoop` folder also exists (#2311). Unlike a lick, an unmatched
-    // sprinkle route falls back to the default root: the route table is
-    // long-lived and a stale entry must not silence a live panel.
-    let target = resolvedTarget ? matchLickTargetAlias(scoops, resolvedTarget) : undefined;
+    // Explicit per-lick target first, then the configured route. Both reuse
+    // the same three-pass alias resolver as the lick pipeline (#2311). A
+    // stale target does not silence the live panel; resolution continues down
+    // the chain and the eventual recipient gets a delivery note.
+    const configuredRoute = getSprinkleRoute(sprinkleName);
+    const targetCandidates: Array<{
+      source: 'explicit target' | 'configured route';
+      value: string;
+    }> = [];
+    if (targetScoop) targetCandidates.push({ source: 'explicit target', value: targetScoop });
+    if (configuredRoute && configuredRoute !== targetScoop) {
+      targetCandidates.push({ source: 'configured route', value: configuredRoute });
+    }
+    const unresolvedTargets: typeof targetCandidates = [];
+    let target: RegisteredScoop | undefined;
+    for (const candidate of targetCandidates) {
+      target = matchLickTargetAlias(scoops, candidate.value);
+      if (target) break;
+      unresolvedTargets.push(candidate);
+    }
     if (!target) {
       // A dip lives in ONE unit's transcript, so its clicks belong to that
       // unit's cone. Falling straight through to the default root sent every
@@ -805,6 +810,13 @@ export class Bridge implements KernelFacade {
       // lick for a card it never wrote (and, on a retried click, twice). Same
       // ownership rule as `ownerRootOrDefault` (#2312) for interactive cards.
       target = this.originRootOf(scoops, origin?.unitJid) ?? rootsOf(scoops)[0];
+    }
+    if (unresolvedTargets.length > 0) {
+      log.warn('Sprinkle lick target could not be resolved; using fallback', {
+        sprinkleName,
+        unresolvedTargets,
+        fallbackJid: target?.jid,
+      });
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
@@ -815,9 +827,16 @@ export class Bridge implements KernelFacade {
       body,
       originLabel: origin?.label,
     } as Parameters<typeof formatLickEventForCone>[0]);
-    const content =
+    const baseContent =
       formatted?.content ??
       `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
+    const unresolvedTargetSummary = unresolvedTargets
+      .map(({ source, value }) => `${source} ${JSON.stringify(value)}`)
+      .join(' and ');
+    const deliveryNote = unresolvedTargetSummary
+      ? `\n\n> Delivery note: ${unresolvedTargetSummary} could not be resolved; delivered to fallback ${JSON.stringify(target.folder)}.`
+      : '';
+    const content = baseContent + deliveryNote;
     const channelMsg: ChannelMessage = {
       id: msgId,
       chatJid: target.jid,

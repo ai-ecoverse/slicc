@@ -285,6 +285,8 @@ depending on two files agreeing forever.
   for trailing slashes.
 - Hard-coded origin strings (e.g. `'https://www.sliccy.ai'`) instead of the canonical
   accessor.
+- Lick/event routing metadata crossing an iframe, BroadcastChannel or extension relay,
+  especially when a UI activation path bypasses the shell command that normally stamps it.
 
 **Historical precedents**
 
@@ -294,13 +296,17 @@ depending on two files agreeing forever.
   HTTP-vs-HTTPS mismatches between the hosted origin and the local bridge.
 - **PR #1243**: the same origin fix had to be applied twice.
 - **PR #1283**: a trailing-slash mismatch caused a silent allowlist failure.
+- **PR #3090 review**: shell-opened sprinkle panels captured their cone, but rail activation
+  (including attention-only promotion) did not, so clicks still woke the oldest cone.
 
-**Class size** — 15 call-site fixes across ~9 PRs in the Jun–Jul 2026 thin-bridge tail.
+**Class size** — 16 call-site fixes across ~10 PRs since the Jun–Jul 2026 thin-bridge tail.
 
 **Remediation** — use the canonical origin / bridge-URL accessors rather than constructing
 URLs by hand. Verify the call works when the UI origin is the hosted origin and the API is
 the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
-Test in both CLI and extension floats.
+Test in both CLI and extension floats. For panel licks, capture the owning cone at the
+opening interaction rather than reading later focus; cover shell-open, rail-open and
+attention-promotion paths without rebuilding live panel state.
 
 ### 10. Layer-stack import direction (back-edges)
 

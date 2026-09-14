@@ -10,6 +10,7 @@
 import type {
   SprinkleEntry,
   SprinkleManagerProxySurface,
+  SprinkleOpenOptions,
   SprinkleSendReport,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
@@ -23,6 +24,7 @@ interface SprinkleOpArgs {
   name?: string;
   data?: unknown;
   target?: SprinkleSendTarget;
+  openOptions?: SprinkleOpenOptions;
 }
 
 const TIMEOUT = 8000;
@@ -91,8 +93,8 @@ export function createSprinkleManagerProxy(): SprinkleManagerProxySurface {
       cachedAvailable = ((await request('list')) as SprinkleEntry[]) ?? [];
       cachedOpened = ((await request('opened')) as string[]) ?? [];
     },
-    async open(name: string, _zone?: string): Promise<void> {
-      await request('open', { name });
+    async open(name: string, _zone?: string, openOptions?: SprinkleOpenOptions): Promise<void> {
+      await request('open', { name, openOptions });
     },
     async reload(name: string): Promise<void> {
       await request('reload', { name });
