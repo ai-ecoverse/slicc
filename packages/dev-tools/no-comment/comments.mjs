@@ -1,7 +1,7 @@
 import { basename, extname } from 'node:path';
 
 const DIRECTIVE_RE =
-  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|go:(?:build|generate|embed|noinline|norace|nosplit)\b|\+build\s|^export\s+\w|nolint\b|^line\s|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on/i;
+  /(?:^#!)|@ts-(?:expect-error|ignore|nocheck|check)\b|biome-ignore\b|eslint-(?:disable|enable|global)|prettier-ignore|unused-dep-ok:|(?:@vite-ignore|vite-ignore|webpackIgnore)|@vitest-environment|#__PURE__|#__NO_SIDE_EFFECTS__|@__PURE__|@__NO_SIDE_EFFECTS__|<reference\s|source(?:MappingURL|URL)=|go:(?:build|generate|embed|noinline|norace|nosplit)\b|\+build\s|^export\s+[A-Za-z_][A-Za-z0-9_]*$|nolint\b|^line(?:\s+\S*)?:\d+(?::\d+)?$|swift-tools-version:|swiftlint:|swiftformat:|sourcery:|shellcheck\s|yamllint\s|istanbul\s+ignore|c8\s+ignore|v8\s+ignore|deno-lint-|gofmt:|fmt:off|fmt:on/i;
 
 const JS_EXTS = new Set([
   '.ts',
@@ -87,6 +87,7 @@ export function languageForPath(relPath) {
   if (base === 'Makefile' || base === 'makefile' || base === 'GNUmakefile') return 'hash';
   if (base === 'go.mod') return 'go';
   if (base === '.swift-format') return 'json';
+  if (relPath.startsWith('.husky/')) return 'hash';
   if (HASH_NAMES.has(lower)) return 'hash';
   const ext = extname(relPath).toLowerCase();
   if (SKIP_EXTS.has(ext)) return null;
@@ -385,7 +386,7 @@ function consumeRawTicks(source, start, end, visit) {
   return i;
 }
 
-function walkCLike(source, visit, { nested = false, rawTicks = false } = {}) {
+function walkCLike(source, visit, { nested = false, rawTicks = false, lineComments = true } = {}) {
   let i = 0;
   const end = source.length;
   while (i < end) {
@@ -400,7 +401,7 @@ function walkCLike(source, visit, { nested = false, rawTicks = false } = {}) {
       i = scanned.end;
       continue;
     }
-    if (ch === '/' && source[i + 1] === '/') {
+    if (lineComments && ch === '/' && source[i + 1] === '/') {
       i = consumeLineComment(source, i, end, visit);
       continue;
     }
@@ -565,7 +566,7 @@ export function stripSource(source, language, fileName = 'file') {
     case 'js':
       return stripJs(source, fileName);
     case 'css':
-      return stripCLike(source);
+      return stripCLike(source, { lineComments: false });
     case 'swift':
       return stripSwift(source);
     case 'go':
@@ -586,7 +587,7 @@ export function findComments(source, language, fileName = 'file') {
     case 'js':
       return findJs(source, fileName);
     case 'css':
-      return findCLike(source);
+      return findCLike(source, { lineComments: false });
     case 'swift':
       return findSwift(source);
     case 'go':

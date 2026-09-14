@@ -24,6 +24,10 @@ describe('isKeptComment', () => {
     expect(isKeptComment('//go:build ignore')).toBe(true);
     expect(isKeptComment('//nolint:errcheck')).toBe(true);
     expect(isKeptComment('// swiftlint:disable:next force_cast')).toBe(true);
+    expect(isKeptComment('// swift-tools-version: 5.10')).toBe(true);
+    expect(isKeptComment('//export MyFunc')).toBe(true);
+    expect(isKeptComment('//line foo.go:1')).toBe(true);
+    expect(isKeptComment('//line foo.go:1:2')).toBe(true);
     expect(isKeptComment('# shellcheck disable=SC1091')).toBe(true);
   });
 
@@ -31,6 +35,8 @@ describe('isKeptComment', () => {
     expect(isKeptComment('// TODO later')).toBe(false);
     expect(isKeptComment('/* explain the algorithm */')).toBe(false);
     expect(isKeptComment('# a yaml note')).toBe(false);
+    expect(isKeptComment('// export the helper so tests can use it')).toBe(false);
+    expect(isKeptComment("// line from this secret's domains")).toBe(false);
   });
 });
 
@@ -50,6 +56,9 @@ describe('languageForPath', () => {
     expect(languageForPath('Makefile')).toBe('hash');
     expect(languageForPath('.gitignore')).toBe('hash');
     expect(languageForPath('packages/webapp/.gitignore')).toBe('hash');
+    expect(languageForPath('.husky/pre-commit')).toBe('hash');
+    expect(languageForPath('.husky/pre-push')).toBe('hash');
+    expect(languageForPath('.husky/pre-merge-commit')).toBe('hash');
   });
 
   it('skips binaries, lockfiles, and license', () => {
@@ -168,6 +177,28 @@ describe('stripSource swift', () => {
     const src = '// swiftlint:disable:next force_cast\nlet x = 1\n';
     expect(stripSource(src, 'swift', 'a.swift')).toContain('swiftlint:disable:next');
   });
+
+  it('keeps the swift-tools-version Package.swift header', () => {
+    const src = '// swift-tools-version: 5.10\nimport PackageDescription\n';
+    const out = stripSource(src, 'swift', 'Package.swift');
+    expect(out).toContain('// swift-tools-version: 5.10');
+    expect(out).toContain('import PackageDescription');
+  });
+});
+
+describe('stripSource css', () => {
+  it('does not treat // inside urls as comments', () => {
+    const src = '.y { background: url(https://cdn.example.com/a.png) }\n';
+    expect(stripSource(src, 'css', 'a.css')).toBe(src);
+    expect(findComments(src, 'css', 'a.css')).toEqual([]);
+  });
+
+  it('still strips /* */ comments', () => {
+    const src = '.y { color: red; /* drop */ }\n';
+    const out = stripSource(src, 'css', 'a.css');
+    expect(out).toContain('color: red;');
+    expect(out).not.toContain('drop');
+  });
 });
 
 describe('stripSource hash', () => {
@@ -184,6 +215,14 @@ describe('stripSource hash', () => {
     expect(out).toContain('#!/usr/bin/env bash');
     expect(out).toContain('shellcheck disable');
     expect(out).not.toContain('drop');
+  });
+
+  it('strips explanatory comments from husky hooks', () => {
+    const src = '#!/usr/bin/env sh\n# Enforce instruction-file size budgets\nnpx lint-staged\n';
+    const out = stripSource(src, 'hash', '.husky/pre-commit');
+    expect(out).toContain('#!/usr/bin/env sh');
+    expect(out).toContain('npx lint-staged');
+    expect(out).not.toContain('Enforce instruction-file');
   });
 });
 
