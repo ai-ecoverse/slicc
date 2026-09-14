@@ -5,6 +5,7 @@ import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import NIOCore
+import NIOHTTP1
 import NIOPosix
 import XCTest
 
@@ -22,6 +23,25 @@ private func referenceHmacSHA256Hex(key: String, message: String) -> String {
 }
 
 final class APIRoutesTests: XCTestCase {
+    func testHTTPRequestMethodsMapToNIOIncludingRawMethods() {
+        let mappings: [(HTTPRequest.Method, HTTPMethod)] = [
+            (.connect, .CONNECT),
+            (.delete, .DELETE),
+            (.get, .GET),
+            (.head, .HEAD),
+            (.options, .OPTIONS),
+            (.patch, .PATCH),
+            (.post, .POST),
+            (.put, .PUT),
+            (.trace, .TRACE),
+            (.init(rawValue: "BREW")!, .RAW(value: "BREW")),
+        ]
+
+        for (source, expected) in mappings {
+            XCTAssertEqual(HTTPMethod(source), expected)
+        }
+    }
+
     func testStatusNamesTheNativeServer() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()
@@ -878,12 +898,13 @@ final class APIRoutesTests: XCTestCase {
         if let davHeader, let davHeaderValue {
             headers[davHeader] = davHeaderValue
         }
+        let requestHeaders = headers
 
         try await proxyApp.test(.router) { proxyClient in
             try await proxyClient.execute(
                 uri: "/api/fetch-proxy",
                 method: httpMethod,
-                headers: headers,
+                headers: requestHeaders,
                 body: ByteBuffer(string: requestBody)
             ) { response in
                 XCTAssertEqual(response.status.code, 207, "207 Multi-Status must flow back to the client")
@@ -925,6 +946,451 @@ final class APIRoutesTests: XCTestCase {
             }
         }
     }
+
+}
+
+final class APIRoutesCoverageTests: XCTestCase {
+
+    func testWebhookAndCronRoutesForwardCRUDRequests() async throws {
+        try await self.withHTTPClient { httpClient in
+            let lickSystem = LickSystem()
+            await self.attachResponderClient(to: lickSystem) { request in
+                switch request["type"] {
+                case .string("list_webhooks"): return .array([.string("hook-1")])
+                case .string("create_webhook"): return .object(["created": .bool(true)])
+                case .string("delete_webhook"): return .object(["deleted": .bool(true)])
+                case .string("list_crontasks"): return .array([.string("cron-1")])
+                case .string("create_crontask"): return .object(["created": .bool(true)])
+                case .string("delete_crontask"): return .object(["error": .string("missing cron")])
+                default: return .null
+                }
+            }
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: lickSystem,
+                config: self.makeConfig(),
+                httpClient: httpClient
+            )
+            let app = Application(responder: router.buildResponder())
+
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/api/webhooks", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                }
+                try await client.execute(
+                    uri: "/api/webhooks",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"url":"https://example.test/hook"}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                }
+                try await client.execute(uri: "/api/webhooks/hook-1", method: .delete) { response in
+                    XCTAssertEqual(response.status, .ok)
+                }
+                try await client.execute(uri: "/api/crontasks", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                }
+                try await client.execute(
+                    uri: "/api/crontasks",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"schedule":"0 * * * *"}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                }
+                try await client.execute(uri: "/api/crontasks/cron-1", method: .delete) { response in
+                    XCTAssertEqual(response.status, .notFound)
+                }
+            }
+        }
+    }
+
+    func testWebhookCronFailureAndPublicWebhookRoutes() async throws {
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                for uri in ["/api/webhooks", "/api/crontasks"] {
+                    try await client.execute(uri: uri, method: .get) { response in
+                        XCTAssertEqual(response.status, .serviceUnavailable)
+                    }
+                    try await client.execute(
+                        uri: uri,
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: "{}")
+                    ) { response in
+                        XCTAssertEqual(response.status, .serviceUnavailable)
+                    }
+                    try await client.execute(uri: "\(uri)/missing", method: .delete) { response in
+                        XCTAssertEqual(response.status, .serviceUnavailable)
+                    }
+                }
+                try await client.execute(uri: "/webhooks/public", method: .options) { response in
+                    XCTAssertEqual(response.status, .noContent)
+                    XCTAssertEqual(response.headers[HTTPField.Name("Access-Control-Allow-Origin")!], "*")
+                }
+                var headers = HTTPFields()
+                headers.append(HTTPField(name: HTTPField.Name("X-Repeat")!, value: "one"))
+                headers.append(HTTPField(name: HTTPField.Name("X-Repeat")!, value: "two"))
+                headers.append(HTTPField(name: HTTPField.Name("X-Repeat")!, value: "three"))
+                try await client.execute(
+                    uri: "/webhooks/public",
+                    method: .post,
+                    headers: headers,
+                    body: ByteBuffer(string: "not-json")
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    XCTAssertEqual(response.headers[HTTPField.Name("Access-Control-Allow-Origin")!], "*")
+                }
+            }
+        }
+    }
+
+    func testFetchProxyScrubsTextBodyHeadersAndCookies() async throws {
+        let realSecret = "response-secret-abcdefghijklmnop"
+        let injector = SecretInjector(secrets: [
+            .init(
+                name: "RESPONSE_TOKEN",
+                realValue: realSecret,
+                maskedValue: "masked-response-token",
+                domains: ["localhost"]
+            )
+        ])
+        let upstreamRouter = Router()
+        upstreamRouter.get("/secret") { _, _ in
+            Response(
+                status: .ok,
+                headers: [
+                    .contentType: "text/plain; charset=utf-8",
+                    HTTPField.Name("Set-Cookie")!: "token=\(realSecret)",
+                    HTTPField.Name("X-Secret")!: realSecret,
+                    HTTPField.Name("X-Proxy-Spoof")!: "must-be-stripped",
+                ],
+                body: .init(byteBuffer: ByteBuffer(string: "before \(realSecret) after"))
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let port = try XCTUnwrap(upstreamClient.port)
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient,
+                    secretInjector: injector
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+                try await proxyApp.test(.router) { client in
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(port)/secret"
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                        XCTAssertFalse(String(buffer: response.body).contains(realSecret))
+                        XCTAssertFalse((response.headers[HTTPField.Name("X-Secret")!] ?? "").contains(realSecret))
+                        XCTAssertNil(response.headers[HTTPField.Name("X-Proxy-Spoof")!])
+                        XCTAssertFalse(
+                            (response.headers[HTTPField.Name("X-Proxy-Set-Cookie")!] ?? "")
+                                .contains(realSecret)
+                        )
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+    }
+
+    func testFetchProxyRestoresTransportHeadersAndUnmasksEveryRequestSurface() async throws {
+        let real = "real-secret-abcdefghijklmnop"
+        let masked = "masked-secret-abcdefghijklmnop"
+        let injector = SecretInjector(secrets: [
+            .init(name: "TOKEN", realValue: real, maskedValue: masked, domains: ["localhost"])
+        ])
+        let captured = ProxySurfaceCaptureBox()
+        let upstreamRouter = Router()
+        upstreamRouter.post("/upstream") { request, _ in
+            let body = try await request.body.collect(upTo: 1024 * 1024)
+            await captured.record(
+                .init(
+                    authorization: request.headers[.authorization],
+                    custom: request.headers[HTTPField.Name("X-Custom-Secret")!],
+                    cookie: request.headers[.cookie],
+                    origin: request.headers[.origin],
+                    referer: request.headers[HTTPField.Name("Referer")!],
+                    proxyAuthorization: request.headers[HTTPField.Name("Proxy-Authorization")!],
+                    signature: request.headers[HTTPField.Name("X-Signature")!],
+                    timestamp: request.headers[HTTPField.Name("X-Timestamp")!],
+                    body: Data(body.readableBytesView)
+                ))
+            return Response(status: .ok, body: .init(byteBuffer: ByteBuffer(string: "ok")))
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let port = try XCTUnwrap(upstreamClient.port)
+                let target = "http://localhost:\(port)/upstream"
+                let router = Router()
+                registerAPIRoutes(
+                    router: router,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient,
+                    secretInjector: injector
+                )
+                let app = Application(responder: router.buildResponder())
+                let encodedBasic = Data("user:\(masked)".utf8).base64EncodedString()
+
+                try await app.test(.router) { client in
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: target,
+                            .contentType: "application/json",
+                            .authorization: "Basic \(encodedBasic)",
+                            HTTPField.Name("X-Custom-Secret")!: masked,
+                            HTTPField.Name("X-Proxy-Cookie")!: "session=\(masked)",
+                            HTTPField.Name("X-Proxy-Origin")!: "https://source.example",
+                            HTTPField.Name("X-Proxy-Referer")!: "https://source.example/page",
+                            HTTPField.Name("X-Proxy-Proxy-Authorization")!: "Basic transported",
+                            HTTPField.Name("X-Slicc-Hmac-Sign")!: "TOKEN:X-Signature:X-Timestamp",
+                        ],
+                        body: ByteBuffer(string: #"{"token":"\#(masked)"}"#)
+                    ) { XCTAssertEqual($0.status, .ok) }
+
+                    let urlWithCredentials = "http://user:\(masked)@localhost:\(port)/upstream"
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: urlWithCredentials,
+                            .contentType: "text/plain",
+                        ],
+                        body: ByteBuffer(string: "url credentials")
+                    ) { XCTAssertEqual($0.status, .ok) }
+
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: target,
+                            .contentType: "application/octet-stream",
+                            .origin: "http://localhost:5710",
+                            HTTPField.Name("Referer")!: "http://127.0.0.1:5710/page",
+                        ],
+                        body: ByteBuffer(data: Data("binary \(masked)".utf8))
+                    ) { XCTAssertEqual($0.status, .ok) }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+
+        let snapshots = await captured.snapshot()
+        XCTAssertEqual(snapshots.count, 3)
+        let basic = Data("user:\(real)".utf8).base64EncodedString()
+        XCTAssertEqual(snapshots[0].authorization, "Basic \(basic)")
+        XCTAssertEqual(snapshots[0].custom, real)
+        XCTAssertEqual(snapshots[0].cookie, "session=\(real)")
+        XCTAssertEqual(snapshots[0].origin, "https://source.example")
+        XCTAssertEqual(snapshots[0].referer, "https://source.example/page")
+        XCTAssertEqual(snapshots[0].proxyAuthorization, "Basic transported")
+        XCTAssertNotNil(snapshots[0].signature)
+        XCTAssertNotNil(snapshots[0].timestamp)
+        XCTAssertEqual(String(data: snapshots[0].body, encoding: .utf8), #"{"token":"\#(real)"}"#)
+        XCTAssertEqual(snapshots[1].authorization, "Basic \(basic)")
+        XCTAssertNil(snapshots[2].origin)
+        XCTAssertNil(snapshots[2].referer)
+        XCTAssertEqual(String(data: snapshots[2].body, encoding: .utf8), "binary \(real)")
+    }
+
+    func testFetchProxyRejectsForbiddenCredentialSurfacesAndMalformedTarget() async throws {
+        let masked = "masked-secret-abcdefghijklmnop"
+        let injector = SecretInjector(secrets: [
+            .init(
+                name: "TOKEN",
+                realValue: "real-secret-abcdefghijklmnop",
+                maskedValue: masked,
+                domains: ["allowed.example"]
+            )
+        ])
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector
+            )
+            let app = Application(responder: router.buildResponder())
+            let basic = Data("user:\(masked)".utf8).base64EncodedString()
+            try await app.test(.router) { client in
+                let cases: [(String, HTTPFields)] = [
+                    (
+                        "url",
+                        [HTTPField.Name("X-Target-URL")!: "http://user:\(masked)@localhost:9/path"]
+                    ),
+                    (
+                        "basic",
+                        [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:9/path",
+                            .authorization: "Basic \(basic)",
+                        ]
+                    ),
+                    (
+                        "header",
+                        [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:9/path",
+                            HTTPField.Name("X-Credential")!: masked,
+                        ]
+                    ),
+                ]
+                for (_, headers) in cases {
+                    try await client.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: headers
+                    ) { response in
+                        XCTAssertEqual(response.status, .forbidden)
+                    }
+                }
+                try await client.execute(
+                    uri: "/api/fetch-proxy",
+                    method: .get,
+                    headers: [HTTPField.Name("X-Target-URL")!: "http://["]
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
+    func testScrubbingStreamPreservesSplitAndMalformedUTF8Boundaries() async throws {
+        let poop = [UInt8]("💩".utf8)
+
+        let continuationOnly = try await drainScrubbingStream([
+            [poop[0]], [poop[1]], Array(poop[2...]),
+        ])
+        let asciiThenSplit = try await drainScrubbingStream([[0x41, poop[0]], Array(poop[1...])])
+        let truncated = try await drainScrubbingStream([[poop[0]]])
+        let malformed = try await drainScrubbingStream([[0xFF]])
+
+        XCTAssertEqual(continuationOnly, poop)
+        XCTAssertEqual(asciiThenSplit, [0x41] + poop)
+        XCTAssertEqual(truncated, [poop[0]])
+        XCTAssertEqual(malformed, [0xFF])
+    }
+
+    private func drainScrubbingStream(_ chunks: [[UInt8]]) async throws -> [UInt8] {
+        let source = AsyncStream<ByteBuffer> { continuation in
+            for chunk in chunks {
+                continuation.yield(ByteBuffer(bytes: chunk))
+            }
+            continuation.finish()
+        }
+        let stream = ScrubbingAsyncStream(
+            upstream: .stream(source),
+            shouldScrub: true,
+            shouldGunzip: false,
+            scrubber: SecretInjector(secrets: [])
+        )
+        var iterator = stream.makeAsyncIterator()
+        var result: [UInt8] = []
+        while let buffer = try await iterator.next() {
+            result.append(contentsOf: buffer.readableBytesView)
+        }
+        return result
+    }
+
+    private func makeConfig() -> ServerConfig {
+        .init(
+            serveOnly: false,
+            cdpPort: 9222,
+            explicitCdpPort: false,
+            electron: false,
+            electronApp: nil,
+            electronAppURL: nil,
+            kill: false,
+            lead: false,
+            leadWorkerBaseUrl: nil,
+            leadWorkerBaseURL: nil,
+            profile: nil,
+            join: false,
+            joinUrl: nil,
+            joinURL: nil,
+            logLevel: "info",
+            logDir: nil,
+            logDirectoryURL: nil,
+            prompt: nil,
+            envFile: nil,
+            envFileURL: nil,
+            mounts: []
+        )
+    }
+
+    private func withHTTPClient(
+        _ body: (HTTPClient) async throws -> Void
+    ) async throws {
+        let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
+        do {
+            try await body(httpClient)
+            try await httpClient.shutdown()
+        } catch {
+            try? await httpClient.shutdown()
+            throw error
+        }
+    }
+
+    private func attachResponderClient(
+        to lickSystem: LickSystem,
+        responder: @escaping @Sendable (LickSystem.JSONObject) throws -> LickSystem.JSONValue
+    ) async {
+        let client = WebSocketClient { text in
+            let request = try LickSystem.decode(text)
+            let requestId = try XCTUnwrap(request["requestId"]?.stringValue)
+            let response = try responder(request)
+            let payload = try LickSystem.encode([
+                "type": .string("response"),
+                "requestId": .string(requestId),
+                "data": response,
+            ])
+            await lickSystem.handleMessage(text: payload)
+        }
+        await lickSystem.addClient(client)
+    }
+}
+
+extension APIRoutesTests {
 
     private func makeConfig(
         leadWorkerBaseUrl: String? = nil,
@@ -1074,5 +1540,29 @@ private actor InternalHeaderCaptureBox {
 
     func snapshot() -> Snapshot {
         .init(rawBodyPresent: self.rawBodyPresent, bridgeTokenPresent: self.bridgeTokenPresent)
+    }
+}
+
+private actor ProxySurfaceCaptureBox {
+    struct Snapshot: Sendable {
+        let authorization: String?
+        let custom: String?
+        let cookie: String?
+        let origin: String?
+        let referer: String?
+        let proxyAuthorization: String?
+        let signature: String?
+        let timestamp: String?
+        let body: Data
+    }
+
+    private var values: [Snapshot] = []
+
+    func record(_ value: Snapshot) {
+        values.append(value)
+    }
+
+    func snapshot() -> [Snapshot] {
+        values
     }
 }

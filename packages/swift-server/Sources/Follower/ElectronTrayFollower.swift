@@ -30,6 +30,8 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
     private let logger: Logger
     private let urlSession: URLSession
     private let connector: TrayFollowerConnector
+    private let connectorStart: @Sendable () async throws -> Void
+    private let servicerConnect: @Sendable (FederatedCDPServicer, URL) async -> Void
 
     private let lock = NSLock()
     private var started = false
@@ -39,12 +41,24 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
     private var reassembler = TrayChunkReassembler()
     private let encoder = JSONEncoder()
 
-    init(cdpPort: Int, joinURL: URL, logger: Logger, session: URLSession = .shared) {
+    init(
+        cdpPort: Int,
+        joinURL: URL,
+        logger: Logger,
+        session: URLSession = .shared,
+        connectorStart: (@Sendable () async throws -> Void)? = nil,
+        servicerConnect: @escaping @Sendable (FederatedCDPServicer, URL) async -> Void = {
+            await $0.connect(browserWsUrl: $1)
+        }
+    ) {
+        let connector = TrayFollowerConnector(joinUrl: joinURL)
         self.cdpPort = cdpPort
         self.joinURL = joinURL
         self.logger = logger
         self.urlSession = session
-        self.connector = TrayFollowerConnector(joinUrl: joinURL)
+        self.connector = connector
+        self.connectorStart = connectorStart ?? { try await connector.start() }
+        self.servicerConnect = servicerConnect
         super.init()
     }
 
@@ -78,7 +92,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
     }
 
-    private func run() async {
+    func run() async {
         guard let browserWsURL = await resolveBrowserWebSocketURL() else {
             logger.error("Could not resolve the app's browser CDP endpoint; follower not started")
             return
@@ -88,7 +102,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
             runtimeId: runtimeId,
             logger: logger,
             send: { [weak self] message in self?.sendToLeader(message) })
-        await servicer.connect(browserWsUrl: browserWsURL)
+        await servicerConnect(servicer, browserWsURL)
         let cancelled: Bool = lock.withLock {
             guard !stopped else { return true }
             self.servicer = servicer
@@ -100,7 +114,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
         }
         connector.delegate = self
         do {
-            try await connector.start()
+            try await connectorStart()
         } catch {
             logger.error("Tray follower connector failed: \(error.localizedDescription)")
         }
@@ -110,7 +124,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
 
     /// Resolve the app's browser-level CDP debugger websocket from
     /// `/json/version` (`webSocketDebuggerUrl`).
-    private func resolveBrowserWebSocketURL() async -> URL? {
+    func resolveBrowserWebSocketURL() async -> URL? {
         guard let versionURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/version") else {
             return nil
         }
@@ -130,7 +144,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
     }
 
     /// Enumerate the app's inspectable targets from `/json/list`.
-    private func listTargets() async -> [FederatedCdpInspectableTarget] {
+    func listTargets() async -> [FederatedCdpInspectableTarget] {
         guard let listURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/list") else { return [] }
         do {
             var request = URLRequest(url: listURL)

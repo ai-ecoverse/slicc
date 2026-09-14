@@ -43,6 +43,16 @@ final class FederatedCDPServicerTests: XCTestCase {
         XCTAssertNil(chunkData)
     }
 
+    func testBuildCdpResponsesWithoutResultStillReturnsCorrelatedEnvelope() {
+        let responses = buildCdpResponses(requestId: "nil-result", result: nil, error: nil)
+        guard case .cdpResponse(let requestId, let result, let error, _, _, _) = responses.first else {
+            return XCTFail("expected cdp.response")
+        }
+        XCTAssertEqual(requestId, "nil-result")
+        XCTAssertNil(result)
+        XCTAssertNil(error)
+    }
+
     func testBuildCdpResponsesSmallResultIsSingleUnchunkedMessage() throws {
         let responses = buildCdpResponses(
             requestId: "r2", result: ["title": "Signal (3)"], error: nil)
@@ -248,6 +258,53 @@ final class FederatedCDPServicerTests: XCTestCase {
             })
     }
 
+    func testInvalidParamsSendFailureMalformedFramesAndSocketLossFailClosed() async throws {
+        let box = FollowerMessageBox()
+        let sendFailure = MockCDPWebSocketTransport(sendError: URLError(.cannotWriteToFile))
+        let failing = FederatedCDPServicer(
+            runtimeId: "failure", logger: Logger(label: "federated-failure"), send: { box.add($0) })
+        await failing.connect(transport: sendFailure)
+        await failing.handleCdpRequest(
+            requestId: "send-failed", method: "Runtime.enable", params: nil, sessionId: nil)
+        XCTAssertTrue(
+            box.messages.contains {
+                if case .cdpResponse(let requestId, _, let error, _, _, _) = $0 {
+                    return requestId == "send-failed" && error?.contains("cdp-send-failed") == true
+                }
+                return false
+            })
+        await failing.stop()
+
+        let transport = MockCDPWebSocketTransport()
+        let receiving = FederatedCDPServicer(
+            runtimeId: "receiving", logger: Logger(label: "federated-receiving"), send: { box.add($0) })
+        await receiving.connect(transport: transport)
+        await transport.pushData(Data("not-json".utf8))
+        await transport.push(#"{"id":999999,"error":{"message":"probe rejected"}}"#)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await transport.failReceive(URLError(.networkConnectionLost))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await receiving.handleCdpRequest(
+            requestId: "after-loss", method: "Runtime.enable", params: nil, sessionId: nil)
+        XCTAssertTrue(
+            box.messages.contains {
+                if case .cdpResponse(let requestId, _, let error, _, _, _) = $0 {
+                    return requestId == "after-loss" && error == "cdp-not-connected"
+                }
+                return false
+            })
+        await receiving.stop()
+    }
+
+    func testProductionConnectReportsAnUnreachableSocketWithoutThrowing() async {
+        let servicer = FederatedCDPServicer(
+            runtimeId: "unreachable", logger: Logger(label: "federated-unreachable"), send: { _ in })
+        await servicer.connect(browserWsUrl: URL(string: "ws://127.0.0.1:1/devtools/browser/missing")!)
+        await servicer.handleCdpRequest(
+            requestId: "not-connected", method: "Runtime.enable", params: nil, sessionId: nil)
+        await servicer.stop()
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 2, _ condition: @escaping () -> Bool
     ) async throws {
@@ -286,9 +343,26 @@ actor MockCDPWebSocketTransport: CDPWebSocketTransport {
     private var waiter: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
     private(set) var sentFrames: [Data] = []
     private(set) var cancelled = false
+    private let sendError: Error?
+
+    init(sendError: Error? = nil) {
+        self.sendError = sendError
+    }
 
     func push(_ text: String) {
-        let message = URLSessionWebSocketTask.Message.string(text)
+        deliver(.string(text))
+    }
+
+    func pushData(_ data: Data) {
+        deliver(.data(data))
+    }
+
+    func failReceive(_ error: Error) {
+        waiter?.resume(throwing: error)
+        waiter = nil
+    }
+
+    private func deliver(_ message: URLSessionWebSocketTask.Message) {
         if let waiter = waiter {
             self.waiter = nil
             waiter.resume(returning: message)
@@ -298,6 +372,7 @@ actor MockCDPWebSocketTransport: CDPWebSocketTransport {
     }
 
     func sendFrame(_ payload: Data) async throws {
+        if let sendError { throw sendError }
         sentFrames.append(payload)
     }
 

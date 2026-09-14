@@ -29,6 +29,16 @@ final class LogDedupTests: XCTestCase {
         XCTAssertEqual(snapshot.count, 1)
         XCTAssertTrue(snapshot[0].contains("suppressed 1 similar"))
     }
+
+    func testBufferPressureFlushesSuppressedEntryBeforeEviction() {
+        let outputs = OutputCollector()
+        let dedup = CliLogDedup(prefix: "[small]", bufferSize: 1, sink: { outputs.append($0) })
+
+        XCTAssertTrue(dedup.shouldLog("request 100 started"))
+        XCTAssertFalse(dedup.shouldLog("request 200 started"))
+        XCTAssertTrue(dedup.shouldLog("a completely different message"))
+        XCTAssertEqual(outputs.snapshot().count, 1)
+    }
 }
 
 private final class OutputCollector: @unchecked Sendable {

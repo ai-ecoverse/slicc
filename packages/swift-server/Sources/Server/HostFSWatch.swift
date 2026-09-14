@@ -92,6 +92,12 @@ final class HostFSWatch: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + .milliseconds(Self.debounceMs), execute: work)
     }
 
+    func noteForTesting(mount: String, root: String, absolutePath: String) {
+        queue.sync {
+            note(mount: mount, root: root, absolutePath: absolutePath)
+        }
+    }
+
     private func flush(mount: String) {
         flushWorkItems.removeValue(forKey: mount)
         guard let paths = pending.removeValue(forKey: mount) else { return }

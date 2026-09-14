@@ -634,14 +634,14 @@ struct ServerConfig: Sendable, Equatable {
 }
 
 @available(macOS 14, *)
-private actor StartupFailureBox {
+actor StartupFailureBox {
     private var error: Error?
     func set(_ error: Error) { self.error = error }
     func get() -> Error? { error }
 }
 
 @available(macOS 14, *)
-private actor ServerStartupLatch {
+actor ServerStartupLatch {
     private var started = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
@@ -969,7 +969,7 @@ extension ServerCommand {
             $0.name == "trayWorkerUrl" || $0.name == "lead" || $0.name == "tray"
         }
         queryItems.append(URLQueryItem(name: "tray", value: trayValue))
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw ValidationError("Invalid launch URL: \(locationHref)")

@@ -230,13 +230,19 @@ enum SignAndForward {
     static func registerRoutes(
         router: Router<some RequestContext>,
         httpClient: HTTPClient,
-        daOrigin: String = defaultDaOrigin
+        daOrigin: String = defaultDaOrigin,
+        maxBodyBytes: Int = maxEnvelopeBytes
     ) {
         router.post("/api/s3-sign-and-forward") { request, _ in
-            await handleS3(request: request, httpClient: httpClient)
+            await handleS3(request: request, httpClient: httpClient, maxBodyBytes: maxBodyBytes)
         }
         router.post("/api/da-sign-and-forward") { request, _ in
-            await handleDa(request: request, httpClient: httpClient, daOrigin: daOrigin)
+            await handleDa(
+                request: request,
+                httpClient: httpClient,
+                daOrigin: daOrigin,
+                maxBodyBytes: maxBodyBytes
+            )
         }
     }
 
@@ -246,11 +252,12 @@ enum SignAndForward {
     /// 502 for upstream fetch failures).
     static func handleS3(
         request: Request,
-        httpClient: HTTPClient
+        httpClient: HTTPClient,
+        maxBodyBytes: Int = maxEnvelopeBytes
     ) async -> Response {
         let env: S3Envelope
         do {
-            env = try await decodeEnvelope(request: request)
+            env = try await decodeEnvelope(request: request, maxBodyBytes: maxBodyBytes)
         } catch is NIOTooManyBytesError {
             return errorResponse(
                 .contentTooLarge,
@@ -332,7 +339,8 @@ enum SignAndForward {
             headers: signed.headers,
             body: signed.body,
             httpClient: httpClient,
-            failureLabel: "S3"
+            failureLabel: "S3",
+            maxResponseBytes: maxBodyBytes
         )
     }
 
@@ -378,11 +386,12 @@ enum SignAndForward {
     static func handleDa(
         request: Request,
         httpClient: HTTPClient,
-        daOrigin: String = defaultDaOrigin
+        daOrigin: String = defaultDaOrigin,
+        maxBodyBytes: Int = maxEnvelopeBytes
     ) async -> Response {
         let env: DaEnvelope
         do {
-            env = try await decodeEnvelope(request: request)
+            env = try await decodeEnvelope(request: request, maxBodyBytes: maxBodyBytes)
         } catch is NIOTooManyBytesError {
             return errorResponse(
                 .contentTooLarge,
@@ -443,7 +452,8 @@ enum SignAndForward {
             headers: headers,
             body: body,
             httpClient: httpClient,
-            failureLabel: "DA"
+            failureLabel: "DA",
+            maxResponseBytes: maxBodyBytes
         )
     }
 
@@ -455,8 +465,11 @@ enum SignAndForward {
     static let maxEnvelopeBytes = 50 * 1024 * 1024
     static let maxEnvelopeBytesHumanReadable = "50 MB"
 
-    private static func decodeEnvelope<T: Decodable>(request: Request) async throws -> T {
-        let buffer = try await request.body.collect(upTo: maxEnvelopeBytes)
+    private static func decodeEnvelope<T: Decodable>(
+        request: Request,
+        maxBodyBytes: Int
+    ) async throws -> T {
+        let buffer = try await request.body.collect(upTo: maxBodyBytes)
         var b = buffer
         let data = b.readData(length: b.readableBytes) ?? Data()
         return try JSONDecoder().decode(T.self, from: data)
@@ -511,13 +524,14 @@ enum SignAndForward {
     /// the JSON envelope shape: `{ ok: true, status, headers, bodyBase64 }`.
     /// Network failures return a 502 envelope with `errorCode: "fetch_failed"`;
     /// oversized responses return 502 with `errorCode: "response_too_large"`.
-    private static func forward(
+    static func forward(
         url: URL,
         method: SigV4Method,
         headers: [String: String],
         body: Data?,
         httpClient: HTTPClient,
-        failureLabel: String
+        failureLabel: String,
+        maxResponseBytes: Int = maxEnvelopeBytes
     ) async -> Response {
         let prepared = prepareForwardRequest(url: url, method: method, headers: headers, body: body)
         var clientRequest = HTTPClientRequest(url: prepared.url)
@@ -542,7 +556,7 @@ enum SignAndForward {
 
         let bodyBuffer: ByteBuffer
         do {
-            bodyBuffer = try await upstream.body.collect(upTo: maxEnvelopeBytes)
+            bodyBuffer = try await upstream.body.collect(upTo: maxResponseBytes)
         } catch is NIOTooManyBytesError {
             return errorResponse(
                 .badGateway,

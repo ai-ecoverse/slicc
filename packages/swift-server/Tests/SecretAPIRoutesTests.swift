@@ -372,6 +372,39 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    func testOAuthUpdatePostRejectsEmptyRequiredValues() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth-empty", oauthStore: oauthStore)
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                for body in [
+                    #"{"providerId":"","accessToken":"token","domains":["example.test"]}"#,
+                    #"{"providerId":"provider","accessToken":"","domains":["example.test"]}"#,
+                    #"{"providerId":"provider","accessToken":"token","domains":[]}"#,
+                ] {
+                    try await client.execute(
+                        uri: "/api/secrets/oauth-update",
+                        method: .post,
+                        headers: [.contentType: "application/json"],
+                        body: ByteBuffer(string: body)
+                    ) { response in
+                        XCTAssertEqual(response.status, .badRequest)
+                    }
+                }
+            }
+        }
+    }
+
     func testOAuthUpdatePostRejectsMalformedJSON() async throws {
         let oauthStore = OAuthSecretStore()
         let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)

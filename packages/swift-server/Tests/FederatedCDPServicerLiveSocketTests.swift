@@ -120,6 +120,11 @@ final class FederatedCDPServicerLiveSocketTests: XCTestCase {
         serviceTask.cancel()
     }
 
+    func testTransportSurfacesConnectionAndClosedSocketErrors() {
+        XCTAssertTrue(WebSocketKitCDPTransportError.noSocket.localizedDescription.contains("without a socket"))
+        XCTAssertEqual(CDPSocketClosedError().localizedDescription, "app CDP socket closed")
+    }
+
     /// The bug that this whole file exists for: `URLSessionWebSocketTask` fails
     /// the handshake against a real browser's raw CDP endpoint, where WebSocketKit
     /// succeeds. A mock (or a plain WebSocket server) can't reproduce it, so this

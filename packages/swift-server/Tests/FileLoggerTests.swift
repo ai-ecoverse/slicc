@@ -87,4 +87,48 @@ final class FileLoggerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: recentFile.path))
     }
+
+    func testNestedMetadataAndMetadataSubscriptRoundTrip() throws {
+        var logger = FileLogger(
+            label: "metadata",
+            configuration: .init(logDirectory: temporaryDirectory, logLevel: .debug, cleanup: false)
+        )
+        logger[metadataKey: "nested"] = .dictionary([
+            "array": .array([.string("one"), .stringConvertible(2)])
+        ])
+        XCTAssertNotNil(logger[metadataKey: "nested"])
+        logger.log(
+            level: .info,
+            message: "nested",
+            metadata: nil,
+            source: "test",
+            file: #fileID,
+            function: #function,
+            line: #line
+        )
+        logger.close()
+
+        let fileURL = try XCTUnwrap(logger.logFileURL)
+        let content = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertTrue(content.contains("\"array\":[\"one\",\"2\"]"))
+    }
+
+    func testInitializationFailureDisablesLoggerWithoutThrowing() {
+        let impossibleDirectory = URL(fileURLWithPath: "/dev/null/slicc-logs")
+        let logger = FileLogger(
+            label: "disabled",
+            configuration: .init(logDirectory: impossibleDirectory, cleanup: false)
+        )
+        logger.log(
+            level: .error,
+            message: "ignored",
+            metadata: nil,
+            source: "test",
+            file: #fileID,
+            function: #function,
+            line: #line
+        )
+        XCTAssertNil(logger.logFileURL)
+        cleanupOldLogs(in: impossibleDirectory)
+    }
 }

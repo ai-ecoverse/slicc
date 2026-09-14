@@ -5,7 +5,7 @@ import Logging
 private let defaultChromeUserDataDirName = "browser-coding-agent-chrome"
 private let defaultServePort = 5710
 private let defaultChromeLaunchTimeout: TimeInterval = 15
-private let chromePidDiscoveryTimeout: TimeInterval = 5
+private let defaultChromePidDiscoveryTimeout: TimeInterval = 5
 private let chromePidDiscoveryPollIntervalNanos: UInt64 = 100_000_000
 private let cdpPortRegex = try! NSRegularExpression(
     pattern: #"DevTools listening on ws://[^:]+:(\d+)/"#,
@@ -125,6 +125,8 @@ struct ChromeLauncher: Sendable {
     private let currentDirectoryProvider: @Sendable () -> String
     private let homeDirectoryProvider: @Sendable () -> String
     private let processFactory: @Sendable () -> Process
+    private let launchServicesExecutablePath: String
+    private let chromePidDiscoveryTimeout: TimeInterval
     private let fetchData: @Sendable (URL) async throws -> (Data, URLResponse)
     /// Snapshot the PIDs of every running app whose bundle URL matches
     /// `bundleURL` (canonical Chrome.app, Chrome for Testing.app, etc.).
@@ -144,6 +146,8 @@ struct ChromeLauncher: Sendable {
             FileManager.default.homeDirectoryForCurrentUser.path
         },
         processFactory: @escaping @Sendable () -> Process = { Process() },
+        launchServicesExecutablePath: String = "/usr/bin/open",
+        chromePidDiscoveryTimeout: TimeInterval = defaultChromePidDiscoveryTimeout,
         fetchData: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
             // Bound every internal HTTP probe (CDP pre-flight, waitForCDP)
             // with an explicit 2 s request timeout. Without this the default
@@ -177,6 +181,8 @@ struct ChromeLauncher: Sendable {
         self.currentDirectoryProvider = currentDirectoryProvider
         self.homeDirectoryProvider = homeDirectoryProvider
         self.processFactory = processFactory
+        self.launchServicesExecutablePath = launchServicesExecutablePath
+        self.chromePidDiscoveryTimeout = chromePidDiscoveryTimeout
         self.fetchData = fetchData
         self.runningPidsForBundle = runningPidsForBundle
     }
@@ -531,7 +537,7 @@ struct ChromeLauncher: Sendable {
             // responsible process and the canonical
             // "/Applications/Google Chrome.app" privacy grant applies as
             // users expect.
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.executableURL = URL(fileURLWithPath: launchServicesExecutablePath)
             process.arguments = buildOpenLaunchArgs(
                 appBundlePath: appBundlePath,
                 chromeArgs: chromeArgs
@@ -641,7 +647,10 @@ struct ChromeLauncher: Sendable {
             if !process.isRunning {
                 let exitCode = process.terminationStatus
                 if exitCode != 0 {
-                    throw ChromeLauncherError.openLaunchFailed(exitCode: exitCode, executable: "/usr/bin/open")
+                    throw ChromeLauncherError.openLaunchFailed(
+                        exitCode: exitCode,
+                        executable: launchServicesExecutablePath
+                    )
                 }
                 // `open` exits 0 once LaunchServices has handed off; keep polling.
             }

@@ -135,6 +135,11 @@ final class ChromeConnectorHarness: @unchecked Sendable {
         await callback?(.text(text))
     }
 
+    func emitBinary(_ bytes: [UInt8]) async {
+        let callback = self.messageCallbackSnapshot()
+        await callback?(.binary(ByteBuffer(bytes: bytes)))
+    }
+
     func emitEvent(_ event: ChromeSocketEvent) async {
         let callback = self.eventCallbackSnapshot()
         await callback?(event)

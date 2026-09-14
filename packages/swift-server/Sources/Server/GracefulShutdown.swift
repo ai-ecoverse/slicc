@@ -342,7 +342,7 @@ private func gracefulShutdownLastResortCleanup() {
     GracefulShutdownLastResortRegistry.performCleanup()
 }
 
-private func defaultFetchBrowserWebSocketURL(cdpPort: Int) async throws -> String {
+func defaultFetchBrowserWebSocketURL(cdpPort: Int) async throws -> String {
     let url = URL(string: "http://127.0.0.1:\(cdpPort)/json/version")!
     var request = URLRequest(url: url)
     request.timeoutInterval = 1
@@ -361,7 +361,7 @@ private func defaultFetchBrowserWebSocketURL(cdpPort: Int) async throws -> Strin
     return payload.webSocketDebuggerUrl
 }
 
-private func defaultSendBrowserCloseCommand(browserWebSocketURL: String) async throws {
+func defaultSendBrowserCloseCommand(browserWebSocketURL: String) async throws {
     guard let url = URL(string: browserWebSocketURL) else {
         throw GracefulShutdownError.invalidBrowserWebSocketURL(browserWebSocketURL)
     }

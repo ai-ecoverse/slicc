@@ -1266,7 +1266,7 @@ private func makeStreamingProxyResponse(
 /// re-encode — corrupt the codepoint with U+FFFD. Real LLM SSE traffic
 /// often emits CJK / emoji / accented Latin so this matters for any non-
 /// ASCII model output.
-private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
+struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     typealias Element = ByteBuffer
     let upstream: HTTPClientResponse.Body
     let shouldScrub: Bool
@@ -1346,7 +1346,7 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
 /// at the tail mean the prefix is incomplete; we walk back from the end
 /// until we find a leading byte and verify the codepoint it starts has
 /// all its continuation bytes present.
-private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
+func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
     if bytes.isEmpty { return 0 }
     var i = bytes.count
     // Walk back over up to 3 continuation bytes (UTF-8 codepoints are at most
@@ -1386,7 +1386,7 @@ private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
 }
 
 extension HTTPMethod {
-    fileprivate init(_ method: HTTPRequest.Method) {
+    init(_ method: HTTPRequest.Method) {
         switch method {
         case .connect: self = .CONNECT
         case .delete: self = .DELETE

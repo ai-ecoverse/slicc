@@ -92,6 +92,21 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertNil(SecretStore.get(name: name))
     }
 
+    func testSetRejectsMultilineValuesBeforeTouchingKeychain() {
+        XCTAssertThrowsError(
+            try SecretStore.set(
+                name: secretName("MULTILINE"),
+                value: "first\nsecond",
+                domains: ["example.com"]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SecretStoreError,
+                .multilineValue(name: self.secretName("MULTILINE"))
+            )
+        }
+    }
+
     // MARK: - bulk read
 
     func testAllReturnsEverySecretInOneCall() throws {
@@ -195,5 +210,49 @@ final class KeychainSecretStoreTests: XCTestCase {
         _ = try? SecretStore.readBlob()
 
         XCTAssertTrue(calls.isEmpty, "interactive runs must not suppress the ACL dialog")
+    }
+
+    func testInjectedKeychainOperationsCoverMissingCorruptAndWriteFailures() throws {
+        defer { SecretStore.resetKeychainOperations() }
+
+        SecretStore.keychainRead = { _ in (errSecItemNotFound, nil) }
+        XCTAssertEqual(try SecretStore.readBlob(), "")
+
+        SecretStore.keychainRead = { _ in (errSecSuccess, NSString(string: "not data")) }
+        XCTAssertThrowsError(try SecretStore.readBlob()) { error in
+            XCTAssertEqual(error as? SecretStoreError, .keychainError(status: errSecDecode))
+        }
+
+        SecretStore.keychainUpdate = { _, _ in errSecItemNotFound }
+        SecretStore.keychainAdd = { query in
+            XCTAssertNotNil(query[kSecValueData as String])
+            return errSecSuccess
+        }
+        XCTAssertNoThrow(try SecretStore.writeBlob("A=b\n"))
+
+        SecretStore.keychainAdd = { _ in errSecAuthFailed }
+        XCTAssertThrowsError(try SecretStore.writeBlob("A=b\n")) { error in
+            XCTAssertEqual(error as? SecretStoreError, .keychainError(status: errSecAuthFailed))
+        }
+
+        SecretStore.keychainUpdate = { _, _ in errSecParam }
+        XCTAssertThrowsError(try SecretStore.writeBlob("A=b\n")) { error in
+            XCTAssertEqual(error as? SecretStoreError, .keychainError(status: errSecParam))
+        }
+    }
+
+    func testNonInteractiveDeniedReadFailsClosedWithoutPrompting() {
+        setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
+        SecretStore.keychainRead = { _ in (errSecInteractionNotAllowed, nil) }
+        SecretStore.setUserInteractionAllowed = { _ in }
+        defer {
+            unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE")
+            SecretStore.resetKeychainOperations()
+            SecretStore.setUserInteractionAllowed = { allowed in
+                SecKeychainSetUserInteractionAllowed(allowed)
+            }
+        }
+
+        XCTAssertTrue(SecretStore.all().isEmpty)
     }
 }
