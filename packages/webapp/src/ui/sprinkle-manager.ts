@@ -13,6 +13,7 @@ import { LEADER_RUNTIME_ID } from '../shell/sprinkle-instances.js';
 import type {
   SprinkleBroadcastResult,
   SprinkleManagerHandle,
+  SprinkleOpenOptions,
   SprinkleSendReport,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
@@ -44,6 +45,8 @@ export interface AddSprinkleOptions {
    */
   background?: boolean;
 }
+
+type SprinkleManagerOpenOptions = AddSprinkleOptions & SprinkleOpenOptions;
 
 export interface SprinkleAddOptions extends AddSprinkleOptions {
   /**
@@ -283,6 +286,8 @@ export interface SprinkleManagerOptions {
    * "shell bridge not available" result instead of throwing.
    */
   execHandler?: SprinkleExecHandler;
+  /** Resolve the opening shell's lick alias against the live page roster. */
+  resolveLickOriginUnitId?: (target: string) => string | undefined;
 }
 
 /**
@@ -313,6 +318,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
     {
       renderer: SprinkleRenderer;
       container: HTMLElement;
+      lickOriginUnitId?: string;
     }
   >();
   /**
@@ -336,6 +342,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
   private autoOpenBehavior: 'activate' | 'attention';
   private onSendToSprinkle?: SprinkleBroadcastHook;
   private onSprinkleReloaded?: (name: string) => void;
+  private readonly resolveLickOriginUnitId?: (target: string) => string | undefined;
   /**
    * Names whose rail icons have been pushed to the layout via
    * `callbacks.registerSprinkle`. Used to diff against the next
@@ -358,7 +365,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
 
   constructor(
     fs: VirtualFS,
-    lickHandler: (event: LickEvent) => void,
+    lickHandler: (event: LickEvent, originUnitId?: string) => void,
     callbacks: SprinkleManagerCallbacks,
     stopConeHandler: () => void,
     options: SprinkleManagerOptions = {}
@@ -462,6 +469,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;
     this.onSprinkleReloaded = options.onSprinkleReloaded;
+    this.resolveLickOriginUnitId = options.resolveLickOriginUnitId;
     this.inlineSprinkles = options.inlineSprinkles ?? new Set();
   }
 
@@ -560,7 +568,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
     // would place a minimized or background sprinkle and steal focus
     // (#2942 review). The replacement iframe is sized from this host box
     // in SprinkleRenderer, which is what close+open was accidentally doing.
-    const api = this.bridge.createAPI(name);
+    const api = this.bridge.createAPI(name, () => entry.lickOriginUnitId);
     const renderer = new SprinkleRenderer(entry.container, api);
     await renderer.render(content, name);
 
@@ -961,7 +969,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
   }
 
   /** Open a sprinkle by name, optionally in a specific zone. */
-  open(name: string, zone?: string, options: AddSprinkleOptions = {}): Promise<void> {
+  open(name: string, zone?: string, options: SprinkleManagerOpenOptions = {}): Promise<void> {
     return this.enqueueRendererOperation(name, () => this.openNow(name, zone, options));
   }
 
@@ -969,7 +977,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
   private async openNow(
     name: string,
     zone?: string,
-    options: AddSprinkleOptions = {}
+    options: SprinkleManagerOpenOptions = {}
   ): Promise<void> {
     if (this.openSprinkles.has(name)) {
       log.info('Sprinkle already open', { name });
@@ -1003,24 +1011,29 @@ export class SprinkleManager implements SprinkleManagerHandle {
     // Attach container to the layout BEFORE rendering so the sandbox iframe
     // (extension mode) gets added to a live DOM subtree. Iframes in detached
     // subtrees won't fire their load event.
-    this.openSprinkles.set(name, { renderer: null!, container });
+    const lickOriginUnitId = options.lickOriginTarget
+      ? this.resolveLickOriginUnitId?.(options.lickOriginTarget)
+      : undefined;
+    const entry = { renderer: null!, container, lickOriginUnitId };
+    this.openSprinkles.set(name, entry);
     if (options.attention) this.attentionOnly.add(name);
     else this.attentionOnly.delete(name);
     this.callbacks.addSprinkle(name, sprinkle.title, container, zone, {
-      ...options,
+      attention: options.attention,
+      background: options.background,
       icon: sprinkle.icon,
     });
 
-    const api = this.bridge.createAPI(name);
+    const api = this.bridge.createAPI(name, () => entry.lickOriginUnitId);
     const renderer = new SprinkleRenderer(container, api);
     await renderer.render(content, name);
 
-    const entry = this.openSprinkles.get(name);
-    if (!entry) {
+    const openEntry = this.openSprinkles.get(name);
+    if (!openEntry) {
       renderer.dispose();
       return;
     }
-    entry.renderer = renderer;
+    openEntry.renderer = renderer;
     renderer.activateBridgeLifecycle();
     if (!this.openSprinkles.has(name)) return;
     this.persistOpenSprinkles();
@@ -1046,21 +1059,26 @@ export class SprinkleManager implements SprinkleManagerHandle {
   /**
    * Route a rail-icon click to the right action based on current
    * state. When the sprinkle was surfaced in attention mode, promote
-   * it to user-opened (`markActivated`) and place its existing container.
+   * it to user-opened (`markActivated`), capture the rail-click origin,
+   * and place its existing container without rebuilding live panel state.
    * When it has a registered rail icon but no content yet, open it.
-   * An already-open sprinkle
+   * A previously user-opened sprinkle keeps its original lick origin. An already-open sprinkle
    * re-runs `addSprinkle` on its existing (already-rendered) container —
    * idempotent when it's already shown, and the layout's re-place if it
    * was minimized/parked.
    */
-  async activate(name: string, zone?: string): Promise<void> {
-    if (this.attentionOnly.has(name)) {
+  async activate(name: string, zone?: string, options: SprinkleOpenOptions = {}): Promise<void> {
+    const wasAttentionOnly = this.attentionOnly.has(name);
+    const entry = this.openSprinkles.get(name);
+    if (wasAttentionOnly && entry && options.lickOriginTarget) {
+      entry.lickOriginUnitId = this.resolveLickOriginUnitId?.(options.lickOriginTarget);
+    }
+    if (wasAttentionOnly) {
       this.markActivated(name);
     }
-    const entry = this.openSprinkles.get(name);
     if (!entry) {
       try {
-        await this.open(name, zone);
+        await this.open(name, zone, options);
       } catch (err) {
         log.warn('Failed to open sprinkle from rail-icon click', {
           name,

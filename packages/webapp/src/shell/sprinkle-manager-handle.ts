@@ -65,6 +65,15 @@ export interface SprinkleBroadcastResult {
   unknownRuntime?: string;
 }
 
+/** Context captured when a shell opens a sprinkle panel. */
+export interface SprinkleOpenOptions {
+  /**
+   * The opening shell's existing lick-target alias. The page resolves this
+   * once to a work-unit id so later panel clicks do not follow UI focus.
+   */
+  lickOriginTarget?: string;
+}
+
 /** Total instances a send reached — zero means the push vanished. */
 export function sendReportReach(report: SprinkleSendReport): number {
   return (report.leader ? 1 : 0) + report.followers.length;
@@ -101,7 +110,7 @@ export interface SprinkleManagerHandle {
   refresh(): Promise<void>;
   available(): ShellSprinkle[];
   opened(): string[];
-  open(name: string): Promise<void>;
+  open(name: string, zone?: string, options?: SprinkleOpenOptions): Promise<void>;
   close(name: string): void;
   reload(name: string): Promise<void>;
   sendToSprinkle(

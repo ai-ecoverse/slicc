@@ -5,7 +5,7 @@
  * posted back over `chrome.runtime`.
  */
 
-import type { SprinkleSendTarget } from '../shell/sprinkle-manager-handle.js';
+import type { SprinkleOpenOptions, SprinkleSendTarget } from '../shell/sprinkle-manager-handle.js';
 import type { SprinkleManager } from './sprinkle-manager.js';
 
 export async function handleSprinkleOp(
@@ -14,7 +14,8 @@ export async function handleSprinkleOp(
   op: string,
   name: string,
   data: unknown,
-  target?: SprinkleSendTarget
+  target?: SprinkleSendTarget,
+  openOptions?: SprinkleOpenOptions
 ): Promise<void> {
   try {
     let result: unknown;
@@ -31,7 +32,7 @@ export async function handleSprinkleOp(
         result = sprinkleManager.available().length;
         break;
       case 'open':
-        await sprinkleManager.open(name);
+        await sprinkleManager.open(name, undefined, openOptions);
         result = true;
         break;
       case 'close':

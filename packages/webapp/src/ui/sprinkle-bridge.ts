@@ -592,7 +592,7 @@ export type SprinkleIframePusher = (
 
 export class SprinkleBridge {
   private listeners = new Map<string, Set<UpdateCallback>>();
-  private lickHandler: (event: LickEvent) => void;
+  private lickHandler: (event: LickEvent, originUnitId?: string) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
   private minimizeHandler: (name: string) => void;
@@ -611,7 +611,7 @@ export class SprinkleBridge {
 
   constructor(
     fs: VirtualFS,
-    lickHandler: (event: LickEvent) => void,
+    lickHandler: (event: LickEvent, originUnitId?: string) => void,
     closeHandler: (name: string) => void,
     minimizeHandler: (name: string) => void,
     stopConeHandler: () => void,
@@ -968,7 +968,8 @@ export class SprinkleBridge {
    * LickEvent and forwards it to the lick handler.
    */
   private createLickHandler(
-    sprinkleName: string
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined
   ): (event: { action: string; data?: unknown } | string) => void {
     return (event) => {
       const action = typeof event === 'string' ? event : event.action;
@@ -980,7 +981,7 @@ export class SprinkleBridge {
         timestamp: new Date().toISOString(),
         body: { action, data },
       };
-      this.lickHandler(lickEvent);
+      this.lickHandler(lickEvent, getOriginUnitId());
     };
   }
 
@@ -1155,11 +1156,14 @@ export class SprinkleBridge {
     };
   }
 
-  /** Create a bridge API for a specific sprinkle. */
-  createAPI(sprinkleName: string): SprinkleBridgeAPI {
+  /** Create a bridge API whose lick origin can be updated without rebuilding the panel. */
+  createAPI(
+    sprinkleName: string,
+    getOriginUnitId: () => string | undefined = () => undefined
+  ): SprinkleBridgeAPI {
     const api: SprinkleBridgeAPI = {
       name: sprinkleName,
-      lick: this.createLickHandler(sprinkleName),
+      lick: this.createLickHandler(sprinkleName, getOriginUnitId),
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
