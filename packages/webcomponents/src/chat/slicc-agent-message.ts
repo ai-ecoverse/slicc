@@ -1,0 +1,360 @@
+import { define } from '../internal/define.js';
+import { h } from '../internal/dom.js';
+
+const STYLE = `
+slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink)); }
+slicc-agent-message .msg-ts { font-family: var(--ui); font-size: 10px; color: var(--txt-3); opacity: .7; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+/* Same containment the user bubble needs, for the same reason: an unbroken run
+   (a base64 payload in unfenced prose) has no break opportunity, so it
+   overflows the chat column and scrolls the transcript sideways. Inherited by
+   every prose surface; fenced code opts back out below. */
+slicc-agent-message .body { font-family: var(--ui); font-size: 14px; overflow-wrap: anywhere; word-break: break-word; }
+slicc-agent-message .body p { margin: 0 0 8px; }
+slicc-agent-message strong { font-weight: 600; color: var(--accent); }
+/* Inline code carries the active context accent (--ctx flips per
+   cone/scoop/freezer). The mixes lean heavily on --canvas / --ink so the
+   wash stays subtle and contrast holds in light AND dark. */
+slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--ctx) 12%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 20%, transparent); color: var(--accent); border-radius: 6px; padding: 1px 6px; overflow-wrap: anywhere; word-break: break-word; }
+slicc-agent-message .body h1, slicc-agent-message .body h2, slicc-agent-message .body h3, slicc-agent-message .body h4, slicc-agent-message .body h5, slicc-agent-message .body h6 { font-family: var(--ui); margin: 1.2em 0 0.35em; font-weight: 700; line-height: 1.25; }
+slicc-agent-message .body > :first-child { margin-top: 0; }
+slicc-agent-message .body > :last-child { margin-bottom: 0; }
+slicc-agent-message .body h1 { font-size: 22px; }
+slicc-agent-message .body h2 { font-size: 18px; }
+slicc-agent-message .body h3 { font-size: 16px; }
+slicc-agent-message .body h4 { font-size: 14px; }
+slicc-agent-message .body h5, slicc-agent-message .body h6 { font-size: 13px; color: var(--txt-2); }
+slicc-agent-message .body a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+slicc-agent-message .body a:hover { text-decoration: underline; }
+/* A verified file mention. It reads as a file rather than a hyperlink — mono
+   face, a dotted underline that only solidifies on hover — because these are
+   dense in agent prose and full link chrome on every one would shout. The rule
+   applies inside inline code too, where the surrounding <code> already supplies
+   the family and background. */
+slicc-agent-message .body a.file-mention { font-family: var(--mono); font-size: .94em; text-decoration: underline dotted color-mix(in srgb, var(--ctx) 45%, transparent); text-underline-offset: 2px; cursor: pointer; border-radius: 3px; }
+slicc-agent-message .body a.file-mention:hover { text-decoration: underline solid var(--accent); background: color-mix(in srgb, var(--ctx) 10%, transparent); }
+slicc-agent-message .body code a.file-mention { font-family: inherit; font-size: inherit; color: inherit; }
+slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
+slicc-agent-message .body li { margin: 3px 0; }
+slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--accent); padding-left: 12px; color: var(--txt-2); }
+slicc-agent-message .body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+slicc-agent-message .body del { color: var(--txt-3); }
+/* Fenced blocks get a soft context-accent wash + accent edge instead of the
+   flat grey card — same --ctx-derived mixes as inline code. */
+slicc-agent-message .body pre { margin: 8px 0; background: color-mix(in srgb, var(--ctx) 7%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 22%, var(--line)); border-left: 3px solid color-mix(in srgb, var(--ctx) 55%, var(--line)); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+slicc-agent-message .body pre code { background: none; border: none; color: var(--ink); border-radius: 0; padding: 0; font-size: inherit; overflow-wrap: normal; word-break: normal; }
+/* Wide tables scroll INSIDE themselves — display:block turns the table into
+   its own scroll container, so a narrow chat column never drags the whole
+   history sideways. */
+slicc-agent-message .body table { display: block; max-width: 100%; width: fit-content; overflow-x: auto; border-collapse: collapse; margin: 2px 0 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; }
+slicc-agent-message .body th, slicc-agent-message .body td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; }
+slicc-agent-message .body th { background: var(--ghost); font-weight: 600; }
+/* Inline media from markdown ![alt](path). Both elements cap at the column
+   width and keep their aspect ratio, so a 4K frame cannot widen the transcript.
+   The dark checkerboard-free neutral backdrop keeps a transparent PNG legible
+   in both themes while the poster/first frame decodes. */
+slicc-agent-message .body .msg__media { display: block; max-width: 100%; margin: 8px 0; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ctx) 6%, var(--canvas)); }
+/* height:auto belongs to the elements that HAVE an intrinsic aspect ratio.
+   An <audio> has none, so auto resolves to 0 and the control bar disappears
+   entirely — it must keep the UA height. */
+slicc-agent-message .body .msg__media--image, slicc-agent-message .body .msg__media--video { height: auto; }
+/* A clip needs a floor: preload="metadata" means the element has no
+   intrinsic height until metadata lands, and a 0px-tall video with controls is
+   unclickable. */
+slicc-agent-message .body .msg__media--video { width: 100%; min-height: 120px; background: #000; }
+slicc-agent-message .body .msg__media--image { cursor: zoom-in; }
+/* An audio player is control chrome, not a picture: it has a fixed intrinsic
+   height and no aspect ratio to preserve, so it spans the column and opts out
+   of the media border/background the visual elements carry. */
+slicc-agent-message .body .msg__media--audio { width: 100%; border: 0; border-radius: 0; background: none; }
+/* Two or more adjacent media items lay out as a grid instead of a tall stack,
+   so a batch of frames stays glanceable and the prose after it remains on
+   screen. auto-fit + minmax collapses to one column in a narrow chat pane. */
+slicc-agent-message .body .msg__media-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+/* Two and four both want an explicit two-column grid: left to auto-fit, four
+   items land as a lopsided 3 + 1 rather than a balanced 2 x 2. */
+slicc-agent-message .body .msg__media-gallery--pair,
+slicc-agent-message .body .msg__media-gallery--quad { grid-template-columns: repeat(2, 1fr); }
+slicc-agent-message .body .msg__media-gallery .msg__media { margin: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+slicc-agent-message .body .msg__media-gallery .msg__media--video { min-height: 0; object-fit: contain; }
+slicc-agent-message .body .msg__media-gallery .msg__media--audio { aspect-ratio: auto; align-self: center; }
+slicc-agent-message .plan { list-style: none; margin: 4px 0 0; padding: 0; }
+slicc-agent-message .plan li { position: relative; padding-left: 20px; margin: 5px 0; font-size: 14px; }
+slicc-agent-message .plan li::before { content: ""; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px; border-radius: 50%; }
+slicc-agent-message .plan li:nth-child(1)::before { background: var(--rose); }
+slicc-agent-message .plan li:nth-child(2)::before { background: var(--violet); }
+slicc-agent-message .plan li:nth-child(3)::before { background: var(--cyan); }
+slicc-agent-message .check { list-style: none; margin: 6px 0 0; padding: 0; }
+slicc-agent-message .check li { display: flex; align-items: center; gap: 9px; font-size: 13.5px; margin: 6px 0; }
+slicc-agent-message .check li .ck { width: 18px; height: 18px; border-radius: 50%; background: #1a7f37; color: #fff; display: grid; place-items: center; font-size: 11px; flex: 0 0 auto; }
+slicc-agent-message .check li .ck.r { background: var(--rose); }
+slicc-agent-message .check li .ck.cy { background: var(--cyan); }
+slicc-agent-message .check li .ck.vi { background: var(--violet); }
+slicc-agent-message .check li .ck.am { background: var(--amber); }
+slicc-agent-message .thinkrow { margin-bottom: 14px; }
+slicc-agent-message .thinkrow-row { display: inline-flex; align-items: center; gap: 10px; }
+slicc-agent-message .progress { font-family: var(--ui); font-size: 13px; color: var(--txt-2); }
+slicc-agent-message .dots { display: inline-flex; gap: 7px; align-items: flex-end; padding: 6px 2px; }
+slicc-agent-message .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--d); animation: slicc-am-bdot 1.05s infinite ease-in-out; }
+slicc-agent-message .dots i:nth-child(2) { animation-delay: .16s; }
+slicc-agent-message .dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes slicc-am-bdot { 0%, 75%, 100% { transform: translateY(0); opacity: .45; } 38% { transform: translateY(-8px); opacity: 1; } }
+slicc-agent-message .tw-caret { display: inline-block; width: 2px; height: 1.05em; vertical-align: -2px; margin-left: 1px; background: var(--ink); animation: slicc-am-cblink .9s steps(1) infinite; }
+@keyframes slicc-am-cblink { 50% { opacity: 0; } }
+`;
+
+const STYLE_ID = 'slicc-agent-message-style';
+
+function ensureMessageStyle(doc: Document): void {
+  if (doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = STYLE;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+const THINK_DOT_HUES = ['#f43f5e', '#06b6d4', '#8b5cf6'] as const;
+
+export type CheckVariant = '' | 'r' | 'cy' | 'vi' | 'am';
+
+export interface CheckItem {
+  text: string;
+
+  variant?: CheckVariant;
+
+  glyph?: string;
+}
+
+const CHECK_VARIANTS: ReadonlySet<string> = new Set(['', 'r', 'cy', 'vi', 'am']);
+
+function thinkRowEl(): HTMLElement {
+  const dots = h('div', { class: 'dots', part: 'dots', 'aria-hidden': 'true' });
+  for (const hue of THINK_DOT_HUES) dots.append(h('i', { style: `--d:${hue}` }));
+  return dots;
+}
+
+function planEl(items: readonly string[]): HTMLElement {
+  const ul = h('ul', { class: 'plan', part: 'plan' });
+  for (const text of items) ul.append(h('li', null, text));
+  return ul;
+}
+
+function checkEl(items: readonly CheckItem[]): HTMLElement {
+  const ul = h('ul', { class: 'check', part: 'check' });
+  for (const item of items) {
+    const variant = item.variant && CHECK_VARIANTS.has(item.variant) ? item.variant : '';
+    const cls = variant ? `ck ${variant}` : 'ck';
+    const glyph = item.glyph ?? '✓';
+    ul.append(
+      h('li', null, h('span', { class: cls }, glyph), h('span', { class: 'ctext' }, item.text))
+    );
+  }
+  return ul;
+}
+
+export class SliccAgentMessage extends HTMLElement {
+  static readonly observedAttributes = ['thinking', 'streaming', 'progress', 'timestamp'];
+
+  #body!: HTMLElement;
+  #think: HTMLElement | null = null;
+  #progressEl: HTMLElement | null = null;
+  #caret: HTMLElement | null = null;
+  #built = false;
+
+  connectedCallback(): void {
+    ensureMessageStyle(this.ownerDocument);
+    this.#build();
+    this.#syncThinking();
+    this.#syncStreaming();
+  }
+
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
+    if (oldValue === newValue || !this.isConnected) return;
+    if (name === 'thinking') {
+      this.#syncThinking();
+      this.dispatchEvent(
+        new CustomEvent('slicc-agent-message-thinking', {
+          bubbles: true,
+          composed: true,
+          detail: { thinking: newValue !== null },
+        })
+      );
+    } else if (name === 'progress') {
+      this.#syncProgress();
+    } else if (name === 'streaming') {
+      this.#syncStreaming();
+      this.dispatchEvent(
+        new CustomEvent('slicc-agent-message-streaming', {
+          bubbles: true,
+          composed: true,
+          detail: { streaming: newValue !== null },
+        })
+      );
+    } else if (name === 'timestamp') {
+      this.#syncTimestamp();
+    }
+  }
+
+  get thinking(): boolean {
+    return this.hasAttribute('thinking');
+  }
+
+  set thinking(value: boolean) {
+    if (value) this.setAttribute('thinking', '');
+    else this.removeAttribute('thinking');
+  }
+
+  get streaming(): boolean {
+    return this.hasAttribute('streaming');
+  }
+
+  set streaming(value: boolean) {
+    if (value) this.setAttribute('streaming', '');
+    else this.removeAttribute('streaming');
+  }
+
+  get progress(): string | null {
+    return this.getAttribute('progress');
+  }
+
+  set progress(value: string | null) {
+    if (value == null) this.removeAttribute('progress');
+    else this.setAttribute('progress', value);
+  }
+
+  get body(): HTMLElement {
+    this.#build();
+    return this.#body;
+  }
+
+  setBodyHtml(html: string): void {
+    this.#build();
+    const range = this.ownerDocument.createRange();
+    range.selectNodeContents(this.#body);
+    this.#setBody(range.createContextualFragment(html));
+  }
+
+  setPlan(items: readonly string[]): void {
+    this.#setBody(planEl(items));
+  }
+
+  setCheck(items: readonly CheckItem[]): void {
+    this.#setBody(checkEl(items));
+  }
+
+  #setBody(content: Node): void {
+    this.#build();
+    this.#body.replaceChildren(content);
+    this.#syncStreaming();
+  }
+
+  #build(): void {
+    if (this.#built) return;
+    this.#built = true;
+
+    this.classList.add('msg', 'bot');
+
+    const incoming = Array.from(this.childNodes).filter(
+      (n) => !(n instanceof HTMLElement && n.classList.contains('body'))
+    );
+
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      const tsEl = this.ownerDocument.createElement('span');
+      tsEl.className = 'msg-ts';
+      tsEl.setAttribute('part', 'timestamp');
+      tsEl.textContent = ts;
+      this.appendChild(tsEl);
+    }
+
+    this.#body = this.ownerDocument.createElement('div');
+    this.#body.className = 'body';
+    this.#body.setAttribute('part', 'body');
+
+    for (const node of incoming) this.#body.appendChild(node);
+
+    this.appendChild(this.#body);
+  }
+
+  #syncThinking(): void {
+    const thinking = this.thinking;
+    this.classList.toggle('thinkrow', thinking);
+    if (thinking) {
+      this.#body.style.display = 'none';
+      if (!this.#think) {
+        this.#think = this.ownerDocument.createElement('div');
+        this.#think.className = 'thinkrow-row';
+        this.#think.appendChild(thinkRowEl());
+        this.insertBefore(this.#think, this.#body);
+      }
+      this.#syncProgress();
+    } else {
+      this.#body.style.removeProperty('display');
+      if (this.#think) {
+        this.#think.remove();
+        this.#think = null;
+        this.#progressEl = null;
+      }
+    }
+  }
+
+  #syncProgress(): void {
+    if (!this.#think) return;
+    const text = this.progress;
+    if (text) {
+      if (!this.#progressEl) {
+        this.#progressEl = this.ownerDocument.createElement('span');
+        this.#progressEl.className = 'progress';
+        this.#progressEl.setAttribute('part', 'progress');
+        this.#progressEl.setAttribute('aria-live', 'polite');
+        this.#think.appendChild(this.#progressEl);
+      }
+      this.#progressEl.textContent = text;
+    } else if (this.#progressEl) {
+      this.#progressEl.remove();
+      this.#progressEl = null;
+    }
+  }
+
+  #syncStreaming(): void {
+    if (this.streaming) {
+      if (!this.#caret?.isConnected) {
+        this.#caret = this.ownerDocument.createElement('span');
+        this.#caret.className = 'tw-caret';
+        this.#caret.setAttribute('part', 'caret');
+        this.#caret.setAttribute('aria-hidden', 'true');
+        this.#body.appendChild(this.#caret);
+      } else {
+        this.#body.appendChild(this.#caret);
+      }
+    } else if (this.#caret) {
+      this.#caret.remove();
+      this.#caret = null;
+    }
+  }
+
+  #syncTimestamp(): void {
+    const existing = this.querySelector('.msg-ts');
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      if (existing) {
+        existing.textContent = ts;
+      } else {
+        const tsEl = this.ownerDocument.createElement('span');
+        tsEl.className = 'msg-ts';
+        tsEl.setAttribute('part', 'timestamp');
+        tsEl.textContent = ts;
+        this.insertBefore(tsEl, this.#body);
+      }
+    } else {
+      existing?.remove();
+    }
+  }
+}
+
+define('slicc-agent-message', SliccAgentMessage);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'slicc-agent-message': SliccAgentMessage;
+  }
+}

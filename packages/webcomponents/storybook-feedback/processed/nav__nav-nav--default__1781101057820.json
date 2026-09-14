@@ -1,0 +1,8 @@
+{
+  "storyId": "nav-nav--default",
+  "storyTitle": "Nav/Nav",
+  "subsystem": "nav",
+  "importPath": "./src/nav/slicc-nav.stories.ts",
+  "comment": "the light/dark switch should never be in the nav bar, we use the system prefs for this",
+  "createdAt": "2026-06-10T14:17:37.820Z"
+}

@@ -1,0 +1,830 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockPopup = { close: vi.fn() };
+const messageListeners = new Set<Function>();
+
+const MOCK_ORIGIN = 'http://localhost';
+
+const mockWindow = {
+  open: vi.fn(() => mockPopup),
+  addEventListener: vi.fn((type: string, fn: Function) => {
+    if (type === 'message') messageListeners.add(fn);
+  }),
+  removeEventListener: vi.fn((type: string, fn: Function) => {
+    if (type === 'message') messageListeners.delete(fn);
+  }),
+  location: { origin: MOCK_ORIGIN, pathname: '/', search: '' },
+};
+
+vi.stubGlobal('window', mockWindow);
+
+vi.stubGlobal(
+  'fetch',
+  vi.fn(() => Promise.resolve({ status: 204 }))
+);
+
+vi.stubGlobal('location', { pathname: '/', search: '' });
+
+function fireMessage(data: unknown, opts: { origin?: string; source?: object | null } = {}) {
+  const origin = opts.origin ?? MOCK_ORIGIN;
+  const source = 'source' in opts ? opts.source : mockPopup;
+  for (const handler of messageListeners) {
+    handler({ data, origin, source } as unknown as MessageEvent);
+  }
+}
+
+import {
+  createOAuthLauncher,
+  getOAuthPageOrigin,
+  openIdpLogoutUrl,
+} from '../../src/providers/oauth-service.js';
+
+describe('createOAuthLauncher', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    messageListeners.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns a function (CLI launcher in Node environment)', () => {
+    const launcher = createOAuthLauncher();
+    expect(typeof launcher).toBe('function');
+  });
+
+  it('opens a popup with the authorize URL', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize?client_id=test');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#access_token=abc123',
+    });
+
+    const result = await promise;
+    expect(mockWindow.open).toHaveBeenCalledWith(
+      'https://idp.example.com/authorize?client_id=test',
+      '_blank',
+      'width=500,height=700,popup=yes'
+    );
+    expect(result).toBe('http://localhost:5710/auth/callback#access_token=abc123');
+  });
+
+  it('returns null when callback reports an error', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      error: 'access_denied',
+    });
+
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('ignores unrelated postMessage events', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({ type: 'unrelated-event' });
+    fireMessage({ something: 'else' });
+    fireMessage(null);
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=xyz',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=xyz');
+  });
+
+  it('returns null on timeout and closes popup', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    vi.advanceTimersByTime(120001);
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(mockPopup.close).toHaveBeenCalled();
+  });
+
+  it('resolves null when the user closes the OAuth popup (cancelled flow)', async () => {
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    vi.mocked(fetch).mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    popupClosed = true;
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('resolves with the server result when popup closes mid-COOP relay (race fix)', async () => {
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=coop',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    popupClosed = true;
+    await vi.advanceTimersByTimeAsync(500);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=coop');
+  });
+
+  it('cleans up message listener after successful callback', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=abc',
+    });
+
+    await promise;
+
+    expect(mockWindow.removeEventListener).toHaveBeenCalledWith('message', expect.any(Function));
+  });
+
+  it('returns null when redirectUrl is missing from callback', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+    });
+
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('resolves to null on timeout when window.open returns null (popup blocked)', async () => {
+    mockWindow.open.mockReturnValueOnce(null as any);
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    vi.advanceTimersByTime(120001);
+
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('resolves via server-side polling in Electron overlay mode', async () => {
+    vi.stubGlobal('location', { pathname: '/electron', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=polled',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=polled');
+
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+  });
+
+  it('polls in standalone CLI mode and postMessage wins the race when it arrives first', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result', { headers: {} });
+    const callsBeforeMessage = mockFetch.mock.calls.length;
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=msg',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=msg');
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockFetch.mock.calls.length).toBe(callsBeforeMessage);
+  });
+
+  it('resolves via polling in standalone CLI mode when postMessage never arrives (COOP-severed opener)', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=polled-cli',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=polled-cli');
+  });
+
+  it('resolves null after timeout when the server only ever returns 204', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(mockPopup.close).toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('resolves null and logs when the server returns an error payload', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve({ error: 'access_denied' }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(errSpy).toHaveBeenCalledWith(
+      '[oauth-service] Server relay OAuth error:',
+      'access_denied'
+    );
+    errSpy.mockRestore();
+  });
+
+  it('logs and keeps polling when fetch rejects', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockRejectedValueOnce(new Error('boom'));
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=after-error',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=after-error');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('continues polling on server errors in Electron overlay mode', async () => {
+    vi.stubGlobal('location', { pathname: '/electron', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValueOnce({ status: 500, ok: false } as Response);
+
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=recovered',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=recovered');
+
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+  });
+
+  it('does not resolve twice on duplicate callbacks', async () => {
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=first',
+    });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=second',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=first');
+  });
+});
+
+describe('createOAuthLauncher — OAuth-result poll routing (thin-bridge)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    messageListeners.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    vi.useRealTimers();
+  });
+
+  it('routes the poll to the configured local API base when bridge mode is active', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('bridge-token-abc');
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:5710/api/oauth-result', {
+      headers: { 'X-Bridge-Token': 'bridge-token-abc' },
+    });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=msg',
+    });
+    await promise;
+  });
+
+  it('omits the bridge token when no local API base is configured (classic CLI)', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl(null);
+
+    setBridgeToken('stray-token');
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result', { headers: {} });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#done',
+    });
+    await promise;
+  });
+
+  it('omits the bridge token when a base is set but no token (defensive)', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken(null);
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:5710/api/oauth-result', {
+      headers: {},
+    });
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#done',
+    });
+    await promise;
+  });
+});
+
+describe('getOAuthPageOrigin', () => {
+  const originalWindow = (globalThis as any).window;
+
+  afterEach(() => {
+    if (originalWindow === undefined) {
+      delete (globalThis as any).window;
+    } else {
+      (globalThis as any).window = originalWindow;
+    }
+    delete (globalThis as any).__slicc_panelRpc;
+  });
+
+  it('reads origin and href from window when available', async () => {
+    (globalThis as any).window = {
+      location: { origin: 'http://localhost:5711', href: 'http://localhost:5711/?x=1' },
+    };
+    const info = await getOAuthPageOrigin();
+    expect(info.origin).toBe('http://localhost:5711');
+    expect(info.href).toBe('http://localhost:5711/?x=1');
+  });
+
+  it('routes through panel-RPC when window is undefined (worker context)', async () => {
+    delete (globalThis as any).window;
+    const callSpy = vi.fn(async (op: string) => {
+      expect(op).toBe('page-info');
+      return { origin: 'http://localhost:5731', href: 'http://localhost:5731/foo', title: 't' };
+    });
+    (globalThis as any).__slicc_panelRpc = { call: callSpy, dispose: () => {} };
+
+    const info = await getOAuthPageOrigin();
+    expect(callSpy).toHaveBeenCalled();
+    expect(info.origin).toBe('http://localhost:5731');
+    expect(info.href).toBe('http://localhost:5731/foo');
+  });
+
+  it('throws with a clear message when no window and no panel-RPC bridge', async () => {
+    delete (globalThis as any).window;
+    delete (globalThis as any).__slicc_panelRpc;
+    await expect(getOAuthPageOrigin()).rejects.toThrow(/panel-RPC bridge/);
+  });
+});
+
+describe('openIdpLogoutUrl', () => {
+  afterEach(() => {
+    vi.stubGlobal('window', mockWindow);
+  });
+
+  it('opens a popup to the given URL with popup=yes in the features string', async () => {
+    const closeStub = vi.fn();
+
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect((window as any).open).toHaveBeenCalledWith(
+      'https://idp.example.com/logout',
+      '_blank',
+      expect.stringContaining('popup=yes')
+    );
+  });
+
+  it('force-closes the popup and resolves after the timeout when user does not close it', async () => {
+    const closeStub = vi.fn();
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect(closeStub).toHaveBeenCalled();
+  });
+
+  it('resolves as soon as the user closes the popup without waiting for the timeout', async () => {
+    let closed = false;
+    const closeStub = vi.fn(() => {
+      closed = true;
+    });
+    vi.stubGlobal('window', {
+      open: vi.fn(() => ({
+        close: closeStub,
+        get closed() {
+          return closed;
+        },
+      })),
+    });
+
+    setTimeout(() => {
+      closed = true;
+    }, 60);
+
+    const start = Date.now();
+    await openIdpLogoutUrl('https://idp.example.com/logout', 10_000);
+
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('resolves undefined and does not throw when window is undefined (worker runtime)', async () => {
+    vi.stubGlobal('window', undefined);
+
+    await expect(openIdpLogoutUrl('https://idp.example.com/logout')).resolves.toBeUndefined();
+  });
+});
+
+describe('createOAuthLauncher — runtime gating regression', () => {
+  afterEach(() => {
+    delete (globalThis as any).chrome;
+    vi.resetModules();
+  });
+
+  it('extension context (chrome.runtime.id present) routes to launchOAuthExtension, not launchOAuthCli', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = {
+      runtime: { id: 'test-extension-id', sendMessage, onMessage },
+    };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    const openCallsBefore = mockWindow.open.mock.calls.length;
+
+    void launcher('https://idp.example.com/authorize');
+    await Promise.resolve();
+
+    expect(mockWindow.open.mock.calls.length).toBe(openCallsBefore);
+    expect(sendMessage).toHaveBeenCalled();
+    expect(onMessage.addListener).toHaveBeenCalled();
+  });
+
+  it('extension launcher forwards interactive:true into the oauth-request by default', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    void launcher('https://idp.example.com/authorize');
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'panel',
+        payload: expect.objectContaining({ type: 'oauth-request', interactive: true }),
+      })
+    );
+  });
+
+  it('extension launcher forwards interactive:false when requested (silent renewal)', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    void launcher('https://idp.example.com/authorize', { interactive: false });
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ type: 'oauth-request', interactive: false }),
+      })
+    );
+  });
+
+  it('extension launcher ignores null runtime messages and still resolves valid oauth results', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    let listener: ((message: unknown) => void) | undefined;
+    const onMessage = {
+      addListener: vi.fn((fn: (message: unknown) => void) => {
+        listener = fn;
+      }),
+      removeListener: vi.fn(),
+    };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    const promise = launcher('https://idp.example.com/authorize');
+    expect(listener).toBeDefined();
+    expect(() => listener?.(null)).not.toThrow();
+    listener?.({
+      source: 'service-worker',
+      payload: {
+        type: 'oauth-result',
+        redirectUrl: 'https://test-extension-id.chromiumapp.org/mcp-callback#code=ok',
+      },
+    });
+
+    await expect(promise).resolves.toBe(
+      'https://test-extension-id.chromiumapp.org/mcp-callback#code=ok'
+    );
+  });
+});
+
+describe('createOAuthLauncher — user-activation fast path (Wave 13b)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    messageListeners.clear();
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    const { setLeaderPermissionsSurface } = await import(
+      '../../src/ui/wc/wc-permissions-registry.js'
+    );
+    setLeaderPermissionsSurface(null);
+
+    vi.stubGlobal('window', mockWindow);
+  });
+
+  function stubUserActivation(isActive: boolean | undefined): void {
+    if (isActive === undefined) {
+      vi.stubGlobal('navigator', {});
+      return;
+    }
+    vi.stubGlobal('navigator', { userActivation: { isActive } });
+  }
+
+  async function loadFreshOauthService() {
+    const oauthMod = await import('../../src/providers/oauth-service.js');
+    const registryMod = await import('../../src/ui/wc/wc-permissions-registry.js');
+    return { ...oauthMod, ...registryMod };
+  }
+
+  it('userActivation.isActive=true: opens window.open directly and does not call surface.prompt', async () => {
+    stubUserActivation(true);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const prompt = vi.fn();
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=fast',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=fast');
+    expect(mockWindow.open).toHaveBeenCalledWith(
+      'https://idp.example.com/authorize',
+      '_blank',
+      'width=500,height=700,popup=yes'
+    );
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('userActivation.isActive=false + surface mounted: routes through surface.prompt with kinds=[popup]', async () => {
+    stubUserActivation(false);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const fakeWindow = mockPopup as unknown as Window;
+    const prompt = vi.fn(async () => ({
+      status: 'granted' as const,
+      grants: [{ kind: 'popup' as const, window: fakeWindow }],
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=gated',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=gated');
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect((prompt.mock.calls[0] as unknown[])[0]).toMatchObject({
+      kinds: ['popup'],
+      requestOptions: { popup: { url: 'https://idp.example.com/authorize' } },
+    });
+    expect(mockWindow.open).not.toHaveBeenCalled();
+  });
+
+  it('userActivation.isActive=false + surface cancelled: resolves null cleanly', async () => {
+    stubUserActivation(false);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const prompt = vi.fn(async () => ({
+      status: 'cancelled' as const,
+      grants: [],
+      reason: 'cancelled' as const,
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const result = await launcher('https://idp.example.com/authorize');
+    expect(result).toBeNull();
+    expect(prompt).toHaveBeenCalled();
+    expect(mockWindow.open).not.toHaveBeenCalled();
+  });
+
+  it('navigator.userActivation undefined: falls back to surface prompt when mounted', async () => {
+    stubUserActivation(undefined);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const fakeWindow = mockPopup as unknown as Window;
+    const prompt = vi.fn(async () => ({
+      status: 'granted' as const,
+      grants: [{ kind: 'popup' as const, window: fakeWindow }],
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=fallback',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=fallback');
+    expect(prompt).toHaveBeenCalled();
+  });
+});

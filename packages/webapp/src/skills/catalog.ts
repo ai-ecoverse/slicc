@@ -1,0 +1,404 @@
+import { createLogger } from '../base/logger.js';
+import type { VirtualFS } from '../fs/index.js';
+import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
+import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+
+const log = createLogger('skills-discovery');
+
+export type SkillDiscoverySource = 'native' | 'agents' | 'claude' | 'marketplace' | 'plugin';
+
+export interface DiscoveredSkillCandidate {
+  source: SkillDiscoverySource;
+
+  sourceRoot: string;
+
+  path: string;
+
+  skillFilePath?: string;
+}
+
+export interface SkillNameCollision<T> {
+  name: string;
+  winner: T;
+  shadowed: T[];
+}
+
+const DISCOVERY_ORDER: SkillDiscoverySource[] = [
+  'native',
+  'agents',
+  'claude',
+  'marketplace',
+  'plugin',
+];
+const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySource, 'native'>>([
+  ['.agents', 'agents'],
+  ['.claude', 'claude'],
+]);
+const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc', 'node_modules']);
+
+const PLUGINS_REGISTRY_PATH = '/workspace/.plugins/plugins.json';
+
+const MAX_DISCOVERY_DEPTH = 24;
+const MAX_DISCOVERY_DIRECTORIES = 20_000;
+const COMPATIBILITY_CACHE_INVALIDATION_METHODS = [
+  'mkdir',
+  'mount',
+  'rename',
+  'rm',
+  'unmount',
+  'writeFile',
+] as const;
+
+type CompatibilityCacheInvalidationMethod =
+  (typeof COMPATIBILITY_CACHE_INVALIDATION_METHODS)[number];
+
+type CompatibilityCacheHookMethod = (...args: unknown[]) => Promise<unknown>;
+
+type MonkeypatchableVirtualFs = Partial<
+  Record<CompatibilityCacheInvalidationMethod, CompatibilityCacheHookMethod>
+>;
+
+interface MarketplaceManifest {
+  readonly plugins?: readonly MarketplacePluginEntry[];
+}
+
+interface MarketplacePluginEntry {
+  readonly source?: unknown;
+}
+
+const compatibilityCandidatesCache = new WeakMap<object, DiscoveredSkillCandidate[]>();
+const compatibilityCacheHooksInstalled = new WeakSet<object>();
+
+export async function discoverSkillCandidates(
+  fs: VirtualFS,
+  nativeSkillsDir: string = WORKSPACE_SKILLS_PATH
+): Promise<DiscoveredSkillCandidate[]> {
+  const nativeCandidates = await discoverNativeSkillCandidates(fs, nativeSkillsDir);
+  const compatibilityCandidates = await getCompatibilitySkillCandidates(fs);
+  const pluginCandidates = await discoverPluginSkillCandidates(fs);
+
+  return [
+    ...DISCOVERY_ORDER.flatMap((source) => {
+      const candidates =
+        source === 'native'
+          ? nativeCandidates
+          : source === 'plugin'
+            ? pluginCandidates
+            : compatibilityCandidates.filter((candidate) => candidate.source === source);
+      return candidates.sort((a, b) => a.path.localeCompare(b.path));
+    }),
+  ];
+}
+
+async function discoverPluginSkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  let roots: string[];
+  try {
+    const raw = await fs.readTextFile(PLUGINS_REGISTRY_PATH);
+    const parsed = JSON.parse(raw) as { plugins?: Record<string, { root?: unknown }> };
+    if (!parsed || typeof parsed !== 'object' || !parsed.plugins) return [];
+    roots = Object.values(parsed.plugins)
+      .map((entry) => entry?.root)
+      .filter((root): root is string => typeof root === 'string');
+  } catch {
+    return [];
+  }
+
+  const discovered: DiscoveredSkillCandidate[] = [];
+  for (const root of roots) {
+    const skillRoot = `${root}/skills`;
+    const skillEntries = await readSortedDir(fs, skillRoot);
+    for (const skillEntry of skillEntries) {
+      if (skillEntry.type !== 'directory') continue;
+      const skillPath = `${skillRoot}/${skillEntry.name}`;
+      const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+      if (!(await pathExists(fs, skillFilePath))) continue;
+      discovered.push({ source: 'plugin', sourceRoot: skillRoot, path: skillPath, skillFilePath });
+    }
+  }
+  return discovered;
+}
+
+async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  if (isMonkeypatchUnsafeFs(fs)) {
+    const fresh = await discoverCompatibilitySkillCandidates(fs);
+    return fresh.map((candidate) => ({ ...candidate }));
+  }
+
+  installCompatibilityCacheInvalidationHooks(fs);
+
+  const cacheKey = fs as object;
+  const cached = compatibilityCandidatesCache.get(cacheKey);
+  if (cached) {
+    return cached.map((candidate) => ({ ...candidate }));
+  }
+
+  const discovered = await discoverCompatibilitySkillCandidates(fs);
+  compatibilityCandidatesCache.set(cacheKey, discovered);
+  return discovered.map((candidate) => ({ ...candidate }));
+}
+
+function isMonkeypatchUnsafeFs(fs: VirtualFS): boolean {
+  try {
+    return (fs as unknown as Record<symbol, unknown>)[MONKEYPATCH_UNSAFE_FS] === true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveSkillNameCollisions<T>(
+  entries: readonly T[],
+  getName: (entry: T) => string
+): { winners: T[]; collisions: SkillNameCollision<T>[] } {
+  const winners = new Map<string, T>();
+  const collisions = new Map<string, SkillNameCollision<T>>();
+
+  for (const entry of entries) {
+    const name = getName(entry);
+    if (!winners.has(name)) {
+      winners.set(name, entry);
+      continue;
+    }
+
+    const collision = collisions.get(name) ?? {
+      name,
+      winner: winners.get(name)!,
+      shadowed: [],
+    };
+    collision.shadowed.push(entry);
+    collisions.set(name, collision);
+  }
+
+  return {
+    winners: Array.from(winners.values()),
+    collisions: Array.from(collisions.values()),
+  };
+}
+
+async function discoverNativeSkillCandidates(
+  fs: VirtualFS,
+  nativeSkillsDir: string
+): Promise<DiscoveredSkillCandidate[]> {
+  const entries = await readSortedDir(fs, nativeSkillsDir);
+  const discovered: DiscoveredSkillCandidate[] = [];
+
+  for (const entry of entries) {
+    if (entry.type !== 'directory') continue;
+
+    const skillPath = `${nativeSkillsDir}/${entry.name}`;
+    const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+    const hasSkillFile = await pathExists(fs, skillFilePath);
+
+    if (!hasSkillFile) continue;
+
+    discovered.push({
+      source: 'native',
+      sourceRoot: nativeSkillsDir,
+      path: skillPath,
+      skillFilePath,
+    });
+  }
+
+  return discovered;
+}
+
+async function resolveMarketplacePluginPaths(
+  fs: VirtualFS,
+  manifestPath: string
+): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await fs.readTextFile(manifestPath);
+  } catch {
+    return [];
+  }
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  if (typeof manifest !== 'object' || manifest === null) {
+    return [];
+  }
+
+  const plugins = (manifest as MarketplaceManifest).plugins;
+  if (!Array.isArray(plugins)) {
+    return [];
+  }
+
+  const parentDir = manifestPath.replace(/\/[^/]+$/, '').replace(/\/.claude-plugin$/, '');
+  const paths: string[] = [];
+
+  for (const plugin of plugins) {
+    if (typeof plugin !== 'object' || plugin === null) continue;
+    const source = (plugin as MarketplacePluginEntry).source;
+
+    if (typeof source !== 'string') continue;
+
+    if (source.startsWith('/') || source.split('/').includes('..')) continue;
+
+    const normalized = source.replace(/^\.\//, '').replace(/\/$/, '').replace(/^\.$/, '');
+    paths.push(normalized ? `${parentDir}/${normalized}` : parentDir);
+  }
+
+  return paths;
+}
+
+async function discoverMarketplaceSkillCandidates(
+  fs: VirtualFS,
+  claudePluginPath: string,
+  seenPaths: Set<string>
+): Promise<DiscoveredSkillCandidate[]> {
+  const manifestPath = `${claudePluginPath}/marketplace.json`;
+  const pluginDirs = await resolveMarketplacePluginPaths(fs, manifestPath);
+  const discovered: DiscoveredSkillCandidate[] = [];
+
+  for (const pluginDir of pluginDirs) {
+    const skillRoot = `${pluginDir}/skills`;
+    const skillEntries = await readSortedDir(fs, skillRoot);
+
+    for (const skillEntry of skillEntries) {
+      if (skillEntry.type !== 'directory') continue;
+
+      const skillPath = `${skillRoot}/${skillEntry.name}`;
+      const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+      if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
+
+      seenPaths.add(skillPath);
+      discovered.push({
+        source: 'marketplace',
+        sourceRoot: skillRoot,
+        path: skillPath,
+        skillFilePath,
+      });
+    }
+  }
+
+  return discovered;
+}
+
+async function discoverSkillsInCompatibilityRoot(
+  fs: VirtualFS,
+  rootPath: string,
+  source: Exclude<SkillDiscoverySource, 'native'>,
+  seenPaths: Set<string>
+): Promise<DiscoveredSkillCandidate[]> {
+  const skillRoot = `${rootPath}/skills`;
+  const skillEntries = await readSortedDir(fs, skillRoot);
+  const discovered: DiscoveredSkillCandidate[] = [];
+
+  for (const skillEntry of skillEntries) {
+    if (skillEntry.type !== 'directory') continue;
+    const skillPath = `${skillRoot}/${skillEntry.name}`;
+    const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+    if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
+    seenPaths.add(skillPath);
+    discovered.push({ source, sourceRoot: skillRoot, path: skillPath, skillFilePath });
+  }
+
+  return discovered;
+}
+
+async function discoverCompatibilitySkillCandidates(
+  fs: VirtualFS
+): Promise<DiscoveredSkillCandidate[]> {
+  const discovered: DiscoveredSkillCandidate[] = [];
+  const seenPaths = new Set<string>();
+  const enqueued = new Set<string>(['/']);
+  const queue: Array<{ path: string; depth: number }> = [{ path: '/', depth: 0 }];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    if (index >= MAX_DISCOVERY_DIRECTORIES) {
+      log.warn('skills discovery: directory budget exhausted; walk truncated', {
+        budget: MAX_DISCOVERY_DIRECTORIES,
+      });
+      break;
+    }
+    const { path: currentPath, depth } = queue[index];
+    const entries = await readSortedDir(fs, currentPath);
+
+    for (const entry of entries) {
+      if (entry.type !== 'directory') continue;
+
+      if (entry.name === '.' || entry.name === '..') continue;
+      const childPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+
+      const source = COMPATIBILITY_DIRECTORY_SOURCES.get(entry.name);
+      if (source) {
+        const candidates = await discoverSkillsInCompatibilityRoot(
+          fs,
+          childPath,
+          source,
+          seenPaths
+        );
+        discovered.push(...candidates);
+      }
+
+      if (entry.name === '.claude-plugin') {
+        const marketplaceCandidates = await discoverMarketplaceSkillCandidates(
+          fs,
+          childPath,
+          seenPaths
+        );
+        discovered.push(...marketplaceCandidates);
+        continue;
+      }
+
+      if (
+        !PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name) &&
+        depth < MAX_DISCOVERY_DEPTH &&
+        !enqueued.has(childPath)
+      ) {
+        enqueued.add(childPath);
+        queue.push({ path: childPath, depth: depth + 1 });
+      }
+    }
+  }
+
+  return discovered;
+}
+
+function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
+  if (isMonkeypatchUnsafeFs(fs)) return;
+
+  const cacheKey = fs as object;
+  if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
+  compatibilityCacheHooksInstalled.add(cacheKey);
+
+  const mutableFs = fs as unknown as MonkeypatchableVirtualFs;
+  for (const methodName of COMPATIBILITY_CACHE_INVALIDATION_METHODS) {
+    const original = mutableFs[methodName];
+    if (typeof original !== 'function') continue;
+
+    try {
+      mutableFs[methodName] = async (...args: unknown[]) => {
+        const result = await original.apply(fs, args);
+        compatibilityCandidatesCache.delete(cacheKey);
+        return result;
+      };
+    } catch {}
+  }
+}
+
+async function pathExists(fs: VirtualFS, path: string): Promise<boolean> {
+  try {
+    await fs.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readSortedDir(
+  fs: VirtualFS,
+  path: string
+): Promise<Array<{ name: string; type: 'file' | 'directory' | 'symlink' }>> {
+  try {
+    const entries = await fs.readDir(path);
+    return [...entries].sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}

@@ -1,0 +1,112 @@
+import { describe, expect, it } from 'vitest';
+import { parseKnownFlags } from '../../../src/shell/supplemental-commands/subcommand-flags.js';
+import { isHelpRequest } from '../../../src/shell/supplemental-commands/subcommand-help.js';
+
+describe('parseKnownFlags', () => {
+  it('collects positionals and leaves unknown dash tokens as errors', () => {
+    const ok = parseKnownFlags(['name', 'payload'], {});
+    expect(ok).toEqual({
+      positionals: ['name', 'payload'],
+      values: new Map(),
+      bools: new Set(),
+    });
+
+    expect(parseKnownFlags(['--bogus=1'], {})).toEqual({ error: 'unknown flag: --bogus' });
+    expect(parseKnownFlags(['name', '--nope'], {})).toEqual({ error: 'unknown flag: --nope' });
+  });
+
+  it('accepts value flags as `--flag=value` or `--flag value` in any position', () => {
+    const eq = parseKnownFlags(['--runtime=leader', 'dash', '{"a":1}'], {
+      value: ['--runtime'],
+    });
+    expect(eq).toMatchObject({
+      positionals: ['dash', '{"a":1}'],
+    });
+    if ('error' in eq) throw new Error(eq.error);
+    expect(eq.values.get('--runtime')).toBe('leader');
+
+    const space = parseKnownFlags(['dash', '{"a":1}', '--runtime', 'leader'], {
+      value: ['--runtime'],
+    });
+    if ('error' in space) throw new Error(space.error);
+    expect(space.positionals).toEqual(['dash', '{"a":1}']);
+    expect(space.values.get('--runtime')).toBe('leader');
+
+    const empty = parseKnownFlags(['--runtime='], { value: ['--runtime'] });
+    if ('error' in empty) throw new Error(empty.error);
+    expect(empty.values.get('--runtime')).toBe('');
+  });
+
+  it('requires a value when a value flag has no following token', () => {
+    expect(parseKnownFlags(['--runtime'], { value: ['--runtime'] })).toEqual({
+      error: '--runtime requires a value',
+    });
+  });
+
+  it('does not consume a known boolean as a value-flag argument', () => {
+    const parsed = parseKnownFlags(['--size', '--download', 'file'], {
+      value: ['--size'],
+      bool: ['--download'],
+    });
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.values.has('--size')).toBe(false);
+    expect(parsed.bools.has('--download')).toBe(true);
+    expect(parsed.positionals).toEqual(['file']);
+  });
+
+  it('accepts boolean flags in any position as exact tokens only', () => {
+    const cleared = parseKnownFlags(['dash', '--clear'], { bool: ['--clear'] });
+    if ('error' in cleared) throw new Error(cleared.error);
+    expect(cleared.bools.has('--clear')).toBe(true);
+    expect(cleared.positionals).toEqual(['dash']);
+
+    expect(parseKnownFlags(['--clear=1'], { bool: ['--clear'] })).toEqual({
+      error: 'unknown flag: --clear',
+    });
+    expect(parseKnownFlags(['--persist=false'], { bool: ['--persist'] })).toEqual({
+      error: 'unknown flag: --persist',
+    });
+  });
+
+  it('treats everything after `--` as positional, including dash tokens', () => {
+    const parsed = parseKnownFlags(['send', '--', '--runtime=x', '--nope'], {
+      value: ['--runtime'],
+    });
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.positionals).toEqual(['send', '--runtime=x', '--nope']);
+    expect(parsed.values.size).toBe(0);
+  });
+
+  it('treats a bare `-` as positional, not a flag', () => {
+    const parsed = parseKnownFlags(['-'], {});
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.positionals).toEqual(['-']);
+  });
+
+  it('agrees with isHelpRequest on valueFlags / spec.value names', () => {
+    const valueFlags = ['--scoop', '--runtime'] as const;
+
+    expect(isHelpRequest(['--runtime', '--help'], { valueFlags })).toBe(false);
+    const parsed = parseKnownFlags(['--runtime', '--help'], { value: valueFlags });
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.values.get('--runtime')).toBe('--help');
+
+    expect(isHelpRequest(['name', '--help'], { valueFlags })).toBe(true);
+    expect(parseKnownFlags(['name', '--help'], { value: valueFlags })).toEqual({
+      error: 'unknown flag: --help',
+    });
+  });
+
+  it('treats negative numeric tokens as positionals', () => {
+    const r = parseKnownFlags(['--tab=id', '0', '-300'], { value: ['--tab'] });
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.positionals).toEqual(['0', '-300']);
+    expect(r.values.get('--tab')).toBe('id');
+  });
+
+  it('still rejects non-numeric dash tokens', () => {
+    const r = parseKnownFlags(['-bogus'], { bool: ['--json'] });
+    expect(r).toEqual({ error: 'unknown flag: -bogus' });
+  });
+});

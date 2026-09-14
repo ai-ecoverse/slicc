@@ -1,0 +1,285 @@
+import { describe, expect, it } from 'vitest';
+import {
+  getImageByteSize,
+  getImageDimensions,
+  isSupportedImageFormat,
+  MAX_IMAGE_BYTES,
+  processImageContent,
+} from '../../src/core/image-processor.js';
+import type { ImageContent } from '../../src/core/types.js';
+
+describe('getImageByteSize', () => {
+  it('calculates correct size for known base64 string', () => {
+    expect(getImageByteSize('SGVsbG8=')).toBe(5);
+  });
+
+  it('handles base64 with double padding', () => {
+    expect(getImageByteSize('SA==')).toBe(1);
+  });
+
+  it('handles base64 with no padding', () => {
+    expect(getImageByteSize('YWJj')).toBe(3);
+  });
+
+  it('handles empty string', () => {
+    expect(getImageByteSize('')).toBe(0);
+  });
+
+  it('ignores line-wrapping whitespace', () => {
+    expect(getImageByteSize('SGVs\nbG8=')).toBe(5);
+  });
+
+  it('estimates large base64 correctly', () => {
+    const oneMB = 1024 * 1024;
+
+    const base64Len = Math.ceil(oneMB / 3) * 4;
+    const fakeBase64 = 'A'.repeat(base64Len);
+    const estimated = getImageByteSize(fakeBase64);
+
+    expect(estimated).toBeGreaterThanOrEqual(oneMB);
+    expect(estimated).toBeLessThanOrEqual(oneMB + 3);
+  });
+});
+
+describe('isSupportedImageFormat', () => {
+  it('accepts JPEG', () => {
+    expect(isSupportedImageFormat('image/jpeg')).toBe(true);
+  });
+
+  it('accepts PNG', () => {
+    expect(isSupportedImageFormat('image/png')).toBe(true);
+  });
+
+  it('accepts GIF', () => {
+    expect(isSupportedImageFormat('image/gif')).toBe(true);
+  });
+
+  it('accepts WebP', () => {
+    expect(isSupportedImageFormat('image/webp')).toBe(true);
+  });
+
+  it('rejects SVG', () => {
+    expect(isSupportedImageFormat('image/svg+xml')).toBe(false);
+  });
+
+  it('rejects BMP', () => {
+    expect(isSupportedImageFormat('image/bmp')).toBe(false);
+  });
+
+  it('rejects TIFF', () => {
+    expect(isSupportedImageFormat('image/tiff')).toBe(false);
+  });
+
+  it('rejects non-image types', () => {
+    expect(isSupportedImageFormat('application/pdf')).toBe(false);
+    expect(isSupportedImageFormat('text/plain')).toBe(false);
+  });
+
+  it('rejects empty string', () => {
+    expect(isSupportedImageFormat('')).toBe(false);
+  });
+});
+
+describe('getImageDimensions', () => {
+  function makeBase64(bytes: number[]): string {
+    return btoa(String.fromCharCode(...bytes));
+  }
+
+  it('extracts PNG dimensions from IHDR chunk', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x03, 0x20, 0x00, 0x00, 0x02, 0x58,
+    ];
+    expect(getImageDimensions(makeBase64(png), 'image/png')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts large PNG dimensions (> 8000px)', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x27, 0x10,
+    ];
+    expect(getImageDimensions(makeBase64(png), 'image/png')).toEqual({
+      width: 1024,
+      height: 10000,
+    });
+  });
+
+  it('extracts GIF dimensions', () => {
+    const gif = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x20, 0x03, 0x58, 0x02];
+    expect(getImageDimensions(makeBase64(gif), 'image/gif')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts JPEG dimensions from SOF0 marker', () => {
+    const jpeg = [0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20];
+    expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts JPEG dimensions from SOF2 (progressive) marker', () => {
+    const jpeg = [0xff, 0xd8, 0xff, 0xc2, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20];
+    expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts JPEG dimensions from an SOF marker after a leading APP0 segment', () => {
+    const jpeg = [
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20,
+    ];
+    expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('returns null for JPEG with no SOF marker', () => {
+    const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46];
+    expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toBeNull();
+  });
+
+  it('returns null for PNG with zero width', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x58,
+    ];
+    expect(getImageDimensions(makeBase64(png), 'image/png')).toBeNull();
+  });
+
+  it('extracts PNG dimensions when padding is omitted', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x03, 0x20, 0x00, 0x00, 0x02, 0x58, 0x00,
+    ];
+    const unpadded = makeBase64(png).replace(/=+$/, '');
+    expect(getImageDimensions(unpadded, 'image/png')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts PNG dimensions when the base64 is line-wrapped', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x03, 0x20, 0x00, 0x00, 0x02, 0x58,
+    ];
+    const wrapped = makeBase64(png).replace(/(.{8})/g, '$1\n');
+    expect(getImageDimensions(wrapped, 'image/png')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('returns null for too-short base64', () => {
+    expect(getImageDimensions('AA==', 'image/png')).toBeNull();
+  });
+
+  it('returns null for unknown format', () => {
+    expect(getImageDimensions('AAAA', 'image/webp')).toBeNull();
+  });
+
+  it('returns null for corrupt header', () => {
+    expect(getImageDimensions('!!!', 'image/png')).toBeNull();
+  });
+});
+
+describe('processImageContent', () => {
+  it('passes through small valid images unchanged', async () => {
+    const image: ImageContent = {
+      type: 'image',
+      data: 'iVBORw0KGgoAAAANSUhEUg==',
+      mimeType: 'image/png',
+    };
+
+    const result = await processImageContent(image);
+    expect(result).toEqual(image);
+  });
+
+  it('returns text placeholder for unsupported MIME type', async () => {
+    const image: ImageContent = {
+      type: 'image',
+      data: 'abc123',
+      mimeType: 'image/svg+xml',
+    };
+
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('unsupported format');
+    expect((result as any).text).toContain('image/svg+xml');
+  });
+
+  it('returns text placeholder for BMP format', async () => {
+    const image: ImageContent = {
+      type: 'image',
+      data: 'abc123',
+      mimeType: 'image/bmp',
+    };
+
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('unsupported format');
+  });
+
+  it('attempts resize for images over 5MB base64', async () => {
+    const largeData = 'A'.repeat(MAX_IMAGE_BYTES + 1024);
+    const image: ImageContent = {
+      type: 'image',
+      data: largeData,
+      mimeType: 'image/png',
+    };
+
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('Image removed');
+  });
+
+  it('passes through image at exactly 5MB base64', async () => {
+    const data = 'A'.repeat(MAX_IMAGE_BYTES);
+    const image: ImageContent = {
+      type: 'image',
+      data,
+      mimeType: 'image/jpeg',
+    };
+
+    const result = await processImageContent(image);
+
+    expect(result).toEqual(image);
+  });
+
+  it('triggers resize for image with raw bytes under 5MB but base64 over 5MB', async () => {
+    const rawBytes = 4.9 * 1024 * 1024;
+    const base64Len = Math.ceil(rawBytes / 3) * 4;
+    expect(base64Len).toBeGreaterThan(MAX_IMAGE_BYTES);
+    expect(getImageByteSize('A'.repeat(base64Len))).toBeLessThan(MAX_IMAGE_BYTES);
+
+    const image: ImageContent = {
+      type: 'image',
+      data: 'A'.repeat(base64Len),
+      mimeType: 'image/png',
+    };
+
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('Image removed');
+  });
+
+  it('triggers resize for small image with dimensions > 8000px', async () => {
+    const pngHeader = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x27, 0x10,
+    ];
+    const headerBase64 = btoa(String.fromCharCode(...pngHeader));
+
+    const data = headerBase64 + 'A'.repeat(1000);
+    const image: ImageContent = {
+      type: 'image',
+      data,
+      mimeType: 'image/png',
+    };
+
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('Image removed');
+  });
+
+  it('handles corrupt base64 data gracefully when resize is attempted', async () => {
+    const image: ImageContent = {
+      type: 'image',
+      data: 'X'.repeat(MAX_IMAGE_BYTES + 1024),
+      mimeType: 'image/jpeg',
+    };
+
+    const result = await processImageContent(image);
+
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('Image removed');
+  });
+});

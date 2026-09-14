@@ -1,0 +1,332 @@
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import {
+  defaultHighlightStyle,
+  HighlightStyle,
+  StreamLanguage,
+  type StreamParser,
+  syntaxHighlighting,
+} from '@codemirror/language';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
+import {
+  EditorView,
+  GutterMarker,
+  gutter,
+  keymap,
+  lineNumbers,
+  placeholder,
+} from '@codemirror/view';
+import { tags } from '@lezer/highlight';
+import { upgradeOwnProperties } from './upgrade-own-properties.js';
+
+const LANG_LOADERS: Record<string, () => Promise<Extension>> = {
+  json: async () => {
+    const { json } = await import('@codemirror/lang-json');
+    return json();
+  },
+  markdown: async () => {
+    const { markdown } = await import('@codemirror/lang-markdown');
+    return markdown();
+  },
+  html: async () => {
+    const { html } = await import('@codemirror/lang-html');
+    return html();
+  },
+};
+
+function buildHighlightStyle(isDark: boolean): HighlightStyle {
+  if (isDark) {
+    return HighlightStyle.define([
+      { tag: tags.keyword, color: '#d19afc' },
+      { tag: tags.string, color: '#87d68d' },
+      { tag: tags.number, color: '#f5a76c' },
+      { tag: tags.comment, color: '#8a8a8a', fontStyle: 'italic' },
+      { tag: tags.punctuation, color: '#7cc5e9' },
+      { tag: tags.function(tags.variableName), color: '#7ea8f8' },
+      { tag: tags.propertyName, color: '#7ea8f8' },
+      { tag: tags.bool, color: '#f5a76c' },
+      { tag: tags.null, color: '#f5a76c' },
+      { tag: tags.operator, color: '#7cc5e9' },
+      { tag: tags.typeName, color: '#d19afc' },
+      { tag: tags.tagName, color: '#d19afc' },
+      { tag: tags.attributeName, color: '#87d68d' },
+      { tag: tags.attributeValue, color: '#87d68d' },
+      { tag: tags.heading, fontWeight: 'bold' },
+      { tag: tags.emphasis, fontStyle: 'italic' },
+      { tag: tags.strong, fontWeight: 'bold' },
+    ]);
+  }
+  return HighlightStyle.define([
+    { tag: tags.keyword, color: '#8839ef' },
+    { tag: tags.string, color: '#40a02b' },
+    { tag: tags.number, color: '#d05d1a' },
+    { tag: tags.comment, color: '#8a8a8a', fontStyle: 'italic' },
+    { tag: tags.punctuation, color: '#1e66f5' },
+    { tag: tags.function(tags.variableName), color: '#2b6cb0' },
+    { tag: tags.propertyName, color: '#2b6cb0' },
+    { tag: tags.bool, color: '#d05d1a' },
+    { tag: tags.null, color: '#d05d1a' },
+    { tag: tags.operator, color: '#1e66f5' },
+    { tag: tags.typeName, color: '#8839ef' },
+    { tag: tags.tagName, color: '#8839ef' },
+    { tag: tags.attributeName, color: '#40a02b' },
+    { tag: tags.attributeValue, color: '#40a02b' },
+    { tag: tags.heading, fontWeight: 'bold' },
+    { tag: tags.emphasis, fontStyle: 'italic' },
+    { tag: tags.strong, fontWeight: 'bold' },
+  ]);
+}
+
+function detectDarkMode(el: HTMLElement): boolean {
+  if (el.closest?.('.theme-light')) return false;
+  if (document.documentElement.classList.contains('theme-light')) return false;
+
+  return true;
+}
+
+function buildEditorTheme() {
+  return EditorView.theme({
+    '&': {
+      fontSize: '13px',
+      border: '1px solid var(--s2-border-subtle, #333)',
+      borderRadius: 'var(--s2-radius-default, 8px)',
+      overflow: 'hidden',
+    },
+    '&.cm-focused': {
+      outline: 'none',
+      borderColor: 'var(--s2-border-focus, var(--s2-accent, #3562ff))',
+    },
+    '.cm-content': {
+      fontFamily: 'var(--s2-font-mono, "SF Mono", "Fira Code", Consolas, monospace)',
+      caretColor: 'var(--s2-accent, #3562ff)',
+      padding: '8px 0',
+    },
+    '.cm-scroller': {
+      overflow: 'auto',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: 'var(--s2-accent, #3562ff)',
+    },
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
+      {
+        background: 'color-mix(in srgb, var(--s2-accent, #3562ff) 20%, transparent)',
+      },
+    '.cm-activeLine': {
+      background: 'color-mix(in srgb, var(--s2-accent, #3562ff) 5%, transparent)',
+    },
+    '.cm-gutters': {
+      backgroundColor: 'var(--s2-bg-layer-1, #1a1a1a)',
+      color: 'var(--s2-content-tertiary, #5a5a5a)',
+      borderRight: 'none',
+      borderRadius: 'var(--s2-radius-default, 8px) 0 0 var(--s2-radius-default, 8px)',
+    },
+    '.cm-lineNumbers .cm-gutterElement': {
+      padding: '0 8px 0 12px',
+      minWidth: '32px',
+    },
+    '.cm-placeholder': {
+      color: 'var(--s2-content-tertiary, #5a5a5a)',
+      fontStyle: 'italic',
+    },
+  });
+}
+
+const SHADOW_CSS = `
+:host {
+  display: block;
+  background: var(--s2-bg-layer-2, var(--s2-gray-75, #252525));
+  border-radius: var(--s2-radius-default, 8px);
+  color: var(--s2-content-default, #cfcfcf);
+}
+.cm-editor {
+  background: var(--s2-bg-layer-2, var(--s2-gray-75, #252525));
+}
+`;
+
+class DotMarker extends GutterMarker {
+  constructor(
+    private color: string,
+    private tooltip?: string
+  ) {
+    super();
+  }
+  toDOM(): HTMLElement {
+    const dot = document.createElement('span');
+    dot.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;background:${this.color};`;
+    if (this.tooltip) dot.title = this.tooltip;
+    return dot;
+  }
+}
+
+export class SliccEditorElement extends HTMLElement {
+  private view: EditorView | null = null;
+  private langCompartment = new Compartment();
+  private highlightCompartment = new Compartment();
+  private lineNumberCompartment = new Compartment();
+  private readonlyCompartment = new Compartment();
+  private gutterCompartment = new Compartment();
+  private placeholderCompartment = new Compartment();
+  private shadowRoot_: ShadowRoot;
+  private placeholderText = '';
+  private connected = false;
+  private langRequestId = 0;
+
+  static get observedAttributes() {
+    return ['language', 'line-numbers', 'readonly'];
+  }
+
+  constructor() {
+    super();
+    this.shadowRoot_ = this.attachShadow({ mode: 'open' });
+  }
+
+  connectedCallback() {
+    if (this.connected) return;
+    this.connected = true;
+
+    this.placeholderText = this.textContent?.trim() ?? '';
+    this.textContent = '';
+
+    const isDark = detectDarkMode(this);
+    const highlightStyle = buildHighlightStyle(isDark);
+
+    const extensions: Extension[] = [
+      buildEditorTheme(),
+      this.highlightCompartment.of(syntaxHighlighting(highlightStyle)),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      this.langCompartment.of([]),
+      this.lineNumberCompartment.of(this.hasAttribute('line-numbers') ? lineNumbers() : []),
+      this.readonlyCompartment.of(EditorState.readOnly.of(this.hasAttribute('readonly'))),
+      this.gutterCompartment.of([]),
+      this.placeholderCompartment.of(this.placeholderText ? placeholder(this.placeholderText) : []),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          this.dispatchEvent(
+            new CustomEvent('change', {
+              detail: { value: update.state.doc.toString() },
+              bubbles: true,
+            })
+          );
+        }
+      }),
+    ];
+
+    const style = document.createElement('style');
+    style.textContent = SHADOW_CSS;
+    this.shadowRoot_.appendChild(style);
+
+    const container = document.createElement('div');
+    this.shadowRoot_.appendChild(container);
+
+    this.view = new EditorView({
+      state: EditorState.create({ extensions }),
+      parent: container,
+      root: this.shadowRoot_,
+    });
+
+    const lang = this.getAttribute('language');
+    if (lang) {
+      void this.loadLanguage(lang);
+    }
+
+    upgradeOwnProperties(this, ['value']);
+  }
+
+  disconnectedCallback() {
+    this.view?.destroy();
+    this.view = null;
+    this.connected = false;
+  }
+
+  attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null) {
+    if (!this.view) return;
+
+    switch (name) {
+      case 'language':
+        if (newValue) {
+          void this.loadLanguage(newValue);
+        } else {
+          this.view.dispatch({
+            effects: this.langCompartment.reconfigure([]),
+          });
+        }
+        break;
+      case 'line-numbers':
+        this.view.dispatch({
+          effects: this.lineNumberCompartment.reconfigure(newValue !== null ? lineNumbers() : []),
+        });
+        break;
+      case 'readonly':
+        this.view.dispatch({
+          effects: this.readonlyCompartment.reconfigure(EditorState.readOnly.of(newValue !== null)),
+        });
+        break;
+    }
+  }
+
+  get value(): string {
+    return this.view?.state.doc.toString() ?? '';
+  }
+
+  set value(text: string) {
+    if (!this.view) return;
+    this.view.dispatch({
+      changes: { from: 0, to: this.view.state.doc.length, insert: text },
+    });
+  }
+
+  setHighlighter(parser: StreamParser<unknown>): void {
+    if (!this.view) return;
+    const lang = StreamLanguage.define(parser);
+    this.view.dispatch({
+      effects: this.langCompartment.reconfigure(lang),
+    });
+  }
+
+  setGutterMarkers(markers: Record<number, { color: string; tooltip?: string }>): void {
+    if (!this.view) return;
+
+    const markerMap = new Map<number, DotMarker>();
+    for (const [lineStr, config] of Object.entries(markers)) {
+      markerMap.set(Number(lineStr), new DotMarker(config.color, config.tooltip));
+    }
+
+    const gutterExt = gutter({
+      class: 'cm-slicc-markers',
+      lineMarker: (view, line) => {
+        const lineNo = view.state.doc.lineAt(line.from).number;
+        return markerMap.get(lineNo) ?? null;
+      },
+    });
+
+    this.view.dispatch({
+      effects: this.gutterCompartment.reconfigure(gutterExt),
+    });
+  }
+
+  private async loadLanguage(name: string): Promise<void> {
+    const requestId = ++this.langRequestId;
+    const loader = LANG_LOADERS[name.toLowerCase()];
+    if (!loader) {
+      if (this.langRequestId === requestId) {
+        this.view?.dispatch({
+          effects: this.langCompartment.reconfigure([]),
+        });
+      }
+      return;
+    }
+
+    const ext = await loader();
+
+    if (this.langRequestId === requestId) {
+      this.view?.dispatch({
+        effects: this.langCompartment.reconfigure(ext),
+      });
+    }
+  }
+}
+
+if (!customElements.get('slicc-editor')) {
+  customElements.define('slicc-editor', SliccEditorElement);
+}

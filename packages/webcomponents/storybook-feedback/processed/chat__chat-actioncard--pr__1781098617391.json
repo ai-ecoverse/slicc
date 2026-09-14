@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-actioncard--pr",
+  "storyTitle": "Chat/ActionCard",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-action-card.stories.ts",
+  "comment": "The PR mode has the wrong fonts. Looks like it's falling back to default fonts",
+  "createdAt": "2026-06-10T13:36:57.390Z"
+}

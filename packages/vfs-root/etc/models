@@ -1,0 +1,33 @@
+# /etc/models — which models a scoop may be spawned with
+#
+# `agent --model` and `scoop_scoop` accept a `provider:model` id, so a scoop can
+# run on a provider OTHER than the selected one. That moves spend onto another
+# account — a work provider rather than a personal one — so it is opt-in here.
+#
+# Sections are keyed by the SELECTED provider; entries apply while it is selected:
+#
+#   [<selected-provider>]
+#   <provider>:<model>    Allow that model.      <provider>:*   Allow all of them.
+#   -<provider>:<model>   Deny it (a deny always beats an allow, in any order).
+#
+# Defaults, with no file or no section for the selected provider:
+#   - The selected provider's OWN models are allowed; never list them. A `-`
+#     entry subtracts one.
+#   - Every OTHER provider's models are denied. Rejections quote the line to add.
+#
+# The model picker and `models` hide only what a `-` entry denies — applying the
+# allow-list there would hide every other account and make switching providers
+# impossible. Switching your account is your call; spawning against another one
+# is what is gated.
+#
+# Edits apply immediately. Writing this file needs a human approval (the
+# `Write /etc/models` rule in /etc/sudoers) because an agent that could rewrite
+# it could authorize its own spend. Reads are ungated.
+#
+# Example — while `adobe` is selected, allow OpenRouter except one model, and
+# keep Adobe's own Opus 5 off-limits (it leaves the picker too):
+#
+# [adobe]
+# openrouter:*
+# -openrouter:openai/o3-pro
+# -adobe:claude-opus-5

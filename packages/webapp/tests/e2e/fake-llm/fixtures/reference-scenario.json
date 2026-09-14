@@ -1,0 +1,48 @@
+{
+  "model": "fake-coder-reference",
+  "turns": [
+    {
+      "whenUserMessageMatches": "open the reference page",
+      "content": "Opening the reference data: URL so the test can assert on the CDP target.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM REFERENCE TARGET</title><h1>Page A</h1>'"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. Page A is open."
+    },
+    {
+      "whenUserMessageMatches": "open the comparison pages",
+      "content": "Opening comparison pages B and C in parallel so the test can assert on multiple CDP targets.",
+      "contentChunkSize": 4,
+      "toolArgumentsChunkSize": 8,
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM COMPARE ALPHA</title><h1>Page B</h1>'"
+          }
+        },
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "playwright-cli tab-new 'data:text/html,<!DOCTYPE html><title>FAKE LLM COMPARE BETA</title><h1>Page C</h1>'"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. Pages B and C are open."
+    },
+    {
+      "whenUserMessageMatches": { "pattern": "summar(y|ize)", "flags": "i" },
+      "content": "Summary: opened three CDP targets - Page A (FAKE LLM REFERENCE TARGET), Page B (FAKE LLM COMPARE ALPHA), and Page C (FAKE LLM COMPARE BETA)."
+    }
+  ],
+  "onOverflow": "error"
+}

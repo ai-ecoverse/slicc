@@ -1,0 +1,65 @@
+name: Renovate Swift Pin Reconcile
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-swift-pin-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'swift-pin')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Reconcile SPM / xcodegen pins
+        id: pins
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if node packages/dev-tools/swift-pin-reconcile/reconcile.mjs --write; then
+            if git diff --quiet; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Reconcile failed."
+            exit 1
+          fi
+
+      - name: Push the pin-sync if anything changed
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "fix(deps): sync SPM and xcodegen pins (renovate-swift-pin-reconcile)"
+          git push
+
+      - name: Comment the outcome
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🔗 Synced the GitHub SPM pin across \`Package.swift\` / \`project.yml\` / \`Package.resolved\` so SPM can resolve (the swift manager and the xcodegen regex customManager otherwise open split PRs). See \`.github/workflows/renovate-swift-pin-reconcile.yml\`."

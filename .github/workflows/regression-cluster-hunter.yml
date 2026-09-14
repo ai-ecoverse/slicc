@@ -1,0 +1,108 @@
+name: Regression Cluster Hunter
+
+on:
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Sweep this PR number, skipping selection (blank = pick from the release)'
+        required: false
+      min_interval_hours:
+        description: 'Override the cooldown in hours (0 = ignore it entirely)'
+        required: false
+      dry_run:
+        description: 'Scan + digest only; do not dispatch Claude'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: regression-cluster-hunter
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+  id-token: write
+
+jobs:
+  hunt:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Select a shipped fix whose construct survives elsewhere
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_ARTIFACT: regression-cluster-dispatch
+          MIN_INTERVAL_HOURS: ${{ github.event.inputs.min_interval_hours || vars.CLUSTER_MIN_INTERVAL_HOURS || '12' }}
+          MAX_ISSUES: ${{ vars.CLUSTER_MAX_ISSUES || '5' }}
+          PR_OVERRIDE: ${{ github.event.inputs.pr }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DIGEST_PATH: ${{ runner.temp }}/regression-cluster-digest.md
+        run: node packages/dev-tools/regression-cluster-hunter/scan-fixes.mjs
+
+      - name: Upload the digest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: regression-cluster-digest
+          path: ${{ runner.temp }}/regression-cluster-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark this run as a dispatch
+        if: steps.scan.outputs.has_candidate == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: regression-cluster-dispatch
+          path: ${{ runner.temp }}/regression-cluster-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Ensure the regression-cluster label exists
+        if: steps.scan.outputs.has_candidate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create regression-cluster --color D93F0B \
+            --description "A sibling of an already-fixed bug, found by sweeping for its shape" --force
+
+      - name: Sweep for siblings and file them
+        if: steps.scan.outputs.has_candidate == 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.CLUSTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh search:*),Bash(git:*)"
+            --disallowedTools "Task,Bash(gh pr create:*),Bash(gh pr merge:*),Bash(gh issue close:*),Edit,Write"
+            --max-turns 200
+          prompt: ${{ steps.scan.outputs.prompt }}

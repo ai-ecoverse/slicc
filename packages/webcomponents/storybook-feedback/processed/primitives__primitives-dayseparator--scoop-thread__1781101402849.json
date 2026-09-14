@@ -1,0 +1,8 @@
+{
+  "storyId": "primitives-dayseparator--scoop-thread",
+  "storyTitle": "Primitives/DaySeparator",
+  "subsystem": "primitives",
+  "importPath": "./src/primitives/slicc-day-separator.stories.ts",
+  "comment": "the day separator in dark mode will likely have no contrast with a dark background. maybe the story should adjust the background color based on dark/light mode",
+  "createdAt": "2026-06-10T14:23:22.849Z"
+}

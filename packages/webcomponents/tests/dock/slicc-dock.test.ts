@@ -1,0 +1,375 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import '../../src/dock/slicc-dock-item.js';
+import {
+  type DockCollapseDetail,
+  type DockItemDescriptor,
+  type DockSelectDetail,
+  SliccDock,
+} from '../../src/dock/slicc-dock.js';
+import { LONG_PRESS_MS } from '../../src/internal/long-press.js';
+import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+const SPRINKLES: DockItemDescriptor[] = [
+  { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
+  { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--amber)' },
+];
+
+function mount(
+  items: DockItemDescriptor[] = SPRINKLES,
+  opts: { systemTools?: boolean; active?: string } = {}
+): SliccDock {
+  const el = document.createElement('slicc-dock') as SliccDock;
+  el.items = items;
+  if (opts.systemTools) el.systemTools = true;
+  if (opts.active) el.active = opts.active;
+  document.body.appendChild(el);
+  return el;
+}
+
+function dockItems(el: SliccDock): HTMLElement[] {
+  return [...el.querySelectorAll<HTMLElement>('slicc-dock-item')];
+}
+
+function itemById(el: SliccDock, id: string): HTMLElement | undefined {
+  return dockItems(el).find((i) => i.dataset.t === id);
+}
+
+function clickItem(el: SliccDock, id: string): void {
+  const item = itemById(el, id);
+  const button = item?.shadowRoot?.querySelector<HTMLButtonElement>('button');
+  if (button) button.click();
+  else item?.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+}
+
+describe('slicc-dock', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-dock')).toBe(SliccDock);
+  });
+
+  it('renders into light DOM (no shadow root) and carries the scoped host class + rail part/role', () => {
+    const el = mount();
+    expect(el.shadowRoot).toBeNull();
+    expect(el.classList.contains('slicc-dock')).toBe(true);
+    expect(el.getAttribute('part')).toBe('rail');
+    expect(el.getAttribute('role')).toBe('toolbar');
+    expect(el.getAttribute('aria-orientation')).toBe('vertical');
+  });
+
+  it('injects its scoped stylesheet once', () => {
+    mount();
+    mount();
+    expect(document.querySelectorAll('#slicc-dock-style')).toHaveLength(1);
+  });
+
+  describe('item composition', () => {
+    it('renders one <slicc-dock-item> per sprinkle (no synthetic New launcher)', () => {
+      const el = mount();
+      const ids = dockItems(el).map((i) => i.dataset.t);
+      expect(ids).toEqual(['hero', 'palette']);
+    });
+
+    it('forwards icon, label (→tip), kind and hue to each item', () => {
+      const el = mount();
+      const hero = itemById(el, 'hero');
+      expect(hero?.getAttribute('icon')).toBe('sparkles');
+      expect(hero?.getAttribute('tip')).toBe('Hero studio');
+      expect(hero?.getAttribute('kind')).toBe('sprinkle');
+
+      expect(hero?.getAttribute('hue')).toBe('var(--violet)');
+    });
+
+    it('escapes interpolated label/id text', () => {
+      const el = mount([{ id: 'x', label: '<img src=x>', kind: 'sprinkle' }]);
+      expect(itemById(el, 'x')?.getAttribute('tip')).toBe('<img src=x>');
+      expect(el.querySelector('img')).toBeNull();
+    });
+
+    it('always renders the .grow spacer that pushes tools to the bottom', () => {
+      const el = mount();
+      expect(el.querySelector('.grow')).not.toBeNull();
+    });
+  });
+
+  describe('system tools variant', () => {
+    it('omits the divider + pinned tools by default', () => {
+      const el = mount();
+      expect(el.querySelector('.div')).toBeNull();
+      expect(itemById(el, 'browser')).toBeUndefined();
+    });
+
+    it('appends the .div divider + Browser/Files/Terminal/Memory tools after the grow', () => {
+      const el = mount(SPRINKLES, { systemTools: true });
+      expect(el.querySelector('.div')).not.toBeNull();
+      expect(itemById(el, 'browser')?.getAttribute('tip')).toBe('Browser · CDP');
+      expect(itemById(el, 'files')?.getAttribute('tip')).toBe('Files · VFS');
+      expect(itemById(el, 'term')?.getAttribute('icon')).toBe('square-terminal');
+      expect(itemById(el, 'memory')?.getAttribute('icon')).toBe('brain');
+
+      expect(itemById(el, 'files')?.getAttribute('kind')).toBe('tool');
+    });
+
+    it('reflects the system-tools attribute to the property', () => {
+      const el = mount();
+      expect(el.systemTools).toBe(false);
+      el.systemTools = true;
+      expect(el.hasAttribute('system-tools')).toBe(true);
+      expect(itemById(el, 'memory')).toBeDefined();
+      el.systemTools = false;
+      expect(el.hasAttribute('system-tools')).toBe(false);
+      expect(itemById(el, 'memory')).toBeUndefined();
+    });
+  });
+
+  describe('items property', () => {
+    it('returns a defensive copy (mutating the result does not affect state)', () => {
+      const el = mount();
+      const got = el.items;
+      got[0].label = 'mutated';
+      expect(el.items[0].label).toBe('Hero studio');
+    });
+
+    it('re-renders when the items list is replaced', () => {
+      const el = mount();
+      el.items = [{ id: 'solo', icon: 'sparkles', label: 'Solo', kind: 'sprinkle' }];
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['solo']);
+    });
+
+    it('tolerates a non-array assignment by clearing the sprinkles', () => {
+      const el = mount();
+      // @ts-expect-error — exercising the runtime guard.
+      el.items = null;
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual([]);
+    });
+  });
+
+  describe('active reflection + state', () => {
+    it('reflects the active attribute to the property', () => {
+      const el = mount(SPRINKLES, { active: 'hero' });
+      expect(el.active).toBe('hero');
+      el.active = 'palette';
+      expect(el.getAttribute('active')).toBe('palette');
+      el.active = null;
+      expect(el.hasAttribute('active')).toBe(false);
+    });
+
+    it('renders the active item with the active attribute on initial paint', () => {
+      const el = mount(SPRINKLES, { active: 'hero' });
+      expect(itemById(el, 'hero')?.hasAttribute('active')).toBe(true);
+    });
+
+    it('marks only the active item via syncActive (no full rebuild)', () => {
+      const el = mount(SPRINKLES, { active: 'hero' });
+      el.active = 'palette';
+      const lit = dockItems(el).filter((i) => i.hasAttribute('active'));
+      expect(lit).toHaveLength(1);
+      expect(lit[0].dataset.t).toBe('palette');
+    });
+  });
+
+  describe('selection + collapse behaviour', () => {
+    it('selectItem() sets active and emits slicc-dock-select with { id, kind }', () => {
+      const el = mount(SPRINKLES, { systemTools: true });
+      const detail = vi.fn();
+      el.addEventListener('slicc-dock-select', (e) =>
+        detail((e as CustomEvent<DockSelectDetail>).detail)
+      );
+      el.selectItem('hero');
+      expect(el.active).toBe('hero');
+      expect(detail).toHaveBeenCalledWith({ id: 'hero', kind: 'sprinkle' });
+      el.selectItem('files');
+      expect(detail).toHaveBeenCalledWith({ id: 'files', kind: 'tool' });
+    });
+
+    it('clicking a non-active item selects it (re-emits dock-select)', () => {
+      const el = mount();
+      const select = vi.fn();
+      el.addEventListener('slicc-dock-select', (e) =>
+        select((e as CustomEvent<DockSelectDetail>).detail.id)
+      );
+      clickItem(el, 'hero');
+      expect(select).toHaveBeenCalledWith('hero');
+      expect(el.active).toBe('hero');
+
+      expect(itemById(el, 'hero')?.hasAttribute('active')).toBe(true);
+    });
+
+    it('clicking the active item collapses it (re-emits dock-collapse, clears active)', () => {
+      const el = mount(SPRINKLES, { active: 'hero' });
+      const collapse = vi.fn();
+      const select = vi.fn();
+      el.addEventListener('slicc-dock-collapse', (e) =>
+        collapse((e as CustomEvent<DockCollapseDetail>).detail.id)
+      );
+      el.addEventListener('slicc-dock-select', select);
+      clickItem(el, 'hero');
+      expect(collapse).toHaveBeenCalledWith('hero');
+      expect(select).not.toHaveBeenCalled();
+      expect(el.active).toBeNull();
+    });
+
+    it('clicking through the rail moves the active item in lockstep (select → collapse)', () => {
+      const el = mount(SPRINKLES, { systemTools: true });
+      clickItem(el, 'hero');
+      expect(el.active).toBe('hero');
+
+      clickItem(el, 'files');
+      expect(el.active).toBe('files');
+      expect(itemById(el, 'hero')?.hasAttribute('active')).toBe(false);
+
+      clickItem(el, 'files');
+      expect(el.active).toBeNull();
+    });
+
+    it('collapse() is a no-op event-wise when nothing is active but still clears', () => {
+      const el = mount();
+      const collapse = vi.fn();
+      el.addEventListener('slicc-dock-collapse', collapse);
+      el.collapse();
+      expect(collapse).not.toHaveBeenCalled();
+      expect(el.active).toBeNull();
+    });
+
+    it('events bubble + are composed so ancestors can listen', () => {
+      const el = mount();
+      const seen = vi.fn();
+      document.body.addEventListener('slicc-dock-select', seen);
+      el.selectItem('hero');
+      expect(seen).toHaveBeenCalledTimes(1);
+      document.body.removeEventListener('slicc-dock-select', seen);
+    });
+  });
+
+  describe('slotted adoption', () => {
+    it('adopts pre-existing sprinkle slicc-dock-item children into the items list at connect', () => {
+      const el = document.createElement('slicc-dock') as SliccDock;
+      el.innerHTML =
+        '<slicc-dock-item item-id="hero" kind="sprinkle" glyph="✦" tip="Hero studio"></slicc-dock-item>' +
+        '<slicc-dock-item item-id="palette" kind="sprinkle" glyph="✦" tip="palette"></slicc-dock-item>';
+      document.body.appendChild(el);
+      expect(el.items.map((i) => i.id)).toEqual(['hero', 'palette']);
+      expect(el.items.map((i) => i.label)).toEqual(['Hero studio', 'palette']);
+
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['hero', 'palette']);
+    });
+
+    it('drops slotted system-tool items in favour of the declarative system-tools attribute', () => {
+      const el = document.createElement('slicc-dock') as SliccDock;
+      el.innerHTML =
+        '<slicc-dock-item item-id="hero" kind="sprinkle" glyph="✦" tip="Hero studio"></slicc-dock-item>' +
+        '<slicc-dock-item item-id="files" kind="tool" glyph="⌗" tip="Files"></slicc-dock-item>';
+      document.body.appendChild(el);
+      expect(el.items.map((i) => i.id)).toEqual(['hero']);
+    });
+  });
+
+  describe('lifecycle', () => {
+    it('drops the child event listeners on disconnect (no re-emit after removal)', () => {
+      const el = mount();
+      const item = itemById(el, 'hero')!;
+      el.remove();
+      const select = vi.fn();
+      el.addEventListener('slicc-dock-select', select);
+
+      item.dispatchEvent(
+        new CustomEvent('select', { detail: { id: 'hero' }, bubbles: true, composed: true })
+      );
+      expect(select).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('computed appearance (real Chromium)', () => {
+    it('lays the rail out as a fixed 48px centered flex column with the 8px gap', () => {
+      const el = mount();
+      const cs = getComputedStyle(el);
+      expect(cs.display).toBe('flex');
+      expect(cs.flexDirection).toBe('column');
+      expect(cs.alignItems).toBe('center');
+      expect(cs.rowGap).toBe('8px');
+
+      expect(cs.flexGrow).toBe('0');
+      expect(cs.flexShrink).toBe('0');
+      expect(cs.flexBasis).toBe('48px');
+    });
+
+    it('draws the border-left hairline and the tinted rail background', () => {
+      const el = mount();
+      const cs = getComputedStyle(el);
+      expect(cs.borderLeftWidth).toBe('1px');
+      expect(cs.borderLeftStyle).toBe('solid');
+
+      expect(cs.backgroundColor).toMatch(/^(rgb|color)\(/);
+      expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    });
+
+    it('flips the rail background between light and dark (--ctx over --bg)', () => {
+      const light = mount();
+      const lightBg = getComputedStyle(light).backgroundColor;
+      light.remove();
+      document.body.classList.add('dark');
+      const dark = mount();
+      const darkBg = getComputedStyle(dark).backgroundColor;
+      document.body.classList.remove('dark');
+      expect(darkBg).not.toBe(lightBg);
+    });
+
+    it('lays the .grow spacer out with flex:1 so tools sink to the bottom', () => {
+      const el = mount(SPRINKLES, { systemTools: true });
+      const grow = el.querySelector('.grow') as HTMLElement;
+      expect(getComputedStyle(grow).flexGrow).toBe('1');
+    });
+
+    it('draws the .div divider as a 22x1 hairline', () => {
+      const el = mount(SPRINKLES, { systemTools: true });
+      const div = el.querySelector('.div') as HTMLElement;
+      const cs = getComputedStyle(div);
+      expect(cs.width).toBe('22px');
+      expect(cs.height).toBe('1px');
+    });
+  });
+
+  describe('long-press (secondary action)', () => {
+    it('click-holding an item selects it and re-emits slicc-dock-longpress', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount();
+        const longpresses: DockSelectDetail[] = [];
+        const selects: DockSelectDetail[] = [];
+        el.addEventListener('slicc-dock-longpress', (e) =>
+          longpresses.push((e as CustomEvent<DockSelectDetail>).detail)
+        );
+        el.addEventListener('slicc-dock-select', (e) =>
+          selects.push((e as CustomEvent<DockSelectDetail>).detail)
+        );
+
+        const button = itemById(el, 'hero')?.shadowRoot?.querySelector('button') as HTMLElement;
+        button.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+
+        expect(longpresses).toEqual([{ id: 'hero', kind: 'sprinkle' }]);
+
+        expect(el.active).toBe('hero');
+        expect(selects.map((s) => s.id)).toEqual(['hero']);
+
+        button.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+        expect(el.active).toBe('hero');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a plain short click still selects without a longpress', () => {
+      const el = mount();
+      const longpresses: unknown[] = [];
+      el.addEventListener('slicc-dock-longpress', (e) => longpresses.push(e));
+      clickItem(el, 'hero');
+      expect(el.active).toBe('hero');
+      expect(longpresses).toHaveLength(0);
+    });
+  });
+});

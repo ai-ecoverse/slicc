@@ -1,0 +1,78 @@
+name: npm ci (with retry)
+description: >-
+  Runs `npm ci` under a bounded shell retry loop so a hard socket failure
+  (ENETUNREACH/ECONNRESET), a concurrent-postinstall ETXTBSY race on a shared
+  binary, or a hang-on-exit gets a full clean re-attempt. npm's own
+  fetch-retries only cover in-flight HTTP transients, not connection-level
+  failures, and nothing in npm covers a process that never exits.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -o pipefail
+        attempts=3
+
+
+
+
+
+
+
+
+
+
+        limit=480
+
+
+
+
+
+
+        run_with_timeout() {
+          local secs="$1"
+          shift
+          "$@" &
+          local pid=$!
+          (
+            sleep "$secs"
+            kill -TERM "$pid" 2>/dev/null || exit 0
+            sleep 30
+            kill -KILL "$pid" 2>/dev/null || true
+          ) &
+          local watcher=$!
+          local rc=0
+          wait "$pid" || rc=$?
+          kill -TERM "$watcher" 2>/dev/null || true
+          wait "$watcher" 2>/dev/null || true
+          return "$rc"
+        }
+
+        for i in $(seq 1 "$attempts"); do
+          echo "::group::npm ci (attempt $i/$attempts)"
+
+
+
+
+
+          status=0
+          run_with_timeout "$limit" npm ci || status=$?
+          echo "::endgroup::"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
+            echo "npm ci exceeded ${limit}s on attempt $i/$attempts (hang, not a failure)" >&2
+          fi
+          if [ "$i" -lt "$attempts" ]; then
+            delay=$((i * 15))
+            echo "npm ci failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+
+
+            rm -rf node_modules
+            sleep "$delay"
+          else
+            echo "npm ci failed (exit $status) after $attempts attempts" >&2
+            exit "$status"
+          fi
+        done

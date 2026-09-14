@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-rail--collapsed",
+  "storyTitle": "Freezer/Rail",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer.stories.ts",
+  "comment": "the tooltips in the collapsed rail are clipped.",
+  "createdAt": "2026-06-10T15:09:16.678Z"
+}

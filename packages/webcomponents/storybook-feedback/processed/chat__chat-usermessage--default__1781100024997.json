@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-usermessage--default",
+  "storyTitle": "Chat/UserMessage",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-user-message.stories.ts",
+  "comment": "user message needs to come with markdown examples. we also need a user message with one or more images or other attachments",
+  "createdAt": "2026-06-10T14:00:24.996Z"
+}

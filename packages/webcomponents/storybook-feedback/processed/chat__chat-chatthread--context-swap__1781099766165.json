@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-chatthread--context-swap",
+  "storyTitle": "Chat/ChatThread",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-chat-thread.stories.ts",
+  "comment": "when I use the context swap here, the aspect ratio changes. this is uninhended.",
+  "createdAt": "2026-06-10T13:56:06.165Z"
+}

@@ -1,0 +1,8 @@
+{
+  "storyId": "composer-composer--default",
+  "storyTitle": "Composer/Composer",
+  "subsystem": "composer",
+  "importPath": "./src/composer/slicc-composer.stories.ts",
+  "comment": "the main chat should be able to scroll below the composer pane (with a blur/frosted glass filter), the composer pane should be semi-transparent",
+  "createdAt": "2026-06-10T14:03:58.862Z"
+}

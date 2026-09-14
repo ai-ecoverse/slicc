@@ -1,0 +1,8 @@
+{
+  "storyId": "shell-chat-pane--narrow",
+  "storyTitle": "Shell/Chat Pane",
+  "subsystem": "shell",
+  "importPath": "./src/shell/slicc-chatpane.stories.ts",
+  "comment": "In the narrow view, the slicc-thread__inner should fill the entire width and height available, there is no point in showing the background",
+  "createdAt": "2026-06-10T19:39:49.422Z"
+}

@@ -1,0 +1,177 @@
+name: PR Fix Dispatcher
+
+on:
+  schedule:
+    - cron: '7 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Scan only this PR (waives the 20m settling + 60m human-activity waits so it is testable on demand)'
+        required: false
+      dry_run:
+        description: 'Scan and report only; no re-runs, labels, comments, or fixers'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: pr-fix-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+      issues: write
+      actions: write
+      checks: read
+    outputs:
+      queue: ${{ steps.scan.outputs.queue }}
+      has_dispatch: ${{ steps.scan.outputs.has_dispatch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Ensure dispatcher labels exist
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ci-fix-dispatched --color 1d76db --description "PR Fix Dispatcher handed this failing automation PR to a fixer" --force
+          gh label create ci-fix-skipped --color cccccc --description "PR Fix Dispatcher looked at this failing automation PR and left it alone" --force
+          gh label create ci-fix-failed --color b60205 --description "PR Fix Dispatcher's fixer could not get CI green" --force
+
+      - name: Scan failing automation PRs
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: node packages/dev-tools/pr-fix-dispatcher/scan-failing-prs.mjs
+
+  fix:
+    needs: scan
+    if: needs.scan.outputs.has_dispatch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    strategy:
+      fail-fast: false
+
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.scan.outputs.queue) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.headRef }}
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        run: |
+          if npm ci; then
+            echo 'state=clean' >> "$GITHUB_OUTPUT"
+          elif npm install --no-audit --no-fund; then
+            echo '::warning::npm ci failed; npm install re-resolved the tree (lockfile may be modified)'
+            echo 'state=re-resolved' >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::both npm ci and npm install failed; the fixer starts without node_modules'
+            echo 'state=failed' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fix the failing checks with Claude
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.PR_FIX_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 150
+          prompt: |
+            Existing PR: https://github.com/${{ github.repository }}/pull/${{ matrix.number }}
+            Title: ${{ matrix.title }}
+            Head branch: ${{ matrix.headRef }}
+            Head SHA: ${{ matrix.headSha }}
+
+            This is a routine automation-authored PR whose CI is failing. Take
+            ownership of the existing PR — do NOT open a new one. You are already
+            checked out on its head branch.
+
+            Dependency install: ${{ steps.install.outputs.state }}
+              clean       `npm ci` succeeded; the worktree is clean.
+              re-resolved `npm ci` FAILED and `npm install` was used instead — so
+                          the lockfile in your worktree is already modified. That
+                          regenerated lockfile is very likely the fix itself:
+                          check `git diff`, confirm it matches the failing check,
+                          and commit it deliberately. Do not discard it without
+                          reading it, and do not commit it blindly either.
+              failed      Neither worked; there is no `node_modules`. Diagnose the
+                          resolution failure from package.json / the lockfile, and
+                          if it needs a NEW dependency or a version decision,
+                          report back instead of guessing.
+
+            Failing checks: ${{ matrix.failures }}
+
+            Your job: get CI green on this branch. Fix the failures and, if the
+            branch is behind or conflicted, rebase/merge `main` and resolve the
+            conflicts. Keep the change minimal and scoped to what CI is
+            complaining about — do not refactor, do not add dependencies, do not
+            change CI configuration, and do not touch the PR title or body beyond
+            noting what you fixed.
+
+            Reproduce locally before and after your change (e.g. `npm run lint`,
+            `npm run typecheck`, `npm test` — run only what is relevant to the
+            failing checks), then commit and `git push` to the head branch.
+
+            If the fix turns out to need a *new* dependency, a schema change, a
+            CI/deploy config change, or a redesign, stop and report back instead
+            of pushing. Syncing a version pin that Renovate already bumped in
+            one manifest but missed in a sibling (e.g. Package.swift vs
+            xcodegen project.yml `exactVersion`) is allowed and expected.
+
+            Do not merge the PR. Do not assign reviewers. Report back with the PR
+            URL and whether CI went green, and post that as one short
+            `gh pr comment` on the PR.
+
+      - name: Report a failed fixer
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr edit "$PR_NUMBER" --add-label ci-fix-failed --remove-label ci-fix-dispatched || true
+          gh pr comment "$PR_NUMBER" --body "🚑 **PR Fix Dispatcher — the fixer did not finish.** Its run stopped before CI went green (it may have run out of turns, hit a failure it was told not to work around, or crashed). Nothing was pushed by a successful fixer; this PR now needs a human. Run log: $RUN_URL"

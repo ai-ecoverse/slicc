@@ -1,0 +1,29 @@
+set -e
+
+npx lint-staged
+
+
+if [ -f .no-comment ]; then
+  node packages/dev-tools/no-comment/check.mjs
+fi
+
+
+
+
+if git diff --cached --name-only | grep -qE '^(CLAUDE\.md|packages/vfs-root/shared/CLAUDE\.md|\.github/copilot-instructions\.md|\.github/instructions/.*\.instructions\.md|packages/.*/CLAUDE\.md)$'; then
+  node packages/dev-tools/tools/check-doc-sizes.mjs
+fi
+
+
+
+
+if git diff --cached --name-only | grep -qE '^(packages/webapp/src/|packages/dev-tools/tools/layer-back-edge-baseline\.json)'; then
+  node packages/dev-tools/tools/check-layer-back-edges.mjs
+fi
+
+
+
+
+if git diff --cached --name-only | grep -qE '^(packages/.*\.(ts|tsx|js|mjs|cjs)|packages/dev-tools/tools/record-string-unknown-baseline\.json)$'; then
+  node packages/dev-tools/tools/check-record-string-unknown.mjs
+fi

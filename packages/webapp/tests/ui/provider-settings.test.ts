@@ -1,0 +1,2480 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const storage = new Map<string, string>();
+const mockStorage = {
+  getItem: vi.fn((key: string) => storage.get(key) ?? null),
+  setItem: vi.fn((key: string, value: string) => {
+    storage.set(key, value);
+  }),
+  removeItem: vi.fn((key: string) => {
+    storage.delete(key);
+  }),
+  clear: vi.fn(() => storage.clear()),
+  get length() {
+    return storage.size;
+  },
+  key: vi.fn((_i: number) => null),
+} as Storage;
+
+Object.defineProperty(globalThis, 'localStorage', { value: mockStorage, configurable: true });
+
+Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
+const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog } = vi.hoisted(
+  () => {
+    const mockLog = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    return {
+      mockLog,
+      mockCreateLogger: vi.fn(() => mockLog),
+      mockGetProviders: vi.fn(() => [
+        'anthropic',
+        'openai',
+        'azure-openai-responses',
+        'amazon-bedrock',
+      ]),
+      mockGetModels: vi.fn((providerId: string) => {
+        if (providerId === 'anthropic') {
+          return [{ id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4', reasoning: true }];
+        }
+        if (providerId === 'openai') {
+          return [{ id: 'gpt-5', name: 'GPT-5', reasoning: true }];
+        }
+        if (providerId === 'amazon-bedrock') {
+          return [{ id: 'anthropic.claude-3-sonnet', name: 'Claude 3 Sonnet', reasoning: true }];
+        }
+        throw new Error(`Unknown provider: ${providerId}`);
+      }),
+      mockGetModel: vi.fn((providerId: string, modelId: string) => ({
+        id: modelId,
+        name: modelId,
+        provider: providerId,
+        api: 'mock-api',
+        baseUrl: 'https://default.example.com',
+      })),
+    };
+  }
+);
+
+vi.mock('../../src/core/index.js', () => ({
+  getProviders: mockGetProviders,
+  getModels: mockGetModels,
+  getModel: mockGetModel,
+  createLogger: mockCreateLogger,
+}));
+
+const { mockShouldIncludeProvider } = vi.hoisted(() => ({
+  mockShouldIncludeProvider: vi.fn((_id: string) => true),
+}));
+
+const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
+  const providerConfigs = new Map<string, Record<string, unknown>>([
+    [
+      'anthropic',
+      {
+        id: 'anthropic',
+        name: 'Anthropic',
+        description: 'Claude',
+        requiresApiKey: true,
+        requiresBaseUrl: false,
+      },
+    ],
+    [
+      'openai',
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        description: 'GPT',
+        requiresApiKey: true,
+        requiresBaseUrl: false,
+      },
+    ],
+    [
+      'bedrock-camp',
+      {
+        id: 'bedrock-camp',
+        name: 'AWS Bedrock',
+        description: 'CAMP',
+        requiresApiKey: true,
+        requiresBaseUrl: true,
+      },
+    ],
+    [
+      'azure-ai-foundry',
+      {
+        id: 'azure-ai-foundry',
+        name: 'Azure (Claude)',
+        description: 'Azure',
+        requiresApiKey: true,
+        requiresBaseUrl: true,
+      },
+    ],
+    [
+      'amazon-bedrock',
+      {
+        id: 'amazon-bedrock',
+        name: 'AWS Bedrock',
+        description: 'Bedrock',
+        requiresApiKey: true,
+        requiresBaseUrl: true,
+      },
+    ],
+    [
+      'azure-openai-responses',
+      {
+        id: 'azure-openai-responses',
+        name: 'Azure (OpenAI)',
+        description: 'Azure OpenAI',
+        requiresApiKey: true,
+        requiresBaseUrl: true,
+      },
+    ],
+    [
+      'test-oauth',
+      {
+        id: 'test-oauth',
+        name: 'Test OAuth',
+        description: 'OAuth test provider',
+        requiresApiKey: false,
+        requiresBaseUrl: false,
+        isOAuth: true,
+      },
+    ],
+  ]);
+  return {
+    mockGetRegisteredProviderConfig: vi.fn((id: string) => providerConfigs.get(id)),
+    mockGetRegisteredProviderIds: vi.fn(() => [...providerConfigs.keys()]),
+  };
+});
+
+vi.mock('../../src/providers/index.js', () => ({
+  getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
+  getRegisteredProviderIds: mockGetRegisteredProviderIds,
+  shouldIncludeProvider: mockShouldIncludeProvider,
+}));
+
+vi.mock('../../src/providers/oauth-service.js', () => ({
+  openIdpLogoutUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
+import type { ProviderDefault } from '../../src/ui/provider-settings.js';
+import {
+  addAccount,
+  applyProviderDefaults,
+  clearAllSettings,
+  clearApiKey,
+  clearBaseUrl,
+  exportProviders,
+  getAccounts,
+  getAllAvailableModels,
+  getApiKey,
+  getApiKeyForProvider,
+  getAvailableProviders,
+  getBaseUrl,
+  getBaseUrlForProvider,
+  getOAuthAccountInfo,
+  getProviderConfig,
+  getProviderModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  logoutOAuthAccount,
+  maskOAuthTokenWithRetry,
+  migrateLegacyAuthOnlySelection,
+  persistOAuthMaskViaServiceWorker,
+  removeAccount,
+  resolveCurrentModel,
+  resolveModelById,
+  saveOAuthAccount,
+  setApiKey,
+  setBaseUrl,
+  setSelectedModelId,
+  setSelectedProvider,
+} from '../../src/ui/provider-settings.js';
+
+describe('multi-account storage', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('getAccounts returns empty array when no accounts', () => {
+    expect(getAccounts()).toEqual([]);
+  });
+
+  it('addAccount stores an account and getAccounts returns it', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    const accounts = getAccounts();
+    expect(accounts).toEqual([{ providerId: 'anthropic', apiKey: 'sk-ant-123' }]);
+  });
+
+  it('addAccount with baseUrl stores it', () => {
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    const accounts = getAccounts();
+    expect(accounts).toEqual([
+      {
+        providerId: 'azure-ai-foundry',
+        apiKey: 'az-key',
+        baseUrl: 'https://contoso.azure.com/anthropic',
+      },
+    ]);
+  });
+
+  it('addAccount replaces existing account for same provider', () => {
+    addAccount('anthropic', 'key-1');
+    addAccount('anthropic', 'key-2');
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].apiKey).toBe('key-2');
+  });
+
+  it('supports multiple accounts for different providers', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(2);
+  });
+
+  it('removeAccount removes the account', async () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    await removeAccount('anthropic');
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('removeAccount calls logoutOAuthAccount (onOAuthLogout) for OAuth providers before removing', async () => {
+    const onOAuthLogoutSpy = vi.fn().mockResolvedValue(undefined);
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz', userName: 'bob' },
+      ])
+    );
+
+    await removeAccount('test-oauth');
+
+    expect(getAccounts()).toHaveLength(0);
+
+    expect(onOAuthLogoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it('removeAccount does NOT call onOAuthLogout for non-OAuth providers', async () => {
+    const onOAuthLogoutSpy = vi.fn();
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('anthropic', {
+      ...configs.get('anthropic'),
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    addAccount('anthropic', 'sk-ant');
+    await removeAccount('anthropic');
+    expect(onOAuthLogoutSpy).not.toHaveBeenCalled();
+    expect(getAccounts()).toHaveLength(0);
+  });
+
+  it('getApiKeyForProvider returns the key for a specific provider', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    expect(getApiKeyForProvider('anthropic')).toBe('ant-key');
+    expect(getApiKeyForProvider('openai')).toBe('oai-key');
+    expect(getApiKeyForProvider('groq')).toBeNull();
+  });
+
+  it('getBaseUrlForProvider returns the baseUrl for a specific provider', () => {
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    addAccount('anthropic', 'ant-key');
+    expect(getBaseUrlForProvider('azure-ai-foundry')).toBe('https://contoso.azure.com/anthropic');
+    expect(getBaseUrlForProvider('anthropic')).toBeNull();
+  });
+});
+
+describe('selected model encodes provider', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('setSelectedModelId stores providerId:modelId', () => {
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+    expect(getSelectedModelId()).toBe('gpt-5');
+    expect(getSelectedProvider()).toBe('openai');
+  });
+
+  it('getSelectedProvider falls back to first account if no model set', () => {
+    addAccount('openai', 'oai-key');
+    expect(getSelectedProvider()).toBe('openai');
+  });
+
+  it('getSelectedProvider defaults to anthropic when no accounts or model', () => {
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('getSelectedProvider skips auth-only accounts when falling back without a prefix', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+        { providerId: 'anthropic', apiKey: 'sk-ant-key' },
+      ])
+    );
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('getSelectedProvider collapses to accounts[0] when no account offers LLM models', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+      ])
+    );
+    expect(getSelectedProvider()).toBe('github');
+  });
+
+  it('getSelectedProvider prefers the LLM account whose catalog offers the bare model', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'github', apiKey: '', accessToken: 'gho_xxx', userName: 'lars' },
+        { providerId: 'anthropic', apiKey: 'sk-ant-key' },
+        { providerId: 'openai', apiKey: 'oai-key' },
+      ])
+    );
+    storage.set('selected-model', 'gpt-5');
+    expect(getSelectedProvider()).toBe('openai');
+  });
+
+  it('setSelectedProvider updates the provider prefix in selected-model', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+    setSelectedProvider('openai');
+    expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
+  });
+
+  it('setSelectedModelId stores prefixed ids verbatim when the leading token is a known provider', () => {
+    addAccount('openai', 'oai-key');
+    setSelectedModelId('openai:gpt-5');
+    expect(storage.get('selected-model')).toBe('openai:gpt-5');
+  });
+
+  it('setSelectedModelId prefixes bare ids with the current provider', () => {
+    addAccount('anthropic', 'ant-key');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+    setSelectedModelId('claude-opus-4-6');
+    expect(storage.get('selected-model')).toBe('anthropic:claude-opus-4-6');
+  });
+
+  it('setSelectedModelId prefixes Bedrock model ids that legitimately contain a colon', () => {
+    addAccount('amazon-bedrock', 'bedrock-key');
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    setSelectedModelId('eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(storage.get('selected-model')).toBe(
+      'amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0'
+    );
+
+    expect(getSelectedModelId()).toBe('eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(getSelectedProvider()).toBe('amazon-bedrock');
+  });
+
+  it('setSelectedModelId stores fully-prefixed Bedrock ids verbatim', () => {
+    addAccount('amazon-bedrock', 'bedrock-key');
+    setSelectedModelId('amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(storage.get('selected-model')).toBe(
+      'amazon-bedrock:eu.anthropic.claude-opus-4-5-20251101-v1:0'
+    );
+    expect(getSelectedProvider()).toBe('amazon-bedrock');
+    expect(getSelectedModelId()).toBe('eu.anthropic.claude-opus-4-5-20251101-v1:0');
+  });
+});
+
+describe('migrateLegacyAuthOnlySelection — clears stale auth-only selections', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('clears selected-model when it points at github (auth-only after 3.13)', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('preserves selected-model for providers that still expose LLM models', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+  });
+
+  it('preserves selected-model when prefix is github-copilot (LLM provider)', () => {
+    storage.set('selected-model', 'github-copilot:claude-sonnet-4.6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('github-copilot:claude-sonnet-4.6');
+  });
+
+  it('is a no-op when selected-model is unset', () => {
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('is a no-op when selected-model has no provider prefix', () => {
+    storage.set('selected-model', 'claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('claude-sonnet-4-6');
+  });
+
+  it('is idempotent', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+});
+
+describe('backward-compatible accessors', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('getApiKey returns key for current provider', () => {
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+    expect(getApiKey()).toBe('oai-key');
+  });
+
+  it('setApiKey adds/updates account for current provider', () => {
+    storage.set('selected-model', 'anthropic:');
+    setApiKey('new-key');
+    expect(getApiKeyForProvider('anthropic')).toBe('new-key');
+  });
+
+  it('clearApiKey removes account for current provider', async () => {
+    addAccount('anthropic', 'ant-key');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+    await clearApiKey();
+    expect(getApiKeyForProvider('anthropic')).toBeNull();
+  });
+
+  it('getBaseUrl returns baseUrl for current provider', () => {
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
+    expect(getBaseUrl()).toBe('https://contoso.azure.com/anthropic');
+  });
+
+  it('setBaseUrl updates baseUrl for current provider', () => {
+    addAccount('azure-ai-foundry', 'az-key');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
+    setBaseUrl('https://new-endpoint.azure.com/anthropic');
+    expect(getBaseUrlForProvider('azure-ai-foundry')).toBe(
+      'https://new-endpoint.azure.com/anthropic'
+    );
+  });
+
+  it('clearBaseUrl removes baseUrl but keeps the account', () => {
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
+    clearBaseUrl();
+    expect(getApiKeyForProvider('azure-ai-foundry')).toBe('az-key');
+    expect(getBaseUrlForProvider('azure-ai-foundry')).toBeNull();
+  });
+
+  it('getBaseUrl returns null when no account exists', () => {
+    expect(getBaseUrl()).toBeNull();
+  });
+});
+
+describe('clearAllSettings', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('removes accounts, model key, and legacy keys', async () => {
+    addAccount('anthropic', 'ant-key');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+
+    storage.set('slicc_provider', 'anthropic');
+    storage.set('anthropic_api_key', 'old');
+
+    await clearAllSettings();
+
+    expect(getAccounts()).toEqual([]);
+    expect(getSelectedModelId()).toBe('');
+    expect(storage.get('slicc_provider')).toBeUndefined();
+    expect(storage.get('anthropic_api_key')).toBeUndefined();
+  });
+});
+
+describe('resolveCurrentModel', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('resolves selected provider/model and applies baseUrl override', () => {
+    addAccount('openai', 'oai-key', 'https://proxy.example.com');
+    storage.set('selected-model', 'openai:gpt-5');
+
+    const model = resolveCurrentModel();
+
+    expect(mockGetModel).toHaveBeenCalledWith('openai', 'gpt-5');
+    expect(model.id).toBe('gpt-5');
+    expect((model as unknown as Record<string, unknown>).baseUrl).toBe('https://proxy.example.com');
+  });
+
+  it('falls back to provider custom model when registry lookup fails', () => {
+    mockGetModel.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+
+    const model = resolveCurrentModel();
+
+    expect(model.id).toBe('gpt-5');
+  });
+
+  it('falls back to anthropic when provider has no matching model either', () => {
+    mockGetModel.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:nonexistent-model');
+
+    const model = resolveCurrentModel();
+
+    expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-0');
+    expect(model.id).toBe('claude-sonnet-4-0');
+  });
+
+  it('does not apply baseUrl when account has none', () => {
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+
+    const model = resolveCurrentModel();
+
+    expect((model as unknown as Record<string, unknown>).baseUrl).toBe(
+      'https://default.example.com'
+    );
+  });
+});
+
+describe('getAllAvailableModels', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns empty array when no accounts configured', () => {
+    expect(getAllAvailableModels()).toEqual([]);
+  });
+
+  it('returns models grouped by provider for single account', () => {
+    addAccount('anthropic', 'ant-key');
+    const groups = getAllAvailableModels();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].providerId).toBe('anthropic');
+    expect(groups[0].providerName).toBe('Anthropic');
+    expect(groups[0].models).toHaveLength(1);
+    expect(groups[0].models[0].id).toBe('claude-sonnet-4-0');
+  });
+
+  it('returns models grouped by provider for multiple accounts', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    const groups = getAllAvailableModels();
+    expect(groups).toHaveLength(2);
+    expect(groups[0].providerId).toBe('anthropic');
+    expect(groups[1].providerId).toBe('openai');
+  });
+
+  it('skips providers with no models', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('groq', 'groq-key');
+    const groups = getAllAvailableModels();
+    expect(groups).toHaveLength(1);
+    expect(groups[0].providerId).toBe('anthropic');
+  });
+});
+
+describe('build-excluded pi-ai providers', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+
+    mockShouldIncludeProvider.mockImplementation((id: string) => id !== 'amazon-bedrock');
+  });
+
+  afterEach(() => {
+    mockShouldIncludeProvider.mockImplementation(() => true);
+  });
+
+  it('getAllAvailableModels skips a stored amazon-bedrock account', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('amazon-bedrock', 'bedrock-key');
+    const groups = getAllAvailableModels();
+    expect(groups.map((g) => g.providerId)).toEqual(['anthropic']);
+  });
+
+  it('leaves bedrock-camp untouched (registered, not a pi-ai provider)', () => {
+    storage.set('selected-model', 'bedrock-camp:some-model');
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'bedrock-camp', apiKey: 'camp-key' }])
+    );
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('bedrock-camp:some-model');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['bedrock-camp']);
+  });
+
+  it('migrateLegacyAuthOnlySelection clears a selected-model on amazon-bedrock', () => {
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('migrateLegacyAuthOnlySelection drops a stored amazon-bedrock account row', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'anthropic', apiKey: 'ant-key' },
+        { providerId: 'amazon-bedrock', apiKey: 'bedrock-key' },
+      ])
+    );
+    migrateLegacyAuthOnlySelection();
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
+  });
+
+  it('migrateLegacyAuthOnlySelection preserves selection + account for an included provider', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    storage.set('slicc_accounts', JSON.stringify([{ providerId: 'anthropic', apiKey: 'ant-key' }]));
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
+  });
+});
+
+describe('legacy key cleanup', () => {
+  it('deletes legacy keys via clearAllSettings', async () => {
+    const legacyKeys = [
+      'slicc_provider',
+      'slicc_api_key',
+      'slicc_base_url',
+      'anthropic_api_key',
+      'api_provider',
+      'azure_resource',
+      'bedrock_region',
+    ];
+    for (const key of legacyKeys) {
+      storage.set(key, 'value');
+    }
+    await clearAllSettings();
+    for (const key of legacyKeys) {
+      expect(storage.get(key)).toBeUndefined();
+    }
+  });
+});
+
+describe('applyProviderDefaults', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('no-op when defaults array is empty', () => {
+    applyProviderDefaults([]);
+    expect(getAccounts()).toEqual([]);
+  });
+
+  it('no-op when accounts already exist', () => {
+    addAccount('openai', 'existing-key');
+    const defaults: ProviderDefault[] = [{ providerId: 'anthropic', apiKey: 'new-key' }];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('adds accounts from defaults when none exist', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key' },
+      { providerId: 'openai', apiKey: 'oai-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0].providerId).toBe('anthropic');
+    expect(accounts[1].providerId).toBe('openai');
+  });
+
+  it('sets selected model from first entry', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
+      { providerId: 'openai', apiKey: 'oai-key', model: 'gpt-5' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('skips entries missing providerId or apiKey', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: '', apiKey: 'key-1' },
+      { providerId: 'anthropic', apiKey: '' },
+      { providerId: 'openai', apiKey: 'oai-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('warns and skips unknown providers', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'unknown-provider', apiKey: 'key-1' },
+      { providerId: 'anthropic', apiKey: 'ant-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('anthropic');
+    expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('unknown-provider'));
+  });
+
+  it('stores baseUrl when provided', () => {
+    const defaults: ProviderDefault[] = [
+      {
+        providerId: 'amazon-bedrock',
+        apiKey: 'aws-key',
+        baseUrl: 'https://bedrock.us-east-1.amazonaws.com',
+      },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getBaseUrlForProvider('amazon-bedrock')).toBe('https://bedrock.us-east-1.amazonaws.com');
+  });
+
+  it('makes getApiKey() return non-null (skips settings dialog)', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getApiKey()).toBe('ant-key');
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('duplicate providerId keeps last entry', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'first-key' },
+      { providerId: 'anthropic', apiKey: 'second-key' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getApiKeyForProvider('anthropic')).toBe('second-key');
+    expect(getAccounts()).toHaveLength(1);
+  });
+
+  it('does not override existing selected model', () => {
+    storage.set('selected-model', 'openai:gpt-5');
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(storage.get('selected-model')).toBe('openai:gpt-5');
+  });
+});
+
+describe('exportProviders', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns empty array when no accounts', () => {
+    expect(exportProviders()).toEqual([]);
+  });
+
+  it('exports all accounts with providerId and apiKey', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    const result = exportProviders();
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ providerId: 'anthropic', apiKey: 'ant-key' });
+    expect(result[1]).toEqual({ providerId: 'openai', apiKey: 'oai-key' });
+  });
+
+  it('includes baseUrl only when present', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    const result = exportProviders();
+    expect(result[0].baseUrl).toBeUndefined();
+    expect(result[1].baseUrl).toBe('https://contoso.azure.com/anthropic');
+  });
+
+  it('attaches model to matching selected provider', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+    const result = exportProviders();
+    expect(result[0].model).toBeUndefined();
+    expect(result[1].model).toBe('gpt-5');
+  });
+
+  it('omits model when no model is selected', () => {
+    addAccount('anthropic', 'ant-key');
+    const result = exportProviders();
+    expect(result[0].model).toBeUndefined();
+  });
+
+  it('round-trips with applyProviderDefaults', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key', 'https://proxy.example.com');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
+
+    const exported = exportProviders();
+
+    storage.clear();
+    applyProviderDefaults(exported);
+
+    expect(getAccounts()).toHaveLength(2);
+    expect(getApiKeyForProvider('anthropic')).toBe('ant-key');
+    expect(getApiKeyForProvider('openai')).toBe('oai-key');
+    expect(getBaseUrlForProvider('openai')).toBe('https://proxy.example.com');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+});
+
+describe('dynamic provider registry', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('getAvailableProviders includes both pi-ai and registered providers', () => {
+    const providers = getAvailableProviders();
+
+    expect(providers).toContain('anthropic');
+    expect(providers).toContain('openai');
+    expect(providers).toContain('test-oauth');
+  });
+
+  it('getProviderConfig returns registered config', () => {
+    const config = getProviderConfig('anthropic');
+    expect(config.id).toBe('anthropic');
+    expect(config.name).toBe('Anthropic');
+  });
+
+  it('getProviderConfig returns fallback for unknown providers', () => {
+    const config = getProviderConfig('unknown-provider');
+    expect(config.id).toBe('unknown-provider');
+    expect(config.name).toBe('Unknown Provider');
+    expect(config.requiresApiKey).toBe(true);
+  });
+
+  it('getProviderConfig returns isOAuth for OAuth providers', () => {
+    const config = getProviderConfig('test-oauth');
+    expect(config.isOAuth).toBe(true);
+    expect(config.requiresApiKey).toBe(false);
+  });
+});
+
+describe('OAuth account storage', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('saveOAuthAccount stores OAuth fields', async () => {
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'token-123',
+      refreshToken: 'refresh-456',
+      tokenExpiresAt: Date.now() + 86400000,
+      userName: 'karl@example.com',
+    });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('test-oauth');
+    expect(accounts[0].accessToken).toBe('token-123');
+    expect(accounts[0].refreshToken).toBe('refresh-456');
+    expect(accounts[0].userName).toBe('karl@example.com');
+    expect(accounts[0].apiKey).toBe('');
+  });
+
+  it('getApiKeyForProvider returns accessToken for OAuth providers', async () => {
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'oauth-token-xyz',
+    });
+
+    expect(getApiKeyForProvider('test-oauth')).toBe('oauth-token-xyz');
+  });
+
+  it('getApiKeyForProvider prefers accessToken over apiKey', () => {
+    const accounts = getAccounts();
+    accounts.push({
+      providerId: 'hybrid',
+      apiKey: 'old-key',
+      accessToken: 'new-token',
+    });
+    storage.set('slicc_accounts', JSON.stringify(accounts));
+    expect(getApiKeyForProvider('hybrid')).toBe('new-token');
+  });
+
+  it('getApiKeyForProvider falls back to apiKey when no accessToken', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    expect(getApiKeyForProvider('anthropic')).toBe('sk-ant-123');
+  });
+
+  it('saveOAuthAccount replaces existing account for same provider', async () => {
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'token-2',
+      userName: 'updated@example.com',
+    });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].accessToken).toBe('token-2');
+    expect(accounts[0].userName).toBe('updated@example.com');
+  });
+
+  it('saveOAuthAccount preserves existing baseUrl through re-login', async () => {
+    addAccount('test-oauth', '', 'https://proxy.example.com');
+
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', userName: 'karl' });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].accessToken).toBe('token-1');
+    expect(accounts[0].baseUrl).toBe('https://proxy.example.com');
+  });
+
+  it('saveOAuthAccount allows explicit baseUrl override', async () => {
+    addAccount('test-oauth', '', 'https://old-proxy.example.com');
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'token-1',
+      baseUrl: 'https://new-proxy.example.com',
+    });
+    expect(getBaseUrlForProvider('test-oauth')).toBe('https://new-proxy.example.com');
+  });
+
+  it('saveOAuthAccount does not set baseUrl when none exists', async () => {
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    const accounts = getAccounts();
+    expect(accounts[0].baseUrl).toBeUndefined();
+  });
+});
+
+describe('getOAuthAccountInfo', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns null when no account exists', () => {
+    expect(getOAuthAccountInfo('nonexistent')).toBeNull();
+  });
+
+  it('returns null when account has no accessToken', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    expect(getOAuthAccountInfo('anthropic')).toBeNull();
+  });
+
+  it('returns token info for OAuth account', async () => {
+    const expiresAt = Date.now() + 3600000;
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-123',
+      tokenExpiresAt: expiresAt,
+      userName: 'karl@example.com',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.token).toBe('tok-123');
+    expect(info!.expiresAt).toBe(expiresAt);
+    expect(info!.userName).toBe('karl@example.com');
+    expect(info!.expired).toBe(false);
+  });
+
+  it('marks token as expired when past expiry minus 60s buffer', async () => {
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-expired',
+      tokenExpiresAt: Date.now() - 1000,
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.expired).toBe(true);
+  });
+
+  it('marks token as expired when within 60s buffer', async () => {
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-almost',
+      tokenExpiresAt: Date.now() + 30000,
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(true);
+  });
+
+  it('returns expired false when no tokenExpiresAt', async () => {
+    await saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-forever',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(false);
+  });
+});
+
+describe('resolveCurrentModel with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to provider custom model when model ID not in pi-ai registry', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'custom-model-not-in-registry', name: 'Custom Model' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'custom-model-not-in-registry') throw new Error('Unknown model');
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'mock-api',
+        baseUrl: 'https://default.example.com',
+      };
+    });
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:custom-model-not-in-registry');
+
+    const model = resolveCurrentModel();
+
+    expect(model.id).toBe('custom-model-not-in-registry');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
+  });
+});
+
+describe('OAuth API routing uses api from getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  async function setupOAuthProviderWithMixedApis() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4' },
+        { id: 'gpt-5', name: 'GPT-5', api: 'openai' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      name: modelId,
+      provider,
+      api: 'mock-api',
+      baseUrl: 'https://default.example.com',
+    }));
+
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+  }
+
+  it('resolveCurrentModel returns correct api from getModelIds for anthropic model', async () => {
+    await setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:claude-sonnet-4-0');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-sonnet-4-0');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('resolveCurrentModel returns correct api from getModelIds for openai model', async () => {
+    await setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:gpt-5');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('gpt-5');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('resolveModelById returns correct api from getModelIds for anthropic model', async () => {
+    await setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:claude-sonnet-4-0');
+
+    const model = resolveModelById('claude-sonnet-4-0');
+    expect(model.id).toBe('claude-sonnet-4-0');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('resolveModelById returns correct api from getModelIds for openai model', async () => {
+    await setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:gpt-5');
+
+    const model = resolveModelById('gpt-5');
+    expect(model.id).toBe('gpt-5');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+});
+
+describe('compat propagation through resolveModelById and resolveCurrentModel', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  async function setupOAuthProviderWithCompat() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+
+      getModelIds: () => [
+        {
+          id: 'claude-haiku-4-5',
+          name: 'Claude Haiku 4.5',
+          compat: { supportsEagerToolInputStreaming: false },
+        },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      name: modelId,
+      provider,
+      api: 'mock-api',
+      baseUrl: 'https://default.example.com',
+    }));
+
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+  }
+
+  it('resolveModelById preserves compat from getModelIds for Haiku (regression)', async () => {
+    await setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-haiku-4-5');
+
+    const model = resolveModelById('claude-haiku-4-5');
+    expect(model.id).toBe('claude-haiku-4-5');
+    expect((model as { compat?: unknown }).compat).toEqual({
+      supportsEagerToolInputStreaming: false,
+    });
+  });
+
+  it('resolveCurrentModel preserves compat from getModelIds for Haiku (regression)', async () => {
+    await setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-haiku-4-5');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-haiku-4-5');
+    expect((model as { compat?: unknown }).compat).toEqual({
+      supportsEagerToolInputStreaming: false,
+    });
+  });
+
+  it('resolveModelById leaves compat undefined for models without overrides', async () => {
+    await setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-opus-4-6');
+
+    const model = resolveModelById('claude-opus-4-6');
+    expect(model.id).toBe('claude-opus-4-6');
+    expect((model as { compat?: unknown }).compat).toBeUndefined();
+  });
+});
+
+describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to custom model when getModelDynamic returns undefined instead of throwing', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'mock-api',
+        baseUrl: 'https://default.example.com',
+      };
+    }) as never);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
+  });
+
+  it('resolveModelById falls back when getModelDynamic returns undefined', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'mock-api',
+        baseUrl: 'https://default.example.com',
+      };
+    }) as never);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    const model = resolveModelById('ghost-model');
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+  });
+});
+
+describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  async function setupColdOAuthProvider() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+
+      getModelIds: () => [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'claude-opus-4-8' || modelId === 'gpt-5-cold') {
+        throw new Error('Unknown model');
+      }
+      return {
+        id: modelId,
+        name: modelId,
+        provider,
+        api: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+      };
+    });
+
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'ims-token' });
+  }
+
+  it('resolveCurrentModel routes the unknown id through the OAuth proxy, not native Anthropic', async () => {
+    await setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveCurrentModel();
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById routes the unknown id through the OAuth proxy, not native Anthropic', async () => {
+    await setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+    expect(model.id).toBe('claude-opus-4-8');
+  });
+
+  it('resolveModelById resolves the REQUESTED unknown id, not the selected one', async () => {
+    await setupColdOAuthProvider();
+
+    storage.set('selected-model', 'adobe:claude-sonnet-4-6');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.id).toBe('claude-opus-4-8');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', async () => {
+    await setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:gpt-5-cold');
+
+    const model = resolveModelById('gpt-5-cold');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', async () => {
+    await setupColdOAuthProvider();
+    storage.set('selected-model', 'adobe:claude-opus-4-8');
+
+    const model = resolveModelById('claude-opus-4-8');
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+
+  it('does NOT synthesize a provider-routed model for a non-OAuth provider', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-key', {
+      id: 'custom-key',
+      name: 'Custom Key',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+      isOAuth: false,
+      getModelIds: () => [{ id: 'known-model', name: 'Known' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'ghost-id') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'anthropic', baseUrl: '' };
+    });
+    addAccount('custom-key', 'k');
+    storage.set('selected-model', 'custom-key:ghost-id');
+
+    const model = resolveModelById('ghost-id');
+    expect(String(model.api)).not.toBe('custom-key-anthropic');
+  });
+});
+
+describe('fallback model fields', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('fallback model from getModelIds has required pi-ai fields', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'unknown-model', name: 'Unknown' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    const model = models[0] as unknown as Record<string, unknown>;
+
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+});
+
+describe('getProviderModels with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('uses getModelIds when provider defines it', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-sonnet-4-0');
+    expect(models[0].provider).toBe('custom-oauth');
+    expect(models[0].api).toBe('custom-oauth-anthropic');
+  });
+
+  it('falls back to all anthropic models for OAuth without getModelIds', () => {
+    const models = getProviderModels('test-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-sonnet-4-0');
+    expect(models[0].api).toBe('test-oauth-anthropic');
+  });
+
+  it('returns empty array and logs error when getModelIds throws', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('broken-oauth', {
+      id: 'broken-oauth',
+      name: 'Broken OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => {
+        throw new Error('config fetch failed');
+      },
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('broken-oauth');
+    expect(models).toEqual([]);
+    expect(mockLog.error).toHaveBeenCalledWith(
+      'Provider getModelIds callback failed',
+      expect.objectContaining({ providerId: 'broken-oauth' })
+    );
+  });
+
+  it('creates fallback model for unknown model IDs from getModelIds', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'unknown-model-id', name: 'My Custom Model' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('unknown-model-id');
+    expect(models[0].name).toBe('My Custom Model');
+    expect(models[0].provider).toBe('custom-oauth');
+  });
+
+  it('merges thinkingLevelMap from getModelIds over the pi-ai base map', () => {
+    mockGetProviders.mockReturnValue(['openai']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'openai') {
+        return [
+          {
+            id: 'gpt-5.3-codex',
+            name: 'GPT-5.3 Codex',
+            provider: 'openai',
+            api: 'openai-responses',
+            reasoning: true,
+
+            thinkingLevelMap: { off: null, xhigh: 'xhigh' },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('codexy', {
+      id: 'codexy',
+      name: 'Codexy',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        {
+          id: 'gpt-5.3-codex',
+          name: 'GPT-5.3 Codex',
+          api: 'openai',
+          thinkingLevelMap: { xhigh: 'xhigh', minimal: 'low' },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('codexy');
+    expect(models).toHaveLength(1);
+    expect(
+      (models[0] as { thinkingLevelMap?: Record<string, string | null> }).thinkingLevelMap
+    ).toEqual({ off: null, xhigh: 'xhigh', minimal: 'low' });
+  });
+});
+
+describe('Adobe sonnet model preference', () => {
+  async function setupAdobeProvider(modelIds: Array<{ id: string; name: string; api?: string }>) {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+      getModelIds: () => modelIds,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-test' });
+  }
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    mockGetProviders.mockReturnValue(['anthropic']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', reasoning: true },
+          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', reasoning: true },
+        ];
+      }
+      return [];
+    });
+  });
+
+  it('resolveCurrentModel prefers sonnet for Adobe when no model selected', async () => {
+    await setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    ]);
+    storage.set('selected-model', 'adobe:');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('resolveCurrentModel respects explicit selection over sonnet preference', async () => {
+    await setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    ]);
+    storage.set('selected-model', 'adobe:claude-opus-4-6');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+
+  it('resolveCurrentModel falls back to first model when no sonnet available', async () => {
+    await setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+    ]);
+    storage.set('selected-model', 'adobe:');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+
+  it('does NOT apply defaultModelId preference for providers without it', () => {
+    addAccount('anthropic', 'ant-key');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+});
+
+describe('model metadata overrides', () => {
+  beforeEach(() => {
+    storage.clear();
+    mockGetProviders.mockReturnValue(['anthropic']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-6',
+            name: 'Claude Opus 4.6',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+          },
+          {
+            id: 'claude-sonnet-4-6',
+            name: 'Claude Sonnet 4.6',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+          },
+        ];
+      }
+      return [];
+    });
+  });
+
+  it('getModelIds metadata overrides pi-ai defaults for known models', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        {
+          id: 'claude-opus-4-6',
+          name: 'Claude Opus 4.6',
+          context_window: 1000000,
+          max_tokens: 128000,
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    expect(models[0].contextWindow).toBe(1000000);
+    expect(models[0]?.maxTokens).toBe(128000);
+  });
+
+  it('getModelIds metadata creates correct model for unknown IDs with api field', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        {
+          id: 'zai-glm-4.7',
+          name: 'GLM 4.7',
+          api: 'openai',
+          context_window: 131072,
+          max_tokens: 40960,
+          reasoning: true,
+          input: ['text'],
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('zai-glm-4.7');
+    expect(models[0].contextWindow).toBe(131072);
+    expect(models[0]?.maxTokens).toBe(40960);
+    expect(models[0].reasoning).toBe(true);
+  });
+
+  it('api field determines model.api for stream routing', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai' },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const glm = models.find((m) => m.id === 'zai-glm-4.7')!;
+    const opus = models.find((m) => m.id === 'claude-opus-4-6')!;
+    expect(String(glm.api)).toContain('openai');
+    expect(String(opus.api)).toContain('anthropic');
+  });
+
+  it('modelOverrides applies to OAuth provider models', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      modelOverrides: {
+        'claude-opus-4-6': { context_window: 500000 },
+      },
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    const opus = models.find((m) => m.id === 'claude-opus-4-6');
+    expect(opus).toBeDefined();
+    expect(opus!.contextWindow).toBe(500000);
+
+    const sonnet = models.find((m) => m.id === 'claude-sonnet-4-6');
+    expect(sonnet!.contextWindow).toBe(200000);
+  });
+
+  it('getModelIds metadata takes priority over modelOverrides', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-4-6': { context_window: 500000 },
+      },
+      getModelIds: () => [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+
+    expect(models[0].contextWindow).toBe(1000000);
+  });
+
+  it('propagates cost from getModelIds for a model id unknown to pi-ai (fixes $0 pricing)', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+
+    expect(model.inputCost).toBe(5);
+    expect(model.outputCost).toBe(25);
+    expect(model.cacheReadCost).toBe(0.5);
+    expect(model.cacheWriteCost).toBe(6.25);
+  });
+
+  it('leaves cost at the synthesized zero default when getModelIds reports none', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('getModelIds cost takes priority over modelOverrides cost (layer 3 > layer 2)', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-5': { cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+      },
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
+  it('cost precedence: reported cost > family-inherited cost > zeros', () => {
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    const reportedCost = { input: 9, output: 45, cacheRead: 0.9, cacheWrite: 11.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'claude-opus-5', name: 'Claude Opus 5' },
+
+        { id: 'claude-opus-5-1', name: 'Claude Opus 5.1', cost: reportedCost },
+
+        { id: 'mystery-1', name: 'Mystery 1' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const inherited = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+    const reported = models.find((m) => m.id === 'claude-opus-5-1') as unknown as Record<
+      string,
+      unknown
+    >;
+    const mystery = models.find((m) => m.id === 'mystery-1') as unknown as Record<string, unknown>;
+
+    expect(inherited.cost).toEqual(knownOpusCost);
+    expect(inherited.inputCost).toBe(5);
+    expect(inherited.outputCost).toBe(25);
+
+    expect(reported.cost).toEqual(reportedCost);
+    expect(reported.inputCost).toBe(9);
+    expect(reported.outputCost).toBe(45);
+
+    expect(mystery.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('does not inherit Claude family cost for OpenAI-routed models (local-llm/azure)', () => {
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [{ id: 'claude-opus-5', name: 'Claude Opus 5', api: 'openai' as const }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+
+    expect(model.cost).not.toEqual(knownOpusCost);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('compat from modelOverrides and getModelIds merges across the three layers', () => {
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-haiku-4-5',
+            name: 'Claude Haiku 4.5',
+            contextWindow: 200000,
+            maxTokens: 16384,
+
+            compat: { supportsLongCacheRetention: true },
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+
+      modelOverrides: {
+        'claude-haiku-4-5': {
+          compat: { supportsEagerToolInputStreaming: true } as never,
+        },
+      },
+
+      getModelIds: () => [
+        {
+          id: 'claude-haiku-4-5',
+          name: 'Claude Haiku 4.5',
+          compat: { supportsEagerToolInputStreaming: false },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+
+    expect((models[0] as { compat?: unknown }).compat).toEqual({
+      supportsLongCacheRetention: true,
+      supportsEagerToolInputStreaming: false,
+    });
+  });
+
+  it('models without api field default to anthropic routing', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(String(models[0].api)).toContain('anthropic');
+    expect(String(models[0].api)).not.toContain('openai');
+  });
+});
+
+describe('logoutOAuthAccount', () => {
+  let onOAuthLogoutMock: ReturnType<typeof vi.fn>;
+  let getOAuthLogoutUrlMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+
+    onOAuthLogoutMock = vi.fn().mockResolvedValue(undefined);
+    getOAuthLogoutUrlMock = vi.fn().mockReturnValue('https://idp.example.com/logout');
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutMock,
+      getOAuthLogoutUrl: getOAuthLogoutUrlMock,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'test-oauth',
+          apiKey: '',
+          accessToken: 'tok-abc',
+          userName: 'alice',
+          userAvatar: 'https://example.com/avatar.png',
+        },
+      ])
+    );
+  });
+
+  it('calls onOAuthLogout when defined', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(onOAuthLogoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('calls getOAuthLogoutUrl with the account object', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(getOAuthLogoutUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'test-oauth', accessToken: 'tok-abc' })
+    );
+  });
+
+  it('after logout: account has loggedOut:true, accessToken cleared, apiKey empty, userName/userAvatar retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0]).toMatchObject({
+      providerId: 'test-oauth',
+      loggedOut: true,
+      apiKey: '',
+      userName: 'alice',
+      userAvatar: 'https://example.com/avatar.png',
+    });
+    expect(accounts[0].accessToken).toBeUndefined();
+  });
+
+  it('does nothing for a non-OAuth provider', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'anthropic', apiKey: 'sk-ant-123' }])
+    );
+    await logoutOAuthAccount('anthropic');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBeUndefined();
+    expect(onOAuthLogoutMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an unknown providerId', async () => {
+    await expect(logoutOAuthAccount('unknown-provider')).resolves.toBeUndefined();
+  });
+
+  it('continues local cleanup when onOAuthLogout throws — still sets loggedOut:true and warns', async () => {
+    onOAuthLogoutMock.mockRejectedValue(new Error('IdP error'));
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBe(true);
+    expect(mockLog.warn).toHaveBeenCalledWith('onOAuthLogout failed', expect.anything());
+  });
+
+  it('buildUserAvatar selector skips logged-out account even though userName/userAvatar are retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
+    expect(found).toBeUndefined();
+  });
+
+  it('showAvatarPopover selector skips logged-out account even though userName is retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
+    expect(found).toBeUndefined();
+  });
+});
+
+describe('maskOAuthTokenWithRetry (cold service worker — issue #847)', () => {
+  const noSleep = async () => {};
+
+  it('returns the masked value once the SW warms up (empty, empty, then value)', async () => {
+    const responses = [{}, {}, { maskedValue: 'MASK' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBe('MASK');
+    expect(i).toBe(3);
+  });
+
+  it('returns immediately on first success without extra round-trips', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return { maskedValue: 'M' };
+    };
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'M'
+    );
+    expect(calls).toBe(1);
+  });
+
+  it('gives up with no maskedValue after exhausting attempts', async () => {
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      return {};
+    };
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(calls).toBe(3);
+  });
+
+  it('keeps retrying through a transient SW error (resp.error then value)', async () => {
+    const responses = [{ error: 'pipeline build failed' }, { maskedValue: 'MASK2' }];
+    let i = 0;
+    const send = async () => responses[i++];
+    expect((await maskOAuthTokenWithRetry(send, { attempts: 3, sleep: noSleep })).maskedValue).toBe(
+      'MASK2'
+    );
+  });
+
+  it('propagates the last SW error reason on give-up (for a prod-visible diagnostic)', async () => {
+    const send = async () => ({ error: 'entry missing after write' });
+    const result = await maskOAuthTokenWithRetry(send, { attempts: 2, sleep: noSleep });
+    expect(result.maskedValue).toBeUndefined();
+    expect(result.lastError).toBe('entry missing after write');
+  });
+});
+
+describe('persistOAuthMaskViaServiceWorker (#847 — offscreen has no chrome.storage)', () => {
+  const noSleep = async () => {};
+
+  it('sends accessToken + comma-joined domains to the SW (so the SW can write storage) and persists the mask', async () => {
+    let payload: { providerId: string; accessToken: string; domains: string } | undefined;
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com', 'api.github.com'] },
+      {
+        sendMaskRequest: async (p) => {
+          payload = p;
+          return { maskedValue: 'MASK' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+
+    expect(payload).toEqual({
+      providerId: 'github',
+      accessToken: 'tok',
+      domains: 'github.com,api.github.com',
+    });
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBe('MASK');
+  });
+
+  it('leaves the account unmasked AND logs a prod-visible error WITH the SW reason', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok' }] as never[];
+    mockLog.error.mockClear();
+    await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => ({ error: 'entry missing after write' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      },
+      { attempts: 2, sleep: noSleep }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({ providerId: 'github', reason: 'entry missing after write' })
+    );
+  });
+
+  it('refuses to persist a replica that equals the access token (#2921)', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'gho_REAL' }] as never[];
+    mockLog.error.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'gho_REAL', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => ({ maskedValue: 'gho_REAL' }),
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'mask replica equals the access token' });
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.stringContaining('give-up'),
+      expect.objectContaining({
+        providerId: 'github',
+        reason: 'mask replica equals the access token',
+      })
+    );
+  });
+
+  it('discards the replica when the access token rotates during the write', async () => {
+    const accounts = [{ providerId: 'github', apiKey: '', accessToken: 'tok-old' }] as never[];
+    mockLog.warn.mockClear();
+    const result = await persistOAuthMaskViaServiceWorker(
+      { providerId: 'github', accessToken: 'tok-old', domains: ['github.com'] },
+      {
+        sendMaskRequest: async () => {
+          (accounts[0] as { accessToken: string }).accessToken = 'tok-new';
+          return { maskedValue: 'MASK-old' };
+        },
+        getAccounts: () => accounts,
+        saveAccounts: async () => {},
+      }
+    );
+    expect((accounts[0] as { maskedValue?: string }).maskedValue).toBeUndefined();
+    expect(result).toEqual({ error: 'access token rotated during mask write' });
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining('token rotation'),
+      expect.objectContaining({ providerId: 'github' })
+    );
+  });
+});
+
+describe('OAuth replica HTTP — thin-bridge URL + token', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      oauthTokenDomains: ['api.test-oauth.example.com'],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+  });
+
+  afterEach(() => {
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    globalThis.fetch = originalFetch;
+  });
+
+  function captureCall(): {
+    getUrl: () => string | null;
+    getInit: () => RequestInit | null;
+  } {
+    let capturedUrl: string | null = null;
+    let capturedInit: RequestInit | null = null;
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedInit = init ?? null;
+
+      return new Response(JSON.stringify({ maskedValue: 'MASK' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    return { getUrl: () => capturedUrl, getInit: () => capturedInit };
+  }
+
+  describe('saveOAuthAccount → POST /api/secrets/oauth-update', () => {
+    it('legacy / same-origin: POSTs the relative path with no X-Bridge-Token', async () => {
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('/api/secrets/oauth-update');
+      const init = cap.getInit();
+      expect(init?.method).toBe('POST');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+      expect(headers['Content-Type']).toBe('application/json');
+    });
+
+    it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth-update');
+      const init = cap.getInit();
+      expect(init?.method).toBe('POST');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBe('abc-123');
+      expect(headers['Content-Type']).toBe('application/json');
+    });
+
+    it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth-update');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'tok-1' });
+      expect(cap.getUrl()).toBe('/api/secrets/oauth-update');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+  });
+
+  describe('logoutOAuthAccount → DELETE /api/secrets/oauth/{providerId}', () => {
+    beforeEach(() => {
+      storage.set(
+        'slicc_accounts',
+        JSON.stringify([{ providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz' }])
+      );
+    });
+
+    it('legacy / same-origin: DELETEs the relative path with no X-Bridge-Token', async () => {
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('/api/secrets/oauth/test-oauth');
+      const init = cap.getInit();
+      expect(init?.method).toBe('DELETE');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('thin-bridge: DELETEs at the bridge origin with X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth/test-oauth');
+      const init = cap.getInit();
+      expect(init?.method).toBe('DELETE');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBe('abc-123');
+    });
+
+    it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+      setLocalApiBaseUrl('http://localhost:5710');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('http://localhost:5710/api/secrets/oauth/test-oauth');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+
+    it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+      setBridgeToken('abc-123');
+      const cap = captureCall();
+      await logoutOAuthAccount('test-oauth');
+      expect(cap.getUrl()).toBe('/api/secrets/oauth/test-oauth');
+      const headers = cap.getInit()?.headers as Record<string, string>;
+      expect(headers['X-Bridge-Token']).toBeUndefined();
+    });
+  });
+});

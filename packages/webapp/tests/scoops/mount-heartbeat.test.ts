@@ -1,0 +1,150 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MOUNT_HEARTBEAT_INTERVAL_MS,
+  MOUNT_HEARTBEAT_MAX_BEATS,
+  withMountHeartbeat,
+} from '../../src/scoops/mount-heartbeat.js';
+
+describe('withMountHeartbeat', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('passes the result through and emits start + interval beats', async () => {
+    const stages: string[] = [];
+    let resolveWork: (v: string) => void = () => {};
+    const work = new Promise<string>((r) => {
+      resolveWork = r;
+    });
+    const p = withMountHeartbeat(
+      () => work,
+      (s) => stages.push(s)
+    );
+    expect(stages).toEqual(['shared-fs-mount:start']);
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS * 3);
+    expect(stages).toEqual([
+      'shared-fs-mount:start',
+      'shared-fs-mount:1',
+      'shared-fs-mount:2',
+      'shared-fs-mount:3',
+    ]);
+    resolveWork('mounted');
+    await expect(p).resolves.toBe('mounted');
+
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS * 2);
+    expect(stages).toHaveLength(4);
+  });
+
+  it('caps the beats so a wedged mount stops re-arming the watchdog', async () => {
+    const stages: string[] = [];
+    const never = new Promise<never>(() => {});
+    void withMountHeartbeat(
+      () => never,
+      (s) => stages.push(s)
+    );
+    await vi.advanceTimersByTimeAsync(
+      MOUNT_HEARTBEAT_INTERVAL_MS * (MOUNT_HEARTBEAT_MAX_BEATS + 10)
+    );
+
+    expect(stages).toHaveLength(1 + MOUNT_HEARTBEAT_MAX_BEATS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clears the timer and rethrows when the mount fails', async () => {
+    const stages: string[] = [];
+    const boom = new Error('mount failed');
+    const p = withMountHeartbeat(
+      () => Promise.reject(boom),
+      (s) => stages.push(s)
+    );
+    await expect(p).rejects.toBe(boom);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS * 2);
+    expect(stages).toEqual(['shared-fs-mount:start']);
+  });
+
+  it('is a plain passthrough with no callback', async () => {
+    await expect(withMountHeartbeat(async () => 42)).resolves.toBe(42);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('hands the work a callable no-op tick even with no callback', async () => {
+    await expect(
+      withMountHeartbeat(async (tick) => {
+        tick();
+        tick();
+        return 'ok';
+      })
+    ).resolves.toBe('ok');
+  });
+
+  it('beats past the cap for as long as ticks keep advancing', async () => {
+    const stages: string[] = [];
+    let tick: () => void = () => {};
+    const never = new Promise<never>(() => {});
+    void withMountHeartbeat(
+      (t) => {
+        tick = t;
+        return never;
+      },
+      (s) => stages.push(s)
+    );
+    const rounds = MOUNT_HEARTBEAT_MAX_BEATS * 3;
+    for (let i = 0; i < rounds; i += 1) {
+      tick();
+      await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS);
+    }
+
+    expect(stages).toHaveLength(1 + rounds);
+    expect(stages.at(-1)).toBe(`shared-fs-mount:${rounds}`);
+  });
+
+  it('a tick resets the quiet run, then the cap counts silence only', async () => {
+    const stages: string[] = [];
+    let tick: () => void = () => {};
+    const never = new Promise<never>(() => {});
+    void withMountHeartbeat(
+      (t) => {
+        tick = t;
+        return never;
+      },
+      (s) => stages.push(s)
+    );
+
+    await vi.advanceTimersByTimeAsync(
+      MOUNT_HEARTBEAT_INTERVAL_MS * (MOUNT_HEARTBEAT_MAX_BEATS - 1)
+    );
+    expect(stages).toHaveLength(1 + (MOUNT_HEARTBEAT_MAX_BEATS - 1));
+
+    tick();
+    await vi.advanceTimersByTimeAsync(
+      MOUNT_HEARTBEAT_INTERVAL_MS * (MOUNT_HEARTBEAT_MAX_BEATS + 1)
+    );
+    const expected = 1 + (MOUNT_HEARTBEAT_MAX_BEATS - 1) + (MOUNT_HEARTBEAT_MAX_BEATS + 1);
+    expect(stages).toHaveLength(expected);
+
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS * 10);
+    expect(stages).toHaveLength(expected);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('names the beats after the stagePrefix option', async () => {
+    const stages: string[] = [];
+    let resolveWork: (v: string) => void = () => {};
+    const work = new Promise<string>((r) => {
+      resolveWork = r;
+    });
+    const p = withMountHeartbeat(
+      () => work,
+      (s) => stages.push(s),
+      { stagePrefix: 'orchestrator-init' }
+    );
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS);
+    expect(stages).toEqual(['orchestrator-init:start', 'orchestrator-init:1']);
+    resolveWork('done');
+    await expect(p).resolves.toBe('done');
+  });
+});

@@ -1,0 +1,1423 @@
+import AsyncHTTPClient
+import Foundation
+import HTTPTypes
+import Hummingbird
+import NIOHTTP1
+
+private let oauthResultStore = OAuthResultStore()
+private let webhookTimestampFormatter = ISO8601DateFormatter()
+private let corsAllowOriginHeader = HTTPField.Name("Access-Control-Allow-Origin")!
+private let corsAllowMethodsHeader = HTTPField.Name("Access-Control-Allow-Methods")!
+private let corsAllowHeadersHeader = HTTPField.Name("Access-Control-Allow-Headers")!
+private let cacheControlHeader = HTTPField.Name("Cache-Control")!
+private let targetURLHeader = HTTPField.Name("X-Target-URL")!
+private let proxyErrorMarkerHeader = HTTPField.Name("X-Proxy-Error")!
+private let contentTypeHeaderValue = "application/json; charset=utf-8"
+private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
+private let proxyHopByHopHeaders: Set<String> = [
+    "host", "connection", "x-target-url", "content-length", "transfer-encoding",
+    "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
+    
+    
+    
+    
+    "x-slicc-raw-body",
+    
+    "x-bridge-token",
+    
+    
+    
+    "x-slicc-hmac-sign",
+    
+    
+    "accept-encoding",
+]
+private let hmacSignHeader = HTTPField.Name("X-Slicc-Hmac-Sign")!
+private let proxyBlockedResponseHeaders: Set<String> = [
+    "transfer-encoding",
+    
+    
+    
+    "content-encoding",
+    "www-authenticate",
+    "set-cookie",
+]
+private let fetchProxyMethods: [HTTPRequest.Method] = [
+    .get, .head, .post, .put, .patch, .delete, .options,
+    
+    
+    
+    
+    
+    HTTPRequest.Method(rawValue: "PROPFIND")!,
+    HTTPRequest.Method(rawValue: "PROPPATCH")!,
+    HTTPRequest.Method(rawValue: "MKCOL")!,
+    HTTPRequest.Method(rawValue: "MKCALENDAR")!,
+    HTTPRequest.Method(rawValue: "REPORT")!,
+    HTTPRequest.Method(rawValue: "COPY")!,
+    HTTPRequest.Method(rawValue: "MOVE")!,
+    HTTPRequest.Method(rawValue: "LOCK")!,
+    HTTPRequest.Method(rawValue: "UNLOCK")!,
+]
+
+private actor OAuthResultStore {
+    struct PendingResult: Codable, Sendable, Equatable {
+        let redirectUrl: String
+        let error: String?
+    }
+
+    private var pending: PendingResult?
+
+    func store(_ result: PendingResult) {
+        self.pending = result
+    }
+
+    func take() -> PendingResult? {
+        defer { self.pending = nil }
+        return self.pending
+    }
+}
+
+func registerAPIRoutes(
+    router: Router<some RequestContext>,
+    lickSystem: LickSystem,
+    config: ServerConfig,
+    httpClient: HTTPClient,
+    agentActivityTracker: AgentActivityTracker = AgentActivityTracker(),
+    secretInjector: SecretInjector = SecretInjector(secrets: []),
+    oauthStore: OAuthSecretStore? = nil
+) {
+    
+    
+    let hostMountRoots = HostFSRoutes.resolveRoots(mounts: config.mounts)
+    HostFSRoutes.registerRoutes(router: router, roots: hostMountRoots)
+    
+    
+    HostFSWatch.shared?.stop()
+    let hostFsWatch = HostFSWatch(lickSystem: lickSystem)
+    hostFsWatch.start(roots: hostMountRoots)
+    HostFSWatch.shared = hostFsWatch
+
+    router.get("/api/runtime-config") { _, _ in
+        let envWorkerBaseUrl: String? = {
+            guard let raw = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !raw.isEmpty
+            else { return nil }
+            return raw
+        }()
+        let trayWorkerBaseUrl =
+            config.leadWorkerBaseUrl
+            ?? envWorkerBaseUrl
+            
+            ?? "https://www.sliccy.ai"
+        return try jsonResponse(
+            .object([
+                "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),
+                "trayJoinUrl": jsonStringOrNull(config.joinUrl),
+                
+                
+                
+                "autoMounts": .array(
+                    hostMountRoots.map {
+                        .object(["path": .string($0.path), "hostPath": .string($0.root)])
+                    }),
+            ])
+        )
+    }
+
+    
+    
+    
+    
+    router.get("/api/status") { _, _ in
+        try jsonResponse(
+            .object([
+                "status": .string("ok"),
+                "service": .string("slicc-server"),
+                "timestamp": .string(ISO8601DateFormatter().string(from: Date())),
+            ]),
+            headers: [cacheControlHeader: "no-store"]
+        )
+    }
+
+    registerAgentActivityRoute(router: router, tracker: agentActivityTracker)
+
+    router.get("/api/tray-status") { _, _ in
+        do {
+            return try jsonResponse(await lickSystem.sendRequest(type: "tray_status", data: [:], timeout: 5))
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: errorMessage(error, fallback: "Browser not connected"))
+        }
+    }
+
+    router.get("/api/webhooks") { _, _ in
+        do {
+            return try jsonResponse(await lickSystem.sendRequest(type: "list_webhooks", data: [:], timeout: 5))
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: errorMessage(error, fallback: "Browser not connected"))
+        }
+    }
+
+    router.post("/api/webhooks") { request, context in
+        do {
+            let payload = try await decodeJSONObjectBody(from: request, context: context)
+            return try jsonResponse(await lickSystem.sendRequest(type: "create_webhook", data: payload, timeout: 5))
+        } catch {
+            let message = errorMessage(error)
+            let status: HTTPResponse.Status = message.contains("Invalid") ? .badRequest : .serviceUnavailable
+            return try jsonErrorResponse(status: status, message: message)
+        }
+    }
+
+    router.delete("/api/webhooks/:id") { _, context in
+        let id = context.parameters.get("id") ?? ""
+        do {
+            let response = try await lickSystem.sendRequest(
+                type: "delete_webhook",
+                data: ["id": .string(id)],
+                timeout: 5
+            )
+            if case .object(let object) = response, let error = object["error"]?.stringValue {
+                return try jsonErrorResponse(status: .notFound, message: error)
+            }
+            return try jsonResponse(response)
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: errorMessage(error, fallback: "Browser not connected"))
+        }
+    }
+
+    router.on("/webhooks/:id", method: .options) { _, _ in
+        Response(status: .noContent, headers: corsHeaders(methods: "POST, OPTIONS", headers: "Content-Type"))
+    }
+
+    router.post("/webhooks/:id") { request, context in
+        let id = context.parameters.get("id") ?? ""
+        let body = try await decodeWebhookBody(from: request)
+        await lickSystem.broadcastEvent([
+            "type": .string("webhook_event"),
+            "webhookId": .string(id),
+            "timestamp": .string(webhookTimestampFormatter.string(from: Date())),
+            "headers": .object(jsonHeaders(from: request.headers)),
+            "body": body,
+        ])
+        return try jsonResponse(
+            .object(["ok": .bool(true), "received": .bool(true)]),
+            headers: [corsAllowOriginHeader: "*"]
+        )
+    }
+
+    router.get("/api/crontasks") { _, _ in
+        do {
+            return try jsonResponse(await lickSystem.sendRequest(type: "list_crontasks", data: [:], timeout: 5))
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: errorMessage(error, fallback: "Browser not connected"))
+        }
+    }
+
+    router.post("/api/crontasks") { request, context in
+        do {
+            let payload = try await decodeJSONObjectBody(from: request, context: context)
+            return try jsonResponse(await lickSystem.sendRequest(type: "create_crontask", data: payload, timeout: 5))
+        } catch {
+            let message = errorMessage(error)
+            let status: HTTPResponse.Status =
+                message.contains("Invalid") || message.contains("required")
+                ? .badRequest
+                : .serviceUnavailable
+            return try jsonErrorResponse(status: status, message: message)
+        }
+    }
+
+    router.delete("/api/crontasks/:id") { _, context in
+        let id = context.parameters.get("id") ?? ""
+        do {
+            let response = try await lickSystem.sendRequest(
+                type: "delete_crontask",
+                data: ["id": .string(id)],
+                timeout: 5
+            )
+            if case .object(let object) = response, let error = object["error"]?.stringValue {
+                return try jsonErrorResponse(status: .notFound, message: error)
+            }
+            return try jsonResponse(response)
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: errorMessage(error, fallback: "Browser not connected"))
+        }
+    }
+
+    
+    
+    
+    
+    
+    
+    router.post("/api/handoff") { request, context in
+        let payload: LickSystem.JSONObject
+        do {
+            payload = try await decodeJSONObjectBody(from: request, context: context)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "Invalid JSON payload")
+        }
+        if let error = Handoff.validatePayload(payload) {
+            return try jsonErrorResponse(status: .badRequest, message: error)
+        }
+        await lickSystem.broadcastEvent(Handoff.buildNavigateEvent(payload))
+        return try jsonResponse(.object(["ok": .bool(true)]))
+    }
+
+    router.get("/auth/callback") { _, _ in
+        Response(
+            status: .ok,
+            headers: [HTTPField.Name.contentType: htmlContentTypeHeaderValue],
+            body: .init(byteBuffer: ByteBuffer(string: oauthCallbackHTML))
+        )
+    }
+
+    router.post("/api/oauth-result") { request, context in
+        let payload = try await request.decode(as: OAuthRelayPayload.self, context: context)
+        await oauthResultStore.store(.init(redirectUrl: payload.redirectUrl ?? "", error: payload.error))
+        return try jsonResponse(.object(["ok": .bool(true)]))
+    }
+
+    router.get("/api/oauth-result") { _, _ in
+        guard let result = await oauthResultStore.take() else {
+            return Response(status: .noContent)
+        }
+        return try jsonResponse(
+            .object([
+                "redirectUrl": .string(result.redirectUrl),
+                "error": jsonStringOrNull(result.error),
+            ])
+        )
+    }
+
+    
+    PersistedSecretAPIRoutes.register(router: router, injector: secretInjector)
+
+    SessionSecretAPIRoutes.register(router: router, injector: secretInjector)
+
+    
+    
+    
+    router.get("/api/secrets/masked") { _, _ in
+        let entries = secretInjector.maskedEntries
+        let items: [LickSystem.JSONValue] = entries.map { entry in
+            .object([
+                "name": .string(entry.name),
+                "maskedValue": .string(entry.maskedValue),
+                "domains": .array(entry.domains.map { .string($0) }),
+            ])
+        }
+        return try jsonResponse(.array(items))
+    }
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    router.post("/api/secrets/scrub") { request, _ in
+        let payload: ScrubPayload
+        do {
+            let body = try await collectBody(from: request)
+            payload = try decodeJSON(from: body, as: ScrubPayload.self)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        guard let text = payload.text else {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        return try jsonResponse(.object(["text": .string(secretInjector.scrub(text: text))]))
+    }
+
+    
+    
+    
+    
+    router.post("/api/secrets/redact-export") { request, _ in
+        let payload: RedactExportPayload
+        do {
+            let body = try await collectBody(from: request)
+            payload = try decodeJSON(from: body, as: RedactExportPayload.self)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        guard let texts = payload.texts else {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        do {
+            let result = secretInjector.redactForExport(texts: texts)
+            let jsonTexts = LickSystem.JSONValue.array(result.texts.map { .string($0) })
+            return try jsonResponse(
+                .object([
+                    "texts": jsonTexts,
+                    "redactionCount": .number(Double(result.redactionCount)),
+                ]))
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: "redaction-unavailable")
+        }
+    }
+
+    
+    
+    
+    
+    
+    
+    if let oauthStore {
+        router.post("/api/secrets/oauth-update") { request, context in
+            let payload: OAuthUpdatePayload
+            do {
+                payload = try await request.decode(as: OAuthUpdatePayload.self, context: context)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "Invalid JSON payload")
+            }
+            guard !payload.providerId.isEmpty, !payload.accessToken.isEmpty, !payload.domains.isEmpty else {
+                return try jsonErrorResponse(
+                    status: .badRequest,
+                    message: "providerId, accessToken, and non-empty domains are required"
+                )
+            }
+            let name = "oauth.\(payload.providerId).token"
+            do {
+                try await oauthStore.set(name: name, value: payload.accessToken, domains: payload.domains)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: errorMessage(error))
+            }
+            await secretInjector.reload()
+            let masked = secretInjector.maskedValue(for: name)
+            return try jsonResponse(
+                .object([
+                    "providerId": .string(payload.providerId),
+                    "name": .string(name),
+                    "maskedValue": jsonStringOrNull(masked),
+                    "domains": .array(payload.domains.map { .string($0) }),
+                ]))
+        }
+
+        router.delete("/api/secrets/oauth/:providerId") { _, context in
+            let providerId = context.parameters.get("providerId") ?? ""
+            let name = "oauth.\(providerId).token"
+            let existing = await oauthStore.get(name: name)
+            if existing == nil {
+                return try jsonErrorResponse(status: .notFound, message: "OAuth entry not found")
+            }
+            await oauthStore.delete(name: name)
+            await secretInjector.reload()
+            return Response(status: .noContent)
+        }
+    }
+
+    
+    
+    
+    
+    SignAndForward.registerRoutes(router: router, httpClient: httpClient)
+
+    
+    
+    
+    
+    SudoApprove.registerRoutes(router: router)
+
+    for method in fetchProxyMethods {
+        router.on("/api/fetch-proxy", method: method) { request, _ in
+            guard let initialTargetURLValue = await trackedTargetURL(request, tracker: agentActivityTracker) else {
+                return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
+            }
+
+            
+            
+            
+            
+            
+            
+            
+            let urlCreds = secretInjector.extractAndUnmaskUrlCredentials(rawUrl: initialTargetURLValue)
+            if let forbidden = urlCreds.forbidden {
+                return try proxyErrorResponse(
+                    status: .forbidden,
+                    message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                )
+            }
+            guard let targetURL = URL(string: urlCreds.url) else {
+                return try proxyErrorResponse(status: .badRequest, message: "Malformed X-Target-URL")
+            }
+            let targetHostname = targetURL.host ?? ""
+
+            do {
+                var rawBody = try await collectBody(from: request)
+
+                
+                var injectedHeaders = request.headers
+                
+                
+                
+                injectedHeaders[targetURLHeader] = urlCreds.url
+                
+                
+                
+                if let synthetic = urlCreds.syntheticAuthorization,
+                    injectedHeaders[.authorization] == nil
+                {
+                    injectedHeaders[.authorization] = synthetic
+                }
+                for field in request.headers {
+                    
+                    
+                    
+                    if field.name == .authorization,
+                        field.value.lowercased().hasPrefix("basic ")
+                    {
+                        let basic = secretInjector.unmaskAuthorizationBasic(
+                            value: field.value,
+                            targetHostname: targetHostname
+                        )
+                        if let forbidden = basic.forbidden {
+                            return try proxyErrorResponse(
+                                status: .forbidden,
+                                message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                            )
+                        }
+                        if basic.value != field.value {
+                            injectedHeaders[field.name] = basic.value
+                        }
+                        continue
+                    }
+                    switch secretInjector.inject(text: field.value, hostname: targetHostname) {
+                    case .success(let replaced):
+                        if replaced != field.value {
+                            injectedHeaders[field.name] = replaced
+                        }
+                    case .domainBlocked(let secretName, let hostname):
+                        return try proxyErrorResponse(
+                            status: .forbidden,
+                            message: "Secret \(secretName) is not allowed for domain \(hostname)"
+                        )
+                    }
+                }
+
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                if rawBody.readableBytes > 0 {
+                    let contentType = injectedHeaders[.contentType] ?? ""
+                    if isTextRequestContentType(contentType),
+                        let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
+                    {
+                        
+                        
+                        
+                        let replaced =
+                            isFormContentType(contentType)
+                            ? unmaskFormBody(text: bodyString, hostname: targetHostname, injector: secretInjector)
+                            : secretInjector.injectBody(text: bodyString, hostname: targetHostname)
+                        if replaced != bodyString {
+                            rawBody = ByteBuffer(string: replaced)
+                        }
+                    } else if let bodyData = rawBody.getData(at: rawBody.readerIndex, length: rawBody.readableBytes) {
+                        let replaced = secretInjector.unmaskBodyBytes(bytes: bodyData, targetHostname: targetHostname)
+                        if replaced != bodyData {
+                            rawBody = ByteBuffer(data: replaced)
+                        }
+                    }
+                }
+
+                
+                
+                
+                
+                if let hmacSpec = injectedHeaders[hmacSignHeader] {
+                    injectedHeaders[hmacSignHeader] = nil
+                    let bodyBytes = rawBody.getBytes(at: rawBody.readerIndex, length: rawBody.readableBytes) ?? []
+                    let signResult = secretInjector.signHmac(spec: hmacSpec, body: bodyBytes, targetHostname: targetHostname)
+                    if let forbidden = signResult.forbidden {
+                        return try proxyErrorResponse(
+                            status: .forbidden,
+                            message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                        )
+                    }
+                    if let headerName = signResult.headerName, let signatureHex = signResult.signatureHex,
+                        let field = HTTPField.Name(headerName)
+                    {
+                        injectedHeaders[field] = signatureHex
+                    }
+                    if let timestampHeaderName = signResult.timestampHeaderName,
+                        let timestampValue = signResult.timestampValue,
+                        let field = HTTPField.Name(timestampHeaderName)
+                    {
+                        injectedHeaders[field] = timestampValue
+                    }
+                }
+
+                let injectedRequest = Request(
+                    head: .init(
+                        method: request.method,
+                        scheme: request.head.scheme,
+                        authority: request.head.authority,
+                        path: request.head.path,
+                        headerFields: injectedHeaders
+                    ),
+                    body: request.body
+                )
+
+                let upstreamRequest = try makeProxyRequest(from: injectedRequest, targetURL: targetURL, rawBody: rawBody)
+                
+                
+                
+                
+                
+                let upstreamResponse = try await httpClient.execute(upstreamRequest, timeout: .hours(1))
+                return try makeStreamingProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
+            } catch {
+                return try proxyErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
+            }
+        }
+    }
+}
+
+private struct OAuthRelayPayload: Decodable {
+    let redirectUrl: String?
+    let error: String?
+}
+
+
+
+
+private struct ScrubPayload: Decodable {
+    let text: String?
+}
+
+private struct SessionSecretPayload: Decodable {
+    let name: String?
+    let value: String?
+    let domains: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case name, value, domains
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.value = try container.decodeIfPresent(String.self, forKey: .value)
+        self.domains = container.contains(.domains) ? try container.decode([String].self, forKey: .domains) : nil
+    }
+}
+
+private struct SecretScopePayload: Decodable {
+    let name: String?
+    let domains: [String]?
+}
+
+
+
+
+
+private struct PersistedSecretPayload: Decodable {
+    let name: String?
+    let value: String?
+    let domains: [String]?
+}
+
+
+
+
+
+private enum PersistedSecretAPIRoutes {
+    static func register(router: Router<some RequestContext>, injector: SecretInjector) {
+        registerList(router: router, injector: injector)
+        registerSet(router: router, injector: injector)
+    }
+
+    
+    
+    
+    
+    
+    private static func registerList(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets") { _, _ in
+            let store = injector.persistedStore
+            guard let entries = await BoundedStoreCall.run({ store.list() }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            let items: [LickSystem.JSONValue] = entries.map { entry in
+                .object([
+                    "name": .string(entry.name),
+                    "domains": .array(entry.domains.map { .string($0) }),
+                ])
+            }
+            return try jsonResponse(.array(items))
+        }
+    }
+
+    
+    
+    
+    
+    private static func registerSet(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.post("/api/secrets") { request, _ in
+            let payload: PersistedSecretPayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: PersistedSecretPayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let value = payload.value, let domains = payload.domains else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            
+            
+            
+            
+            
+            
+            guard !domains.isEmpty else {
+                return try jsonErrorResponse(
+                    status: .internalServerError,
+                    message: "Secret \"\(name)\" must have at least one authorized domain"
+                )
+            }
+            
+            
+            
+            
+            
+            guard EnvFileFormat.isSingleLineValue(value) else {
+                return try jsonErrorResponse(
+                    status: .badRequest,
+                    message: EnvFileFormat.multilineValueError(name)
+                )
+            }
+            
+            
+            
+            
+            
+            
+            
+            guard !injector.envFileShadows(name) else {
+                return try jsonErrorResponse(
+                    status: .conflict,
+                    message: "Secret \"\(name)\" is defined by this server's --env-file and cannot be "
+                        + "overwritten from the API; edit that file and restart instead"
+                )
+            }
+            let store = injector.persistedStore
+            guard
+                let saved = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.save(name, value, domains) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
+            }
+            if case .failure(let error) = saved {
+                return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+            }
+            
+            
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
+}
+
+private enum SessionSecretAPIRoutes {
+    static func register(router: Router<some RequestContext>, injector: SecretInjector) {
+        registerDelete(router: router, injector: injector)
+        registerSession(router: router, injector: injector)
+        registerPeek(router: router, injector: injector)
+        registerScope(router: router, injector: injector)
+    }
+
+    private static func registerDelete(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.delete("/api/secrets/:name") { _, context in
+            let name = context.parameters.get("name") ?? ""
+            guard !name.isEmpty else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if await injector.sessionStore.delete(name: name) {
+                await injector.reload()
+                return try deleteResponse(name: name, fromSession: true)
+            }
+            let store = injector.persistedStore
+            guard let existing = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            guard existing != nil else {
+                return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+            }
+            guard
+                let removed = await BoundedStoreCall.runThrowing(
+                    onLateCompletion: reconcileLateWrite(injector),
+                    { try store.remove(name) }
+                )
+            else {
+                return try persistedStoreWriteTimeoutResponse()
+            }
+            if case .failure(let error) = removed {
+                return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+            }
+            await injector.reload()
+            return try deleteResponse(name: name, fromSession: false)
+        }
+    }
+
+    private static func registerSession(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets/session") { _, _ in
+            let entries = await injector.sessionStore.list()
+            return try jsonResponse(
+                .array(
+                    entries.map { entry in
+                        .object([
+                            "name": .string(entry.name),
+                            "domains": .array(entry.domains.map { .string($0) }),
+                        ])
+                    }))
+        }
+        router.post("/api/secrets/session") { request, _ in
+            let payload: SessionSecretPayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: SessionSecretPayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let value = payload.value else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            await injector.sessionStore.set(name: name, value: value, domains: payload.domains ?? [])
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
+
+    private static func registerPeek(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets/peek") { request, _ in
+            let name = String(request.uri.queryParameters["name"] ?? "")
+            guard !name.isEmpty else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if let record = await injector.sessionStore.getRecord(name: name) {
+                return try secretPreviewResponse(name: name, value: record.value, domains: record.domains)
+            }
+            let store = injector.persistedStore
+            guard let persisted = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                return try persistedStoreTimeoutResponse()
+            }
+            if let secret = persisted {
+                return try secretPreviewResponse(name: name, value: secret.value, domains: secret.domains)
+            }
+            return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+        }
+    }
+
+    private static func registerScope(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.post("/api/secrets/scope") { request, _ in
+            let payload: SecretScopePayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: SecretScopePayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let domains = payload.domains else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if !((await injector.sessionStore.setDomains(name: name, domains: domains))) {
+                let store = injector.persistedStore
+                guard let found = await BoundedStoreCall.run({ store.get(name: name) }) else {
+                    return try persistedStoreTimeoutResponse()
+                }
+                guard let existing = found else {
+                    return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+                }
+                
+                
+                
+                
+                guard EnvFileFormat.isSingleLineValue(existing.value) else {
+                    return try jsonErrorResponse(
+                        status: .badRequest,
+                        message: EnvFileFormat.multilineValueError(name)
+                    )
+                }
+                guard
+                    let saved = await BoundedStoreCall.runThrowing(
+                        onLateCompletion: reconcileLateWrite(injector),
+                        { try store.save(name, existing.value, domains) }
+                    )
+                else {
+                    return try persistedStoreWriteTimeoutResponse()
+                }
+                if case .failure(let error) = saved {
+                    return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+                }
+            }
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
+
+    private static func deleteResponse(name: String, fromSession: Bool) throws -> Response {
+        try jsonResponse(
+            .object([
+                "ok": .bool(true),
+                "name": .string(name),
+                "fromSession": .bool(fromSession),
+            ]))
+    }
+}
+
+
+
+private struct RedactExportPayload: Decodable {
+    let texts: [String]?
+}
+
+
+
+private struct OAuthUpdatePayload: Decodable {
+    let providerId: String
+    let accessToken: String
+    let domains: [String]
+}
+
+private let oauthCallbackHTML = """
+    <!DOCTYPE html><html><body><script>
+      var q = new URLSearchParams(location.search);
+      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+      var payload = {
+        type: 'oauth-callback',
+        redirectUrl: location.href,
+        code: q.get('code'),
+        state: q.get('state') || h.get('state'),
+        error: q.get('error') || h.get('error'),
+        access_token: h.get('access_token'),
+        expires_in: h.get('expires_in'),
+        token_type: h.get('token_type')
+      };
+      if (window.opener) {
+        try {
+          window.opener.postMessage(payload, '*');
+        } catch (e) {
+          console.warn('[oauth-callback] postMessage to opener failed:', e);
+        }
+      }
+      var closed = false;
+      function closeWindow() {
+        if (closed) return;
+        closed = true;
+        window.close();
+      }
+      setTimeout(closeWindow, 2000);
+      fetch('/api/oauth-result', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); }).finally(closeWindow);
+    </script><p>Completing login... you can close this window.</p></body></html>
+    """
+
+private func decodeJSONObjectBody<Context: RequestContext>(from request: Request, context: Context) async throws -> LickSystem.JSONObject {
+    let body = try await collectBody(from: request)
+    guard body.readableBytes > 0 else { return [:] }
+    return try decodeJSON(from: body, as: LickSystem.JSONObject.self)
+}
+
+private func decodeWebhookBody(from request: Request) async throws -> LickSystem.JSONValue {
+    let body = try await collectBody(from: request)
+    guard body.readableBytes > 0 else { return .object([:]) }
+    do {
+        return try decodeJSON(from: body, as: LickSystem.JSONValue.self)
+    } catch {
+        return .object(["raw": .string(String(buffer: body))])
+    }
+}
+
+private func collectBody(from request: Request) async throws -> ByteBuffer {
+    try await request.body.collect(upTo: 50 * 1024 * 1024)
+}
+
+private func decodeJSON<T: Decodable>(from buffer: ByteBuffer, as type: T.Type) throws -> T {
+    var body = buffer
+    let data = body.readData(length: body.readableBytes) ?? Data()
+    return try JSONDecoder().decode(T.self, from: data)
+}
+
+private func registerAgentActivityRoute(
+    router: Router<some RequestContext>,
+    tracker: AgentActivityTracker
+) {
+    router.get("/api/agent-activity") { _, _ in
+        try jsonResponse(
+            .object(["activeInLastMinute": .bool(await tracker.isActiveInLastMinute())]),
+            headers: [cacheControlHeader: "no-store"]
+        )
+    }
+}
+
+private func trackedTargetURL(_ request: Request, tracker: AgentActivityTracker) async -> String? {
+    if request.method != .options {
+        await tracker.recordActivity()
+    }
+    return request.headers[targetURLHeader]
+}
+
+private func jsonStringOrNull(_ value: String?) -> LickSystem.JSONValue {
+    value.map(LickSystem.JSONValue.string) ?? .null
+}
+
+private func secretPreviewResponse(name: String, value: String, domains: [String]) throws -> Response {
+    try jsonResponse(
+        .object([
+            "name": .string(name),
+            "preview": .string(previewSecret(value)),
+            "domains": .array(domains.map { .string($0) }),
+        ]))
+}
+
+private func jsonResponse(
+    _ value: LickSystem.JSONValue,
+    status: HTTPResponse.Status = .ok,
+    headers: HTTPFields = [:]
+) throws -> Response {
+    let data = try JSONEncoder().encode(value)
+    var responseHeaders = headers
+    responseHeaders[.contentType] = contentTypeHeaderValue
+    return Response(
+        status: status,
+        headers: responseHeaders,
+        body: .init(byteBuffer: ByteBuffer(bytes: data))
+    )
+}
+
+private func jsonErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
+    try jsonResponse(.object(["error": .string(message)]), status: status)
+}
+
+
+
+
+
+
+private func persistedStoreTimeoutResponse() throws -> Response {
+    try jsonResponse(
+        .object([
+            "error": .string(BoundedStoreCall.timeoutMessage),
+            "errorCode": .string(BoundedStoreCall.timeoutErrorCode),
+        ]),
+        status: .serviceUnavailable
+    )
+}
+
+
+
+private func persistedStoreWriteTimeoutResponse() throws -> Response {
+    try jsonResponse(
+        .object([
+            "error": .string(BoundedStoreCall.writeTimeoutMessage),
+            "errorCode": .string(BoundedStoreCall.writeTimeoutErrorCode),
+        ]),
+        status: .serviceUnavailable
+    )
+}
+
+
+
+
+
+
+
+private func reconcileLateWrite(_ injector: SecretInjector) -> @Sendable (Result<Void, Error>) -> Void {
+    { result in
+        guard case .success = result else { return }
+        Task { await injector.reload() }
+    }
+}
+
+
+
+
+private func proxyErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
+    try jsonResponse(
+        .object(["error": .string(message)]),
+        status: status,
+        headers: [proxyErrorMarkerHeader: "1"]
+    )
+}
+
+private func corsHeaders(methods: String, headers: String) -> HTTPFields {
+    [
+        corsAllowOriginHeader: "*",
+        corsAllowMethodsHeader: methods,
+        corsAllowHeadersHeader: headers,
+    ]
+}
+
+private func errorMessage(_ error: Error, fallback: String? = nil) -> String {
+    let message = (error as NSError).localizedDescription
+    if !message.isEmpty, message != "The operation could not be completed." {
+        return message
+    }
+    return fallback ?? String(describing: error)
+}
+
+private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
+    var result: LickSystem.JSONObject = [:]
+    for field in headers {
+        let key = field.name.canonicalName.lowercased()
+        if let existing = result[key] {
+            switch existing {
+            case .string(let current):
+                result[key] = .array([.string(current), .string(field.value)])
+            case .array(var values):
+                values.append(.string(field.value))
+                result[key] = .array(values)
+            default:
+                result[key] = .string(field.value)
+            }
+        } else {
+            result[key] = .string(field.value)
+        }
+    }
+    return result
+}
+
+private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClientRequest {
+    var headers = HTTPHeaders(request.headers)
+
+    
+    if let proxyCookie = headers["x-proxy-cookie"].first {
+        headers.add(name: "Cookie", value: proxyCookie)
+    }
+
+    
+    if let proxyOrigin = headers["X-Proxy-Origin"].first {
+        headers.replaceOrAdd(name: "Origin", value: proxyOrigin)
+    } else if let currentOrigin = headers["Origin"].first, BridgeSecurity.isLoopbackBridgeOrigin(currentOrigin) {
+        
+        headers.remove(name: "Origin")
+    }
+    headers.remove(name: "X-Proxy-Origin")
+
+    
+    if let proxyReferer = headers["X-Proxy-Referer"].first {
+        headers.replaceOrAdd(name: "Referer", value: proxyReferer)
+    } else if let currentReferer = headers["Referer"].first, BridgeSecurity.isLoopbackBridgeOrigin(currentReferer) {
+        
+        headers.remove(name: "Referer")
+    }
+    headers.remove(name: "X-Proxy-Referer")
+
+    
+    let proxyPrefixHeaders = headers.compactMap { field -> (String, String)? in
+        let lower = field.name.lowercased()
+        guard lower.hasPrefix("x-proxy-proxy-") else { return nil }
+        let restored = String(field.name.dropFirst("x-proxy-".count))
+        return (restored, field.value)
+    }
+    for (name, _) in proxyPrefixHeaders {
+        headers.remove(name: "x-proxy-\(name)")
+    }
+    for (name, value) in proxyPrefixHeaders {
+        headers.add(name: name, value: value)
+    }
+
+    for header in proxyHopByHopHeaders {
+        headers.remove(name: header)
+    }
+
+    var clientRequest = HTTPClientRequest(url: targetURL.absoluteString)
+    clientRequest.method = HTTPMethod(request.method)
+    clientRequest.headers = headers
+    if rawBody.readableBytes > 0 && request.method != .get && request.method != .head {
+        clientRequest.body = .bytes(rawBody)
+    }
+    return clientRequest
+}
+
+private func makeStreamingProxyResponse(
+    from response: HTTPClientResponse,
+    secretInjector: SecretInjector
+) throws -> Response {
+    
+    let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
+
+    var headers = HTTPFields(response.headers)
+    for header in proxyBlockedResponseHeaders {
+        headers[HTTPField.Name(header)!] = nil
+    }
+    
+    let xProxyNames = headers.compactMap { field -> HTTPField.Name? in
+        field.name.canonicalName.lowercased().hasPrefix("x-proxy-") ? field.name : nil
+    }
+    for name in xProxyNames {
+        headers[name] = nil
+    }
+    
+    
+    
+    let accessControlNames = headers.compactMap { field -> HTTPField.Name? in
+        field.name.canonicalName.lowercased().hasPrefix("access-control-") ? field.name : nil
+    }
+    for name in accessControlNames {
+        headers[name] = nil
+    }
+    
+    
+    headers[HTTPField.Name.contentLength] = nil
+
+    if !setCookies.isEmpty,
+        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
+        let jsonString = String(data: jsonData, encoding: .utf8)
+    {
+        headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
+    }
+
+    
+    
+    if !secretInjector.isEmpty {
+        var scrubbedHeaders = HTTPFields()
+        for field in headers {
+            let scrubbedValue = secretInjector.scrub(text: field.value)
+            scrubbedHeaders.append(HTTPField(name: field.name, value: scrubbedValue))
+        }
+        headers = scrubbedHeaders
+    }
+
+    headers[cacheControlHeader] = "no-store, no-cache"
+
+    
+    
+    
+    
+    
+    var exposeNames: [String] = [
+        "Link",
+        "X-Proxy-Error",
+        "X-Proxy-Set-Cookie",
+        "Mcp-Session-Id",
+        "MCP-Protocol-Version",
+        "Cache-Control",
+    ]
+    var exposeSeen = Set(exposeNames.map { $0.lowercased() })
+    for field in headers {
+        let lower = field.name.canonicalName.lowercased()
+        if exposeSeen.contains(lower) { continue }
+        exposeSeen.insert(lower)
+        exposeNames.append(field.name.canonicalName)
+    }
+    headers[HTTPField.Name("Access-Control-Expose-Headers")!] = exposeNames.joined(separator: ", ")
+
+    
+    
+    
+    let isText = isTextContentType(headers[HTTPField.Name.contentType] ?? "")
+    let shouldScrub = isText && !secretInjector.isEmpty
+    let upstreamBody = response.body
+    let scrubber = secretInjector
+
+    
+    
+    
+    
+    
+    
+    
+    let body = ResponseBody(
+        asyncSequence: ScrubbingAsyncStream(
+            upstream: upstreamBody,
+            shouldScrub: shouldScrub,
+            shouldGunzip: isText,
+            scrubber: scrubber
+        ))
+
+    return Response(
+        status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
+        headers: headers,
+        body: body
+    )
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
+    typealias Element = ByteBuffer
+    let upstream: HTTPClientResponse.Body
+    let shouldScrub: Bool
+    let shouldGunzip: Bool
+    let scrubber: SecretInjector
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        var inner: HTTPClientResponse.Body.AsyncIterator
+        let shouldScrub: Bool
+        let scrubber: SecretInjector
+        var pendingTail: [UInt8] = []
+        var didEmitTail = false
+        var gzip: MaybeGunzipState<HTTPClientResponse.Body.AsyncIterator>
+
+        mutating func next() async throws -> ByteBuffer? {
+            guard shouldScrub else {
+                
+                return try await gzip.next(from: &inner)
+            }
+
+            while let chunk = try await gzip.next(from: &inner) {
+                
+                var bytes = pendingTail
+                bytes.append(contentsOf: chunk.readableBytesView)
+                pendingTail.removeAll(keepingCapacity: true)
+
+                
+                
+                
+                let cut = lastCompleteUTF8Boundary(bytes)
+                if cut == 0 {
+                    
+                    
+                    pendingTail = bytes
+                    continue
+                }
+                if cut < bytes.count {
+                    pendingTail = Array(bytes[cut...])
+                    bytes.removeLast(bytes.count - cut)
+                }
+
+                guard let str = String(bytes: bytes, encoding: .utf8) else {
+                    
+                    
+                    
+                    return ByteBuffer(bytes: bytes)
+                }
+                let scrubbed = scrubber.scrub(text: str)
+                return ByteBuffer(string: scrubbed)
+            }
+
+            
+            
+            
+            if !didEmitTail, !pendingTail.isEmpty {
+                didEmitTail = true
+                let tail = pendingTail
+                pendingTail.removeAll()
+                return ByteBuffer(bytes: tail)
+            }
+            return nil
+        }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(
+            inner: upstream.makeAsyncIterator(),
+            shouldScrub: shouldScrub,
+            scrubber: scrubber,
+            gzip: MaybeGunzipState(enabled: shouldGunzip)
+        )
+    }
+}
+
+
+
+
+
+
+private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
+    if bytes.isEmpty { return 0 }
+    var i = bytes.count
+    
+    
+    
+    var continuations = 0
+    while i > 0, (bytes[i - 1] & 0xC0) == 0x80, continuations < 3 {
+        i -= 1
+        continuations += 1
+    }
+    if i == 0 {
+        
+        
+        
+        return bytes.count
+    }
+    let lead = bytes[i - 1]
+    let needed: Int
+    if lead & 0x80 == 0 {
+        needed = 1
+    }  
+    else if lead & 0xE0 == 0xC0 {
+        needed = 2
+    }  
+    else if lead & 0xF0 == 0xE0 {
+        needed = 3
+    }  
+    else if lead & 0xF8 == 0xF0 {
+        needed = 4
+    }  
+    else {
+        return bytes.count
+    }  
+    let have = bytes.count - (i - 1)
+    if have >= needed { return bytes.count }
+    return i - 1
+}
+
+extension HTTPMethod {
+    fileprivate init(_ method: HTTPRequest.Method) {
+        switch method {
+        case .connect: self = .CONNECT
+        case .delete: self = .DELETE
+        case .get: self = .GET
+        case .head: self = .HEAD
+        case .options: self = .OPTIONS
+        case .patch: self = .PATCH
+        case .post: self = .POST
+        case .put: self = .PUT
+        case .trace: self = .TRACE
+        default: self = .RAW(value: method.rawValue)
+        }
+    }
+}
+
+extension HTTPHeaders {
+    fileprivate init(_ headers: HTTPFields) {
+        self.init()
+        for field in headers {
+            self.add(name: field.name.canonicalName, value: field.value)
+        }
+    }
+}
+
+extension HTTPFields {
+    fileprivate init(_ headers: HTTPHeaders) {
+        self.init()
+        for field in headers {
+            if let name = HTTPField.Name(field.name) {
+                self.append(HTTPField(name: name, value: field.value))
+            }
+        }
+    }
+}

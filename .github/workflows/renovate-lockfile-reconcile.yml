@@ -1,0 +1,82 @@
+name: Renovate Lockfile Reconcile
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: renovate-lockfile-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Detect a stale lockfile
+        id: detect
+        run: |
+          if npm run --silent lint:lockfile; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "Lockfile is in sync — nothing to reconcile." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            {
+              echo '### Stale lockfile detected'
+              echo '```'
+              npm run --silent lint:lockfile 2>&1 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Regenerate the lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Verify the regenerated lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "npm install produced no lockfile change — the mismatch is not a stale lockfile." >&2
+            exit 1
+          fi
+          npm run lint:lockfile
+
+      - name: Comment the outcome
+        if: steps.detect.outputs.stale == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🔒 Renovate shipped this bump without a matching \`package-lock.json\` (every job would fail at \`npm ci\` with EUSAGE), so I ran \`npm install\` and am pushing the lockfile. See \`.github/workflows/renovate-lockfile-reconcile.yml\`."
+
+      - name: Push the lockfile
+        if: steps.detect.outputs.stale == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+
+          git add package-lock.json
+          git commit -m "fix(deps): sync package-lock.json (renovate-lockfile-reconcile)"
+          git push

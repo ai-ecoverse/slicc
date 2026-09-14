@@ -1,0 +1,227 @@
+name: SliccFollower
+options:
+  bundleIdPrefix: com.sliccy
+  deploymentTarget:
+    iOS: '26.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: 1
+    SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
+    SUPPORTS_MACCATALYST: NO
+targets:
+  SliccTrayKit:
+    type: framework
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccTrayKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.traykit
+        PRODUCT_NAME: SliccTrayKit
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WebRTC
+
+      - package: SliccTrayFollower
+
+      - package: SliccTrayVFS
+      - sdk: FileProvider.framework
+      - sdk: Security.framework
+      - sdk: UniformTypeIdentifiers.framework
+  SliccFollower:
+    type: application
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFollower
+
+        excludes:
+          - Tests
+
+    info:
+      path: SliccFollower/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.sliccy.follower.deeplink
+            CFBundleURLSchemes: [slicc]
+          - CFBundleURLName: com.sliccy.follower.open-callback
+            CFBundleURLSchemes: [slicc-open-callback]
+
+        UIBackgroundModes: [remote-notification]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower
+
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: 'UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: 'UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        PRODUCT_NAME: SliccFollower
+        SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
+        SUPPORTS_MACCATALYST: NO
+        INFOPLIST_KEY_NSCameraUsageDescription: 'Take a photo to attach it to your message.'
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: 'Hold the message field to dictate a message with your voice.'
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 'Dictated audio is transcribed on this device when possible to fill the message field.'
+        INFOPLIST_KEY_NSFaceIDUsageDescription: 'Face ID confirms it is you before an agent action you approve is allowed to run.'
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+
+        CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
+    dependencies:
+      - package: GhosttyTerminal
+      - package: SliccWidgetKit
+      - target: SliccTrayKit
+      - target: SliccFileProvider
+      - target: SliccShareExtension
+      - target: SliccWidgets
+      - package: HuggingFace
+      - package: WebRTC
+      - package: SliccTraySession
+      - package: SliccTrayFollower
+      - sdk: WebKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMotion.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: UserNotifications.framework
+  SliccFileProvider:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFileProvider
+    info:
+      path: SliccFileProvider/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccy
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: group.ai.sliccy.follower
+
+          NSExtensionFileProviderSupportsEnumeration: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.fileprovider
+        PRODUCT_NAME: SliccFileProvider
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
+        CODE_SIGN_ENTITLEMENTS: SliccFileProvider.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - target: SliccTrayKit
+      - sdk: FileProvider.framework
+      - sdk: UniformTypeIdentifiers.framework
+  SliccShareExtension:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccShareExtension
+
+      - path: SliccFollower/App/AppGroupInbox.swift
+    info:
+      path: SliccShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccy
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.share
+        PRODUCT_NAME: SliccShareExtension
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
+        CODE_SIGN_ENTITLEMENTS: SliccShareExtension.entitlements
+
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - sdk: UniformTypeIdentifiers.framework
+  SliccWidgets:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccWidgets
+    info:
+      path: SliccWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccy
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.widgets
+        PRODUCT_NAME: SliccWidgets
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
+        CODE_SIGN_ENTITLEMENTS: SliccWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: SliccWidgetKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+  SliccFollowerTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFollower/Tests/SliccFollowerTests
+    dependencies:
+      - target: SliccFollower
+      - target: SliccTrayKit
+
+      - package: SliccTrayFollower
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
+  SliccFollowerUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFollower/Tests/SliccFollowerUITests
+    dependencies:
+      - target: SliccFollower
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.uitests
+        TEST_TARGET_NAME: SliccFollower
+schemes:
+  SliccFollower:
+    build:
+      targets:
+        SliccTrayKit: all
+        SliccFileProvider: all
+        SliccFollower: all
+        SliccShareExtension: all
+        SliccWidgets: all
+        SliccFollowerTests: [test]
+        SliccFollowerUITests: [test]
+    test:
+      gatherCoverageData: true
+      coverageTargets:
+        - SliccFollower
+      targets:
+        - name: SliccFollowerTests
+          parallelizable: false
+          randomExecutionOrder: true
+
+        - name: SliccFollowerUITests
+          parallelizable: false
+          randomExecutionOrder: true
+packages:
+  GhosttyTerminal:
+    url: https://github.com/Lakr233/libghostty-spm
+    exactVersion: 1.5.20260906
+  HuggingFace:
+    url: https://github.com/huggingface/swift-huggingface
+    minorVersion: 0.10.0
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 152.0.0
+  SliccTraySession:
+    path: ../swift-traysession
+  SliccTrayFollower:
+    path: ../swift-trayfollower
+  SliccTrayVFS:
+    path: ../swift-traykit
+  SliccWidgetKit:
+    path: ../swift-widgetkit

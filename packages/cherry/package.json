@@ -1,0 +1,32 @@
+{
+  "name": "@ai-ecoverse/cherry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "html2canvas-pro": "2.4.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/build-preview-bootstrap.mjs",
+    "test": "vitest run --root ../.. --config vitest.config.ts --project cherry",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/jsdom": "30.0.0",
+    "esbuild": "0.28.2",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,291 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { SliccNav } from '../../src/nav/slicc-nav.js';
+
+import '../../src/primitives/slicc-avatar.js';
+import '../../src/primitives/slicc-floatbar.js';
+import type { ScoopDescriptor, SliccAgentTabs } from '../../src/switcher/slicc-agent-tabs.js';
+import '../../src/switcher/slicc-agent-tabs.js';
+import '../../src/theme/slicc-theme-toggle.js';
+import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
+
+function spacerOf(el: SliccNav): HTMLElement | null {
+  return el.querySelector(':scope > .slicc-nav__spacer, :scope > .spacer');
+}
+
+function makeNav(accent?: string): SliccNav {
+  const el = document.createElement('slicc-nav') as SliccNav;
+
+  el.style.cssText = 'width:1000px;';
+  if (accent) el.setAttribute('accent', accent);
+  el.innerHTML = `
+    <div data-testid="nav-leading"></div>
+    <slicc-agent-tabs active="cone"></slicc-agent-tabs>
+    <slicc-floatbar label="CLI · tray · 1 follower" linked float-kind="npx" connection="live" tray-role="leader"></slicc-floatbar>
+    <slicc-theme-toggle></slicc-theme-toggle>
+    <slicc-avatar initials="PM"></slicc-avatar>`;
+  return el;
+}
+
+describe('slicc-nav', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    setTheme('light');
+    document.body.replaceChildren();
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-nav')).toBe(SliccNav);
+  });
+
+  it('renders into light DOM (no shadow root) and tags itself as part="bar"', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+    expect(el.shadowRoot).toBeNull();
+    expect(el.classList.contains('slicc-nav')).toBe(true);
+    expect(el.getAttribute('part')).toBe('bar');
+  });
+
+  it('reflects the accent attribute to the property and back', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+
+    expect(el.accent).toBeNull();
+    el.accent = '#06b6d4';
+    expect(el.getAttribute('accent')).toBe('#06b6d4');
+    expect(el.accent).toBe('#06b6d4');
+
+    el.setAttribute('accent', '#8b5cf6');
+    expect(el.accent).toBe('#8b5cf6');
+
+    el.accent = null;
+    expect(el.hasAttribute('accent')).toBe(false);
+    expect(el.accent).toBeNull();
+  });
+
+  it('keeps the composed controls in DOM (== layout) order', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+    const tags = [...el.children].map((c) =>
+      c.classList.contains('slicc-nav__spacer') ? 'spacer' : c.tagName.toLowerCase()
+    );
+
+    expect(tags[0]).toBe('div');
+    expect(tags[1]).toBe('slicc-agent-tabs');
+    expect(tags).toContain('spacer');
+    expect(tags).toContain('slicc-floatbar');
+    expect(tags).toContain('slicc-theme-toggle');
+    expect(tags).toContain('slicc-avatar');
+
+    expect(tags[tags.length - 1]).toBe('slicc-avatar');
+  });
+
+  it('auto-inserts the flexible spacer immediately before the first right-aligned control', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+    const spacer = spacerOf(el);
+    expect(spacer).not.toBeNull();
+    expect(el.spacer).toBe(spacer);
+
+    const floatbar = el.querySelector('slicc-floatbar');
+    expect(spacer!.nextElementSibling).toBe(floatbar);
+
+    expect(getComputedStyle(spacer as HTMLElement).flexGrow).toBe('1');
+    expect((spacer as HTMLElement).getAttribute('part')).toBe('spacer');
+  });
+
+  it('respects an author-supplied .spacer (does not insert a second one)', () => {
+    const el = document.createElement('slicc-nav') as SliccNav;
+    el.innerHTML = `
+      <slicc-agent-tabs></slicc-agent-tabs>
+      <div class="spacer"></div>
+      <slicc-avatar initials="PM"></slicc-avatar>`;
+    document.body.appendChild(el);
+    expect(el.querySelectorAll('.spacer, .slicc-nav__spacer').length).toBe(1);
+
+    expect(getComputedStyle(el.querySelector('.spacer') as HTMLElement).flexGrow).toBe('1');
+  });
+
+  it('falls back to appending the spacer at the end when there is no right-aligned control', () => {
+    const el = document.createElement('slicc-nav') as SliccNav;
+    el.innerHTML = '<slicc-agent-tabs></slicc-agent-tabs>';
+    document.body.appendChild(el);
+    const spacer = spacerOf(el);
+    expect(spacer).not.toBeNull();
+    expect(spacer).toBe(el.lastElementChild);
+  });
+
+  it('maps the accent attribute onto the --ctx custom property inline on the host', () => {
+    const el = makeNav('#8b5cf6');
+    document.body.appendChild(el);
+    expect(el.style.getPropertyValue('--ctx').trim()).toBe('#8b5cf6');
+
+    el.accent = '#06b6d4';
+    expect(el.style.getPropertyValue('--ctx').trim()).toBe('#06b6d4');
+
+    el.accent = null;
+    expect(el.style.getPropertyValue('--ctx')).toBe('');
+  });
+
+  it('emits a composed, bubbling slicc-nav-accent-change when the accent changes', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+
+    const seen: (string | null)[] = [];
+    let composed = false;
+    document.body.addEventListener('slicc-nav-accent-change', (e) => {
+      const ce = e as CustomEvent<{ accent: string | null }>;
+      seen.push(ce.detail.accent);
+      composed = ce.composed && ce.bubbles;
+    });
+
+    el.accent = '#f43f5e';
+    expect(seen).toEqual(['#f43f5e']);
+    el.accent = null;
+    expect(seen).toEqual(['#f43f5e', null]);
+    expect(composed).toBe(true);
+  });
+
+  it('is a fixed-height frosted header: --barh height, 0 24px padding, bottom --line border, z-index 4', () => {
+    const el = makeNav('#f59e0b');
+    document.body.appendChild(el);
+    const cs = getComputedStyle(el);
+
+    expect(cs.height).toBe('36px');
+
+    expect(cs.paddingTop).toBe('0px');
+    expect(cs.paddingLeft).toBe('24px');
+    expect(cs.paddingRight).toBe('9px');
+
+    expect(cs.columnGap).toBe('14px');
+
+    expect(cs.borderBottomStyle).toBe('solid');
+    expect(cs.borderBottomWidth).toBe('1px');
+    expect(cs.borderTopStyle).toBe('none');
+
+    expect(cs.zIndex).toBe('4');
+
+    const backdrop =
+      cs.backdropFilter || (cs as unknown as { webkitBackdropFilter: string }).webkitBackdropFilter;
+    expect(backdrop).toContain('blur(18px)');
+    expect(backdrop).toContain('saturate(1.4)');
+
+    expect(cs.display).toBe('flex');
+  });
+
+  it('context-tinted: the frosted background reacts to the accent (--ctx) — different accents → different surfaces', () => {
+    const amber = makeNav('#f59e0b');
+    document.body.appendChild(amber);
+    const amberBg = getComputedStyle(amber).backgroundColor;
+
+    const cyan = makeNav('#06b6d4');
+    document.body.appendChild(cyan);
+    const cyanBg = getComputedStyle(cyan).backgroundColor;
+
+    expect(amberBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(cyanBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(amberBg).not.toBe(cyanBg);
+    expect(/(rgba?|color)\(/.test(amberBg)).toBe(true);
+  });
+
+  it('light variant: background mixes the accent over the light --canvas', () => {
+    const el = makeNav('#f59e0b');
+    document.body.appendChild(el);
+    const bg = getComputedStyle(el).backgroundColor;
+    expect(bg).not.toBe('transparent');
+    expect(bg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(/(rgba?|color)\(/.test(bg)).toBe(true);
+  });
+
+  it('dark variant: recomputes the frosted tint from the flipped --canvas/--line (no explicit dark rule)', () => {
+    const el = makeNav('#f59e0b');
+    document.body.appendChild(el);
+    const light = getComputedStyle(el).backgroundColor;
+
+    setTheme('dark');
+    const dark = getComputedStyle(el).backgroundColor;
+
+    expect(dark).not.toBe(light);
+    expect(dark).not.toBe('rgba(0, 0, 0, 0)');
+  });
+
+  it('survives detach + re-attach without duplicating the spacer', () => {
+    const el = makeNav();
+    document.body.appendChild(el);
+    const spacer = spacerOf(el);
+
+    el.remove();
+    document.body.appendChild(el);
+
+    expect(spacerOf(el)).toBe(spacer);
+    expect(el.querySelectorAll('.slicc-nav__spacer, .spacer').length).toBe(1);
+  });
+
+  it('pushes the right-aligned controls to the edge: avatar sits at the bar right inset', () => {
+    const el = makeNav('#f59e0b');
+    document.body.appendChild(el);
+    const avatar = el.querySelector('slicc-avatar') as HTMLElement;
+    const navRect = el.getBoundingClientRect();
+    const avatarRect = avatar.getBoundingClientRect();
+
+    expect(navRect.right - avatarRect.right).toBeGreaterThan(5);
+    expect(navRect.right - avatarRect.right).toBeLessThan(13);
+
+    expect(avatarRect.left - navRect.left).toBeGreaterThan(300);
+  });
+
+  it('tightens padding + gap from its own available width, not the viewport', () => {
+    const el = document.createElement('slicc-nav');
+    el.style.width = '560px';
+    document.body.appendChild(el);
+    const style = getComputedStyle(el);
+    expect(el.hasAttribute('data-narrow')).toBe(true);
+    expect(style.paddingLeft).toBe('10px');
+    expect(style.columnGap).toBe('8px');
+    expect(style.containerName).toBe('slicc-nav');
+    expect(style.containerType).toBe('inline-size');
+  });
+
+  it.each([560, 360])(
+    'keeps the 39×24px overflow grid clear of the focused avatar at %ipx',
+    async (width) => {
+      const el = makeNav();
+      el.style.width = `${width}px`;
+      const tabs = el.querySelector('slicc-agent-tabs') as SliccAgentTabs;
+      const scoops: ScoopDescriptor[] = [
+        { key: 'cone', type: 'cone', label: 'Sliccy', eyes: 'open', state: 'idle' },
+        ...Array.from({ length: 18 }, (_, index) => ({
+          key: `scoop-${index}`,
+          type: 'scoop' as const,
+          label: `Scoop ${index}`,
+          eyes: 'open' as const,
+          fill: index * 5,
+          state: index % 4 === 0 ? ('working' as const) : ('idle' as const),
+        })),
+      ];
+      tabs.scoops = scoops;
+      document.body.appendChild(el);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      tabs.reflow();
+
+      const focusedAvatar = tabs.querySelector('slicc-agent-avatar') as HTMLElement;
+      const overflow = tabs.querySelector('slicc-scoop-overflow') as HTMLElement;
+      const trigger = overflow.shadowRoot?.querySelector('[part="more"]') as HTMLElement;
+      const avatarRect = focusedAvatar.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const tabsRect = tabs.getBoundingClientRect();
+
+      expect(focusedAvatar.tagName).toBe('SLICC-AGENT-AVATAR');
+      expect(triggerRect.width).toBeCloseTo(39, 1);
+      expect(triggerRect.height).toBeCloseTo(24, 1);
+      expect(avatarRect.right).toBeLessThanOrEqual(triggerRect.left + 0.5);
+      expect(triggerRect.right).toBeLessThanOrEqual(tabsRect.right + 0.5);
+      if (width === 360) {
+        const firstLabel = tabs.querySelector('.slicc-agent-tabs__label') as HTMLElement;
+        const floatbar = el.querySelector('slicc-floatbar') as HTMLElement;
+        expect(firstLabel.clientWidth).toBeGreaterThanOrEqual(firstLabel.scrollWidth);
+        expect(floatbar.getBoundingClientRect().width).toBeCloseTo(30, 1);
+        expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth + 1);
+      }
+    }
+  );
+});

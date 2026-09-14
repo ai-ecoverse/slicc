@@ -1,0 +1,151 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  gated-review:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.pull_request.head.repo.full_name == github.repository && (
+          github.event.pull_request.user.type != 'Bot' ||
+          startsWith(github.event.pull_request.head.ref, 'automation/')
+        )
+      )
+    steps:
+      - name: Wait 5 minutes for personal/human reviewers
+        if: github.event_name != 'workflow_dispatch'
+        run: sleep 300
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Check PR-review gate
+        id: gate
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          FORCE_REVIEW: ${{ github.event_name == 'workflow_dispatch' && 'true' || '' }}
+        run: node packages/dev-tools/pr-review-gate/check-pr-review-gate.mjs
+
+      - name: Resolve PR head SHA
+        if: steps.gate.outputs.should_review == 'true'
+        id: pr_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha }}"
+          if [ -z "$SHA" ]; then
+            SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid -q .headRefOid)
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.gate.outputs.should_review == 'true'
+        with:
+          ref: ${{ steps.pr_head.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Claude PR review
+        if: steps.gate.outputs.should_review == 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+
+          track_progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-actions[bot]'
+
+          claude_args: |
+            --model ${{ vars.PR_REVIEW_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash,Read,Grep,Glob"
+            --max-turns 200
+          prompt: |
+            You are performing an automated code review for the SLICC codebase.
+
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+
+            Review the pull request above. Use `gh pr view` and `gh pr diff` to
+            read the PR description and the changed code. Focus your review on:
+
+            - Correctness and bugs: logic errors, edge cases, broken behaviour,
+              incorrect error handling.
+            - Security: injection, secret leakage, unsafe input handling,
+              privilege/permission mistakes.
+            - Performance: needless work, obvious inefficiencies, leaks.
+            - Repo conventions: follow the guidance in the nearest CLAUDE.md
+              (shell-first, browser-first, dual-mode CLI/extension, SHA-pinned
+              actions, tests + docs for behaviour changes, etc.).
+
+            Then `Read docs/review-patterns.md` and check the diff against the
+            recurring blind-spot categories it documents (error-path coverage,
+            UI state preservation, cross-runtime parity across the five
+            runtimes, CDP edge cases, native/macOS permissions, test coverage,
+            layer-stack import direction). Apply the severity rubric from that
+            file (Critical/Major/Minor) when labelling findings, and reason
+            contextually — only flag a category when the surrounding code does
+            not already handle it.
+
+            Two checks are cheap and deterministic — do them on every review:
+            - Layering: the webapp layer stack is fs → shell/git → cdp → tools
+              → core → scoops → ui. Scan the diff for any ADDED import that
+              points UP that stack (static, dynamic `import()`, or
+              `import type`) — e.g. `cdp/` importing `scoops/`, or any lower
+              layer importing `packages/webapp/src/ui/`. A pure-looking helper
+              does not excuse the back-edge — the helper is mislocated; say so.
+            - Baseline growth: a diff that adds entries or raises counts in
+              `packages/dev-tools/tools/layer-back-edge-baseline.json` is
+              grandfathering a new violation. Flag it as Major.
+
+            You have a full shell. When a finding depends on runtime behaviour,
+            actually run the code to confirm it before reporting — e.g. `npm ci`
+            then a targeted `npx vitest run <file>`, `npm run typecheck`, or a
+            scoped build — rather than guessing. Use `gh api` / `gh pr view` /
+            `gh pr diff` for any extra PR context. Keep it targeted: don't run
+            the whole suite for a trivial diff, and prefer not commenting over a
+            speculative comment you could have verified.
+
+            Post specific, actionable feedback as INLINE comments on the exact
+            changed lines using the
+            `mcp__github_inline_comment__create_inline_comment` tool. Then post
+            ONE concise top-level summary (a few sentences on overall quality
+            and the most important findings) with `gh pr comment`.
+
+            Be focused and high-signal: only flag things that genuinely matter,
+            and prefer no comment over a noisy or speculative one. Do NOT submit
+            your review as raw chat/output text — all feedback must go through
+            the inline-comment tool and `gh pr comment`.

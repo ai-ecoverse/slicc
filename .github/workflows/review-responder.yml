@@ -1,0 +1,276 @@
+name: Review Responder
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR to respond on (waives the debounce sleep so it is testable on demand)'
+        required: true
+      dry_run:
+        description: 'Scan and report only; no Claude, no push, no comments'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: review-responder-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+      pull-requests: write
+
+      issues: write
+
+      id-token: write
+
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        !contains(github.event.comment.body, '<!-- review-response') &&
+        !contains(github.event.review.body, '<!-- review-response') &&
+        (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
+        (
+          github.event_name == 'issue_comment' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) &&
+        (github.event.pull_request.state || github.event.issue.state) == 'open'
+      )
+    steps:
+      - name: Debounce the reviewer burst
+        if: github.event_name != 'workflow_dispatch'
+        run: sleep 300
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Scan review feedback
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          SCANNER=packages/dev-tools/review-responder/scan-review-feedback.mjs
+
+
+
+
+
+
+
+          if [ ! -f "$SCANNER" ]; then
+            echo "::warning::$SCANNER is not on the default branch yet — skipping. This run cannot use the PR's copy: the gate must not be run by the branch it judges."
+            echo "should_respond=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$SCANNER"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.scan.outputs.should_respond == 'true'
+        with:
+          ref: ${{ steps.scan.outputs.head_ref }}
+          token: ${{ secrets.BOT_PAT }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        if: steps.scan.outputs.should_respond == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        if: steps.scan.outputs.should_respond == 'true'
+        run: npm ci
+
+      - name: Respond to the review feedback with Claude
+        id: claude
+        if: steps.scan.outputs.should_respond == 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+
+          SUMMARY_FILE: ${{ runner.temp }}/review-response-summary.md
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-actions[bot],chatgpt-codex-connector[bot],copilot-pull-request-reviewer[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.REVIEW_RESPONDER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr close:*),Bash(gh issue close:*)"
+            --max-turns 200
+
+          prompt: |
+            You are responding to code-review feedback on an existing pull
+            request in the SLICC codebase.
+
+            REPO: ${{ github.repository }}
+            PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+            Title: ${{ steps.scan.outputs.pr_title }}
+            Head branch: ${{ steps.scan.outputs.head_ref }}
+            Head SHA: ${{ steps.scan.outputs.head_sha }}
+
+            A deterministic scan has ALREADY established that this PR has
+            unaddressed review feedback — you do not need to re-derive that, and
+            you should not second-guess whether to engage. The feedback it found
+            is in this JSON file, one entry per item, with `kind`
+            (review/inline/top-level), `author`, `path`, `line` and `body`:
+
+              ${{ steps.scan.outputs.feedback_file }}
+
+            Read that file first. You are already checked out on the PR's head
+            branch with dependencies installed.
+
+            A REVIEWER CAN BE WRONG. This is the most important thing to
+            understand about this job. Some of these reviewers are automated, and
+            an automated reviewer confidently states incorrect things. The right
+            response to a bad finding is a REPLY EXPLAINING WHY IT IS WRONG — not
+            a change. Changing code to satisfy a finding you believe is mistaken
+            is the worst available outcome: it makes the code worse and it hides
+            the disagreement.
+
+            Reviewers also disagree with each other, and that is normal. Real
+            precedent from this repo: on PR
+            change that renamed `Record<string, unknown>` occurrences, while
+            Codex correctly identified that the rename defeated the
+            spelling-based debt gate the baseline depends on. Codex was right and
+            the house reviewer was wrong. Do not count votes; reason about the
+            code, read the gate or the test that is actually involved, and decide
+            on the merits. Say which reviewer you agree with and why.
+
+            For each item of feedback, do exactly one of:
+              (a) it is right → make the smallest correct fix;
+              (b) it is wrong → change nothing and reply explaining why,
+                  citing the code, gate, or test that settles it;
+              (c) it is right but out of scope for this PR → change nothing,
+                  reply saying so, and open nothing (you cannot open issues or
+                  PRs here; naming it in the reply is the deliverable).
+
+            VERIFY BEFORE YOU PUSH. The repo's gates are listed in
+            `.agents/skills/verifying-before-push/SKILL.md` — read it. At minimum
+            run `npm run verify`, the targeted tests for what you touched, and
+            `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main`
+            (the boy-scout debt gate, which is NOT part of `npm run lint` and is
+            the gate most often missed locally). Do not push a change you have
+            not run.
+
+            REPLY IN EVERY THREAD. Use `gh api` to reply to each inline comment
+            in its own thread (POST
+            /repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies) so
+            the reasoning sits next to the code it is about. Every item in the
+            JSON file with a `path` gets a reply in its thread; items without one
+            (review summaries and top-level comments) are answered in the summary
+            below.
+
+            THE SUMMARY IS A FILE, NOT A COMMENT. Write ONE short markdown
+            summary — what you changed, what you declined and why, and which
+            reviewer you agreed with where they disagreed — to the path in
+            $SUMMARY_FILE. A deterministic step posts it after you finish. Do NOT
+            run `gh pr comment` yourself: a top-level comment you post is
+            indistinguishable from a reviewer's, and this workflow reads top-level
+            comments as its trigger, so posting one is how the responder ends up
+            answering itself. Thread replies are fine — those are structurally
+            identifiable as ours.
+
+            HARD CONSTRAINTS:
+            - IF you changed code, commit and `git push` to the EXISTING head
+              branch. If you changed nothing — every finding was wrong, or out of
+              scope, so you took (b) or (c) — then push nothing. Do NOT create an
+              empty commit to have something to push: a reply-only response is a
+              complete and expected outcome, and an empty commit would spend a
+              full CI run to say nothing. Your replies are the deliverable there.
+            - Never `git push --force` and never `git push --force-with-lease`:
+              this branch may carry a human's commits and rewriting them destroys
+              their work. If your push is rejected, fetch and rebase or merge,
+              then push again.
+            - Do not merge this PR, do not open a new PR, do not close anything,
+              and do not edit the PR's title, body, base, draft state, labels,
+              assignees, or reviewers.
+            - Do not add dependencies, do not change CI configuration, and do not
+              touch coverage thresholds.
+            - Keep the change scoped to the feedback. If addressing a finding
+              properly needs a redesign, a dependency, or a decision you cannot
+              make, do (c): reply saying so, and leave the code alone.
+
+      - name: Record the response
+        if: success() && steps.scan.outputs.should_respond == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          HEAD_SHA: ${{ steps.scan.outputs.head_sha }}
+          FEEDBACK_COUNT: ${{ steps.scan.outputs.feedback_count }}
+
+          FEEDBACK_WATERMARK: ${{ steps.scan.outputs.feedback_watermark }}
+          SUMMARY_FILE: ${{ runner.temp }}/review-response-summary.md
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+
+
+          BODY_FILE="$RUNNER_TEMP/review-response-comment.md"
+          {
+            printf '🍨 **Review Responder** answered %s review item(s) at head SHA `%s`.\n\n' \
+              "$FEEDBACK_COUNT" "${HEAD_SHA:0:7}"
+            if [ -s "$SUMMARY_FILE" ]; then
+              cat "$SUMMARY_FILE"
+              printf '\n'
+            else
+
+
+              printf '_The responder finished without writing a summary; its replies are in the threads above._\n'
+            fi
+            printf '\nReplies are in the threads above; the run log shows what it verified: %s\n\n' "$RUN_URL"
+            printf 'Pushing a new commit, or leaving new feedback, makes this PR eligible for another pass.\n\n'
+
+
+
+            printf '<!-- review-response:%s:%s -->\n' "$HEAD_SHA" "${FEEDBACK_WATERMARK:-none}"
+          } > "$BODY_FILE"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+
+      - name: Report a failed responder
+        if: failure() && steps.scan.outputs.should_respond == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          BODY_FILE="$RUNNER_TEMP/review-response-failure.md"
+          {
+            printf '🚑 **Review Responder — the responder did not finish.** It stopped before it could answer the review feedback (it may have run out of turns, failed verification, or crashed). No response was recorded, so new feedback or a new commit will trigger another attempt. Run log: %s\n\n' "$RUN_URL"
+            printf '<!-- review-response-summary -->\n'
+          } > "$BODY_FILE"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE" || true

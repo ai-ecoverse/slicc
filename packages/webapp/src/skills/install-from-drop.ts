@@ -1,0 +1,257 @@
+import { unzipSync } from 'fflate';
+import type { VirtualFS } from '../fs/index.js';
+import { joinPath, splitPath } from '../fs/index.js';
+import {
+  MAX_SKILL_ARCHIVE_ENTRY_COUNT,
+  MAX_SKILL_ARCHIVE_SIZE_BYTES,
+  MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
+  SKILL_ARCHIVE_EXTENSION,
+  SKILL_FILE,
+  WORKSPACE_SKILLS_PATH,
+} from './constants.js';
+
+export interface DroppedSkillFile {
+  name: string;
+  size: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+export interface InstallSkillFromDropResult {
+  skillName: string;
+  destinationPath: string;
+  fileCount: number;
+}
+
+interface ArchiveEntry {
+  originalPath: string;
+  path: string;
+  bytes: Uint8Array;
+}
+
+const VALID_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function isArchiveMetadataPath(path: string): boolean {
+  if (path === '__MACOSX' || path.startsWith('__MACOSX/')) return true;
+  const base = path.includes('/') ? path.slice(path.lastIndexOf('/') + 1) : path;
+  if (base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini') return true;
+
+  if (base.startsWith('._')) return true;
+  return false;
+}
+
+class ArchiveBudgetError extends Error {}
+
+function sanitizeArchiveEntryPath(path: string): string | null {
+  const normalized = path.replace(/\\/g, '/');
+  if (!normalized || normalized.endsWith('/')) return null;
+  if (normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)) {
+    throw new Error(`Blocked suspicious path "${path}".`);
+  }
+
+  const segments = normalized.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error(`Blocked suspicious path "${path}".`);
+  }
+
+  return segments.join('/');
+}
+
+function assertValidSkillName(skillName: string): void {
+  if (!VALID_SKILL_NAME.test(skillName)) {
+    throw new Error(`Invalid skill: skill name "${skillName}" must be a simple directory name.`);
+  }
+}
+
+function collectArchiveEntries(files: Record<string, Uint8Array>): ArchiveEntry[] {
+  const entries: ArchiveEntry[] = [];
+  for (const [originalPath, bytes] of Object.entries(files)) {
+    const path = sanitizeArchiveEntryPath(originalPath);
+    if (!path) continue;
+    if (isArchiveMetadataPath(path)) continue;
+    entries.push({ originalPath, path, bytes });
+  }
+  return entries;
+}
+
+function findSkillEntry(entries: ArchiveEntry[]): ArchiveEntry {
+  const skillFiles = entries.filter(
+    (entry) => entry.path === SKILL_FILE || entry.path.endsWith(`/${SKILL_FILE}`)
+  );
+
+  if (skillFiles.length === 0) {
+    throw new Error(`Skill archive is missing ${SKILL_FILE}.`);
+  }
+  if (skillFiles.length > 1) {
+    throw new Error(`Skill archive contains multiple ${SKILL_FILE} files.`);
+  }
+
+  return skillFiles[0];
+}
+
+function unzipArchiveWithSafetyLimits(bytes: Uint8Array): Record<string, Uint8Array> {
+  let entryCount = 0;
+  let totalUncompressedBytes = 0;
+
+  return unzipSync(bytes, {
+    filter(file) {
+      entryCount++;
+      if (entryCount > MAX_SKILL_ARCHIVE_ENTRY_COUNT) {
+        throw new ArchiveBudgetError(
+          `Skill archives may contain at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries.`
+        );
+      }
+
+      totalUncompressedBytes += file.originalSize;
+      if (totalUncompressedBytes > MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES) {
+        throw new ArchiveBudgetError(
+          'Skill archives must expand to 50 MB or smaller after extraction.'
+        );
+      }
+
+      return true;
+    },
+  });
+}
+
+function createTemporaryDestinationPath(skillName: string): string {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  return joinPath(WORKSPACE_SKILLS_PATH, `.${skillName}.tmp-${suffix}`);
+}
+
+function deriveSkillNameFromArchive(fileName: string, skillEntryPath: string): string {
+  if (skillEntryPath === SKILL_FILE) {
+    const base = fileName.replace(/\.skill$/i, '');
+    return base;
+  }
+
+  return (
+    skillEntryPath
+      .slice(0, -(SKILL_FILE.length + 1))
+      .split('/')
+      .pop() ?? ''
+  );
+}
+
+function assertDroppableSkillArchive(file: DroppedSkillFile): void {
+  if (!file.name.toLowerCase().endsWith(SKILL_ARCHIVE_EXTENSION)) {
+    throw new Error(
+      `Only ${SKILL_ARCHIVE_EXTENSION} archives can be installed with drag and drop.`
+    );
+  }
+  if (file.size > MAX_SKILL_ARCHIVE_SIZE_BYTES) {
+    throw new Error('Skill archives must be 50 MB or smaller.');
+  }
+}
+
+async function unzipDroppedSkillArchive(
+  file: DroppedSkillFile
+): Promise<Record<string, Uint8Array>> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return unzipArchiveWithSafetyLimits(bytes);
+  } catch (err) {
+    if (err instanceof ArchiveBudgetError) {
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid .skill archive: ${message}`);
+  }
+}
+
+function skillPrefixForEntry(skillEntry: ArchiveEntry): string {
+  if (skillEntry.path === SKILL_FILE) return '';
+  return skillEntry.path.slice(0, -(SKILL_FILE.length + 1));
+}
+
+function relativePathUnderSkillPrefix(entryPath: string, skillPrefix: string): string | null {
+  if (skillPrefix) {
+    if (entryPath === skillPrefix) return null;
+    if (!entryPath.startsWith(`${skillPrefix}/`)) return null;
+  }
+
+  const relativePath = skillPrefix ? entryPath.slice(skillPrefix.length + 1) : entryPath;
+  return relativePath || null;
+}
+
+async function writeArchiveEntry(
+  fs: VirtualFS,
+  temporaryDestinationPath: string,
+  relativePath: string,
+  bytes: Uint8Array
+): Promise<void> {
+  const outputPath = joinPath(temporaryDestinationPath, relativePath);
+  const { dir } = splitPath(outputPath);
+  if (dir !== '/') {
+    await fs.mkdir(dir, { recursive: true });
+  }
+  await fs.writeFile(outputPath, bytes);
+}
+
+async function writeSkillEntriesToTemporaryDestination(
+  fs: VirtualFS,
+  entries: ArchiveEntry[],
+  skillPrefix: string,
+  temporaryDestinationPath: string
+): Promise<number> {
+  let fileCount = 0;
+  for (const entry of entries) {
+    const relativePath = relativePathUnderSkillPrefix(entry.path, skillPrefix);
+    if (!relativePath) continue;
+
+    await writeArchiveEntry(fs, temporaryDestinationPath, relativePath, entry.bytes);
+    fileCount++;
+  }
+  return fileCount;
+}
+
+async function removePathIfExists(fs: VirtualFS, path: string): Promise<void> {
+  if (await fs.exists(path)) {
+    await fs.rm(path, { recursive: true });
+  }
+}
+
+async function assertDestinationAvailable(fs: VirtualFS, skillName: string): Promise<string> {
+  const destinationPath = joinPath(WORKSPACE_SKILLS_PATH, skillName);
+  if (await fs.exists(destinationPath)) {
+    throw new Error(`Skill "${skillName}" already exists at ${destinationPath}.`);
+  }
+  return destinationPath;
+}
+
+export async function installSkillFromDrop(
+  fs: VirtualFS,
+  file: DroppedSkillFile
+): Promise<InstallSkillFromDropResult> {
+  assertDroppableSkillArchive(file);
+
+  const archive = await unzipDroppedSkillArchive(file);
+  const entries = collectArchiveEntries(archive);
+  const skillEntry = findSkillEntry(entries);
+  const skillName = deriveSkillNameFromArchive(file.name, skillEntry.path);
+  assertValidSkillName(skillName);
+
+  const destinationPath = await assertDestinationAvailable(fs, skillName);
+  const temporaryDestinationPath = createTemporaryDestinationPath(skillName);
+  const skillPrefix = skillPrefixForEntry(skillEntry);
+
+  await fs.mkdir(temporaryDestinationPath, { recursive: true });
+
+  try {
+    const fileCount = await writeSkillEntriesToTemporaryDestination(
+      fs,
+      entries,
+      skillPrefix,
+      temporaryDestinationPath
+    );
+    await fs.rename(temporaryDestinationPath, destinationPath);
+
+    return {
+      skillName,
+      destinationPath,
+      fileCount,
+    };
+  } catch (err) {
+    await removePathIfExists(fs, temporaryDestinationPath);
+    throw err;
+  }
+}

@@ -1,0 +1,64 @@
+name: Renovate Format Reconcile
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-format-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'formatter-bump')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies (no scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Run the formatter
+        run: |
+          npx biome check --write . || true
+          npx prettier --write . || true
+
+      - name: Push the reflow if anything changed
+        id: reflow
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes — this bump needs no reflow."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "style: reflow source for the formatter bump (renovate-format-reconcile)"
+          git push
+
+      - name: Comment the outcome
+        if: steps.reflow.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🎨 Auto-reflowed the tree with the bumped formatter (\`biome check --write . && prettier --write .\`) and pushed it to this branch — CI re-runs on the reflow commit. See \`.github/workflows/renovate-format-reconcile.yml\`."

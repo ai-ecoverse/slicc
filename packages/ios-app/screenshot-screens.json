@@ -1,0 +1,291 @@
+{
+  "screens": [
+    {
+      "name": "settings",
+      "description": "Settings sheet as opened on first launch (no stored join URL)",
+      "args": [
+        "-joinUrl",
+        ""
+      ]
+    },
+    {
+      "name": "icloud-sessions",
+      "description": "Settings with fixture iCloud sessions listed",
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "recent-joins",
+      "description": "Settings with the synced Recent list: one row this device recorded, one pasted on another device (no label, so it shows its host)",
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsFixture",
+        "YES",
+        "-uiTestRecentJoinsFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "icloud-empty",
+      "description": "Settings with the iCloud empty state",
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsEmpty",
+        "YES"
+      ]
+    },
+    {
+      "name": "conversation-fixture",
+      "description": "Every chat message variant, leaderless (FixtureConversationView)",
+      "args": [
+        "-uiTestFixtureRoute",
+        "YES"
+      ]
+    },
+    {
+      "name": "connection-failed",
+      "description": "Failed connection pill (dials 127.0.0.1:1, refused instantly)",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots"
+      ],
+      "settleSeconds": 10
+    },
+    {
+      "name": "connection-stalled",
+      "description": "Connected but the leader stopped answering",
+      "args": [
+        "-uiTestConnectionState",
+        "stalled"
+      ]
+    },
+    {
+      "name": "connection-gave-up",
+      "description": "Reconnect budget exhausted (terminal, actionable)",
+      "args": [
+        "-uiTestConnectionState",
+        "gaveUp"
+      ]
+    },
+    {
+      "name": "connection-stalled-draft",
+      "description": "A draft survives connection trouble: composer at full strength, send disabled",
+      "args": [
+        "-uiTestConnectionState",
+        "stalled",
+        "-uiTestComposerText",
+        "a draft the drop cannot take away"
+      ]
+    },
+    {
+      "name": "frozen-list",
+      "description": "Past Sessions sheet with fixture archives",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenFixture",
+        "YES",
+        "-uiTestOpenFrozenRail",
+        "YES"
+      ]
+    },
+    {
+      "name": "frozen-readonly",
+      "description": "An archived session open read-only (banner replaces composer)",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenFixture",
+        "YES",
+        "-uiTestOpenFrozenSession",
+        "YES"
+      ]
+    },
+    {
+      "name": "ptt-recording",
+      "description": "Push-to-talk mid-hold: pulsing mic, streaming caption, engine line",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestPttStage",
+        "recording",
+        "-uiTestPttCaption",
+        "the quick brown fox jumps over"
+      ]
+    },
+    {
+      "name": "ptt-enable",
+      "description": "Hold-to-enable gate before the first permission prompt",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestPttStage",
+        "enable"
+      ]
+    },
+    {
+      "name": "ptt-denied",
+      "description": "Microphone blocked: instructions instead of a recorder",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestPttStage",
+        "denied"
+      ]
+    },
+    {
+      "name": "theme-forest",
+      "description": "Leader theme applied natively: token-driven dark-green palette",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestThemeFixture",
+        "forest",
+        "-uiTestComposerText",
+        "themed composer"
+      ]
+    },
+    {
+      "name": "theme-light",
+      "description": "Light-base leader theme: the canonical webapp light tokens",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestThemeFixture",
+        "light",
+        "-uiTestComposerText",
+        "light composer"
+      ]
+    },
+    {
+      "name": "composer-attachment",
+      "description": "A photo staged in the composer (chip with thumbnail + remove)",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestAttachmentFixture",
+        "YES",
+        "-uiTestComposerText",
+        "look at this"
+      ]
+    },
+    {
+      "name": "dock-term",
+      "description": "Dock rail + terminal placeholder overlay (leader-only surface)",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "term"
+      ]
+    },
+    {
+      "name": "dock-left",
+      "description": "Left-handed mode: the dock rail mirrored to the leading edge",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-leftHandedDock",
+        "YES",
+        "-uiTestOpenDockSurface",
+        "term"
+      ]
+    },
+    {
+      "name": "dock-memory",
+      "description": "Memory surface: the cone's workspace CLAUDE.md as tagged rows",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "memory",
+        "-uiTestMemoryFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-browser-remote",
+      "description": "Browser surface with federated remote-tab preview cards",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "browser",
+        "-uiTestRemoteTargetsFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-files",
+      "description": "Files surface: browsing the leader's VFS with share-to-Files export",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "files",
+        "-uiTestFilesFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-monitor",
+      "description": "Monitor surface: connection vitals, scoops, visible-session cost",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "monitor"
+      ]
+    },
+    {
+      "name": "frozen-empty",
+      "description": "Past Sessions sheet with no archived sessions",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenEmpty",
+        "YES",
+        "-uiTestOpenFrozenRail",
+        "YES"
+      ]
+    },
+    {
+      "name": "avatar-expression-light",
+      "description": "Agent-avatar expression kit in light mode: the four activities (idle wander, thinking brows, working square, awaiting eye contact) plus the glower, scrutiny and drowse lids, a high-fill square, and a frozen static square. Every scalar is driven on a frozen clock so the capture is identical run to run.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "light-expression"
+      ]
+    },
+    {
+      "name": "avatar-expression-dark",
+      "description": "The same expression-kit state matrix in dark mode.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "dark-expression"
+      ]
+    },
+    {
+      "name": "avatar-toolbar-light",
+      "description": "The header avatar in its real home: a `.principal` toolbar item at the 30pt-tile-in-36pt-slot size ChatView gives it, over the same four activities inline. The grid fixtures put the tile straight into a stack, so only this one exercises the toolbar layout where the eye pair was stacked vertically instead of side by side.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "light-toolbar"
+      ]
+    },
+    {
+      "name": "avatar-toolbar-dark",
+      "description": "The same toolbar avatar in dark mode.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "dark-toolbar"
+      ]
+    }
+  ]
+}

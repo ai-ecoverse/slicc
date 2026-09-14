@@ -1,0 +1,147 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../../src/providers/account-store.js', () => ({
+  getApiKeyForProvider: vi.fn(),
+  getRawApiKeyForProvider: vi.fn(),
+  getBaseUrlForProvider: vi.fn(),
+  addAccount: vi.fn(),
+}));
+
+vi.mock('../../../src/providers/built-in/local-llm.js', () => ({
+  verifyConnection: vi.fn(),
+
+  config: { id: 'local-llm' },
+}));
+
+import {
+  addAccount,
+  getApiKeyForProvider,
+  getBaseUrlForProvider,
+  getRawApiKeyForProvider,
+} from '../../../src/providers/account-store.js';
+import { verifyConnection } from '../../../src/providers/built-in/local-llm.js';
+import { createLocalLlmCommand } from '../../../src/shell/supplemental-commands/local-llm-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
+
+const mockGetApiKey = vi.mocked(getApiKeyForProvider);
+const mockGetRawApiKey = vi.mocked(getRawApiKeyForProvider);
+const mockGetBaseUrl = vi.mocked(getBaseUrlForProvider);
+const mockAddAccount = vi.mocked(addAccount);
+const mockVerify = vi.mocked(verifyConnection);
+
+const createMockCtx = () => mockCommandContext();
+
+describe('local-llm command', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('has correct name', () => {
+    expect(createLocalLlmCommand().name).toBe('local-llm');
+  });
+
+  it('shows help with --help', async () => {
+    const result = await createLocalLlmCommand().execute(['--help'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('local-llm');
+    expect(result.stdout).toContain('discover');
+  });
+
+  it('errors when base URL is not configured', async () => {
+    mockGetBaseUrl.mockReturnValue(null);
+    const result = await createLocalLlmCommand().execute([], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not configured');
+  });
+
+  it('rejects unknown subcommands', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:11434/v1');
+    const result = await createLocalLlmCommand().execute(['nonsense'], createMockCtx());
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('Unknown subcommand');
+  });
+
+  it('status reports a successful verification', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:11434/v1');
+    mockGetApiKey.mockReturnValue(null);
+    mockVerify.mockResolvedValue({
+      ok: true,
+      runtime: { kind: 'ollama', version: '0.5.4' },
+      models: ['llama3.1:8b', 'qwen2.5-coder:14b'],
+    });
+    const result = await createLocalLlmCommand().execute(['status'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ollama');
+    expect(result.stdout).toContain('llama3.1:8b');
+    expect(mockAddAccount).not.toHaveBeenCalled();
+  });
+
+  it('status surfaces hint on Ollama CORS error', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:11434/v1');
+    mockGetApiKey.mockReturnValue(null);
+    mockVerify.mockResolvedValue({
+      ok: false,
+      runtime: { kind: 'ollama' },
+      models: [],
+      error: { kind: 'cors', message: 'Failed to fetch', hint: 'Set OLLAMA_ORIGINS=*' },
+    });
+    const result = await createLocalLlmCommand().execute([], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('OLLAMA_ORIGINS');
+  });
+
+  it('discover writes the model list back to Settings', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:1234/v1');
+    mockGetApiKey.mockReturnValue('lm-studio');
+    mockGetRawApiKey.mockReturnValue('lm-studio');
+    mockVerify.mockResolvedValue({
+      ok: true,
+      runtime: { kind: 'lmstudio' },
+      models: ['qwen2.5-coder-14b', 'llama-3.2-3b'],
+    });
+    const result = await createLocalLlmCommand().execute(['discover'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(mockAddAccount).toHaveBeenCalledWith(
+      'local-llm',
+      'lm-studio',
+      'http://localhost:1234/v1',
+      'qwen2.5-coder-14b, llama-3.2-3b'
+    );
+    expect(result.stdout).toContain('Saved 2 models');
+  });
+
+  it('discover does NOT persist the optionalApiKey placeholder back into Settings', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:11434/v1');
+    mockGetApiKey.mockReturnValue('local');
+    mockGetRawApiKey.mockReturnValue(null);
+    mockVerify.mockResolvedValue({
+      ok: true,
+      runtime: { kind: 'ollama' },
+      models: ['llama3.1:8b'],
+    });
+
+    await createLocalLlmCommand().execute(['discover'], createMockCtx());
+
+    expect(mockAddAccount).toHaveBeenCalledWith(
+      'local-llm',
+      '',
+      'http://localhost:11434/v1',
+      'llama3.1:8b'
+    );
+  });
+
+  it('discover does not write when verification fails', async () => {
+    mockGetBaseUrl.mockReturnValue('http://localhost:11434/v1');
+    mockGetApiKey.mockReturnValue(null);
+    mockGetRawApiKey.mockReturnValue(null);
+    mockVerify.mockResolvedValue({
+      ok: false,
+      runtime: { kind: 'ollama' },
+      models: [],
+      error: { kind: 'connection', message: 'connect ECONNREFUSED' },
+    });
+    const result = await createLocalLlmCommand().execute(['discover'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(mockAddAccount).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,526 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CDP_SUPERSEDED_CLOSE_CODE,
+  CDP_UPSTREAM_RESET_CLOSE_CODE,
+  CDPClient,
+} from '../../src/cdp/cdp-client.js';
+
+type WSHandler = (ev: { data: string }) => void;
+
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  onmessage: WSHandler | null = null;
+
+  sent: string[] = [];
+  protocols: string | string[] | undefined;
+
+  constructor(
+    public url: string,
+    protocols?: string | string[]
+  ) {
+    this.protocols = protocols;
+    MockWebSocket.instances.push(this);
+  }
+
+  send(data: string) {
+    this.sent.push(data);
+  }
+
+  close(code?: number) {
+    this.readyState = 3;
+    if (this.onclose) this.onclose(code !== undefined ? { code } : undefined);
+  }
+
+  simulateOpen() {
+    this.readyState = 1;
+    if (this.onopen) this.onopen();
+  }
+
+  simulateMessage(data: Record<string, unknown>) {
+    if (this.onmessage) this.onmessage({ data: JSON.stringify(data) });
+  }
+
+  simulateError() {
+    if (this.onerror) this.onerror(new Error('connection error'));
+  }
+
+  simulateClose(code?: number) {
+    if (this.onclose) this.onclose(code !== undefined ? { code } : undefined);
+  }
+}
+
+const originalWebSocket = globalThis.WebSocket;
+
+beforeEach(() => {
+  MockWebSocket.instances = [];
+  (globalThis as unknown as Record<string, unknown>).WebSocket =
+    MockWebSocket as unknown as typeof WebSocket;
+});
+
+afterEach(() => {
+  (globalThis as unknown as Record<string, unknown>).WebSocket = originalWebSocket;
+});
+
+describe('CDPClient', () => {
+  let client: CDPClient;
+
+  beforeEach(() => {
+    client = new CDPClient();
+  });
+
+  afterEach(() => {
+    client.disconnect();
+  });
+
+  describe('connect', () => {
+    it('connects successfully', async () => {
+      expect(client.state).toBe('disconnected');
+
+      const connectPromise = client.connect({ url: 'ws://localhost:5710/cdp' });
+
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      expect(ws.url).toBe('ws://localhost:5710/cdp');
+      ws.simulateOpen();
+
+      await connectPromise;
+      expect(client.state).toBe('connected');
+    });
+
+    it('rejects on connection error', async () => {
+      const connectPromise = client.connect({ url: 'ws://localhost:5710/cdp' });
+
+      const ws = MockWebSocket.instances[0];
+      ws.simulateError();
+
+      await expect(connectPromise).rejects.toThrow('WebSocket connection failed');
+      expect(client.state).toBe('disconnected');
+    });
+
+    it('rejects on timeout', async () => {
+      const connectPromise = client.connect({
+        url: 'ws://localhost:5710/cdp',
+        timeout: 50,
+      });
+
+      await expect(connectPromise).rejects.toThrow('timed out');
+      expect(client.state).toBe('disconnected');
+    });
+
+    it('rejects if already connected', async () => {
+      const p = client.connect({ url: 'ws://localhost:5710/cdp' });
+      MockWebSocket.instances[0].simulateOpen();
+      await p;
+
+      await expect(client.connect({ url: 'ws://localhost:5710/cdp' })).rejects.toThrow(
+        'Cannot connect'
+      );
+    });
+
+    it('forwards a subprotocol string to the WebSocket constructor', async () => {
+      const p = client.connect({
+        url: 'ws://localhost:5710/cdp',
+        protocols: 'slicc.bridge.v1.token-abc',
+      });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toBe('slicc.bridge.v1.token-abc');
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('forwards a subprotocol array to the WebSocket constructor', async () => {
+      const p = client.connect({
+        url: 'ws://localhost:5710/cdp',
+        protocols: ['slicc.bridge.v1.tok1', 'slicc.bridge.v1.tok2'],
+      });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toEqual(['slicc.bridge.v1.tok1', 'slicc.bridge.v1.tok2']);
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('omits protocols argument when not provided', async () => {
+      const p = client.connect({ url: 'ws://localhost:5710/cdp' });
+      const ws = MockWebSocket.instances[0];
+      expect(ws.protocols).toBeUndefined();
+      ws.simulateOpen();
+      await p;
+    });
+  });
+
+  describe('send', () => {
+    let ws: MockWebSocket;
+
+    beforeEach(async () => {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      ws = MockWebSocket.instances[0];
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('sends a command and resolves with result', async () => {
+      const resultPromise = client.send('Page.navigate', { url: 'https://example.com' });
+
+      expect(ws.sent).toHaveLength(1);
+      const sent = JSON.parse(ws.sent[0]);
+      expect(sent.method).toBe('Page.navigate');
+      expect(sent.params).toEqual({ url: 'https://example.com' });
+      expect(sent.id).toBe(1);
+
+      ws.simulateMessage({ id: 1, result: { frameId: 'abc' } });
+
+      const result = await resultPromise;
+      expect(result).toEqual({ frameId: 'abc' });
+    });
+
+    it('sends commands with session ID', async () => {
+      const resultPromise = client.send('DOM.enable', {}, 'session-123');
+
+      const sent = JSON.parse(ws.sent[0]);
+      expect(sent.sessionId).toBe('session-123');
+
+      ws.simulateMessage({ id: 1, result: {} });
+      await resultPromise;
+    });
+
+    it('rejects on CDP error response', async () => {
+      const resultPromise = client.send('Page.navigate', { url: 'bad' });
+
+      ws.simulateMessage({
+        id: 1,
+        error: { code: -32000, message: 'Cannot navigate' },
+      });
+
+      await expect(resultPromise).rejects.toThrow('Cannot navigate');
+    });
+
+    it('rejects if not connected', async () => {
+      client.disconnect();
+      await expect(client.send('Page.enable')).rejects.toThrow('not connected');
+    });
+
+    it('increments message IDs', async () => {
+      const p1 = client.send('Method1');
+      const p2 = client.send('Method2');
+      const p3 = client.send('Method3');
+
+      expect(ws.sent).toHaveLength(3);
+      expect(JSON.parse(ws.sent[0]).id).toBe(1);
+      expect(JSON.parse(ws.sent[1]).id).toBe(2);
+      expect(JSON.parse(ws.sent[2]).id).toBe(3);
+
+      ws.simulateMessage({ id: 1, result: {} });
+      ws.simulateMessage({ id: 2, result: {} });
+      ws.simulateMessage({ id: 3, result: {} });
+      await Promise.all([p1, p2, p3]);
+    });
+  });
+
+  describe('events', () => {
+    let ws: MockWebSocket;
+
+    beforeEach(async () => {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      ws = MockWebSocket.instances[0];
+      ws.simulateOpen();
+      await p;
+    });
+
+    it('dispatches events to listeners', () => {
+      const handler = vi.fn();
+      client.on('Page.loadEventFired', handler);
+
+      ws.simulateMessage({
+        method: 'Page.loadEventFired',
+        params: { timestamp: 1234 },
+      });
+
+      expect(handler).toHaveBeenCalledWith({ timestamp: 1234 });
+    });
+
+    it('supports multiple listeners for the same event', () => {
+      const h1 = vi.fn();
+      const h2 = vi.fn();
+      client.on('Network.requestWillBeSent', h1);
+      client.on('Network.requestWillBeSent', h2);
+
+      ws.simulateMessage({
+        method: 'Network.requestWillBeSent',
+        params: { requestId: '1' },
+      });
+
+      expect(h1).toHaveBeenCalled();
+      expect(h2).toHaveBeenCalled();
+    });
+
+    it('removes listeners with off()', () => {
+      const handler = vi.fn();
+      client.on('Page.loadEventFired', handler);
+      client.off('Page.loadEventFired', handler);
+
+      ws.simulateMessage({ method: 'Page.loadEventFired', params: {} });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('once() resolves on event', async () => {
+      const promise = client.once('Page.loadEventFired');
+
+      ws.simulateMessage({
+        method: 'Page.loadEventFired',
+        params: { timestamp: 5678 },
+      });
+
+      const result = await promise;
+      expect(result).toEqual({ timestamp: 5678 });
+    });
+
+    it('once() times out', async () => {
+      const promise = client.once('Page.loadEventFired', 50);
+
+      await expect(promise).rejects.toThrow('Timed out');
+    });
+  });
+
+  describe('connection lifecycle', () => {
+    it('rejects pending commands on close', async () => {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances[0];
+      ws.simulateOpen();
+      await p;
+
+      const sendPromise = client.send('Page.enable');
+
+      ws.simulateClose();
+
+      await expect(sendPromise).rejects.toThrow('connection closed');
+    });
+
+    it('disconnect cleans up state', async () => {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      MockWebSocket.instances[0].simulateOpen();
+      await p;
+
+      client.disconnect();
+      expect(client.state).toBe('disconnected');
+    });
+  });
+
+  describe('superseded latch', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('is not superseded after a normal (no-code) close', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose();
+      expect(client.superseded).toBe(false);
+    });
+
+    it('is not superseded after a non-supersede close code', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(1006);
+      expect(client.superseded).toBe(false);
+    });
+
+    it('latches superseded when evicted with CDP_SUPERSEDED_CLOSE_CODE', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+    });
+
+    it('rejects in-flight commands with a distinguishable superseded reason', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.enable');
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      await expect(sendPromise).rejects.toThrow(/superseded/i);
+    });
+
+    it('rejects in-flight commands with the generic reason on a non-supersede close', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.enable');
+      ws.simulateClose(1006);
+      await expect(sendPromise).rejects.toThrow('connection closed');
+      await expect(sendPromise).rejects.not.toThrow(/superseded/i);
+    });
+
+    it('clears the latch on the next successful connect', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+
+      await connectOpen();
+      expect(client.superseded).toBe(false);
+    });
+
+    it('clears the latch on an explicit disconnect()', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+
+      client.disconnect();
+      expect(client.superseded).toBe(false);
+    });
+  });
+
+  describe('onStateChange', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('notifies on connect', async () => {
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      await connectOpen();
+
+      expect(seen).toEqual([['connected', undefined]]);
+    });
+
+    it('notifies on an unexpected close, carrying the close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose();
+
+      expect(seen.every(([state]) => state === 'disconnected')).toBe(true);
+      expect(seen.map(([, reason]) => reason)).toContain('CDP connection closed');
+    });
+
+    it('announces a close exactly once, with the specific close reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        [
+          'disconnected',
+          'CDP connection reset by proxy (upstream Chrome connection was re-established)',
+        ],
+      ]);
+    });
+
+    it('announces a supersede close exactly once, with the supersede reason', async () => {
+      const ws = await connectOpen();
+      const seen: Array<[string, string | undefined]> = [];
+      client.onStateChange((state, reason) => seen.push([state, reason]));
+
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+
+      expect(seen).toEqual([
+        ['disconnected', 'CDP connection superseded by another SLICC tab/window on this instance'],
+      ]);
+    });
+
+    it('rejects in-flight commands with the same reason it announces', async () => {
+      const ws = await connectOpen();
+      const seen: Array<string | undefined> = [];
+      client.onStateChange((_state, reason) => seen.push(reason));
+      const inFlight = client.send('Page.navigate');
+
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(inFlight).rejects.toThrow(seen[0]!);
+      expect(seen).toHaveLength(1);
+    });
+
+    it('notifies on an explicit disconnect()', async () => {
+      await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      client.disconnect();
+
+      expect(seen).toEqual(['disconnected']);
+    });
+
+    it('notifies again on a reconnect after a drop', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange((state) => seen.push(state));
+
+      ws.simulateClose();
+      await connectOpen();
+
+      expect(seen.at(-1)).toBe('connected');
+      expect(seen).toContain('disconnected');
+    });
+
+    it('stops notifying after unsubscribe', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      const off = client.onStateChange((state) => seen.push(state));
+
+      off();
+      ws.simulateClose();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('keeps notifying the other subscribers when one throws', async () => {
+      const ws = await connectOpen();
+      const seen: string[] = [];
+      client.onStateChange(() => {
+        throw new Error('observer blew up');
+      });
+      client.onStateChange((state) => seen.push(state));
+
+      expect(() => ws.simulateClose()).not.toThrow();
+      expect(seen).toContain('disconnected');
+    });
+  });
+
+  describe('upstream reset (proxy rebuilt its Chrome leg)', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('uses close code 4002', () => {
+      expect(CDP_UPSTREAM_RESET_CLOSE_CODE).toBe(4002);
+    });
+
+    it('does NOT latch superseded — the slot is still ours', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.superseded).toBe(false);
+    });
+
+    it('leaves the client disconnected so the next command reconnects lazily', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+      expect(client.state).toBe('disconnected');
+
+      await connectOpen();
+      expect(client.state).toBe('connected');
+    });
+
+    it('rejects in-flight commands with the reset reason', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.navigate');
+      ws.simulateClose(CDP_UPSTREAM_RESET_CLOSE_CODE);
+
+      await expect(sendPromise).rejects.toThrow(/reset by proxy/i);
+      await expect(sendPromise).rejects.toThrow(/upstream Chrome connection was re-established/i);
+      await expect(sendPromise).rejects.not.toThrow(/superseded/i);
+    });
+  });
+});

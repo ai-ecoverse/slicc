@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-freezernew--expanded",
+  "storyTitle": "Freezer/FreezerNew",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer-new.stories.ts",
+  "comment": "the font for new chat feels too bold.\n\nThe icon should be the three-state option we have in prod-code using the PressButton: normal click saves the chat, extracts memories, then starts new chat. double click starts new chat without memories from this chat (will be back-filled), long press starts new chat erasing this one from the history. In expanded mode, we can show these options visually.",
+  "createdAt": "2026-06-10T14:11:48.224Z"
+}

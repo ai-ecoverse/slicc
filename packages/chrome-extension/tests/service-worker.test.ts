@@ -1,0 +1,947 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+type OnMessageListener = (
+  message: unknown,
+  sender: unknown,
+  sendResponse: (response?: unknown) => void
+) => void | boolean;
+type DebuggerEventListener = (
+  source: { tabId: number },
+  method: string,
+  params?: Record<string, unknown>
+) => void;
+type DebuggerDetachListener = (source: { tabId: number }, reason: string) => void;
+type HeadersReceivedListener = (details: {
+  url: string;
+  tabId: number;
+  responseHeaders?: Array<{ name: string; value?: string }>;
+}) => void;
+
+const runtimeMessageListeners: OnMessageListener[] = [];
+const runtimeExternalMessageListeners: OnMessageListener[] = [];
+type StorageChangedListener = (
+  changes: Record<string, { oldValue?: unknown; newValue?: unknown }>,
+  areaName: string
+) => void;
+const storageChangedListeners: StorageChangedListener[] = [];
+const runtimeSentMessages: unknown[] = [];
+
+let sessionStorageState: Record<string, unknown> = {};
+
+const headersReceivedListeners: HeadersReceivedListener[] = [];
+let headersReceivedListener: HeadersReceivedListener | null = null;
+const debuggerEventListeners: DebuggerEventListener[] = [];
+const debuggerDetachListeners: DebuggerDetachListener[] = [];
+
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+
+  readonly sent: string[] = [];
+  readonly listeners = new Map<string, Array<(event?: { data?: unknown }) => void>>();
+  closeArgs: { code?: number; reason?: string } | null = null;
+
+  constructor(readonly url: string) {
+    MockWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event?: { data?: unknown }) => void): void {
+    const handlers = this.listeners.get(type) ?? [];
+    handlers.push(listener);
+    this.listeners.set(type, handlers);
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closeArgs = { code, reason };
+  }
+
+  emit(type: string, event?: { data?: unknown }): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+}
+
+function createChromeMock() {
+  return {
+    action: {
+      setBadgeText: vi.fn(async () => undefined),
+      setBadgeBackgroundColor: vi.fn(async () => undefined),
+      onClicked: { addListener: vi.fn() },
+    },
+    sidePanel: {
+      setPanelBehavior: vi.fn(async () => {}),
+      setOptions: vi.fn(async () => {}),
+      open: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    },
+    storage: {
+      local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      },
+      session: {
+        get: vi.fn(async (key?: string | string[] | null) => {
+          if (typeof key === 'string') {
+            return key in sessionStorageState
+              ? { [key]: structuredClone(sessionStorageState[key]) }
+              : {};
+          }
+          if (Array.isArray(key)) {
+            return Object.fromEntries(
+              key
+                .filter((k) => k in sessionStorageState)
+                .map((k) => [k, structuredClone(sessionStorageState[k])])
+            );
+          }
+          return structuredClone(sessionStorageState);
+        }),
+        set: vi.fn(async (items: Record<string, unknown>) => {
+          Object.assign(sessionStorageState, structuredClone(items));
+        }),
+        remove: vi.fn(async (key: string) => {
+          delete sessionStorageState[key];
+        }),
+      },
+      onChanged: {
+        addListener: vi.fn((listener: StorageChangedListener) => {
+          storageChangedListeners.push(listener);
+        }),
+      },
+    },
+    runtime: {
+      sendMessage: vi.fn(async (message: unknown) => {
+        runtimeSentMessages.push(message);
+      }),
+      onMessage: {
+        addListener: vi.fn((listener: OnMessageListener) => {
+          runtimeMessageListeners.push(listener);
+        }),
+      },
+      getContexts: vi.fn(async () => []),
+      onConnect: {
+        addListener: vi.fn(),
+      },
+      onConnectExternal: {
+        addListener: vi.fn(),
+      },
+      onMessageExternal: {
+        addListener: vi.fn((listener: OnMessageListener) => {
+          runtimeExternalMessageListeners.push(listener);
+        }),
+      },
+      onInstalled: {
+        addListener: vi.fn(),
+      },
+      onStartup: {
+        addListener: vi.fn(),
+      },
+      onUpdateAvailable: {
+        addListener: vi.fn(),
+      },
+      reload: vi.fn(),
+    },
+    tabs: {
+      query: vi.fn(async () => []),
+      create: vi.fn(async ({ url }: { url: string }) => ({ id: 123, url })),
+      get: vi.fn(async (id: number) => ({ id, windowId: 1 }) as unknown),
+      update: vi.fn(async (id: number, _props: unknown) => ({ id }) as unknown),
+      reload: vi.fn(async () => {}),
+      remove: vi.fn(async () => undefined),
+      group: vi.fn(async () => 1),
+      onCreated: {
+        addListener: vi.fn(),
+      },
+      onUpdated: {
+        addListener: vi.fn(),
+      },
+      onRemoved: {
+        addListener: vi.fn(),
+      },
+    },
+    tabGroups: {
+      update: vi.fn(async () => undefined),
+    },
+    windows: {
+      create: vi.fn(async () => ({ id: 1 })),
+      update: vi.fn(async () => ({})),
+    },
+    debugger: {
+      attach: vi.fn(),
+      detach: vi.fn(),
+      sendCommand: vi.fn(async () => ({})),
+      onEvent: {
+        addListener: vi.fn((listener: DebuggerEventListener) => {
+          debuggerEventListeners.push(listener);
+        }),
+      },
+      onDetach: {
+        addListener: vi.fn((listener: DebuggerDetachListener) => {
+          debuggerDetachListeners.push(listener);
+        }),
+      },
+    },
+    identity: {
+      launchWebAuthFlow: vi.fn(),
+      getRedirectURL: vi.fn(),
+    },
+    notifications: {
+      create: vi.fn(),
+      onClicked: {
+        addListener: vi.fn(),
+      },
+    },
+    webRequest: {
+      onHeadersReceived: {
+        addListener: vi.fn((listener: HeadersReceivedListener) => {
+          headersReceivedListeners.push(listener);
+          headersReceivedListener ??= listener;
+        }),
+      },
+    },
+  };
+}
+
+function dispatchOffscreenMessage(payload: unknown): void {
+  for (const listener of runtimeMessageListeners) {
+    listener({ source: 'offscreen', payload }, {}, () => {});
+  }
+}
+
+async function dispatchAndCaptureResponse(message: unknown): Promise<unknown> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const sendResponse = (response?: unknown): void => {
+      if (resolved) return;
+      resolved = true;
+      resolve(response);
+    };
+    let asyncHandled = false;
+    for (const listener of runtimeMessageListeners) {
+      const ret = listener(message, {}, sendResponse);
+      if (ret === true) asyncHandled = true;
+    }
+
+    if (!asyncHandled && !resolved) resolve(undefined);
+  });
+}
+
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function loadServiceWorker(): Promise<void> {
+  headersReceivedListeners.length = 0;
+  headersReceivedListener = null;
+  await import('../src/service-worker.js');
+}
+
+describe('extension service worker', () => {
+  beforeEach(async () => {
+    runtimeMessageListeners.length = 0;
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    runtimeSentMessages.length = 0;
+    debuggerEventListeners.length = 0;
+    debuggerDetachListeners.length = 0;
+    MockWebSocket.instances.length = 0;
+    headersReceivedListeners.length = 0;
+    headersReceivedListener = null;
+    sessionStorageState = {};
+    vi.clearAllMocks();
+    vi.resetModules();
+
+    (globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }).chrome =
+      createChromeMock();
+    (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
+      MockWebSocket as never;
+
+    await loadServiceWorker();
+  });
+
+  it('oauth-request with interactive:false runs launchWebAuthFlow with the silent (windowless) options', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.identity.launchWebAuthFlow.mockResolvedValue(undefined);
+
+    await dispatchAndCaptureResponse({
+      source: 'panel',
+      payload: {
+        type: 'oauth-request',
+        providerId: 'adobe',
+        authorizeUrl: 'https://ims.example.com/authorize',
+        interactive: false,
+      },
+    });
+    await flushAsync();
+
+    expect(chromeMock.identity.launchWebAuthFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://ims.example.com/authorize',
+        interactive: false,
+        abortOnLoadForNonInteractive: false,
+        timeoutMsForNonInteractive: expect.any(Number),
+      })
+    );
+  });
+
+  it('oauth-request without interactive defaults to a visible (interactive:true) flow', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.identity.launchWebAuthFlow.mockResolvedValue(undefined);
+
+    await dispatchAndCaptureResponse({
+      source: 'panel',
+      payload: {
+        type: 'oauth-request',
+        providerId: 'adobe',
+        authorizeUrl: 'https://ims.example.com/authorize',
+      },
+    });
+    await flushAsync();
+
+    expect(chromeMock.identity.launchWebAuthFlow).toHaveBeenCalledWith({
+      url: 'https://ims.example.com/authorize',
+      interactive: true,
+    });
+  });
+
+  it('hosts the leader tray socket in the service worker and relays frames', async () => {
+    dispatchOffscreenMessage({
+      type: 'tray-socket-open',
+      id: 7,
+      url: 'wss://tray.example.com/controller',
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    const socket = MockWebSocket.instances[0];
+    expect(socket.url).toBe('wss://tray.example.com/controller');
+
+    socket.emit('open');
+    socket.emit('message', { data: '{"type":"leader.connected"}' });
+    await Promise.resolve();
+
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-opened', id: 7 },
+    });
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-message', id: 7, data: '{"type":"leader.connected"}' },
+    });
+
+    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 7, data: '{"type":"ping"}' });
+    expect(socket.sent).toEqual(['{"type":"ping"}']);
+
+    dispatchOffscreenMessage({ type: 'tray-socket-close', id: 7, code: 1000, reason: 'done' });
+    expect(socket.closeArgs).toEqual({ code: 1000, reason: 'done' });
+  });
+
+  it('does not report the replacement tray socket as closed when the socket it replaced closes', async () => {
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/a' });
+    const first = MockWebSocket.instances[0];
+    first.emit('open');
+    await flushAsync();
+
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/b' });
+    expect(MockWebSocket.instances).toHaveLength(2);
+    const second = MockWebSocket.instances[1];
+    expect(first.closeArgs).toEqual({ code: 1000, reason: 'replaced' });
+
+    runtimeSentMessages.length = 0;
+    first.emit('close');
+    first.emit('error');
+    first.emit('message', { data: '{"stale":true}' });
+    await flushAsync();
+    expect(runtimeSentMessages).toEqual([]);
+
+    second.emit('open');
+    await flushAsync();
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-opened', id: 7 },
+    });
+    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 7, data: '{"type":"ping"}' });
+    expect(second.sent).toEqual(['{"type":"ping"}']);
+  });
+
+  it('still confirms the close of a tray socket the offscreen closed explicitly', async () => {
+    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 3, url: 'wss://tray.example.com/c' });
+    const socket = MockWebSocket.instances[0];
+    dispatchOffscreenMessage({ type: 'tray-socket-close', id: 3, code: 1000, reason: 'done' });
+    runtimeSentMessages.length = 0;
+
+    socket.emit('close');
+    await flushAsync();
+
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: { type: 'tray-socket-closed', id: 3 },
+    });
+  });
+
+  it('reports tray socket command failures back to offscreen', async () => {
+    dispatchOffscreenMessage({ type: 'tray-socket-send', id: 99, data: '{"type":"ping"}' });
+    await flushAsync();
+
+    expect(runtimeSentMessages).toContainEqual({
+      source: 'service-worker',
+      payload: {
+        type: 'tray-socket-error',
+        id: 99,
+        error: 'Tray socket 99 is not open',
+      },
+    });
+  });
+
+  it('rejects malformed mount sign-and-forward messages via the type guard', async () => {
+    const reply = await dispatchAndCaptureResponse({
+      type: 'mount.s3-sign-and-forward',
+    });
+
+    expect(reply).toBeUndefined();
+  });
+
+  it('returns profile_not_configured when chrome.storage has no credentials', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.storage.local.get = vi.fn(async () => ({})) as never;
+
+    const reply = (await dispatchAndCaptureResponse({
+      type: 'mount.s3-sign-and-forward',
+      envelope: {
+        profile: 'aws',
+        method: 'GET',
+        bucket: 'my-bucket',
+        key: 'foo.txt',
+      },
+    })) as { ok: boolean; errorCode: string; error: string };
+
+    expect(reply.ok).toBe(false);
+    expect(reply.errorCode).toBe('profile_not_configured');
+    expect(reply.error).toContain("missing required field 'access_key_id'");
+  });
+
+  it('returns invalid_profile for a malformed profile name', async () => {
+    const reply = (await dispatchAndCaptureResponse({
+      type: 'mount.s3-sign-and-forward',
+      envelope: {
+        profile: 'aws/etc/passwd',
+        method: 'GET',
+        bucket: 'b',
+        key: 'k',
+      },
+    })) as { ok: boolean; errorCode: string };
+
+    expect(reply.ok).toBe(false);
+    expect(reply.errorCode).toBe('invalid_profile');
+  });
+
+  it('forwards a configured S3 request via fetch using SigV4', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+
+    const stored: Record<string, string> = {
+      's3.aws.access_key_id': 'AKIDEXAMPLE',
+      's3.aws.secret_access_key': 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
+      's3.aws.region': 'us-east-1',
+    };
+    chrome.storage.local.get = vi.fn(async (key?: string | string[] | null) => {
+      if (typeof key === 'string') {
+        return key in stored ? { [key]: stored[key] } : {};
+      }
+      return stored;
+    }) as never;
+
+    let capturedUrl = '';
+    let capturedAuth = '';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: unknown, init?: { headers?: Record<string, string> }) => {
+      capturedUrl = String(url);
+      capturedAuth = init?.headers?.['Authorization'] ?? '';
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { etag: '"e1"', 'content-type': 'application/octet-stream' },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const reply = (await dispatchAndCaptureResponse({
+        type: 'mount.s3-sign-and-forward',
+        envelope: {
+          profile: 'aws',
+          method: 'GET',
+          bucket: 'my-bucket',
+          key: 'foo.txt',
+        },
+      })) as { ok: true; status: number; headers: Record<string, string>; bodyBase64: string };
+
+      expect(reply.ok).toBe(true);
+      expect(reply.status).toBe(200);
+      expect(reply.headers.etag).toBe('"e1"');
+
+      expect(atob(reply.bodyBase64)).toBe(String.fromCharCode(1, 2, 3));
+      expect(capturedUrl).toBe('https://my-bucket.s3.us-east-1.amazonaws.com/foo.txt');
+      expect(capturedAuth).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\//);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('shows a notification and sets badge when a SLICC handoff Link header is received', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 1, title: 'Handoff Page' })) as never;
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff',
+      tabId: 42,
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'basic', message: expect.any(String) })
+    );
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '!' });
+    expect(chrome.action.setBadgeBackgroundColor).toHaveBeenCalledWith({ color: '#ff5f72' });
+  });
+
+  it('focuses the leader tab and clears badge when handoff notification is clicked', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 21,
+      windowId: 7,
+      url: 'https://www.sliccy.ai/?slicc=leader',
+      title: 'Slicc',
+    })) as never;
+    chrome.tabs.update = vi.fn(async () => ({})) as never;
+    chrome.storage.session.get = vi.fn(async (key: string) => ({
+      [key]: key === 'slicc_leader_tab_id' ? 21 : undefined,
+    })) as never;
+
+    let notificationClickListener: ((id: string) => void) | null = null;
+    chrome.notifications.onClicked.addListener = vi.fn((listener: (id: string) => void) => {
+      notificationClickListener = listener;
+    }) as never;
+
+    vi.resetModules();
+    await loadServiceWorker();
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff',
+      tabId: 42,
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).toHaveBeenCalled();
+    const notificationId = (chrome.notifications.create as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+
+    notificationClickListener!(notificationId);
+    await flushAsync();
+    await flushAsync();
+
+    expect(chrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  const UPSKILL_LINK_VALUE =
+    '<https://github.com/adobe/skills>; rel="https://www.sliccy.ai/rel/upskill"; branch=main; path="plugins/aem/edge-delivery-services"';
+
+  function fireHandoffSighting(linkValue: string, url = 'https://www.aem.live/docs/'): void {
+    headersReceivedListener!({
+      url,
+      tabId: 42,
+      responseHeaders: [{ name: 'Link', value: linkValue }],
+    });
+  }
+
+  async function respawnServiceWorker(): Promise<void> {
+    vi.resetModules();
+    await loadServiceWorker();
+  }
+
+  function notificationCreateCalls(): Array<[string, { title: string; message: string }]> {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    return (chrome.notifications.create as ReturnType<typeof vi.fn>).mock.calls as Array<
+      [string, { title: string; message: string }]
+    >;
+  }
+
+  it('does not re-show the toast when the same fingerprint is sighted after a SW respawn', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+
+    await respawnServiceWorker();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/tutorial/');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+  });
+
+  it('shows a toast for a different fingerprint after a SW respawn', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+
+    await respawnServiceWorker();
+    fireHandoffSighting('<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(2);
+  });
+
+  it('forwards the navigate lick on every sighting, including deduped ones', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/tutorial/');
+    await flushAsync();
+    await respawnServiceWorker();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/blog/');
+    await flushAsync();
+
+    const licks = runtimeSentMessages.filter(
+      (m) => (m as { payload?: { type?: string } }).payload?.type === 'navigate-lick'
+    );
+    expect(licks).toHaveLength(3);
+    expect(notificationCreateCalls()).toHaveLength(1);
+  });
+
+  it('clears the badge and focuses the leader tab for a handoff notification id minted before a SW respawn', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    sessionStorageState['slicc_leader_tab_id'] = 21;
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 21,
+      windowId: 7,
+      url: 'https://www.sliccy.ai/?slicc=leader',
+      title: 'Slicc',
+    })) as never;
+    chrome.tabs.update = vi.fn(async () => ({})) as never;
+
+    const clickListener = (chrome.notifications.onClicked.addListener as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as (id: string) => void;
+
+    clickListener('slicc-handoff-1700000000000');
+    await flushAsync();
+    await flushAsync();
+
+    expect(chrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('ignores notification clicks with non-handoff ids', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const clickListener = (chrome.notifications.onClicked.addListener as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as (id: string) => void;
+    clickListener('some-other-notification');
+    await flushAsync();
+
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+    expect(chrome.action.setBadgeText).not.toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('mints distinct notification ids for two different handoffs in the same millisecond', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    try {
+      fireHandoffSighting(UPSKILL_LINK_VALUE);
+      fireHandoffSighting(
+        '<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"'
+      );
+      await flushAsync();
+
+      const ids = notificationCreateCalls().map(([id]) => id);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('collapses control characters in the handoff instruction before rendering the toast', async () => {
+    fireHandoffSighting(
+      `</>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8''Security%20alert%3A%0Are-authenticate%20now`,
+      'https://evil.example/page'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).not.toMatch(/[\u0000-\u001f]/);
+    expect(options.message).toContain('Security alert: re-authenticate now');
+  });
+
+  it('attributes the handoff toast to the advertising page origin', async () => {
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Do the thing"',
+      'https://example.com/deep/page?q=1'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://example.com');
+  });
+
+  it('attributes the upskill toast to the advertising page origin', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://www.aem.live');
+  });
+
+  it('caps the persisted fingerprints at 100, dropping the oldest first', async () => {
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = Array.from(
+      { length: 100 },
+      (_, i) => `fp-${i}`
+    );
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(100);
+    expect(stored).not.toContain('fp-0');
+    expect(stored).toContain('fp-1');
+    expect(stored[99]).not.toMatch(/^fp-/);
+  });
+
+  it('persists both fingerprints when two different sightings land back-to-back', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    fireHandoffSighting('<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"');
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(2);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(2);
+  });
+
+  it('does not clobber persisted fingerprints when the storage read fails', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = ['old-fingerprint'];
+    chrome.storage.session.get.mockRejectedValueOnce(new Error('transient'));
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toContain('old-fingerprint');
+  });
+
+  it('names the repo and skill path in the upskill toast', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    const calls = notificationCreateCalls();
+    expect(calls).toHaveLength(1);
+    const [, options] = calls[0];
+    expect(options.title).toBe('Slicc skill available');
+    expect(options.message).toContain('github.com/adobe/skills');
+    expect(options.message).toContain('plugins/aem/edge-delivery-services');
+  });
+
+  it('includes the instruction in the handoff toast', async () => {
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Summarize this page and file an issue"',
+      'https://example.com/page'
+    );
+    await flushAsync();
+
+    const calls = notificationCreateCalls();
+    expect(calls).toHaveLength(1);
+    const [, options] = calls[0];
+    expect(options.title).toBe('Slicc handoff received');
+    expect(options.message).toContain('Summarize this page and file an issue');
+  });
+
+  it('truncates a long handoff instruction in the toast', async () => {
+    const instruction = 'x'.repeat(300);
+    fireHandoffSighting(
+      `</>; rel="https://www.sliccy.ai/rel/handoff"; title="${instruction}"`,
+      'https://example.com/long'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('…');
+    expect(options.message).not.toContain('x'.repeat(200));
+  });
+
+  it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {
+    let capturedUrl = '';
+    let capturedAuth = '';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: unknown, init?: { headers?: Record<string, string> }) => {
+      capturedUrl = String(url);
+      capturedAuth = init?.headers?.['Authorization'] ?? '';
+      return new Response('[]', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const reply = (await dispatchAndCaptureResponse({
+        type: 'mount.da-sign-and-forward',
+        envelope: {
+          imsToken: 'ims-token-xyz',
+          method: 'GET',
+          path: '/source/my-org/my-repo/index.html',
+        },
+      })) as { ok: true; status: number };
+
+      expect(reply.ok).toBe(true);
+      expect(reply.status).toBe(200);
+      expect(capturedUrl).toBe('https://admin.da.live/source/my-org/my-repo/index.html');
+      expect(capturedAuth).toBe('Bearer ims-token-xyz');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  async function reloadWithDiscoverySetting(value: unknown): Promise<void> {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.storage.local.get.mockImplementation(async (...args: unknown[]) =>
+      args[0] === 'slicc_discovery_enabled' ? { slicc_discovery_enabled: value } : {}
+    );
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    vi.resetModules();
+    await loadServiceWorker();
+    await flushAsync();
+  }
+
+  it('skips the discovery probe when the persisted setting is disabled', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await reloadWithDiscoverySetting(false);
+
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('fails closed: no probe on a cold-start navigation before the setting has loaded', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+
+    let resolveGet: (v: Record<string, unknown>) => void = () => {};
+    const pending = new Promise<Record<string, unknown>>((r) => {
+      resolveGet = r;
+    });
+    chromeMock.storage.local.get.mockImplementation((...args: unknown[]) =>
+      args[0] === 'slicc_discovery_enabled' ? pending : Promise.resolve({})
+    );
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    vi.resetModules();
+    try {
+      await loadServiceWorker();
+
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      resolveGet({ slicc_discovery_enabled: false });
+      await flushAsync();
+      discoveryListener?.({ url: 'https://ex2.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('runs the discovery probe when the setting is enabled (default)', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await reloadWithDiscoverySetting(undefined);
+      const discoveryListener = headersReceivedListeners[1];
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('persists discovery.set-enabled from an allowed leader origin', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const listener = runtimeExternalMessageListeners[0];
+    expect(listener).toBeTruthy();
+    listener?.(
+      { type: 'discovery.set-enabled', enabled: false },
+      { origin: 'https://www.sliccy.ai' },
+      () => {}
+    );
+    await flushAsync();
+    expect(chromeMock.storage.local.set).toHaveBeenCalledWith({ slicc_discovery_enabled: false });
+  });
+
+  it('ignores discovery.set-enabled from a non-allowlisted origin', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const listener = runtimeExternalMessageListeners[0];
+    listener?.(
+      { type: 'discovery.set-enabled', enabled: false },
+      { origin: 'https://evil.example' },
+      () => {}
+    );
+    await flushAsync();
+    expect(chromeMock.storage.local.set).not.toHaveBeenCalledWith({
+      slicc_discovery_enabled: false,
+    });
+  });
+});

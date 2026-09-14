@@ -1,0 +1,122 @@
+diff --git a/node_modules/isomorphic-git/index.js b/node_modules/isomorphic-git/index.js
+index bbdc7f0..c1abc93 100644
+--- a/node_modules/isomorphic-git/index.js
++++ b/node_modules/isomorphic-git/index.js
+@@ -3576,6 +3576,64 @@ async function shasumRange(
+   return shasum(buffer.subarray(start, end))
+ }
+ 
++/**
++ * SLICC patch (ai-ecoverse/slicc#2710, #2735): monotonic use counter stamped on
++ * every cached pack index that serves a read, so a long-lived `cache` object
++ * can evict the least-recently-used pack buffers instead of holding every
++ * packfile it ever touched in memory.
++ */
++let packUseCounter = 0;
++
++/**
++ * SLICC patch (ai-ecoverse/slicc#2710, #2735): packfile integrity verification,
++ * extracted so it can be memoized as a promise on the cached pack index.
++ *
++ * Upstream ran this inline behind a `p._checksumVerified` boolean that is only
++ * set AFTER the `await`, so every reader that arrived while the first
++ * verification was in flight started its own SHA-1 over the whole pack (a
++ * 92 MB pack was hashed 8-9 times per command). Callers now await a single
++ * shared promise.
++ *
++ * The deep (full-payload) SHA-1 is skipped when the caller's cache object sets
++ * `skipDeepPackVerification` — the O(1) trailer check still runs, matching what
++ * canonical git does on a normal object read (it only verifies packs on
++ * `fsck` / `index-pack`). `deep` is passed in rather than re-read from the
++ * cache so the memoized promise and the flag it was created under cannot
++ * disagree.
++ */
++async function verifyPackfileIntegrity({ pack, p, deep }) {
++  const expectedShaFromIndex = p.packfileSha;
++
++  // 1. Fast Check: Verify packfile trailer matches index record
++  // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
++  const packTrailer = pack.subarray(-20);
++  const packTrailerSha = Array.from(packTrailer)
++    .map(b => b.toString(16).padStart(2, '0'))
++    .join('');
++  if (packTrailerSha !== expectedShaFromIndex) {
++    throw new InternalError(
++      `Packfile trailer mismatch: expected ${expectedShaFromIndex}, got ${packTrailerSha}. The packfile may be corrupted.`
++    )
++  }
++
++  // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
++  // The Node package build swaps in a chunked implementation for large packs.
++  if (deep) {
++    const actualPayloadSha = await shasumRange(pack, {
++      start: 0,
++      end: pack.length - 20,
++    });
++    if (actualPayloadSha !== expectedShaFromIndex) {
++      throw new InternalError(
++        `Packfile payload corrupted: calculated ${actualPayloadSha} but expected ${expectedShaFromIndex}. The packfile may have been tampered with.`
++      )
++    }
++  }
++
++  // Mark as verified to prevent performance regression on subsequent reads
++  p._checksumVerified = true;
++}
++
+ async function readObjectPacked({
+   fs,
+   cache,
+@@ -3613,37 +3671,22 @@ async function readObjectPacked({
+       }
+ 
+       // === Packfile Integrity Verification ===
+-      // Performance optimization: use _checksumVerified flag to verify only once per packfile
+-      if (!p._checksumVerified) {
+-        const expectedShaFromIndex = p.packfileSha;
+-
+-        // 1. Fast Check: Verify packfile trailer matches index record
+-        // Use subarray instead of slice to avoid memory copy (zero-copy for large packfiles)
+-        const packTrailer = pack.subarray(-20);
+-        const packTrailerSha = Array.from(packTrailer)
+-          .map(b => b.toString(16).padStart(2, '0'))
+-          .join('');
+-        if (packTrailerSha !== expectedShaFromIndex) {
+-          throw new InternalError(
+-            `Packfile trailer mismatch: expected ${expectedShaFromIndex}, got ${packTrailerSha}. The packfile may be corrupted.`
+-          )
+-        }
+-
+-        // 2. Deep Integrity Check: Calculate actual SHA-1 of packfile payload.
+-        // The Node package build swaps in a chunked implementation for large packs.
+-        const actualPayloadSha = await shasumRange(pack, {
+-          start: 0,
+-          end: pack.length - 20,
+-        });
+-        if (actualPayloadSha !== expectedShaFromIndex) {
+-          throw new InternalError(
+-            `Packfile payload corrupted: calculated ${actualPayloadSha} but expected ${expectedShaFromIndex}. The packfile may have been tampered with.`
+-          )
+-        }
+-
+-        // Mark as verified to prevent performance regression on subsequent reads
+-        p._checksumVerified = true;
++      // SLICC patch (ai-ecoverse/slicc#2735): memoized as a promise on the
++      // cached pack index so N concurrent readers verify exactly once.
++      // SLICC patch (ai-ecoverse/slicc#2710): the memo records whether it
++      // INCLUDED the deep payload hash, so a caller that wants the deep check
++      // after a skipped one (`SLICC_GIT_VERIFY_PACKS=1` later in the same
++      // shell) is not served the promise of the verification that skipped it.
++      const deepVerification = !(cache && cache.skipDeepPackVerification);
++      if (!p._verification || (deepVerification && !p._deepVerified)) {
++        p._deepVerified = deepVerification;
++        p._verification = verifyPackfileIntegrity({ pack, p, deep: deepVerification });
+       }
++      await p._verification;
++
++      // SLICC patch (ai-ecoverse/slicc#2710): usage stamp for LRU eviction of
++      // resident pack buffers by a long-lived cache owner.
++      p._lastUsedAt = ++packUseCounter;
+ 
+       const result = await p.read({ oid, getExternalRefDelta });
+       result.format = 'content';

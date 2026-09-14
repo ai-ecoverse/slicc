@@ -1,0 +1,184 @@
+{
+  "typescript": {
+    "cloudflare-worker": {
+      "lines": 91,
+      "statements": 89,
+      "functions": 94,
+      "branches": 82,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**",
+        "packages/cloud-core/**"
+      ]
+    },
+    "node-server": {
+      "lines": 85,
+      "statements": 83,
+      "functions": 86,
+      "branches": 74,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/src/secret-env-schema.ts",
+        "packages/shared-ts/src/transcript-export.ts",
+        "packages/shared-ts/src/transcript-redaction.ts",
+        "packages/shared-ts/src/slicc-app-url.ts",
+        "packages/shared-ts/src/extension-bridge-protocol.ts",
+        "packages/shared-ts/src/cdp-target-info.ts",
+        "packages/shared-ts/src/proxy-headers.ts",
+        "packages/shared-ts/src/discovery-link.ts",
+        "packages/shared-ts/src/well-known-probe.ts",
+        "packages/shared-ts/src/handoff-link.ts",
+        "packages/shared-ts/src/link-header.ts",
+        "packages/shared-ts/src/iframe-repaint.ts",
+        "packages/shared-ts/src/leader-ext-id.ts",
+        "packages/node-server/src/electron-tray-follower.ts"
+      ]
+    },
+    "chrome-extension": {
+      "lines": 88,
+      "statements": 86,
+      "functions": 80,
+      "branches": 76,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/chrome-extension/vite-plugins/**",
+        "packages/webapp/src/scoops/**",
+        "packages/webapp/src/net/**",
+        "packages/webapp/src/shell/**",
+        "packages/webapp/src/fs/**",
+        "packages/webapp/src/kernel/**",
+        "packages/webapp/src/core/proxy-error.ts",
+        "packages/webapp/src/core/runtime-env.ts",
+        "packages/webapp/src/cdp/remote-cdp-transport.ts",
+        "packages/node-server/src/**",
+        "packages/shared-ts/**"
+      ]
+    },
+    "webapp": {
+      "lines": 85,
+      "statements": 83,
+      "functions": 83,
+      "branches": 75,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/webcomponents/**",
+        "packages/dev-tools/**"
+      ]
+    },
+    "cherry": {
+      "lines": 92,
+      "statements": 90,
+      "functions": 98,
+      "branches": 79
+    },
+    "cloud-core": {
+      "lines": 86,
+      "statements": 83,
+      "functions": 82,
+      "branches": 78,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**"
+      ]
+    },
+    "shared": {
+      "lines": 97,
+      "statements": 95,
+      "functions": 95,
+      "branches": 90
+    },
+    "webcomponents": {
+      "lines": 95,
+      "statements": 91,
+      "functions": 95,
+      "branches": 80
+    },
+    "spoon": {
+      "lines": 99,
+      "statements": 99,
+      "functions": 99,
+      "branches": 98
+    }
+  },
+  "swift": {
+    "swift-server": {
+      "lines": 68,
+      "functions": 67,
+      "regions": 65
+    },
+    "swift-launcher": {
+      "lines": 80,
+      "functions": 71,
+      "regions": 72
+    },
+    "swift-optel": {
+      "lines": 75,
+      "functions": 70,
+      "regions": 79
+    },
+    "swift-traysession": {
+      "lines": 92,
+      "functions": 88,
+      "regions": 87
+    },
+    "swift-trayfollower": {
+      "lines": 70,
+      "functions": 56,
+      "regions": 78
+    },
+    "swift-traykit": {
+      "lines": 60,
+      "functions": 55,
+      "regions": 58
+    },
+    "swift-widgetkit": {
+      "lines": 94,
+      "functions": 90,
+      "regions": 91
+    },
+    "ios-app": {
+      "lines": 75,
+      "functions": 75,
+      "regions": 71
+    }
+  }
+}

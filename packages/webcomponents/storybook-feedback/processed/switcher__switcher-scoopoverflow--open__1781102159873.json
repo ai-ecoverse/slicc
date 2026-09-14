@@ -1,0 +1,8 @@
+{
+  "storyId": "switcher-scoopoverflow--open",
+  "storyTitle": "Switcher/ScoopOverflow",
+  "subsystem": "switcher",
+  "importPath": "./src/switcher/slicc-scoop-overflow.stories.ts",
+  "comment": "I don't think we need a background or frame for the opened overflow. the scoops appearing underneath is enough. but we can add some stagger to make it look more organic",
+  "createdAt": "2026-06-10T14:35:59.873Z"
+}

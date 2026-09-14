@@ -1,0 +1,448 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SliccQuickLook } from '../../src/quick-look/slicc-quick-look.js';
+import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+function toggleLabels(ql: SliccQuickLook): string[] {
+  return [...(ql.shadowRoot?.querySelectorAll('.toggle button') ?? [])].map(
+    (b) => b.textContent ?? ''
+  );
+}
+
+function pressedLabel(ql: SliccQuickLook): string | undefined {
+  return (
+    ql.shadowRoot?.querySelector('.toggle button[aria-pressed="true"]')?.textContent ?? undefined
+  );
+}
+
+function clickToggle(ql: SliccQuickLook, label: string): void {
+  const buttons = [...(ql.shadowRoot?.querySelectorAll('.toggle button') ?? [])];
+  (buttons.find((b) => b.textContent === label) as HTMLElement | undefined)?.click();
+}
+
+describe('slicc-quick-look', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+    SliccQuickLook.close();
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-quick-look')).toBe(SliccQuickLook);
+  });
+
+  it('open() renders the overlay with a text preview', () => {
+    SliccQuickLook.open({
+      path: '/workspace/hello.txt',
+      content: 'Hello world',
+      mimeType: 'text/plain',
+    });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql).not.toBeNull();
+    expect(ql.shadowRoot?.querySelector('pre')).not.toBeNull();
+    expect(ql.shadowRoot?.querySelector('pre')?.textContent).toContain('Hello world');
+  });
+
+  it('open() renders an image preview for image/* MIME', () => {
+    const buf = new ArrayBuffer(8);
+    SliccQuickLook.open({ path: '/workspace/photo.png', content: buf, mimeType: 'image/png' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql.shadowRoot?.querySelector('img')).not.toBeNull();
+  });
+
+  it('open() renders audio controls for audio/* MIME', () => {
+    const buf = new ArrayBuffer(8);
+    SliccQuickLook.open({ path: '/workspace/clip.mp3', content: buf, mimeType: 'audio/mpeg' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql.shadowRoot?.querySelector('audio')).not.toBeNull();
+  });
+
+  it('open() renders video controls for video/* MIME', () => {
+    const buf = new ArrayBuffer(8);
+    SliccQuickLook.open({ path: '/workspace/demo.mp4', content: buf, mimeType: 'video/mp4' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql.shadowRoot?.querySelector('video')).not.toBeNull();
+  });
+
+  it('open() shows a fallback for unknown MIME types', () => {
+    SliccQuickLook.open({
+      path: '/workspace/data.bin',
+      content: new ArrayBuffer(128),
+      mimeType: 'application/octet-stream',
+    });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql.shadowRoot?.textContent).toContain('Preview not available');
+  });
+
+  it('displays the filename in the header', () => {
+    SliccQuickLook.open({ path: '/workspace/hello.txt', content: 'hi', mimeType: 'text/plain' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    expect(ql.shadowRoot?.querySelector('.header')?.textContent).toContain('hello.txt');
+  });
+
+  it('close() removes the overlay', () => {
+    SliccQuickLook.open({ path: '/workspace/x.txt', content: 'x', mimeType: 'text/plain' });
+    expect(document.querySelector('slicc-quick-look')).not.toBeNull();
+    SliccQuickLook.close();
+    expect(document.querySelector('slicc-quick-look')).toBeNull();
+  });
+
+  it('Escape dismisses the overlay', () => {
+    SliccQuickLook.open({ path: '/workspace/x.txt', content: 'x', mimeType: 'text/plain' });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('slicc-quick-look')).toBeNull();
+  });
+
+  it('clicking the backdrop dismisses the overlay', () => {
+    SliccQuickLook.open({ path: '/workspace/x.txt', content: 'x', mimeType: 'text/plain' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    const backdrop = ql.shadowRoot?.querySelector('.backdrop') as HTMLElement;
+    backdrop.click();
+    expect(document.querySelector('slicc-quick-look')).toBeNull();
+  });
+
+  it('clicking the close button dismisses the overlay', () => {
+    SliccQuickLook.open({ path: '/workspace/x.txt', content: 'x', mimeType: 'text/plain' });
+    const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+    const closeBtn = ql.shadowRoot?.querySelector('.x') as HTMLElement;
+    closeBtn.click();
+    expect(document.querySelector('slicc-quick-look')).toBeNull();
+  });
+
+  it('only one overlay open at a time', () => {
+    SliccQuickLook.open({ path: '/a.txt', content: 'a', mimeType: 'text/plain' });
+    SliccQuickLook.open({ path: '/b.txt', content: 'b', mimeType: 'text/plain' });
+    expect(document.querySelectorAll('slicc-quick-look')).toHaveLength(1);
+    expect(
+      document.querySelector('slicc-quick-look')?.shadowRoot?.querySelector('.header')?.textContent
+    ).toContain('b.txt');
+  });
+
+  describe('type handling', () => {
+    it('previews a caller-sniffed unknown extension as text — the .jsh case', () => {
+      SliccQuickLook.open({
+        path: '/workspace/bb.jsh',
+        content: '#!/usr/bin/env jsh\necho hi\n',
+        mimeType: 'text/plain',
+        text: true,
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.textContent).not.toContain('Preview not available');
+      expect(ql.shadowRoot?.querySelector('pre')?.textContent).toContain('echo hi');
+    });
+
+    it('honours an explicit text override even for an octet-stream MIME', () => {
+      SliccQuickLook.open({
+        path: '/workspace/weird.xyz',
+        content: 'plain words',
+        mimeType: 'application/octet-stream',
+        text: true,
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('pre')?.textContent).toContain('plain words');
+    });
+
+    it('treats structured application/* types as text', () => {
+      SliccQuickLook.open({
+        path: '/a/b.json',
+        content: '{"a":1}',
+        mimeType: 'application/json',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('pre')).not.toBeNull();
+    });
+
+    it('renders a PDF in a frame rather than refusing it', () => {
+      SliccQuickLook.open({
+        path: '/a/doc.pdf',
+        content: new ArrayBuffer(64),
+        mimeType: 'application/pdf',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('iframe')).not.toBeNull();
+    });
+
+    it('names the type it could not preview, so the dead end is explained', () => {
+      SliccQuickLook.open({
+        path: '/a/blob.bin',
+        content: new ArrayBuffer(2048),
+        mimeType: 'application/octet-stream',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      const text = ql.shadowRoot?.textContent ?? '';
+      expect(text).toContain('Preview not available');
+      expect(text).toContain('application/octet-stream');
+    });
+
+    it('shows a type chip in the header', () => {
+      SliccQuickLook.open({ path: '/a/b.ts', content: 'x', mimeType: 'text/typescript' });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.chip')?.textContent).toBe('typescript');
+    });
+  });
+
+  describe('git awareness', () => {
+    const modified = {
+      path: '/repo/src/main.ts',
+      content: 'const a = 2;\n',
+      mimeType: 'text/typescript',
+      baseContent: 'const a = 1;\n',
+      gitStatus: 'modified',
+    };
+
+    it('shows the git status in the header', () => {
+      SliccQuickLook.open(modified);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.chip--git')?.textContent).toBe('modified');
+    });
+
+    it('offers a diff/source toggle only when a base version was supplied', () => {
+      SliccQuickLook.open(modified);
+      let ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.toggle')).not.toBeNull();
+
+      SliccQuickLook.open({ path: '/a/b.ts', content: 'x', mimeType: 'text/typescript' });
+      ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.toggle')).toBeNull();
+    });
+
+    it('opens on the diff, since that is the question a changed file poses', () => {
+      SliccQuickLook.open(modified);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      const pressed = ql.shadowRoot?.querySelector('.toggle button[aria-pressed="true"]');
+      expect(pressed?.textContent).toBe('Diff');
+    });
+
+    it('switches to the whole file when the toggle is clicked', () => {
+      SliccQuickLook.open(modified);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      clickToggle(ql, 'Source');
+      const pressed = ql.shadowRoot?.querySelector('.toggle button[aria-pressed="true"]');
+      expect(pressed?.textContent).toBe('Source');
+    });
+  });
+
+  describe('rendered views', () => {
+    const readme = {
+      path: '/workspace/README.md',
+      content: '# Title\n',
+      mimeType: 'text/plain',
+      text: true,
+      rendered: { mount: 'inline' as const, html: '<h1>Title</h1><p>Hello</p>' },
+    };
+
+    it('opens on the rendered document, because that is what a reader wants', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.rendered h1')?.textContent).toBe('Title');
+      expect(pressedLabel(ql)).toBe('Preview');
+    });
+
+    it('offers the source view alongside it', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(toggleLabels(ql)).toEqual(['Preview', 'Source']);
+
+      clickToggle(ql, 'Source');
+      expect(ql.shadowRoot?.querySelector('pre')?.textContent).toContain('# Title');
+      expect(ql.shadowRoot?.querySelector('.rendered')).toBeNull();
+    });
+
+    it('goes back to the rendered view', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      clickToggle(ql, 'Source');
+      clickToggle(ql, 'Preview');
+      expect(ql.shadowRoot?.querySelector('.rendered h1')?.textContent).toBe('Title');
+    });
+
+    it('keeps the diff reachable for a modified document', () => {
+      SliccQuickLook.open({ ...readme, baseContent: '# Old\n', gitStatus: 'modified' });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(toggleLabels(ql)).toEqual(['Preview', 'Source', 'Diff']);
+
+      expect(pressedLabel(ql)).toBe('Preview');
+    });
+
+    it('mounts an HTML file in a sandboxed iframe, never inline', () => {
+      const source = '<h1>Report</h1><script>window.pwned = true;</script>';
+      SliccQuickLook.open({
+        path: '/workspace/report.html',
+        content: source,
+        mimeType: 'text/html',
+        rendered: { mount: 'sandbox', html: source },
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      const frame = ql.shadowRoot?.querySelector('iframe');
+
+      expect(frame).not.toBeNull();
+
+      expect(frame?.getAttribute('sandbox')).toBe('');
+      expect(frame?.getAttribute('srcdoc')).toContain(source);
+      expect(ql.shadowRoot?.querySelector('.rendered')).toBeNull();
+    });
+
+    describe('the sandboxed document knows which theme it landed in', () => {
+      const openHtml = (html: string): HTMLIFrameElement | null | undefined => {
+        SliccQuickLook.open({
+          path: '/workspace/report.html',
+          content: html,
+          mimeType: 'text/html',
+          rendered: { mount: 'sandbox', html },
+        });
+        const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+        return ql.shadowRoot?.querySelector('iframe');
+      };
+
+      afterEach(() => {
+        delete document.documentElement.dataset.theme;
+      });
+
+      it('states the app theme, not the OS preference', () => {
+        document.documentElement.dataset.theme = 'dark';
+        expect(openHtml('<h1>Report</h1>')?.getAttribute('srcdoc')).toContain('color-scheme:dark');
+
+        document.documentElement.dataset.theme = 'light';
+        expect(openHtml('<h1>Report</h1>')?.getAttribute('srcdoc')).toContain('color-scheme:light');
+      });
+
+      it('gives an unstyled document a matching surface', () => {
+        document.documentElement.dataset.theme = 'dark';
+        const srcdoc = openHtml('<h1>Report</h1>')?.getAttribute('srcdoc') ?? '';
+        expect(srcdoc).toContain('background:Canvas');
+        expect(srcdoc).toContain('color:CanvasText');
+      });
+
+      it('keeps a doctype first, so the file never lands in quirks mode', () => {
+        const srcdoc =
+          openHtml('<!doctype html>\n<html><body><p>Hi</p></body></html>')?.getAttribute(
+            'srcdoc'
+          ) ?? '';
+        expect(srcdoc.startsWith('<!doctype html>')).toBe(true);
+
+        expect(srcdoc.indexOf('color-scheme')).toBeLessThan(srcdoc.indexOf('<html'));
+      });
+
+      it("lets the file's own styles outrank the base", () => {
+        const source = '<style>html{background:#fff;color:#111;}</style><h1>Report</h1>';
+        const srcdoc = openHtml(source)?.getAttribute('srcdoc') ?? '';
+
+        expect(srcdoc.indexOf('color-scheme')).toBeLessThan(srcdoc.indexOf('background:#fff'));
+      });
+    });
+
+    it('shows no toggle for a file with only one form', () => {
+      SliccQuickLook.open({ path: '/a/b.ts', content: 'x', mimeType: 'text/typescript' });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.toggle')).toBeNull();
+    });
+  });
+
+  describe('rich rendering', () => {
+    const waitForRich = async (ql: SliccQuickLook, timeoutMs = 15_000): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (ql.shadowRoot?.querySelector('diffs-container')) return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return false;
+    };
+
+    const richText = (ql: SliccQuickLook): string =>
+      ql.shadowRoot?.querySelector('diffs-container')?.shadowRoot?.textContent ?? '';
+
+    const waitForRichText = async (ql: SliccQuickLook, needle: string): Promise<string> => {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const text = richText(ql);
+        if (text.includes(needle)) return text;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return richText(ql);
+    };
+
+    it('upgrades a text preview to the syntax-highlighted view', async () => {
+      SliccQuickLook.open({
+        path: '/a/main.ts',
+        content: 'const greeting: string = "hello";\n',
+        mimeType: 'text/typescript',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+
+      expect(ql.shadowRoot?.querySelector('pre')).not.toBeNull();
+
+      expect(await waitForRich(ql)).toBe(true);
+      expect(await waitForRichText(ql, 'greeting')).toContain('greeting');
+    });
+
+    it('renders a real diff when a base version is supplied', async () => {
+      SliccQuickLook.open({
+        path: '/repo/src/main.ts',
+        content: 'const a = 2;\n',
+        mimeType: 'text/typescript',
+        baseContent: 'const a = 1;\n',
+        gitStatus: 'modified',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(await waitForRich(ql)).toBe(true);
+    });
+
+    it('honours a line number in diff mode, not just whole-file mode', async () => {
+      SliccQuickLook.open({
+        path: '/repo/src/main.ts',
+        content: 'const a = 1;\nconst b = 2;\nconst c = 3;\n',
+        mimeType: 'text/typescript',
+        baseContent: 'const a = 1;\nconst b = 0;\nconst c = 3;\n',
+        gitStatus: 'modified',
+        line: 2,
+      });
+      const withLine = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(await waitForRich(withLine)).toBe(true);
+      const selectedHtml =
+        withLine.shadowRoot?.querySelector('diffs-container')?.shadowRoot?.innerHTML ?? '';
+
+      SliccQuickLook.open({
+        path: '/repo/src/main.ts',
+        content: 'const a = 1;\nconst b = 2;\nconst c = 3;\n',
+        mimeType: 'text/typescript',
+        baseContent: 'const a = 1;\nconst b = 0;\nconst c = 3;\n',
+        gitStatus: 'modified',
+      });
+      const withoutLine = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(await waitForRich(withoutLine)).toBe(true);
+      const plainHtml =
+        withoutLine.shadowRoot?.querySelector('diffs-container')?.shadowRoot?.innerHTML ?? '';
+
+      expect(selectedHtml).not.toBe('');
+      expect(selectedHtml).not.toBe(plainHtml);
+    });
+
+    it('does not upgrade a binary preview', async () => {
+      SliccQuickLook.open({
+        path: '/a/photo.png',
+        content: new ArrayBuffer(8),
+        mimeType: 'image/png',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(ql.shadowRoot?.querySelector('diffs-container')).toBeNull();
+      expect(ql.shadowRoot?.querySelector('img')).not.toBeNull();
+    });
+
+    it('does not paint a stale upgrade over a newer file', async () => {
+      SliccQuickLook.open({
+        path: '/a/first.ts',
+        content: 'const a = 1;\n',
+        mimeType: 'text/typescript',
+      });
+      SliccQuickLook.open({
+        path: '/a/second.ts',
+        content: 'const b = 2;\n',
+        mimeType: 'text/typescript',
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      await waitForRich(ql);
+      expect(ql.shadowRoot?.querySelector('.header')?.textContent).toContain('second.ts');
+      expect(ql.shadowRoot?.textContent).not.toContain('const a = 1');
+    });
+  });
+});

@@ -1,0 +1,368 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/base/sudoers.js';
+import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
+import type { MountBackend } from '../../src/fs/mount/backend.js';
+import {
+  createSudoFs,
+  FS_DENIED_MESSAGE,
+  fsSudoMessage,
+  GRANTED_FILE,
+} from '../../src/fs/sudo-fs.js';
+import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
+import type { SudoDecision, SudoRequest } from '../../src/sudo/types.js';
+
+function makeBroker(decision: SudoDecision | ((req: SudoRequest) => SudoDecision)) {
+  const calls: SudoRequest[] = [];
+  const broker = {
+    async requestApproval(req: SudoRequest): Promise<SudoDecision> {
+      calls.push(req);
+      return typeof decision === 'function' ? decision(req) : decision;
+    },
+  };
+  return { calls, broker };
+}
+
+describe('SudoFS', () => {
+  let vfs: VirtualFS;
+  let policy: SudoersPolicy;
+  const getPolicy = () => policy;
+
+  beforeEach(async () => {
+    indexedDB.deleteDatabase('test-sudo-fs');
+    vfs = await VirtualFS.create({ dbName: 'test-sudo-fs', wipe: true });
+    policy = mergePolicies(parseSudoers('Read /shared/secrets/**\nWrite /workspace/.git/**'));
+    await vfs.mkdir('/workspace/.git', { recursive: true });
+    await vfs.mkdir('/shared/secrets', { recursive: true });
+    await vfs.writeFile('/workspace/note.txt', 'hi');
+    await vfs.writeFile('/workspace/.git/config', 'cfg');
+    await vfs.writeFile('/shared/secrets/api.key', 'sekret');
+  });
+  afterEach(async () => {
+    await vfs.dispose?.();
+  });
+
+  it('gates protected reads and passes through non-protected reads', async () => {
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    expect(await sfs.readTextFile('/shared/secrets/api.key')).toBe('sekret');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    expect(await sfs.readTextFile('/workspace/note.txt')).toBe('hi');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('gates a ranged read like a whole-file read', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.readFileRange('/shared/secrets/api.key', 0, 3)).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    await expect(sfs.readFileRange('/workspace/note.txt', 0, 2)).resolves.toEqual(
+      new TextEncoder().encode('hi')
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it('gates getNativeFile like a whole-file read', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.getNativeFile('/shared/secrets/api.key')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    await expect(sfs.getNativeFile('/workspace/note.txt')).resolves.toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('throws EACCES when a gated write is denied', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.writeFile('/workspace/.git/config', 'evil')).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/.git/config' });
+
+    await sfs.writeFile('/workspace/note.txt', 'changed');
+    expect(await vfs.readTextFile('/workspace/note.txt')).toBe('changed');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports an unanswered prompt as a timeout, not a denial', async () => {
+    const { broker } = makeBroker({ decision: 'deny', reason: 'user-timeout' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    const timeoutMessage = fsSudoMessage({ decision: 'deny', reason: 'user-timeout' });
+
+    await expect(sfs.writeFile('/workspace/.git/config', 'evil')).rejects.toMatchObject({
+      code: 'EACCES',
+      message: expect.stringContaining(timeoutMessage),
+    });
+    expect(timeoutMessage).toContain('timed out');
+    expect(timeoutMessage).toContain('not a denial');
+    expect(timeoutMessage).not.toBe(FS_DENIED_MESSAGE);
+  });
+
+  it('always-protects writes to sudoers files regardless of policy', async () => {
+    policy = parseSudoers('');
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.writeFile('/etc/sudoers', 'x')).rejects.toBeInstanceOf(FsError);
+    await expect(sfs.mkdir('/etc/sudoers.d/extra')).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls).toHaveLength(2);
+
+    await vfs.writeFile('/etc/sudoers', 'Cmnd rm -rf *');
+    expect(await sfs.readTextFile('/etc/sudoers')).toContain('Cmnd');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('never prompts for no-op device writes even under require-approval default', async () => {
+    policy = parseSudoers('');
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+
+    const rfs = new RestrictedFS(vfs, ['/scoops/test', '/shared'], [], 'sudo-delegated');
+    const sfs = createSudoFs(rfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+    for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
+      await expect(sfs.writeFile(devicePath, 'discard me')).resolves.toBeUndefined();
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('DOES gate a STRUCTURAL write (mkdir) to a device path under require-approval', async () => {
+    policy = parseSudoers('');
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+
+    const rfs = new RestrictedFS(vfs, ['/scoops/test', '/shared'], [], 'sudo-delegated');
+    const sfs = createSudoFs(rfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+    for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
+      await expect(sfs.mkdir(devicePath, { recursive: true })).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    }
+    expect(calls).toHaveLength(NO_OP_WRITE_DEVICE_PATHS.length);
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: NO_OP_WRITE_DEVICE_PATHS[0] });
+  });
+
+  it('persists a NOPASSWD grant on "always" and stops re-prompting', async () => {
+    const { calls, broker } = makeBroker({ decision: 'always', pattern: '/workspace/.git/**' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await sfs.writeFile('/workspace/.git/config', 'one');
+    expect(calls).toHaveLength(1);
+
+    const granted = await vfs.readTextFile(GRANTED_FILE);
+    expect(granted).toContain('NOPASSWD Write /workspace/.git/**');
+
+    await sfs.writeFile('/workspace/.git/HEAD', 'ref');
+    await sfs.writeFile('/workspace/.git/config', 'two');
+    expect(calls).toHaveLength(1);
+    expect(await vfs.readTextFile('/workspace/.git/config')).toBe('two');
+  });
+
+  it('gates the source path as a read in rename (before writes) and moves on allow', async () => {
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await sfs.rename('/shared/secrets/api.key', '/workspace/moved.key');
+
+    expect(calls.some((c) => c.kind === 'read' && c.detail === '/shared/secrets/api.key')).toBe(
+      true
+    );
+    expect(await vfs.exists('/workspace/moved.key')).toBe(true);
+    expect(await vfs.exists('/shared/secrets/api.key')).toBe(false);
+  });
+
+  it('blocks the rename when the source read approval is denied', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(
+      sfs.rename('/shared/secrets/api.key', '/workspace/moved.key')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+
+    expect(await vfs.exists('/shared/secrets/api.key')).toBe(true);
+    expect(await vfs.exists('/workspace/moved.key')).toBe(false);
+  });
+
+  it('sanitizes a newline-bearing pattern at the default persist sink', async () => {
+    const { broker } = makeBroker({
+      decision: 'always',
+      pattern: '/workspace/.git/**\nNOPASSWD Write /etc/sudoers',
+    });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await sfs.writeFile('/workspace/.git/config', 'one');
+
+    const granted = await vfs.readTextFile(GRANTED_FILE);
+
+    expect(granted).toContain('NOPASSWD Write /workspace/.git/**');
+    expect(granted).not.toContain('/etc/sudoers');
+  });
+
+  it('forces async fallback for gated sync fast-paths', () => {
+    const { broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    expect(sfs.statSync('/shared/secrets/api.key')).toBeNull();
+    expect(sfs.readDirSync('/shared/secrets')).toBeNull();
+
+    expect(sfs.statSync('/workspace/note.txt')?.type).toBe('file');
+    expect(sfs.readDirSync('/workspace')).not.toBeNull();
+  });
+
+  it('forwards non-gated methods transparently', async () => {
+    const { broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    expect(sfs.canWrite('/workspace/anything')).toBe(true);
+    expect(await sfs.exists('/workspace/note.txt')).toBe(true);
+  });
+
+  it('gates symlink on the linkPath (second arg), not the target', async () => {
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await sfs.symlink('/workspace/note.txt', '/workspace/.git/hooks-link');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/.git/hooks-link' });
+
+    expect(await vfs.lstat('/workspace/.git/hooks-link')).toMatchObject({ type: 'symlink' });
+  });
+
+  it('blocks symlink when the linkPath approval is denied', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(
+      sfs.symlink('/workspace/note.txt', '/workspace/.git/hooks-link')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/.git/hooks-link' });
+
+    expect(await vfs.exists('/workspace/.git/hooks-link')).toBe(false);
+  });
+
+  it('always-protects symlinks targeting sudoers files regardless of policy', async () => {
+    policy = parseSudoers('');
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.symlink('/workspace/note.txt', '/etc/sudoers.d/inject')).rejects.toMatchObject(
+      { code: 'EACCES' }
+    );
+
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: '/etc/sudoers.d/inject' });
+  });
+
+  describe('mount/unmount/refreshMount gating', () => {
+    function fakeMountBackend(): MountBackend {
+      return {
+        kind: 'da',
+        source: 'da://test/repo',
+        mountId: 'test-mount-id',
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ kind: 'directory', size: 0, mtime: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        remove: async () => {},
+        refresh: async () => ({ added: [], removed: [], changed: [], unchanged: 0, errors: [] }),
+        describe: () => ({ displayName: 'test/repo' }),
+        close: async () => {},
+      };
+    }
+
+    it('gates mount as a write and blocks on deny', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.mount('/workspace/external', fakeMountBackend())).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+
+    it('allows mount when broker approves', async () => {
+      const { calls, broker } = makeBroker({ decision: 'allow' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await sfs.mount('/workspace/external', fakeMountBackend());
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+      expect(sfs.listMounts()).toContain('/workspace/external');
+    });
+
+    it('gates unmount as a write', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.unmount('/workspace/external')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+
+    it('gates refreshMount as a write', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.refreshMount('/workspace/external')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+  });
+
+  describe('defaultDisposition: "require-approval"', () => {
+    it('escalates writes to unmatched paths and proceeds on allow', async () => {
+      policy = parseSudoers('');
+      const { calls, broker } = makeBroker({ decision: 'allow' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await sfs.writeFile('/workspace/escalated.txt', 'ok');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/escalated.txt' });
+      expect(await vfs.readTextFile('/workspace/escalated.txt')).toBe('ok');
+    });
+
+    it('does NOT escalate unmatched reads (filtered downstream by RestrictedFS)', async () => {
+      policy = parseSudoers('');
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      expect(await sfs.readTextFile('/workspace/note.txt')).toBe('hi');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('still throws EACCES on a denied escalated write', async () => {
+      policy = parseSudoers('');
+      const { broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.writeFile('/workspace/escalated.txt', 'no')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(await vfs.exists('/workspace/escalated.txt')).toBe(false);
+    });
+
+    it('NOPASSWD grant skips the escalation entirely', async () => {
+      policy = parseSudoers('NOPASSWD Write /workspace/sandbox/**');
+      await vfs.mkdir('/workspace/sandbox', { recursive: true });
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await sfs.writeFile('/workspace/sandbox/ok.txt', 'allowed');
+      expect(calls).toHaveLength(0);
+      expect(await vfs.readTextFile('/workspace/sandbox/ok.txt')).toBe('allowed');
+    });
+  });
+});

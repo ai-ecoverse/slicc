@@ -1,0 +1,131 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+import { handlePreviewRequest, type PreviewChannel } from '../../src/ui/preview-sw-handler.js';
+import {
+  installPreviewVfsResponder,
+  type PreviewVfsChannelLike,
+} from '../../src/ui/preview-vfs-responder.js';
+
+type Listener = (ev: MessageEvent) => void;
+
+class BroadcastBus {
+  private readonly channels = new Set<BusChannel>();
+  register(ch: BusChannel): void {
+    this.channels.add(ch);
+  }
+  publish(from: BusChannel, data: unknown): void {
+    for (const ch of this.channels) {
+      if (ch !== from) ch.deliver(data);
+    }
+  }
+}
+
+class BusChannel implements PreviewChannel, PreviewVfsChannelLike {
+  private readonly listeners = new Set<Listener>();
+  constructor(private readonly bus: BroadcastBus) {
+    bus.register(this);
+  }
+  postMessage(data: unknown): void {
+    this.bus.publish(this, data);
+  }
+  addEventListener(_t: 'message', l: Listener): void {
+    this.listeners.add(l);
+  }
+  removeEventListener(_t: 'message', l: Listener): void {
+    this.listeners.delete(l);
+  }
+  close(): void {
+    this.listeners.clear();
+  }
+  deliver(data: unknown): void {
+    for (const l of this.listeners) l(new MessageEvent('message', { data }));
+  }
+}
+
+describe('serve directory → index.html fallback (real responder + handler + VFS)', () => {
+  let vfs: VirtualFS;
+  let swChannel: BusChannel;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({ backend: 'memory', wipe: true });
+    await vfs.mkdir('/site/products', { recursive: true });
+    await vfs.writeFile('/site/index.html', '<!DOCTYPE html><h1>Home</h1>');
+    await vfs.writeFile('/site/app.js', 'console.log("ok")');
+    await vfs.writeFile('/site/products/index.html', '<h1>Products</h1>');
+
+    const bus = new BroadcastBus();
+    const responderChannel = new BusChannel(bus);
+    swChannel = new BusChannel(bus);
+    installPreviewVfsResponder({
+      channel: responderChannel,
+      getReader: () => vfs as unknown as LocalVfsClient,
+    });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
+  });
+
+  it('serves a real file directly', async () => {
+    const res = await handlePreviewRequest(swChannel, '/site/app.js', 1000);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/javascript');
+    expect(await res.text()).toContain('console.log');
+  });
+
+  it('serves index.html for a directory path with no trailing slash', async () => {
+    const res = await handlePreviewRequest(swChannel, '/site', 1000);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('text/html');
+    expect(await res.text()).toContain('<h1>Home</h1>');
+  });
+
+  it('serves index.html for a directory path with a trailing slash', async () => {
+    const res = await handlePreviewRequest(swChannel, '/site/', 1000);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('text/html');
+    expect(await res.text()).toContain('<h1>Home</h1>');
+  });
+
+  it('serves index.html for a nested directory (project-serve link target)', async () => {
+    const res = await handlePreviewRequest(swChannel, '/site/products', 1000);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('text/html');
+    expect(await res.text()).toContain('<h1>Products</h1>');
+  });
+
+  it('returns 404 for a directory that has no index.html', async () => {
+    await vfs.mkdir('/empty-dir', { recursive: true });
+    const res = await handlePreviewRequest(swChannel, '/empty-dir', 1000);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for a missing path', async () => {
+    const res = await handlePreviewRequest(swChannel, '/site/missing.html', 1000);
+    expect(res.status).toBe(404);
+  });
+
+  it('a Range request asks the VFS for only the window (#2857)', async () => {
+    const bytes = new Uint8Array(256).map((_, i) => i);
+    await vfs.writeFile('/site/cut.mp4', bytes);
+    const rangeSpy = vi.spyOn(vfs, 'readFileRange');
+    const res = await handlePreviewRequest(swChannel, '/site/cut.mp4', 1000, 'bytes=10-19');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('Content-Range')).toBe('bytes 10-19/256');
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(
+      Array.from(bytes.subarray(10, 20))
+    );
+    expect(rangeSpy).toHaveBeenCalledWith('/site/cut.mp4', 10, 20);
+  });
+
+  it('answers 416 for a range past EOF without calling readFileRange', async () => {
+    const bytes = new Uint8Array(64).map((_, i) => i);
+    await vfs.writeFile('/site/cut.mp4', bytes);
+    const rangeSpy = vi.spyOn(vfs, 'readFileRange');
+    const res = await handlePreviewRequest(swChannel, '/site/cut.mp4', 1000, 'bytes=2000-');
+    expect(res.status).toBe(416);
+    expect(res.headers.get('Content-Range')).toBe('bytes */64');
+    expect(rangeSpy).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,292 @@
+name: Weekend CLAUDE.md Compactor
+
+on:
+  schedule:
+    - cron: '40 22 * * 6'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Measure and report only; no branch, commit, or PR'
+        type: boolean
+        required: false
+        default: false
+      max_chars:
+        description: 'Oversized threshold in characters (default 10000)'
+        required: false
+      target_chars:
+        description: 'Compaction target in characters (default 9500)'
+        required: false
+      max_guides:
+        description: 'How many oversized guides to fan out (default 0 = all, largest first)'
+        required: false
+        default: '0'
+      max_turns:
+        description: 'Override Claude --max-turns per shard (default: 300 plus overflow for that file)'
+        required: false
+
+concurrency:
+  group: claude-md-compactor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      has_oversized: ${{ steps.measure.outputs.has_oversized }}
+      oversized_count: ${{ steps.measure.outputs.oversized_count }}
+      matrix: ${{ steps.measure.outputs.matrix }}
+      worklist: ${{ steps.measure.outputs.worklist }}
+      before_sizes: ${{ steps.measure.outputs.before_sizes }}
+      branch: ${{ steps.measure.outputs.branch }}
+      pr_title: ${{ steps.measure.outputs.pr_title }}
+      existing_pr: ${{ steps.measure.outputs.existing_pr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Align CLAUDE.md with origin/main
+        run: |
+          git fetch --quiet origin main
+          files=$(git ls-files -- '*CLAUDE.md')
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            git checkout origin/main -- $files
+          fi
+
+      - name: Measure tracked CLAUDE.md guides
+        id: measure
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          MAX_GUIDES: ${{ github.event.inputs.max_guides }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
+
+      - name: Report claimed files in an already-open compaction PR
+        if: steps.measure.outputs.existing_pr != ''
+        run: |
+          echo "::notice::Open compaction PR ${{ steps.measure.outputs.existing_pr }} — those CLAUDE.md files are claimed; other oversized guides still fan out."
+
+  compact:
+    needs: measure
+    if: needs.measure.outputs.has_oversized == 'true' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.measure.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Align CLAUDE.md with origin/main
+        run: |
+          git fetch --quiet origin main
+          files=$(git ls-files -- '*CLAUDE.md')
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            git checkout origin/main -- $files
+          fi
+
+      - name: Measure this guide
+        id: shard
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          SKIP_PR_CHECK: '1'
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          MAX_TURNS: ${{ github.event.inputs.max_turns }}
+          GUIDE: ${{ matrix.guide }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
+
+      - name: Configure git identity
+        if: steps.shard.outputs.has_oversized == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compact ${{ matrix.guide }}
+        id: claude
+        if: steps.shard.outputs.has_oversized == 'true'
+
+        continue-on-error: true
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+        with:
+          use_bedrock: 'true'
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(git push:*),Agent,Task,TodoWrite"
+            --max-turns ${{ steps.shard.outputs.max_turns }}
+          prompt: ${{ steps.shard.outputs.prompt }}
+
+      - name: Verify this guide is under the policy limit
+        id: verify
+        if: always() && steps.claude.outcome != 'skipped' && steps.shard.outputs.has_oversized == 'true'
+        continue-on-error: true
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.shard.outputs.worklist }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
+
+      - name: Pack this shard
+        id: pack
+        if: always() && steps.claude.outcome != 'skipped' && steps.shard.outputs.has_oversized == 'true'
+        continue-on-error: true
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.shard.outputs.worklist }}
+          BEFORE_SIZES: ${{ steps.shard.outputs.before_sizes }}
+          SHRUNK_PATHS_FILE: ${{ runner.temp }}/compactor-shrunk-paths.txt
+          ORIG_SHA: ${{ github.sha }}
+          PACK_DIR: ${{ runner.temp }}/pack
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --pack
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && steps.pack.outputs.packed == 'true'
+        with:
+          name: compacted-${{ matrix.safe_name }}
+          path: ${{ runner.temp }}/pack
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish:
+    needs: [measure, compact]
+    if: always() && needs.measure.result == 'success' && needs.measure.outputs.has_oversized == 'true' && needs.compact.result != 'skipped' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: compacted-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Consolidate shards onto origin/main
+        id: recover
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+          PACKS_DIR: ${{ runner.temp }}/shards
+          ASSEMBLE_PATHS_FILE: ${{ runner.temp }}/compactor-publish-paths.txt
+          BRANCH: ${{ needs.measure.outputs.branch }}
+          HUSKY: '0'
+        run: |
+          set -euo pipefail
+          node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --assemble
+
+          git fetch --quiet origin main
+          git checkout -f -B "$BRANCH" --no-track origin/main
+
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            found=""
+            for shard in "$PACKS_DIR"/*; do
+              if [ -f "$shard/files/$p" ]; then
+                found="$shard/files/$p"
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "::error::$p was assembled but is missing from every shard."
+              exit 1
+            fi
+            mkdir -p "$(dirname "$p")"
+            cp -- "$found" "$p"
+            git add -- "$p"
+          done < "$ASSEMBLE_PATHS_FILE"
+
+          xargs npx prettier --write < "$ASSEMBLE_PATHS_FILE"
+          while IFS= read -r p; do
+            git add -- "$p"
+          done < "$ASSEMBLE_PATHS_FILE"
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit after applying compaction onto origin/main."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --no-verify -m "chore(docs): compact CLAUDE.md guides for weekly headroom"
+          git push --no-verify -u origin "$BRANCH"
+
+      - name: Open the compaction PR
+        if: steps.recover.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.measure.outputs.branch }}
+          PR_TITLE: ${{ needs.measure.outputs.pr_title }}
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git fetch --quiet origin main
+          if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+            echo "Nothing was pushed — nothing to open."
+            exit 0
+          fi
+          if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
+            echo "$BRANCH has no commits ahead of origin/main — nothing to open."
+            exit 0
+          fi
+          PR_URL=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            echo "A PR for $BRANCH is already open: $PR_URL"
+          elif [ ! -s "$PR_BODY_FILE" ]; then
+            echo "::warning::$BRANCH was pushed but no PR body exists at $PR_BODY_FILE — leaving the branch for a human."
+            exit 0
+          else
+            PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "$PR_TITLE" \
+              --body-file "$PR_BODY_FILE")
+            echo "Opened $PR_URL"
+          fi
+          echo "🧹 CLAUDE.md compaction PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"

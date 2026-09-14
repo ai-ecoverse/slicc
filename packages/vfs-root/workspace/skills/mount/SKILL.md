@@ -1,0 +1,180 @@
+---
+name: mount
+description: |
+  Use this whenever the user asks to mount anything — local folders, S3
+  buckets, S3-compatible services (Cloudflare R2, MinIO), or Adobe da.live
+  / AEM Document Authoring repos. Read this skill BEFORE deciding which
+  backend to use; do NOT default to a local file picker when the user
+  names a remote service. Covers credential setup with profile-namespaced
+  `secret set` keys (e.g. `s3.aws.access_key_id`) or the extension Options
+  page, the right `mount --source` invocation per intent, and common errors
+  (EACCES on missing credentials, EBUSY on concurrent edits, EFBIG on
+  oversized files).
+allowed-tools: bash, read_file, write_file, edit_file
+---
+
+# Mount
+
+The `mount` shell command bridges remote storage into the VFS. After mounting, `read_file`, `write_file`, `edit_file`, and `bash` (with `cat`, `ls`, etc.) all work against the remote source as if it were a local directory. Four backends:
+
+| Backend | Source URI                    | Auth                                                   |
+| ------- | ----------------------------- | ------------------------------------------------------ |
+| Local   | (no `--source`)               | OS file picker — cone-only, fails in scoops            |
+| S3      | `s3://<bucket>[/<prefix>]`    | Profile-namespaced secrets (`s3.<profile>.*`)          |
+| DA      | `da://<org>/<repo>[/<path>]`  | Adobe IMS bearer (reuses the Adobe LLM provider login) |
+| AEM     | `aem://<org>/<site>[/<path>]` | Adobe IMS bearer (same login as DA)                    |
+
+## Choosing a backend from user intent
+
+When the user asks to "mount X", read the request literally before defaulting to local:
+
+| User says                                          | Use this backend                                        |
+| -------------------------------------------------- | ------------------------------------------------------- |
+| "mount my Documents folder" / "mount /tmp"         | Local — `mount /mnt/documents`                          |
+| "mount this S3 bucket: s3://my-bucket/foo"         | S3 — `mount --source s3://my-bucket/foo /mnt/s3`        |
+| "mount this R2 bucket"                             | S3 with a custom-endpoint profile (R2 is S3-compatible) |
+| "mount the AEM DA repo for org/site"               | DA — `mount --source da://<org>/<site> /mnt/da`         |
+| "mount this Adobe DA project" / "mount da.live"    | DA                                                      |
+| "mount this Helix 6 site" / "mount the Source Bus" | AEM — `mount --source aem://<org>/<site> /mnt/aem`      |
+| "mount this S3-compatible storage" (MinIO, etc.)   | S3 with a custom-endpoint profile                       |
+
+If the URL scheme is `s3://`, `da://`, or `aem://`, the choice is unambiguous — don't ask. If the user gives a hostname or describes a service without a URL, ask one specific clarifying question (e.g. "Is this the AEM Document Authoring service at da.live, or a different system?") rather than offering a menu of generic options.
+
+**Don't default to local when the user mentions a remote service name.**
+
+### DA or AEM? You don't have to know — but read the mount output
+
+A site upgraded to the Helix 6 architecture keeps its `da.live` authoring UI and its `<org>/<site>` name, but its content moves to the Source Bus on `api.aem.live`. `da://` handles this for you: it probes the site config before mounting and re-routes to the Source Bus when that is where the content lives, printing a note on stderr. So `mount --source da://<org>/<site>` is always safe to reach for.
+
+Two things follow:
+
+- **Read the stderr note.** `mount: <org>/<site> is on Helix 6 …` means the mount landed on `aem://` — that is correct, not a warning to work around.
+- **A `da://` mount can now fail with `could not determine the content source`.** That means the site config was unreadable (usually: no Adobe login), not that the site is missing. Fix the login, or pass `--backend da` / `--backend aem` if you already know which store holds the content. Don't retry the same command hoping for a different answer.
+
+## Setting up credentials before the first mount
+
+### S3 / R2 / MinIO
+
+S3 mounts read credentials from profile-namespaced secrets. Set them via the `secret` command before mounting. The agent never sees real secret values; only the server-side sign-and-forward handler does.
+
+```bash
+# AWS S3 (default profile)
+secret set s3.default.access_key_id      AKIA...      --domain "*.amazonaws.com"
+secret set s3.default.secret_access_key  ...          --domain "*.amazonaws.com"
+secret set s3.default.region             us-east-1    --domain "*.amazonaws.com"
+
+# Cloudflare R2 (uses a custom endpoint, requires path-style addressing for some setups)
+secret set s3.r2.access_key_id           ...          --domain "*.r2.cloudflarestorage.com"
+secret set s3.r2.secret_access_key       ...          --domain "*.r2.cloudflarestorage.com"
+secret set s3.r2.endpoint                https://<account>.r2.cloudflarestorage.com  --domain "*.r2.cloudflarestorage.com"
+# Optional — only set this if R2 returns "Bucket name was not in expected format" at first read:
+secret set s3.r2.path_style              true         --domain "*.r2.cloudflarestorage.com"
+```
+
+Per-profile keys: `access_key_id` and `secret_access_key` are required; `region` (default `us-east-1`), `endpoint` (custom host for R2/MinIO), `session_token` (for STS), and `path_style` (`"true"` for path-style addressing) are optional.
+
+In **CLI / Electron mode** secrets live in `~/.slicc/secrets.env` (or macOS Keychain via swift-server). In **extension mode** they live in `chrome.storage.local` and the `secret` command writes to it directly.
+
+### Adobe da.live and AEM Source Bus
+
+DA and AEM mounts both use the Adobe IMS bearer token from the existing Adobe LLM provider — there are no DA-specific secrets to set. **If the user has not logged into the Adobe LLM provider yet, the first mount will fail with `EACCES`. Tell them to log in via Settings → Providers → Adobe (or run `oauth-token adobe`) first.**
+
+## Mounting
+
+```bash
+# Local (interactive picker, cone only)
+mount /mnt/local
+
+# S3 — bucket + optional prefix
+mount --source s3://my-bucket           /mnt/s3
+mount --source s3://my-bucket/site      --profile aws  /mnt/aws
+
+# Cloudflare R2 — same s3:// scheme, different profile (custom endpoint)
+mount --source s3://my-r2-bucket/path   --profile r2   /mnt/r2
+
+# Adobe da.live — org + repo (probes the site config, re-routes if Helix 6)
+mount --source da://my-org/my-repo      /mnt/da
+
+# AEM Helix 6 Source Bus — org + site, no probe needed
+mount --source aem://my-org/my-site     /mnt/aem
+```
+
+Useful flags:
+
+- `--profile <name>` — selects which `s3.<profile>.*` keys to use (S3 only). Defaults to `default`.
+- `--backend <da|aem>` — force the Adobe backend instead of probing the site config. Reach for it only when the probe fails or you know it is wrong.
+- `--no-probe` — skip the mount-time `HEAD bucket` / `GET /list` probe. Use when you want the mount to land even if the source is temporarily unreachable; first read/write will surface any auth errors instead. It does **not** skip the `da://` content-source probe.
+- `--max-body-mb <n>` — override the per-mount body-size limit. Defaults: S3 25 MB, DA/AEM 5 MB. Files exceeding this throw `EFBIG` before bytes flow.
+
+## Lifecycle
+
+```bash
+mount list                         # show all active mounts
+mount --list                       # same as `mount list` (`-l` also works)
+mount unmount /mnt/r2              # tear down (cache stays for next mount within TTL)
+umount /mnt/r2                     # alias for `mount unmount` (same flags, same exit codes)
+mount unmount --clear-cache /mnt/r2 # tear down + drop cached listings/bodies
+mount refresh /mnt/r2              # re-walk the source and diff against cache
+mount refresh --bodies /mnt/r2     # also conditionally re-fetch changed bodies
+```
+
+`umount <path>` is a plain alias for `mount unmount <path>` — same parser, same `--clear-cache`, same exit codes; only the error prefix says `umount:`. Use whichever spelling the user typed. Unmounting a path that is not mounted is a no-op (not an error) under both.
+
+`mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
+
+## Index state and bounds (`mount list`)
+
+Each mount is indexed in the background for fast file discovery and listings; `mount list` shows each mount's index state. The walk is bounded — defaults (raised 10×): max directory depth **400**, max total entries **2,000,000**. Two env vars override them: `SLICC_MOUNT_INDEX_MAX_DEPTH` and `SLICC_MOUNT_INDEX_MAX_ENTRIES` (an invalid value falls back to the default with a warning).
+
+When a bound is hit the index is **skipped** (reads still work via the slow fallback) and `mount list` shows a distinct cause, so advise the right remedy:
+
+- `directory nesting exceeded the depth limit` → raise `SLICC_MOUNT_INDEX_MAX_DEPTH` or unmount.
+- `mounted tree is too large` → raise `SLICC_MOUNT_INDEX_MAX_ENTRIES` or unmount (this is **not** a cycle).
+- `self-referential mount cycle detected` → a real, confirmed cycle; unmount it.
+- `index error: <message>` → any other indexing failure.
+
+Don't call a large or deep mount "cyclic" — only `self-referential mount cycle detected` means a true self-reference.
+
+## Reading and writing once mounted
+
+Treat the mount path like any other VFS directory:
+
+```bash
+ls /mnt/da
+read_file /mnt/da/index.html
+write_file /mnt/da/new-page.html "<html>..."
+edit_file /mnt/da/index.html       # via the standard edit_file tool
+rm /mnt/da/old.html
+```
+
+Reads and writes use TTL + ETag caching (30 s default). Reads are zero-RTT within TTL. Writes use `If-Match` / `If-None-Match: *` for conflict detection.
+
+On an AEM (Source Bus) mount there are no ETags — the API exposes only `last-modified` — so conflict detection uses modification time and only covers files you read first. A blind `write_file` to a path you never read will overwrite whatever is there. Read before you write on `aem://` mounts.
+
+## Common error patterns
+
+| Error                                                                                    | What it means                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mount: probe failed for s3://… — profile 'aws' missing required field 'access_key_id'.` | The user hasn't set credentials yet. Walk them through `secret set s3.<profile>.*`.                                                                                   |
+| `EACCES: s3 access denied`                                                               | Wrong credentials, wrong region, or the bucket policy denies the user.                                                                                                |
+| `EACCES: da access denied` / `EACCES: aem access denied`                                 | IMS token expired or user not authed against the Adobe provider.                                                                                                      |
+| `mount: could not determine the content source for da://…`                               | The site config probe failed — usually no Adobe login. Fix the login, or pass `--backend da` / `--backend aem`. Don't just retry.                                     |
+| `EBUSY: remote modified since last read — re-read and retry`                             | Concurrent writer changed the file. Re-read with `read_file` and retry the edit.                                                                                      |
+| `EFBIG: body exceeds maxBodyBytes`                                                       | File is over the per-mount size limit (S3 25 MB, DA/AEM 5 MB). Use shell tools (`aws s3 cp`) for very large files instead, or pass `--max-body-mb <n>` at mount time. |
+| `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture. Either ask the cone to mount, or use S3/DA which work in scoops.                                                                    |
+
+## When asked to "explore" a mounted DA or S3 source
+
+After mounting, prefer `bash: ls` over `read_file` for navigation — it's instant within the TTL window because the listing is cached. Only `read_file` files you actually intend to read; every read is a network round-trip on the first call.
+
+For DA specifically: the `/list` endpoint doesn't include file sizes, so `ls -l` triggers one HEAD per file the first time, then caches. Subsequent `ls -l` within 30 s is free.
+
+For AEM: listings _do_ carry size and mtime, so `ls -l` costs one listing and no per-file round-trips. The size shown is the stored (compressed) size until the file has been read, so it can be well under what `read_file` returns. Empty folders don't exist on the Source Bus — a directory disappears when its last file is deleted.
+
+## Don't
+
+- Don't suggest the user install a separate AWS CLI / da.live SDK — `mount` is the integration point.
+- Don't try to `cd` into a remote mount before mounting; `bash`'s working directory is independent of mount setup.
+- Don't ask "do you have credentials" if the user has already named a service — try the mount first, surface the actionable error from the probe, and walk them through the specific `secret set` commands.
+- Don't work around a `could not determine the content source` failure by switching to `--no-probe` — that flag doesn't skip the content-source probe, and the failure is telling you the login is missing.
+- Don't fall back to a local mount if the user mentioned a remote service. Default to clarifying which remote backend, not which directory to pick.

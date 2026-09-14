@@ -1,0 +1,13 @@
+or {
+    `$obj.innerHTML = $val` as $node,
+    `$obj.outerHTML = $val` as $node,
+    `$obj.innerHTML += $val` as $node,
+    `$obj.outerHTML += $val` as $node
+} where {
+    $filename <: r".*electron-overlay.*\.ts$",
+    register_diagnostic(
+        span = $node,
+        message = "innerHTML / outerHTML assignment is banned in electron-overlay files (Trusted Types / VS Code CSP). Use createElement + textContent instead.",
+        severity = "error"
+    )
+}

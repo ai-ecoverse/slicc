@@ -1,0 +1,8 @@
+{
+  "storyId": "workbench-tabbar--tool-tabs",
+  "storyTitle": "Workbench/TabBar",
+  "subsystem": "workbench",
+  "importPath": "./src/workbench/slicc-tab-bar.stories.ts",
+  "comment": "we will never show tools in the tab bar",
+  "createdAt": "2026-06-10T14:37:49.355Z"
+}

@@ -1,0 +1,612 @@
+import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
+import { describe, expect, it } from 'vitest';
+import { createInProcessJsRealmFactory } from '../../../src/kernel/realm/realm-inprocess.js';
+import { executeJsCode } from '../../../src/shell/jsh-executor.js';
+
+function makeFs(files: Record<string, string> = {}): IFileSystem {
+  const store = new Map<string, string>(Object.entries(files));
+  const fs: IFileSystem = {
+    async readFile(p: string): Promise<string> {
+      const v = store.get(p);
+      if (v === undefined) throw new Error(`ENOENT: ${p}`);
+      return v;
+    },
+    async readFileBuffer(p: string): Promise<Uint8Array> {
+      return new TextEncoder().encode(await fs.readFile(p));
+    },
+    async writeFile(p: string, c: string | Uint8Array): Promise<void> {
+      store.set(p, typeof c === 'string' ? c : new TextDecoder().decode(c));
+    },
+    async appendFile(p: string, c: string | Uint8Array): Promise<void> {
+      store.set(
+        p,
+        (store.get(p) || '') + (typeof c === 'string' ? c : new TextDecoder().decode(c))
+      );
+    },
+    async exists(p: string): Promise<boolean> {
+      return store.has(p);
+    },
+    async stat(p: string): Promise<FsStat> {
+      if (!store.has(p)) throw new Error(`ENOENT: ${p}`);
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        mode: 0o644,
+        size: (store.get(p) || '').length,
+        mtime: new Date(),
+      };
+    },
+    async mkdir(): Promise<void> {},
+    async readdir(): Promise<string[]> {
+      return [];
+    },
+    async rm(p: string): Promise<void> {
+      store.delete(p);
+    },
+    async cp(): Promise<void> {},
+    async mv(): Promise<void> {},
+    resolvePath(base: string, p: string): string {
+      if (p.startsWith('/')) return p;
+      if (p === '.') return base;
+      return base === '/' ? `/${p}` : `${base}/${p}`;
+    },
+    getAllPaths(): string[] {
+      return [...store.keys()];
+    },
+    async chmod(): Promise<void> {},
+    async symlink(): Promise<void> {},
+    async link(): Promise<void> {},
+    async readlink(): Promise<string> {
+      return '';
+    },
+    async lstat(p: string): Promise<FsStat> {
+      return fs.stat(p);
+    },
+    async realpath(p: string): Promise<string> {
+      return p;
+    },
+    async utimes(): Promise<void> {},
+  };
+  return fs;
+}
+
+function makeCtx(
+  opts: {
+    files?: Record<string, string>;
+    env?: Record<string, string>;
+    exec?: CommandContext['exec'];
+  } = {}
+): CommandContext {
+  const ctx: CommandContext = {
+    fs: makeFs(opts.files ?? {}),
+    cwd: '/workspace',
+    env: new Map<string, string>(Object.entries(opts.env ?? {})),
+    stdin: unsafeBytesFromLatin1(''),
+  };
+  if (opts.exec) ctx.exec = opts.exec;
+  return ctx;
+}
+
+async function runCode(
+  code: string,
+  ctx: CommandContext,
+  argv: string[] = ['node']
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return executeJsCode(code, argv, ctx, undefined, {
+    realmFactory: createInProcessJsRealmFactory(),
+  });
+}
+
+describe('sliccy: virtual-module scheme', () => {
+  it("require('sliccy:exec') returns the exec bridge with .spawn", async () => {
+    const calls: Array<{ cmd: string; argv?: string[] }> = [];
+    const ctx = makeCtx({
+      exec: (async (command, opts: { args?: string[] } = {}) => {
+        if (Array.isArray(opts.args)) calls.push({ cmd: command, argv: opts.args });
+        else calls.push({ cmd: command });
+        return { stdout: `ran:${command}\n`, stderr: '', exitCode: 0 };
+      }) as CommandContext['exec'],
+    });
+    const code = `
+      const exec = require('sliccy:exec');
+      console.log(typeof exec);
+      console.log(typeof exec.spawn);
+      const a = await exec('echo hi');
+      console.log(a.stdout.trim());
+      const b = await exec.spawn(['echo', 'hello']);
+      console.log(b.stdout.trim());
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('function');
+    expect(out.stdout).toContain('ran:echo hi');
+    expect(out.stdout).toContain('ran:echo');
+  });
+
+  it("require('sliccy:time') and require('sliccy:fmt') return working helpers", async () => {
+    const code = `
+      const time = require('sliccy:time');
+      const fmt = require('sliccy:fmt');
+      console.log(time.parseDuration('1h'));
+      console.log(fmt.trunc('hello world', 8));
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('3600000');
+    expect(out.stdout).toContain('hello w…');
+  });
+
+  it("require('sliccy:pool') runs bounded concurrency", async () => {
+    const code = `
+      const pool = require('sliccy:pool');
+      const out = await pool(2, [1, 2, 3, 4], async (x) => x * 10);
+      console.log(JSON.stringify(out));
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('[10,20,30,40]');
+  });
+
+  it("require('sliccy:color') and require('sliccy:cli') expose their surfaces", async () => {
+    const code = `
+      const color = require('sliccy:color');
+      const cli = require('sliccy:cli');
+      console.log(typeof color.red);
+      console.log(typeof cli.die);
+      console.log(typeof cli.out);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['function', 'function', 'function']);
+  });
+
+  it("require('sliccy:skill') returns a frozen object with dir/root/refs/assets/config/token", async () => {
+    const code = `
+      const skill = require('sliccy:skill');
+      console.log(typeof skill);
+      console.log(Object.isFrozen(skill));
+      console.log(typeof skill.config);
+      console.log(typeof skill.token);
+      console.log(typeof skill.dir);
+      console.log(typeof skill.root);
+      console.log(skill.dir);
+      console.log(skill.root);
+      console.log(skill.refs);
+      console.log(skill.assets);
+    `;
+    const out = await runCode(code, makeCtx(), [
+      'node',
+      '/workspace/skills/interview-me/scripts/install.jsh',
+    ]);
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('object');
+    expect(lines[1]).toBe('true');
+    expect(lines[2]).toBe('function');
+    expect(lines[3]).toBe('function');
+    expect(lines[4]).toBe('string');
+    expect(lines[5]).toBe('string');
+    expect(lines[6]).toBe('/workspace/skills/interview-me/scripts');
+    expect(lines[7]).toBe('/workspace/skills/interview-me');
+    expect(lines[8]).toBe('/workspace/skills/interview-me/references');
+    expect(lines[9]).toBe('/workspace/skills/interview-me/assets');
+  });
+
+  it("require('sliccy:http') returns the API-client builder", async () => {
+    const code = `
+      const http = require('sliccy:http');
+      console.log(typeof http.client);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('function');
+  });
+
+  it("require('sliccy:browser'|'usb'|'serial'|'hid') exposes the documented surface", async () => {
+    const code = `
+      console.log(typeof require('sliccy:browser').findTab);
+      console.log(typeof require('sliccy:usb').request);
+      console.log(typeof require('sliccy:serial').request);
+      console.log(typeof require('sliccy:hid').request);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      'function',
+      'function',
+      'function',
+      'function',
+    ]);
+  });
+
+  it("require('sliccy:bogus') throws a scheme-specific error", async () => {
+    const code = `
+      try { require('sliccy:bogus'); console.log('UNEXPECTED'); }
+      catch (e) { console.log(e.message); }
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("unknown sliccy: module 'bogus'");
+    expect(out.stdout).toContain("require('sliccy:bogus')");
+  });
+
+  it("require('sliccy:') (empty name) throws a scheme-specific error", async () => {
+    const code = `
+      try { require('sliccy:'); console.log('UNEXPECTED'); }
+      catch (e) { console.log(e.message); }
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('empty sliccy: module name');
+  });
+
+  it('sliccy: requires never hit the registry / no preload warning', async () => {
+    const code = `
+      const exec = require('sliccy:exec');
+      const time = require('sliccy:time');
+      console.log(typeof exec, typeof time);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('failed to pre-load');
+    expect(out.stderr).not.toContain('sliccy:');
+  });
+});
+
+describe('require("fs") / require("node:fs") still return the VFS bridge', () => {
+  it("require('fs') returns the VFS bridge", async () => {
+    const ctx = makeCtx({ files: { '/workspace/data.txt': 'hello vfs' } });
+    const code = `
+      const fs = require('fs');
+      console.log(typeof fs.readFile);
+      console.log(await fs.readFile('data.txt'));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('function');
+    expect(out.stdout).toContain('hello vfs');
+  });
+
+  it("require('node:fs') strips prefix and returns the VFS bridge", async () => {
+    const ctx = makeCtx({ files: { '/workspace/data.txt': 'hello node' } });
+    const code = `
+      const fs = require('node:fs');
+      console.log(await fs.readFile('data.txt'));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('hello node');
+  });
+
+  it("require('node:http') still throws the browser-unavailable error", async () => {
+    const code = `
+      try { require('node:http'); console.log('UNEXPECTED'); }
+      catch (e) { console.log(e.message); }
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('not available in the browser');
+  });
+});
+
+describe('Buffer is reachable through the realm seam in both floats', () => {
+  it("require('node:buffer').Buffer round-trips Buffer.from/.toString", async () => {
+    const code = `
+      const { Buffer } = require('node:buffer');
+      console.log(typeof Buffer);
+      console.log(typeof Buffer.from);
+      console.log(Buffer.from('hi-node').toString());
+      console.log(Buffer.from('aGVsbG8=', 'base64').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('function');
+    expect(lines[2]).toBe('hi-node');
+    expect(lines[3]).toBe('hello');
+  });
+
+  it("require('buffer').Buffer (bare) also resolves to a working constructor", async () => {
+    const code = `
+      const { Buffer } = require('buffer');
+      console.log(typeof Buffer);
+      console.log(Buffer.from('bare-bare').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('bare-bare');
+  });
+
+  it('bare Buffer is a defined global in the realm and Buffer.alloc round-trips', async () => {
+    const code = `
+      console.log(typeof Buffer);
+      console.log(typeof Buffer.from);
+      console.log(typeof Buffer.alloc);
+      const a = Buffer.alloc(4);
+      a[0] = 104; a[1] = 105; a[2] = 33; a[3] = 0;
+      console.log(a.toString('utf-8', 0, 3));
+      console.log(Buffer.from([0x68, 0x69]).toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('function');
+    expect(lines[1]).toBe('function');
+    expect(lines[2]).toBe('function');
+    expect(lines[3]).toBe('hi!');
+    expect(lines[4]).toBe('hi');
+  });
+
+  it("bare Buffer and require('node:buffer').Buffer refer to the same constructor", async () => {
+    const code = `
+      const { Buffer: B } = require('node:buffer');
+      console.log(B === Buffer);
+      console.log(B.from('x').toString() === Buffer.from('x').toString());
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('true');
+    expect(lines[1]).toBe('true');
+  });
+});
+
+describe('bespoke globals are fully removed from the realm', () => {
+  it.each([
+    'exec',
+    'skill',
+    'http',
+    'browser',
+    'usb',
+    'serial',
+    'hid',
+    'cli',
+    'c',
+    'time',
+    'fmt',
+    'pool',
+    'fs',
+  ])('a bare reference to %s throws ReferenceError and fails loudly', async (name) => {
+    const code = `${name};`;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(1);
+    expect(out.stderr).toContain('not defined');
+    expect(out.stderr.toLowerCase()).toContain(name);
+  });
+
+  it('typeof bareName === "undefined" still works without ReferenceError', async () => {
+    const code = `
+      console.log(typeof exec, typeof skill, typeof http, typeof fs, typeof cli, typeof c);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('undefined undefined undefined undefined undefined undefined');
+  });
+
+  it('the bespoke globals are not published on globalThis either', async () => {
+    const code = `
+      const names = ['exec','skill','http','browser','usb','serial','hid','cli','c','color','time','fmt','pool'];
+      const seen = names.filter((n) => typeof globalThis[n] !== 'undefined');
+      console.log(JSON.stringify(seen));
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('[]');
+  });
+});
+
+describe('Node-standard globals + CJS scope vars remain bare', () => {
+  it('process / console / fetch / Buffer / globalThis / setTimeout / clearTimeout work bare', async () => {
+    const code = `
+      console.log(typeof process);
+      console.log(typeof console);
+      console.log(typeof fetch);
+      console.log(typeof Buffer);
+      console.log(typeof globalThis);
+      console.log(typeof setTimeout);
+      console.log(typeof clearTimeout);
+    `;
+    const out = await runCode(code, makeCtx());
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines.every((l) => l === 'function' || l === 'object')).toBe(true);
+  });
+
+  it('CJS scope vars (require / module / exports / __dirname / __filename) are bare', async () => {
+    const code = `
+      console.log(typeof require);
+      console.log(typeof module);
+      console.log(typeof exports);
+      console.log(typeof __dirname);
+      console.log(typeof __filename);
+    `;
+    const out = await runCode(code, makeCtx(), ['node', '/workspace/scripts/x.jsh']);
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines).toEqual(['function', 'object', 'object', 'string', 'string']);
+  });
+
+  it('__dirname is the parent directory of __filename', async () => {
+    const code = `console.log(__dirname, '||', __filename);`;
+    const out = await runCode(code, makeCtx(), ['node', '/workspace/skills/foo/bar.jsh']);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('/workspace/skills/foo || /workspace/skills/foo/bar.jsh');
+  });
+});
+
+describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
+  type ExecCall = { cmd: string; args: string[] };
+
+  function makeAgentCtx(
+    result: { stdout?: string; stderr?: string; exitCode?: number },
+    calls: ExecCall[]
+  ): CommandContext {
+    return makeCtx({
+      exec: (async (command, opts: { args?: string[] } = {}) => {
+        calls.push({ cmd: command, args: Array.isArray(opts.args) ? opts.args : [] });
+        return {
+          stdout: result.stdout ?? '',
+          stderr: result.stderr ?? '',
+          exitCode: result.exitCode ?? 0,
+        };
+      }) as CommandContext['exec'],
+    });
+  }
+  const argvOf = (c: ExecCall): string[] => [c.cmd, ...c.args];
+
+  it('is a callable with a .spawn sibling', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      console.log(typeof agent);
+      console.log(typeof agent.spawn);
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['function', 'function']);
+  });
+
+  it("plain agent('hi') builds default argv and resolves to trimmed stdout", async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '  the answer  \n\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      const r = await agent('hi');
+      console.log(JSON.stringify(r));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+
+    expect(argvOf(calls[0])).toEqual(['agent', '/workspace', '*', 'hi']);
+
+    expect(out.stdout.trim()).toBe(JSON.stringify('  the answer  '));
+  });
+
+  it('forwards --read-only only when the caller asked for it (#2271)', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('a', { readOnly: ['/data/', '/etc/'] });
+      await agent('b', { readOnly: '/data/' });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--read-only',
+      '/data/,/etc/',
+      '/workspace',
+      '*',
+      'a',
+    ]);
+    expect(argvOf(calls[1])).toEqual(['agent', '--read-only', '/data/', '/workspace', '*', 'b']);
+  });
+
+  it('--model / --thinking / readOnly[] / custom cwd + allowedCommands map to argv', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'done\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('do it', {
+        model: 'claude-opus-4-6',
+        thinking: 'high',
+        readOnly: ['/a', '/b'],
+        cwd: '/work',
+        allowedCommands: 'git,ls',
+      });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--model',
+      'claude-opus-4-6',
+      '--thinking',
+      'high',
+      '--read-only',
+      '/a,/b',
+      '/work',
+      'git,ls',
+      'do it',
+    ]);
+  });
+
+  it('readOnly as a CSV string passes through verbatim', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('x', { readOnly: '/a,/b,/c' });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual(['agent', '--read-only', '/a,/b,/c', '/workspace', '*', 'x']);
+  });
+
+  it('schema → --schema-b64 present (decodes to schema JSON) and result is JSON-parsed', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '{"ok":true,"n":42}\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      const r = await agent('give json', { schema: { type: 'object' } });
+      console.log(typeof r);
+      console.log(JSON.stringify(r));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    const argv = argvOf(calls[0]);
+    const flagIdx = argv.indexOf('--schema-b64');
+    expect(flagIdx).toBeGreaterThanOrEqual(0);
+    const b64 = argv[flagIdx + 1];
+    expect(typeof b64).toBe('string');
+    expect(Buffer.from(b64, 'base64').toString('utf-8')).toBe(JSON.stringify({ type: 'object' }));
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('object');
+    expect(lines[1]).toBe(JSON.stringify({ ok: true, n: 42 }));
+  });
+
+  it('non-zero exit → callable rejects while .spawn resolves with exitCode!==0', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '', stderr: 'kaboom\n', exitCode: 2 }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      let rejected = false;
+      try { await agent('boom'); }
+      catch (e) { rejected = true; console.log('ERR:' + e.message); }
+      console.log('rejected=' + rejected);
+      const s = await agent.spawn('boom');
+      console.log('spawn.exitCode=' + s.exitCode);
+      console.log('spawn.stderr=' + s.stderr);
+      console.log('spawn.finalText=' + JSON.stringify(s.finalText));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('ERR:agent: exited with code 2: kaboom');
+    expect(out.stdout).toContain('rejected=true');
+    expect(out.stdout).toContain('spawn.exitCode=2');
+    expect(out.stdout).toContain('spawn.stderr=kaboom');
+    expect(out.stdout).toContain('spawn.finalText=""');
+  });
+
+  it('invalid JSON with schema → callable rejects with a helpful message', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'not json at all\n', exitCode: 0 }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      try { await agent('give', { schema: { type: 'object' } }); console.log('UNEXPECTED'); }
+      catch (e) { console.log('ERR:' + e.message); }
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).not.toContain('UNEXPECTED');
+    expect(out.stdout).toContain('agent: schema response was not valid JSON');
+    expect(out.stdout).toContain('not json at all');
+  });
+});

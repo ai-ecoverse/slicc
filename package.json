@@ -1,0 +1,161 @@
+{
+  "name": "sliccy",
+  "version": "6.151.0",
+  "description": "Browser-based coding agent with thin CLI server",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/node-server/index.js",
+  "types": "./dist/node-server/index.d.ts",
+  "bin": {
+    "slicc": "dist/node-server/index.js"
+  },
+  "files": [
+    "dist/node-server",
+    "dist/ui"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-ecoverse/slicc"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "workspaces": [
+    "packages/shared-ts",
+    "packages/cloud-core",
+    "packages/spoon",
+    "packages/webcomponents",
+    "packages/webapp",
+    "packages/cherry",
+    "packages/node-server",
+    "packages/chrome-extension",
+    "packages/cloudflare-worker",
+    "packages/swift-launcher",
+    "packages/swift-traysession",
+    "packages/swift-traykit",
+    "packages/swift-widgetkit",
+    "packages/swift-server",
+    "packages/swift-optel"
+  ],
+  "scripts": {
+    "dev": "tsx packages/node-server/src/index.ts",
+    "dev:electron": "tsx packages/node-server/src/index.ts --electron",
+    "dev:standalone:fresh": "bash packages/dev-tools/tools/dev-standalone-fresh.sh",
+    "dev:swift:fresh": "PORT=5720 CDP_PORT=9224 bash packages/dev-tools/tools/dev-swift-fresh.sh",
+    "dev:extension:fresh": "CDP_PORT=9333 bash packages/dev-tools/tools/dev-extension-fresh.sh",
+    "dev:electron:node:fresh": "PORT=5730 CDP_PORT=9225 bash packages/dev-tools/tools/dev-electron-node-fresh.sh",
+    "dev:electron:swift:fresh": "PORT=5740 CDP_PORT=9226 bash packages/dev-tools/tools/dev-electron-swift-fresh.sh",
+    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @ai-ecoverse/spoon && npm run build -w @slicc/webcomponents && npm run build -w @slicc/webapp && npm run build -w @ai-ecoverse/cherry && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-optel && npm run build -w @slicc/swift-traysession && npm run build -w @slicc/swift-traykit && npm run build -w @slicc/swift-widgetkit && npm run build -w @slicc/swift-launcher",
+    "start": "node dist/node-server/index.js",
+    "start:electron": "node dist/node-server/index.js --electron",
+    "preflight": "node packages/dev-tools/tools/preflight-deps.mjs",
+    "pretypecheck": "npm run preflight",
+    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p packages/node-server/tsconfig.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json && tsc --noEmit -p packages/cloud-core/tsconfig.json && tsc --noEmit -p packages/cherry/tsconfig.json && tsc --noEmit -p packages/spoon/tsconfig.json && tsc --noEmit -p packages/webcomponents/tsconfig.json",
+    "pretest": "npm run preflight",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:cloudflare-worker": "node packages/dev-tools/tools/coverage-gate.mjs cloudflare-worker",
+    "test:coverage:node-server": "node packages/dev-tools/tools/coverage-gate.mjs node-server",
+    "test:coverage:chrome-extension": "node packages/dev-tools/tools/coverage-gate.mjs chrome-extension",
+    "test:coverage:webapp": "node packages/dev-tools/tools/coverage-gate.mjs webapp",
+    "test:coverage:cherry": "node packages/dev-tools/tools/coverage-gate.mjs cherry",
+    "test:coverage:cloud-core": "node packages/dev-tools/tools/coverage-gate.mjs cloud-core",
+    "test:coverage:shared": "node packages/dev-tools/tools/coverage-gate.mjs shared",
+    "test:coverage:webcomponents": "npm run test:coverage -w @slicc/webcomponents",
+    "test:coverage:spoon": "npm run test:coverage -w @ai-ecoverse/spoon",
+    "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
+    "bundle-size": "npm run size -w @slicc/webapp && npm run size -w @slicc/chrome-extension",
+    "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
+    "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
+    "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
+    "lint": "biome check --write . && prettier --write . && npm run lint:docs && npm run lint:no-comments && npm run lint:skills && npm run lint:skill-router && npm run lint:no-innerhtml && npm run lint:no-ui-in-providers && npm run lint:layer-back-edges && npm run lint:no-float-probes && npm run lint:record-string-unknown && npm run lint:lockfile && npm run lint:patches && npm run lint:swift-pins && npm run lint:no-raw-chrome-runtime-id && npm run lint:hosted-origin && npm run lint:swift-deps && npm run lint:ios-ui-tests && npm run lint:duplication",
+    "lint:ci": "biome check . && prettier --check . && npm run lint:docs && npm run lint:no-comments && npm run lint:skills -- --strict && npm run lint:skill-router && npm run lint:no-innerhtml && npm run lint:no-ui-in-providers && npm run lint:layer-back-edges && npm run lint:no-float-probes && npm run lint:record-string-unknown && npm run lint:lockfile && npm run lint:patches && npm run lint:swift-pins && npm run lint:no-raw-chrome-runtime-id && npm run lint:hosted-origin && npm run lint:swift-deps && npm run lint:ios-ui-tests && npm run lint:duplication",
+    "lint:docs": "node packages/dev-tools/tools/check-doc-sizes.mjs && node packages/dev-tools/tools/check-agents-symlinks.mjs && node packages/dev-tools/tools/check-doc-refs.mjs",
+    "lint:no-comments": "node packages/dev-tools/no-comment/check.mjs",
+    "lint:skills": "node packages/dev-tools/tools/lint-skills.mjs",
+    "lint:skill-router": "bash packages/dev-tools/tools/check-skill-router-sync.sh",
+    "lint:no-innerhtml": "node packages/dev-tools/tools/check-no-innerhtml.mjs",
+    "lint:no-ui-in-providers": "node packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs",
+    "lint:layer-back-edges": "node packages/dev-tools/tools/check-layer-back-edges.mjs",
+    "lint:no-float-probes": "node packages/dev-tools/tools/check-no-float-probes.mjs",
+    "lint:record-string-unknown": "node packages/dev-tools/tools/check-record-string-unknown.mjs",
+    "lint:lockfile": "node packages/dev-tools/tools/check-lockfile-sync.mjs",
+    "lint:patches": "node packages/dev-tools/patch-reconcile/check-patches.mjs",
+    "lint:swift-pins": "node packages/dev-tools/swift-pin-reconcile/check-swift-pins.mjs",
+    "lint:swift-deps": "node packages/dev-tools/tools/check-swift-unused-deps.mjs",
+    "lint:ios-ui-tests": "node packages/dev-tools/tools/ios-ui-test-exclusions.mjs",
+    "lint:duplication": "jscpd --config jscpd.json --no-tips",
+    "lint:duplication:report": "jscpd --config jscpd.json --no-tips --threshold 100 --reporters console,html,json --output dist/jscpd",
+    "lint:swift": "npm run lint -w @slicc/swift-server && npm run lint -w @slicc/swift-optel && npm run lint -w @slicc/swift-traysession && npm run lint -w @slicc/swift-traykit && npm run lint -w @slicc/swift-widgetkit && npm run lint -w @slicc/swift-launcher && cd packages/ios-app && swiftlint lint",
+    "lint:swift:format": "npm run lint:format -w @slicc/swift-server && npm run lint:format -w @slicc/swift-optel && npm run lint:format -w @slicc/swift-traysession && npm run lint:format -w @slicc/swift-traykit && npm run lint:format -w @slicc/swift-widgetkit && npm run lint:format -w @slicc/swift-launcher && cd packages/ios-app && swift format lint --strict --parallel --recursive SliccFollower SliccTrayKit SliccFileProvider SliccShareExtension SliccWidgets Package.swift",
+    "format:swift": "npm run format -w @slicc/swift-server && npm run format -w @slicc/swift-optel && npm run format -w @slicc/swift-traysession && npm run format -w @slicc/swift-traykit && npm run format -w @slicc/swift-widgetkit && npm run format -w @slicc/swift-launcher && cd packages/ios-app && swift format --in-place --parallel --recursive SliccFollower SliccWidgets",
+    "deadcode": "knip --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates",
+    "deadcode:full": "knip",
+    "deadcode:files": "knip --include files",
+    "deadcode:production": "knip --production --strict",
+    "deadcode:production-files": "knip --production --include files",
+    "deadcode:swift": "npm run deadcode -w @slicc/swift-server && npm run deadcode -w @slicc/swift-optel && npm run deadcode -w @slicc/swift-traysession && npm run deadcode -w @slicc/swift-traykit && npm run deadcode -w @slicc/swift-launcher",
+    "package:release": "node dist/node-server/release-package.js",
+    "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
+    "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
+    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/spoon ]; then npm run build -w @ai-ecoverse/spoon; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi && if [ -d packages/cherry ]; then npm run build -w @ai-ecoverse/cherry; fi",
+    "prepare": "husky",
+    "lint:no-raw-chrome-runtime-id": "node packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs",
+    "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs",
+    "lint:autofix-drift": "bash packages/dev-tools/tools/check-autofix-drift.sh",
+    "verify": "bash packages/dev-tools/tools/pre-push-lint-gate.sh"
+  },
+  "dependencies": {
+    "e2b": "2.46.1",
+    "express": "5.2.1",
+    "pyodide": "314.0.6",
+    "werift": "0.24.4",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@playwright/test": "1.62.1",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/git": "11.0.1",
+    "@size-limit/file": "13.0.3",
+    "@tessl/cli": "0.105.0",
+    "@types/node": "24.13.3",
+    "@vitest/browser": "4.1.11",
+    "@vitest/browser-playwright": "4.1.11",
+    "@vitest/coverage-v8": "4.1.11",
+    "esbuild": "0.28.2",
+    "husky": "9.1.7",
+    "jscpd": "5.0.16",
+    "knip": "6.34.0",
+    "lint-staged": "17.3.0",
+    "patch-package": "8.0.1",
+    "playwright": "1.62.1",
+    "prettier": "3.9.6",
+    "semantic-release": "25.0.9",
+    "sharp": "0.34.5",
+    "size-limit": "13.0.3",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "typescript-js": "npm:typescript@6.0.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  },
+  "lint-staged": {
+    "**/*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css}": [
+      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+    ],
+    "**/*.{md,html,yaml,yml}": [
+      "prettier --write"
+    ],
+    "**/*.swift": [
+      "node packages/dev-tools/tools/run-if-installed.mjs swiftlint --fix --quiet",
+      "node packages/dev-tools/tools/run-if-installed.mjs swiftlint lint --quiet"
+    ],
+    "**/*.go": [
+      "node packages/dev-tools/tools/run-if-installed.mjs gofmt -w"
+    ]
+  }
+}

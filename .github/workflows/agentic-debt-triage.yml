@@ -1,0 +1,74 @@
+name: Agentic Debt Triage
+
+on:
+  schedule:
+    - cron: '33 5 * * *'
+  workflow_dispatch:
+    inputs:
+      sin:
+        description: 'Override sin of the day (1-7 or name); blank = rotation'
+        required: false
+      dry_run:
+        description: 'Select the sin only; do not run Claude / file an issue'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: agentic-debt-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  id-token: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Ensure triage labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create agentic-debt --color 5319e7 --description "Agentic-codebase tech-debt surfaced by nightly triage" --force
+          for id in complicatification entanglement drift duplication bloat necrophilia paranoia; do
+            gh label create "debt:$id" --color 5319e7 --description "Agentic-debt sin: $id" --force
+          done
+
+      - name: Select the sin of the day
+        id: sin
+        env:
+          SIN_OVERRIDE: ${{ github.event.inputs.sin }}
+        run: node packages/dev-tools/codebase-sins/select-sin.mjs
+
+      - name: Hunt the sin and file an issue
+        if: github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.SINS_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh label:*),Bash(git:*)"
+            --max-turns 200
+          prompt: ${{ steps.sin.outputs.prompt }}

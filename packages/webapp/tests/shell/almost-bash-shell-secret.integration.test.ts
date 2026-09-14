@@ -1,0 +1,174 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
+
+interface SessionEntry {
+  name: string;
+  value: string;
+  domains: string[];
+}
+
+function maskFor(value: string): string {
+  return `mskd-${value.length}-${value.charCodeAt(0)}`;
+}
+
+function installSecretApiFetchMock(session: Map<string, SessionEntry>) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
+
+    const json = (data: unknown, ok = true, status = ok ? 200 : 400) =>
+      ({
+        ok,
+        status,
+        json: async () => data,
+      }) as Response;
+
+    if (url === '/api/secrets' && method === 'GET') return json([]);
+    if (url === '/api/secrets/session' && method === 'GET') {
+      return json([...session.values()].map((e) => ({ name: e.name, domains: e.domains })));
+    }
+    if (url === '/api/secrets/session' && method === 'POST') {
+      session.set(body.name, { name: body.name, value: body.value, domains: body.domains });
+      return json({ ok: true });
+    }
+    if (url === '/api/secrets' && method === 'POST') {
+      session.set(body.name, { name: body.name, value: body.value, domains: body.domains });
+      return json({ ok: true });
+    }
+    if (url === '/api/secrets/masked' && method === 'GET') {
+      return json(
+        [...session.values()].map((e) => ({
+          name: e.name,
+          maskedValue: maskFor(e.value),
+          domains: e.domains,
+        }))
+      );
+    }
+    if (url.startsWith('/api/secrets/') && method === 'DELETE') {
+      const name = decodeURIComponent(url.slice('/api/secrets/'.length));
+      if (!session.delete(name)) return json({ error: 'not-found' }, false, 404);
+      return json({ ok: true, name, fromSession: true });
+    }
+    return json({ error: 'unhandled' }, false, 404);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+describe('AlmostBashShellHeadless + secret set — masked-env injection (LLM-context parity)', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+  let session: Map<string, SessionEntry>;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-almost-bash-shell-secret-${dbCounter++}`,
+      wipe: true,
+    });
+    session = new Map();
+    installSecretApiFetchMock(session);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('exposes the masked value under $NAME after secret set, not the real value', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const setRes = await shell.executeCommand('secret set K real-value --domain api.x.com');
+    expect(setRes.exitCode).toBe(0);
+    expect(setRes.stdout).toContain('Set session secret "K"');
+
+    expect(session.get('K')?.value).toBe('real-value');
+
+    const echoRes = await shell.executeCommand('echo $K');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe(maskFor('real-value'));
+
+    expect(echoRes.stdout).not.toContain('real-value');
+  });
+
+  it('drops $NAME again after secret delete, so no dead mask survives the secret', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    await shell.executeCommand('secret set K real-value --domain api.x.com');
+    expect((await shell.executeCommand('echo $K')).stdout.trim()).toBe(maskFor('real-value'));
+
+    const delRes = await shell.executeCommand('secret delete K');
+    expect(delRes.exitCode).toBe(0);
+    expect(session.has('K')).toBe(false);
+
+    const echoRes = await shell.executeCommand('echo "[$K]"');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe('[]');
+    expect(echoRes.stdout).not.toContain(maskFor('real-value'));
+  });
+
+  it('accepts the value via stdin (echo v | secret set K2)', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const setRes = await shell.executeCommand(
+      'echo piped-value | secret set K2 --domain api.x.com'
+    );
+    expect(setRes.exitCode).toBe(0);
+
+    expect(session.get('K2')?.value).toBe('piped-value');
+
+    const echoRes = await shell.executeCommand('echo $K2');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe(maskFor('piped-value'));
+  });
+
+  it('rejects a domainless argument value before calling the backend', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const res = await shell.executeCommand('secret set K value');
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('set requires --domain <patterns>');
+    expect(session.has('K')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a domainless stdin value before calling the backend', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const res = await shell.executeCommand('echo piped-value | secret set K');
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('set requires --domain <patterns>');
+    expect(session.has('K')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('publishes a mask through setMaskedEnvVar without any secret command', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    shell.setMaskedEnvVar('UI_TOKEN', 'mskd-ui');
+
+    const echoRes = await shell.executeCommand('echo $UI_TOKEN');
+    expect(echoRes.exitCode).toBe(0);
+    expect(echoRes.stdout.trim()).toBe('mskd-ui');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reapplies the mask after the bash.exec env snapshot would drop it', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    await shell.executeCommand('echo warm');
+    shell.setMaskedEnvVar('UI_TOKEN', 'mskd-ui');
+
+    expect((await shell.executeCommand('echo $UI_TOKEN')).stdout.trim()).toBe('mskd-ui');
+
+    expect((await shell.executeCommand('echo $UI_TOKEN')).stdout.trim()).toBe('mskd-ui');
+  });
+
+  it('errors when both arg and stdin are provided', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const res = await shell.executeCommand('echo stdin-v | secret set K arg-v --domain api.x.com');
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('argument OR via stdin');
+    expect(session.has('K')).toBe(false);
+  });
+});

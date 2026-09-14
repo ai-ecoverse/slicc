@@ -1,0 +1,179 @@
+import 'fake-indexeddb/auto';
+import type { SecureFetch } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { VirtualFS } from '../../src/fs/index.js';
+import {
+  ensureSpeechAssetsStaged,
+  type SpeechAssetProgress,
+} from '../../src/speech/ensure-speech-assets.js';
+import {
+  ESPEAK_DIST_VFS_PATH,
+  ESPEAK_GLUE_FILE,
+  ESPEAK_WASM_FILE,
+} from '../../src/speech/espeak-phonemizer.js';
+import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from '../../src/speech/transformers-env.js';
+
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
+
+type FetchResult = Awaited<ReturnType<SecureFetch>>;
+
+let dbCounter = 0;
+async function newFs(): Promise<VirtualFS> {
+  return VirtualFS.create({ dbName: `test-ensure-speech-${dbCounter++}`, wipe: true });
+}
+function bytes(s: string): Uint8Array {
+  return new TextEncoder().encode(s);
+}
+
+async function stageOrt(fs: VirtualFS): Promise<void> {
+  for (const f of ORT_WASM_DIST_FILES) {
+    await fs.mkdir(ORT_DIST_VFS_PATH, { recursive: true });
+    await fs.writeFile(`${ORT_DIST_VFS_PATH}${f}`, bytes('wasm'));
+  }
+}
+
+async function stageEspeak(fs: VirtualFS): Promise<void> {
+  await fs.mkdir(ESPEAK_DIST_VFS_PATH, { recursive: true });
+  await fs.writeFile(`${ESPEAK_DIST_VFS_PATH}${ESPEAK_GLUE_FILE}`, bytes('glue'));
+  await fs.writeFile(`${ESPEAK_DIST_VFS_PATH}${ESPEAK_WASM_FILE}`, bytes('wasm'));
+}
+
+async function stageRuntimes(fs: VirtualFS): Promise<void> {
+  await stageOrt(fs);
+  await stageEspeak(fs);
+}
+
+function hfFetch(files: Record<string, Uint8Array>): SecureFetch {
+  return (async (url: string, _opts?: SecureFetchOptions): Promise<FetchResult> => {
+    if (url.includes('/api/models/')) {
+      const entries = Object.entries(files).map(([path, b]) => ({
+        type: 'file',
+        path,
+        size: b.byteLength,
+      }));
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        body: bytes(JSON.stringify(entries)),
+        url,
+      };
+    }
+    const m = url.match(/\/resolve\/[^/]+\/(.+)$/);
+    const body = m ? files[m[1]] : undefined;
+    if (!body) return { status: 404, statusText: 'Not Found', headers: {}, body: bytes(''), url };
+    return { status: 200, statusText: 'OK', headers: {}, body, url };
+  }) as unknown as SecureFetch;
+}
+
+const REPO = 'owner/model';
+
+let savedChrome: unknown;
+beforeEach(() => {
+  savedChrome = (globalThis as { chrome?: unknown }).chrome;
+  (globalThis as { chrome?: unknown }).chrome = undefined;
+});
+afterEach(() => {
+  (globalThis as { chrome?: unknown }).chrome = savedChrome;
+});
+
+describe('ensureSpeechAssetsStaged', () => {
+  it('stages weight repos (ort already present) and streams per-asset progress', async () => {
+    const fs = await newFs();
+    await stageRuntimes(fs);
+    const fetch = hfFetch({ 'config.json': bytes('{}'), 'model.onnx': bytes('abcd') });
+    const progress: SpeechAssetProgress[] = [];
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] }, (p) =>
+      progress.push(p)
+    );
+    expect(result).toMatchObject({ skipped: false, ortStaged: false, espeakStaged: false });
+    expect(result.repos).toEqual([{ repo: REPO, downloaded: 2, skipped: 0 }]);
+    expect(await fs.exists(`/workspace/models/${REPO}/model.onnx`)).toBe(true);
+    expect(progress.some((p) => p.asset === 'onnxruntime-web' && p.phase === 'present')).toBe(true);
+    expect(progress.some((p) => p.asset === 'espeak-ng' && p.phase === 'present')).toBe(true);
+    const listing = progress.find((p) => p.asset === REPO && p.phase === 'listing');
+    expect(listing).toMatchObject({ filesTotal: 2, bytesTotal: 6 });
+  });
+
+  it('is a fast no-op on a second call (weights byte-skipped)', async () => {
+    const fs = await newFs();
+    await stageRuntimes(fs);
+    const fetch = hfFetch({ 'config.json': bytes('{}'), 'model.onnx': bytes('abcd') });
+    await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    const second = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(second.repos).toEqual([{ repo: REPO, downloaded: 0, skipped: 2 }]);
+    expect(second.ortStaged).toBe(false);
+    expect(second.espeakStaged).toBe(false);
+  });
+
+  it('early-returns on the extension float without touching the network', async () => {
+    const fs = await newFs();
+    let called = false;
+    const fetch: SecureFetch = (async () => {
+      called = true;
+      throw new Error('should not fetch');
+    }) as unknown as SecureFetch;
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'ext-id' } };
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(result).toEqual({ skipped: true, ortStaged: false, espeakStaged: false, repos: [] });
+    expect(called).toBe(false);
+  });
+
+  it('rejects with a host-named error when HF is unreachable', async () => {
+    const fs = await newFs();
+    await stageRuntimes(fs);
+    const failing: SecureFetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as SecureFetch;
+    await expect(ensureSpeechAssetsStaged({ fs, fetch: failing, repos: [REPO] })).rejects.toThrow(
+      /huggingface\.co/
+    );
+  });
+
+  it('still stages weight repos when optional espeak-ng staging fails', async () => {
+    const fs = await newFs();
+
+    await stageOrt(fs);
+    const hf = hfFetch({ 'config.json': bytes('{}'), 'model.onnx': bytes('abcd') });
+    const fetch: SecureFetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (url.includes('huggingface.co')) return hf(url, opts);
+      throw new TypeError(`Failed to fetch ${url}`);
+    }) as unknown as SecureFetch;
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(result).toMatchObject({ skipped: false, ortStaged: false, espeakStaged: false });
+    expect(result.repos).toEqual([{ repo: REPO, downloaded: 2, skipped: 0 }]);
+    expect(await fs.exists(`/workspace/models/${REPO}/model.onnx`)).toBe(true);
+  });
+
+  it('rejects with an actionable error when the ort runtime install fails', async () => {
+    const fs = await newFs();
+
+    const failing: SecureFetch = (async (url: string): Promise<FetchResult> => {
+      throw new TypeError(`Failed to fetch ${url}`);
+    }) as unknown as SecureFetch;
+    await expect(ensureSpeechAssetsStaged({ fs, fetch: failing, repos: [REPO] })).rejects.toThrow(
+      /failed to stage onnxruntime-web/
+    );
+  });
+
+  it('does not reinstall ort when only an optional (asyncify/jspi) variant is absent', async () => {
+    const fs = await newFs();
+    await stageEspeak(fs);
+    await fs.mkdir(ORT_DIST_VFS_PATH, { recursive: true });
+    for (const f of ORT_WASM_DIST_FILES) {
+      if (/\.asyncify\./.test(f)) continue;
+      await fs.writeFile(`${ORT_DIST_VFS_PATH}${f}`, bytes('wasm'));
+    }
+    let registryHits = 0;
+    const fetch = (async (url: string) => {
+      if (url.includes('registry.npmjs.org')) {
+        registryHits += 1;
+        throw new Error('registry must not be contacted');
+      }
+      return hfFetch({ 'config.json': bytes('{}') })(url);
+    }) as unknown as SecureFetch;
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(result.ortStaged).toBe(false);
+    expect(registryHits).toBe(0);
+  });
+});

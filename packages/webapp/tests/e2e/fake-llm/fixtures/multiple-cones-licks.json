@@ -1,0 +1,32 @@
+{
+  "model": "fake-cone-primary",
+  "models": ["fake-cone-primary", "fake-cone-alternate"],
+  "turns": [
+    {
+      "whenUserMessageMatches": "watch for your own notes",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "fswatch create --path /tmp --pattern 'own-*.md' --name own-feed"
+          }
+        }
+      ]
+    },
+    {
+      "whenUserMessageMatches": "watch for your own notes",
+      "content": "Watching for my own notes.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "own-feed",
+      "content": "Own note seen.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "named-feed",
+      "content": "Named note seen.",
+      "contentChunkSize": 64
+    }
+  ]
+}

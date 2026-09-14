@@ -1,0 +1,163 @@
+name: Flaky CI Hunter
+
+on:
+  schedule:
+    - cron: '50 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      window_days:
+        description: 'Trailing evidence window in days (default 7)'
+        required: false
+        default: '7'
+      job:
+        description: 'Only consider jobs matching this substring (blank = all)'
+        required: false
+      dry_run:
+        description: 'Scan + digest only; do not dispatch a fixer'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: flaky-ci-hunter
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+  issues: write
+  actions: read
+  id-token: write
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan CI history for proven flips
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+
+          GH_TOKEN: ${{ github.token }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '7' }}
+          JOB_OVERRIDE: ${{ github.event.inputs.job }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DIGEST_PATH: ${{ runner.temp }}/flaky-ci-digest.md
+        run: node packages/dev-tools/flaky-ci-hunter/scan-flakes.mjs
+
+      - name: Upload the digest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: flaky-ci-digest
+          path: ${{ runner.temp }}/flaky-ci-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Ensure the flaky-fix label exists
+        if: steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create flaky-fix --color FBCA04 --description "Determinism fix for a proven CI flake" --force
+
+      - name: Fix the flake and push the branch
+        if: steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+          FLAKY_SLUG: ${{ steps.scan.outputs.slug }}
+
+          PR_TITLE_FILE: ${{ runner.temp }}/flaky-fix-pr-title.txt
+          PR_BODY_FILE: ${{ runner.temp }}/flaky-fix-pr-body.md
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.FLAKY_HUNTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh label create:*)"
+            --max-turns 200
+          prompt: ${{ steps.scan.outputs.prompt }}
+
+      - name: Open the fix PR
+        id: pr
+        if: success() && steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          BRANCH: automation/flaky-fix/${{ steps.scan.outputs.slug }}
+          FLAKY_JOB: ${{ steps.scan.outputs.job }}
+          PR_TITLE_FILE: ${{ runner.temp }}/flaky-fix-pr-title.txt
+          PR_BODY_FILE: ${{ runner.temp }}/flaky-fix-pr-body.md
+        run: |
+          set -euo pipefail
+
+
+          git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git fetch --quiet origin main
+          if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+            echo "Claude pushed nothing — nothing to open."
+            exit 0
+          fi
+          if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
+            echo "$BRANCH has no commits ahead of origin/main — nothing to open."
+            exit 0
+          fi
+          PR_URL=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            echo "A PR for $BRANCH is already open: $PR_URL"
+          elif [ ! -s "$PR_BODY_FILE" ]; then
+            echo "::warning::$BRANCH was pushed but no PR body exists at $PR_BODY_FILE — leaving the branch for a human."
+            exit 0
+          else
+
+
+            PR_TITLE=""
+            if [ -s "$PR_TITLE_FILE" ]; then
+              PR_TITLE=$(head -n 1 "$PR_TITLE_FILE")
+            fi
+            if [ -z "$PR_TITLE" ]; then
+              PR_TITLE="fix(ci): make $FLAKY_JOB deterministic"
+            fi
+            PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "$PR_TITLE" \
+              --body-file "$PR_BODY_FILE")
+            echo "Opened $PR_URL"
+          fi
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "🔧 Flaky-fix PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Label the fix PR
+        if: success() && steps.pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_URL" --add-label flaky-fix

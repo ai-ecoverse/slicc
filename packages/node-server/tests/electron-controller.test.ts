@@ -1,0 +1,1754 @@
+import { createServer, type Server } from 'node:http';
+import { describe, expect, it } from 'vitest';
+import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
+import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from '../src/bridge-security.js';
+import {
+  BRIDGE_ROLE_FOLLOWER,
+  BRIDGE_ROLE_LEADER,
+  BRIDGE_ROLE_QUERY_PARAM,
+  buildThinOverlayAppUrl,
+  decodeCdpRequestPostBody,
+  ElectronOverlayInjector,
+  findMatchingElectronAppPids,
+  isOverlayEgressBlockError,
+  OVERLAY_EGRESS_BLOCK_ERROR_TEXTS,
+  OVERLAY_LOADED_PROBE_EXPRESSION,
+  resolveFetchProxyOrigin,
+  resolveHostedLeaderOrigin,
+  resolveOverlayThinBridge,
+} from '../src/electron-controller.js';
+import type { ElectronInspectableTarget } from '../src/electron-runtime.js';
+
+describe('findMatchingElectronAppPids', () => {
+  it('excludes the current CLI pid while keeping other matching Electron app pids', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 111,
+            commandLine: 'node dist/node-server/index.js --electron /Applications/Slack.app',
+            executablePath: '/usr/local/bin/node',
+          },
+          {
+            pid: 222,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+          {
+            pid: 333,
+            commandLine: '/Applications/Linear.app/Contents/MacOS/Linear',
+            executablePath: '/Applications/Linear.app/Contents/MacOS/Linear',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        111
+      )
+    ).toEqual([222]);
+  });
+
+  it('excludes all Node.js tool-chain processes that have the app path as a CLI argument', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 100,
+            commandLine: 'npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/local/bin/node',
+          },
+          {
+            pid: 101,
+            commandLine:
+              'npx tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
+            executablePath: '/usr/local/bin/node',
+          },
+          {
+            pid: 102,
+            commandLine: 'tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
+            executablePath: '/usr/local/bin/node',
+          },
+          {
+            pid: 103,
+            commandLine: 'node dist/node-server/index.js --electron /Applications/Slack.app',
+            executablePath: '/usr/local/bin/node',
+          },
+          {
+            pid: 200,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+          {
+            pid: 201,
+            commandLine:
+              '/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper --type=renderer',
+            executablePath: null,
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        103
+      )
+    ).toEqual([200, 201]);
+  });
+
+  it('matches via executablePath when commandLine has no app path', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 111,
+            commandLine: '/Applications/Slack.app/Contents/Frameworks/Slack Helper --type=gpu',
+            executablePath: '/Applications/Slack.app/Contents/Frameworks/Slack Helper',
+          },
+          {
+            pid: 222,
+            commandLine: '',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+          {
+            pid: 333,
+            commandLine: 'node server.js',
+            executablePath: '/usr/local/bin/node',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999
+      )
+    ).toEqual([111, 222]);
+  });
+
+  it('handles case-insensitive Node.js executable names', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 50,
+            commandLine: 'Node dist/node-server/index.js --electron /Applications/Slack.app',
+            executablePath: null,
+          },
+          {
+            pid: 51,
+            commandLine:
+              'NPX tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
+            executablePath: null,
+          },
+          {
+            pid: 60,
+            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack',
+            executablePath: null,
+          },
+        ],
+        ['/Applications/Slack.app'],
+        999
+      )
+    ).toEqual([60]);
+  });
+
+  it('excludes full-path node executables (e.g. Homebrew-installed node)', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 400,
+            commandLine:
+              '/opt/homebrew/Cellar/node/25.2.1/bin/node --require /opt/homebrew/lib/node_modules/npm/node_modules/dotenv/config --electron /Applications/Slack.app',
+            executablePath: '/opt/homebrew/Cellar/node/25.2.1/bin/node',
+          },
+          {
+            pid: 401,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999
+      )
+    ).toEqual([401]);
+  });
+
+  it('excludes the `open` command used to launch macOS .app bundles', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 500,
+            commandLine:
+              'open -n -a /Applications/Slack.app -W --args --remote-debugging-port=9223',
+            executablePath: '/usr/bin/open',
+          },
+          {
+            pid: 501,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999
+      )
+    ).toEqual([501]);
+  });
+
+  it('excludes shell wrapper processes that have the app path in their arguments', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 600,
+            commandLine:
+              'zsh -c -l source /dev/stdin npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/bin/zsh',
+          },
+          {
+            pid: 601,
+            commandLine: 'bash -c npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/bin/bash',
+          },
+          {
+            pid: 602,
+            commandLine: 'timeout 30 npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/usr/bin/timeout',
+          },
+          {
+            pid: 603,
+            commandLine: 'env npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/usr/bin/env',
+          },
+          {
+            pid: 604,
+            commandLine: '/bin/sh -c npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/bin/sh',
+          },
+          {
+            pid: 605,
+            commandLine: 'sudo npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/sudo',
+          },
+          {
+            pid: 606,
+            commandLine: 'caffeinate -i npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/caffeinate',
+          },
+          {
+            pid: 700,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999
+      )
+    ).toEqual([700]);
+  });
+
+  it('excludes full-path shell wrappers (e.g. /usr/local/bin/bash)', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 610,
+            commandLine: '/usr/local/bin/bash -c npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/local/bin/bash',
+          },
+          {
+            pid: 611,
+            commandLine: '/usr/bin/env npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/env',
+          },
+          {
+            pid: 612,
+            commandLine: '/usr/bin/timeout 30 npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/timeout',
+          },
+          {
+            pid: 700,
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999
+      )
+    ).toEqual([700]);
+  });
+
+  it('does not filter out non-Node processes that happen to have "node" in their path', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 70,
+            commandLine:
+              '/Applications/Slack.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/crashpad_handler --monitor-self',
+            executablePath: null,
+          },
+        ],
+        ['/Applications/Slack.app'],
+        999
+      )
+    ).toEqual([70]);
+  });
+});
+
+describe('resolveFetchProxyOrigin', () => {
+  it('returns the parent http origin (preserves prior https behavior)', () => {
+    expect(resolveFetchProxyOrigin('https://teams.example/calendar', 5711)).toBe(
+      'https://teams.example'
+    );
+  });
+
+  it('includes the explicit port when the parent origin has one', () => {
+    expect(resolveFetchProxyOrigin('https://example.com:8443/path?q=1#x', 5711)).toBe(
+      'https://example.com:8443'
+    );
+    expect(resolveFetchProxyOrigin('http://localhost:5710/?runtime=hosted-leader', 5711)).toBe(
+      'http://localhost:5710'
+    );
+  });
+
+  it('falls back to the overlay iframe http origin for file:// parents', () => {
+    expect(
+      resolveFetchProxyOrigin(
+        'file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html',
+        5711
+      )
+    ).toBe('http://localhost:5711');
+  });
+
+  it('falls back to the overlay iframe origin for app:// (and other non-http) schemes', () => {
+    expect(resolveFetchProxyOrigin('app://something/foo', 5711)).toBe('http://localhost:5711');
+  });
+
+  it('threads the served port through the fallback', () => {
+    expect(resolveFetchProxyOrigin('file:///opt/app/index.html', 5730)).toBe(
+      'http://localhost:5730'
+    );
+  });
+
+  it('falls back to the overlay iframe origin for invalid URLs', () => {
+    expect(resolveFetchProxyOrigin('not a url', 5711)).toBe('http://localhost:5711');
+  });
+});
+
+interface RecordedMessage {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+}
+
+interface FakeCdpHarness {
+  url: string;
+  port: number;
+  messages: RecordedMessage[];
+  socket: () => WsWebSocket | undefined;
+  waitFor: (
+    predicate: (msg: RecordedMessage) => boolean,
+    label: string
+  ) => Promise<RecordedMessage>;
+  close: () => Promise<void>;
+}
+
+async function startFakeCdpTarget(
+  onMessage: (msg: RecordedMessage, socket: WsWebSocket) => void
+): Promise<FakeCdpHarness> {
+  const httpServer: Server = createServer();
+  await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Failed to bind fake CDP server');
+  }
+  const port = address.port;
+  const wss = new WebSocketServer({ server: httpServer, path: '/devtools/page/1' });
+  const messages: RecordedMessage[] = [];
+  let activeSocket: WsWebSocket | undefined;
+  const pending: Array<{
+    predicate: (msg: RecordedMessage) => boolean;
+    resolve: (msg: RecordedMessage) => void;
+  }> = [];
+
+  wss.on('connection', (socket) => {
+    activeSocket = socket;
+    socket.on('message', (data) => {
+      let msg: RecordedMessage;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      messages.push(msg);
+      onMessage(msg, socket);
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (pending[i].predicate(msg)) {
+          pending[i].resolve(msg);
+          pending.splice(i, 1);
+        }
+      }
+    });
+  });
+
+  return {
+    url: `ws://127.0.0.1:${port}/devtools/page/1`,
+    port,
+    messages,
+    socket: () => activeSocket,
+    waitFor: (predicate, label) => {
+      const existing = messages.find(predicate);
+      if (existing) return Promise.resolve(existing);
+      return new Promise<RecordedMessage>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 4000);
+        pending.push({
+          predicate,
+          resolve: (msg) => {
+            clearTimeout(timer);
+            resolve(msg);
+          },
+        });
+      });
+    },
+    close: async () => {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    },
+  };
+}
+
+describe('ElectronOverlayInjector connect flow (file:// parity with swift-server Wave 5)', () => {
+  it('probes file:// targets and escalates to Fetch proxy keyed on http://localhost:<servePort>', async () => {
+    const servePort = 5711;
+    const targetUrl =
+      'file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html';
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: 'string', value: 'no-host' } },
+          })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'AEM Desktop',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.setBypassCSP', 'Page.setBypassCSP');
+      const firstProbe = await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes('slicc-electron-overlay-root'),
+        'first probe Runtime.evaluate'
+      );
+
+      const probeExpr = firstProbe.params?.expression as string;
+      expect(probeExpr).not.toContain('slicc-electron-sidebar');
+      expect(probeExpr).toContain("host.shadowRoot.querySelector('iframe')");
+      expect(probeExpr).toContain("return 'blank:'");
+
+      expect(probeExpr.match(/return 'ok'/g)?.length).toBe(1);
+
+      const firstReload = await harness.waitFor(
+        (m) => m.method === 'Page.reload',
+        'Page.reload after first probe failure'
+      );
+      expect(firstReload.params).toEqual({ ignoreCache: true });
+
+      harness.socket()?.send(JSON.stringify({ method: 'Page.loadEventFired', params: {} }));
+
+      const fetchEnable = await harness.waitFor(
+        (m) => m.method === 'Fetch.enable',
+        'Fetch.enable after CSP-reload escalation'
+      );
+      const patterns = (fetchEnable.params as { patterns?: Array<{ urlPattern?: string }> })
+        ?.patterns;
+      expect(patterns).toBeDefined();
+      expect(patterns?.[0]?.urlPattern).toBe(`http://localhost:${servePort}/*`);
+      expect(patterns?.[0]?.urlPattern).not.toMatch(/^file:/);
+      expect(patterns?.[0]?.urlPattern).not.toContain('null');
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('does NOT record bypass when the WS disconnects mid-reload (re-runs full bypass flow on reconnect)', async () => {
+    const servePort = 5711;
+    const targetUrl = 'file:///Applications/AEM%20Desktop.app/index.html';
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: 'string', value: 'no-host' } },
+          })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'AEM Desktop',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.setBypassCSP', 'Page.setBypassCSP');
+      await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes('slicc-electron-overlay-root'),
+        'first probe Runtime.evaluate'
+      );
+      await harness.waitFor(
+        (m) => m.method === 'Page.reload',
+        'Page.reload after first probe failure'
+      );
+
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('records bypass only after the post-reload probe confirms the iframe loaded', async () => {
+    const servePort = 5711;
+    const targetUrl = 'file:///opt/app/index.html';
+    let probeCount = 0;
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        probeCount++;
+
+        const value = probeCount === 1 ? 'no-host' : 'ok';
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { result: { type: 'string', value } },
+          })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Local',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload');
+
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      harness.socket()?.send(JSON.stringify({ method: 'Page.loadEventFired', params: {} }));
+
+      const deadline = Date.now() + 2000;
+      while (probeCount < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(probeCount).toBeGreaterThanOrEqual(2);
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(true);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('already-bypassed guard skips probe + reload + Fetch.enable for file:// targets', async () => {
+    const servePort = 5711;
+    const targetUrl = 'file:///tmp/index.html';
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort,
+        probeDelayMs: 20,
+      });
+      injector._testingSeedBypassedTarget(targetUrl);
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(true);
+
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Local',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.setBypassCSP', 'Page.setBypassCSP');
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const probes = harness.messages.filter(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes('slicc-electron-overlay-root')
+      );
+      const reloads = harness.messages.filter((m) => m.method === 'Page.reload');
+      const fetches = harness.messages.filter((m) => m.method === 'Fetch.enable');
+
+      expect(probes).toHaveLength(0);
+      expect(reloads).toHaveLength(0);
+      expect(fetches).toHaveLength(0);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe('isOverlayEgressBlockError', () => {
+  it('matches the app-layer network-denial errors, not CSP / generic failures', () => {
+    expect(isOverlayEgressBlockError('net::ERR_ACCESS_DENIED')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_NETWORK_ACCESS_DENIED')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_CLIENT')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_ADMINISTRATOR')).toBe(true);
+
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_CSP')).toBe(false);
+    expect(isOverlayEgressBlockError('net::ERR_NAME_NOT_RESOLVED')).toBe(false);
+    expect(isOverlayEgressBlockError('net::ERR_ABORTED')).toBe(false);
+    expect(isOverlayEgressBlockError(undefined)).toBe(false);
+    expect(isOverlayEgressBlockError('')).toBe(false);
+  });
+
+  it('exports the error-text list it checks against', () => {
+    expect(OVERLAY_EGRESS_BLOCK_ERROR_TEXTS).toContain('net::ERR_ACCESS_DENIED');
+    for (const t of OVERLAY_EGRESS_BLOCK_ERROR_TEXTS)
+      expect(isOverlayEgressBlockError(t)).toBe(true);
+  });
+});
+
+describe('ElectronOverlayInjector egress-block detection', () => {
+  const TOKEN = 'egress-tok-9f3a';
+  const targetUrl = 'file:///Applications/Signal.app/Contents/Resources/app.asar/background.html';
+
+  it('marks the target egress-blocked on ERR_ACCESS_DENIED and skips escalation without recording bypass', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Network.enable' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+
+        socket.send(
+          JSON.stringify({
+            method: 'Network.requestWillBeSent',
+            params: {
+              requestId: 'req-1',
+              type: 'Document',
+              request: { url: `https://www.sliccy.ai/electron?bridgeToken=${TOKEN}&role=leader` },
+            },
+          })
+        );
+
+        socket.send(
+          JSON.stringify({
+            method: 'Network.loadingFailed',
+            params: { requestId: 'req-1', type: 'Document', errorText: 'net::ERR_ACCESS_DENIED' },
+          })
+        );
+      }
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        String(msg.params?.expression).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'ok' } } })
+        );
+      }
+    });
+
+    try {
+      const egressCalls: string[] = [];
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+        onEgressBlocked: (url) => egressCalls.push(url),
+      });
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Network.enable', 'Network.enable');
+      await new Promise((r) => setTimeout(r, 150));
+
+      expect(injector._testingEgressBlockedTargets().has(targetUrl)).toBe(true);
+
+      expect(egressCalls).toEqual([targetUrl]);
+
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      expect(harness.messages.some((m) => m.method === 'Page.reload')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Fetch.enable')).toBe(false);
+
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            String(m.params?.expression).includes('slicc-electron-overlay-root')
+        )
+      ).toBe(false);
+
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Page.addScriptToEvaluateOnNewDocument' &&
+            m.params?.source === '/* test-status */'
+        )
+      ).toBe(true);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('ignores a network failure on a frame that is not our overlay (no bridge token)', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Network.enable' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+
+        socket.send(
+          JSON.stringify({
+            method: 'Network.requestWillBeSent',
+            params: {
+              requestId: 'other-1',
+              type: 'Document',
+              request: { url: 'https://example.com/x' },
+            },
+          })
+        );
+        socket.send(
+          JSON.stringify({
+            method: 'Network.loadingFailed',
+            params: { requestId: 'other-1', type: 'Document', errorText: 'net::ERR_ACCESS_DENIED' },
+          })
+        );
+      }
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        String(msg.params?.expression).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'no-host' } } })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+      });
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload (normal escalation)');
+      expect(injector._testingEgressBlockedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('injects the status-only overlay on reconnect to an already-egress-blocked target', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+      });
+      injector._testingSeedEgressBlockedTarget(targetUrl);
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      expect(harness.messages.some((m) => m.method === 'Page.captureScreenshot')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Page.reload')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Network.enable')).toBe(false);
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            String(m.params?.expression).includes('slicc-electron-overlay-root')
+        )
+      ).toBe(false);
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+const THIN_BRIDGE = {
+  hostedLeaderOrigin: 'https://www.sliccy.ai',
+  bridgeWsUrl: 'ws://localhost:5710/cdp',
+  bridgeToken: 'aabbccdd-1122-3344-5566-778899aabbcc',
+};
+
+describe('buildThinOverlayAppUrl', () => {
+  it('embeds bridge ws url + token + leader role on the hosted /electron path', () => {
+    const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER });
+    const parsed = new URL(url);
+    expect(parsed.origin).toBe('https://www.sliccy.ai');
+    expect(parsed.pathname).toBe('/electron');
+    expect(parsed.searchParams.get(BRIDGE_WS_QUERY_PARAM)).toBe(THIN_BRIDGE.bridgeWsUrl);
+    expect(parsed.searchParams.get(BRIDGE_TOKEN_QUERY_PARAM)).toBe(THIN_BRIDGE.bridgeToken);
+    expect(parsed.searchParams.get(BRIDGE_ROLE_QUERY_PARAM)).toBe(BRIDGE_ROLE_LEADER);
+    expect(parsed.searchParams.get('tab')).toBeNull();
+  });
+
+  it('emits role=follower for auto-follow tabs', () => {
+    const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_FOLLOWER });
+    expect(new URL(url).searchParams.get(BRIDGE_ROLE_QUERY_PARAM)).toBe(BRIDGE_ROLE_FOLLOWER);
+  });
+
+  it('carries the tray join URL so a --join launch attaches as a tray follower, not a second leader', () => {
+    const joinUrl = 'https://www.sliccy.ai/join/292c4f92-19ad-495e-a4f9-12f0d4631e2e.07bb9dad';
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      role: BRIDGE_ROLE_LEADER,
+      trayJoinUrl: joinUrl,
+    });
+    expect(new URL(url).searchParams.get('tray')).toBe(joinUrl);
+  });
+
+  it('emits no tray param when the option is absent (electron-main float URL keeps stored re-follow)', () => {
+    for (const trayJoinUrl of [undefined, null]) {
+      const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, trayJoinUrl });
+      expect(new URL(url).searchParams.get('tray')).toBeNull();
+    }
+  });
+
+  it('emits an explicitly EMPTY tray param for "no tray intent" so the stored join URL cannot leak in', () => {
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      role: BRIDGE_ROLE_FOLLOWER,
+      trayJoinUrl: '',
+    });
+    const parsed = new URL(url);
+    expect(parsed.searchParams.has('tray')).toBe(true);
+    expect(parsed.searchParams.get('tray')).toBe('');
+  });
+
+  it('emits a tab override only when not the default "chat" tab', () => {
+    expect(
+      new URL(
+        buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, activeTab: 'chat' })
+      ).searchParams.get('tab')
+    ).toBeNull();
+    expect(
+      new URL(
+        buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, activeTab: 'memory' })
+      ).searchParams.get('tab')
+    ).toBe('memory');
+  });
+
+  it('honors a custom hosted origin (staging worker / dev override)', () => {
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      hostedLeaderOrigin: 'https://slicc-tray-hub-staging.minivelos.workers.dev',
+      role: BRIDGE_ROLE_LEADER,
+    });
+    expect(new URL(url).origin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
+  });
+
+  it('never resolves to the bundled localhost serve-port overlay URL', () => {
+    const servePort = 5711;
+    const thinBridge = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, servePort);
+    expect(thinBridge).not.toBeNull();
+    for (const role of [BRIDGE_ROLE_LEADER, BRIDGE_ROLE_FOLLOWER] as const) {
+      const url = buildThinOverlayAppUrl({ ...thinBridge!, role });
+      const parsed = new URL(url);
+      expect(parsed.origin).toBe('https://www.sliccy.ai');
+      expect(parsed.pathname).toBe('/electron');
+      expect(url).not.toContain(`localhost:${servePort}/electron`);
+    }
+  });
+});
+
+describe('resolveHostedLeaderOrigin', () => {
+  it('defaults to production sliccy.ai', () => {
+    expect(resolveHostedLeaderOrigin({})).toBe('https://www.sliccy.ai');
+  });
+
+  it('prefers SLICC_HOSTED_LEADER_ORIGIN over WORKER_BASE_URL', () => {
+    expect(
+      resolveHostedLeaderOrigin({
+        SLICC_HOSTED_LEADER_ORIGIN: 'https://primary.example',
+        WORKER_BASE_URL: 'https://fallback.example',
+      })
+    ).toBe('https://primary.example');
+  });
+
+  it('falls back to WORKER_BASE_URL when SLICC_HOSTED_LEADER_ORIGIN is unset', () => {
+    expect(resolveHostedLeaderOrigin({ WORKER_BASE_URL: 'https://staging.example' })).toBe(
+      'https://staging.example'
+    );
+  });
+
+  it('strips trailing slashes so callers can concatenate paths', () => {
+    expect(
+      resolveHostedLeaderOrigin({ SLICC_HOSTED_LEADER_ORIGIN: 'https://example.com///' })
+    ).toBe('https://example.com');
+  });
+});
+
+describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
+  const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
+  const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
+
+  function makeThinInjector(): ElectronOverlayInjector {
+    return ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+    });
+  }
+
+  it('pins the first injected target as leader and elects subsequent targets as followers', async () => {
+    const injector = makeThinInjector();
+    const leaderUrl = 'https://app.slack.com/';
+    const followerUrl = 'https://teams.microsoft.com/';
+
+    const leaderHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    const followerHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: leaderUrl,
+        webSocketDebuggerUrl: leaderHarness.url,
+      });
+
+      const leaderEval = await leaderHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'leader Runtime.evaluate'
+      );
+      expect(leaderEval.params!.expression as string).not.toContain(FOLLOWER_MARK);
+      expect(injector._testingLeaderTargetUrl()).toBe(leaderUrl);
+
+      injector._testingConnectToTarget({
+        id: '2',
+        type: 'page',
+        title: 'Teams',
+        url: followerUrl,
+        webSocketDebuggerUrl: followerHarness.url,
+      });
+
+      const followerEval = await followerHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(FOLLOWER_MARK),
+        'follower Runtime.evaluate'
+      );
+      expect(followerEval.params!.expression as string).not.toContain(LEADER_MARK);
+
+      expect(injector._testingLeaderTargetUrl()).toBe(leaderUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await Promise.all([leaderHarness.close(), followerHarness.close()]);
+    }
+  });
+
+  it('keeps the same target as leader across reconnects (idempotent election)', async () => {
+    const injector = makeThinInjector();
+    const targetUrl = 'https://app.slack.com/';
+
+    const firstHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: targetUrl,
+        webSocketDebuggerUrl: firstHarness.url,
+      });
+
+      await firstHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'first leader injection'
+      );
+      injector._testingCloseConnections();
+    } finally {
+      await firstHarness.close();
+    }
+
+    const secondHarness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Slack',
+        url: targetUrl,
+        webSocketDebuggerUrl: secondHarness.url,
+      });
+
+      const reEval = await secondHarness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(LEADER_MARK),
+        'leader Runtime.evaluate on reconnect'
+      );
+      expect(reEval.params!.expression as string).not.toContain(FOLLOWER_MARK);
+      injector._testingCloseConnections();
+    } finally {
+      await secondHarness.close();
+    }
+  });
+
+  it('_testingSeedLeaderTargetUrl forces a target to be elected as follower', async () => {
+    const injector = makeThinInjector();
+    injector._testingSeedLeaderTargetUrl('https://leader.example/');
+    expect(injector._testingLeaderTargetUrl()).toBe('https://leader.example/');
+
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    try {
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Other',
+        url: 'https://other.example/',
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      const followerEval = await harness.waitFor(
+        (m) =>
+          m.method === 'Runtime.evaluate' &&
+          typeof m.params?.expression === 'string' &&
+          (m.params.expression as string).includes(FOLLOWER_MARK),
+        'follower Runtime.evaluate'
+      );
+      expect(followerEval.params!.expression as string).not.toContain(LEADER_MARK);
+
+      expect(injector._testingLeaderTargetUrl()).toBe('https://leader.example/');
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('syncTargets drops the elected leader once its target disappears from /json/list', async () => {
+    const listServer: Server = createServer();
+    let currentTargets: ElectronInspectableTarget[] = [];
+    listServer.on('request', (req, res) => {
+      if (req.url === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(currentTargets));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => listServer.listen(0, '127.0.0.1', resolve));
+    const address = listServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Failed to bind fake /json/list server');
+    }
+    const cdpPort = address.port;
+
+    const injector = ElectronOverlayInjector._createForTesting({
+      cdpPort,
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+    });
+
+    try {
+      injector._testingSeedLeaderTargetUrl('https://stale.example/');
+      currentTargets = [
+        {
+          id: 'live-1',
+          type: 'page',
+          title: 'Live',
+          url: 'https://live.example/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:65535/devtools/page/live-1',
+        } as ElectronInspectableTarget,
+      ];
+
+      await injector._testingSyncTargets();
+
+      expect(injector._testingLeaderTargetUrl()).toBeNull();
+    } finally {
+      injector._testingCloseConnections();
+      await new Promise<void>((resolve) => listServer.close(() => resolve()));
+    }
+  });
+
+  it('syncTargets keeps the elected leader pinned while its target is still live', async () => {
+    const listServer: Server = createServer();
+    let currentTargets: ElectronInspectableTarget[] = [];
+    listServer.on('request', (req, res) => {
+      if (req.url === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(currentTargets));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => listServer.listen(0, '127.0.0.1', resolve));
+    const address = listServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Failed to bind fake /json/list server');
+    }
+    const cdpPort = address.port;
+
+    const injector = ElectronOverlayInjector._createForTesting({
+      cdpPort,
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+    });
+
+    try {
+      injector._testingSeedLeaderTargetUrl('https://live.example/');
+      currentTargets = [
+        {
+          id: 'live-1',
+          type: 'page',
+          title: 'Live',
+          url: 'https://live.example/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:65535/devtools/page/live-1',
+        } as ElectronInspectableTarget,
+      ];
+
+      await injector._testingSyncTargets();
+
+      expect(injector._testingLeaderTargetUrl()).toBe('https://live.example/');
+    } finally {
+      injector._testingCloseConnections();
+      await new Promise<void>((resolve) => listServer.close(() => resolve()));
+    }
+  });
+});
+
+describe('resolveOverlayThinBridge', () => {
+  const TOKEN = 'cafef00d-1234-5678-9abc-def012345678';
+
+  it('returns null only when bridgeToken is null (no bundled-UI fallback)', () => {
+    expect(
+      resolveOverlayThinBridge({ SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' }, null, 5711)
+    ).toBeNull();
+  });
+
+  it('defaults to the production hosted origin when SLICC_HOSTED_LEADER_ORIGIN is unset', () => {
+    const cfg = resolveOverlayThinBridge({}, TOKEN, 5711);
+    expect(cfg).toEqual({
+      hostedLeaderOrigin: 'https://www.sliccy.ai',
+      bridgeWsUrl: 'ws://localhost:5711/cdp',
+      bridgeToken: TOKEN,
+    });
+  });
+
+  it('builds a thin-bridge config when a token is present', () => {
+    const cfg = resolveOverlayThinBridge(
+      { SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' },
+      TOKEN,
+      5711
+    );
+    expect(cfg).toEqual({
+      hostedLeaderOrigin: 'https://www.sliccy.ai',
+      bridgeWsUrl: 'ws://localhost:5711/cdp',
+      bridgeToken: TOKEN,
+    });
+  });
+
+  it('honors a custom hosted origin from SLICC_HOSTED_LEADER_ORIGIN', () => {
+    const cfg = resolveOverlayThinBridge(
+      { SLICC_HOSTED_LEADER_ORIGIN: 'https://slicc-tray-hub-staging.minivelos.workers.dev/' },
+      TOKEN,
+      5712
+    );
+    expect(cfg?.hostedLeaderOrigin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
+    expect(cfg?.bridgeWsUrl).toBe('ws://localhost:5712/cdp');
+  });
+});
+
+describe('OVERLAY_LOADED_PROBE_EXPRESSION classification', () => {
+  const evalProbe = (hrefBehavior: () => string): string => {
+    const iframe = {
+      src: 'https://www.sliccy.ai/electron',
+      get contentWindow() {
+        return {
+          get location() {
+            return {
+              get href() {
+                return hrefBehavior();
+              },
+            };
+          },
+        };
+      },
+    };
+    const host = {
+      shadowRoot: {
+        querySelector: (sel: string) => (sel === 'iframe' ? iframe : null),
+      },
+    };
+    const doc = {
+      getElementById: (id: string) => (id === 'slicc-electron-overlay-root' ? host : null),
+    };
+    return new Function('document', `return ${OVERLAY_LOADED_PROBE_EXPRESSION}`)(doc) as string;
+  };
+
+  it("classifies a CSP-blocked chrome-error:// swap as NOT loaded (readable href => 'blank:')", () => {
+    const result = evalProbe(() => 'chrome-error://chromewebdata/');
+    expect(result).not.toBe('ok');
+    expect(result.startsWith('blank:')).toBe(true);
+    expect(result).toContain('chrome-error://chromewebdata/');
+  });
+
+  it("treats a committed cross-origin navigation (location access THROWS) as loaded => 'ok'", () => {
+    const result = evalProbe(() => {
+      throw new DOMException('cross-origin', 'SecurityError');
+    });
+    expect(result).toBe('ok');
+  });
+
+  it("classifies a still-about:blank iframe as NOT loaded (readable href => 'blank:')", () => {
+    const result = evalProbe(() => 'about:blank');
+    expect(result).not.toBe('ok');
+    expect(result.startsWith('blank:')).toBe(true);
+  });
+});
+
+describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () => {
+  const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
+  const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
+  const targetUrl = 'https://discord.com/app';
+
+  const countLeaderInjects = (harness: FakeCdpHarness): number =>
+    harness.messages.filter(
+      (m) =>
+        m.method === 'Runtime.evaluate' &&
+        typeof m.params?.expression === 'string' &&
+        (m.params.expression as string).includes(LEADER_MARK)
+    ).length;
+
+  const makeHarness = (evicted: () => boolean) =>
+    startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string'
+      ) {
+        const expr = msg.params.expression as string;
+        if (expr.includes('__SLICC_ELECTRON_OVERLAY__')) {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { result: { type: 'string', value: evicted() ? 'evicted' : 'ok' } },
+            })
+          );
+        } else if (expr.includes('slicc-electron-overlay-root')) {
+          socket.send(
+            JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'ok' } } })
+          );
+        }
+      }
+    });
+
+  const connectAndAwaitFirstInject = async (
+    injector: ElectronOverlayInjector,
+    harness: FakeCdpHarness
+  ): Promise<void> => {
+    injector._testingConnectToTarget({
+      id: '1',
+      type: 'page',
+      title: 'Discord',
+      url: targetUrl,
+      webSocketDebuggerUrl: harness.url,
+    });
+
+    await harness.waitFor(
+      (m) =>
+        m.method === 'Runtime.evaluate' &&
+        typeof m.params?.expression === 'string' &&
+        (m.params.expression as string).includes(LEADER_MARK),
+      'initial leader overlay injection'
+    );
+  };
+
+  it('re-injects the role bootstrap once on a Page.navigatedWithinDocument event', async () => {
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 1_000_000,
+    });
+    const harness = await makeHarness(() => true);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      harness
+        .socket()
+        ?.send(JSON.stringify({ method: 'Page.navigatedWithinDocument', params: {} }));
+
+      await harness.waitFor(() => countLeaderInjects(harness) >= 2, 'overlay re-injection');
+
+      const reinject = harness.messages
+        .filter(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            typeof m.params?.expression === 'string' &&
+            (m.params.expression as string).includes(LEADER_MARK)
+        )
+        .at(-1)!;
+      const reinjectExpr = reinject.params!.expression as string;
+      expect(reinjectExpr).not.toContain(FOLLOWER_MARK);
+      expect(reinjectExpr).not.toContain('slicc-theme');
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(countLeaderInjects(harness)).toBe(2);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('presence re-check re-injects exactly once on eviction, then stops (idempotent)', async () => {
+    let evictionProbes = 0;
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 40,
+    });
+    const harness = await makeHarness(() => ++evictionProbes === 1);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+
+      await harness.waitFor(
+        () => countLeaderInjects(harness) >= 2,
+        'presence-timer overlay re-injection'
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(countLeaderInjects(harness)).toBe(2);
+      expect(evictionProbes).toBeGreaterThanOrEqual(2);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('does NOT re-inject while the overlay host is still present (no loop)', async () => {
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 40,
+    });
+    const harness = await makeHarness(() => false);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+
+      harness
+        .socket()
+        ?.send(JSON.stringify({ method: 'Page.navigatedWithinDocument', params: {} }));
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      expect(countLeaderInjects(harness)).toBe(1);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe('decodeCdpRequestPostBody (#2886 — overlay document POST stays byte-exact)', () => {
+  const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff, 0x98, 0x00, 0x41, 0x7f, 0x80, 0xfe]);
+
+  it('recovers every byte 0x00..0xFF from postDataEntries', () => {
+    const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [{ bytes: all.toString('base64') }],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+
+    expect(result.bytes.length).toBe(256);
+    expect(result.bytes.equals(all)).toBe(true);
+  });
+
+  it('concatenates multi-part postDataEntries in order (multipart boundary + JPEG part)', () => {
+    const head = Buffer.from('--b\r\nContent-Disposition: form-data; name="f"\r\n\r\n', 'latin1');
+    const tail = Buffer.from('\r\n--b--\r\n', 'latin1');
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [
+        { bytes: head.toString('base64') },
+        { bytes: JPEG_SOI.toString('base64') },
+        { bytes: tail.toString('base64') },
+      ],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.equals(Buffer.concat([head, JPEG_SOI, tail]))).toBe(true);
+  });
+
+  it('prefers postDataEntries over a lossy postData string for the same request', () => {
+    const result = decodeCdpRequestPostBody({
+      postData: JPEG_SOI.toString('latin1'),
+      hasPostData: true,
+      postDataEntries: [{ bytes: JPEG_SOI.toString('base64') }],
+    });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.equals(JPEG_SOI)).toBe(true);
+  });
+
+  it('accepts an ASCII postData string (ordinary urlencoded form post)', () => {
+    const body = 'name=ada&note=hello+world%C3%A9';
+    const result = decodeCdpRequestPostBody({ postData: body, hasPostData: true });
+    expect(result.kind).toBe('bytes');
+    if (result.kind !== 'bytes') return;
+    expect(result.bytes.toString('latin1')).toBe(body);
+    expect(result.bytes.length).toBe(body.length);
+  });
+
+  it('refuses a non-ASCII postData string instead of guessing a codec', () => {
+    const result = decodeCdpRequestPostBody({
+      postData: JPEG_SOI.toString('latin1'),
+      hasPostData: true,
+    });
+    expect(result.kind).toBe('unrecoverable');
+  });
+
+  it('refuses a file/blob entry Chrome exposes without bytes', () => {
+    const result = decodeCdpRequestPostBody({
+      hasPostData: true,
+      postDataEntries: [{ bytes: Buffer.from('--b\r\n', 'latin1').toString('base64') }, {}],
+    });
+    expect(result.kind).toBe('unrecoverable');
+  });
+
+  it('refuses hasPostData with the body dropped, and passes a bodyless navigation through', () => {
+    expect(decodeCdpRequestPostBody({ hasPostData: true }).kind).toBe('unrecoverable');
+    expect(decodeCdpRequestPostBody({}).kind).toBe('none');
+    expect(decodeCdpRequestPostBody({ postData: '', hasPostData: false }).kind).toBe('none');
+  });
+});
+
+describe('ElectronOverlayInjector Fetch proxy document POST (#2886)', () => {
+  async function escalateToFetchProxy(
+    harness: FakeCdpHarness,
+    servePort: number
+  ): Promise<ElectronOverlayInjector> {
+    const injector = ElectronOverlayInjector._createForTesting({ servePort, probeDelayMs: 20 });
+    injector._testingConnectToTarget({
+      id: '1',
+      type: 'page',
+      title: 'AEM Desktop',
+      url: 'file:///Applications/AEM%20Desktop.app/index.html',
+      webSocketDebuggerUrl: harness.url,
+    });
+    await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload after first probe');
+    harness.socket()?.send(JSON.stringify({ method: 'Page.loadEventFired', params: {} }));
+    await harness.waitFor((m) => m.method === 'Fetch.enable', 'Fetch.enable escalation');
+    return injector;
+  }
+
+  function makeEscalatingHarness(): Promise<FakeCdpHarness> {
+    return startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string' &&
+        (msg.params.expression as string).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'no-host' } } })
+        );
+      }
+    });
+  }
+
+  async function startEchoOrigin(): Promise<{
+    url: string;
+    bodies: Buffer[];
+    contentLengths: Array<string | undefined>;
+    close: () => Promise<void>;
+  }> {
+    const bodies: Buffer[] = [];
+    const contentLengths: Array<string | undefined> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks));
+        contentLengths.push(req.headers['content-length']);
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<html>ok</html>');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Failed to bind echo origin');
+    return {
+      url: `http://127.0.0.1:${address.port}/upload`,
+      bodies,
+      contentLengths,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it('forwards a multipart document POST byte-for-byte (no UTF-8 expansion)', async () => {
+    const servePort = 5711;
+    const harness = await makeEscalatingHarness();
+    const origin = await startEchoOrigin();
+    try {
+      const injector = await escalateToFetchProxy(harness, servePort);
+
+      const head = Buffer.from(
+        '--b\r\nContent-Disposition: form-data; name="f"; filename="p.jpg"\r\n' +
+          'Content-Type: image/jpeg\r\n\r\n',
+        'latin1'
+      );
+      const jpeg = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+      const tail = Buffer.from('\r\n--b--\r\n', 'latin1');
+      const body = Buffer.concat([head, jpeg, tail]);
+
+      harness.socket()?.send(
+        JSON.stringify({
+          method: 'Fetch.requestPaused',
+          params: {
+            requestId: 'interception-1',
+            request: {
+              url: origin.url,
+              method: 'POST',
+              headers: {
+                Accept: 'text/html,application/xhtml+xml',
+                'Content-Type': 'multipart/form-data; boundary=b',
+
+                'Content-Length': '999',
+              },
+              hasPostData: true,
+              postDataEntries: [
+                { bytes: head.toString('base64') },
+                { bytes: jpeg.toString('base64') },
+                { bytes: tail.toString('base64') },
+              ],
+            },
+          },
+        })
+      );
+
+      await harness.waitFor(
+        (m) => m.method === 'Fetch.fulfillRequest',
+        'Fetch.fulfillRequest after proxying the POST'
+      );
+      expect(origin.bodies.length).toBe(1);
+      expect(origin.bodies[0].length).toBe(body.length);
+      expect(origin.bodies[0].equals(body)).toBe(true);
+      expect(origin.contentLengths[0]).toBe(String(body.length));
+
+      injector._testingCloseConnections();
+    } finally {
+      await origin.close();
+      await harness.close();
+    }
+  });
+
+  it('fails the request instead of forwarding a body it cannot reconstruct', async () => {
+    const servePort = 5711;
+    const harness = await makeEscalatingHarness();
+    const origin = await startEchoOrigin();
+    try {
+      const injector = await escalateToFetchProxy(harness, servePort);
+
+      harness.socket()?.send(
+        JSON.stringify({
+          method: 'Fetch.requestPaused',
+          params: {
+            requestId: 'interception-2',
+            request: {
+              url: origin.url,
+              method: 'POST',
+              headers: { Accept: 'text/html' },
+              hasPostData: true,
+
+              postDataEntries: [{}],
+            },
+          },
+        })
+      );
+
+      const failed = await harness.waitFor(
+        (m) => m.method === 'Fetch.failRequest',
+        'Fetch.failRequest for an unrecoverable body'
+      );
+      expect((failed.params as { errorReason?: string })?.errorReason).toBe('Failed');
+      expect(origin.bodies.length).toBe(0);
+      expect(harness.messages.some((m) => m.method === 'Fetch.fulfillRequest')).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await origin.close();
+      await harness.close();
+    }
+  });
+});

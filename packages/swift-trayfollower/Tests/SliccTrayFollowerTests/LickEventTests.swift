@@ -1,0 +1,58 @@
+import Foundation
+import XCTest
+
+@testable import SliccTrayFollower
+
+
+
+final class LickEventTests: XCTestCase {
+
+    func testFollowerLickTypeRoundTrips() throws {
+        XCTAssertEqual(try WireCodec.roundTrip(FollowerLickType.navigate), .navigate)
+        XCTAssertEqual(try WireCodec.roundTrip(FollowerLickType.discovery), .discovery)
+    }
+
+    func testNavigateLickRoundTrip() throws {
+        let body = try WireCodec.anyCodable(#"{"url":"https:
+        let event = LickEvent(
+            type: .navigate, timestamp: "2026-08-08T00:00:00.000Z", body: body, navigateUrl: "https://x")
+        let decoded = try WireCodec.roundTrip(event)
+        XCTAssertEqual(decoded.type, .navigate)
+        XCTAssertEqual(decoded.timestamp, "2026-08-08T00:00:00.000Z")
+        XCTAssertEqual(decoded.navigateUrl, "https://x")
+        
+        
+        XCTAssertEqual(try WireCodec.canonical(decoded.body), try WireCodec.canonical(body))
+    }
+
+    func testDiscoveryLickRoundTrip() throws {
+        let event = LickEvent(
+            type: .discovery, timestamp: "2026-08-08T00:00:00.000Z", body: nil,
+            discoveryOrigin: "https://origin", discoveryKind: "skill", discoveryUrl: "https://origin/manifest.json")
+        XCTAssertEqual(try WireCodec.roundTrip(event), event)
+    }
+
+    func testNilFieldsAreOmittedFromWire() throws {
+        let event = LickEvent(type: .navigate, timestamp: "2026-08-08T00:00:00.000Z", body: nil)
+        let json = try WireCodec.jsonString(event)
+        XCTAssertFalse(json.contains("navigateUrl"))
+        XCTAssertFalse(json.contains("discoveryOrigin"))
+        XCTAssertFalse(json.contains("targetScoop"))
+        XCTAssertTrue(json.contains("\"type\":\"navigate\""))
+    }
+
+    func testTargetScoopRoundTrip() throws {
+        let event = LickEvent(
+            type: .navigate, timestamp: "2026-08-08T00:00:00.000Z", body: nil, targetScoop: "j1")
+        XCTAssertEqual(try WireCodec.roundTrip(event), event)
+    }
+
+    func testDecodeFromBrowserFollowerShape() throws {
+        let json = #"{"type":"navigate","timestamp":"2026-08-08T00:00:00.000Z","navigateUrl":"https:
+        let decoded = try WireCodec.decode(LickEvent.self, from: json)
+        XCTAssertEqual(decoded.type, .navigate)
+        XCTAssertEqual(decoded.timestamp, "2026-08-08T00:00:00.000Z")
+        XCTAssertEqual(decoded.navigateUrl, "https://x")
+        XCTAssertNil(decoded.body)
+    }
+}

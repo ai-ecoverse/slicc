@@ -1,0 +1,372 @@
+import { gzipSync } from 'fflate';
+import { describe, expect, it } from 'vitest';
+import { gunzip, gzip, readTar, writeTar } from '../../../src/shell/ipk/tar.js';
+
+function writeString(view: Uint8Array, offset: number, len: number, value: string): void {
+  for (let i = 0; i < len; i++) {
+    view[offset + i] = i < value.length ? value.charCodeAt(i) : 0;
+  }
+}
+
+function writeOctal(view: Uint8Array, offset: number, len: number, value: number): void {
+  const oct = value.toString(8);
+  const padded = oct.padStart(len - 1, '0');
+  writeString(view, offset, len - 1, padded);
+  view[offset + len - 1] = 0;
+}
+
+function computeChecksum(header: Uint8Array): number {
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += header[i];
+  return sum;
+}
+
+interface TarEntryInput {
+  name: string;
+  data: Uint8Array;
+  typeflag?: string;
+  prefix?: string;
+}
+
+function buildUstarHeader(entry: TarEntryInput): Uint8Array {
+  const header = new Uint8Array(512);
+  const typeflag = entry.typeflag ?? '0';
+  writeString(header, 0, 100, entry.name);
+  writeOctal(header, 100, 8, 0o644);
+  writeOctal(header, 108, 8, 0);
+  writeOctal(header, 116, 8, 0);
+  writeOctal(header, 124, 12, entry.data.length);
+  writeOctal(header, 136, 12, 0);
+
+  for (let i = 0; i < 8; i++) header[148 + i] = 0x20;
+  header[156] = typeflag.charCodeAt(0);
+  writeString(header, 157, 100, '');
+  writeString(header, 257, 6, 'ustar');
+  writeString(header, 263, 2, '00');
+  writeString(header, 265, 32, '');
+  writeString(header, 297, 32, '');
+  writeOctal(header, 329, 8, 0);
+  writeOctal(header, 337, 8, 0);
+  writeString(header, 345, 155, entry.prefix ?? '');
+  const sum = computeChecksum(header);
+  const sumOct = sum.toString(8).padStart(6, '0');
+  writeString(header, 148, 6, sumOct);
+  header[154] = 0;
+  header[155] = 0x20;
+  return header;
+}
+
+function buildTar(entries: TarEntryInput[]): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  for (const entry of entries) {
+    chunks.push(buildUstarHeader(entry));
+    chunks.push(entry.data);
+    const pad = (512 - (entry.data.length % 512)) % 512;
+    if (pad > 0) chunks.push(new Uint8Array(pad));
+  }
+
+  chunks.push(new Uint8Array(1024));
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.length;
+  }
+  return out;
+}
+
+function bytes(s: string): Uint8Array {
+  return new TextEncoder().encode(s);
+}
+
+function paxRecord(key: string, value: string): Uint8Array {
+  const enc = new TextEncoder();
+  const body = enc.encode(` ${key}=${value}\n`);
+  let len = body.length + 1;
+  while (String(len).length + body.length !== len) {
+    len = String(len).length + body.length;
+  }
+  const prefix = enc.encode(String(len));
+  const out = new Uint8Array(prefix.length + body.length);
+  out.set(prefix, 0);
+  out.set(body, prefix.length);
+  return out;
+}
+
+describe('gunzip', () => {
+  it('decompresses gzip output produced by fflate', () => {
+    const original = bytes('hello world');
+    const gz = gzipSync(original);
+    const out = gunzip(gz);
+    expect(out).toEqual(original);
+  });
+
+  it('throws a clear error on non-gzip input', () => {
+    const notGzip = new Uint8Array([1, 2, 3, 4, 5]);
+    expect(() => gunzip(notGzip)).toThrow(/gzip|gunzip|decompress|invalid/i);
+  });
+
+  it('throws on truncated gzip input', () => {
+    const gz = gzipSync(bytes('some content'));
+    const truncated = gz.slice(0, 4);
+    expect(() => gunzip(truncated)).toThrow();
+  });
+});
+
+describe('gzip', () => {
+  it('compresses bytes that gunzip restores', () => {
+    const original = bytes('shared tar compression');
+    expect(gunzip(gzip(original))).toEqual(original);
+  });
+
+  it('throws when input is not a Uint8Array', () => {
+    // @ts-expect-error intentional bad input
+    expect(() => gzip('not bytes')).toThrow(/Uint8Array/);
+  });
+});
+
+describe('writeTar', () => {
+  it('creates archives containing files and directory entries', () => {
+    const archive = writeTar([
+      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true },
+      { path: 'package/file.txt', bytes: bytes('contents') },
+    ]);
+    const entries = readTar(archive, {
+      stripNpmPrefix: false,
+      includeDirectories: true,
+      preserveRawPaths: true,
+    });
+    expect(entries).toEqual([
+      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true },
+      { path: 'package/file.txt', bytes: bytes('contents') },
+    ]);
+  });
+});
+
+describe('readTar', () => {
+  it('reads only the bytes in a non-zero-offset Uint8Array view', () => {
+    const archive = writeTar([{ path: 'package/index.js', bytes: bytes('export {};') }]);
+    const padded = new Uint8Array(archive.length + 19);
+    padded.fill(0xff);
+    padded.set(archive, 11);
+    const view = padded.subarray(11, 11 + archive.length);
+
+    expect(view.byteOffset).toBe(11);
+    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};') }]);
+  });
+
+  it('preserves package prefixes and raw paths when requested', () => {
+    const tar = buildTar([
+      { name: 'package/', data: new Uint8Array(0), typeflag: '5' },
+      { name: '../package/file.txt', data: bytes('raw') },
+    ]);
+    const out = readTar(tar, {
+      stripNpmPrefix: false,
+      includeDirectories: true,
+      preserveRawPaths: true,
+    });
+    expect(out.map((entry) => entry.path)).toEqual(['package/', '../package/file.txt']);
+    expect(out[0].directory).toBe(true);
+  });
+
+  it('reads a single small file with package/ prefix stripped', () => {
+    const tar = buildTar([{ name: 'package/package.json', data: bytes('{"name":"a"}') }]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('package.json');
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('{"name":"a"}');
+  });
+
+  it('reads multiple files with varied sizes honoring 512-byte block alignment', () => {
+    const big = new Uint8Array(2000);
+    for (let i = 0; i < big.length; i++) big[i] = i & 0xff;
+    const exact = new Uint8Array(512);
+    for (let i = 0; i < exact.length; i++) exact[i] = (i * 7) & 0xff;
+    const tiny = bytes('x');
+    const empty = new Uint8Array(0);
+    const tar = buildTar([
+      { name: 'package/package.json', data: bytes('{"name":"multi"}') },
+      { name: 'package/lib/big.bin', data: big },
+      { name: 'package/lib/exact.bin', data: exact },
+      { name: 'package/lib/tiny.txt', data: tiny },
+      { name: 'package/lib/empty.txt', data: empty },
+    ]);
+    const out = readTar(tar);
+    const byPath = new Map(out.map((e) => [e.path, e.bytes]));
+    expect(byPath.get('package.json')).toEqual(bytes('{"name":"multi"}'));
+    expect(byPath.get('lib/big.bin')).toEqual(big);
+    expect(byPath.get('lib/exact.bin')).toEqual(exact);
+    expect(byPath.get('lib/tiny.txt')).toEqual(tiny);
+    expect(byPath.get('lib/empty.txt')).toEqual(empty);
+  });
+
+  it('parses octal sizes correctly for sizes that need 8+ octal digits', () => {
+    const big = new Uint8Array(1234);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 13) & 0xff;
+    const tar = buildTar([{ name: 'package/blob', data: big }]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].bytes.length).toBe(1234);
+    expect(out[0].bytes).toEqual(big);
+  });
+
+  it('skips directory entries (typeflag 5)', () => {
+    const tar = buildTar([
+      { name: 'package/lib/', data: new Uint8Array(0), typeflag: '5' },
+      { name: 'package/lib/a.txt', data: bytes('A') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('lib/a.txt');
+  });
+
+  it('roundtrips through gzip+gunzip', () => {
+    const tar = buildTar([
+      { name: 'package/index.js', data: bytes('module.exports = 1') },
+      { name: 'package/README.md', data: bytes('# hi') },
+    ]);
+    const gz = gzipSync(tar);
+    const out = readTar(gunzip(gz));
+    expect(out.map((e) => e.path).sort()).toEqual(['README.md', 'index.js']);
+  });
+
+  it('handles the GNU @LongLink long-name extension', () => {
+    const longName = `package/${'a'.repeat(50)}/${'b'.repeat(60)}/file.txt`;
+    const nameBytes = new Uint8Array(longName.length + 1);
+    nameBytes.set(new TextEncoder().encode(longName), 0);
+    const tar = buildTar([
+      { name: '././@LongLink', data: nameBytes, typeflag: 'L' },
+      { name: longName.slice(0, 100), data: bytes('hello') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longName.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('hello');
+  });
+
+  it('honors PAX path overrides', () => {
+    const longPath = `package/${'p'.repeat(120)}/file.txt`;
+    const recordBytes = paxRecord('path', longPath);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: recordBytes, typeflag: 'x' },
+      { name: longPath.slice(0, 100), data: bytes('paxed') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('paxed');
+  });
+
+  it('uses ustar prefix+name when prefix is set', () => {
+    const tar = buildTar([{ name: 'lib/file.js', prefix: 'package', data: bytes('p') }]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('lib/file.js');
+  });
+
+  it('reconstructs deep paths split across ustar prefix+name (long-path regression)', () => {
+    const body = bytes('deep contents');
+    const tar = buildTar([{ name: 'file.js', prefix: 'package/lib/very/deep/dir', data: body }]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('lib/very/deep/dir/file.js');
+    expect(out[0].bytes).toEqual(body);
+  });
+
+  it('does not double-prefix a PAX long-name entry that also carries a ustar prefix', () => {
+    const longPath = `package/${'q'.repeat(120)}/deep.txt`;
+    const recordBytes = paxRecord('path', longPath);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: recordBytes, typeflag: 'x' },
+      { name: longPath.slice(0, 100), prefix: 'package/should/not/appear', data: bytes('paxed') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('paxed');
+  });
+
+  it('returns independent byte copies (mutating the source does not affect entries)', () => {
+    const tar = buildTar([{ name: 'package/a.txt', data: bytes('original') }]);
+    const out = readTar(tar);
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('original');
+
+    tar.fill(0);
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('original');
+  });
+
+  it('filters out non-regular entries (symlinks, hardlinks)', () => {
+    const tar = buildTar([
+      { name: 'package/link', data: new Uint8Array(0), typeflag: '2' },
+      { name: 'package/hard', data: new Uint8Array(0), typeflag: '1' },
+      { name: 'package/real.txt', data: bytes('R') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('real.txt');
+  });
+
+  it('does not throw on a truncated archive (nanotar parses leniently)', () => {
+    const tar = buildTar([{ name: 'package/a', data: bytes('hello world') }]);
+    const truncated = tar.slice(0, 700);
+    expect(() => readTar(truncated)).not.toThrow();
+  });
+
+  it('returns no entries for non-tar garbage input', () => {
+    const garbage = new Uint8Array(2048);
+    for (let i = 0; i < garbage.length; i++) garbage[i] = (i * 31) & 0xff;
+    expect(readTar(garbage)).toHaveLength(0);
+  });
+
+  it('throws when input is not a Uint8Array', () => {
+    // @ts-expect-error intentional bad input
+    expect(() => readTar('not bytes')).toThrow(/Uint8Array/);
+  });
+
+  it('honors PAX path overrides with multibyte UTF-8 paths (byte-length record framing)', () => {
+    const longPath = `package/${'漢'.repeat(40)}/file.txt`;
+    const recordBytes = paxRecord('path', longPath);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: recordBytes, typeflag: 'x' },
+      { name: 'package/placeholder.txt', data: bytes('utf8') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('utf8');
+  });
+
+  it('parses multiple PAX records back-to-back when paths contain multibyte characters', () => {
+    const longPath = `package/${'好'.repeat(35)}/file.bin`;
+    const enc = new TextEncoder();
+    const sizeRec = paxRecord('size', '4');
+    const pathRec = paxRecord('path', longPath);
+    const combined = new Uint8Array(sizeRec.length + pathRec.length);
+    combined.set(sizeRec, 0);
+    combined.set(pathRec, sizeRec.length);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: combined, typeflag: 'x' },
+      { name: 'package/placeholder.txt', data: enc.encode('data') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+  });
+
+  it('returns no entries for input shorter than a full header block', () => {
+    expect(readTar(new Uint8Array(100))).toHaveLength(0);
+  });
+
+  it('strips the package/ prefix but leaves other prefixes alone', () => {
+    const tar = buildTar([
+      { name: 'package/file-a', data: bytes('a') },
+      { name: 'other/file-b', data: bytes('b') },
+    ]);
+    const out = readTar(tar);
+    const byPath = new Map(out.map((e) => [e.path, new TextDecoder().decode(e.bytes)]));
+    expect(byPath.get('file-a')).toBe('a');
+    expect(byPath.get('other/file-b')).toBe('b');
+  });
+});

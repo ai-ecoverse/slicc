@@ -1,0 +1,8 @@
+{
+  "storyId": "dock-dockitem--dock-rail",
+  "storyTitle": "Dock/DockItem",
+  "subsystem": "dock",
+  "importPath": "./src/dock/slicc-dock-item.stories.ts",
+  "comment": "for the dock rail, the globe/playwright icon is a cool idea, but we need a UI for what happens when you click it: a full-screen list of open tabs, each one with a screenshot of the tab. you can scroll it, click a tab (which would bring it to the foreground), close tabs, or close the entire overlay).",
+  "createdAt": "2026-06-10T14:07:48.450Z"
+}

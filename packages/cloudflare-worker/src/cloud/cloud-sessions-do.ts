@@ -1,0 +1,382 @@
+import {
+  createSubstrate,
+  isCloudError,
+  killCone,
+  listCones,
+  pauseCone,
+  reserveSlot,
+  resumeCone,
+  type SandboxSubstrate,
+  startCone,
+} from '@slicc/cloud-core';
+import { bundleIndex, type ConeConfigDelta, imsTokenExpiry } from '@slicc/cloud-core/cone-config';
+import { checkCapsForRun } from './caps.js';
+import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
+import { errorResponse, okResponse } from './error-envelope.js';
+import { LocalRegistry } from './local-registry.js';
+
+interface DoEnv {
+  E2B_API_KEY: string;
+  CONE_CAP_RUNNING: string;
+  CONE_CAP_PAUSED: string;
+
+  __SUBSTRATE_FACTORY__?: () => SandboxSubstrate;
+}
+
+interface DurableObjectStateLike {
+  storage: {
+    get<T>(key: string): Promise<T | undefined>;
+    put<T>(key: string, value: T): Promise<void>;
+  };
+  blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+export const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev';
+
+interface StartConeBody {
+  bearer: string;
+  name?: string;
+  userId: string;
+  workerOrigin: string;
+  coneConfig?: unknown;
+}
+interface ResumeConeBody {
+  bearer: string;
+  sandboxId: string;
+  localSliccVersion: string;
+  userId: string;
+  coneConfigDelta?: unknown;
+}
+interface SimpleSandboxBody {
+  sandboxId: string;
+}
+interface ListConesBody {
+  userId: string;
+}
+
+export class CloudSessionsDurableObject {
+  constructor(
+    private readonly state: DurableObjectStateLike,
+    private readonly env: DoEnv
+  ) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    return this.dispatch(url.pathname, request);
+  }
+
+  private substrate(): SandboxSubstrate {
+    if (this.env.__SUBSTRATE_FACTORY__) return this.env.__SUBSTRATE_FACTORY__();
+    return createSubstrate('e2b', { apiKey: this.env.E2B_API_KEY });
+  }
+  private registry(): LocalRegistry {
+    return new LocalRegistry(this.state.storage);
+  }
+
+  private async dispatch(op: string, request: Request): Promise<Response> {
+    try {
+      switch (op) {
+        case '/start-cone':
+          return await this.startConeOp((await request.json()) as StartConeBody);
+        case '/resume-cone':
+          return await this.resumeConeOp((await request.json()) as ResumeConeBody);
+        case '/pause-cone':
+          return await this.pauseConeOp((await request.json()) as SimpleSandboxBody);
+        case '/kill-cone':
+          return await this.killConeOp((await request.json()) as SimpleSandboxBody);
+        case '/list-cones':
+          return await this.listConesOp((await request.json()) as ListConesBody);
+        case '/cone-config-index':
+          return await this.coneConfigIndexOp((await request.json()) as SimpleSandboxBody);
+        default:
+          return new Response(`unknown DO op: ${op}`, { status: 404 });
+      }
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async startConeOp(body: StartConeBody): Promise<Response> {
+    const substrate = this.substrate();
+    const registry = this.registry();
+
+    try {
+      await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+
+    const reservation = await this.state.blockConcurrencyWhile(async () => {
+      try {
+        const freshRegistry = await registry.list();
+        const filtered = body.userId
+          ? freshRegistry.filter((e) => e.metadata?.userId === body.userId)
+          : freshRegistry;
+
+        return {
+          ok: true as const,
+          ...(await reserveSlot(
+            { substrate, registry },
+            {
+              userId: body.userId,
+              name: body.name?.trim(),
+              metadata: { userId: body.userId },
+              sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
+              env: this.env,
+              reconciledCones: filtered,
+            }
+          )),
+        };
+      } catch (err) {
+        if (isCloudError(err)) {
+          return {
+            ok: false as const,
+            response: errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details),
+          };
+        }
+        return {
+          ok: false as const,
+          response: errorResponse(500, 'INTERNAL', String(err)),
+        };
+      }
+    });
+
+    if (!reservation.ok) return reservation.response;
+
+    try {
+      const bundle = coneConfigToBundle(body.coneConfig, body.bearer);
+      const { envContents, coneConfigJson } = buildStartConeArgs(bundle, body.bearer);
+
+      const result = await startCone(
+        { substrate, registry },
+        {
+          reservationId: reservation.reservationId,
+          envContents,
+          coneConfigJson,
+          envs: {
+            ADOBE_IMS_TOKEN: body.bearer,
+            ADOBE_IMS_TOKEN_DOMAINS: ADOBE_TOKEN_DOMAINS,
+          },
+          workerBaseUrl: body.workerOrigin,
+          sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
+          name: body.name?.trim(),
+          metadata: { userId: body.userId },
+        }
+      );
+
+      const index = bundleIndex(bundle);
+      await registry.update(result.sandboxId, { coneConfigIndex: index });
+
+      return okResponse({
+        sandboxId: result.sandboxId,
+        name: result.name,
+        joinUrl: result.joinUrl,
+      });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async resumeConeOp(body: ResumeConeBody): Promise<Response> {
+    const substrate = this.substrate();
+    const registry = this.registry();
+
+    try {
+      await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+
+    let originalState: 'paused' | 'dead' | undefined;
+    const precheck = await this.state.blockConcurrencyWhile(async () => {
+      const all = await registry.list();
+      const target = all.find((c) => c.sandboxId === body.sandboxId);
+      if (!target) {
+        return {
+          error: errorResponse(404, 'NOT_FOUND', `cloud session not found: ${body.sandboxId}`),
+        };
+      }
+      if (target.state === 'running' || target.state === 'reserved') {
+        return {
+          error: errorResponse(
+            409,
+            'ALREADY_RUNNING',
+            `cloud session is already running: ${body.sandboxId}`
+          ),
+        };
+      }
+
+      const others = all
+        .filter((c) => c.sandboxId !== body.sandboxId)
+        .filter((c) => c.state !== 'dead');
+      const cap = checkCapsForRun(others, this.env);
+      if (!cap.ok) {
+        return {
+          error: errorResponse(403, 'CAP_EXCEEDED', 'resuming would exceed running cap', {
+            running: cap.running,
+            cap: { running: cap.runningCap, paused: cap.pausedCap },
+          }),
+        };
+      }
+
+      originalState = target.state;
+
+      await registry.update(body.sandboxId, {
+        state: 'reserved',
+        reservedAt: new Date().toISOString(),
+      });
+      return { error: null };
+    });
+    if (precheck.error) return precheck.error;
+
+    try {
+      const userDelta = body.coneConfigDelta as ConeConfigDelta | undefined;
+
+      const adobeExpiresAt = imsTokenExpiry(body.bearer);
+
+      const userAccounts = (userDelta?.upsert?.accounts ?? []).filter(
+        (a) => a.providerId !== 'adobe'
+      );
+      const userSecrets = (userDelta?.upsert?.secrets ?? []).filter(
+        (s) => s.name !== 'ADOBE_IMS_TOKEN'
+      );
+      const mergedDelta: ConeConfigDelta = {
+        ...(userDelta?.model ? { model: userDelta.model } : {}),
+        upsert: {
+          accounts: [
+            {
+              providerId: 'adobe',
+              kind: 'oauth',
+              accessToken: body.bearer,
+              ...(adobeExpiresAt !== undefined ? { tokenExpiresAt: adobeExpiresAt } : {}),
+            },
+            ...userAccounts,
+          ],
+          secrets: [
+            { name: 'ADOBE_IMS_TOKEN', value: body.bearer, domains: [ADOBE_TOKEN_DOMAINS] },
+            ...userSecrets,
+          ],
+        },
+        ...(userDelta?.delete ? { delete: userDelta.delete } : {}),
+      };
+      const result = await resumeCone(
+        { substrate, registry },
+        {
+          query: body.sandboxId,
+          localSliccVersion: body.localSliccVersion,
+          coneConfigDelta: mergedDelta,
+          skipStateCheck: true,
+        }
+      );
+
+      if (result.coneConfigIndex) {
+        await registry.update(body.sandboxId, { coneConfigIndex: result.coneConfigIndex });
+      }
+
+      return okResponse({
+        sandboxId: result.sandboxId,
+        joinUrl: result.joinUrl,
+        trayRebuilt: result.trayRebuilt,
+      });
+    } catch (err) {
+      try {
+        if (originalState) {
+          await registry.update(body.sandboxId, { state: originalState });
+        }
+      } catch (rollbackErr) {
+        const msg = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+        console.warn('[cloud-do] resume rollback failed', { sandboxId: body.sandboxId, err: msg });
+      }
+
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async pauseConeOp(body: SimpleSandboxBody): Promise<Response> {
+    try {
+      await pauseCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
+      return okResponse();
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async killConeOp(body: SimpleSandboxBody): Promise<Response> {
+    try {
+      await killCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
+    } catch (err) {
+      if (isCloudError(err) && err.code === 'NOT_FOUND') return okResponse();
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+    return okResponse();
+  }
+
+  private async listConesOp(body: ListConesBody): Promise<Response> {
+    try {
+      const cones = await listCones(
+        { substrate: this.substrate(), registry: this.registry() },
+        { metadata: { userId: body.userId } }
+      );
+      return okResponse({ cones });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async coneConfigIndexOp(body: SimpleSandboxBody): Promise<Response> {
+    try {
+      const entry = await this.registry().findByNameOrId(body.sandboxId);
+      if (!entry) {
+        return errorResponse(404, 'NOT_FOUND', `cone not found: ${body.sandboxId}`);
+      }
+      return okResponse({ coneConfigIndex: entry.coneConfigIndex ?? null });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+  }
+}
+
+function errCodeToStatus(code: string): number {
+  const map: Record<string, number> = {
+    CAP_EXCEEDED: 403,
+    NOT_FOUND: 404,
+    NAME_TAKEN: 409,
+    ALREADY_PAUSED: 409,
+    ALREADY_RUNNING: 409,
+    LEADER_NOT_READY: 503,
+    SANDBOX_NOT_READY: 503,
+    CDP_NOT_READY: 503,
+    CDP_ERROR: 500,
+    DO_UNREACHABLE: 503,
+    UPSTREAM_UNAVAILABLE: 503,
+    INTERNAL: 500,
+  };
+  return map[code] ?? 500;
+}

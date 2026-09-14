@@ -1,0 +1,170 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slicc-tray-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
+  "assets": {
+    "directory": "../../dist/ui/",
+    "binding": "ASSETS",
+
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+  "r2_buckets": [
+    { "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive" },
+    { "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }
+  ],
+
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "routes": [
+    { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" },
+    { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" }
+  ],
+  "vars": {
+    "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
+
+    "GITHUB_CLIENT_ID": "Ov23li6DZA5dPBZIaqFS",
+
+    "ADOBE_PROXY_ENDPOINT": "https://adobe-llm-proxy.paolo-moz.workers.dev",
+    "IMS_RELAY_URL": "https://www.sliccy.ai/auth/callback",
+    "ALLOWED_EMAIL_DOMAIN": "adobe.com",
+    "BLOCKED_EMAILS": "",
+    "REQUIRE_OWNER_ORG": "false",
+    "ADMIN_USER_IDS": "",
+
+    "CONE_CAP_RUNNING": "1",
+    "CONE_CAP_PAUSED": "5",
+
+    "FEATURE_FLAGS": {
+      "base": {
+        "experimental-settings": "on",
+        "panel-layouts": "off",
+        "agentic-memory": "off",
+        "compact-on-idle": "off",
+        "memory-v2": "off"
+      },
+      "floats": {
+        "standalone": {},
+        "cherry": { "experimental-settings": "off" }
+      }
+    },
+
+    "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev",
+
+    "ALLOWED_CHERRY_HOST_ORIGINS": "* chrome-extension://akjjllgokmbgpbdbmafpiefnhidlmbgf chrome-extension://akggccfpkleihhemkkikggopnifgelbk"
+  },
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRAY_HUB",
+        "class_name": "SessionTrayDurableObject"
+      },
+      {
+        "name": "CLOUD_SESSIONS",
+        "class_name": "CloudSessionsDurableObject"
+      },
+      {
+        "name": "WEBHOOK_HOMES",
+        "class_name": "WebhookHomeDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SessionTrayDurableObject"]
+    },
+    {
+      "tag": "v2-cloud-sessions",
+      "new_classes": ["CloudSessionsDurableObject"]
+    },
+    {
+      "tag": "v3-webhook-homes",
+      "new_sqlite_classes": ["WebhookHomeDurableObject"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "slicc-tray-hub-staging",
+      "workers_dev": true,
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+          "invocation_logs": false
+        }
+      },
+      "assets": {
+        "directory": "../../dist/ui/",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "not_found_handling": "single-page-application"
+      },
+      "r2_buckets": [
+        { "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive-staging" },
+        { "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }
+      ],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "routes": [],
+      "vars": {
+        "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
+        "GITHUB_CLIENT_ID": "Ov23liUe1b3b6GDjPGz4",
+
+        "ADOBE_PROXY_ENDPOINT": "https://adobe-llm-proxy.paolo-moz.workers.dev",
+        "IMS_RELAY_URL": "https://www.sliccy.ai/auth/callback",
+        "ALLOWED_EMAIL_DOMAIN": "adobe.com",
+        "BLOCKED_EMAILS": "",
+        "REQUIRE_OWNER_ORG": "false",
+        "ADMIN_USER_IDS": "",
+
+        "CONE_CAP_RUNNING": "1",
+        "CONE_CAP_PAUSED": "5",
+
+        "FEATURE_FLAGS": {
+          "base": {
+            "experimental-settings": "on",
+            "panel-layouts": "off",
+            "agentic-memory": "off",
+            "compact-on-idle": "off",
+            "memory-v2": "off"
+          },
+          "floats": {
+            "standalone": {},
+            "cherry": { "experimental-settings": "off" }
+          }
+        },
+
+        "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai",
+
+        "ALLOWED_CHERRY_HOST_ORIGINS": "* chrome-extension://akjjllgokmbgpbdbmafpiefnhidlmbgf chrome-extension://akggccfpkleihhemkkikggopnifgelbk"
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "TRAY_HUB",
+            "class_name": "SessionTrayDurableObject"
+          },
+          {
+            "name": "CLOUD_SESSIONS",
+            "class_name": "CloudSessionsDurableObject"
+          },
+          {
+            "name": "WEBHOOK_HOMES",
+            "class_name": "WebhookHomeDurableObject"
+          }
+        ]
+      }
+    }
+  }
+}

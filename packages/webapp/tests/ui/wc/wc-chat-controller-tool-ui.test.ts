@@ -1,0 +1,196 @@
+// @vitest-environment jsdom
+
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { installWcDomStubs } from './wc-dom-stubs.js';
+
+installWcDomStubs();
+
+vi.mock('../../../src/kernel/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/kernel/telemetry.js')>(
+    '../../../src/kernel/telemetry.js'
+  );
+  return { ...actual, trackChatSend: vi.fn() };
+});
+
+const dipMocks: {
+  mount: Mock<(container: HTMLElement, html: string, trusted?: boolean) => void>;
+  dispose: Mock<() => void>;
+  lastOnLick: ((action: string, data: unknown) => void) | null;
+} = {
+  mount: vi.fn<(container: HTMLElement, html: string, trusted?: boolean) => void>(),
+  dispose: vi.fn<() => void>(),
+  lastOnLick: null,
+};
+
+vi.mock('../../../src/ui/dip.js', () => ({
+  mountDip: (
+    container: HTMLElement,
+    html: string,
+    onLick: (action: string, data: unknown) => void,
+    trusted?: boolean
+  ) => {
+    dipMocks.mount(container, html, trusted);
+    dipMocks.lastOnLick = onLick;
+    return { dispose: () => dipMocks.dispose() };
+  },
+}));
+
+import { TOOL_UI_MOUNTED_ACTION } from '../../../src/tools/tool-ui.js';
+import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
+import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
+
+class FakeAgent implements AgentHandle {
+  listeners = new Set<(event: AgentEvent) => void>();
+  sendMessage(): void {}
+  onEvent(callback: (event: AgentEvent) => void): () => void {
+    this.listeners.add(callback);
+    return () => this.listeners.delete(callback);
+  }
+  stop(): void {}
+  emit(event: AgentEvent): void {
+    for (const listener of this.listeners) listener(event);
+  }
+}
+
+describe('WcChatController tool_ui handling', () => {
+  let thread: HTMLElement;
+  let agent: FakeAgent;
+  let actions: Array<{ requestId: string; action: string; data: unknown }>;
+  let controller: WcChatController;
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    agent = new FakeAgent();
+    actions = [];
+    dipMocks.mount.mockClear();
+    dipMocks.dispose.mockClear();
+    dipMocks.lastOnLick = null;
+    controller = new WcChatController({
+      thread,
+      agent,
+      onToolUiAction: (requestId, action, data) => {
+        actions.push({ requestId, action, data });
+      },
+    });
+  });
+
+  it('mounts a dip under the thread and acks the mount on tool_ui', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-1',
+      html: '<button data-action="approve">Approve</button>',
+    });
+
+    expect(dipMocks.mount).toHaveBeenCalledTimes(1);
+    const [container, html, trusted] = dipMocks.mount.mock.calls[0];
+    expect(html).toContain('data-action="approve"');
+    expect(trusted).toBe(false);
+    expect((container as HTMLElement).getAttribute('data-tool-ui-request')).toBe('tool-ui-1');
+    expect((container as HTMLElement).className).toBe('msg__dip');
+
+    expect(actions[0]).toEqual({
+      requestId: 'tool-ui-1',
+      action: TOOL_UI_MOUNTED_ACTION,
+      data: undefined,
+    });
+  });
+
+  it('escapes apostrophes in read-only tool UI titles', () => {
+    controller.dispose();
+    controller = new WcChatController({ thread, agent, readOnlyToolUi: true });
+
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-read-only',
+      html: `<div class="sprinkle-action-card__header">Owner's approval<span class="sprinkle-badge">approval</span></div>`,
+    });
+
+    const [, html] = dipMocks.mount.mock.calls[0];
+    expect(html).toContain('Owner&#39;s approval');
+    expect(html).not.toContain("Owner's approval");
+  });
+
+  it('forwards dip licks to onToolUiAction with the originating requestId', () => {
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-7',
+      html: '<button data-action="deny">Deny</button>',
+    });
+    actions.length = 0;
+    dipMocks.lastOnLick?.('deny', { reason: 'no thanks' });
+    expect(actions).toEqual([
+      { requestId: 'tool-ui-7', action: 'deny', data: { reason: 'no thanks' } },
+    ]);
+  });
+
+  it('disposes the dip on tool_ui_done and removes its container', () => {
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-2',
+      html: '<p>card</p>',
+    });
+    const container = thread.querySelector('[data-tool-ui-request="tool-ui-2"]');
+    expect(container).not.toBeNull();
+
+    agent.emit({ type: 'tool_ui_done', messageId: 'm1', requestId: 'tool-ui-2' });
+    expect(dipMocks.dispose).toHaveBeenCalledTimes(1);
+    expect(thread.querySelector('[data-tool-ui-request="tool-ui-2"]')).toBeNull();
+  });
+
+  it('replaces the dip on a re-entrant tool_ui for the same requestId', () => {
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-3',
+      html: '<p>v1</p>',
+    });
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-3',
+      html: '<p>v2</p>',
+    });
+
+    expect(dipMocks.mount).toHaveBeenCalledTimes(2);
+    expect(dipMocks.dispose).toHaveBeenCalledTimes(1);
+    expect(thread.querySelectorAll('[data-tool-ui-request="tool-ui-3"]').length).toBe(1);
+  });
+
+  it('disposes all live tool_ui dips on loadMessages', () => {
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-4',
+      html: '<p>card</p>',
+    });
+    controller.loadMessages([]);
+    expect(dipMocks.dispose).toHaveBeenCalledTimes(1);
+    expect(thread.querySelector('[data-tool-ui-request="tool-ui-4"]')).toBeNull();
+  });
+
+  it('disposes all live tool_ui dips on dispose', () => {
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-5',
+      html: '<p>card</p>',
+    });
+    controller.dispose();
+    expect(dipMocks.dispose).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,0 +1,51 @@
+{
+  "model": "fake-rasterizer",
+  "turns": [
+    {
+      "whenUserMessageMatches": "seed and rasterize at 72",
+      "content": "Seeding a two-page PDF into the VFS and rasterizing it at 72 DPI.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "mkdir -p /workspace/pdftest; cd /workspace/pdftest; echo 'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA0IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAgMTAwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNiAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAgMTAwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNyAwIFIgPj4KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago2IDAgb2JqCjw8IC9MZW5ndGggNjYgPj4Kc3RyZWFtCjEgMCAwIHJnIDEwIDEwIDgwIDgwIHJlIGYKQlQgL0YxIDE0IFRmIDEwMCA0NSBUZCAoUEFHRSBPTkUpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNyAwIG9iago8PCAvTGVuZ3RoIDY2ID4+CnN0cmVhbQowIDAgMSByZyAxMCAxMCA4MCA4MCByZSBmCkJUIC9GMSAxNCBUZiAxMDAgNDUgVGQgKFBBR0UgVFdPKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA4CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMjEgMDAwMDAgbiAKMDAwMDAwMDI0NyAwMDAwMCBuIAowMDAwMDAwMzczIDAwMDAwIG4gCjAwMDAwMDA0NDMgMDAwMDAgbiAKMDAwMDAwMDU1OCAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDggL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjY3MwolJUVPRgo=' | base64 -d > doc.pdf; file doc.pdf; pdftoppm -png -r 72 doc.pdf page; ls"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. Wrote page-1.png and page-2.png at 72 DPI."
+    },
+    {
+      "whenUserMessageMatches": "rasterize at 144",
+      "content": "Rasterizing page 1 only, at 144 DPI, into a single file.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "cd /workspace/pdftest; pdftoppm -png -r 144 -f 1 -l 1 -singlefile doc.pdf hi; ls"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. Wrote hi.png at 144 DPI."
+    },
+    {
+      "whenUserMessageMatches": "rasterize as jpeg",
+      "content": "Rasterizing page 2 as a JPEG at the default resolution.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "cd /workspace/pdftest; pdftoppm -jpeg -jpegopt quality=80 -f 2 -singlefile doc.pdf cover; ls"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. Wrote cover.jpg from page 2."
+    }
+  ],
+  "onOverflow": "error"
+}

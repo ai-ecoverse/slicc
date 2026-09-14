@@ -1,0 +1,136 @@
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { TrayFsRequest, TrayFsResponse } from './tray-sync-protocol.js';
+
+export { base64ToUint8, uint8ToBase64 };
+
+const CHUNK_THRESHOLD_CHARS = 64 * 1024;
+
+export async function handleFsRequest(
+  vfs: VirtualFS,
+  request: TrayFsRequest
+): Promise<TrayFsResponse[]> {
+  try {
+    switch (request.op) {
+      case 'readFile':
+        return await handleReadFile(vfs, request.path, request.encoding);
+      case 'writeFile':
+        return [await handleWriteFile(vfs, request.path, request.content, request.encoding)];
+      case 'stat':
+        return [await handleStat(vfs, request.path)];
+      case 'readDir':
+        return [await handleReadDir(vfs, request.path)];
+      case 'mkdir':
+        return [await handleMkdir(vfs, request.path, request.recursive)];
+      case 'rm':
+        return [await handleRm(vfs, request.path, request.recursive)];
+      case 'exists':
+        return [await handleExists(vfs, request.path)];
+      case 'walk':
+        return [await handleWalk(vfs, request.path)];
+      default:
+        return [{ ok: false, error: `Unknown fs operation: ${(request as { op: string }).op}` }];
+    }
+  } catch (err) {
+    return [errorResponse(err)];
+  }
+}
+
+async function handleReadFile(
+  vfs: VirtualFS,
+  path: string,
+  encoding?: 'utf-8' | 'binary'
+): Promise<TrayFsResponse[]> {
+  const enc = encoding ?? 'utf-8';
+  if (enc === 'utf-8') {
+    const text = (await vfs.readFile(path, { encoding: 'utf-8' })) as string;
+    return chunkContent(text, 'utf-8');
+  }
+
+  const data = (await vfs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+  const b64 = uint8ToBase64(data);
+  return chunkContent(b64, 'base64');
+}
+
+async function handleWriteFile(
+  vfs: VirtualFS,
+  path: string,
+  content: string,
+  encoding: 'utf-8' | 'base64'
+): Promise<TrayFsResponse> {
+  if (encoding === 'base64') {
+    const data = base64ToUint8(content);
+    await vfs.writeFile(path, data);
+  } else {
+    await vfs.writeFile(path, content);
+  }
+  return { ok: true, data: { type: 'void' } };
+}
+
+async function handleStat(vfs: VirtualFS, path: string): Promise<TrayFsResponse> {
+  const s = await vfs.stat(path);
+  return { ok: true, data: { type: 'stat', stat: s } };
+}
+
+async function handleReadDir(vfs: VirtualFS, path: string): Promise<TrayFsResponse> {
+  const entries = await vfs.readDir(path);
+  return { ok: true, data: { type: 'dirEntries', entries } };
+}
+
+async function handleMkdir(
+  vfs: VirtualFS,
+  path: string,
+  recursive?: boolean
+): Promise<TrayFsResponse> {
+  await vfs.mkdir(path, { recursive });
+  return { ok: true, data: { type: 'void' } };
+}
+
+async function handleRm(
+  vfs: VirtualFS,
+  path: string,
+  recursive?: boolean
+): Promise<TrayFsResponse> {
+  await vfs.rm(path, { recursive });
+  return { ok: true, data: { type: 'void' } };
+}
+
+async function handleExists(vfs: VirtualFS, path: string): Promise<TrayFsResponse> {
+  const exists = await vfs.exists(path);
+  return { ok: true, data: { type: 'exists', exists } };
+}
+
+async function handleWalk(vfs: VirtualFS, path: string): Promise<TrayFsResponse> {
+  const paths: string[] = [];
+  for await (const p of vfs.walk(path)) {
+    paths.push(p);
+  }
+  return { ok: true, data: { type: 'paths', paths } };
+}
+
+function chunkContent(content: string, encoding: 'utf-8' | 'base64'): TrayFsResponse[] {
+  if (content.length <= CHUNK_THRESHOLD_CHARS) {
+    return [{ ok: true, data: { type: 'file', content, encoding } }];
+  }
+
+  const totalChunks = Math.ceil(content.length / CHUNK_THRESHOLD_CHARS);
+  const responses: TrayFsResponse[] = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_THRESHOLD_CHARS;
+    const chunk = content.slice(start, start + CHUNK_THRESHOLD_CHARS);
+    responses.push({
+      ok: true,
+      data: { type: 'file', content: chunk, encoding },
+      chunkIndex: i,
+      totalChunks,
+    });
+  }
+  return responses;
+}
+
+function errorResponse(err: unknown): TrayFsResponse {
+  if (err instanceof Error && 'code' in err) {
+    return { ok: false, error: err.message, code: (err as Error & { code: string }).code };
+  }
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+}

@@ -1,0 +1,1363 @@
+import {
+  type FollowerAttachResponse,
+  type FollowerAttachResult,
+  type FollowerTrust,
+  type LeaderToWorkerControlMessage,
+  TRAY_BOOTSTRAP_MAX_RETRIES,
+  TRAY_BOOTSTRAP_RETRY_AFTER_MS,
+  TRAY_BOOTSTRAP_TIMEOUT_MS,
+  type TrayLeaderSummary,
+  type TurnIceServer,
+  type WorkerToLeaderControlMessage,
+} from '@slicc/shared-ts';
+import {
+  type ApnsProviderTokenSource,
+  type ApnsSender,
+  apnsConfigFromEnv,
+  LocalProviderTokenMinter,
+  WebCryptoApnsSender,
+} from './apns.js';
+import {
+  APNS_TOKEN_PATH,
+  durableObjectProviderTokenStore,
+  handleProviderTokenRequest,
+  SharedProviderTokenSource,
+} from './apns-provider-token.js';
+import { prefersManualRedirect, supersededLinkHeaders, supersededLocation } from './links.js';
+import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
+import { PreviewContinuity } from './preview-continuity.js';
+import { previewTokenFromHost } from './preview-host.js';
+import { type BiscottoDeps, dispatchBiscottoRoute } from './session-tray-biscotto.js';
+import { BootstrapCoordinator, type BootstrapDeps } from './session-tray-bootstrap.js';
+import { BRIDGE_WS_TAG, type BridgeDeps, BridgeRelay } from './session-tray-bridge.js';
+import {
+  dispatchPreviewRoute,
+  expirePersistentPreviews,
+  failAllPendingPreviews,
+  handlePreviewPurge,
+  listPreviews as listPreviewsImpl,
+  mintPreview as mintPreviewImpl,
+  type PreviewAssembler,
+  type PreviewDeps,
+  type PreviewResponseChunk,
+  previewAnnouncementState,
+  pushPreviewResponseChunk,
+  resolvePreview as resolvePreviewImpl,
+  revokePreview as revokePreviewImpl,
+} from './session-tray-preview.js';
+import { PushCoordinator, type PushDeps } from './session-tray-push.js';
+import {
+  buildLeaderWebSocketUrl,
+  type ControllerAttachRequest,
+  isBootstrapRequest,
+  type JoinRequest,
+  joinRequestControllerId,
+  readAttachRequest,
+  readJoinRequest,
+} from './session-tray-requests.js';
+import { type WebhookDeps, WebhookRelay } from './session-tray-webhook.js';
+import {
+  type CreateTrayRequest,
+  type DurableObjectNamespaceLike,
+  type DurableObjectStateLike,
+  FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  type JoinCapability,
+  jsonResponse,
+  type PreviewRecord,
+  reclaimMsForTray,
+  resolveJoinCapability,
+  type TrayRecord,
+  type TrayWebSocketLike,
+  websocketResponse,
+} from './shared.js';
+import { timingSafeEqual } from './timing-safe-equal.js';
+import { fetchTURNCredentials, TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
+import { readBoundedWebhookBody } from './webhook-body.js';
+
+export interface SessionTrayEnv {
+  CLOUDFLARE_TURN_KEY_ID?: string;
+  CLOUDFLARE_TURN_API_TOKEN?: string;
+  PREVIEW_STORAGE?: R2Bucket;
+
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_PRIVATE_KEY?: string;
+  APNS_TOPIC?: string;
+
+  TRAY_HUB?: DurableObjectNamespaceLike;
+}
+
+interface SessionTrayOptions {
+  now?: () => number;
+  webSocketPairFactory?: () => { client: unknown; server: TrayWebSocketLike };
+  fetchImpl?: typeof fetch;
+
+  apnsSender?: ApnsSender | null;
+
+  webhookDeliveryWaitMs?: number;
+}
+
+const TRAY_STORAGE_KEY = 'tray';
+const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const LEADER_WS_TAG = 'leader';
+
+const LEADER_SEEN_PERSIST_MS = 30_000;
+
+const CONTROLLER_STALE_MS = 2 * 60 * 60 * 1000;
+
+const LEADER_STALE_MS = 2 * 60 * 1000;
+
+interface CachedIceServers {
+  iceServers: TurnIceServer[];
+  expiresAtMs: number;
+}
+
+const CORS_PREFLIGHT_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': 'content-type',
+};
+
+export class SessionTrayDurableObject {
+  private readonly now: () => number;
+  private readonly webSocketPairFactory: () => { client: unknown; server: TrayWebSocketLike };
+  private readonly fetchImpl: typeof fetch;
+  private readonly turnKeyId: string | undefined;
+  private readonly turnApiToken: string | undefined;
+  private readonly previewStorage: R2Bucket | undefined;
+  private readonly apns: ApnsSender | null;
+
+  private readonly apnsTokenMinter: ApnsProviderTokenSource | null;
+  private tray: TrayRecord | null = null;
+  private leaderSocket: TrayWebSocketLike | null = null;
+  private cachedIceServers: CachedIceServers | null = null;
+  private autoResponseSet = false;
+
+  private lastLeaderSeenPersistMs = 0;
+
+  private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+  private previewMutation: Promise<unknown> = Promise.resolve();
+
+  private readonly bootstrap: BootstrapCoordinator;
+  private readonly bridge: BridgeRelay;
+  private readonly previewContinuity: PreviewContinuity;
+  private readonly webhooks: WebhookRelay;
+  private readonly push: PushCoordinator;
+
+  constructor(
+    private readonly state: DurableObjectStateLike,
+    env: SessionTrayEnv | unknown,
+    options: SessionTrayOptions = {}
+  ) {
+    this.now = options.now ?? (() => Date.now());
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    const typedEnv = (env && typeof env === 'object' ? env : {}) as SessionTrayEnv;
+    this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
+    this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
+    this.previewStorage = typedEnv.PREVIEW_STORAGE;
+    const apnsConfig = apnsConfigFromEnv(typedEnv);
+    this.apnsTokenMinter = apnsConfig
+      ? new LocalProviderTokenMinter(apnsConfig, {
+          now: this.now,
+          store: durableObjectProviderTokenStore(this.state.storage),
+        })
+      : null;
+    if (options.apnsSender !== undefined) {
+      this.apns = options.apnsSender;
+    } else if (apnsConfig && this.apnsTokenMinter) {
+      const tokenSource = typedEnv.TRAY_HUB
+        ? new SharedProviderTokenSource(typedEnv.TRAY_HUB, this.now)
+        : this.apnsTokenMinter;
+      this.apns = new WebCryptoApnsSender(apnsConfig, {
+        fetchImpl: this.fetchImpl,
+        now: this.now,
+        tokenSource,
+      });
+    } else {
+      this.apns = null;
+    }
+    this.webSocketPairFactory =
+      options.webSocketPairFactory ??
+      (() => {
+        const PairCtor = (globalThis as { WebSocketPair?: new () => { 0: unknown; 1: unknown } })
+          .WebSocketPair;
+        if (!PairCtor) {
+          throw new Error('WebSocketPair is not available in this runtime');
+        }
+        const pair = new PairCtor();
+        return {
+          client: pair[0],
+          server: pair[1] as TrayWebSocketLike,
+        };
+      });
+
+    this.bootstrap = new BootstrapCoordinator(this.bootstrapDeps());
+    this.bridge = new BridgeRelay(this.bridgeDeps());
+    this.previewContinuity = new PreviewContinuity({
+      namespace: typedEnv.TRAY_HUB,
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      matchesToken: (received, expected) => this.matchesToken(received, expected),
+      revoke: async (token) => {
+        const result = await this.revokePreview(token);
+        this.bridge.closeSocketsForPreview(token);
+        return result;
+      },
+      transferred: async (tokens) => {
+        for (const token of tokens) this.bridge.closeSocketsForPreview(token, true);
+        failAllPendingPreviews(this.pendingPreviews);
+        await this.state.storage.deleteAlarm?.();
+      },
+      imported: async () => {
+        await expirePersistentPreviews(this.previewDeps());
+        if (this.leaderSocket) this.replayPreviewStatesToLeader(this.leaderSocket);
+      },
+    });
+    this.webhooks = new WebhookRelay(this.webhookDeps(), options.webhookDeliveryWaitMs);
+    this.push = new PushCoordinator(this.pushDeps());
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/internal/create' && request.method === 'POST') {
+      return this.handleCreate(request);
+    }
+
+    if (url.pathname === APNS_TOKEN_PATH) {
+      return this.handleApnsTokenRequest(request);
+    }
+
+    this.restoreLeaderSocket();
+
+    if (url.pathname.startsWith('/internal/preview/')) {
+      const previewRoute = await this.handleInternalPreviewRoute(url, request);
+      if (previewRoute) return previewRoute;
+    }
+
+    if (
+      url.pathname === '/__slicc/bridge' &&
+      request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+    ) {
+      const hostResult = previewTokenFromHost(url.host);
+      if (hostResult) {
+        return this.bridge.handleWebSocket(hostResult.token, request);
+      }
+    }
+
+    await this.loadTray();
+    this.restoreLeaderSocket();
+    if (!this.tray) {
+      return jsonResponse({ error: 'Tray not initialized', code: 'TRAY_NOT_INITIALIZED' }, 500);
+    }
+
+    const internal = await this.handleInternalRoute(url, request);
+    if (internal) return internal;
+
+    const joinMatch = url.pathname.match(/^\/join\/([^/]+)$/);
+    if (joinMatch) {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: CORS_PREFLIGHT_HEADERS });
+      }
+      const response = await this.handleJoin(request, joinMatch[1], url);
+      response.headers.set('access-control-allow-origin', '*');
+      return response;
+    }
+
+    const webhookMatch = url.pathname.match(/^\/webhook\/([^/]+?)(?:\/([^/]+))?$/);
+    if (webhookMatch) {
+      return this.handleWebhookRoute(request, webhookMatch[1], webhookMatch[2]);
+    }
+
+    const expiration = await this.ensureTrayIsActive();
+    if (expiration) {
+      return expiration;
+    }
+
+    const controllerMatch = url.pathname.match(/^\/controller\/([^/]+)$/);
+    if (controllerMatch) {
+      if (request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
+        return this.handleLeaderWebSocket(controllerMatch[1], url);
+      }
+      return this.handleControllerAttach(request, controllerMatch[1], url);
+    }
+
+    return jsonResponse({ error: 'Not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  private handleWebhookRoute(
+    request: Request,
+    token: string,
+    webhookId: string | undefined
+  ): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return Promise.resolve(new Response(null, { status: 204, headers: CORS_PREFLIGHT_HEADERS }));
+    }
+    if (request.method !== 'POST') {
+      return Promise.resolve(
+        jsonResponse({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405, {
+          allow: 'POST, OPTIONS',
+        })
+      );
+    }
+    return this.webhooks.handle(token, request, webhookId);
+  }
+
+  private async handleInternalRoute(url: URL, request: Request): Promise<Response | null> {
+    if (url.pathname === '/internal/supersede' && request.method === 'POST') {
+      return this.handleSupersede(request);
+    }
+
+    if (url.pathname === '/internal/confirm-controller' && request.method === 'POST') {
+      return this.handleConfirmController(request);
+    }
+
+    if (url.pathname === '/internal/confirm-controller-ownership' && request.method === 'POST') {
+      return this.handleConfirmController(request, true);
+    }
+
+    const internalWebhookMatch = url.pathname.match(/^\/internal\/webhook\/([^/]+)$/);
+    if (internalWebhookMatch && request.method === 'POST') {
+      return this.webhooks.handleInternal(decodeURIComponent(internalWebhookMatch[1]!), request);
+    }
+    if (url.pathname.startsWith('/internal/biscotto/')) {
+      return dispatchBiscottoRoute(url, request, this.biscottoDeps(), (id) =>
+        this.announceBiscottoRevocation(id)
+      );
+    }
+    return null;
+  }
+
+  private async handleConfirmController(
+    request: Request,
+    ownershipOnly = false
+  ): Promise<Response> {
+    let body: { controllerToken?: string };
+    try {
+      body = JSON.parse(
+        new TextDecoder().decode(await readBoundedWebhookBody(request))
+      ) as typeof body;
+    } catch {
+      return jsonResponse({ confirmed: false }, 200);
+    }
+    const token = typeof body?.controllerToken === 'string' ? body.controllerToken : '';
+    const confirmed = this.tray ? this.matchesToken(token, this.tray.controllerToken) : false;
+    if (!confirmed || ownershipOnly) return jsonResponse({ confirmed }, 200);
+    const unavailable =
+      this.tray?.supersededByJoinUrl ||
+      this.tray?.supersededByWebhookUrl ||
+      (await this.ensureTrayIsActive());
+    return jsonResponse({ confirmed: !unavailable }, 200);
+  }
+
+  async webSocketMessage(ws: TrayWebSocketLike, message: string | ArrayBuffer): Promise<void> {
+    if (!this.tray) {
+      await this.loadTray();
+    }
+
+    if (this.tagsFor(ws).includes(BRIDGE_WS_TAG)) {
+      await this.bridge.handleMessage(ws, message);
+      return;
+    }
+
+    this.leaderSocket = ws;
+    const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    await this.handleLeaderMessage(ws, data);
+  }
+
+  async webSocketClose(ws: TrayWebSocketLike): Promise<void> {
+    if (this.tagsFor(ws).includes(BRIDGE_WS_TAG)) {
+      await this.bridge.handleSocketGone(ws);
+      return;
+    }
+    await this.handleLeaderSocketGone(ws);
+  }
+
+  async webSocketError(ws: TrayWebSocketLike): Promise<void> {
+    await this.webSocketClose(ws);
+  }
+
+  private async handleLeaderSocketGone(ws: TrayWebSocketLike): Promise<void> {
+    if (!this.tray) {
+      await this.loadTray();
+    }
+    const liveSockets = this.currentLeaderSockets().filter((socket) => socket !== ws);
+    if (liveSockets.length > 0) {
+      this.leaderSocket = liveSockets[0] ?? null;
+      return;
+    }
+    this.leaderSocket = ws;
+    await this.markLeaderDisconnected(ws);
+  }
+
+  private currentLeaderSockets(): TrayWebSocketLike[] {
+    if (typeof this.state.getWebSockets !== 'function') {
+      return this.leaderSocket ? [this.leaderSocket] : [];
+    }
+    return this.state.getWebSockets(LEADER_WS_TAG) as TrayWebSocketLike[];
+  }
+
+  private restoreLeaderSocket(): void {
+    if (this.leaderSocket) {
+      return;
+    }
+    const [socket] = this.currentLeaderSockets();
+    if (socket) {
+      this.leaderSocket = socket;
+    }
+  }
+
+  private socketsWithTag(tag: string): TrayWebSocketLike[] {
+    return (this.state.getWebSockets?.(tag) ?? []) as TrayWebSocketLike[];
+  }
+
+  private tagsFor(ws: TrayWebSocketLike): string[] {
+    return this.state.getTags?.(ws) ?? [];
+  }
+
+  private ensureWebSocketAutoResponse(): void {
+    if (this.autoResponseSet) return;
+    if (typeof WebSocketRequestResponsePair !== 'undefined') {
+      this.state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('ping', 'pong'));
+    }
+    this.autoResponseSet = true;
+  }
+
+  private async handleCreate(request: Request): Promise<Response> {
+    const payload = (await request.json()) as CreateTrayRequest;
+    if (this.tray) {
+      return jsonResponse(this.tray, 200);
+    }
+
+    this.tray = {
+      trayId: payload.trayId,
+      createdAt: payload.createdAt,
+      joinToken: payload.joinToken,
+      controllerToken: payload.controllerToken,
+      webhookToken: payload.webhookToken,
+      kind: payload.kind ?? 'desktop',
+      controllers: {},
+      bootstraps: {},
+      leader: null,
+    };
+    await this.persistTray();
+    return jsonResponse(this.tray, 201);
+  }
+
+  private async handleSupersede(request: Request): Promise<Response> {
+    const tray = this.requireTray();
+    let body: { controllerToken?: string; joinUrl?: string; webhookUrl?: string };
+    try {
+      body = (await request.json()) as {
+        controllerToken?: string;
+        joinUrl?: string;
+        webhookUrl?: string;
+      };
+    } catch {
+      return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
+    }
+    if (!this.matchesToken(body.controllerToken ?? '', tray.controllerToken)) {
+      return jsonResponse(
+        { error: 'Invalid controller capability', code: 'INVALID_CONTROLLER_CAPABILITY' },
+        403
+      );
+    }
+    if (typeof body.joinUrl !== 'string' || !body.joinUrl) {
+      return jsonResponse({ error: 'joinUrl is required', code: 'INVALID_BODY' }, 400);
+    }
+    try {
+      new URL(body.joinUrl);
+    } catch {
+      return jsonResponse({ error: 'joinUrl must be an absolute URL', code: 'INVALID_BODY' }, 400);
+    }
+
+    if (body.webhookUrl !== undefined) {
+      if (typeof body.webhookUrl !== 'string' || !body.webhookUrl) {
+        return jsonResponse(
+          { error: 'webhookUrl must be a non-empty string', code: 'INVALID_BODY' },
+          400
+        );
+      }
+      try {
+        new URL(body.webhookUrl);
+      } catch {
+        return jsonResponse(
+          { error: 'webhookUrl must be an absolute URL', code: 'INVALID_BODY' },
+          400
+        );
+      }
+      tray.supersededByWebhookUrl = body.webhookUrl;
+    }
+    tray.supersededByJoinUrl = body.joinUrl;
+    await this.persistTray();
+    return jsonResponse(
+      {
+        trayId: tray.trayId,
+        supersededByJoinUrl: tray.supersededByJoinUrl,
+        supersededByWebhookUrl: tray.supersededByWebhookUrl,
+      },
+      200
+    );
+  }
+
+  private async loadTray(): Promise<void> {
+    if (this.tray) {
+      return;
+    }
+    const storedTray = (await this.state.storage.get<TrayRecord>(TRAY_STORAGE_KEY)) ?? null;
+    this.tray = storedTray
+      ? {
+          ...storedTray,
+          bootstraps: storedTray.bootstraps ?? {},
+        }
+      : null;
+  }
+
+  private async persistTray(): Promise<void> {
+    if (!this.tray) {
+      return;
+    }
+    try {
+      await this.state.storage.put(TRAY_STORAGE_KEY, this.tray);
+    } catch (error) {
+      this.tray = null;
+      throw error;
+    }
+  }
+
+  private requireTray(): TrayRecord {
+    if (!this.tray) {
+      throw new Error('Tray not loaded');
+    }
+    return this.tray;
+  }
+
+  private async ensureTrayIsActive(): Promise<Response | null> {
+    const tray = this.requireTray();
+
+    if (tray.expiredAt) {
+      return jsonResponse({ error: 'Tray expired', code: 'TRAY_EXPIRED' }, 410);
+    }
+
+    if (tray.leader?.connected && !this.leaderSocket) {
+      tray.leader.connected = false;
+      tray.leader.disconnectedAt ??= this.isoNow();
+      await this.persistTray();
+    }
+
+    if (!tray.leader?.disconnectedAt || tray.leader.connected) {
+      return null;
+    }
+
+    const expiresAt = Date.parse(tray.leader.disconnectedAt) + reclaimMsForTray(tray);
+    if (this.now() <= expiresAt) {
+      return null;
+    }
+
+    tray.expiredAt = this.isoNow();
+    await this.persistTray();
+    return jsonResponse(
+      {
+        error: 'Tray expired because the leader did not reclaim it in time',
+        code: 'TRAY_EXPIRED',
+      },
+      410
+    );
+  }
+
+  private async handleJoin(request: Request, token: string, url: URL): Promise<Response> {
+    const tray = this.requireTray();
+    const joinRequest = request.method === 'POST' ? await readJoinRequest(request, url) : null;
+
+    const capability = resolveJoinCapability(tray, token, this.now(), (a, b) =>
+      this.matchesToken(a, b)
+    );
+    if (!capability) {
+      if (joinRequest) {
+        return await this.buildFollowerAttachResponse(
+          joinRequestControllerId(joinRequest),
+          {
+            action: 'fail',
+            code: 'INVALID_JOIN_CAPABILITY',
+            error: 'Invalid join capability',
+          },
+          403
+        );
+      }
+      return jsonResponse(
+        { error: 'Invalid join capability', code: 'INVALID_JOIN_CAPABILITY' },
+        403
+      );
+    }
+
+    if (tray.supersededByJoinUrl && capability.trust === 'full') {
+      return await this.supersededResponse(tray.supersededByJoinUrl, joinRequest, url);
+    }
+    if (tray.supersededByJoinUrl) {
+      if (joinRequest) {
+        return await this.buildFollowerAttachResponse(
+          joinRequestControllerId(joinRequest),
+          {
+            action: 'fail',
+            code: 'TRAY_EXPIRED',
+            error: 'This guest session ended when the tray was replaced',
+          },
+          410
+        );
+      }
+      return jsonResponse(
+        { error: 'This guest session ended when the tray was replaced', code: 'TRAY_EXPIRED' },
+        410
+      );
+    }
+
+    const expiration = await this.ensureTrayIsActive();
+    if (expiration) {
+      if (joinRequest) {
+        return await this.buildFollowerAttachResponse(
+          joinRequestControllerId(joinRequest),
+          {
+            action: 'fail',
+            code: 'TRAY_EXPIRED',
+            error: 'Tray expired because the leader did not reclaim it in time',
+          },
+          410
+        );
+      }
+      return expiration;
+    }
+
+    if (joinRequest) {
+      if (isBootstrapRequest(joinRequest)) {
+        return this.bootstrap.handleRequest(joinRequest);
+      }
+      return this.handleFollowerAttach(joinRequest, capability);
+    }
+
+    return this.handleJoinProbe(tray);
+  }
+
+  private async handleJoinProbe(tray: TrayRecord): Promise<Response> {
+    const payload = {
+      trayId: tray.trayId,
+      capability: 'join',
+      leader: await this.leaderSummary(),
+      participantCount: Object.keys(tray.controllers).length,
+    };
+
+    if (!tray.leader || !this.hasLiveLeader()) {
+      return jsonResponse(
+        {
+          ...payload,
+          error: 'Follower join requires a live leader connection before signaling can begin',
+          code: 'FOLLOWER_JOIN_NOT_READY',
+          retryable: true,
+        },
+        409
+      );
+    }
+
+    return jsonResponse({
+      ...payload,
+      signaling: {
+        transport: 'http-poll',
+        actions: ['attach', 'poll', 'answer', 'ice-candidate', 'retry'],
+        timeoutMs: TRAY_BOOTSTRAP_TIMEOUT_MS,
+        maxRetries: TRAY_BOOTSTRAP_MAX_RETRIES,
+        retryAfterMs: TRAY_BOOTSTRAP_RETRY_AFTER_MS,
+      },
+    });
+  }
+
+  private async supersededResponse(
+    joinUrl: string,
+    joinRequest: JoinRequest | null,
+    requestUrl: URL
+  ): Promise<Response> {
+    const error = 'This session moved to a new tray after the leader reconnected';
+    const location = prefersManualRedirect(requestUrl)
+      ? null
+      : supersededLocation(joinUrl, requestUrl);
+    const headers = {
+      ...supersededLinkHeaders(joinUrl),
+      ...(location ? { Location: location } : {}),
+    };
+    const status = location ? 308 : 409;
+    if (joinRequest) {
+      return await this.buildFollowerAttachResponse(
+        joinRequestControllerId(joinRequest),
+        {
+          action: location ? 'redirect' : 'fail',
+          code: 'TRAY_SUPERSEDED',
+          error,
+          joinUrl,
+        },
+        status,
+        undefined,
+        headers
+      );
+    }
+    return jsonResponse(
+      {
+        trayId: this.requireTray().trayId,
+        capability: 'join',
+        error,
+        code: 'TRAY_SUPERSEDED',
+        joinUrl,
+      },
+      status,
+      headers
+    );
+  }
+
+  private async handleFollowerAttach(
+    attach: ControllerAttachRequest,
+    capability: JoinCapability
+  ): Promise<Response> {
+    try {
+      const tray = this.requireTray();
+      this.pruneStaleControllers();
+      const controllerId = attach.controllerId ?? crypto.randomUUID();
+      const biscottoId = capability.trust === 'biscotto' ? capability.biscotto.id : undefined;
+
+      const mismatch = this.recordFollowerController(controllerId, attach.runtime, biscottoId);
+      if (mismatch) return mismatch;
+
+      if (capability.trust === 'biscotto') {
+        capability.biscotto.lastSeenAt = this.isoNow();
+      }
+
+      let iceServers: TurnIceServer[] | undefined;
+      const result: FollowerAttachResult = this.hasLiveLeader()
+        ? {
+            action: 'signal',
+            code: 'LEADER_CONNECTED',
+            bootstrap: this.bootstrap.buildStatus(
+              await this.bootstrap.ensure(controllerId, attach.runtime, biscottoId)
+            ),
+          }
+        : {
+            action: 'wait',
+            code: tray.leader ? 'LEADER_NOT_CONNECTED' : 'LEADER_NOT_ELECTED',
+            retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+          };
+
+      if (result.action === 'signal') {
+        iceServers = await this.getIceServers();
+      }
+
+      await this.persistTray();
+
+      return await this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonResponse(
+        {
+          error: 'Internal error during follower attach',
+          code: 'FOLLOWER_ATTACH_ERROR',
+          diagnostics: message,
+        },
+        500
+      );
+    }
+  }
+
+  private recordFollowerController(
+    controllerId: string,
+    runtime: string | undefined,
+    biscottoId: string | undefined
+  ): Response | null {
+    const tray = this.requireTray();
+    const nowIso = this.isoNow();
+    const known = tray.controllers[controllerId];
+    if (!known) {
+      tray.controllers[controllerId] = {
+        controllerId,
+        firstSeenAt: nowIso,
+        lastSeenAt: nowIso,
+        runtime,
+        biscottoId,
+      };
+      return null;
+    }
+    if (known.biscottoId !== biscottoId) {
+      return jsonResponse(
+        {
+          error: 'Controller id was already attached with a different capability',
+          code: 'JOIN_CAPABILITY_MISMATCH',
+        },
+        409
+      );
+    }
+    known.lastSeenAt = nowIso;
+    if (runtime) {
+      known.runtime = runtime;
+    }
+    return null;
+  }
+
+  private async buildFollowerAttachResponse(
+    controllerId: string,
+    result: FollowerAttachResult,
+    status = 200,
+    iceServers?: TurnIceServer[],
+    headers?: HeadersInit
+  ): Promise<Response> {
+    const tray = this.requireTray();
+    const payload: FollowerAttachResponse = {
+      trayId: tray.trayId,
+      controllerId,
+      role: 'follower',
+      trust: this.trustForController(controllerId),
+      leader: await this.leaderSummary(),
+      participantCount: Object.keys(tray.controllers).length,
+      result,
+    };
+    if (iceServers) {
+      payload.iceServers = iceServers;
+    }
+    return jsonResponse(payload, status, headers);
+  }
+
+  private trustForController(controllerId: string): FollowerTrust {
+    return this.requireTray().controllers[controllerId]?.biscottoId ? 'biscotto' : 'full';
+  }
+
+  private pruneStaleControllers(): void {
+    const tray = this.requireTray();
+    const cutoff = new Date(this.now() - CONTROLLER_STALE_MS).toISOString();
+    const leaderControllerId = tray.leader?.controllerId;
+    for (const [id, controller] of Object.entries(tray.controllers)) {
+      if (id === leaderControllerId) continue;
+      if (controller.lastSeenAt < cutoff) {
+        delete tray.controllers[id];
+      }
+    }
+  }
+
+  private async handleControllerAttach(
+    request: Request,
+    token: string,
+    url: URL
+  ): Promise<Response> {
+    const tray = this.requireTray();
+    if (!this.matchesToken(token, tray.controllerToken)) {
+      return jsonResponse(
+        { error: 'Invalid controller capability', code: 'INVALID_CONTROLLER_CAPABILITY' },
+        403
+      );
+    }
+
+    const attach = await readAttachRequest(request, url);
+    this.pruneStaleControllers();
+    const controllerId = attach.controllerId ?? crypto.randomUUID();
+    const nowIso = this.isoNow();
+
+    if (!tray.controllers[controllerId]) {
+      tray.controllers[controllerId] = {
+        controllerId,
+        firstSeenAt: nowIso,
+        lastSeenAt: nowIso,
+        runtime: attach.runtime,
+      };
+    } else {
+      tray.controllers[controllerId].lastSeenAt = nowIso;
+      if (attach.runtime) {
+        tray.controllers[controllerId].runtime = attach.runtime;
+      }
+    }
+
+    let role: 'leader' | 'follower' = 'follower';
+    let leaderKey: string | undefined;
+
+    if (!tray.leader) {
+      role = 'leader';
+      leaderKey = this.createLeaderKey();
+      tray.leader = {
+        controllerId,
+        leaderKey,
+        claimedAt: nowIso,
+        lastSeenAt: nowIso,
+        connected: false,
+      };
+    } else if (attach.leaderKey === tray.leader.leaderKey) {
+      if (tray.leader.connected && tray.leader.controllerId !== controllerId) {
+        return jsonResponse(
+          { error: 'Leader is already connected', code: 'LEADER_ALREADY_CONNECTED' },
+          409
+        );
+      }
+      role = 'leader';
+      tray.leader.controllerId = controllerId;
+      tray.leader.lastSeenAt = nowIso;
+      tray.leader.disconnectedAt = undefined;
+      leaderKey = tray.leader.leaderKey;
+    } else if (!tray.leader.connected && tray.leader.controllerId === controllerId) {
+      return jsonResponse(
+        {
+          error: 'Leader reclaim requires the previously issued leader key',
+          code: 'LEADER_KEY_REQUIRED',
+        },
+        409
+      );
+    }
+
+    await this.persistTray();
+
+    return jsonResponse({
+      trayId: tray.trayId,
+      controllerId,
+      role,
+      leaderKey,
+      leader: await this.leaderSummary(),
+      websocket:
+        role === 'leader' && leaderKey
+          ? { url: buildLeaderWebSocketUrl(url, controllerId, leaderKey) }
+          : null,
+    });
+  }
+
+  private async handleLeaderWebSocket(token: string, url: URL): Promise<Response> {
+    const tray = this.requireTray();
+    if (!this.matchesToken(token, tray.controllerToken)) {
+      return jsonResponse(
+        { error: 'Invalid controller capability', code: 'INVALID_CONTROLLER_CAPABILITY' },
+        403
+      );
+    }
+    if (!tray.leader) {
+      return jsonResponse({ error: 'No leader has been elected', code: 'LEADER_NOT_ELECTED' }, 409);
+    }
+
+    const controllerId = url.searchParams.get('controllerId');
+    const leaderKey = url.searchParams.get('leaderKey');
+    if (!controllerId || !leaderKey) {
+      return jsonResponse(
+        {
+          error: 'controllerId and leaderKey are required for the leader WebSocket',
+          code: 'LEADER_WEBSOCKET_AUTH_REQUIRED',
+        },
+        400
+      );
+    }
+    if (leaderKey !== tray.leader.leaderKey || controllerId !== tray.leader.controllerId) {
+      return jsonResponse(
+        { error: 'Only the elected leader may open the tray WebSocket', code: 'LEADER_ONLY' },
+        403
+      );
+    }
+    if (tray.leader.connected && this.leaderSocket) {
+      this.evictSupersededLeaderSocket();
+    }
+
+    const { client, server } = this.webSocketPairFactory();
+    if (typeof this.state.acceptWebSocket !== 'function') {
+      throw new Error('Durable Object runtime does not support WebSocket hibernation');
+    }
+
+    this.ensureWebSocketAutoResponse();
+    this.state.acceptWebSocket(server, [LEADER_WS_TAG]);
+    this.leaderSocket = server;
+    tray.leader.connected = true;
+    tray.leader.lastSeenAt = this.isoNow();
+    tray.leader.disconnectedAt = undefined;
+
+    await this.persistTray();
+    server.send(
+      JSON.stringify({
+        type: 'leader.connected',
+        trayId: tray.trayId,
+        controllerId,
+      })
+    );
+
+    this.replayPreviewStatesToLeader(server);
+
+    this.bridge.replayConnectionsToLeader(server);
+
+    return websocketResponse(client);
+  }
+
+  private evictSupersededLeaderSocket(): void {
+    const staleSocket = this.leaderSocket;
+    this.leaderSocket = null;
+    try {
+      staleSocket?.close(1000, 'superseded by leader reconnect');
+    } catch {}
+  }
+
+  private replayPreviewStatesToLeader(leaderWs: TrayWebSocketLike): void {
+    for (const record of Object.values(this.tray?.previews ?? {})) {
+      const { quiet, announced } = previewAnnouncementState(record);
+      leaderWs.send(
+        JSON.stringify({
+          type: 'preview.state',
+          previewToken: record.previewToken,
+          quiet,
+          announced,
+        })
+      );
+    }
+  }
+
+  private async handleLeaderMessage(socket: TrayWebSocketLike, raw: string): Promise<void> {
+    if (socket !== this.leaderSocket || !this.tray?.leader) {
+      return;
+    }
+
+    try {
+      const message = JSON.parse(raw) as LeaderToWorkerControlMessage;
+      this.tray.leader.lastSeenAt = this.isoNow();
+
+      const persistentMutation = await this.dispatchLeaderMessage(socket, message);
+
+      if (persistentMutation) {
+        await this.persistTray();
+      } else {
+        const nowMs = this.now();
+        if (nowMs - this.lastLeaderSeenPersistMs >= LEADER_SEEN_PERSIST_MS) {
+          this.lastLeaderSeenPersistMs = nowMs;
+          await this.persistTray();
+        }
+      }
+    } catch {
+      socket.send(JSON.stringify({ type: 'error', code: 'INVALID_JSON' }));
+    }
+  }
+
+  private async dispatchLeaderMessage(
+    socket: TrayWebSocketLike,
+    message: LeaderToWorkerControlMessage
+  ): Promise<boolean> {
+    switch (message.type) {
+      case 'ping':
+        socket.send(JSON.stringify({ type: 'pong', trayId: this.requireTray().trayId }));
+        return false;
+      case 'bootstrap.offer':
+        this.bootstrap.onLeaderOffer(socket, message);
+        return true;
+      case 'bootstrap.ice_candidate':
+        this.bootstrap.onLeaderIceCandidate(socket, message);
+        return true;
+      case 'bootstrap.failed':
+        this.bootstrap.onLeaderFailed(socket, message);
+        return true;
+      case 'preview.response':
+        pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
+        return false;
+      case 'preview.state.update': {
+        if (this.tray?.previewTransfer) return false;
+        const record = this.tray?.previews?.[message.previewToken];
+        if (record) record.announced = message.announced;
+        return true;
+      }
+      case 'preview.purge':
+        await handlePreviewPurge(message.previewToken, this.previewDeps());
+        return true;
+      case 'bridge.cdp.request':
+        this.bridge.relayCdpRequest(message);
+        return false;
+      case 'bridge.close':
+        this.bridge.closeConnection(message.connId);
+        return false;
+      case 'webhook.delivery':
+        this.webhooks.settle(message);
+        return false;
+      case 'push.register':
+        this.push.register(message);
+        return true;
+      case 'push.send':
+        await this.push.send(message);
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  private async markLeaderDisconnected(socket: TrayWebSocketLike): Promise<void> {
+    if (socket !== this.leaderSocket || !this.tray?.leader) {
+      return;
+    }
+
+    this.leaderSocket = null;
+    this.tray.leader.connected = false;
+    this.tray.leader.disconnectedAt = this.isoNow();
+    this.tray.leader.lastSeenAt = this.tray.leader.disconnectedAt;
+    failAllPendingPreviews(this.pendingPreviews);
+    await this.persistTray();
+  }
+
+  private sendToLeader(message: WorkerToLeaderControlMessage): boolean {
+    if (!this.hasLiveLeader() || !this.leaderSocket) {
+      return false;
+    }
+
+    try {
+      this.leaderSocket.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private hasLiveLeader(): boolean {
+    if (!this.tray?.leader?.connected || !this.leaderSocket) {
+      return false;
+    }
+
+    const lastSeenMs = Date.parse(this.tray.leader.lastSeenAt);
+    return this.now() - lastSeenMs < LEADER_STALE_MS;
+  }
+
+  private async evictStaleLeaderIfNeeded(): Promise<void> {
+    if (!this.tray?.leader?.connected || !this.leaderSocket) {
+      return;
+    }
+    const lastSeenMs = Date.parse(this.tray.leader.lastSeenAt);
+    if (this.now() - lastSeenMs < LEADER_STALE_MS) {
+      return;
+    }
+
+    const staleSocket = this.leaderSocket;
+    this.leaderSocket = null;
+    this.tray.leader.connected = false;
+    this.tray.leader.disconnectedAt = this.isoNow();
+    failAllPendingPreviews(this.pendingPreviews);
+    await this.persistTray();
+    try {
+      staleSocket.close(1000, 'leader stale — no messages in >2 min');
+    } catch {}
+  }
+
+  private async leaderSummary(): Promise<TrayLeaderSummary | null> {
+    const leader = this.requireTray().leader;
+    if (!leader) {
+      return null;
+    }
+
+    await this.evictStaleLeaderIfNeeded();
+
+    return {
+      controllerId: leader.controllerId,
+      connected: this.hasLiveLeader(),
+      reconnectDeadline: leader.disconnectedAt
+        ? new Date(Date.parse(leader.disconnectedAt) + reclaimMsForTray(this.tray)).toISOString()
+        : null,
+      lastSeenAt: leader.lastSeenAt,
+    };
+  }
+
+  private createLeaderKey(): string {
+    return crypto.randomUUID();
+  }
+
+  private matchesToken(received: string, expected: string): boolean {
+    return timingSafeEqual(received, expected);
+  }
+
+  private isoNow(): string {
+    return new Date(this.now()).toISOString();
+  }
+
+  private async getIceServers(): Promise<TurnIceServer[] | undefined> {
+    if (!this.turnKeyId || !this.turnApiToken) {
+      return undefined;
+    }
+
+    const now = this.now();
+    if (this.cachedIceServers && now < this.cachedIceServers.expiresAtMs) {
+      return this.cachedIceServers.iceServers;
+    }
+
+    try {
+      const iceServers = await fetchTURNCredentials(
+        this.turnKeyId,
+        this.turnApiToken,
+        this.fetchImpl
+      );
+      this.cachedIceServers = {
+        iceServers,
+        expiresAtMs:
+          this.now() + Math.max(0, TURN_CREDENTIAL_TTL_MS - TURN_CREDENTIAL_REFRESH_MARGIN_MS),
+      };
+      return iceServers;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private handleApnsTokenRequest(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return Promise.resolve(jsonResponse({ error: 'Method not allowed' }, 405));
+    }
+    if (!this.apnsTokenMinter) {
+      return Promise.resolve(
+        jsonResponse({ error: 'APNs is not configured', code: 'APNS_NOT_CONFIGURED' }, 503)
+      );
+    }
+    return handleProviderTokenRequest(request, this.apnsTokenMinter);
+  }
+
+  private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    const concurrent = /\/(?:fetch|emit|relocate|activate)$/.test(url.pathname);
+    return concurrent
+      ? this.dispatchInternalPreviewRoute(url, request)
+      : this.withPreviewMutation(() => this.dispatchInternalPreviewRoute(url, request));
+  }
+
+  private withPreviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.previewMutation.then(operation, operation);
+    this.previewMutation = result.catch(() => {});
+    return result;
+  }
+
+  private async dispatchInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    const continuity = await this.previewContinuity.route(url, request);
+    if (continuity) return continuity;
+
+    if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
+      let previewToken: string | undefined;
+      try {
+        const cloned = request.clone();
+        const body = (await cloned.json()) as { previewToken?: string };
+        previewToken = body.previewToken;
+      } catch {}
+      const response = await dispatchPreviewRoute(url, request, this.previewDeps());
+      if (response && response.status === 200 && previewToken) {
+        this.bridge.closeSocketsForPreview(previewToken);
+      }
+      return response;
+    }
+    return dispatchPreviewRoute(url, request, this.previewDeps());
+  }
+
+  async mintPreview(req: {
+    controllerToken: string;
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    workerBaseUrl: string;
+    quiet?: boolean;
+    ttlMs?: number;
+  }): Promise<{ previewToken: string; url: string; uploadToken?: string }> {
+    return mintPreviewImpl(req, this.previewDeps());
+  }
+
+  async resolvePreview(previewToken: string): Promise<PreviewRecord | null> {
+    return resolvePreviewImpl(previewToken, this.previewDeps());
+  }
+
+  async revokePreview(previewToken: string): Promise<{ revoked: boolean }> {
+    return revokePreviewImpl(previewToken, this.previewDeps());
+  }
+
+  async listPreviews(): Promise<PreviewRecord[]> {
+    return listPreviewsImpl(this.previewDeps());
+  }
+
+  async alarm(): Promise<void> {
+    await this.withPreviewMutation(() => expirePersistentPreviews(this.previewDeps()));
+  }
+
+  private announceBiscottoRevocation(biscottoId: string): boolean {
+    return this.sendToLeader({
+      type: 'biscotto.revoked',
+      trayId: this.requireTray().trayId,
+      biscottoId,
+    });
+  }
+
+  private bootstrapDeps(): BootstrapDeps {
+    return {
+      requireTray: () => this.requireTray(),
+      persistTray: () => this.persistTray(),
+      now: () => this.now(),
+      isoNow: () => this.isoNow(),
+      hasLiveLeader: () => this.hasLiveLeader(),
+      sendToLeader: (msg) => this.sendToLeader(msg),
+      getIceServers: () => this.getIceServers(),
+      leaderSummary: () => this.leaderSummary(),
+    };
+  }
+
+  private bridgeDeps(): BridgeDeps {
+    return {
+      socketsWithTag: (tag) => this.socketsWithTag(tag),
+      tagsFor: (ws) => this.tagsFor(ws),
+      acceptWebSocket: (ws, tags) => {
+        if (typeof this.state.acceptWebSocket !== 'function') {
+          throw new Error('Durable Object runtime does not support WebSocket hibernation');
+        }
+        this.state.acceptWebSocket(ws, tags);
+      },
+      newWebSocketPair: () => this.webSocketPairFactory(),
+      ensureAutoResponse: () => this.ensureWebSocketAutoResponse(),
+      loadTray: () => this.loadTray(),
+      restoreLeaderSocket: () => this.restoreLeaderSocket(),
+      getTray: () => this.tray,
+      sendToLeader: (msg) => this.sendToLeader(msg),
+      resolvePreview: (token) => this.resolvePreview(token),
+      isoNow: () => this.isoNow(),
+      now: () => this.now(),
+    };
+  }
+
+  private webhookDeps(): WebhookDeps {
+    return {
+      requireTray: () => this.requireTray(),
+      matchesToken: (r, e) => this.matchesToken(r, e),
+      hasLiveLeader: () => this.hasLiveLeader(),
+      sendToLeader: (msg) => this.sendToLeader(msg as WorkerToLeaderControlMessage),
+      isoNow: () => this.isoNow(),
+      now: () => this.now(),
+      ensureTrayIsActive: () => this.ensureTrayIsActive(),
+    };
+  }
+
+  private pushDeps(): PushDeps {
+    return {
+      requireTray: () => this.requireTray(),
+      persistTray: () => this.persistTray(),
+      isoNow: () => this.isoNow(),
+      apns: this.apns,
+    };
+  }
+
+  private previewDeps(): PreviewDeps {
+    return {
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      isoNow: () => this.isoNow(),
+      hasLiveLeader: () => this.hasLiveLeader(),
+      sendToLeader: (msg) => this.sendToLeader(msg as WorkerToLeaderControlMessage),
+      matchesToken: (r, e) => this.matchesToken(r, e),
+      pendingPreviews: this.pendingPreviews,
+      now: () => this.now(),
+      archiveAvailable: () => this.previewStorage !== undefined,
+      deleteArchivePrefix: async (prefix) => {
+        if (!this.previewStorage) throw new Error('persistent preview storage unavailable');
+        await deletePreviewArchivePrefix(this.previewStorage, prefix);
+      },
+      scheduleExpiry: async (timestamp) => {
+        if (timestamp === null) {
+          await this.state.storage.deleteAlarm?.();
+        } else {
+          await this.state.storage.setAlarm?.(timestamp);
+        }
+      },
+    };
+  }
+
+  private biscottoDeps(): BiscottoDeps {
+    return {
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      isoNow: () => this.isoNow(),
+      now: () => this.now(),
+      matchesToken: (r, e) => this.matchesToken(r, e),
+    };
+  }
+}

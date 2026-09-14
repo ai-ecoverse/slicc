@@ -1,0 +1,501 @@
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import type { Command, CommandContext, ExecResult } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
+import type { SprinkleManagerHandle } from '../sprinkle-manager-handle.js';
+import {
+  basename,
+  detectMimeType,
+  dirname,
+  findProjectRoot,
+  isLikelyUrl,
+  toPreviewUrl,
+} from './shared.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+interface OpenBrowserAPI {
+  createPage(url: string): Promise<string | undefined>;
+}
+
+const OPEN_BOOL_FLAGS = ['--download', '-d', '--view', '-v'] as const;
+const OPEN_VALUE_FLAGS = ['--size'] as const;
+
+interface OpenGlobals {
+  __slicc_sprinkleManager?: SprinkleManagerHandle;
+}
+
+const SIZE_PRESETS = { low: 256, medium: 768, high: 1536 } as const;
+type SizePreset = keyof typeof SIZE_PRESETS;
+
+function openHelp(): { stdout: string; stderr: string; exitCode: number } {
+  return {
+    stdout:
+      'usage: open [--download|-d] [--view|-v [--size <spec>]] <url|path> [url|path...]\n\n' +
+      '  VFS paths are served in a new browser tab via the preview service worker.\n' +
+      '  URLs (http/https/etc.) are opened directly in a new tab.\n' +
+      '  For app directories with a default entry file, prefer serve <dir>.\n' +
+      '  --download, -d  Force download instead of opening in a tab.\n' +
+      '  --view, -v      Return image inline so the agent can see it.\n' +
+      '                  Requires --size to bound how much context the image\n' +
+      '                  consumes; without --size open prints the native\n' +
+      '                  dimensions and exits non-zero.\n' +
+      '  --size <spec>   Resize before inlining. Accepts presets low (256x256),\n' +
+      '                  medium (768x768), high (1536x1536), or a custom WxH\n' +
+      '                  box like 512x512. The image is fit inside the box\n' +
+      '                  with aspect ratio preserved and is never upscaled.\n',
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+function parseSizeSpec(spec: string): { maxW: number; maxH: number } | null {
+  if (spec in SIZE_PRESETS) {
+    const v = SIZE_PRESETS[spec as SizePreset];
+    return { maxW: v, maxH: v };
+  }
+  const m = /^(\d+)x(\d+)$/.exec(spec);
+  if (m) {
+    const w = parseInt(m[1], 10);
+    const h = parseInt(m[2], 10);
+    if (w > 0 && h > 0) return { maxW: w, maxH: h };
+  }
+  return null;
+}
+
+function sourceHasAlpha(bytes: Uint8Array, mime: string): boolean {
+  if (mime === 'image/png' || mime === 'image/apng') {
+    if (bytes.length < 26) return false;
+    const colorType = bytes[25];
+    return colorType === 4 || colorType === 6;
+  }
+  if (mime === 'image/webp') {
+    if (bytes.length < 16) return false;
+    const chunk = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+    if (chunk === 'VP8L') return true;
+    if (chunk === 'VP8X') {
+      if (bytes.length < 21) return false;
+      return (bytes[20] & 0x10) !== 0;
+    }
+    return false;
+  }
+  return false;
+}
+
+function sizeUsageHint(): string {
+  return (
+    'open --view requires --size to bound the inlined image. Use one of:\n' +
+    '  --size low     (256x256)\n' +
+    '  --size medium  (768x768)\n' +
+    '  --size high    (1536x1536)\n' +
+    '  --size WxH     (custom box, e.g. 512x512)\n'
+  );
+}
+
+interface ResizedImage {
+  bytes: Uint8Array;
+  mime: string;
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
+
+const CANVAS_ALPHA_MIMES = new Set(['image/png', 'image/webp']);
+
+function copyToFreshBuffer(sourceBytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const buf = new ArrayBuffer(sourceBytes.byteLength);
+  const safeBytes = new Uint8Array(buf);
+  safeBytes.set(sourceBytes);
+  return safeBytes;
+}
+
+async function decodeDimensions(
+  sourceBytes: Uint8Array,
+  sourceMime: string
+): Promise<{ width: number; height: number }> {
+  const safeBytes = copyToFreshBuffer(sourceBytes);
+  const blob = new Blob([safeBytes], { type: sourceMime });
+  const bitmap = await createImageBitmap(blob);
+  try {
+    return { width: bitmap.width, height: bitmap.height };
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+async function decodeAndResize(
+  sourceBytes: Uint8Array,
+  sourceMime: string,
+  maxW: number,
+  maxH: number
+): Promise<ResizedImage> {
+  const safeBytes = copyToFreshBuffer(sourceBytes);
+  const blob = new Blob([safeBytes], { type: sourceMime });
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const nativeWidth = bitmap.width;
+    const nativeHeight = bitmap.height;
+
+    const scale = Math.min(maxW / nativeWidth, maxH / nativeHeight, 1);
+    const targetW = Math.max(1, Math.round(nativeWidth * scale));
+    const targetH = Math.max(1, Math.round(nativeHeight * scale));
+    const canvas = new OffscreenCanvas(targetW, targetH);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('failed to acquire 2d context for resize');
+    }
+    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+    const preserveAlpha = sourceHasAlpha(sourceBytes, sourceMime);
+    const outMime = preserveAlpha
+      ? CANVAS_ALPHA_MIMES.has(sourceMime)
+        ? sourceMime
+        : 'image/png'
+      : 'image/jpeg';
+    const blobOut = await canvas.convertToBlob(
+      outMime === 'image/jpeg' ? { type: 'image/jpeg', quality: 0.85 } : { type: outMime }
+    );
+    const outBytes = new Uint8Array(await blobOut.arrayBuffer());
+    return {
+      bytes: outBytes,
+      mime: outMime,
+      width: targetW,
+      height: targetH,
+      nativeWidth,
+      nativeHeight,
+    };
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+interface ParsedOpenArgs {
+  download: boolean;
+  view: boolean;
+  sizeSpec: string | undefined;
+  targets: string[];
+}
+
+function parseOpenArgs(args: readonly string[]): ParsedOpenArgs | { error: string } {
+  const parsed = parseKnownFlags(args, {
+    bool: OPEN_BOOL_FLAGS,
+    value: OPEN_VALUE_FLAGS,
+  });
+  if ('error' in parsed) return { error: `open: ${parsed.error}` };
+  const sizeSpec = parsed.values.get('--size');
+  if (sizeSpec?.startsWith('-') && sizeSpec !== '-') {
+    return { error: `open: unknown flag: ${sizeSpec}` };
+  }
+  return {
+    download: parsed.bools.has('--download') || parsed.bools.has('-d'),
+    view: parsed.bools.has('--view') || parsed.bools.has('-v'),
+    sizeSpec,
+    targets: parsed.positionals,
+  };
+}
+
+type TargetOutcome = { ok: true; message: string } | { ok: false; result: ExecResult };
+
+function okOutcome(message: string): TargetOutcome {
+  return { ok: true, message };
+}
+
+function errOutcome(stderr: string): TargetOutcome {
+  return { ok: false, result: { stdout: '', stderr, exitCode: 1 } };
+}
+
+function targetIdSuffix(targetId: string | undefined): string {
+  return targetId ? ` (targetId: ${targetId})` : '';
+}
+
+type OpenExternal = (url: string) => Promise<string | undefined>;
+
+function createOpenExternal(
+  browserAPI: OpenBrowserAPI | undefined,
+  hasDom: boolean,
+  panelRpc: PanelRpcClient | null
+): OpenExternal {
+  return async (url: string) => {
+    if (browserAPI) {
+      return browserAPI.createPage(url);
+    }
+    if (hasDom) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return undefined;
+    }
+    try {
+      await panelRpc!.call('window-open', {
+        url,
+        target: '_blank',
+        features: 'noopener,noreferrer',
+      });
+    } catch (err) {
+      throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return undefined;
+  };
+}
+
+async function handleShtmlTarget(
+  target: string,
+  ctx: CommandContext,
+  sprinkleManager: SprinkleManagerHandle | undefined,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
+  if (sprinkleManager) {
+    const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
+    try {
+      await sprinkleManager.open(name);
+      return okOutcome(`opened sprinkle ${name} from ${fullPath}`);
+    } catch (err) {
+      return errOutcome(`open: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+  if (canOpenWindow) {
+    const projectRoot = await findProjectRoot(ctx.fs, dirname(fullPath));
+    const previewUrl = toPreviewUrl(fullPath, projectRoot);
+    let targetId: string | undefined;
+    try {
+      targetId = await openExternal(previewUrl);
+    } catch (err) {
+      return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    return okOutcome(`opened ${fullPath} → ${previewUrl}${targetIdSuffix(targetId)}`);
+  }
+  return errOutcome('open: sprinkle manager not initialized\n');
+}
+
+async function handleUrlTarget(
+  target: string,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  if (!canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+  let targetId: string | undefined;
+  try {
+    targetId = await openExternal(target);
+  } catch (err) {
+    return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+  }
+  return okOutcome(`opened ${target}${targetIdSuffix(targetId)}`);
+}
+
+async function handleViewTarget(
+  target: string,
+  path: string,
+  ctx: CommandContext,
+  sizeSpec: string | undefined
+): Promise<TargetOutcome> {
+  let stat: { isFile: boolean };
+  try {
+    stat = await ctx.fs.stat(path);
+  } catch {
+    return errOutcome(`open: no such file: ${target}\n`);
+  }
+  if (!stat.isFile) {
+    return errOutcome(`open: not a file: ${target}\n`);
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return errOutcome(`open: failed to read: ${target}\n`);
+  }
+  const sourceMime = detectMimeType(path);
+  const sourceBytes = new Uint8Array(bytes);
+
+  let parsedSize: { maxW: number; maxH: number } | null = null;
+  if (sizeSpec !== undefined) {
+    parsedSize = parseSizeSpec(sizeSpec);
+    if (!parsedSize) {
+      return errOutcome(
+        `open: invalid --size spec '${sizeSpec}' ` +
+          `(expected low|medium|high or WxH such as 512x512)\n`
+      );
+    }
+  }
+
+  if (!parsedSize) {
+    let dims: { width: number; height: number };
+    try {
+      dims = await decodeDimensions(sourceBytes, sourceMime);
+    } catch (err) {
+      return errOutcome(
+        `open: not an image or failed to decode: ${target} ` +
+          `(${err instanceof Error ? err.message : String(err)})\n`
+      );
+    }
+    const kb = Math.round(sourceBytes.byteLength / 1024);
+    return errOutcome(
+      `open --view: ${path} is ${dims.width}x${dims.height} ` +
+        `(${kb} KB, ${sourceMime})\n` +
+        sizeUsageHint()
+    );
+  }
+
+  let resized: ResizedImage;
+  try {
+    resized = await decodeAndResize(sourceBytes, sourceMime, parsedSize.maxW, parsedSize.maxH);
+  } catch (err) {
+    return errOutcome(
+      `open: not an image or failed to decode: ${target} ` +
+        `(${err instanceof Error ? err.message : String(err)})\n`
+    );
+  }
+
+  const base64 = uint8ToBase64(resized.bytes);
+  const outKb = Math.round(resized.bytes.byteLength / 1024);
+  return okOutcome(
+    `${path} (${resized.nativeWidth}x${resized.nativeHeight} → ` +
+      `${resized.width}x${resized.height}, ${outKb} KB, ${resized.mime})\n` +
+      `<img:data:${resized.mime};base64,${base64}>`
+  );
+}
+
+async function handleDownloadTarget(
+  target: string,
+  path: string,
+  ctx: CommandContext,
+  hasDom: boolean
+): Promise<TargetOutcome> {
+  if (!hasDom) {
+    return errOutcome('open: --download requires the in-panel terminal (DOM-only)\n');
+  }
+  let stat: { isFile: boolean };
+  try {
+    stat = await ctx.fs.stat(path);
+  } catch {
+    return errOutcome(`open: no such file: ${target}\n`);
+  }
+  if (!stat.isFile) {
+    return errOutcome(`open: not a file: ${target}\n`);
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return errOutcome(`open: failed to read: ${target}\n`);
+  }
+  const safeBytes = new Uint8Array(bytes.byteLength);
+  safeBytes.set(bytes);
+  const blob = new Blob([safeBytes.buffer], { type: detectMimeType(path) });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = basename(path) || 'download';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  return okOutcome(`downloaded ${path}`);
+}
+
+async function handleDefaultTarget(
+  path: string,
+  ctx: CommandContext,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  if (!canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+
+  let isDirectoryTarget = false;
+  try {
+    isDirectoryTarget = (await ctx.fs.stat(path)).isDirectory;
+  } catch {}
+  const projectRoot = await findProjectRoot(ctx.fs, isDirectoryTarget ? path : dirname(path));
+  const previewUrl = toPreviewUrl(path, projectRoot);
+  let targetId: string | undefined;
+  try {
+    targetId = await openExternal(previewUrl);
+  } catch (err) {
+    return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+  }
+  return okOutcome(`opened ${path} → ${previewUrl}${targetIdSuffix(targetId)}`);
+}
+
+interface TargetModeFlags {
+  view: boolean;
+  download: boolean;
+  sizeSpec: string | undefined;
+}
+
+interface DispatchTargetDeps {
+  canOpenWindow: boolean;
+  hasDom: boolean;
+  sprinkleManager: SprinkleManagerHandle | undefined;
+  openExternal: OpenExternal;
+}
+
+async function dispatchTarget(
+  target: string,
+  ctx: CommandContext,
+  flags: TargetModeFlags,
+  deps: DispatchTargetDeps
+): Promise<TargetOutcome> {
+  if (!isLikelyUrl(target) && target.endsWith('.shtml') && ctx.fs) {
+    return handleShtmlTarget(
+      target,
+      ctx,
+      deps.sprinkleManager,
+      deps.canOpenWindow,
+      deps.openExternal
+    );
+  }
+  if (!flags.view && !deps.canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+  if (isLikelyUrl(target)) {
+    return handleUrlTarget(target, deps.canOpenWindow, deps.openExternal);
+  }
+  const path = ctx.fs.resolvePath(ctx.cwd, target);
+  if (flags.view) return handleViewTarget(target, path, ctx, flags.sizeSpec);
+  if (flags.download) return handleDownloadTarget(target, path, ctx, deps.hasDom);
+  return handleDefaultTarget(path, ctx, deps.canOpenWindow, deps.openExternal);
+}
+
+export function createOpenCommand(browserAPI?: OpenBrowserAPI): Command {
+  return defineCommand('open', async (args, ctx) => {
+    if (args.length === 0 || isHelpRequest(args, { valueFlags: OPEN_VALUE_FLAGS })) {
+      return openHelp();
+    }
+
+    const parsed = parseOpenArgs(args);
+    if ('error' in parsed) {
+      return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
+    }
+    const { download, view, sizeSpec, targets } = parsed;
+
+    if (targets.length === 0) {
+      return openHelp();
+    }
+
+    const sprinkleManager = (globalThis as OpenGlobals).__slicc_sprinkleManager;
+    const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
+    const panelRpc = !hasDom ? getPanelRpcClient() : null;
+    const canOpenWindow = !!browserAPI || hasDom || !!panelRpc;
+    const openExternal = createOpenExternal(browserAPI, hasDom, panelRpc);
+    const deps: DispatchTargetDeps = { canOpenWindow, hasDom, sprinkleManager, openExternal };
+
+    const results: string[] = [];
+
+    for (const target of targets) {
+      const outcome = await dispatchTarget(target, ctx, { view, download, sizeSpec }, deps);
+      if (!outcome.ok) return outcome.result;
+      results.push(outcome.message);
+    }
+
+    return {
+      stdout: results.join('\n') + '\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  });
+}

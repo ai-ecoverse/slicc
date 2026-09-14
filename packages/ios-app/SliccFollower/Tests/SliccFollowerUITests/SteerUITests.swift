@@ -1,0 +1,78 @@
+import XCTest
+
+
+
+
+final class SteerUITests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+    }
+
+    func testSteerAffordanceOnlyExistsWhileStreaming() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "streaming"]
+        app.launch()
+
+        
+        let composer = app.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 60))
+
+        
+        XCTAssertFalse(app.buttons["send-while-streaming"].exists)
+
+        composer.tap()
+        composer.typeText("actually, look at the failing test first")
+
+        let send = app.buttons["send-while-streaming"]
+        XCTAssertTrue(
+            send.waitForExistence(timeout: 10),
+            "A non-empty composer during a running turn should offer send")
+
+        
+        
+        
+        
+        send.press(forDuration: 1.0)
+        if !app.buttons["Interrupt & send"].waitForExistence(timeout: 10) {
+            send.press(forDuration: 1.2)
+        }
+        XCTAssertTrue(
+            app.buttons["Interrupt & send"].waitForExistence(timeout: 10),
+            "The long-press menu should offer the steer action")
+    }
+
+    func testNoSteerAffordanceWhenIdle() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "connected"]
+        app.launch()
+
+        let composer = app.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 60))
+        composer.tap()
+        composer.typeText("hello")
+
+        XCTAssertFalse(
+            app.buttons["send-while-streaming"].exists,
+            "The streaming send affordance must not exist while idle")
+    }
+
+    func testReadyStatusRestoresIdleComposerWithoutTurnEnd() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-joinUrl", "", "-uiTestCompletedTurn", "YES",
+            "-uiTestComposerText", "follow up",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 60))
+        let idleSend = app.buttons["composer-send"]
+        XCTAssertTrue(
+            idleSend.waitForExistence(timeout: 10),
+            "status: ready should restore the idle send control without turn_end")
+        XCTAssertFalse(
+            app.buttons["send-while-streaming"].exists,
+            "A ready turn must not retain the streaming send affordance")
+    }
+}

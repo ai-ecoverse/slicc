@@ -1,0 +1,331 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SliccUserMessage } from '../../src/chat/slicc-user-message.js';
+import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+function mount(attrs: Record<string, string> = {}): SliccUserMessage {
+  const el = document.createElement('slicc-user-message');
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  document.body.appendChild(el);
+  return el;
+}
+
+describe('slicc-user-message', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+    document.body.classList.remove('dark');
+    document.body.removeAttribute('data-theme');
+  });
+
+  afterEach(() => {
+    document.body.classList.remove('dark');
+    document.body.removeAttribute('data-theme');
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-user-message')).toBe(SliccUserMessage);
+  });
+
+  it('renders the .msg.user row wrapping a single .b bubble', () => {
+    const el = mount({ text: 'hello' });
+    const row = el.shadowRoot?.querySelector('.msg.user');
+    const bubble = row?.querySelector('.b');
+    expect(row).not.toBeNull();
+    expect(bubble).not.toBeNull();
+    expect(row?.querySelectorAll('.b').length).toBe(1);
+    expect(bubble?.textContent).toBe('hello');
+  });
+
+  it('exposes ::part hooks on the row and bubble', () => {
+    const el = mount({ text: 'parts' });
+    expect(el.shadowRoot?.querySelector('[part="message"]')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('[part="bubble"]')).not.toBeNull();
+  });
+
+  it('reflects the text attribute to the property', () => {
+    const el = mount({ text: 'attr first' });
+    expect(el.text).toBe('attr first');
+  });
+
+  it('reflects the text property to the attribute and re-renders', () => {
+    const el = mount();
+    el.text = 'set via property';
+    expect(el.getAttribute('text')).toBe('set via property');
+    expect(el.shadowRoot?.querySelector('.b')?.textContent).toBe('set via property');
+  });
+
+  it('clears the attribute when the property is set to null', () => {
+    const el = mount({ text: 'temporary' });
+    el.text = null;
+    expect(el.hasAttribute('text')).toBe(false);
+  });
+
+  it('renders a default <slot> when no text attribute is present', () => {
+    const el = mount();
+    expect(el.shadowRoot?.querySelector('slot')).not.toBeNull();
+  });
+
+  it('projects slotted content through the bubble when text is absent', () => {
+    const el = document.createElement('slicc-user-message');
+    el.textContent = 'slotted body';
+    document.body.appendChild(el);
+    const slot = el.shadowRoot?.querySelector('slot') as HTMLSlotElement;
+    expect(
+      slot
+        .assignedNodes()
+        .map((n) => n.textContent)
+        .join('')
+    ).toBe('slotted body');
+  });
+
+  it('escapes interpolated text', () => {
+    const el = mount({ text: '<script>x</script>' });
+    const bubble = el.shadowRoot?.querySelector('.b');
+    expect(bubble?.querySelector('script')).toBeNull();
+    expect(bubble?.textContent).toBe('<script>x</script>');
+  });
+
+  it('right-aligns the bubble via the flex row (light)', () => {
+    const el = mount({ text: 'right' });
+    const row = el.shadowRoot?.querySelector('.msg.user') as HTMLElement;
+    const cs = getComputedStyle(row);
+    expect(cs.display).toBe('flex');
+    expect(cs.justifyContent).toBe('flex-end');
+  });
+
+  it('paints the inverted bubble: white text, asymmetric radius, 80% cap (light)', () => {
+    const el = mount({ text: 'bubble' });
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    const cs = getComputedStyle(bubble);
+
+    expect(cs.color).toBe('rgb(255, 255, 255)');
+    expect(cs.backgroundColor).toBe('rgb(0, 0, 0)');
+
+    expect(cs.borderTopLeftRadius).toBe('16px');
+    expect(cs.borderTopRightRadius).toBe('16px');
+    expect(cs.borderBottomRightRadius).toBe('4px');
+    expect(cs.borderBottomLeftRadius).toBe('16px');
+
+    expect(cs.maxWidth).not.toBe('none');
+    expect(cs.maxWidth).toMatch(/(?:px|%)$/);
+  });
+
+  it('flips the bubble text to dark ink in dark mode (body.dark)', () => {
+    document.body.classList.add('dark');
+    const el = mount({ text: 'dark' });
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(getComputedStyle(bubble).color).toBe('rgb(10, 10, 10)');
+  });
+
+  it('flips the bubble text to dark ink under [data-theme="dark"]', () => {
+    document.body.setAttribute('data-theme', 'dark');
+    const el = mount({ text: 'dark attr' });
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(getComputedStyle(bubble).color).toBe('rgb(10, 10, 10)');
+  });
+
+  describe('markdown body (setBodyHtml)', () => {
+    it('renders rendered-markdown HTML into the bubble and wins over text/slot', () => {
+      const el = mount({ text: 'plain' });
+      el.setBodyHtml('<p>run <code>npm test</code> then <a href="https://x.dev">open</a></p>');
+      const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+      expect(bubble.querySelector('code')?.textContent).toBe('npm test');
+      expect(bubble.querySelector('a')?.getAttribute('href')).toBe('https://x.dev');
+
+      expect(bubble.textContent).not.toBe('plain');
+    });
+
+    it('styles inline code in the mono font with a currentColor-tinted chip', () => {
+      const el = mount();
+      el.setBodyHtml('<p>use <code>--canvas</code></p>');
+      const code = el.shadowRoot?.querySelector('.b code') as HTMLElement;
+      const cs = getComputedStyle(code);
+      expect(cs.fontFamily.toLowerCase()).toContain('mono');
+
+      expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    });
+
+    it('renders a fenced code block and a list', () => {
+      const el = mount();
+      el.setBodyHtml('<ul><li>a</li><li>b</li></ul><pre><code>x = 1</code></pre>');
+      const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+      expect(bubble.querySelectorAll('li')).toHaveLength(2);
+      expect(bubble.querySelector('pre code')?.textContent).toBe('x = 1');
+    });
+  });
+
+  describe('attachments (setAttachments)', () => {
+    it('renders an image attachment as a right-aligned thumbnail above the bubble', () => {
+      const el = mount({ text: 'see this' });
+      el.setAttachments([{ name: 'p.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      const row = el.shadowRoot?.querySelector('.attachments') as HTMLElement;
+      expect(row).not.toBeNull();
+      expect(getComputedStyle(row).justifyContent).toBe('flex-end');
+      const img = row.querySelector('.attachment-chip--image img') as HTMLImageElement;
+      expect(img.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+
+      const stack = el.shadowRoot?.querySelector('.stack') as HTMLElement;
+      const kids = Array.from(stack.children).map((n) => n.className);
+      expect(kids[0]).toBe('attachments');
+      expect(kids[1]).toBe('b');
+    });
+
+    it('renders a non-image attachment as a lucide file chip with name + meta', () => {
+      const el = mount({ text: 'doc' });
+      el.setAttachments([{ name: 'tokens.css', kind: 'text', mime: 'text/css', size: 2048 }]);
+      const chip = el.shadowRoot?.querySelector('.attachment-chip--text') as HTMLElement;
+      expect(chip.querySelector('.attachment-chip__visual svg')).toBeInstanceOf(SVGSVGElement);
+      expect(chip.querySelector('.attachment-chip__name')?.textContent).toBe('tokens.css');
+      expect(chip.querySelector('.attachment-chip__meta')?.textContent).toBe('text/css · 2.0 KB');
+    });
+
+    it('omits the bubble for an image-only message (no text / slot)', () => {
+      const el = mount();
+      el.setAttachments([{ name: 's.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      expect(el.shadowRoot?.querySelector('.attachments')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.b')).toBeNull();
+    });
+
+    it('replaces attachments on a subsequent call', () => {
+      const el = mount({ text: 'x' });
+      el.setAttachments([{ name: 'a.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      el.setAttachments([{ name: 'b.txt', kind: 'text' }]);
+      expect(el.shadowRoot?.querySelectorAll('.attachment-chip')).toHaveLength(1);
+      expect(el.shadowRoot?.querySelector('.attachment-chip__name')?.textContent).toBe('b.txt');
+    });
+
+    it('opens image preview on thumbnail click', () => {
+      const el = mount({ text: 'check this' });
+      el.setAttachments([{ name: 'p.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      const img = el.shadowRoot?.querySelector('.attachment-chip--image img') as HTMLImageElement;
+      expect(img).not.toBeNull();
+      expect(getComputedStyle(img).cursor).toBe('zoom-in');
+      img.click();
+      const preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview).not.toBeNull();
+      expect(preview?.hasAttribute('open')).toBe(true);
+      expect(preview?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+      preview?.remove();
+    });
+
+    it('does not add preview behavior to non-image attachments', () => {
+      const el = mount({ text: 'doc' });
+      el.setAttachments([{ name: 'readme.txt', kind: 'text', mime: 'text/plain' }]);
+      const chip = el.shadowRoot?.querySelector('.attachment-chip--text') as HTMLElement;
+      const img = chip?.querySelector('img');
+      expect(img).toBeNull();
+      chip.click();
+      const preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.hasAttribute('open')).toBeFalsy();
+      preview?.remove();
+    });
+
+    it('each image attachment independently opens its own preview', () => {
+      const el = mount({ text: 'two images' });
+      el.setAttachments([
+        { name: 'a.png', kind: 'image', src: 'data:image/png;base64,AAAA' },
+        { name: 'b.jpg', kind: 'image', src: 'data:image/jpeg;base64,BBBB' },
+      ]);
+      const imgs = el.shadowRoot?.querySelectorAll(
+        '.attachment-chip--image img'
+      ) as NodeListOf<HTMLImageElement>;
+      expect(imgs).toHaveLength(2);
+
+      imgs[0].click();
+      let preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+
+      imgs[1].click();
+      preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.getAttribute('src')).toBe('data:image/jpeg;base64,BBBB');
+      preview?.remove();
+    });
+  });
+});
+
+describe('queued state', () => {
+  it('dims the bubble and shows the clock tag while queued', () => {
+    const el = mount({ text: 'do this next', queued: '' });
+    const tag = el.shadowRoot?.querySelector('.queued-tag') as HTMLElement;
+    expect(tag?.textContent).toContain('queued');
+    expect(tag?.querySelector('svg')).toBeTruthy();
+    expect(getComputedStyle(el.shadowRoot?.querySelector('.b') as Element).opacity).toBe('0.62');
+
+    el.queued = false;
+    expect(el.shadowRoot?.querySelector('.queued-tag')).toBeNull();
+    expect(getComputedStyle(el.shadowRoot?.querySelector('.b') as Element).opacity).toBe('1');
+  });
+});
+
+describe('timestamp', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('renders a .ts element when the timestamp attribute is set', () => {
+    const el = mount({ text: 'hello', timestamp: '14:32' });
+    const ts = el.shadowRoot?.querySelector('.ts');
+    expect(ts).not.toBeNull();
+    expect(ts?.textContent).toBe('14:32');
+  });
+
+  it('exposes a ::part(timestamp) hook', () => {
+    const el = mount({ text: 'parts', timestamp: '09:15' });
+    expect(el.shadowRoot?.querySelector('[part="timestamp"]')).not.toBeNull();
+  });
+
+  it('does not render a timestamp when the attribute is absent', () => {
+    const el = mount({ text: 'no time' });
+    expect(el.shadowRoot?.querySelector('.ts')).toBeNull();
+  });
+
+  it('places the timestamp before the bubble in the stack', () => {
+    const el = mount({ text: 'order', timestamp: '10:00' });
+    const stack = el.shadowRoot?.querySelector('.stack') as HTMLElement;
+    const kids = Array.from(stack.children).map((n) => n.className);
+    expect(kids[0]).toBe('ts');
+    expect(kids[1]).toBe('b');
+  });
+
+  function overflow(el: HTMLElement): number {
+    return el.scrollWidth - el.clientWidth;
+  }
+
+  function inColumn(width: string, html: string): SliccUserMessage {
+    const column = document.createElement('div');
+    column.style.width = width;
+    document.body.appendChild(column);
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.setBodyHtml(html);
+    column.appendChild(el);
+    return el;
+  }
+
+  it('breaks an unbroken run instead of letting it spill out of the bubble', () => {
+    const el = inColumn('320px', `<p>${'A'.repeat(600)}</p>`);
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+    expect(overflow(bubble.querySelector('p') as HTMLElement)).toBeLessThanOrEqual(1);
+  });
+
+  it('does not scroll its column sideways', () => {
+    const el = inColumn('320px', `<p>${'A'.repeat(600)}</p>`);
+    const column = el.parentElement as HTMLElement;
+    expect(overflow(column)).toBeLessThanOrEqual(1);
+  });
+
+  it('wraps a long run in inline code too', () => {
+    const el = inColumn('320px', `<p><code>${'A'.repeat(600)}</code></p>`);
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+  });
+
+  it('still lets fenced code scroll inside itself rather than breaking it', () => {
+    const el = inColumn('320px', `<pre><code>${'A'.repeat(600)}</code></pre>`);
+    const code = el.shadowRoot?.querySelector('pre code') as HTMLElement;
+    expect(getComputedStyle(code).overflowWrap).toBe('normal');
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+  });
+});

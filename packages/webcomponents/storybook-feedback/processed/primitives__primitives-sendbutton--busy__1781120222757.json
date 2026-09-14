@@ -1,0 +1,8 @@
+{
+  "storyId": "primitives-sendbutton--busy",
+  "storyTitle": "Primitives/SendButton",
+  "subsystem": "primitives",
+  "importPath": "./src/primitives/slicc-send-button.stories.ts",
+  "comment": "The fill animations are great, but when the rectangle has been filled, the next animation should gradually clear it, so that we have 12 animations in total, 6 to fill, 6 to clear and they are run in alternating order",
+  "createdAt": "2026-06-10T19:37:02.757Z"
+}

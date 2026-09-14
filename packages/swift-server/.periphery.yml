@@ -1,0 +1,13 @@
+schemes:
+  - slicc-server
+targets:
+  - slicc-server
+  - slicc-serverTests
+retain_public: false
+retain_assign_only_property: true
+retain_objc_accessible: true
+retain_objc_annotated: true
+retain_swift_ui_previews: true
+disable_redundant_public_analysis: false
+clean_build: false
+strict: false

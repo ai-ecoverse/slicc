@@ -1,0 +1,33 @@
+OnDeviceTTS
+Copyright 2026 Taras Chernysh
+
+This product includes software developed by third parties, redistributed under
+the Apache License, Version 2.0. See the LICENSE file for the full license text.
+
+================================================================================
+FluidAudio
+================================================================================
+Portions of this package (the sources under `Sources/OnDeviceTTS/KokoroAne/`)
+are derived from FluidAudio.
+
+    Source : https://github.com/FluidInference/FluidAudio
+    Commit : 56607d90b97de7d95a731200563bf49aa5beef20
+    License: Apache License, Version 2.0
+    Scope  : English KokoroAne inference + grapheme-to-phoneme (G2P) only.
+
+These files were modified for this package: the Mandarin code path was removed,
+the FluidAudio infrastructure symbols were replaced with thin local shims
+(`KokoroAne/KokoroAneShims.swift`), asset loading was repointed at a
+caller-supplied cache directory, and the synthesis pipeline is composed by
+`KokoroTTSEngine`. Modified files are marked `// Modified by OnDeviceTTS`.
+
+================================================================================
+Kokoro-82M
+================================================================================
+The text-to-speech models this package loads at runtime are the Kokoro models.
+
+    Source : https://huggingface.co/hexgrad/Kokoro-82M
+    License: Apache License, Version 2.0
+
+The models are not distributed with this package; you host and download them
+yourself. Their license applies to the model files you host.

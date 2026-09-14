@@ -1,0 +1,22 @@
+{
+  "name": "@slicc/node-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json && node scripts/inline-workspaces.mjs",
+    "test": "vitest run",
+    "test:live:cloud": "vitest run tests/cloud-live.test.ts",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json && tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@slicc/cloud-core": "*",
+    "@slicc/shared-ts": "*",
+    "e2b": "2.46.1",
+    "werift": "0.24.4"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/ws": "8.18.1",
+    "electron": "43.6.0"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "name": "@slicc/webcomponents",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./composer/speech": {
+      "types": "./src/composer/speech.ts",
+      "default": "./src/composer/speech.ts"
+    },
+    "./icons": {
+      "types": "./src/internal/icons.ts",
+      "default": "./src/internal/icons.ts"
+    },
+    "./internal/html": {
+      "types": "./src/internal/html.ts",
+      "default": "./src/internal/html.ts"
+    },
+
+    "./quick-look/mime-label": {
+      "types": "./src/quick-look/mime-label.ts",
+      "default": "./src/quick-look/mime-label.ts"
+    },
+    "./panel/center-ops": {
+      "types": "./src/panel/center-ops.ts",
+      "default": "./src/panel/center-ops.ts"
+    },
+    "./panel/layout-schema": {
+      "types": "./src/panel/layout-schema.ts",
+      "default": "./src/panel/layout-schema.ts"
+    },
+    "./panel/meta": {
+      "types": "./src/panel/panel-meta.ts",
+      "default": "./src/panel/panel-meta.ts"
+    },
+    "./panel/registry": {
+      "types": "./src/panel/panel-registry.ts",
+      "default": "./src/panel/panel-registry.ts"
+    },
+    "./memory/rows": {
+      "types": "./src/memory/memory-rows.ts",
+      "default": "./src/memory/memory-rows.ts"
+    },
+    "./memory/synthetic-fixture": {
+      "types": "./src/memory/synthetic-memory-fixture.ts",
+      "default": "./src/memory/synthetic-memory-fixture.ts"
+    },
+    "./memory/machine-written-fixture": {
+      "types": "./src/memory/machine-written-memory-fixture.ts",
+      "default": "./src/memory/machine-written-memory-fixture.ts"
+    },
+    "./memory/redacted-real-world-fixture": {
+      "types": "./src/memory/redacted-real-world-memory-fixture.ts",
+      "default": "./src/memory/redacted-real-world-memory-fixture.ts"
+    },
+    "./audio/soundscape-cues": {
+      "types": "./src/audio/soundscape-cues.ts",
+      "default": "./src/audio/soundscape-cues.ts"
+    },
+    "./src/*": "./src/*"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "storybook": "storybook dev -p 6006 --no-open",
+    "build-storybook": "storybook build"
+  },
+  "dependencies": {
+    "@ai-ecoverse/spoon": "*",
+    "@pierre/diffs": "1.3.6",
+    "@pierre/trees": "1.0.0-beta.6",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "lucide": "1.41.0"
+  },
+  "devDependencies": {
+    "@storybook/web-components-vite": "10.5.10",
+    "lit": "3.3.3",
+    "storybook": "10.5.10"
+  }
+}

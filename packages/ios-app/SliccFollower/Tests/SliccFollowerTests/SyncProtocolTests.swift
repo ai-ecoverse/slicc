@@ -1,0 +1,160 @@
+import Foundation
+import XCTest
+
+@testable import SliccFollower
+@testable import SliccTrayKit
+
+final class SyncProtocolHelloTests: XCTestCase {
+    func testLeaderExecCapabilityDecodesAndLegacyOmissionStaysNil() throws {
+        let capable = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(
+                #"{"type":"hello","protocolVersion":5,"capabilities":{"exec":true}}"#.utf8))
+        guard case .hello(_, _, let capabilities, _) = capable else {
+            return XCTFail("expected hello")
+        }
+        XCTAssertEqual(capabilities?.exec, true)
+
+        let legacy = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(#"{"type":"hello","protocolVersion":5}"#.utf8))
+        guard case .hello(_, _, let legacyCapabilities, _) = legacy else {
+            return XCTFail("expected legacy hello")
+        }
+        XCTAssertNil(legacyCapabilities)
+        XCTAssertTrue(trayFollowerCapabilities.exec)
+    }
+}
+
+final class SyncProtocolStatusTests: XCTestCase {
+    func testStatusRoundTripsScoopJidAndDecodesLegacyOmission() throws {
+        let scoped = LeaderToFollowerMessage.status(scoopStatus: "processing", scoopJid: "cone")
+        let encoded = try JSONEncoder().encode(scoped)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["scoopJid"] as? String, "cone")
+
+        let legacy = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(#"{"type":"status","scoopStatus":"ready"}"#.utf8))
+        guard case .status(let scoopStatus, let scoopJid) = legacy else {
+            return XCTFail("expected status")
+        }
+        XCTAssertEqual(scoopStatus, "ready")
+        XCTAssertNil(scoopJid)
+    }
+}
+
+
+
+
+
+final class SyncProtocolExecTests: XCTestCase {
+    private let messages = [
+        """
+        {"type":"exec.request","requestId":"exec-1","command":"echo hello",\
+        "cwd":"/workspace","env":{"TERM":"xterm-256color"}}
+        """,
+        """
+        {"type":"exec.chunk","requestId":"exec-1","stream":"stdout","data":"aGVsbG8K"}
+        """,
+        """
+        {"type":"exec.response","requestId":"exec-1","exitCode":130,\
+        "signal":"SIGINT","error":"cancelled"}
+        """,
+        """
+        {"type":"exec.signal","requestId":"exec-1","signal":"SIGINT"}
+        """,
+    ]
+
+    func testLeaderToFollowerExecMessagesRoundTrip() throws {
+        for message in messages {
+            try assertRoundTrip(LeaderToFollowerMessage.self, json: message)
+        }
+    }
+
+    func testFollowerToLeaderExecMessagesRoundTrip() throws {
+        for message in messages {
+            try assertRoundTrip(FollowerToLeaderMessage.self, json: message)
+        }
+    }
+
+    private func assertRoundTrip<Message: Codable>(_ type: Message.Type, json: String) throws {
+        let source = Data(json.utf8)
+        let decoded = try JSONDecoder().decode(type, from: source)
+        let reencoded = try JSONEncoder().encode(decoded)
+        let expected = try XCTUnwrap(try JSONSerialization.jsonObject(with: source) as? NSDictionary)
+        let actual = try XCTUnwrap(try JSONSerialization.jsonObject(with: reencoded) as? NSDictionary)
+        XCTAssertEqual(actual, expected)
+    }
+}
+
+
+
+
+
+final class SyncProtocolTranscriptExportTests: XCTestCase {
+    private let exportTypes = [
+        "transcript.export.pending",
+        "transcript.export.denied",
+        "transcript.export.start",
+        "transcript.export.chunk",
+        "transcript.export.complete",
+        "transcript.export.error",
+    ]
+
+    func testExportResponseMessagesDecodeToUnknown() throws {
+        for msgType in exportTypes {
+            let json = """
+                {"type":"\(msgType)","requestId":"te-1"}
+                """.data(using: .utf8)!
+            let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
+            guard case .unknown(let type) = msg else {
+                XCTFail("\(msgType) should decode to .unknown, got \(msg)")
+                continue
+            }
+            XCTAssertEqual(type, msgType)
+        }
+    }
+
+    func testExportRequestMessagesThrowOnDecode() throws {
+        let requestVariants = [
+            "{\"type\":\"transcript.export.request\",\"requestId\":\"te-1\","
+                + "\"selector\":{\"kind\":\"active\"}}",
+            "{\"type\":\"transcript.export.cancel\",\"requestId\":\"te-1\"}",
+        ]
+        for jsonStr in requestVariants {
+            let json = jsonStr.data(using: .utf8)!
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(FollowerToLeaderMessage.self, from: json),
+                "FollowerToLeaderMessage should throw for export variants iOS never originates"
+            )
+        }
+    }
+}
+
+final class SyncProtocolCherryTests: XCTestCase {
+    func testRemoteTargetInfoDecodesCherryKindAndCapabilities() throws {
+        let json = """
+            {"targetId":"c","title":"Host","url":"https:
+             "kind":"cherry","capabilities":{"navigate":true,"network":false,"screenshot":true}}
+            """.data(using: .utf8)!
+        let target = try JSONDecoder().decode(RemoteTargetInfo.self, from: json)
+        XCTAssertEqual(target.kind, "cherry")
+        XCTAssertEqual(target.capabilities?.network, false)
+        XCTAssertEqual(target.capabilities?.navigate, true)
+        XCTAssertEqual(target.capabilities?.screenshot, true)
+    }
+
+    func testCherrySliccEventMessageDecodes() throws {
+        let json = """
+            {"type":"cherry.slicc_event","targetId":"c","name":"open-url","detail":{"url":"https://x"}}
+            """.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
+        guard case .cherrySliccEvent(let targetId, let name, let detail) = msg else {
+            return XCTFail("expected cherrySliccEvent, got \(msg)")
+        }
+        XCTAssertEqual(targetId, "c")
+        XCTAssertEqual(name, "open-url")
+        XCTAssertNotNil(detail, "detail should decode the {\"url\":...} payload")
+    }
+}

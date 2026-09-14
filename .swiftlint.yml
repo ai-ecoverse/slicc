@@ -1,0 +1,72 @@
+excluded:
+  - '**/.build'
+  - '**/Package.resolved'
+  - node_modules
+
+opt_in_rules:
+  - first_where
+  - last_where
+  - contains_over_filter_count
+  - contains_over_first_not_nil
+  - sorted_first_last
+  - redundant_nil_coalescing
+  - closure_spacing
+  - fatal_error_message
+  - toggle_bool
+  - yoda_condition
+
+disabled_rules:
+  - trailing_comma
+
+  - todo
+
+  - opening_brace
+
+identifier_name:
+  min_length:
+    warning: 0
+    error: 0
+  max_length:
+    warning: 50
+    error: 60
+
+  validates_start_with_lowercase: warning
+
+force_try:
+  severity: warning
+
+line_length:
+  warning: 160
+
+  error: 500
+  ignores_urls: true
+  ignores_comments: true
+  ignores_function_declarations: true
+
+file_length:
+  warning: 1200
+  error: 2000
+
+type_body_length:
+  warning: 600
+  error: 1000
+
+function_body_length:
+  warning: 120
+  error: 400
+
+cyclomatic_complexity:
+  warning: 25
+  error: 50
+
+function_parameter_count:
+  warning: 8
+  error: 10
+
+large_tuple:
+  warning: 4
+  error: 5
+
+nesting:
+  type_level:
+    warning: 3

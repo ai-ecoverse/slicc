@@ -1,0 +1,561 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  type SliccAddDetail,
+  SliccAddMenu,
+  type SliccAddSection,
+} from '../../src/add-menu/slicc-add-menu.js';
+import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+
+function mount(): SliccAddMenu {
+  const el = document.createElement('slicc-add-menu');
+  document.body.appendChild(el);
+  return el;
+}
+
+const shadow = (el: SliccAddMenu) => el.shadowRoot as ShadowRoot;
+const trigger = (el: SliccAddMenu) => shadow(el).querySelector('.trigger') as HTMLButtonElement;
+const searchInput = (el: SliccAddMenu) =>
+  shadow(el).querySelector('.searchbox input') as HTMLInputElement;
+const rows = (el: SliccAddMenu) =>
+  Array.from(shadow(el).querySelectorAll<HTMLElement>('.results .item'));
+const sections = (el: SliccAddMenu) =>
+  Array.from(shadow(el).querySelectorAll<HTMLElement>('.results .sec')).map(
+    (s) => s.textContent ?? ''
+  );
+
+function typeSearch(el: SliccAddMenu, value: string): void {
+  const input = searchInput(el);
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+const flush = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+function fileDrag(type: string, files: File[] = [], composed = false): DragEvent {
+  const dt = new DataTransfer();
+  for (const f of files) dt.items.add(f);
+
+  if (files.length === 0) dt.items.add(new File([''], '__probe'));
+  return new DragEvent(type, { bubbles: true, composed, dataTransfer: dt });
+}
+
+describe('slicc-add-menu', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('registers the custom element', () => {
+    expect(customElements.get('slicc-add-menu')).toBe(SliccAddMenu);
+  });
+
+  it('exposes the ::part hooks from the prototype contract', () => {
+    const el = mount();
+    const root = shadow(el);
+    expect(root.querySelector('[part="wrap"]')).not.toBeNull();
+    expect(root.querySelector('[part="trigger"]')).not.toBeNull();
+    expect(root.querySelector('[part="results"]')).not.toBeNull();
+  });
+
+  it('renders the trigger as a lucide <svg>, never a unicode +/× glyph', () => {
+    const el = mount();
+    const trig = trigger(el);
+
+    const svg = trig.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelector('path, line, circle, rect')).not.toBeNull();
+
+    for (const glyph of ['+', '×', '＋', '✕', '✦']) {
+      expect(trig.textContent ?? '').not.toContain(glyph);
+    }
+  });
+
+  it('swaps the trigger glyph between lucide plus (closed) and x (open)', async () => {
+    const el = mount();
+    const trig = trigger(el);
+
+    expect(trig.querySelector('svg')).not.toBeNull();
+
+    el.open();
+    await flush();
+
+    const openSvg = trig.querySelector('svg');
+    expect(openSvg).not.toBeNull();
+    expect(trig.textContent ?? '').not.toContain('×');
+    expect(trig.textContent ?? '').not.toContain('+');
+
+    expect(openSvg?.querySelector('line, path')).not.toBeNull();
+
+    el.close();
+    await flush();
+    expect(trig.querySelector('svg')).not.toBeNull();
+  });
+
+  it('renders every result-row + quick-action icon as a lucide <svg> (no emoji)', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+    const icons = Array.from(shadow(el).querySelectorAll<HTMLElement>('.results .item .ic'));
+    expect(icons.length).toBeGreaterThan(0);
+    for (const ic of icons) {
+      expect(ic.querySelector('svg')).not.toBeNull();
+    }
+
+    expect(shadow(el).querySelector('.searchbox .si svg')).not.toBeNull();
+
+    const text = (shadow(el).querySelector('.results') as HTMLElement).textContent ?? '';
+    for (const glyph of ['📎', '🖼', '📷', '🖥', '➕', '✕', '×']) {
+      expect(text).not.toContain(glyph);
+    }
+  });
+
+  it('starts closed', () => {
+    const el = mount();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-open')).toBe(false);
+    expect(trigger(el).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens and closes via the trigger, reflecting data-open + aria-expanded', async () => {
+    const el = mount();
+
+    trigger(el).click();
+    await flush();
+    expect(el.isOpen).toBe(true);
+    expect(el.hasAttribute('data-open')).toBe(true);
+    expect(trigger(el).getAttribute('aria-expanded')).toBe('true');
+
+    trigger(el).click();
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-open')).toBe(false);
+    expect(trigger(el).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('reveals the slide-in search box only while open (real layout)', async () => {
+    const el = mount();
+    const box = shadow(el).querySelector('.searchbox') as HTMLElement;
+    expect(getComputedStyle(box).display).toBe('none');
+
+    el.open();
+    await flush();
+    expect(getComputedStyle(box).display).not.toBe('none');
+  });
+
+  it('renders the default demo dataset (quick actions + the three sections)', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    expect(sections(el)).toEqual(['Files', 'Skills', 'Conversations']);
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('Upload from this computer');
+    expect(labels).toContain('README.md');
+    expect(labels).toContain('slicc-handoff');
+  });
+
+  it('no-camera hides "Take a photo" but keeps upload + screenshot', async () => {
+    const el = mount();
+    el.setAttribute('no-camera', '');
+    el.open();
+    await flush();
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('Upload from this computer');
+    expect(labels).toContain('Take a screenshot');
+    expect(labels).not.toContain('Take a photo');
+  });
+
+  it('no-camera added while open repaints away the camera action', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain('Take a photo');
+
+    el.setAttribute('no-camera', '');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).not.toContain('Take a photo');
+  });
+
+  it('omits the secret action unless the host opts in with secret-action', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).not.toContain(
+      'Share secret securely'
+    );
+  });
+
+  it('secret-action appends the secret row BELOW upload + capture', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels.indexOf('Share secret securely')).toBeGreaterThan(
+      labels.indexOf('Take a screenshot')
+    );
+  });
+
+  it('secret-action set while open repaints the secret row in', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    el.setAttribute('secret-action', '');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain(
+      'Share secret securely'
+    );
+  });
+
+  it('emits a value-free { kind: "secret" } detail when the secret row is chosen', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    const seen: SliccAddDetail[] = [];
+    el.addEventListener('slicc-add', (e) => seen.push(e.detail));
+    const row = rows(el).find(
+      (r) => r.querySelector('.lb')?.textContent === 'Share secret securely'
+    );
+    row?.click();
+
+    expect(seen).toEqual([{ kind: 'secret', label: 'Share secret securely' }]);
+
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('surfaces the secret row for a "secret" search query', async () => {
+    const el = mount();
+    el.setAttribute('secret-action', '');
+    el.open();
+    await flush();
+
+    typeSearch(el, 'secret');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain(
+      'Share secret securely'
+    );
+  });
+
+  it('filters results by the search query across sections', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    typeSearch(el, 'main');
+    await flush();
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('main.ts');
+
+    expect(labels).not.toContain('README.md');
+
+    typeSearch(el, 'zzzznomatch');
+    await flush();
+    expect(rows(el)).toHaveLength(0);
+    expect(shadow(el).querySelector('.empty')).not.toBeNull();
+  });
+
+  it('emits a composed, bubbling "slicc-add" event with detail on row selection', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+    typeSearch(el, 'orchestrator');
+    await flush();
+
+    let detail: SliccAddDetail | undefined;
+    let event: CustomEvent<SliccAddDetail> | undefined;
+
+    document.addEventListener(
+      'slicc-add',
+      (e) => {
+        event = e as CustomEvent<SliccAddDetail>;
+        detail = (e as CustomEvent<SliccAddDetail>).detail;
+      },
+      { once: true }
+    );
+
+    const row = rows(el).find((r) => r.querySelector('.lb')?.textContent === 'orchestrator.ts');
+    expect(row).toBeTruthy();
+    row?.click();
+
+    expect(event?.bubbles).toBe(true);
+    expect(event?.composed).toBe(true);
+    expect(detail).toEqual({
+      kind: 'file',
+      id: '/workspace/src/orchestrator.ts',
+      label: 'orchestrator.ts',
+    });
+
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('emits a capture detail for the screenshot quick action', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+
+    let detail: SliccAddDetail | undefined;
+    document.addEventListener('slicc-add', (e) => {
+      detail = (e as CustomEvent<SliccAddDetail>).detail;
+    });
+
+    const shot = rows(el).find((r) => r.querySelector('.lb')?.textContent === 'Take a screenshot');
+    shot?.click();
+    expect(detail).toEqual({ kind: 'capture', mode: 'screenshot', label: 'Take a screenshot' });
+  });
+
+  it('honors an injected `results` dataset in place of the demo data', async () => {
+    const custom: SliccAddSection[] = [
+      {
+        kind: 'doc',
+        label: 'Docs',
+        icon: 'file',
+        entries: [{ id: 'spec', label: 'Design spec', sub: 'docs/design.md' }],
+      },
+    ];
+    const el = mount();
+    el.results = custom;
+    el.open();
+    await flush();
+
+    expect(sections(el)).toEqual(['Docs']);
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('Design spec');
+
+    expect(labels).not.toContain('README.md');
+
+    let detail: SliccAddDetail | undefined;
+    document.addEventListener('slicc-add', (e) => {
+      detail = (e as CustomEvent<SliccAddDetail>).detail;
+    });
+    rows(el)
+      .find((r) => r.querySelector('.lb')?.textContent === 'Design spec')
+      ?.click();
+    expect(detail).toEqual({ kind: 'doc', id: 'spec', label: 'Design spec' });
+
+    el.results = null;
+    el.open();
+    await flush();
+    expect(sections(el)).toEqual(['Files', 'Skills', 'Conversations']);
+  });
+
+  it('honors an injected async `provider` callback (taking precedence over results)', async () => {
+    const seen: string[] = [];
+    const el = mount();
+    el.results = [
+      {
+        kind: 'static',
+        label: 'Static',
+        icon: 'file',
+        entries: [{ id: 's', label: 'static row' }],
+      },
+    ];
+    el.provider = (q) => {
+      seen.push(q);
+      return Promise.resolve([
+        {
+          kind: 'dyn',
+          label: 'Dynamic',
+          icon: 'sparkles',
+          entries: [{ id: 'd', label: 'dynamic row' }],
+        },
+      ]);
+    };
+    el.open();
+    await flush();
+
+    expect(sections(el)).toEqual(['Dynamic']);
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('dynamic row');
+
+    expect(labels).not.toContain('static row');
+
+    typeSearch(el, 'DYN');
+    await flush();
+    expect(seen).toContain('dyn');
+  });
+
+  it('escapes interpolated entry text', async () => {
+    const el = mount();
+    el.results = [
+      {
+        kind: 'x',
+        label: 'X',
+        icon: 'file',
+        entries: [{ id: 'evil', label: '<img src=x onerror=alert(1)>', sub: '<b>sub</b>' }],
+      },
+    ];
+    el.open();
+    await flush();
+
+    typeSearch(el, 'img');
+    await flush();
+    const lb = shadow(el).querySelector('.results .item .lb') as HTMLElement;
+    expect(lb.querySelector('img')).toBeNull();
+    expect(lb.textContent).toBe('<img src=x onerror=alert(1)>');
+  });
+
+  it('toggles the data-dropping state during a file drag-over', async () => {
+    const el = mount();
+    const wrap = shadow(el).querySelector('.wrap') as HTMLElement;
+
+    wrap.dispatchEvent(new DragEvent('dragover', { bubbles: true }));
+    await flush();
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+
+    wrap.dispatchEvent(new DragEvent('drop', { bubbles: true }));
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('a dropped file emits slicc-add WITH the File object (hosts read its content)', async () => {
+    const el = mount();
+    const wrap = shadow(el).querySelector('.wrap') as HTMLElement;
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    const file = new File(['payload'], 'drop.md', { type: 'text/markdown' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    wrap.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+
+    expect(details).toHaveLength(1);
+    expect(details[0]).toMatchObject({ kind: 'upload', name: 'drop.md', size: 7 });
+    expect(details[0].file).toBe(file);
+  });
+
+  it('global-drop: a document file drag opens the menu and sets data-dropping', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    expect(el.isOpen).toBe(false);
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(true);
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+  });
+
+  it('global-drop: a document drop emits one upload per file and closes the menu', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(true);
+
+    const a = new File(['a'], 'a.md', { type: 'text/markdown' });
+    const b = new File(['bb'], 'b.txt', { type: 'text/plain' });
+    document.dispatchEvent(fileDrag('drop', [a, b]));
+
+    expect(details).toHaveLength(2);
+    expect(details.map((d) => d.name)).toEqual(['a.md', 'b.txt']);
+    expect(details[0].file).toBe(a);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('global-drop: the drag-counter holds data-dropping across nested enter/leave', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    document.dispatchEvent(fileDrag('dragenter'));
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    expect(el.isOpen).toBe(true);
+
+    document.dispatchEvent(fileDrag('dragleave'));
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    expect(el.isOpen).toBe(true);
+
+    document.dispatchEvent(fileDrag('dragleave'));
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+
+    expect(el.isOpen).toBe(false);
+  });
+
+  it('global-drop: leaving the window keeps a user-opened menu open', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.open();
+    await flush();
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    expect(el.hasAttribute('data-dropping')).toBe(true);
+    document.dispatchEvent(fileDrag('dragleave'));
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+
+    expect(el.isOpen).toBe(true);
+  });
+
+  it('without global-drop, a document file drag does nothing (no document listeners)', async () => {
+    const el = mount();
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('removing global-drop detaches the document listeners', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.removeAttribute('global-drop');
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('global-drop listeners are cleaned up on disconnect', async () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    el.remove();
+
+    document.dispatchEvent(fileDrag('dragenter'));
+    await flush();
+    expect(el.isOpen).toBe(false);
+    expect(el.isConnected).toBe(false);
+  });
+
+  it('global-drop does not double-emit when the drop lands on the wrap', () => {
+    const el = mount();
+    el.setAttribute('global-drop', '');
+    const wrap = shadow(el).querySelector('.wrap') as HTMLElement;
+    const details: Array<Record<string, unknown>> = [];
+    el.addEventListener('slicc-add', (e) =>
+      details.push((e as CustomEvent<Record<string, unknown>>).detail)
+    );
+
+    const file = new File(['x'], 'x.md', { type: 'text/markdown' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    wrap.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, dataTransfer: dt }));
+
+    expect(details).toHaveLength(1);
+    expect(details[0].name).toBe('x.md');
+  });
+
+  it('cleans up the document listener on disconnect', () => {
+    const el = mount();
+    el.open();
+    expect(el.isOpen).toBe(true);
+    el.remove();
+
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(el.isConnected).toBe(false);
+  });
+});

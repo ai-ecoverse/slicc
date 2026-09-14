@@ -1,0 +1,421 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  BRIDGE_ALLOWED_ORIGINS,
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_HEADER,
+  buildCorsHeaders,
+  buildPnaPreflightHeaders,
+  isAllowedBridgeOrigin,
+  isLoopbackBridgeOrigin,
+  mintBridgeToken,
+  parseSubprotocolHeader,
+  preflightMaxAge,
+  resolveServerBridgeToken,
+  selectBridgeSubprotocol,
+  shouldMountThinBridgeCors,
+  validateBridgeToken,
+  validateBridgeUpgrade,
+} from '../src/bridge-security.js';
+
+async function reloadBridgeSecurity(value: string | undefined) {
+  vi.resetModules();
+  if (value === undefined) {
+    vi.stubEnv('BRIDGE_DEV_ALLOWED_ORIGINS', '');
+
+    delete process.env.BRIDGE_DEV_ALLOWED_ORIGINS;
+  } else {
+    vi.stubEnv('BRIDGE_DEV_ALLOWED_ORIGINS', value);
+  }
+  return await import('../src/bridge-security.js');
+}
+
+const PROD_ORIGIN = 'https://www.sliccy.ai';
+const TOKEN = 'aabbccdd-1122-3344-5566-778899aabbcc';
+
+describe('isAllowedBridgeOrigin', () => {
+  it('accepts every entry in BRIDGE_ALLOWED_ORIGINS', () => {
+    for (const origin of BRIDGE_ALLOWED_ORIGINS) {
+      expect(isAllowedBridgeOrigin(origin)).toBe(true);
+    }
+  });
+
+  it('rejects unrelated, partial, and empty origins', () => {
+    expect(isAllowedBridgeOrigin(undefined)).toBe(false);
+    expect(isAllowedBridgeOrigin(null)).toBe(false);
+    expect(isAllowedBridgeOrigin('')).toBe(false);
+    expect(isAllowedBridgeOrigin('https://evil.example.com')).toBe(false);
+
+    expect(isAllowedBridgeOrigin('https://www.sliccy.ai.evil.com')).toBe(false);
+
+    expect(isAllowedBridgeOrigin('http://www.sliccy.ai')).toBe(false);
+
+    expect(isAllowedBridgeOrigin('https://www.sliccy.ai/')).toBe(false);
+  });
+});
+
+describe('mintBridgeToken', () => {
+  it('returns a UUID-shaped token that differs each call', () => {
+    const a = mintBridgeToken();
+    const b = mintBridgeToken();
+    expect(a).toMatch(/^[0-9a-f-]{36}$/);
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('resolveServerBridgeToken', () => {
+  it('returns the SLICC_BRIDGE_TOKEN value when set, regardless of mode', () => {
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: false })).toBe(
+      TOKEN
+    );
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: true })).toBe(
+      TOKEN
+    );
+  });
+
+  it('mints a fresh UUID-shaped token when thinBridgeMode is true and env is unset', () => {
+    const token = resolveServerBridgeToken({}, { thinBridgeMode: true });
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('returns null in legacy modes when SLICC_BRIDGE_TOKEN is unset', () => {
+    expect(resolveServerBridgeToken({}, { thinBridgeMode: false })).toBeNull();
+    expect(
+      resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: '' }, { thinBridgeMode: false })
+    ).toBeNull();
+  });
+});
+
+describe('serve-only bridge gate wiring (index.ts THIN_BRIDGE_MODE = !SERVE_ONLY)', () => {
+  const SERVE_ONLY = true;
+  const NOT_SERVE_ONLY = false;
+
+  it('direct --serve-only with no forwarded token leaves the gate off and CORS unmounted', () => {
+    const thinBridgeMode = !SERVE_ONLY;
+    const token = resolveServerBridgeToken({}, { thinBridgeMode });
+    expect(token).toBeNull();
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(false);
+  });
+
+  it('--serve-only reattach with a forwarded token still gates and mounts CORS', () => {
+    const thinBridgeMode = !SERVE_ONLY;
+    const token = resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode });
+    expect(token).toBe(TOKEN);
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(true);
+  });
+
+  it('standalone (not serve-only) mints a token and mounts CORS', () => {
+    const thinBridgeMode = !NOT_SERVE_ONLY;
+    const token = resolveServerBridgeToken({}, { thinBridgeMode });
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(true);
+  });
+});
+
+describe('parseSubprotocolHeader', () => {
+  it('handles comma-separated, whitespace, array, and empty inputs', () => {
+    expect(parseSubprotocolHeader(undefined)).toEqual([]);
+    expect(parseSubprotocolHeader('')).toEqual([]);
+    expect(parseSubprotocolHeader('a, b,   c')).toEqual(['a', 'b', 'c']);
+    expect(parseSubprotocolHeader(['a', 'b,c'])).toEqual(['a', 'b', 'c']);
+    expect(parseSubprotocolHeader(', ,a, ,')).toEqual(['a']);
+  });
+});
+
+describe('selectBridgeSubprotocol', () => {
+  it('returns the matching subprotocol string', () => {
+    const proto = `${BRIDGE_SUBPROTOCOL_PREFIX}${TOKEN}`;
+    expect(selectBridgeSubprotocol([proto], TOKEN)).toBe(proto);
+    expect(selectBridgeSubprotocol(['other', proto, 'extra'], TOKEN)).toBe(proto);
+  });
+
+  it('returns null on missing, mismatched, or empty token', () => {
+    const proto = `${BRIDGE_SUBPROTOCOL_PREFIX}${TOKEN}`;
+    expect(selectBridgeSubprotocol([], TOKEN)).toBeNull();
+    expect(selectBridgeSubprotocol([proto], 'other-token')).toBeNull();
+    expect(selectBridgeSubprotocol(['unrelated'], TOKEN)).toBeNull();
+    expect(selectBridgeSubprotocol([proto], '')).toBeNull();
+  });
+});
+
+describe('validateBridgeUpgrade', () => {
+  const proto = `${BRIDGE_SUBPROTOCOL_PREFIX}${TOKEN}`;
+
+  it('accepts allowlisted origin + matching subprotocol', () => {
+    const res = validateBridgeUpgrade({
+      origin: PROD_ORIGIN,
+      subprotocolHeader: proto,
+      expectedToken: TOKEN,
+    });
+    expect(res).toEqual({ ok: true, acceptedSubprotocol: proto });
+  });
+
+  it('rejects when origin is not allowlisted (even if subprotocol matches)', () => {
+    const res = validateBridgeUpgrade({
+      origin: 'https://evil.example.com',
+      subprotocolHeader: proto,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('origin-not-allowed');
+    expect(res.acceptedSubprotocol).toBeNull();
+  });
+
+  it('rejects when origin is missing entirely', () => {
+    const res = validateBridgeUpgrade({
+      origin: undefined,
+      subprotocolHeader: proto,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('origin-not-allowed');
+  });
+
+  it('rejects allowlisted origin with no Sec-WebSocket-Protocol header', () => {
+    const res = validateBridgeUpgrade({
+      origin: PROD_ORIGIN,
+      subprotocolHeader: undefined,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('subprotocol-missing-or-mismatched');
+  });
+
+  it('rejects allowlisted origin with wrong token in subprotocol', () => {
+    const res = validateBridgeUpgrade({
+      origin: PROD_ORIGIN,
+      subprotocolHeader: `${BRIDGE_SUBPROTOCOL_PREFIX}wrong-token`,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('subprotocol-missing-or-mismatched');
+  });
+});
+
+describe('buildCorsHeaders', () => {
+  it('returns CORS headers echoing an allowlisted origin', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN);
+    expect(headers).not.toBeNull();
+    expect(headers!['Access-Control-Allow-Origin']).toBe(PROD_ORIGIN);
+    expect(headers!['Access-Control-Allow-Credentials']).toBe('true');
+    expect(headers!['Access-Control-Allow-Methods']).toBe(
+      'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK'
+    );
+
+    for (const verb of ['PATCH', 'PROPFIND', 'REPORT', 'MKCALENDAR', 'HEAD']) {
+      expect(headers!['Access-Control-Allow-Methods']).toContain(verb);
+    }
+    expect(headers!['Access-Control-Allow-Headers']).toContain('Content-Type');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Target-URL');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Proxy-Cookie');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Error');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('X-Proxy-Set-Cookie');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('Mcp-Session-Id');
+    expect(headers!['Access-Control-Expose-Headers']).toContain('MCP-Protocol-Version');
+    expect(headers!.Vary).toBe('Origin, Access-Control-Request-Headers');
+  });
+
+  it('returns null for non-allowlisted origins', () => {
+    expect(buildCorsHeaders('https://evil.example.com')).toBeNull();
+    expect(buildCorsHeaders(undefined)).toBeNull();
+  });
+
+  it('reflects unknown headers from Access-Control-Request-Headers', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, 'X-Custom-Upstream, Anthropic-Version');
+    expect(headers).not.toBeNull();
+    const allow = headers!['Access-Control-Allow-Headers'];
+    expect(allow).toContain('X-Custom-Upstream');
+    expect(allow).toContain('Anthropic-Version');
+
+    expect(allow).toContain('Content-Type');
+  });
+
+  it('skips reflected headers that are already in the base set', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, 'content-type, X-Target-URL, X-Other');
+    const allow = headers!['Access-Control-Allow-Headers'];
+
+    expect(allow.match(/Content-Type/gi)?.length ?? 0).toBe(1);
+    expect(allow.match(/X-Target-URL/gi)?.length ?? 0).toBe(1);
+    expect(allow).toContain('X-Other');
+  });
+
+  it('accepts string[] Access-Control-Request-Headers (Node header shape)', () => {
+    const headers = buildCorsHeaders(PROD_ORIGIN, ['X-One', 'X-Two']);
+    const allow = headers!['Access-Control-Allow-Headers'];
+    expect(allow).toContain('X-One');
+    expect(allow).toContain('X-Two');
+  });
+});
+
+describe('buildPnaPreflightHeaders', () => {
+  it('advertises Private Network Access opt-in', () => {
+    expect(buildPnaPreflightHeaders()).toEqual({
+      'Access-Control-Allow-Private-Network': 'true',
+    });
+  });
+});
+
+describe('BRIDGE_TOKEN_HEADER', () => {
+  it('matches the X-Bridge-Token header name listed in CORS_BASE_ALLOW_HEADERS', () => {
+    expect(BRIDGE_TOKEN_HEADER).toBe('X-Bridge-Token');
+    const headers = buildCorsHeaders(PROD_ORIGIN);
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Bridge-Token');
+  });
+});
+
+describe('isLoopbackBridgeOrigin', () => {
+  it('accepts localhost / 127.0.0.0/8 / ::1 origins on any port', () => {
+    expect(isLoopbackBridgeOrigin('http://localhost:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://127.0.0.1:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://127.0.0.2:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://[::1]:5710')).toBe(true);
+
+    expect(isLoopbackBridgeOrigin('http://localhost')).toBe(true);
+  });
+
+  it('rejects remote / malformed / empty origins', () => {
+    expect(isLoopbackBridgeOrigin(undefined)).toBe(false);
+    expect(isLoopbackBridgeOrigin(null)).toBe(false);
+    expect(isLoopbackBridgeOrigin('')).toBe(false);
+    expect(isLoopbackBridgeOrigin('https://www.sliccy.ai')).toBe(false);
+    expect(isLoopbackBridgeOrigin('https://localhost.evil.com')).toBe(false);
+    expect(isLoopbackBridgeOrigin('not a url')).toBe(false);
+  });
+});
+
+describe('validateBridgeToken', () => {
+  it('accepts a matching string presented value', () => {
+    expect(validateBridgeToken(TOKEN, TOKEN)).toBe(true);
+  });
+
+  it('uses the first value of a string[] presented header', () => {
+    expect(validateBridgeToken([TOKEN, 'other'], TOKEN)).toBe(true);
+    expect(validateBridgeToken(['wrong', TOKEN], TOKEN)).toBe(false);
+  });
+
+  it('rejects mismatches, missing values, and an unset expected token', () => {
+    expect(validateBridgeToken('other', TOKEN)).toBe(false);
+    expect(validateBridgeToken(undefined, TOKEN)).toBe(false);
+    expect(validateBridgeToken('', TOKEN)).toBe(false);
+
+    expect(validateBridgeToken(TOKEN, null)).toBe(false);
+    expect(validateBridgeToken('', null)).toBe(false);
+  });
+
+  it('rejects length-mismatched values without throwing', () => {
+    expect(validateBridgeToken('short', TOKEN)).toBe(false);
+    expect(validateBridgeToken(`${TOKEN}-extra`, TOKEN)).toBe(false);
+  });
+});
+
+describe('BRIDGE_DEV_ALLOWED_ORIGINS env extension', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('accepts an env-extended origin alongside the frozen base', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+
+    expect(mod.isAllowedBridgeOrigin('https://www.sliccy.ai')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:5710')).toBe(true);
+
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('https://evil.example.com')).toBe(false);
+  });
+
+  it('flows through validateBridgeUpgrade for an env-extended origin', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    const proto = `${mod.BRIDGE_SUBPROTOCOL_PREFIX}${TOKEN}`;
+    const res = mod.validateBridgeUpgrade({
+      origin: 'http://localhost:8787',
+      subprotocolHeader: proto,
+      expectedToken: TOKEN,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.acceptedSubprotocol).toBe(proto);
+  });
+
+  it('returns CORS headers for an env-extended origin', async () => {
+    const mod = await reloadBridgeSecurity('http://localhost:8787');
+    const headers = mod.buildCorsHeaders('http://localhost:8787');
+    expect(headers).not.toBeNull();
+    expect(headers!['Access-Control-Allow-Origin']).toBe('http://localhost:8787');
+    expect(headers!['Access-Control-Allow-Headers']).toContain('X-Bridge-Token');
+  });
+
+  it('is byte-identical to the frozen base when the env var is unset', async () => {
+    const mod = await reloadBridgeSecurity(undefined);
+
+    for (const origin of mod.BRIDGE_ALLOWED_ORIGINS) {
+      expect(mod.isAllowedBridgeOrigin(origin)).toBe(true);
+    }
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+    expect(mod.buildCorsHeaders('http://localhost:8787')).toBeNull();
+  });
+
+  it('supports multiple comma-separated origins', async () => {
+    const mod = await reloadBridgeSecurity(
+      'http://localhost:8787,http://localhost:4200,http://127.0.0.1:8787'
+    );
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:4200')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://127.0.0.1:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:9999')).toBe(false);
+  });
+
+  it('ignores blank and whitespace-only entries', async () => {
+    const mod = await reloadBridgeSecurity(
+      ' , http://localhost:8787 ,  ,\t, ,http://localhost:4200,'
+    );
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:4200')).toBe(true);
+
+    expect(mod.isAllowedBridgeOrigin('')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin(' ')).toBe(false);
+  });
+
+  it('tolerates malformed entries without throwing', async () => {
+    const mod = await reloadBridgeSecurity('not a url,http://localhost:8787,://broken,');
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('not a url')).toBe(false);
+    expect(mod.isAllowedBridgeOrigin('://broken')).toBe(false);
+  });
+
+  it('normalizes trailing slashes and case in env entries', async () => {
+    const mod = await reloadBridgeSecurity('HTTP://Localhost:8787/');
+
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787')).toBe(true);
+
+    expect(mod.isAllowedBridgeOrigin('HTTP://Localhost:8787')).toBe(true);
+    expect(mod.isAllowedBridgeOrigin('http://localhost:8787/')).toBe(true);
+  });
+});
+
+describe('shouldMountThinBridgeCors', () => {
+  it('mounts in canonical thin-bridge mode regardless of token', () => {
+    expect(shouldMountThinBridgeCors(true, TOKEN)).toBe(true);
+    expect(shouldMountThinBridgeCors(true, null)).toBe(true);
+  });
+
+  it('mounts when a bridge token is present even with thinBridgeMode false', () => {
+    expect(shouldMountThinBridgeCors(false, TOKEN)).toBe(true);
+  });
+
+  it('stays off in legacy modes with no bridge token (same-origin preserved)', () => {
+    expect(shouldMountThinBridgeCors(false, null)).toBe(false);
+  });
+});
+
+describe('preflightMaxAge', () => {
+  it("gives hostfs Chrome's 7200s cap and everything else 600s", () => {
+    expect(preflightMaxAge('/api/hostfs')).toBe('7200');
+    expect(preflightMaxAge('/api/hostfs/read')).toBe('7200');
+    expect(preflightMaxAge('/api/fetch-proxy')).toBe('600');
+    expect(preflightMaxAge('/cdp')).toBe('600');
+
+    expect(preflightMaxAge('/api/hostfs-admin')).toBe('600');
+  });
+});

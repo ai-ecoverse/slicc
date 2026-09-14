@@ -1,0 +1,56 @@
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "adobe-clean";
+  src: url("/fonts/AdobeClean-ExtraBold.otf") format("opentype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Adobe Clean";
+  src: url("/fonts/AdobeClean-ExtraBold.otf") format("opentype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}

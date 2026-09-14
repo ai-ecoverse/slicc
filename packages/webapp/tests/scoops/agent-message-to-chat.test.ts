@@ -1,0 +1,512 @@
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import { describe, expect, it } from 'vitest';
+import { agentMessagesToChatMessages } from '../../src/scoops/agent-message-to-chat.js';
+import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../src/scoops/transcript-limits.js';
+
+function userMsg(text: string, timestamp = 1): AgentMessage {
+  return {
+    role: 'user',
+    content: [{ type: 'text', text }],
+    timestamp,
+  } as AgentMessage;
+}
+
+function assistantMsg(
+  blocks: Array<
+    | { type: 'text'; text: string }
+    | { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown> }
+  >,
+  timestamp = 2
+): AgentMessage {
+  return {
+    role: 'assistant',
+    content: blocks,
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    model: 'claude-haiku-4-5',
+    usage: {
+      input: 12,
+      output: 3,
+      cacheRead: 4,
+      cacheWrite: 1,
+      totalTokens: 20,
+      cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 },
+    },
+    stopReason: 'stop',
+    timestamp,
+  } as AgentMessage;
+}
+
+function toolResultMsg(
+  toolCallId: string,
+  text: string,
+  isError = false,
+  timestamp = 3
+): AgentMessage {
+  return {
+    role: 'toolResult',
+    toolCallId,
+    toolName: 'bash',
+    content: [{ type: 'text', text }],
+    isError,
+    timestamp,
+  } as AgentMessage;
+}
+
+let counter = 0;
+const seedId = (): string => `id-${++counter}`;
+
+describe('lickChannelFromBody', () => {
+  it('classifies scoop lifecycle bodies that carry no sender channel prefix', async () => {
+    const { lickChannelFromBody } = await import('../../src/scoops/agent-message-to-chat.js');
+    expect(lickChannelFromBody('[@tool-demo-scoop completed]VFS path: /shared/x')).toBe(
+      'scoop-notify'
+    );
+    expect(lickChannelFromBody('[@pomodoro-scoop idle]: Scoop "pomodoro" has been ready')).toBe(
+      'scoop-idle'
+    );
+    expect(lickChannelFromBody('[scoop_wait completed]1 completed, 0 timed out')).toBe(
+      'scoop-wait'
+    );
+    expect(lickChannelFromBody('[scoop_wait timeout]0 completed, 1 timed out')).toBe('scoop-wait');
+    expect(lickChannelFromBody('[Session Reload] Mount recovery required.')).toBe('session-reload');
+    expect(
+      lickChannelFromBody(
+        '[@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u'
+      )
+    ).toBe('sudo-request');
+    expect(lickChannelFromBody('plain user text')).toBeNull();
+    expect(lickChannelFromBody('[just a bracket] but not a marker')).toBeNull();
+  });
+
+  it('replayed scoop notifications come back as licks, not plain bubbles', () => {
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[6/11/2026, 1:00:00 PM] tool-demo-scoop: [@tool-demo-scoop completed]VFS path: /shared/n.md'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('scoop-notify');
+  });
+
+  it('replayed sudo-request notifications come back as licks, not plain bubbles', () => {
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[6/11/2026, 1:00:00 PM] pr1003-always-scoop: [@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sudo-request');
+    expect(out[0].lickId).toBe('sudo-mqf7gh5c-cr56age9');
+    expect(out[0].id).toBe('sudo-request-sudo-mqf7gh5c-cr56age9');
+    expect(out[0].lickState).toBeUndefined();
+  });
+
+  it('replayed sudo-request bodies recover lickId from the Lick ID line', () => {
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg(
+          '[9/10/2026, 12:00:00 PM] test-scoop: [@test-scoop sudo-request]\nLick ID: lick-1\nKind: command\nDetail: git push'
+        ),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out[0]).toMatchObject({
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+      id: 'sudo-request-lick-1',
+    });
+    expect(out[0].lickState).toBeUndefined();
+  });
+});
+
+describe('agentMessagesToChatMessages', () => {
+  it('returns an empty array for empty input', () => {
+    expect(agentMessagesToChatMessages([])).toEqual([]);
+  });
+
+  it('caps oversized tool results and inputs at the transcript boundary', () => {
+    const hugeResult = 'r'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 50_000);
+    const hugeContent = 'w'.repeat(MAX_TRANSCRIPT_TOOL_TEXT_CHARS + 50_000);
+    const input: AgentMessage[] = [
+      assistantMsg([
+        { type: 'text', text: 'writing + reading' },
+        {
+          type: 'toolCall',
+          id: 'tc-1',
+          name: 'write_file',
+          arguments: { path: '/big.txt', content: hugeContent },
+        },
+      ]),
+      toolResultMsg('tc-1', hugeResult),
+    ];
+
+    const [msg] = agentMessagesToChatMessages(input);
+    const tc = msg.toolCalls?.[0];
+
+    expect(tc?.result?.length).toBeLessThan(hugeResult.length);
+    expect(tc?.result).toContain('truncated for the chat transcript');
+    const content = (tc?.input as { content: string }).content;
+    expect(content.length).toBeLessThan(hugeContent.length);
+
+    expect((tc?.input as { path: string }).path).toBe('/big.txt');
+  });
+
+  it('translates a plain user/assistant exchange', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      userMsg('hello', 1),
+      assistantMsg([{ type: 'text', text: 'hi there' }], 2),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toEqual([
+      { id: 'id-1', role: 'user', content: 'hello', timestamp: 1 },
+      {
+        id: 'id-2',
+        role: 'assistant',
+        content: 'hi there',
+        timestamp: 2,
+        source: 'cone',
+        model: 'claude-haiku-4-5',
+        usage: {
+          input: 12,
+          output: 3,
+          cacheRead: 4,
+          cacheWrite: 1,
+          cost: {
+            input: 0.01,
+            output: 0.02,
+            cacheRead: 0.003,
+            cacheWrite: 0.004,
+            total: 0.037,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('joins multiple text blocks into a single content string', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          { type: 'text', text: 'first ' },
+          { type: 'text', text: 'second' },
+        ],
+        2
+      ),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out[0].content).toBe('first second');
+  });
+
+  it('collapses tool calls + tool results into the assistant message', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      userMsg('list files', 1),
+      assistantMsg(
+        [
+          { type: 'text', text: 'Listing now.' },
+          {
+            type: 'toolCall',
+            id: 'tc-1',
+            name: 'bash',
+            arguments: { command: 'ls' },
+          },
+        ],
+        2
+      ),
+      toolResultMsg('tc-1', 'a.txt\nb.txt\n', false, 3),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toHaveLength(2);
+    const assistant = out[1];
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.content).toBe('Listing now.');
+    expect(assistant.toolCalls).toEqual([
+      {
+        id: 'tc-1',
+        name: 'bash',
+        input: { command: 'ls' },
+        result: 'a.txt\nb.txt\n',
+        isError: false,
+      },
+    ]);
+  });
+
+  it('attaches the error flag when a tool result is an error', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          {
+            type: 'toolCall',
+            id: 'tc-fail',
+            name: 'bash',
+            arguments: { command: 'badcmd' },
+          },
+        ],
+        2
+      ),
+      toolResultMsg('tc-fail', 'bash: badcmd: command not found', true, 3),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out[0].toolCalls?.[0].isError).toBe(true);
+    expect(out[0].toolCalls?.[0].result).toContain('command not found');
+  });
+
+  it('passes the source label through to assistant messages', () => {
+    counter = 0;
+    const input: AgentMessage[] = [assistantMsg([{ type: 'text', text: 'from a scoop' }], 2)];
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId, source: 'todo-app' });
+    expect(out[0].source).toBe('todo-app');
+  });
+
+  it('skips empty user messages', () => {
+    counter = 0;
+    const input: AgentMessage[] = [userMsg('', 1), assistantMsg([{ type: 'text', text: 'hi' }], 2)];
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe('assistant');
+  });
+
+  it('drops orphan tool results that have no preceding tool call', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      userMsg('hi', 1),
+      toolResultMsg('tc-orphan', 'whatever', false, 2),
+    ];
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe('user');
+  });
+
+  it('keeps multi-turn exchanges in order', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      userMsg('first', 1),
+      assistantMsg([{ type: 'text', text: 'one' }], 2),
+      userMsg('second', 3),
+      assistantMsg([{ type: 'text', text: 'two' }], 4),
+    ];
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out.map((m) => `${m.role}:${m.content}`)).toEqual([
+      'user:first',
+      'assistant:one',
+      'user:second',
+      'assistant:two',
+    ]);
+  });
+
+  it('omits the toolCalls field entirely when there are none', () => {
+    counter = 0;
+    const input: AgentMessage[] = [assistantMsg([{ type: 'text', text: 'just text' }], 2)];
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out[0]).not.toHaveProperty('toolCalls');
+  });
+
+  it('drops internal orchestration tools (send_message / list_scoops / list_tasks)', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          { type: 'text', text: 'thinking…' },
+          { type: 'toolCall', id: 'tc-keep', name: 'bash', arguments: { command: 'ls' } },
+          {
+            type: 'toolCall',
+            id: 'tc-hidden-1',
+            name: 'send_message',
+            arguments: { to: 'cone' },
+          },
+          { type: 'toolCall', id: 'tc-hidden-2', name: 'list_scoops', arguments: {} },
+          { type: 'toolCall', id: 'tc-hidden-3', name: 'list_tasks', arguments: {} },
+        ],
+        2
+      ),
+      toolResultMsg('tc-keep', 'a.txt\n', false, 3),
+
+      toolResultMsg('tc-hidden-1', 'sent', false, 4),
+      toolResultMsg('tc-hidden-2', '[]', false, 5),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toEqual([
+      { id: 'tc-keep', name: 'bash', input: { command: 'ls' }, result: 'a.txt\n', isError: false },
+    ]);
+  });
+
+  it('strips the orchestrator envelope from plain user messages', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages([userMsg('[May 11, 6:50 AM] User: hi', 100)], {
+      idSeed: seedId,
+    });
+    expect(out).toEqual([
+      {
+        id: 'id-1',
+        role: 'user',
+        content: 'hi',
+        timestamp: 100,
+      },
+    ]);
+  });
+
+  it('tags sprinkle lick messages with source=lick and channel=sprinkle', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 8:15 AM] sprinkle:welcome: [Sprinkle Event: welcome]\n```json\n{"foo":1}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 200)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe('user');
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+
+    expect(out[0].content.startsWith('[Sprinkle Event: welcome]')).toBe(true);
+  });
+
+  it('handles upgrade lick senders with arrow-containing event names', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 9:12 AM] upgrade:2.37.0→2.38.1: [Upgrade Event: 2.37.0→2.38.1]\n\nSLICC was upgraded.';
+    const out = agentMessagesToChatMessages([userMsg(raw, 300)], { idSeed: seedId });
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('upgrade');
+    expect(out[0].content).toBe('[Upgrade Event: 2.37.0→2.38.1]\n\nSLICC was upgraded.');
+  });
+
+  it('restores preview lick metadata from persisted envelopes', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 9:15 AM] preview:connected: Preview tab connected from https://example.test';
+    const out = agentMessagesToChatMessages([userMsg(raw, 301)], { idSeed: seedId });
+    expect(out[0]).toMatchObject({
+      role: 'user',
+      source: 'lick',
+      channel: 'preview',
+      content: 'Preview tab connected from https://example.test',
+    });
+  });
+
+  it('recognizes scoop-lifecycle channels (scoop-notify / scoop-wait)', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg('[May 11, 10:00 AM] scoop-notify:done: [@scout completed]', 400),
+        userMsg('[May 11, 10:00 AM] scoop-wait:settle: [scoop_wait completed]', 401),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out[0].channel).toBe('scoop-notify');
+    expect(out[0].source).toBe('lick');
+    expect(out[1].channel).toBe('scoop-wait');
+    expect(out[1].source).toBe('lick');
+  });
+
+  it('leaves pre-envelope or unbracketed content unchanged', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages([userMsg('just text, no envelope', 500)], {
+      idSeed: seedId,
+    });
+    expect(out[0].content).toBe('just text, no envelope');
+    expect(out[0].source).toBeUndefined();
+    expect(out[0].channel).toBeUndefined();
+  });
+
+  it('leaves an unknown sender as a plain user message (no lick tagging)', () => {
+    counter = 0;
+
+    const out = agentMessagesToChatMessages(
+      [userMsg('[May 11, 7:00 AM] cone: forwarded note', 600)],
+      { idSeed: seedId }
+    );
+    expect(out[0].content).toBe('forwarded note');
+    expect(out[0].source).toBeUndefined();
+    expect(out[0].channel).toBeUndefined();
+  });
+
+  it('does not unwrap when the bracket spans a newline', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages(
+      [userMsg('[opens here\nbut keeps going] User: bogus', 700)],
+      { idSeed: seedId }
+    );
+    expect(out[0].content).toBe('[opens here\nbut keeps going] User: bogus');
+  });
+
+  it('parses a sender containing ": " by anchoring on the known channel prefix', () => {
+    counter = 0;
+
+    const raw =
+      '[May 11, 10:00 AM] webhook:deploy: prod: [Webhook Event: deploy: prod]\n```json\n{"ok":true}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 1000)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('webhook');
+    expect(out[0].content.startsWith('[Webhook Event: deploy: prod]')).toBe(true);
+  });
+
+  it('splits a batched user message with multiple envelopes into separate ChatMessages', () => {
+    counter = 0;
+
+    const raw =
+      '[May 11, 8:15 AM] sprinkle:welcome: [Sprinkle Event: welcome]\n' +
+      '```json\n{"x":1}\n```\n' +
+      '[May 11, 8:16 AM] User: typed input\n' +
+      '[May 11, 8:17 AM] cron:daily: [Cron Event: daily]\n' +
+      '```json\n{"y":2}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 8000)], { idSeed: seedId });
+    expect(out).toHaveLength(3);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+    expect(out[0].content.startsWith('[Sprinkle Event: welcome]')).toBe(true);
+    expect(out[1].source).toBeUndefined();
+    expect(out[1].content).toBe('typed input');
+    expect(out[2].source).toBe('lick');
+    expect(out[2].channel).toBe('cron');
+    expect(out[2].content.startsWith('[Cron Event: daily]')).toBe(true);
+
+    expect(out.every((m) => m.timestamp === 8000)).toBe(true);
+  });
+
+  it('does not start a new envelope on an inner [Sprinkle Event: x] body line', () => {
+    counter = 0;
+
+    const raw = '[May 11, 8:15 AM] sprinkle:welcome: header\n[Sprinkle Event: welcome]\nmore body';
+    const out = agentMessagesToChatMessages([userMsg(raw, 1)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+    expect(out[0].content).toBe('header\n[Sprinkle Event: welcome]\nmore body');
+  });
+
+  it('honors a custom hiddenToolNames override', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          { type: 'toolCall', id: 'tc-bash', name: 'bash', arguments: { command: 'ls' } },
+          { type: 'toolCall', id: 'tc-x', name: 'experimental_thing', arguments: {} },
+        ],
+        2
+      ),
+    ];
+
+    const out = agentMessagesToChatMessages(input, {
+      idSeed: seedId,
+      hiddenToolNames: new Set(['experimental_thing']),
+    });
+    expect(out[0].toolCalls?.map((t) => t.name)).toEqual(['bash']);
+  });
+});

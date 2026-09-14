@@ -1,0 +1,87 @@
+import 'fake-indexeddb/auto';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { GitCommands } from '../../src/git/git-commands.js';
+import { createDirectoryHandle } from '../fs/fsa-test-helpers.js';
+
+let dbCounter = 0;
+
+describe('GitCommands on mounted directories (issue #421)', () => {
+  let vfs: VirtualFS;
+  let git: GitCommands;
+
+  beforeEach(async () => {
+    const testId = dbCounter++;
+    vfs = await VirtualFS.create({ dbName: `git-mount-test-${testId}`, wipe: true });
+    git = new GitCommands({
+      fs: vfs,
+      authorName: 'Test User',
+      authorEmail: 'test@example.com',
+      globalDbName: `git-mount-global-${testId}`,
+    });
+  });
+
+  async function mountEmpty(path: string): Promise<void> {
+    await vfs.mkdir(path, { recursive: true });
+    await vfs.mount(
+      path,
+      LocalMountBackend.fromHandle(createDirectoryHandle({}), { mountId: newMountId() })
+    );
+  }
+
+  it('git init creates .git/HEAD inside a mounted directory', async () => {
+    await mountEmpty('/mnt/repo');
+
+    const result = await git.execute(['init'], '/mnt/repo');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Initialized empty Git repository');
+
+    expect(await vfs.exists('/mnt/repo/.git/HEAD')).toBe(true);
+    const head = await vfs.readTextFile('/mnt/repo/.git/HEAD');
+    expect(head).toMatch(/^ref: refs\/heads\//);
+  });
+
+  it('status reports clean after a commit on a mounted repo', async () => {
+    await mountEmpty('/mnt/repo');
+    await git.execute(['init'], '/mnt/repo');
+
+    await vfs.writeFile('/mnt/repo/readme.txt', 'mounted hello');
+    const add = await git.execute(['add', 'readme.txt'], '/mnt/repo');
+    expect(add.exitCode).toBe(0);
+
+    const commit = await git.execute(['commit', '-m', 'first'], '/mnt/repo');
+    expect(commit.exitCode).toBe(0);
+
+    const status = await git.execute(['status'], '/mnt/repo');
+    expect(status.exitCode).toBe(0);
+
+    expect(status.stderr).not.toMatch(/HEAD not found/i);
+    expect(status.stdout).toMatch(/nothing to commit|working tree clean/);
+  });
+
+  it('log --oneline shows the commit made inside the mount', async () => {
+    await mountEmpty('/mnt/repo');
+    await git.execute(['init'], '/mnt/repo');
+    await vfs.writeFile('/mnt/repo/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/mnt/repo');
+    await git.execute(['commit', '-m', 'mounted commit'], '/mnt/repo');
+
+    const log = await git.execute(['log', '--oneline'], '/mnt/repo');
+    expect(log.exitCode).toBe(0);
+    expect(log.stdout).toContain('mounted commit');
+  });
+
+  it('still works on a non-mounted LightningFS-backed repo (no regression)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/a.txt', 'a');
+    await git.execute(['add', 'a.txt'], '/project');
+    const commit = await git.execute(['commit', '-m', 'lfs repo'], '/project');
+    expect(commit.exitCode).toBe(0);
+
+    const log = await git.execute(['log', '--oneline'], '/project');
+    expect(log.exitCode).toBe(0);
+    expect(log.stdout).toContain('lfs repo');
+  });
+});

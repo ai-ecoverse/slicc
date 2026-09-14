@@ -1,0 +1,22 @@
+diff --git a/node_modules/kerium/dist/log.js b/node_modules/kerium/dist/log.js
+index 2bc3eff..34bd4ec 100644
+--- a/node_modules/kerium/dist/log.js
++++ b/node_modules/kerium/dist/log.js
+@@ -50,6 +50,17 @@ export function log(level, message) {
+         timestamp: new Date(),
+         elapsedMs: performance.now(),
+     };
++    // PATCH: bound the backlog. Upstream retains every entry forever — even
++    // levels below the output threshold that are never printed — so a
++    // long-lived worker under log pressure eventually hits V8's 2^24-element
++    // Set cap, after which entries.add throws RangeError('Set maximum size
++    // exceeded') into every logging caller (SLICC 2026-08-18: every ZenFS op
++    // failed and the VFS went offline). Evict the oldest entry once full.
++    if (entries.size >= 10000) {
++        const oldest = entries.values().next().value;
++        if (oldest !== undefined)
++            entries.delete(oldest);
++    }
+     entries.add(entry);
+     output(entry);
+ }

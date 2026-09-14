@@ -1,0 +1,1490 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
+import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../../src/scoops/types.js';
+
+const cone: RegisteredScoop = {
+  jid: 'cone_main_1',
+  name: 'Main',
+  folder: 'cone',
+  parentJid: null,
+  requiresTrigger: false,
+  assistantLabel: 'sliccy',
+  addedAt: new Date().toISOString(),
+};
+
+function findScoopScoopTool(
+  resolveModelSelection?: (
+    id: string
+  ) => import('../../src/providers/account-store.js').ScoopModelResolution,
+  creator: RegisteredScoop = cone
+) {
+  const onScoopScoop = vi.fn(
+    async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
+      ...scoop,
+      jid: `scoop_${scoop.folder}_${Date.now()}`,
+    })
+  );
+
+  const tools = createScoopManagementTools({
+    scoop: creator,
+    onSendMessage: vi.fn(),
+    getScoops: () => [creator],
+    onScoopScoop,
+    ...(resolveModelSelection ? { resolveModelSelection } : {}),
+  });
+
+  const tool = tools.find((t) => t.name === 'scoop_scoop');
+  if (!tool) throw new Error('scoop_scoop tool missing from cone toolset');
+  return { tool, onScoopScoop };
+}
+
+describe('send_message tool — registration gating', () => {
+  const nonConeScoop: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    parentJid: 'cone_main_1',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  it('is absent on the cone toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeUndefined();
+  });
+
+  it('is present on a non-cone scoop toolset', () => {
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonConeScoop],
+    });
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('forwards the text and optional sender on a non-cone scoop', async () => {
+    const onSendMessage = vi.fn();
+    const tools = createScoopManagementTools({
+      scoop: nonConeScoop,
+      onSendMessage,
+      getScoops: () => [cone, nonConeScoop],
+    });
+    const tool = tools.find((t) => t.name === 'send_message');
+    if (!tool) throw new Error('send_message tool missing from non-cone toolset');
+    const result = await tool.execute({ text: 'progress', sender: 'alpha' });
+    expect(onSendMessage).toHaveBeenCalledWith('progress', 'alpha');
+    expect(result.content).toBe('Message sent.');
+  });
+});
+
+describe('scoop_scoop tool — config defaults', () => {
+  it('injects visiblePaths: ["/workspace/"] when no model is specified', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+
+    expect(onScoopScoop).toHaveBeenCalledTimes(1);
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config).toBeDefined();
+    expect(created.config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('keeps visiblePaths when a model is also specified', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block', model: 'claude-sonnet-4-6' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(created.config?.modelId).toBe('claude-sonnet-4-6');
+  });
+
+  it('defaults visiblePaths to the creating cone workspace for an extra cone', async () => {
+    const extraCone: RegisteredScoop = {
+      ...cone,
+      jid: 'cone_beta_1',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+    };
+    const { tool, onScoopScoop } = findScoopScoopTool(undefined, extraCone);
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+
+    expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
+  });
+
+  it('slugs scoop folders through the shared helper (NFKD + -scoop suffix)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'Café Ölçü' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.folder).toBe('cafe-olcu-scoop');
+    expect(created.name).toBe('Café Ölçü');
+  });
+
+  it("stamps workspaceMode shared-readonly by default so today's sandbox is named", async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.workspaceMode).toBe('shared-readonly');
+    expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
+  });
+
+  it('workspaceMode private drops parent workspace and implicit /shared/', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'secret', workspaceMode: 'private' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.workspaceMode).toBe('private');
+    expect(created.config?.visiblePaths).toEqual([]);
+    expect(created.config?.writablePaths).toEqual(['/scoops/secret-scoop/']);
+    expect(created.config?.writablePaths).not.toContain('/shared/');
+  });
+
+  it('explicit visiblePaths still replace under private (mode does not drop a named grant)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'secret',
+      workspaceMode: 'private',
+      visiblePaths: ['/workspace/docs/'],
+    });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual(['/workspace/docs/']);
+    expect(created.config?.writablePaths).toEqual(['/scoops/secret-scoop/']);
+  });
+
+  it('rejects unimplemented snapshot / shared-live modes', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const snap = await tool.execute({ name: 'cow', workspaceMode: 'snapshot' });
+    expect(snap.isError).toBe(true);
+    expect(snap.content).toContain('not implemented');
+    expect(snap.content).toContain('RFC open question 4');
+    const live = await tool.execute({ name: 'live', workspaceMode: 'shared-live' });
+    expect(live.isError).toBe(true);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('rejects a model the resolver cannot resolve', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool((id) => ({
+      ok: false,
+      error: `unknown model: ${id}`,
+    }));
+    const result = await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Unknown model "claude-haiku-4-5"');
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('stores the resolver-canonicalized id, not the caller-supplied alias', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: true,
+      selection: {
+        modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        providerId: 'bedrock-camp',
+      },
+    }));
+    await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+  });
+
+  it('records the resolved provider on the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: true,
+      selection: { modelId: 'openai/gpt-5.6-terra-pro', providerId: 'openrouter' },
+    }));
+    await tool.execute({ name: 'hero-block', model: 'openrouter:openai/gpt-5.6-terra-pro' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(created.config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('surfaces the resolver reason (e.g. ambiguity) in the tool error', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: false,
+      error:
+        'ambiguous model: opus matches adobe:claude-opus-5, openrouter:anthropic/claude-opus-5-fast',
+    }));
+    const result = await tool.execute({ name: 'hero-block', model: 'opus' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('openrouter:anthropic/claude-opus-5-fast');
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the resolver when no model is specified', async () => {
+    const resolveModelSelection = vi.fn(() => ({ ok: false as const, error: 'unknown model: x' }));
+    const { tool, onScoopScoop } = findScoopScoopTool(resolveModelSelection);
+    await tool.execute({ name: 'hero-block' });
+
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    expect(onScoopScoop.mock.calls[0][0].config?.modelId).toBeUndefined();
+  });
+
+  it('injects writablePaths scoped to the new scoop folder plus /shared/', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual([`/scoops/${created.folder}/`, '/shared/']);
+  });
+
+  it('passes a child (non-root) scoop with a sanitized folder', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'Hero Block #1' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.parentJid).not.toBeNull();
+    expect(created.folder).toBe('hero-block-1-scoop');
+  });
+
+  it('stamps the current configSchemaVersion so the orchestrator skips compat migration', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('forwards caller-provided visiblePaths verbatim (pure replace)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'narrow', visiblePaths: ['/shared/docs/', '/mnt/context/'] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual(['/shared/docs/', '/mnt/context/']);
+  });
+
+  it('accepts an empty visiblePaths array — read-nothing is explicit', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'blind', visiblePaths: [] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+
+    expect(created.config?.visiblePaths).toEqual([]);
+  });
+
+  it('forwards caller-provided writablePaths verbatim (pure replace)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'scratch',
+      writablePaths: ['/scoops/scratch-scoop/', '/tmp/'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual(['/scoops/scratch-scoop/', '/tmp/']);
+  });
+
+  it('accepts an empty writablePaths array — read-only scoop', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'read-only', writablePaths: [] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual([]);
+  });
+
+  it('forwards caller-provided allowedCommands verbatim', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'text-processor',
+      allowedCommands: ['echo', 'cat', 'grep', 'sort'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.allowedCommands).toEqual(['echo', 'cat', 'grep', 'sort']);
+  });
+
+  it('omits allowedCommands from config when the caller does not set it (unrestricted default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+
+    expect(created.config?.allowedCommands).toBeUndefined();
+  });
+
+  it('passes all three sandbox params through together with a model and prompt', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({
+      name: 'combined',
+      model: 'claude-sonnet-4-6',
+      prompt: 'task',
+      visiblePaths: ['/workspace/skills/'],
+      writablePaths: ['/scoops/combined-scoop/'],
+      allowedCommands: ['echo'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config).toEqual({
+      modelId: 'claude-sonnet-4-6',
+      visiblePaths: ['/workspace/skills/'],
+      writablePaths: ['/scoops/combined-scoop/'],
+      workspaceMode: 'shared-readonly',
+      allowedCommands: ['echo'],
+    });
+    expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('forwards a valid thinking level onto the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'thinker', thinking: 'high' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.thinkingLevel).toBe('high');
+  });
+
+  it('omits thinkingLevel from config when the caller does not set it (inherits default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default-effort' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+
+    expect(created.config?.thinkingLevel).toBeUndefined();
+  });
+
+  it('rejects an unknown thinking level without invoking the registry callback', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({ name: 'bad-effort', thinking: 'turbo' });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid thinking level/);
+    expect(String(result.content)).toMatch(/off, minimal, low, medium, high, xhigh/);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('accepts every valid thinking level', async () => {
+    const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+    for (const level of levels) {
+      const { tool, onScoopScoop } = findScoopScoopTool();
+      await tool.execute({ name: `t-${level}`, thinking: level });
+      const created = onScoopScoop.mock.calls[0][0];
+      expect(created.config?.thinkingLevel).toBe(level);
+    }
+  });
+
+  it('combines thinking with model + sandbox params on a single config record', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'combined-effort',
+      model: 'claude-opus-4-7',
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/combined-effort-scoop/'],
+      allowedCommands: ['echo'],
+      thinking: 'xhigh',
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config).toEqual({
+      modelId: 'claude-opus-4-7',
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/combined-effort-scoop/'],
+      workspaceMode: 'shared-readonly',
+      allowedCommands: ['echo'],
+      thinkingLevel: 'xhigh',
+    });
+  });
+
+  it('forwards background_after onto the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'patient', background_after: 45 });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBe(45);
+  });
+
+  it('forwards background_after: 0 (detach every command immediately)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'impatient', background_after: 0 });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBe(0);
+  });
+
+  it('omits backgroundAfterSeconds when unset (inherits the tool default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default-bg' });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBeUndefined();
+  });
+
+  it('rejects a negative background_after without creating the scoop', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({ name: 'bad-bg', background_after: -1 });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid background_after/);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+});
+
+describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
+  const targetScoop: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    parentJid: 'cone_main_1',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  function buildConeTools(
+    options: {
+      unmuteReturns?: Array<{
+        jid: string;
+        summary: string;
+        timestamp: string;
+        notificationPath: string | null;
+      }>;
+    } = {}
+  ) {
+    const onMuteScoops = vi.fn();
+    const onUnmuteScoops = vi.fn(async () => options.unmuteReturns ?? []);
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop],
+      onMuteScoops,
+      onUnmuteScoops,
+      onScheduleScoopWait,
+    });
+    return { tools, onMuteScoops, onUnmuteScoops, onScheduleScoopWait };
+  }
+
+  it('scoop_mute forwards resolved jids and reports unknown names', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop', 'ghost'] });
+    expect(onMuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Muted: alpha-scoop');
+    expect(result.content).toContain('unknown: ghost');
+  });
+
+  it('scoop_mute rejects an empty list', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    const result = await tool!.execute({ scoop_names: [] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('scoop_mute reports an error when every name is unknown', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    const result = await tool!.execute({ scoop_names: ['missing'] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('scoop_unmute forwards resolved jids and reports no stashed completions when empty', async () => {
+    const { tools, onUnmuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_unmute');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(onUnmuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Unmuted: alpha-scoop');
+    expect(result.content).toContain('No stashed completions');
+  });
+
+  it('scoop_unmute folds stashed completions into the tool result', async () => {
+    const { tools, onUnmuteScoops } = buildConeTools({
+      unmuteReturns: [
+        {
+          jid: targetScoop.jid,
+          summary: 'scoop wrote hero block',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          notificationPath: '/shared/scoop-notifications/2026-01-01T00-00-00-000Z-alpha.md',
+        },
+      ],
+    });
+    const tool = tools.find((t) => t.name === 'scoop_unmute');
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(onUnmuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Unmuted: alpha-scoop');
+    expect(result.content).toContain('Stashed completions');
+    expect(result.content).toContain('--- alpha-scoop ---');
+    expect(result.content).toContain('scoop wrote hero block');
+    expect(result.content).toContain(
+      'VFS path: /shared/scoop-notifications/2026-01-01T00-00-00-000Z-alpha.md'
+    );
+  });
+
+  it('scoop_wait schedules a non-blocking wait and returns immediately', async () => {
+    const { tools, onScheduleScoopWait } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    expect(tool).toBeDefined();
+
+    const start = Date.now();
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 1000 });
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(500);
+    expect(onScheduleScoopWait).toHaveBeenCalledWith([targetScoop.jid], 1000);
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('timeout: 1000ms');
+    expect(result.content).toContain("'scoop-wait' lick");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('scoop_wait reports unknown names but still schedules known ones', async () => {
+    const { tools, onScheduleScoopWait } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop', 'ghost'] });
+    expect(onScheduleScoopWait).toHaveBeenCalledWith([targetScoop.jid], undefined);
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('no timeout');
+    expect(result.content).toContain('Unknown (skipped): ghost');
+  });
+
+  it('scoop_wait surfaces scoops dropped between resolve and schedule', async () => {
+    const onScheduleScoopWait = vi.fn(() => ({
+      scheduled: [],
+      unknown: [targetScoop.jid],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onScheduleScoopWait,
+    });
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('could not be scheduled');
+    expect(result.content).toContain('alpha-scoop');
+  });
+
+  it('scoop_wait reports partial schedule when some jids are dropped', async () => {
+    const otherScoop: RegisteredScoop = {
+      ...targetScoop,
+      jid: 'scoop_beta_1',
+      name: 'beta',
+      folder: 'beta-scoop',
+      assistantLabel: 'beta-scoop',
+    };
+    const onScheduleScoopWait = vi.fn(() => ({
+      scheduled: [targetScoop.jid],
+      unknown: [otherScoop.jid],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop, otherScoop],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onScheduleScoopWait,
+    });
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const result = await tool!.execute({
+      scoop_names: ['alpha-scoop', 'beta-scoop'],
+      timeout_ms: 500,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('timeout: 500ms');
+    expect(result.content).toContain('Dropped before schedule (skipped): beta-scoop');
+  });
+
+  it('scoop_wait rejects non-finite or negative timeouts', async () => {
+    const { tools, onScheduleScoopWait } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const neg = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: -5 });
+    expect(neg.isError).toBe(true);
+    const nan = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: Number.NaN });
+    expect(nan.isError).toBe(true);
+    expect(onScheduleScoopWait).not.toHaveBeenCalled();
+  });
+
+  it('mute/unmute/wait tools are absent on non-cone scoops', async () => {
+    const nonCone: RegisteredScoop = { ...targetScoop };
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onScheduleScoopWait: vi.fn(() => ({ scheduled: [], unknown: [] })),
+    });
+    expect(tools.find((t) => t.name === 'scoop_mute')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'scoop_unmute')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'scoop_wait')).toBeUndefined();
+  });
+});
+
+describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools', () => {
+  const nonCone: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    parentJid: 'cone_main_1',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  it('sudo_request is present on a non-cone scoop and absent on the cone', () => {
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest: vi.fn(async () => ({ decision: 'allow' as const })),
+    });
+    expect(scoopTools.find((t) => t.name === 'sudo_request')).toBeDefined();
+
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+
+      onSudoRequest: vi.fn(async () => ({ decision: 'allow' as const })),
+    });
+    expect(coneTools.find((t) => t.name === 'sudo_request')).toBeUndefined();
+  });
+
+  it('sudo_request is absent on a scoop when no onSudoRequest callback is wired', () => {
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+    });
+    expect(tools.find((t) => t.name === 'sudo_request')).toBeUndefined();
+  });
+
+  it('lick_confirm / lick_dismiss are present on the cone and absent on a scoop', () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    expect(coneTools.find((t) => t.name === 'lick_confirm')).toBeDefined();
+    expect(coneTools.find((t) => t.name === 'lick_dismiss')).toBeDefined();
+
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    expect(scoopTools.find((t) => t.name === 'lick_confirm')).toBeUndefined();
+    expect(scoopTools.find((t) => t.name === 'lick_dismiss')).toBeUndefined();
+  });
+
+  it('list_sudo_requests is present on the cone and absent on a scoop', () => {
+    const onListSudoRequests = vi.fn(() => []);
+    const coneTools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    expect(coneTools.find((t) => t.name === 'list_sudo_requests')).toBeDefined();
+
+    const scoopTools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    expect(scoopTools.find((t) => t.name === 'list_sudo_requests')).toBeUndefined();
+  });
+
+  it('sudo_request forwards kind + detail + suggested_pattern to onSudoRequest', async () => {
+    const onSudoRequest = vi.fn(async () => ({
+      decision: 'always' as const,
+      pattern: 'git push*',
+    }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({
+      kind: 'command',
+      detail: 'git push origin main',
+      suggested_pattern: 'git push*',
+    });
+    expect(onSudoRequest).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+      suggestedPattern: 'git push*',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Cone decision: always');
+    expect(result.content).toContain('Persisted pattern: git push*');
+  });
+
+  it('sudo_request surfaces a deny decision with a clear cue', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'deny' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'write', detail: '/etc/sudoers' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Cone decision: deny');
+    expect(result.content).toContain('not approved');
+  });
+
+  it('sudo_request rejects an unknown kind without invoking the callback', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'turbo', detail: 'something' });
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid sudo kind/);
+    expect(onSudoRequest).not.toHaveBeenCalled();
+  });
+
+  it('sudo_request rejects an empty detail without invoking the callback', async () => {
+    const onSudoRequest = vi.fn(async () => ({ decision: 'allow' as const }));
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoRequest,
+    });
+    const tool = tools.find((t) => t.name === 'sudo_request')!;
+    const result = await tool.execute({ kind: 'command', detail: '   ' });
+    expect(result.isError).toBe(true);
+    expect(onSudoRequest).not.toHaveBeenCalled();
+  });
+
+  it('lick_confirm with always=true forwards a SudoDecision and reports persistence', async () => {
+    const onSudoResolve = vi.fn(async () => ({
+      settled: true,
+      persisted: true,
+      persistedPattern: 'git push*',
+      scoopFolder: 'alpha-scoop',
+      kind: 'command' as const,
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({
+      lick_id: 'lick-abc',
+      always: true,
+      pattern: 'git push*',
+    });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', {
+      decision: 'always',
+      pattern: 'git push*',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (always)');
+    expect(result.content).toContain('NOPASSWD');
+    expect(result.content).toContain('alpha-scoop');
+    expect(result.content).toContain('git push*');
+  });
+
+  it('lick_confirm with always=false (default) sends an allow-once decision', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', { decision: 'allow' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (once)');
+  });
+
+  it('lick_confirm surfaces a persistence failure without dropping the allow', async () => {
+    const onSudoResolve = vi.fn(async () => ({
+      settled: true,
+      persisted: false,
+      persistError: 'pattern collapsed to empty after sanitization',
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-abc', always: true });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Approved (always)');
+    expect(result.content).toContain('could NOT persist');
+    expect(result.content).toContain('collapsed to empty');
+  });
+
+  it('lick_confirm reports an error when the lick id is unknown / already settled', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_confirm')!;
+    const result = await tool.execute({ lick_id: 'lick-ghost' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('unknown');
+  });
+
+  it('lick_dismiss forwards a deny decision and reports settlement', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: true, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({ lick_id: 'lick-abc' });
+    expect(onSudoResolve).toHaveBeenCalledWith('lick-abc', { decision: 'deny' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Denied');
+  });
+
+  it('lick_dismiss reports an error when the lick id is unknown', async () => {
+    const onSudoResolve = vi.fn(async () => ({ settled: false, persisted: false }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onSudoResolve,
+    });
+    const tool = tools.find((t) => t.name === 'lick_dismiss')!;
+    const result = await tool.execute({ lick_id: 'lick-ghost' });
+    expect(result.isError).toBe(true);
+  });
+
+  it('list_sudo_requests formats pending requests by scoop folder', async () => {
+    const onListSudoRequests = vi.fn(() => [
+      {
+        id: 'sudo-1',
+        scoopJid: nonCone.jid,
+        request: {
+          kind: 'command' as const,
+          detail: 'git push origin main',
+          suggestedPattern: 'git push*',
+        },
+      },
+    ]);
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests,
+    });
+    const tool = tools.find((t) => t.name === 'list_sudo_requests')!;
+    const result = await tool.execute({});
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('sudo-1');
+    expect(result.content).toContain('alpha-scoop');
+    expect(result.content).toContain('command');
+    expect(result.content).toContain('git push origin main');
+    expect(result.content).toContain('suggested: git push*');
+  });
+
+  it('list_sudo_requests reports an empty state when nothing is pending', async () => {
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onListSudoRequests: vi.fn(() => []),
+    });
+    const tool = tools.find((t) => t.name === 'list_sudo_requests')!;
+    const result = await tool.execute({});
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('No pending sudo requests');
+  });
+});
+
+describe('scoop_scoop — parentJid propagation from cone', () => {
+  it('passes the cone jid as parentJid on the created scoop record', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+
+    await tool.execute({ name: 'worker' });
+
+    expect(onScoopScoop).toHaveBeenCalledOnce();
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.parentJid).toBe(cone.jid);
+  });
+
+  it('does not set originToolCallId on the created scoop record (not available in ToolDefinition)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+
+    await tool.execute({ name: 'worker' });
+
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.originToolCallId).toBeUndefined();
+  });
+});
+
+describe('name resolution is scoped to the caller subtree (#2360)', () => {
+  const coneA: RegisteredScoop = {
+    jid: 'cone_a',
+    name: 'Cone A',
+    folder: 'cone',
+    parentJid: null,
+    requiresTrigger: false,
+    assistantLabel: 'sliccy',
+    addedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const coneB: RegisteredScoop = {
+    ...coneA,
+    jid: 'cone_b',
+    name: 'Cone B',
+    folder: 'cone-b',
+    assistantLabel: 'cone-b',
+    addedAt: '2026-01-02T00:00:00.000Z',
+  };
+  const helperA: RegisteredScoop = {
+    jid: 'scoop_helper_a',
+    name: 'helper',
+    folder: 'helper-scoop',
+    parentJid: coneA.jid,
+    requiresTrigger: true,
+    assistantLabel: 'helper-scoop',
+    addedAt: '2026-01-03T00:00:00.000Z',
+  };
+
+  const helperB: RegisteredScoop = {
+    ...helperA,
+    jid: 'scoop_helper_b',
+    folder: 'helper-scoop-2',
+    assistantLabel: 'helper-scoop-2',
+    parentJid: coneB.jid,
+  };
+
+  const grandchildA: RegisteredScoop = {
+    ...helperA,
+    jid: 'scoop_deep_a',
+    name: 'deep',
+    folder: 'deep-scoop',
+    assistantLabel: 'deep-scoop',
+    parentJid: helperA.jid,
+  };
+
+  const ROSTER = [coneA, coneB, helperA, helperB, grandchildA];
+
+  const REVERSED = [...ROSTER].reverse();
+
+  function toolsFor(caller: RegisteredScoop, roster: readonly RegisteredScoop[] = ROSTER) {
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
+    const onFeedScoop = vi.fn(async () => {});
+    const onDropScoop = vi.fn(async () => {});
+    const onScoopScoop = vi.fn(
+      async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
+        ...scoop,
+        jid: `scoop_${scoop.folder}_1`,
+      })
+    );
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...roster],
+      onScheduleScoopWait,
+      onFeedScoop,
+      onDropScoop,
+      onScoopScoop,
+      onMuteScoops: vi.fn(),
+    });
+    const pick = (name: string) => tools.find((t) => t.name === name)!;
+    return { pick, onScheduleScoopWait, onFeedScoop, onDropScoop, onScoopScoop };
+  }
+
+  it('scoop_wait resolves each cone to its OWN same-named scoop', async () => {
+    const a = toolsFor(coneA);
+    await a.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+    expect(a.onScheduleScoopWait).toHaveBeenCalledWith([helperA.jid], undefined);
+
+    const b = toolsFor(coneB);
+    await b.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+    expect(b.onScheduleScoopWait).toHaveBeenCalledWith([helperB.jid], undefined);
+  });
+
+  it('scoop_wait resolution is registry-order independent', async () => {
+    for (const roster of [ROSTER, REVERSED]) {
+      const b = toolsFor(coneB, roster);
+      await b.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+      expect(b.onScheduleScoopWait).toHaveBeenCalledWith([helperB.jid], undefined);
+    }
+  });
+
+  it('scoop_wait errors on another cone’s scoop folder instead of crossing', async () => {
+    const b = toolsFor(coneB);
+    const result = await b.pick('scoop_wait').execute({ scoop_names: [helperA.folder] });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('cone-b');
+    expect(result.content).toContain(helperA.folder);
+    expect(b.onScheduleScoopWait).not.toHaveBeenCalled();
+  });
+
+  it('scoop_wait reaches a grandchild through the transitive walk', async () => {
+    const a = toolsFor(coneA);
+    await a.pick('scoop_wait').execute({ scoop_names: ['deep-scoop'] });
+    expect(a.onScheduleScoopWait).toHaveBeenCalledWith([grandchildA.jid], undefined);
+
+    const b = toolsFor(coneB);
+    const crossed = await b.pick('scoop_wait').execute({ scoop_names: ['deep-scoop'] });
+    expect(crossed.isError).toBe(true);
+  });
+
+  it('scoop_mute only resolves the caller’s own children', async () => {
+    const onMuteScoops = vi.fn();
+    const tools = createScoopManagementTools({
+      scoop: coneB,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...ROSTER],
+      onMuteScoops,
+    });
+    const result = await tools
+      .find((t) => t.name === 'scoop_mute')!
+      .execute({ scoop_names: [helperA.folder] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('feed_scoop refuses another cone’s scoop and its sibling cone', async () => {
+    const b = toolsFor(coneB);
+    const foreignScoop = await b
+      .pick('feed_scoop')
+      .execute({ scoop_name: helperA.folder, prompt: 'go' });
+    expect(foreignScoop.isError).toBe(true);
+    expect(foreignScoop.content).toContain('Not found in the scoops you can manage (cone-b)');
+
+    const foreignCone = await b
+      .pick('feed_scoop')
+      .execute({ scoop_name: coneA.folder, prompt: 'go' });
+    expect(foreignCone.isError).toBe(true);
+    expect(b.onFeedScoop).not.toHaveBeenCalled();
+
+    const own = await b.pick('feed_scoop').execute({ scoop_name: 'helper', prompt: 'go' });
+    expect(own.isError).toBeUndefined();
+    expect(b.onFeedScoop).toHaveBeenCalledWith(helperB.jid, 'go');
+  });
+
+  it('feed_scoop still reports self-feeding rather than "not found"', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('feed_scoop').execute({ scoop_name: coneA.folder, prompt: 'go' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot feed yourself.');
+  });
+
+  it('drop_scoop refuses another cone’s scoop and its sibling cone', async () => {
+    const b = toolsFor(coneB);
+    const foreignScoop = await b.pick('drop_scoop').execute({ scoop_name: helperA.folder });
+    expect(foreignScoop.isError).toBe(true);
+    expect(foreignScoop.content).toContain('Not found in the scoops you can manage (cone-b)');
+
+    const foreignCone = await b.pick('drop_scoop').execute({ scoop_name: coneA.folder });
+    expect(foreignCone.isError).toBe(true);
+    expect(b.onDropScoop).not.toHaveBeenCalled();
+
+    const own = await b.pick('drop_scoop').execute({ scoop_name: helperB.folder });
+    expect(own.isError).toBeUndefined();
+    expect(b.onDropScoop).toHaveBeenCalledWith(helperB.jid);
+  });
+
+  it('drop_scoop still reports self-dropping rather than "not found"', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('drop_scoop').execute({ scoop_name: coneA.folder });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot drop yourself.');
+  });
+
+  it('list_scoops lists only the caller’s subtree for a cone that does not lead', async () => {
+    const b = toolsFor(coneB);
+    const listed = await b.pick('list_scoops').execute({});
+    expect(listed.content).toContain(`(${helperB.folder})`);
+    expect(listed.content).not.toContain(`(${helperA.folder})`);
+    expect(listed.content).not.toContain('deep-scoop');
+  });
+
+  it('list_scoops tags the leading cone’s reach instead of hiding it', async () => {
+    const a = toolsFor(coneA);
+    const listedA = await a.pick('list_scoops').execute({});
+    expect(listedA.content).toContain(`(${helperA.folder}) —`);
+    expect(listedA.content).toContain('deep-scoop');
+
+    expect(listedA.content).toContain(`(${helperB.folder}) [FOREIGN: cone-b]`);
+    expect(listedA.content).not.toContain('(cone-b) [CONE]');
+  });
+
+  it('scoop_scoop rejects a duplicate name inside the caller’s own subtree', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('scoop_scoop').execute({ name: 'helper' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('already exists in your scoops');
+    expect(a.onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('scoop_scoop allows the same name in another subtree but keeps folders unique', async () => {
+    const roster = [coneA, coneB, helperA];
+    const b = toolsFor(coneB, roster);
+    const result = await b.pick('scoop_scoop').execute({ name: 'helper' });
+    expect(result.isError).toBeUndefined();
+    const created = b.onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.name).toBe('helper');
+    expect(created.folder).toBe('helper-scoop-2');
+    expect(created.parentJid).toBe(coneB.jid);
+    expect(result.content).toContain('helper-scoop-2');
+  });
+});
+
+describe('leading cone reaches inherited and foreign scoops', () => {
+  const lead: RegisteredScoop = {
+    jid: 'cone_lead',
+    name: 'Lead',
+    folder: 'cone',
+    parentJid: null,
+    requiresTrigger: false,
+    assistantLabel: 'sliccy',
+    addedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const other: RegisteredScoop = {
+    ...lead,
+    jid: 'cone_other',
+    name: 'Other',
+    folder: 'cone-other',
+    assistantLabel: 'cone-other',
+    addedAt: '2026-01-02T00:00:00.000Z',
+  };
+  const mine: RegisteredScoop = {
+    jid: 'scoop_mine',
+    name: 'mine',
+    folder: 'mine-scoop',
+    parentJid: lead.jid,
+    requiresTrigger: true,
+    assistantLabel: 'mine-scoop',
+    addedAt: '2026-01-03T00:00:00.000Z',
+  };
+  const theirs: RegisteredScoop = {
+    ...mine,
+    jid: 'scoop_theirs',
+    name: 'theirs',
+    folder: 'theirs-scoop',
+    assistantLabel: 'theirs-scoop',
+    parentJid: other.jid,
+  }; // prettier-ignore
+
+  const orphan: RegisteredScoop = {
+    ...mine,
+    jid: 'scoop_orphan',
+    name: 'orphan',
+    folder: 'orphan-scoop',
+    assistantLabel: 'orphan-scoop',
+    parentJid: 'cone_dropped',
+  }; // prettier-ignore
+
+  const ROSTER = [lead, other, mine, theirs, orphan];
+
+  function toolsFor(caller: RegisteredScoop) {
+    const onFeedScoop = vi.fn(async () => {});
+    const onDropScoop = vi.fn(async () => {});
+    const onMuteScoops = vi.fn();
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...ROSTER],
+      onFeedScoop,
+      onDropScoop,
+      onMuteScoops,
+      onScheduleScoopWait,
+    });
+    return {
+      pick: (name: string) => tools.find((t) => t.name === name)!,
+      onFeedScoop,
+      onDropScoop,
+      onMuteScoops,
+      onScheduleScoopWait,
+    };
+  }
+
+  it('list_scoops distinguishes own, inherited and foreign scoops', async () => {
+    const listed = await toolsFor(lead).pick('list_scoops').execute({});
+    expect(listed.content).toContain(`(${mine.folder}) —`);
+    expect(listed.content).toContain(`(${orphan.folder}) [INHERITED]`);
+    expect(listed.content).toContain(`(${theirs.folder}) [FOREIGN: cone-other]`);
+  });
+
+  it('hides both from a cone that does not lead, even with cross_cone', async () => {
+    const o = toolsFor(other);
+    const listed = await o.pick('list_scoops').execute({});
+    expect(listed.content).not.toContain(orphan.folder);
+    expect(listed.content).not.toContain(mine.folder);
+
+    const dropped = await o
+      .pick('drop_scoop')
+      .execute({ scoop_name: orphan.folder, cross_cone: true });
+    expect(dropped.isError).toBe(true);
+    expect(dropped.content).toContain('Not found');
+    expect(o.onDropScoop).not.toHaveBeenCalled();
+  });
+
+  it('refuses a foreign target without cross_cone and names the owning cone', async () => {
+    const l = toolsFor(lead);
+    const refused = await l.pick('feed_scoop').execute({ scoop_name: theirs.folder, prompt: 'go' });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('cross_cone');
+    expect(refused.content).toContain('cone-other');
+    expect(l.onFeedScoop).not.toHaveBeenCalled();
+
+    const explicitFalse = await l
+      .pick('feed_scoop')
+      .execute({ scoop_name: theirs.folder, prompt: 'go', cross_cone: false });
+    expect(explicitFalse.isError).toBe(true);
+    expect(l.onFeedScoop).not.toHaveBeenCalled();
+  });
+
+  it('refuses an inherited target without cross_cone and says why it is orphaned', async () => {
+    const l = toolsFor(lead);
+    const refused = await l.pick('drop_scoop').execute({ scoop_name: orphan.folder });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('inherited');
+    expect(refused.content).toContain('cross_cone');
+    expect(l.onDropScoop).not.toHaveBeenCalled();
+  });
+
+  it('feeds, waits on and drops both once cross_cone is set', async () => {
+    const l = toolsFor(lead);
+    const fed = await l
+      .pick('feed_scoop')
+      .execute({ scoop_name: theirs.folder, prompt: 'go', cross_cone: true });
+    expect(fed.isError).toBeUndefined();
+    expect(l.onFeedScoop).toHaveBeenCalledWith(theirs.jid, 'go');
+
+    expect(fed.content).toContain('scoop_wait');
+
+    await l
+      .pick('scoop_wait')
+      .execute({ scoop_names: [orphan.folder, theirs.folder], cross_cone: true });
+    expect(l.onScheduleScoopWait).toHaveBeenCalledWith([orphan.jid, theirs.jid], undefined);
+
+    const dropped = await l
+      .pick('drop_scoop')
+      .execute({ scoop_name: orphan.folder, cross_cone: true });
+    expect(dropped.isError).toBeUndefined();
+    expect(l.onDropScoop).toHaveBeenCalledWith(orphan.jid);
+  });
+
+  it('fails a mixed batch as a whole instead of silently muting the own half', async () => {
+    const l = toolsFor(lead);
+    const refused = await l
+      .pick('scoop_mute')
+      .execute({ scoop_names: [mine.folder, theirs.folder] });
+    expect(refused.isError).toBe(true);
+    expect(l.onMuteScoops).not.toHaveBeenCalled();
+
+    const allowed = await l
+      .pick('scoop_mute')
+      .execute({ scoop_names: [mine.folder, theirs.folder], cross_cone: true });
+    expect(allowed.isError).toBeUndefined();
+    expect(l.onMuteScoops).toHaveBeenCalledWith([mine.jid, theirs.jid]);
+  });
+
+  it('never needs cross_cone for the caller’s own scoops', async () => {
+    const l = toolsFor(lead);
+    const fed = await l.pick('feed_scoop').execute({ scoop_name: mine.folder, prompt: 'go' });
+    expect(fed.isError).toBeUndefined();
+    expect(fed.content).toContain('You will be notified');
+    expect(l.onFeedScoop).toHaveBeenCalledWith(mine.jid, 'go');
+  });
+
+  it('resolves an exact folder before a local display name', async () => {
+    const decoy: RegisteredScoop = {
+      ...mine,
+      jid: 'scoop_decoy',
+      name: theirs.folder,
+      folder: 'decoy-scoop',
+      assistantLabel: 'decoy-scoop',
+      parentJid: lead.jid,
+    };
+    const onDropScoop = vi.fn(async () => {});
+    const tools = createScoopManagementTools({
+      scoop: lead,
+      onSendMessage: vi.fn(),
+      getScoops: () => [lead, other, mine, decoy, theirs, orphan],
+      onDropScoop,
+    });
+    const drop = tools.find((t) => t.name === 'drop_scoop')!;
+
+    const refused = await drop.execute({ scoop_name: theirs.folder });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('cross_cone');
+    expect(onDropScoop).not.toHaveBeenCalled();
+
+    const dropped = await drop.execute({ scoop_name: theirs.folder, cross_cone: true });
+    expect(dropped.isError).toBeUndefined();
+    expect(onDropScoop).toHaveBeenCalledWith(theirs.jid);
+
+    const byDisplayName = await drop.execute({ scoop_name: decoy.name });
+    expect(byDisplayName.isError).toBe(true);
+  });
+
+  it('never advertises a cyclic ownership chain as inherited', async () => {
+    const cycleA: RegisteredScoop = {
+      ...mine,
+      jid: 'scoop_cycle_a',
+      name: 'cycle-a',
+      folder: 'cycle-a-scoop',
+      assistantLabel: 'cycle-a-scoop',
+      parentJid: 'scoop_cycle_b',
+    };
+    const cycleB: RegisteredScoop = {
+      ...cycleA,
+      jid: 'scoop_cycle_b',
+      name: 'cycle-b',
+      folder: 'cycle-b-scoop',
+      assistantLabel: 'cycle-b-scoop',
+      parentJid: 'scoop_cycle_a',
+    };
+    const onDropScoop = vi.fn(async () => {});
+    const tools = createScoopManagementTools({
+      scoop: lead,
+      onSendMessage: vi.fn(),
+      getScoops: () => [lead, mine, cycleA, cycleB],
+      onDropScoop,
+    });
+
+    const listed = await tools.find((t) => t.name === 'list_scoops')!.execute({});
+    expect(listed.content).toContain(mine.folder);
+    expect(listed.content).not.toContain(cycleA.folder);
+    expect(listed.content).not.toContain(cycleB.folder);
+
+    const dropped = await tools
+      .find((t) => t.name === 'drop_scoop')!
+      .execute({ scoop_name: cycleA.folder, cross_cone: true });
+    expect(dropped.isError).toBe(true);
+    expect(onDropScoop).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cone off the target list even for the leading cone', async () => {
+    const l = toolsFor(lead);
+    const result = await l
+      .pick('drop_scoop')
+      .execute({ scoop_name: other.folder, cross_cone: true });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Not found');
+    expect(l.onDropScoop).not.toHaveBeenCalled();
+  });
+});
+
+describe('nested delegation via canCreateChildren grant', () => {
+  const lead: RegisteredScoop = {
+    jid: 'scoop_lead_1',
+    name: 'lead',
+    folder: 'lead-scoop',
+    parentJid: cone.jid,
+    requiresTrigger: true,
+    assistantLabel: 'lead-scoop',
+    addedAt: new Date().toISOString(),
+    config: { canCreateChildren: true },
+  };
+  const leaf: RegisteredScoop = {
+    jid: 'scoop_leaf_1',
+    name: 'leaf',
+    folder: 'leaf-scoop',
+    parentJid: cone.jid,
+    requiresTrigger: true,
+    assistantLabel: 'leaf-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  function toolsFor(caller: RegisteredScoop, roster: RegisteredScoop[]) {
+    const onScoopScoop = vi.fn(
+      async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
+        ...scoop,
+        jid: `scoop_${scoop.folder}_1`,
+      })
+    );
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => roster,
+      onScoopScoop,
+      onFeedScoop: vi.fn(async () => {}),
+      onDropScoop: vi.fn(async () => {}),
+      onScheduleScoopWait: vi.fn((jids: readonly string[]) => ({
+        scheduled: [...jids],
+        unknown: [],
+      })),
+    });
+    return { tools, onScoopScoop };
+  }
+
+  it('registers scoop_scoop and management tools on a granted child', () => {
+    const { tools } = toolsFor(lead, [cone, lead]);
+    expect(tools.find((t) => t.name === 'scoop_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'feed_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'drop_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'list_scoops')).toBeDefined();
+    expect(tools.find((t) => t.name === 'scoop_wait')).toBeDefined();
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('does not register scoop_scoop on an ungranted child even when the callback is wired', () => {
+    const { tools } = toolsFor(leaf, [cone, leaf]);
+    expect(tools.find((t) => t.name === 'scoop_scoop')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'feed_scoop')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('a granted child creates a grandchild owned by the child, not the cone', async () => {
+    const { tools, onScoopScoop } = toolsFor(lead, [cone, lead]);
+    const tool = tools.find((t) => t.name === 'scoop_scoop')!;
+    const result = await tool.execute({ name: 'deep' });
+    expect(result.isError).toBeUndefined();
+    expect(onScoopScoop).toHaveBeenCalledOnce();
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.parentJid).toBe(lead.jid);
+    expect(created.config?.canCreateChildren).toBeUndefined();
+  });
+
+  it('stamps config.canCreateChildren only when the caller passes the grant', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'lead', canCreateChildren: true });
+    expect(onScoopScoop.mock.calls[0][0].config?.canCreateChildren).toBe(true);
+
+    const again = findScoopScoopTool();
+    await again.tool.execute({ name: 'leaf', canCreateChildren: false });
+    expect(again.onScoopScoop.mock.calls[0][0].config?.canCreateChildren).toBeUndefined();
+  });
+});

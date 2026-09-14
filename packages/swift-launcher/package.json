@@ -1,0 +1,13 @@
+{
+  "name": "@slicc/swift-launcher",
+  "private": true,
+  "scripts": {
+    "build": "test -f ../swift-server/.build/release/slicc-server || (echo 'Error: slicc-server binary not found. Run: cd ../swift-server && swift build -c release' && exit 1) && swift build -c release && node assemble-app.mjs",
+    "test": "swift test",
+    "lint": "swiftlint lint",
+    "lint:fix": "swiftlint --fix",
+    "format": "swift format --in-place --parallel --recursive Sliccstart SliccstartTests SliccstartWidgets Package.swift",
+    "lint:format": "swift format lint --strict --parallel --recursive Sliccstart SliccstartTests SliccstartWidgets Package.swift",
+    "deadcode": "periphery scan"
+  }
+}

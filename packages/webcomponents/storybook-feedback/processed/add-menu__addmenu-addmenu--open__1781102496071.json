@@ -1,0 +1,8 @@
+{
+  "storyId": "addmenu-addmenu--open",
+  "storyTitle": "AddMenu/AddMenu",
+  "subsystem": "add-menu",
+  "importPath": "./src/add-menu/slicc-add-menu.stories.ts",
+  "comment": "You are a good bot, and I appreciate your effort",
+  "createdAt": "2026-06-10T14:41:36.071Z"
+}

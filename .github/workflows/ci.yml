@@ -1,0 +1,1882 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [automation/planning-artifact-cleanup]
+  merge_group:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --dns-result-order=ipv4first
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      webapp: ${{ steps.filter.outputs.webapp }}
+      vfs-root: ${{ steps.filter.outputs.vfs-root }}
+      assets: ${{ steps.filter.outputs.assets }}
+      cloud-core: ${{ steps.filter.outputs.cloud-core }}
+      node-server: ${{ steps.filter.outputs.node-server }}
+      shared: ${{ steps.filter.outputs.shared }}
+      webcomponents: ${{ steps.filter.outputs.webcomponents }}
+      spoon: ${{ steps.filter.outputs.spoon }}
+      extension: ${{ steps.filter.outputs.extension }}
+      cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      cherry: ${{ steps.filter.outputs.cherry }}
+      dev-tools: ${{ steps.filter.outputs.dev-tools }}
+      capability-contract: ${{ steps.filter.outputs.capability-contract }}
+      swift-server: ${{ steps.filter.outputs.swift-server }}
+      swift-optel: ${{ steps.filter.outputs.swift-optel }}
+      swift-traysession: ${{ steps.filter.outputs.swift-traysession }}
+      swift-trayfollower: ${{ steps.filter.outputs.swift-trayfollower }}
+      swift-traykit: ${{ steps.filter.outputs.swift-traykit }}
+      swift-widgetkit: ${{ steps.filter.outputs.swift-widgetkit }}
+      swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
+      ios-app: ${{ steps.filter.outputs.ios-app }}
+      go-optel: ${{ steps.filter.outputs.go-optel }}
+      slicc-cli: ${{ steps.filter.outputs.slicc-cli }}
+      swift-config: ${{ steps.filter.outputs.swift-config }}
+      root-config: ${{ steps.filter.outputs.root-config }}
+      native-root-config: ${{ steps.filter.outputs.native-root-config }}
+      speech: ${{ steps.filter.outputs.speech }}
+      is-queue-leader: ${{ steps.queue-position.outputs.leader }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          filters: |
+            webapp:
+              - 'packages/webapp/**'
+            vfs-root:
+              - 'packages/vfs-root/**'
+            assets:
+              - 'packages/assets/**'
+            cloud-core:
+              - 'packages/cloud-core/**'
+            node-server:
+              - 'packages/node-server/**'
+            shared:
+              - 'packages/shared-ts/**'
+            webcomponents:
+              - 'packages/webcomponents/**'
+            spoon:
+              - 'packages/spoon/**'
+            extension:
+              - 'packages/chrome-extension/**'
+            cloudflare-worker:
+              - 'packages/cloudflare-worker/**'
+            cherry:
+              - 'packages/cherry/**'
+            dev-tools:
+              - 'packages/dev-tools/**'
+
+
+
+
+
+            capability-contract:
+              - 'packages/shared-ts/fixtures/capability-rest-contract.json'
+            swift-server:
+              - 'packages/swift-server/**'
+            swift-optel:
+              - 'packages/swift-optel/**'
+            swift-traysession:
+              - 'packages/swift-traysession/**'
+            swift-trayfollower:
+              - 'packages/swift-trayfollower/**'
+            swift-traykit:
+              - 'packages/swift-traykit/**'
+            swift-widgetkit:
+              - 'packages/swift-widgetkit/**'
+            swift-launcher:
+              - 'packages/swift-launcher/**'
+            ios-app:
+              - 'packages/ios-app/**'
+
+
+
+
+
+
+              - 'packages/dev-tools/tools/ios-sim-test.sh'
+              - 'packages/dev-tools/tools/ios-sim-select.sh'
+              - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
+              - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
+
+
+
+
+
+
+              - '.github/workflows/ci.yml'
+            go-optel:
+              - 'packages/go-optel/**'
+            slicc-cli:
+              - 'packages/slicc-cli/**'
+
+
+              - 'packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
+
+
+
+              - 'packages/go-optel/**'
+            swift-config:
+              - '.swiftlint.yml'
+              - '.swift-format'
+
+
+
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/swift-coverage-check.sh'
+
+              - 'packages/dev-tools/tools/swift-coverage-runner-retry.sh'
+            root-config:
+              - 'package.json'
+              - 'package-lock.json'
+              - 'patches/**'
+              - 'tsconfig*.json'
+              - 'vitest*.config.*'
+              - '.github/workflows/ci.yml'
+
+
+              - 'coverage-thresholds.json'
+              - 'packages/dev-tools/tools/coverage-gate.mjs'
+              - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
+
+
+
+
+
+
+
+
+            native-root-config:
+              - 'patches/**'
+              - '.github/workflows/ci.yml'
+
+
+
+
+            speech:
+              - 'packages/webapp/src/speech/**'
+              - 'packages/webapp/src/shell/supplemental-commands/say-command.ts'
+              - 'packages/webapp/src/ui/panel-rpc-handlers.ts'
+              - 'packages/webapp/src/kernel/panel-rpc.ts'
+              - 'packages/webapp/src/kernel/remote-terminal-view.ts'
+              - 'packages/webapp/src/kernel/terminal-session-client.ts'
+              - 'packages/webapp/src/ui/wc/wc-live.ts'
+              - 'packages/webapp/tests/e2e/speech-roundtrip.test.ts'
+              - 'packages/webapp/tests/e2e/helpers.ts'
+              - 'packages/webapp/tests/e2e/playwright.config.ts'
+
+      - name: Check merge queue position
+        id: queue-position
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_NUMBER=$(echo "${{ github.event.merge_group.head_ref }}" | grep -oP 'pr-\K[0-9]+')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          POSITION=$(gh api graphql -f query='{ repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") { mergeQueue(branch: "main") { entries(first: 20) { nodes { position pullRequest { number } } } } } }' --jq ".data.repository.mergeQueue.entries.nodes[] | select(.pullRequest.number == $PR_NUMBER) | .position" 2>/dev/null || echo "")
+          if [ "$POSITION" = "1" ] || [ -z "$POSITION" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (leader)"
+          else
+            echo "leader=false" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (skipping expensive jobs)"
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+
+      - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
+        run: npm run lint:ci
+      - name: Autofix drift (npm run lint must be a no-op)
+
+        run: npm run lint:autofix-drift
+      - name: Debt boy-scout gate (biome rules + layer back-edges + float probes + record<string,unknown>)
+
+        run: node packages/dev-tools/tools/check-touched-exemptions.mjs
+      - name: Check Chrome Web Store manifest justifications
+
+        run: bash packages/dev-tools/tools/check-manifest-justifications.sh
+      - name: Dead code detection (knip)
+
+        run: npm run deadcode -- --no-progress --reporter compact
+      - name: Dead code detection — production-mode files (knip)
+
+        run: npm run deadcode:production-files -- --no-progress --reporter compact
+
+  linear-history:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Check linear history
+        run: |
+          bash packages/dev-tools/tools/check-linear-history.sh \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
+
+  typecheck:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck (all tsc projects)
+        run: npm run typecheck
+
+  node-matrix-tests:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24', '25', '26']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Vitest (all projects, no coverage thresholds)
+        run: npm run test
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+          SLICC_CDP_LAUNCH_TIMEOUT_MS: '60000'
+
+  webapp:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-webapp
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timing-webapp
+          path: test-timing/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/webapp
+      - name: Check bundle for Node-only APIs
+        run: |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in browser bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in webapp bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/webapp
+        run: |
+
+          npx vite optimize --force
+
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+
+
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -vE 'pyodide|transformers\.web' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps"
+
+  e2e:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true' ||
+      needs.changes.outputs.speech == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build webapp (wrangler serves dist/ui)
+        run: npm run build -w @slicc/webapp
+      - name: Build @slicc/shared-ts (node-server runtime dependency)
+        run: npm run build -w @slicc/shared-ts
+      - name: Build node-server (the /cdp bridge under test)
+        run: npm run build -w @slicc/node-server
+
+      - name: Free disk space for the browser storage quota
+        if: needs.changes.outputs.speech == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Playwright Chromium
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Cache Hugging Face mirror store
+        if: needs.changes.outputs.speech == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: .cache/hf-mirror
+          key: hf-mirror-${{ hashFiles('packages/webapp/tests/e2e/speech-roundtrip.test.ts') }}
+          restore-keys: |
+            hf-mirror-
+      - name: Start Hugging Face caching mirror
+        if: needs.changes.outputs.speech == 'true'
+        run: |
+          mkdir -p .cache/hf-mirror
+          nohup node packages/dev-tools/tools/hf-cache-mirror.mjs \
+            --port 8791 --dir .cache/hf-mirror --ready-file .cache/hf-mirror.ready \
+            > .cache/hf-mirror.log 2>&1 &
+          for i in $(seq 1 50); do [ -f .cache/hf-mirror.ready ] && break; sleep 0.2; done
+          test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
+          echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
+      - name: E2E tests
+
+        run: npm run test:e2e
+        env:
+          WRANGLER_LOG: debug
+          NODE_OPTIONS: '--max-old-space-size=6144'
+
+          RUN_REAL_SPEECH_E2E: ${{ needs.changes.outputs.speech == 'true' && '1' || '' }}
+      - name: Mirror log
+        if: always() && needs.changes.outputs.speech == 'true'
+        run: cat .cache/hf-mirror.log || true
+      - name: Upload Playwright artifacts
+
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: playwright-report-e2e
+
+          path: |
+            packages/webapp/playwright-report/
+            packages/webapp/test-results/
+            packages/webapp/tests/e2e/test-results/
+          if-no-files-found: ignore
+      - name: Show wrangler crash report
+
+        if: always()
+        run: |
+          if [ -f .wrangler/e2e-logs/crash-report.md ]; then
+            echo '::warning title=WRANGLER_CRASHED::wrangler dev crashed during the e2e run - see the crash report below and the wrangler-logs-e2e artifact'
+            cat .wrangler/e2e-logs/crash-report.md
+          else
+            echo 'No wrangler crash recorded.'
+          fi
+      - name: Upload wrangler logs
+
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wrangler-logs-e2e
+          path: |
+            .wrangler/e2e-logs/
+            ~/.config/.wrangler/logs/
+          if-no-files-found: ignore
+
+  node-server:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck (build config)
+        run: tsc --noEmit -p tsconfig.cli.json
+      - name: Typecheck (src + tests)
+        run: tsc --noEmit -p packages/node-server/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:node-server
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-node-server
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timing-node-server
+          path: test-timing/
+          if-no-files-found: ignore
+      - name: Build @slicc/shared-ts (runtime dependency)
+        run: npm run build -w @slicc/shared-ts
+      - name: Build
+        run: npm run build -w @slicc/node-server
+
+  chrome-extension:
+    needs: changes
+    if: >-
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:chrome-extension
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-chrome-extension
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timing-chrome-extension
+          path: test-timing/
+          if-no-files-found: ignore
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
+      - name: Build extension
+        run: npm run build -w @slicc/chrome-extension
+      - name: Upload unpacked extension build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: chrome-extension-unpacked
+          path: dist/extension/
+          if-no-files-found: error
+      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
+        run: bash packages/dev-tools/tools/check-extension-rhc.sh
+      - name: Check bundle for Node-only APIs
+        run: |
+
+
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|js-realm-worker|py-realm-worker|transformers\.web' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in extension bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in extension bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/chrome-extension
+        run: |
+
+          npx vite optimize --force
+
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+
+
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -vE 'pyodide|transformers\.web' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps (extension):"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Extension smoke test (CDP)
+        env:
+          SLICC_CI: '1'
+
+        continue-on-error: true
+        run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
+
+  cloudflare-worker:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
+
+      - name: Validate worker bundle and asset sizes (dry-run)
+        run: npm run build -w @slicc/cloudflare-worker
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.worker.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloudflare-worker
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-cloudflare-worker
+          path: coverage/
+          if-no-files-found: ignore
+
+      - name: Emit test timing report
+        if: always()
+        continue-on-error: true
+        run: npx vitest run --project cloudflare-worker --reporter=junit --outputFile.junit=test-results/cloudflare-worker-junit.xml
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timing-cloudflare-worker
+          path: test-results/
+          if-no-files-found: ignore
+
+      - name: Archive assets to R2 (staging)
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+
+      - name: Deploy staging worker (attempt 1)
+        id: deploy_attempt_1
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 1)
+        id: deploy_attempt_1_secrets
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+      - name: Wait before staging deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        run: sleep 20
+      - name: Deploy staging worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 2)
+        id: deploy_attempt_2_secrets
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+      - name: Wait before staging deploy retry 3
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        run: sleep 40
+      - name: Deploy staging worker (attempt 3)
+        id: deploy_attempt_3
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 3)
+        id: deploy_attempt_3_secrets
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+      - name: Finalize staging deploy
+        id: deploy
+        if: (steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success')
+        env:
+          DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
+          DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOY_A_2: ${{ steps.deploy_attempt_2.outcome }}
+          DEPLOY_B_2: ${{ steps.deploy_attempt_2_secrets.outcome }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOY_A_3: ${{ steps.deploy_attempt_3.outcome }}
+          DEPLOY_B_3: ${{ steps.deploy_attempt_3_secrets.outcome }}
+          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
+        run: |
+          DEPLOYMENT_URL=""
+          if [ "$DEPLOY_A_1" = "success" ] && [ "$DEPLOY_B_1" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ] && [ "$DEPLOY_A_2" = "success" ] && [ "$DEPLOY_B_2" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ] && [ "$DEPLOY_A_3" = "success" ] && [ "$DEPLOY_B_3" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::error::Staging deploy failed after 3 attempts"
+            exit 1
+          fi
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+      - name: Smoke test staging
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+          SLICC_ARCHIVE_SMOKE: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Smoke test attempt ${attempt} failed; waiting for propagation..."
+            sleep 15
+          done
+
+      - name: Deploy staging preview worker
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging --config wrangler-preview.jsonc
+
+  cloud-core:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cloud-core/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloud-core
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-cloud-core
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/cloud-core
+
+  go-optel:
+    needs: changes
+    if: >-
+      needs.changes.outputs.go-optel == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: packages/go-optel/go.mod
+
+          cache: false
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Format, lint, vet, race tests, coverage floor
+        working-directory: packages/go-optel
+        run: make check
+
+  slicc-cli:
+    needs: changes
+    if: >-
+      needs.changes.outputs.slicc-cli == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+
+      - name: Tests
+        if: matrix.os != 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: go test ./...
+
+      - name: Install golangci-lint
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Format, lint, vet, race tests, coverage floor
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: make check
+
+      - name: Test timings (go test -json)
+        if: always()
+        working-directory: packages/slicc-cli
+        run: make test-json
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-slicc-cli-${{ matrix.os }}
+          path: packages/slicc-cli/test-report.json
+          if-no-files-found: ignore
+      - name: Cross-compile all targets (mac/linux/windows × amd64/arm64)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: make dist
+
+  shared:
+    needs: changes
+    if: >-
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: npm run typecheck -w @slicc/shared-ts
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:shared
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-shared
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/shared-ts
+
+  webcomponents:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: npm run typecheck -w @slicc/webcomponents
+
+      - name: Install Chromium (browser tests)
+        run: npx playwright install chromium
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:webcomponents
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-webcomponents
+          path: packages/webcomponents/coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @slicc/webcomponents
+
+  spoon:
+    needs: changes
+    if: >-
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: npm run typecheck -w @ai-ecoverse/spoon
+
+      - name: Install Chromium (browser tests)
+        run: npx playwright install chromium
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:spoon
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-spoon
+          path: packages/spoon/coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @ai-ecoverse/spoon
+
+  cherry:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck
+        run: tsc --noEmit -p packages/cherry/tsconfig.json
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cherry
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-cherry
+          path: coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @ai-ecoverse/cherry
+
+  swift-server:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.capability-contract == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-server && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-server && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-server && swift build -c release
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-server SliccServerPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-server
+          path: packages/swift-server/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-server
+          path: packages/swift-server/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-server && periphery scan --disable-update-check || true
+
+  swift-optel:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-optel == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-optel && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-optel && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-optel && swift build -c release
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-optel SwiftOptelPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-optel
+          path: packages/swift-optel/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-optel
+          path: packages/swift-optel/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-optel && periphery scan --disable-update-check || true
+
+  swift-traysession:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-traysession && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-traysession && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-traysession && swift build -c release
+
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-traysession
+          xcodebuild build -scheme SliccTraySession \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-traysession SliccTraySessionPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-traysession
+          path: packages/swift-traysession/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-traysession
+          path: packages/swift-traysession/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-traysession && periphery scan --disable-update-check || true
+
+  swift-trayfollower:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-trayfollower && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-trayfollower && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-trayfollower && swift build -c release
+
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-trayfollower
+          xcodebuild build -scheme SliccTrayFollower \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-trayfollower SliccTrayFollowerPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-trayfollower
+          path: packages/swift-trayfollower/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-trayfollower
+          path: packages/swift-trayfollower/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-trayfollower && periphery scan --disable-update-check || true
+
+  swift-widgetkit:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-widgetkit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-widgetkit && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-widgetkit && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-widgetkit && swift build -c release
+
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-widgetkit
+          xcodebuild build -scheme SliccWidgetKit \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-widgetkit SliccWidgetKitPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-widgetkit
+          path: packages/swift-widgetkit/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-widgetkit
+          path: packages/swift-widgetkit/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-widgetkit && periphery scan --disable-update-check || true
+
+  swift-traykit:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-traykit && swiftlint lint --reporter github-actions-logging
+      - name: Lint (swift-format)
+        run: cd packages/swift-traykit && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-traykit && swift build -c release
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-traykit
+          xcodebuild build -scheme SliccTrayVFS \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-traykit SliccTrayVFSPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-traykit
+          path: packages/swift-traykit/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-traykit
+          path: packages/swift-traykit/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          cd packages/swift-traykit && periphery scan --disable-update-check || true
+
+  swift-launcher:
+    needs: [changes, lint]
+
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-launcher == 'true' ||
+      needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-optel == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
+      needs.changes.outputs.swift-config == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.native-root-config == 'true')
+    runs-on: macos-latest
+
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Record Swift toolchain fingerprint
+        id: swift-toolchain
+        run: echo "id=$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Swift build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            packages/swift-launcher/.build
+            !packages/swift-launcher/.build/coverage
+            packages/swift-server/.build
+          key: swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*', 'packages/swift-traykit/Package.*') }}-${{ hashFiles('packages/swift-launcher/Sliccstart/**', 'packages/swift-launcher/SliccstartTests/**', 'packages/swift-launcher/SliccFileProvider/**', 'packages/swift-server/Sources/**', 'packages/swift-server/Tests/**', 'packages/swift-optel/Sources/**', 'packages/swift-traysession/Sources/**', 'packages/swift-traykit/Sources/**') }}
+          restore-keys: |
+            swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*', 'packages/swift-traykit/Package.*') }}-
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: cd packages/swift-launcher && swift format lint --strict --parallel --recursive Sliccstart SliccstartTests Package.swift
+      - name: Build swift-server (dependency)
+        run: cd packages/swift-server && swift build -c release
+      - name: Test (with coverage threshold gate)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-launcher SliccstartPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-swift-launcher
+          path: packages/swift-launcher/.build/coverage/
+          if-no-files-found: ignore
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-swift-launcher
+          path: packages/swift-launcher/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Build overlay bootstrap (dist/ui/electron-overlay-entry.js)
+
+        run: npm run build -w @ai-ecoverse/spoon
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build
+        run: npm run build -w @slicc/swift-launcher
+      - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Sliccstart-${{ github.event.pull_request.number || github.run_id }}-unsigned
+          path: packages/swift-launcher/build/Sliccstart.app
+          if-no-files-found: error
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+          cd packages/swift-launcher && periphery scan --disable-update-check || true
+
+  ios-app:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+
+    runs-on: macos-26
+
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
+
+      - name: Lint (swift-format)
+        run: |
+          cd packages/ios-app && swift format lint --strict --parallel --recursive \
+            SliccFollower SliccTrayKit SliccFileProvider SliccShareExtension SliccWidgets Package.swift
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+      - name: Resolve SPM dependencies
+        run: |
+          cd packages/ios-app
+          xcodebuild -resolvePackageDependencies \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower
+
+      - name: Check SwiftPM lockfile drift
+        run: |
+          node packages/dev-tools/tools/check-swift-resolved-drift.mjs \
+            packages/ios-app/SliccFollower.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+            packages/ios-app/Package.resolved
+      - name: Build (iOS Simulator)
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          xcodebuild build \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Build (iOS device)
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          xcodebuild build \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+
+
+
+
+          cd packages/ios-app && periphery scan \
+            --project SliccFollower.xcodeproj \
+            --schemes SliccFollower \
+            --targets SliccFollower \
+            --disable-update-check || true
+
+  ios-app-tests:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
+        ios: ['26', '27']
+    runs-on: ${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}
+    continue-on-error: ${{ matrix.ios == '27' }}
+
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+      - name: Resolve SPM dependencies
+        run: |
+          cd packages/ios-app
+          xcodebuild -resolvePackageDependencies \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower
+
+      - name: Test (iPhone unit suite, coverage threshold gate)
+        if: matrix.device == 'iPhone' && matrix.ios == '26'
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            --xcodebuild SliccFollower packages/ios-app SliccFollower
+
+      - name: Test (iPhone unit suite, no coverage gate)
+        if: matrix.device == 'iPhone' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPhone \
+            --result-bundle .build/unit-suite.xcresult \
+            --only-testing SliccFollowerTests
+
+      - name: Test UI suite (whole bundle minus reviewed exclusions)
+        if: matrix.ios == '26'
+        run: |
+          set -euo pipefail
+
+
+
+
+          SKIP_SPECS="$(node packages/dev-tools/tools/ios-ui-test-exclusions.mjs --print-skip-args)"
+          SKIP_ARGS=()
+          while IFS= read -r spec; do
+
+
+
+            if [ -n "$spec" ]; then SKIP_ARGS+=(--skip-testing "$spec"); fi
+          done <<< "$SKIP_SPECS"
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device ${{ matrix.device }} \
+            --result-bundle .build/ui-suite.xcresult \
+            --only-testing SliccFollowerUITests \
+            ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}
+
+      - name: Test transcript scroll anchoring (#2072, beta SDK)
+        if: matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device ${{ matrix.device }} \
+            --result-bundle .build/transcript-anchor-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptComposerGrowthUITests
+
+      - name: Test transcript short actions (iPhone, beta SDK)
+        if: matrix.device == 'iPhone' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPhone \
+            --result-bundle .build/transcript-short-actions-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptShortActionsUITests
+      - name: Test regular-width browser (iPad, beta SDK)
+        if: matrix.device == 'iPad' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPad \
+            --result-bundle .build/regular-width-ui.xcresult \
+            --only-testing SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
+      - name: Test regular-width transcript column (iPad, beta SDK)
+        if: matrix.device == 'iPad' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPad \
+            --result-bundle .build/transcript-column-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptColumnUITests
+      - name: Upload coverage report
+        if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-ios-app
+          path: packages/ios-app/.build/coverage/lcov.info
+          if-no-files-found: ignore
+
+      - name: Upload test timings (xcresult)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-timings-ios-app-${{ matrix.ios }}-${{ matrix.device }}
+
+          include-hidden-files: true
+          path: |
+            packages/ios-app/.build/coverage/ios-app.xcresult
+            packages/ios-app/.build/*.xcresult
+          if-no-files-found: ignore
+
+  global-install:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build @slicc/shared-ts
+        run: npm run build -w @slicc/shared-ts
+      - name: Build node-server
+        run: npm run build -w @slicc/node-server
+      - name: Pack
+        run: echo "tarball=$(npm pack --quiet | tail -1)" >> "$GITHUB_OUTPUT"
+        id: pack
+
+      - name: Test global install
+        env:
+          npm_config_prefer_online: 'true'
+        run: |
+          set -o pipefail
+          attempts=3
+          for i in $(seq 1 "$attempts"); do
+            echo "::group::npm install -g (attempt $i/$attempts)"
+            status=0
+            npm install -g "./${{ steps.pack.outputs.tarball }}" || status=$?
+            echo "::endgroup::"
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$i" -ge "$attempts" ]; then
+              echo "global install failed (exit $status) after $attempts attempts" >&2
+              exit "$status"
+            fi
+            delay=$((i * 15))
+            echo "global install failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+          slicc --version
+      - name: Test npx
+        env:
+          npm_config_prefer_online: 'true'
+        run: |
+          set -o pipefail
+          attempts=3
+          for i in $(seq 1 "$attempts"); do
+            echo "::group::npx (attempt $i/$attempts)"
+            status=0
+            npx --yes "sliccy@file:./${{ steps.pack.outputs.tarball }}" --version || status=$?
+            echo "::endgroup::"
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$i" -ge "$attempts" ]; then
+              echo "npx failed (exit $status) after $attempts attempts" >&2
+              exit "$status"
+            fi
+            delay=$((i * 15))
+            echo "npx failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+
+  release-gate:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for active release
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+          DEADLINE_MINUTES: '85'
+        run: |
+          deadline=$(( $(date +%s) + DEADLINE_MINUTES * 60 ))
+          while true; do
+            ACTIVE=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
+            QUEUED=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=queued&per_page=1" --jq '.total_count')
+            if [ "$ACTIVE" = "0" ] && [ "$QUEUED" = "0" ]; then
+              echo "No release in progress, proceeding"
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Release still running (active=$ACTIVE queued=$QUEUED) after ${DEADLINE_MINUTES}m; giving up so this batch does not merge mid-release. Re-enqueue once the release completes."
+              exit 1
+            fi
+            echo "Release running (active=$ACTIVE queued=$QUEUED), waiting 30s..."
+            sleep 30
+          done
+
+  bundle-size:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build webapp
+        run: npm run build -w @slicc/webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Build extension
+        run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle-size budgets
+        run: npm run bundle-size
+
+  ci:
+    if: always()
+    needs:
+      [
+        changes,
+        lint,
+        linear-history,
+        typecheck,
+        node-matrix-tests,
+        webapp,
+        e2e,
+        node-server,
+        chrome-extension,
+        cloudflare-worker,
+        cloud-core,
+        shared,
+        webcomponents,
+        spoon,
+        bundle-size,
+        global-install,
+        swift-launcher,
+        swift-server,
+        swift-optel,
+        swift-traysession,
+        swift-trayfollower,
+        swift-traykit,
+        swift-widgetkit,
+        ios-app,
+        ios-app-tests,
+        go-optel,
+        slicc-cli,
+        release-gate,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::One or more jobs failed or were cancelled"
+            exit 1
+          fi

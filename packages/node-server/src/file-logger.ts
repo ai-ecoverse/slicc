@@ -1,0 +1,224 @@
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type { LogLevel } from './runtime-flags.js';
+
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[^[].?/g;
+
+export function stripAnsi(str: string): string {
+  return str.replace(ANSI_RE, '');
+}
+
+const LEVEL_PRIORITY: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+};
+
+function shouldLog(messageLevel: LogLevel, currentLevel: LogLevel): boolean {
+  return LEVEL_PRIORITY[messageLevel] >= LEVEL_PRIORITY[currentLevel];
+}
+
+function timestamp(): string {
+  return new Date().toISOString();
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => {
+      if (typeof v === 'bigint') return v.toString() + 'n';
+      if (v instanceof Error) return { name: v.name, message: v.message, stack: v.stack };
+      return v;
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+export function generateLogFilename(): string {
+  const ts = new Date()
+    .toISOString()
+    .replace(/:/g, '-')
+    .replace(/\.\d{3}Z$/, '');
+  return `${ts}_${process.pid}.log`;
+}
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function cleanupOldLogs(logDir: string, maxAgeMs: number = SEVEN_DAYS_MS): void {
+  try {
+    const now = Date.now();
+    const entries = readdirSync(logDir);
+    for (const entry of entries) {
+      if (!entry.endsWith('.log')) continue;
+      try {
+        const filePath = join(logDir, entry);
+        const stat = statSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.error(`[file-logger] Failed to remove old log ${entry}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[file-logger] Failed to scan logs directory for cleanup:', err);
+  }
+}
+
+export interface FileLoggerOptions {
+  logDir?: string;
+
+  logLevel?: LogLevel;
+
+  devMode?: boolean;
+
+  cleanup?: boolean;
+}
+
+export type StructuredLogValue =
+  | string
+  | number
+  | boolean
+  | null
+  | StructuredLogValue[]
+  | { [key: string]: StructuredLogValue };
+
+export type StructuredLogData = { [key: string]: StructuredLogValue | undefined };
+
+export class FileLogger {
+  readonly logDir: string;
+  readonly logFile: string;
+  private fd: number | null = null;
+  private logLevel: LogLevel;
+  private devMode: boolean;
+  private origConsole: {
+    log: typeof console.log;
+    info: typeof console.info;
+    warn: typeof console.warn;
+    error: typeof console.error;
+    debug: typeof console.debug;
+  } | null = null;
+
+  constructor(options: FileLoggerOptions = {}) {
+    this.logDir = options.logDir ?? join(homedir(), '.slicc', 'logs');
+    this.logLevel = options.logLevel ?? 'info';
+    this.devMode = options.devMode ?? false;
+    this.logFile = '';
+
+    try {
+      mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
+
+      if (options.cleanup !== false) {
+        cleanupOldLogs(this.logDir);
+      }
+
+      const filename = generateLogFilename();
+      this.logFile = join(this.logDir, filename);
+      this.fd = openSync(this.logFile, 'a', 0o600);
+
+      this.writeLine(`--- SLICC CLI log started at ${timestamp()} (PID ${process.pid}) ---`);
+
+      if (this.devMode) {
+        this.installConsoleTee();
+      }
+
+      this.registerShutdownHandlers();
+    } catch (err) {
+      console.error(
+        '[file-logger] Failed to initialize file logging:',
+        err instanceof Error ? err.message : String(err)
+      );
+      console.error('[file-logger] File logging disabled for this session.');
+      this.fd = null;
+    }
+  }
+
+  log(level: LogLevel, message: string, data?: StructuredLogData): void {
+    if (!shouldLog(level, this.logLevel)) return;
+    const entry = data
+      ? `${timestamp()} [${level.toUpperCase()}] ${message} ${safeStringify(data)}`
+      : `${timestamp()} [${level.toUpperCase()}] ${message}`;
+    this.writeLine(entry);
+  }
+
+  close(): void {
+    this.deregisterShutdownHandlers();
+    if (this.fd === null) return;
+    this.writeLine(`--- SLICC CLI log ended at ${timestamp()} ---`);
+    try {
+      closeSync(this.fd);
+    } catch {}
+    this.fd = null;
+    this.restoreConsole();
+  }
+
+  private installConsoleTee(): void {
+    this.origConsole = {
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      error: console.error,
+      debug: console.debug,
+    };
+
+    const self = this;
+
+    for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+      const original = this.origConsole[method];
+      const level = method === 'log' ? 'info' : method;
+
+      console[method] = function (...args: unknown[]) {
+        original.apply(console, args);
+
+        if (shouldLog(level as LogLevel, self.logLevel)) {
+          const text = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ');
+
+          self.writeLine(`${timestamp()} [${level.toUpperCase()}] ${text}`);
+        }
+      };
+    }
+  }
+
+  private restoreConsole(): void {
+    if (!this.origConsole) return;
+    console.log = this.origConsole.log;
+    console.info = this.origConsole.info;
+    console.warn = this.origConsole.warn;
+    console.error = this.origConsole.error;
+    console.debug = this.origConsole.debug;
+    this.origConsole = null;
+  }
+
+  private writeLine(line: string): void {
+    if (this.fd === null) return;
+    try {
+      writeSync(this.fd, stripAnsi(line) + '\n');
+    } catch {}
+  }
+
+  private onExit = () => {
+    this.close();
+  };
+
+  private registerShutdownHandlers(): void {
+    process.once('SIGINT', this.onExit);
+    process.once('SIGTERM', this.onExit);
+    process.once('exit', this.onExit);
+  }
+
+  private deregisterShutdownHandlers(): void {
+    process.removeListener('SIGINT', this.onExit);
+    process.removeListener('SIGTERM', this.onExit);
+    process.removeListener('exit', this.onExit);
+  }
+}

@@ -1,0 +1,837 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import type { SignedFetchDaRequest } from '../../src/fs/mount/backend-da.js';
+import { MountCommands } from '../../src/fs/mount-commands.js';
+import type { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { runMountDirectoryApproval } from '../../src/shell/supplemental-commands/mount-directory-approval.js';
+import {
+  popToolExecutionContext,
+  pushToolExecutionContext,
+  type ToolExecutionContext,
+  toolUIRegistry,
+} from '../../src/tools/tool-ui.js';
+
+function makeMockMountIndex() {
+  return {
+    getState: vi.fn(() => undefined),
+    isReady: vi.fn(() => false),
+  };
+}
+
+function makeFs(overrides: Partial<VirtualFS> = {}): VirtualFS {
+  return {
+    listMounts: vi.fn(() => []),
+    unmount: vi.fn(),
+    mount: vi.fn(),
+    getMountIndex: vi.fn(() => makeMockMountIndex()),
+    ...overrides,
+  } as unknown as VirtualFS;
+}
+
+function makeMountCommands(overrides: ConstructorParameters<typeof MountCommands>[0]) {
+  return new MountCommands({
+    acquireLocalMountViaToolUI: runMountDirectoryApproval,
+    ...overrides,
+  });
+}
+
+describe('MountCommands', () => {
+  describe('no arguments', () => {
+    it('returns exitCode 1', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute([], '/workspace');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('includes "mount point required" in stderr', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute([], '/workspace');
+      expect(result.stderr).toContain('mount: mount point required');
+    });
+
+    it('includes usage hint in stderr', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute([], '/workspace');
+      expect(result.stderr).toContain('mount point required');
+    });
+
+    it('stderr ends with a newline', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute([], '/workspace');
+      expect(result.stderr).toMatch(/\n$/);
+    });
+  });
+
+  describe('list subcommand', () => {
+    it('returns exitCode 0 with no mounts', async () => {
+      const cmd = makeMountCommands({ fs: makeFs({ listMounts: vi.fn(() => []) }) });
+      const result = await cmd.execute(['list'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('No active mounts\n');
+    });
+
+    it('lists active mounts', async () => {
+      const mounts = ['/workspace/myapp', '/workspace/other'];
+      const cmd = makeMountCommands({ fs: makeFs({ listMounts: vi.fn(() => mounts) }) });
+      const result = await cmd.execute(['list'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('/workspace/myapp');
+      expect(result.stdout).toContain('/workspace/other');
+    });
+
+    it('-l alias works', async () => {
+      const cmd = makeMountCommands({ fs: makeFs({ listMounts: vi.fn(() => []) }) });
+      const result = await cmd.execute(['-l'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('No active mounts\n');
+    });
+
+    it('--list alias matches `mount list`', async () => {
+      const mounts = ['/workspace/myapp'];
+      const fs = makeFs({ listMounts: vi.fn(() => mounts) });
+      const cmd = makeMountCommands({ fs });
+      const listed = await cmd.execute(['list'], '/workspace');
+      const aliased = await cmd.execute(['--list'], '/workspace');
+      expect(aliased.exitCode).toBe(0);
+      expect(aliased.stdout).toBe(listed.stdout);
+      expect(aliased.stderr).toBe(listed.stderr);
+    });
+
+    async function runListWithErrorState(
+      mountPath: string,
+      state: Record<string, unknown>
+    ): Promise<string> {
+      const mountIndex = {
+        getState: vi.fn(() => ({ status: 'error' as const, indexed: 0, ...state })),
+        isReady: vi.fn(() => false),
+      };
+      const cmd = makeMountCommands({
+        fs: makeFs({
+          listMounts: vi.fn(() => [mountPath]),
+          getMountIndex: vi.fn(() => mountIndex) as unknown as VirtualFS['getMountIndex'],
+        }),
+      });
+      const result = await cmd.execute(['list'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      return result.stdout;
+    }
+
+    it('renders a depth-exceeded index skip with the depth env var hint', async () => {
+      const stdout = await runListWithErrorState('/mnt/deep', {
+        error: 'mount indexing aborted: directory nesting exceeded 400 levels',
+        abortCause: 'depth-exceeded',
+      });
+      expect(stdout).toContain('/mnt/deep');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('depth');
+      expect(stdout).toContain('SLICC_MOUNT_INDEX_MAX_DEPTH');
+      expect(stdout).toContain('mount unmount /mnt/deep');
+      expect(stdout.toLowerCase()).not.toContain('cycl');
+    });
+
+    it('renders an entries-exceeded index skip as a too-large tree, not a cycle', async () => {
+      const stdout = await runListWithErrorState('/mnt/huge', {
+        error: 'mount indexing aborted: entry budget of 2000000 exceeded',
+        abortCause: 'entries-exceeded',
+      });
+      expect(stdout).toContain('/mnt/huge');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('too large');
+      expect(stdout).toContain('SLICC_MOUNT_INDEX_MAX_ENTRIES');
+      expect(stdout).toContain('mount unmount /mnt/huge');
+      expect(stdout.toLowerCase()).not.toContain('cycl');
+    });
+
+    it('renders a cycle-detected index skip with an actionable unmount hint', async () => {
+      const stdout = await runListWithErrorState('/mnt/cyclic', {
+        error: 'mount indexing aborted: self-referential mount cycle detected',
+        abortCause: 'cycle-detected',
+      });
+      expect(stdout).toContain('/mnt/cyclic');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('cycle');
+      expect(stdout).toContain('mount unmount /mnt/cyclic');
+    });
+
+    it('renders the raw message for a generic indexing-error', async () => {
+      const stdout = await runListWithErrorState('/mnt/broken', {
+        error: 'backend unavailable',
+        abortCause: 'indexing-error',
+      });
+      expect(stdout).toContain('index error: backend unavailable');
+      expect(stdout).not.toContain('mount unmount');
+      expect(stdout).not.toContain('index skipped');
+    });
+  });
+
+  describe('unmount subcommand', () => {
+    it('returns error when path is missing', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['unmount'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('path required');
+    });
+
+    it('calls fs.unmount with absolute path', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.execute(['unmount', '/workspace/myapp'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
+    });
+
+    it('resolves relative path against cwd', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      await cmd.execute(['unmount', 'myapp'], '/workspace');
+      expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
+    });
+
+    it('answers --help after the path without unmounting it', async () => {
+      for (const args of [
+        ['unmount', '/mnt/myapp', '--help'],
+        ['unmount', '/mnt/myapp', '-h'],
+        ['-u', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.execute(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe('umount alias', () => {
+    it('returns a usage error when no path is given', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.executeUmount([], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('umount: path required\n');
+      expect(result.stdout).toBe('');
+    });
+
+    it('unmounts a mounted path', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
+      expect(result.stdout).toBe('Unmounted /mnt/myapp\n');
+    });
+
+    it('resolves a relative path against cwd, like `mount unmount`', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      await cmd.executeUmount(['myapp'], '/workspace');
+      expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
+    });
+
+    it('reports a not-mounted path the same way `mount unmount` does', async () => {
+      const unmount = vi.fn(() => {
+        throw new Error("ENOENT: '/mnt/nope' is not a mount point");
+      });
+      const viaMount = await makeMountCommands({ fs: makeFs({ unmount }) }).execute(
+        ['unmount', '/mnt/nope'],
+        '/workspace'
+      );
+      const viaAlias = await makeMountCommands({ fs: makeFs({ unmount }) }).executeUmount(
+        ['/mnt/nope'],
+        '/workspace'
+      );
+      expect(viaAlias.exitCode).toBe(viaMount.exitCode);
+      expect(viaAlias.exitCode).toBe(1);
+
+      expect(viaMount.stderr).toBe("mount unmount: ENOENT: '/mnt/nope' is not a mount point\n");
+      expect(viaAlias.stderr).toBe("umount: ENOENT: '/mnt/nope' is not a mount point\n");
+    });
+
+    it('forwards --clear-cache in either position', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const before = await cmd.executeUmount(['--clear-cache', '/mnt/s3'], '/workspace');
+      const after = await cmd.executeUmount(['/mnt/s3', '--clear-cache'], '/workspace');
+      expect(before.exitCode).toBe(0);
+      expect(after.exitCode).toBe(0);
+
+      expect(before.stdout).toBe('Unmounted /mnt/s3 (no remote cache to clear)\n');
+      expect(after.stdout).toBe(before.stdout);
+    });
+
+    it('answers --help without unmounting anything', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      for (const flag of ['--help', '-h']) {
+        const result = await cmd.executeUmount([flag], '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(result.stdout).toContain('alias for');
+      }
+      expect(unmount).not.toHaveBeenCalled();
+    });
+
+    it('answers --help AFTER the path without unmounting it', async () => {
+      for (const args of [
+        ['/mnt/myapp', '--help'],
+        ['/mnt/myapp', '-h'],
+        ['--clear-cache', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.executeUmount(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
+
+    it('treats `--` as an end-of-options terminator, not a help request', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp', '--', '--help'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Unmounted /mnt/myapp');
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
+    });
+
+    it('is listed as an alias in `mount --help`', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const { stdout } = await cmd.execute(['--help'], '/workspace');
+      expect(stdout).toContain('umount <path>');
+    });
+  });
+
+  describe('scoop (non-interactive) context', () => {
+    it('fails fast with exitCode 1 when invoked from a scoop', async () => {
+      const cmd = makeMountCommands({ fs: makeFs(), isScoop: () => true });
+      const result = await cmd.execute(['/workspace/myapp'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('cannot mount local directories from a scoop');
+    });
+
+    it('does not invoke the directory picker or fs.mount in scoop context', async () => {
+      const mount = vi.fn();
+      const showDirectoryPicker = vi.fn();
+      vi.stubGlobal('window', { showDirectoryPicker });
+      try {
+        const cmd = makeMountCommands({ fs: makeFs({ mount }), isScoop: () => true });
+        const result = await cmd.execute(['/workspace/myapp'], '/workspace');
+        expect(result.exitCode).toBe(1);
+        expect(showDirectoryPicker).not.toHaveBeenCalled();
+        expect(mount).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('still allows list/unmount/refresh subcommands inside a scoop', async () => {
+      const cmd = makeMountCommands({
+        fs: makeFs({ listMounts: vi.fn(() => []) }),
+        isScoop: () => true,
+      });
+      const result = await cmd.execute(['list'], '/workspace');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe('cone (interactive) timeout', () => {
+    let pushedCtx: ToolExecutionContext | null = null;
+
+    afterEach(() => {
+      if (pushedCtx) {
+        popToolExecutionContext(pushedCtx);
+        pushedCtx = null;
+      }
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it('times out after 5 minutes, cancels the pending UI, and exits 1', async () => {
+      vi.useFakeTimers();
+
+      vi.stubGlobal('window', { showDirectoryPicker: vi.fn() });
+
+      const onUpdate = vi.fn();
+      pushedCtx = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-timeout',
+      });
+
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const pendingBefore = toolUIRegistry.getPendingIds().length;
+
+      const promise = cmd.execute(['/workspace/myapp'], '/workspace');
+
+      await Promise.resolve();
+      expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore + 1);
+
+      const newRequestId = toolUIRegistry.getPendingIds()[pendingBefore];
+      toolUIRegistry.markMounted(newRequestId);
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      const result = await promise;
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('timed out');
+
+      expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore);
+
+      const blocks = onUpdate.mock.calls.flatMap(
+        (call) => (call[0]?.content ?? []) as Array<{ type?: string }>
+      );
+      expect(blocks.some((b) => b.type === 'tool_ui_done')).toBe(true);
+    });
+  });
+
+  describe('cone (interactive) approval card content', () => {
+    it('includes the resolved target path in the approval card html', async () => {
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-target-path',
+      });
+      try {
+        const cmd = makeMountCommands({ fs: makeFs() });
+        const promise = cmd.execute(['/workspace/mnt/docs'], '/workspace');
+
+        await Promise.resolve();
+
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) =>
+            (call[0]?.content ?? []) as Array<{
+              type?: string;
+              html?: string;
+              requestId?: string;
+            }>
+        );
+        const uiBlock = blocks.find((b) => b.type === 'tool_ui');
+        expect(uiBlock?.html).toContain('Target: /workspace/mnt/docs');
+
+        await toolUIRegistry.handleAction(uiBlock!.requestId!, { action: 'deny' });
+        const result = await promise;
+        expect(result.exitCode).toBe(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
+  });
+
+  describe('--help', () => {
+    it('returns exitCode 0', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['--help'], '/workspace');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('shows required <target-path> in usage', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['--help'], '/workspace');
+      expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+    });
+
+    it('documents --list as an alias of list', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['--help'], '/workspace');
+      expect(result.stdout).toContain('mount --list');
+      expect(result.stdout).toMatch(/list, --list, -l/);
+    });
+  });
+
+  describe('--source URL scheme dispatch', () => {
+    it('rejects an unknown scheme with an actionable error', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['--source', 'unknown://foo', '/mnt/x'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/invalid source/);
+      expect(result.stderr).toMatch(/s3:\/\/.*da:\/\//);
+    });
+
+    it('s3:// surfaces probe failure with the actionable secret-set hint', async () => {
+      const { FsError } = await import('../../src/fs/types.js');
+      const cmd = makeMountCommands({
+        fs: makeFs(),
+        signedFetchS3: async () => {
+          throw new FsError(
+            'EACCES',
+            "profile 'r2' missing required field 'access_key_id'. " +
+              'Set it via: secret set s3.r2.access_key_id <value>'
+          );
+        },
+      });
+      const result = await cmd.execute(
+        ['--source', 's3://my-bucket/prefix', '--profile', 'r2', '/mnt/r2'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/profile 'r2'/);
+      expect(result.stderr).toMatch(/access_key_id/);
+      expect(result.stderr).toMatch(/secret set s3\.r2\.access_key_id/);
+    });
+
+    it('s3:// with --no-probe constructs an S3 backend and calls fs.mount', async () => {
+      const fs = makeFs();
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchS3: async () => new Response('', { status: 200 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 's3://my-bucket/prefix', '--no-probe', '/mnt/s3'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Mounted');
+      expect(result.stdout).toContain('(profile: default)');
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      expect(mountFn).toHaveBeenCalledTimes(1);
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('s3');
+      expect(backend.source).toBe('s3://my-bucket/prefix');
+    });
+
+    it('da:// with --no-probe constructs a DA backend and calls fs.mount', async () => {
+      const fs = makeFs();
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchDa: async () => new Response('[]', { status: 200 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '--no-probe', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      expect(mountFn).toHaveBeenCalledTimes(1);
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('da');
+      expect(backend.source).toBe('da://my-org/my-repo');
+    });
+
+    it('da:// re-routes to the Source Bus when the site is on Helix 6', async () => {
+      const fs = makeFs();
+      const responses = [
+        new Response(
+          JSON.stringify({
+            content: {
+              source: {
+                type: 'markup',
+                url: 'https://api.aem.live/adobe/sites/aem-website/source',
+              },
+            },
+          }),
+          { status: 200 }
+        ),
+
+        new Response('[]', { status: 200 }),
+      ];
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchDa: async () => responses.shift()!,
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://adobe/aem-website', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toMatch(/Helix 6/);
+      expect(result.stderr).toMatch(/api\.aem\.live/);
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+      expect(backend.source).toBe('aem://adobe/aem-website');
+    });
+
+    it('da:// stays on DA when the site config points at content.da.live', async () => {
+      const fs = makeFs();
+      const responses = [
+        new Response(
+          JSON.stringify({
+            content: { source: { type: 'markup', url: 'https://content.da.live/my-org/my-repo/' } },
+          }),
+          { status: 200 }
+        ),
+        new Response('[]', { status: 200 }),
+      ];
+      const cmd = makeMountCommands({ fs, signedFetchDa: async () => responses.shift()! });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string }];
+      expect(backend.kind).toBe('da');
+    });
+
+    it('da:// fails loudly when the content source cannot be determined', async () => {
+      const fs = makeFs();
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchDa: async () => new Response('', { status: 401 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/could not determine the content source/);
+      expect(result.stderr).toMatch(/--backend/);
+      expect(fs.mount as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    });
+
+    it('--backend da forces the old endpoint with no config probe', async () => {
+      const fs = makeFs();
+      const signedFetchDa = vi.fn(async () => new Response('[]', { status: 200 }));
+      const cmd = makeMountCommands({ fs, signedFetchDa });
+      const result = await cmd.execute(
+        ['--source', 'da://adobe/aem-website', '--backend', 'da', '--no-probe', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(signedFetchDa).not.toHaveBeenCalled();
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('da');
+    });
+
+    it('--backend aem forces the Source Bus for a da:// source', async () => {
+      const fs = makeFs();
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchDa: async () => new Response('[]', { status: 200 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo/blog', '--backend', 'aem', '--no-probe', '/mnt/x'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+      expect(backend.source).toBe('aem://my-org/my-repo/blog');
+    });
+
+    it('rejects an unknown --backend value', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '--backend', 'helix7', '/mnt/x'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/invalid --backend 'helix7'/);
+    });
+
+    it('aem:// mounts the Source Bus directly without a config probe', async () => {
+      const fs = makeFs();
+      const requests: SignedFetchDaRequest[] = [];
+      const signedFetchDa = vi.fn(async (req: SignedFetchDaRequest) => {
+        requests.push(req);
+        return new Response('[]', { status: 200 });
+      });
+      const cmd = makeMountCommands({ fs, signedFetchDa });
+      const result = await cmd.execute(
+        ['--source', 'aem://adobe/aem-website', '/mnt/aem'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        path: '/adobe/sites/aem-website/source/',
+        origin: 'https://api.aem.live',
+      });
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+    });
+
+    it('aem:// surfaces a probe failure and does not mount', async () => {
+      const fs = makeFs();
+      const cmd = makeMountCommands({
+        fs,
+        signedFetchDa: async () => new Response('', { status: 404 }),
+      });
+      const result = await cmd.execute(['--source', 'aem://adobe/nope', '/mnt/aem'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/probe failed for aem:\/\/adobe\/nope/);
+      expect(fs.mount as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    });
+
+    it('s3:// in cone (tool) context mounts directly without registering a tool_ui', async () => {
+      const fs = makeFs();
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-s3-no-consent',
+      });
+      try {
+        const cmd = makeMountCommands({
+          fs,
+          signedFetchS3: async () => new Response('', { status: 200 }),
+        });
+        const pendingBefore = toolUIRegistry.getPendingIds().length;
+        const result = await cmd.execute(
+          ['--source', 's3://b/p', '--no-probe', '/mnt/r2'],
+          '/workspace'
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore);
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) => (call[0]?.content ?? []) as Array<{ type?: string }>
+        );
+        expect(blocks.some((b) => b.type === 'tool_ui')).toBe(false);
+        expect(fs.mount as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
+
+    it('da:// in cone (tool) context mounts directly without registering a tool_ui', async () => {
+      const fs = makeFs();
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-da-no-consent',
+      });
+      try {
+        const cmd = makeMountCommands({
+          fs,
+          signedFetchDa: async () => new Response('[]', { status: 200 }),
+        });
+        const pendingBefore = toolUIRegistry.getPendingIds().length;
+        const result = await cmd.execute(
+          ['--source', 'da://my-org/my-repo', '--no-probe', '/mnt/da'],
+          '/workspace'
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore);
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) => (call[0]?.content ?? []) as Array<{ type?: string }>
+        );
+        expect(blocks.some((b) => b.type === 'tool_ui')).toBe(false);
+        expect(fs.mount as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
+  });
+
+  describe('mount refresh outputs RefreshReport summary', () => {
+    it('renders +/-/~ counts plus unchanged/errors', async () => {
+      const fs = makeFs({
+        refreshMount: vi.fn(async () => ({
+          added: ['a.html', 'b.html'],
+          removed: ['old.html'],
+          changed: ['index.html'],
+          unchanged: 5,
+          errors: [],
+        })),
+      } as Partial<VirtualFS>);
+      const cmd = makeMountCommands({ fs });
+      const result = await cmd.execute(['refresh', '/mnt/s3'], '/workspace');
+      expect(result.exitCode).toBe(0);
+
+      expect(result.stdout).toMatch(/Refreshed \/mnt\/s3:\s*\+2\s*-1\s*~1.*5 unchanged.*0 errors/);
+    });
+
+    it('threads the just-bash env through to fs.refreshMount', async () => {
+      const refreshMount = vi.fn(async () => ({
+        added: [],
+        removed: [],
+        changed: [],
+        unchanged: 0,
+        errors: [],
+      }));
+      const fs = makeFs({ refreshMount } as Partial<VirtualFS>);
+      const cmd = makeMountCommands({ fs });
+      const env = new Map([['SLICC_MOUNT_INDEX_MAX_ENTRIES', '7']]);
+
+      await cmd.execute(['refresh', '/mnt/s3'], '/workspace', env);
+
+      expect(refreshMount).toHaveBeenCalledTimes(1);
+      const [path, opts] = refreshMount.mock.calls[0] as unknown as [string, { env?: unknown }];
+      expect(path).toBe('/mnt/s3');
+      expect(opts.env).toBe(env);
+    });
+
+    it('surfaces refresh errors on stderr', async () => {
+      const fs = makeFs({
+        refreshMount: vi.fn(async () => ({
+          added: [],
+          removed: [],
+          changed: [],
+          unchanged: 0,
+          errors: [{ path: 'foo.html', message: 'EIO: 503' }],
+        })),
+      } as Partial<VirtualFS>);
+      const cmd = makeMountCommands({ fs });
+      const result = await cmd.execute(['refresh', '/mnt/s3'], '/workspace');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('foo.html');
+      expect(result.stderr).toContain('EIO: 503');
+    });
+  });
+
+  describe('mount unmount --clear-cache', () => {
+    it('clears the RemoteMountCache for s3 mounts', async () => {
+      // @ts-expect-error fake-indexeddb/auto has no types for the .mjs subpath
+      await import('fake-indexeddb/auto');
+      const { RemoteMountCache } = await import('../../src/fs/mount/remote-cache.js');
+      const { saveMountEntry } = await import('../../src/fs/mount-table-store.js');
+
+      const mountId = 'unmount-test-' + Math.random().toString(36).slice(2);
+      const cacheDbName = 'slicc-mount-cache';
+
+      const cache = new RemoteMountCache({ mountId, ttlMs: 30_000, dbName: cacheDbName });
+      await cache.putBody('foo.txt', new Uint8Array([1, 2, 3]), '"e1"');
+      expect(await cache.getBody('foo.txt')).not.toBeNull();
+
+      await saveMountEntry({
+        targetPath: '/mnt/s3-test',
+        descriptor: { kind: 's3', mountId, source: 's3://b/p', profile: 'default' },
+        createdAt: Date.now(),
+      });
+
+      const fs = makeFs();
+      const cmd = makeMountCommands({ fs });
+      const result = await cmd.execute(['unmount', '--clear-cache', '/mnt/s3-test'], '/workspace');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('cache cleared');
+
+      const verifier = new RemoteMountCache({ mountId, ttlMs: 30_000, dbName: cacheDbName });
+      expect(await verifier.getBody('foo.txt')).toBeNull();
+    });
+
+    it('reports "no remote cache to clear" for local mounts', async () => {
+      // @ts-expect-error fake-indexeddb/auto has no types for the .mjs subpath
+      await import('fake-indexeddb/auto');
+      const { saveMountEntry } = await import('../../src/fs/mount-table-store.js');
+      await saveMountEntry({
+        targetPath: '/mnt/local-test',
+        descriptor: {
+          kind: 'local',
+          mountId: 'local-' + Math.random().toString(36).slice(2),
+          idbHandleKey: '/mnt/local-test',
+        },
+        createdAt: Date.now(),
+      });
+
+      const fs = makeFs();
+      const cmd = makeMountCommands({ fs });
+      const result = await cmd.execute(
+        ['unmount', '--clear-cache', '/mnt/local-test'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/no remote cache to clear/);
+    });
+  });
+});

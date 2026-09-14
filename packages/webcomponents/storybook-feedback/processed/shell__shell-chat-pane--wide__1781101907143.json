@@ -1,0 +1,8 @@
+{
+  "storyId": "shell-chat-pane--wide",
+  "storyTitle": "Shell/Chat Pane",
+  "subsystem": "shell",
+  "importPath": "./src/shell/slicc-chatpane.stories.ts",
+  "comment": "in dark mode, the agent text in the chat pane should be very bright, so that there is enough contrast with the background",
+  "createdAt": "2026-06-10T14:31:47.143Z"
+}

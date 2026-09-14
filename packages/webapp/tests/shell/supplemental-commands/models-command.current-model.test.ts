@@ -1,0 +1,191 @@
+import type { IFileSystem } from 'just-bash';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../../src/providers/account-store.js', () => ({
+  getAccounts: vi.fn(),
+  getAvailableProviders: vi.fn(),
+  getProviderConfig: vi.fn(),
+  getProviderModels: vi.fn(),
+  getSelectedProvider: vi.fn(),
+  getSelectedModelId: vi.fn(),
+  resolveCurrentModel: vi.fn(),
+}));
+
+const mockProxiedFetch = vi.fn();
+vi.mock('../../../src/shell/proxied-fetch.js', () => ({
+  createProxiedFetch: () => mockProxiedFetch,
+}));
+
+import {
+  getAccounts,
+  getAvailableProviders,
+  getProviderConfig,
+  getProviderModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  resolveCurrentModel,
+} from '../../../src/providers/account-store.js';
+import { createModelsCommand } from '../../../src/shell/supplemental-commands/models-command.js';
+
+const mk = (id: string, costIn: number, costOut: number, ctx = 1_000_000, provider = 'adobe') => ({
+  id,
+  name: id,
+  provider,
+  cost: { input: costIn, output: costOut, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: ctx,
+  maxTokens: 128000,
+  reasoning: true,
+  input: ['text', 'image'],
+});
+
+function ctx() {
+  const fs: Partial<IFileSystem> = {
+    resolvePath: (b: string, p: string) => (p.startsWith('/') ? p : `${b}/${p}`),
+  };
+  return { fs: fs as IFileSystem, cwd: '/home', env: new Map<string, string>(), stdin: '' };
+}
+
+describe('models command reports the resolved model (no guessing)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProxiedFetch.mockReset();
+    vi.mocked(getAccounts).mockReturnValue([{ providerId: 'adobe' }] as never);
+    vi.mocked(getAvailableProviders).mockReturnValue(['adobe'] as never);
+    vi.mocked(getProviderConfig).mockReturnValue({ id: 'adobe', name: 'Adobe' } as never);
+    vi.mocked(getSelectedProvider).mockReturnValue('adobe');
+    vi.mocked(getSelectedModelId).mockReturnValue('claude-opus-4-8');
+  });
+
+  it('shows the RESOLVED model when it differs from the selection (fallback exposed)', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([
+      mk('claude-opus-4-6', 5, 25),
+      mk('claude-sonnet-4-6', 3, 15),
+      mk('claude-haiku-4-5', 1, 5, 200_000),
+    ] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-sonnet-4-0',
+      provider: 'anthropic',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--no-benchmarks'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+
+    expect(res.stdout).toContain('claude-sonnet-4-0');
+
+    expect(res.stdout).toContain('claude-opus-4-8');
+
+    expect(res.stdout).not.toMatch(/Currently using:\s*adobe:claude-opus-4-8/);
+  });
+
+  it('never hides the active model behind version-family dedup', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([
+      mk('claude-opus-4-6', 5, 25),
+      mk('claude-opus-4-8', 0, 0),
+    ] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-8',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--no-benchmarks'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain('claude-opus-4-8');
+    expect(res.stdout).toMatch(/Currently using:\s*adobe:claude-opus-4-8/);
+  });
+
+  it('--json marks the RESOLVED model as selected, not the raw selection', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([
+      mk('claude-opus-4-6', 5, 25),
+      mk('claude-opus-4-8', 0, 0),
+    ] as never);
+    vi.mocked(getSelectedModelId).mockReturnValue('claude-opus-4-6');
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-8',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(
+      ['--json', '--all-versions', '--no-benchmarks'],
+      ctx() as never
+    );
+    expect(res.exitCode).toBe(0);
+    const models = JSON.parse(res.stdout) as Array<{ id: string; selected: boolean }>;
+    const selected = models.filter((m) => m.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].id).toBe('claude-opus-4-8');
+  });
+
+  it('--all reports the resolved model in a single global "Currently using" line', async () => {
+    vi.mocked(getAccounts).mockReturnValue([
+      { providerId: 'adobe' },
+      { providerId: 'anthropic' },
+    ] as never);
+    vi.mocked(getProviderConfig).mockImplementation(((id: string) => ({
+      id,
+      name: id === 'adobe' ? 'Adobe' : 'Anthropic',
+    })) as never);
+    vi.mocked(getProviderModels).mockImplementation(((id: string) =>
+      id === 'adobe'
+        ? [mk('claude-opus-4-8', 0, 0)]
+        : [mk('claude-sonnet-4-0', 3, 15, 200_000, 'anthropic')]) as never);
+    vi.mocked(getSelectedModelId).mockReturnValue('claude-opus-4-8');
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-8',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--all', '--no-benchmarks'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    const usingLines = res.stdout.split('\n').filter((l) => l.includes('Currently using:'));
+    expect(usingLines).toHaveLength(1);
+    expect(usingLines[0]).toContain('adobe:claude-opus-4-8');
+  });
+
+  it('rejects an unknown flag with a non-zero exit (issue #2255)', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--bogus'], ctx() as never);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain('unknown flag: --bogus');
+  });
+
+  it('accepts known flags in any position', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--no-benchmarks', '--json'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    expect(() => JSON.parse(res.stdout)).not.toThrow();
+  });
+
+  it('requires a value for --provider', async () => {
+    const res = await createModelsCommand().execute(['--provider'], ctx() as never);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toMatch(/--provider requires a value/);
+  });
+
+  it('treats a null benchmark JSON body as empty enrichment (non-fatal)', async () => {
+    mockProxiedFetch.mockResolvedValue({
+      status: 200,
+      body: new TextEncoder().encode('null'),
+    });
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--json'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    const models = JSON.parse(res.stdout) as Array<{ id: string }>;
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-opus-4-6');
+  });
+});

@@ -1,0 +1,222 @@
+import { OPENROUTER_MODELS } from '@earendil-works/pi-ai/providers/openrouter.models';
+import type { ModelMetadata } from '../src/providers/types.js';
+
+const MODELS_URL = 'https://openrouter.ai/api/v1/models';
+const MODELS_STORAGE_KEY = 'slicc.openrouter.models';
+const FILTER_STORAGE_KEY = 'slicc.openrouter.modelFilter';
+const FETCH_TIMEOUT_MS = 10_000;
+const DEFAULT_PATTERNS = ['*'] as const;
+
+export interface OpenRouterPricing {
+  prompt?: string;
+  completion?: string;
+  request?: string;
+  image?: string;
+  web_search?: string;
+  internal_reasoning?: string;
+  audio?: string;
+
+  discount?: number | string;
+  overrides?: unknown;
+  [key: string]: unknown;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  context_length: number;
+  architecture?: {
+    modality?: string;
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+  top_provider?: {
+    context_length?: number;
+    max_completion_tokens?: number;
+    is_moderated?: boolean;
+  };
+  supported_parameters?: string[];
+  pricing?: OpenRouterPricing;
+}
+
+export interface OpenRouterCatalogModel {
+  id: string;
+  name: string;
+  context_length?: number;
+  architecture?: OpenRouterModel['architecture'];
+  top_provider?: OpenRouterModel['top_provider'];
+  supported_parameters?: readonly string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  input?: readonly string[];
+  pricing?: OpenRouterPricing;
+}
+
+export const FREE_AGENT_REQUIRED_PARAMS = ['tools', 'temperature', 'top_p'] as const;
+
+export const FREE_ROUTER_FALLBACK: OpenRouterCatalogModel = {
+  id: 'openrouter/free',
+  name: 'Free Models Router',
+  context_length: 200_000,
+  architecture: {
+    modality: 'text+image->text',
+    input_modalities: ['text', 'image'],
+    output_modalities: ['text'],
+  },
+  top_provider: { max_completion_tokens: 16_384 },
+  supported_parameters: [...FREE_AGENT_REQUIRED_PARAMS, 'tool_choice'],
+  pricing: { prompt: '0', completion: '0' },
+};
+
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+
+export type OpenRouterModelMetadata = { id: string; name: string } & ModelMetadata;
+
+let liveCatalog: OpenRouterModel[] | null = null;
+
+export function loadCache(): OpenRouterModel[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(MODELS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as OpenRouterModel[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCache(models: readonly OpenRouterModel[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(MODELS_STORAGE_KEY, JSON.stringify(models));
+  } catch {}
+}
+
+export async function fetchModels(): Promise<OpenRouterModel[]> {
+  const response = await fetch(MODELS_URL, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch OpenRouter models: ${response.status} ${response.statusText}`.trim()
+    );
+  }
+
+  const body = (await response.json()) as { data?: unknown };
+  if (!Array.isArray(body.data)) {
+    throw new Error('Failed to fetch OpenRouter models: response did not contain a data array');
+  }
+  const models = body.data as OpenRouterModel[];
+  liveCatalog = models;
+  saveCache(models);
+  return models;
+}
+
+function patternToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+export function filterModels<T extends { id: string }>(
+  models: readonly T[],
+  patterns: readonly string[] = DEFAULT_PATTERNS
+): T[] {
+  const effectivePatterns = patterns.length > 0 ? patterns : DEFAULT_PATTERNS;
+  const regexes = effectivePatterns.map(patternToRegex);
+  return models.filter((model) => regexes.some((regex) => regex.test(model.id)));
+}
+
+export function loadFilterPatterns(): string[] {
+  if (typeof localStorage === 'undefined') return [...DEFAULT_PATTERNS];
+  try {
+    const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+    if (!raw) return [...DEFAULT_PATTERNS];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [...DEFAULT_PATTERNS];
+    const patterns = parsed.filter(
+      (pattern): pattern is string => typeof pattern === 'string' && pattern.length > 0
+    );
+    return patterns.length > 0 ? patterns : [...DEFAULT_PATTERNS];
+  } catch {
+    return [...DEFAULT_PATTERNS];
+  }
+}
+
+export function toModelMetadata(model: OpenRouterCatalogModel): OpenRouterModelMetadata {
+  const modalities = model.architecture?.input_modalities ?? model.input ?? ['text'];
+  return {
+    id: model.id,
+    name: model.name,
+    api: 'openai',
+    context_window: model.context_length ?? model.contextWindow ?? 128_000,
+    max_tokens: model.top_provider?.max_completion_tokens ?? model.maxTokens ?? 16_384,
+    reasoning:
+      model.supported_parameters?.includes('include_reasoning') ?? model.reasoning ?? false,
+    input: modalities.includes('image') ? ['text', 'image'] : ['text'],
+  };
+}
+
+function catalogSource(): readonly OpenRouterCatalogModel[] {
+  const cached = loadCache();
+  return liveCatalog ?? (cached.length > 0 ? cached : Object.values(OPENROUTER_MODELS));
+}
+
+export function isOpenRouterFreePriced(model: OpenRouterCatalogModel): boolean {
+  const pricing = model.pricing;
+  if (pricing) {
+    if (!(Number(pricing.prompt ?? NaN) === 0 && Number(pricing.completion ?? NaN) === 0)) {
+      return false;
+    }
+
+    for (const [key, value] of Object.entries(pricing)) {
+      if (key === 'discount' || key === 'overrides') continue;
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'object') continue;
+      if (Number(value) !== 0) return false;
+    }
+    return true;
+  }
+
+  return model.id === 'openrouter/free' || model.id.endsWith(':free');
+}
+
+function hasAll(values: readonly string[] | undefined, required: readonly string[]): boolean {
+  if (!values) return false;
+  const set = new Set(values);
+  return required.every((item) => set.has(item));
+}
+
+export function isFreeAgentCapableModel(model: OpenRouterCatalogModel): boolean {
+  if (!isOpenRouterFreePriced(model)) return false;
+  const inputs = model.architecture?.input_modalities ?? model.input ?? [];
+  const outputs = model.architecture?.output_modalities ?? ['text'];
+  return (
+    hasAll(inputs, ['text', 'image']) &&
+    hasAll(outputs, ['text']) &&
+    hasAll(model.supported_parameters, FREE_AGENT_REQUIRED_PARAMS)
+  );
+}
+
+function withFreeCost(metadata: OpenRouterModelMetadata): OpenRouterModelMetadata {
+  return { ...metadata, cost: { ...ZERO_COST } };
+}
+
+export function getCatalog(): OpenRouterModelMetadata[] {
+  return filterModels(catalogSource(), loadFilterPatterns()).map(toModelMetadata);
+}
+
+export function getFreeCatalog(): OpenRouterModelMetadata[] {
+  const matched = catalogSource()
+    .filter(isFreeAgentCapableModel)
+    .map(toModelMetadata)
+    .map(withFreeCost);
+  if (matched.length > 0) return matched;
+  return [withFreeCost(toModelMetadata(FREE_ROUTER_FALLBACK))];
+}
+
+export function isModelInFreeCatalog(modelId: string): boolean {
+  return getFreeCatalog().some((entry) => entry.id === modelId);
+}

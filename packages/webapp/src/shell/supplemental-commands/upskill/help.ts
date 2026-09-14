@@ -1,0 +1,158 @@
+import type { DiscoveredSkill } from '../../../skills/types.js';
+
+export function formatDiscoveryScope(): string {
+  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, **/.claude-plugin/marketplace.json skill collections anywhere in the VFS, and installed agent plugins (`plugin list`).\n';
+}
+
+export function formatSkillSource(source: DiscoveredSkill['source']): string {
+  switch (source) {
+    case 'native':
+      return 'native';
+    case 'agents':
+      return '.agents';
+    case 'claude':
+      return '.claude';
+    case 'marketplace':
+      return 'marketplace';
+    case 'plugin':
+      return 'plugin';
+  }
+}
+
+export function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
+  const nameWidth = Math.max(4, ...discovered.map((s) => s.name.length));
+  const sourceWidth = 11;
+
+  const descWidth = Math.max(20, 99 - 2 - nameWidth - 2 - sourceWidth - 1);
+
+  const header = 'NAME'.padEnd(nameWidth);
+  const divider = '─'.repeat(2 + nameWidth + 2 + sourceWidth + 1 + descWidth);
+
+  let output = `${heading}:\n\n`;
+  output += `  ${header}  SOURCE      DESCRIPTION\n`;
+  output += `${divider}\n`;
+
+  for (const skill of discovered) {
+    const raw = skill.description || '';
+    const description = raw.length > descWidth ? `${raw.slice(0, descWidth - 1)}…` : raw;
+    output += `  ${skill.name.padEnd(nameWidth)}  ${formatSkillSource(skill.source).padEnd(sourceWidth)} ${description}\n`;
+  }
+
+  output += `\n${formatDiscoveryScope()}`;
+  return output;
+}
+
+export function formatSkillInfo(skill: DiscoveredSkill): string {
+  let output = `Skill: ${skill.name}\n`;
+  output += `Description: ${skill.description || '(none)'}\n`;
+  output += `Source: ${formatSkillSource(skill.source)}\n`;
+  output += `Source root: ${skill.sourceRoot}\n`;
+
+  if (skill.skillFilePath) {
+    output += `Instructions: ${skill.skillFilePath}\n`;
+  }
+
+  if (skill.shadowedPaths?.length) {
+    output += 'Shadowed paths:\n';
+    for (const path of skill.shadowedPaths) {
+      output += `  - ${path}\n`;
+    }
+  }
+
+  return output;
+}
+
+export function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
+  return {
+    stdout: `usage: upskill <command> [options]
+
+Install skills from GitHub repositories, the Tessl registry, or browse.sh.
+
+Commands:
+  search <query>             Search registries for skills
+  list [--outdated] [--json]  List discoverable local skills
+  update [<skill>…]          Re-install skills from their recorded source
+  upgrade [<skill>…]         Alias for update
+  tabs [--json]              Suggest skills for open browser tabs
+  info <name>                Show details about a discoverable local skill
+  read <name>                Read the SKILL.md instructions
+  <owner/repo>               Install skill(s) from GitHub repository
+  tessl:<name>               Install skill from Tessl registry
+  browse:<hostname>/<task>   Install site-specific skill from browse.sh
+
+${formatDiscoveryScope()}
+GitHub Installation:
+  upskill owner/repo                     List available skills in repo
+  upskill owner/repo --skill name        Install specific skill
+  upskill owner/repo --all               Install all skills from repo
+  upskill owner/repo --path subdir       Restrict to subfolder
+  upskill owner/repo@branch              Install from a specific branch
+  upskill owner/repo --branch name       Same, using flag syntax
+
+Updating installed skills:
+  upskill list --outdated                Skills a bare update would change
+  upskill list --json                    Machine-readable discovered-skill list
+  upskill update                         Update every skill with provenance
+  upskill update mixtape                 Update just that skill
+  upskill update --dry-run               Report what would change, write nothing
+  upskill update mixtape --branch dev    Override the recorded ref
+  upskill update mixtape --from o/repo   Record a source for an unrecorded skill
+
+  Every install records its source in <skill>/.upskill (repo, ref, resolved
+  commit, last-updated timestamp, file list), so update needs no arguments.
+  When the recorded commit still matches the ref's head, update says "already
+  current" from one small API call instead of downloading the archive. Paths
+  are classified unchanged, updated, added, removed, or kept-local — the same
+  vocabulary the "upgrade" command uses for bundled workspace files.
+
+What upskill never touches:
+  - Dotfiles in a skill directory. Credentials (scripts/.config) and provenance
+    (.upskill) survive --force reinstalls and updates; upstream dotfiles are
+    written on first install only.
+  - Files no recorded install wrote. Your own NOTES.md is kept-local by both
+    --force and update; only files listed in .upskill can be removed.
+
+Recommendations:
+  upskill recommendations                Show skills matching your profile
+  upskill recommendations --install      Install all recommended skills
+
+Registry Search:
+  upskill search "pdf conversion"        Search registries
+  upskill tessl:postgres-pro             Install from Tessl (via GitHub)
+  upskill browse:weather.gov/get-forecast-1uezib
+                                         Install from browse.sh by slug
+  upskill https://browse.sh/skills/weather.gov/get-forecast-1uezib
+                                         Same, using the URL form
+
+Options:
+  --skill <name>           Install specific skill (repeatable)
+  --all                    Install all skills from source
+  --path <subfolder>       Only discover skills under this subfolder
+  --branch, -b <name>      Install from a specific branch (default: main)
+  --list                   List available skills without installing
+  --force                  Overwrite existing skills (keeps dotfiles)
+  --dry-run, -n            update only: report changes without writing
+  --from <owner>/<repo>    update only: record a source for an unrecorded skill
+  --outdated               list only: skills a bare update would change
+  --json                   list / update / tabs: machine-readable result
+  -h, --help               Show help
+
+GitHub rate limits:
+  On shared VPNs or corporate IPs, anonymous GitHub access may be rate-limited.
+  Configure a token to avoid shared-IP limits: git config github.token <PAT>
+
+Examples:
+  upskill search "browser automation"
+  upskill anthropics/skills --list
+  upskill anthropics/skills --skill pdf --skill xlsx
+  upskill adobe/skills --path skills/aem --all
+  upskill aemcoder/skills@fix/stateless-tab-targeting --all
+  upskill tessl:postgres-pro
+  upskill browse:weather.gov/get-forecast-1uezib
+  upskill list --outdated
+  upskill update --dry-run
+`,
+    stderr: '',
+    exitCode: 0,
+  };
+}

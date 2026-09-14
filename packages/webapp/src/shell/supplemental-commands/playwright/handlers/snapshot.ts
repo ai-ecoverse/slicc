@@ -1,0 +1,305 @@
+import { isExtensionRealm } from '../../../../base/runtime-env.js';
+import { ensureSessionDirs } from '../session-log.js';
+import { renderNode, takeSnapshot } from '../snapshot.js';
+import {
+  base64ToBytes,
+  filenameSafeTimestamp,
+  parsePageJson,
+  requireTab,
+  resolveFrame,
+} from '../state.js';
+import type { PlaywrightHandler, PlaywrightState, TabHandle, TabSnapshot } from '../types.js';
+
+type FrameInfo = Awaited<ReturnType<TabHandle['getFrameTree']>>[number];
+
+type ScreenshotClip = { x: number; y: number; width: number; height: number; scale?: number };
+
+function loadSnapshotFeatures(): Promise<typeof import('./snapshot-features.js')> {
+  return import('./snapshot-features.js');
+}
+
+async function takeFrameSnapshot(
+  page: TabHandle,
+  state: PlaywrightState,
+  targetId: string,
+  frame: FrameInfo
+): Promise<string> {
+  const tree = await page.getAccessibilityTreeForFrame(frame.frameId);
+  const refToSelector = new Map<string, string>();
+  const refToBackendNodeId = new Map<string, number>();
+  const refToFrameId = new Map<string, string>();
+  const lines = renderNode(tree, refToSelector, refToBackendNodeId, { value: 0 }, '', 'f1');
+  for (const ref of refToSelector.keys()) refToFrameId.set(ref, frame.frameId);
+
+  const output = lines.join('\n');
+  state.snapshots.set(targetId, {
+    url: frame.url,
+    title: frame.name,
+    refToSelector,
+    refToBackendNodeId,
+    refToFrameId,
+    content: output,
+    timestamp: Date.now(),
+  });
+  return output;
+}
+
+async function clipFromBackendNode(
+  page: TabHandle,
+  backendNodeId: number
+): Promise<ScreenshotClip | undefined> {
+  await page.send('DOM.enable');
+  await page.send('Runtime.enable');
+  const resolveResult = await page.send('DOM.resolveNode', { backendNodeId });
+  const obj = resolveResult['object'] as { objectId?: string } | undefined;
+  if (!obj?.objectId) return undefined;
+  const boxResult = await page.send('Runtime.callFunctionOn', {
+    objectId: obj.objectId,
+    functionDeclaration: `function() {
+        this.scrollIntoView({ block: 'center' });
+        const r = this.getBoundingClientRect();
+        return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
+      }`,
+    returnByValue: true,
+  });
+  return (boxResult['result'] as { value?: ScreenshotClip })?.value;
+}
+
+async function clipFromSelector(
+  page: TabHandle,
+  selector: string
+): Promise<ScreenshotClip | undefined> {
+  const rectJson = await page.evaluate(
+    `(function() {
+      const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
+    })()`
+  );
+  return rectJson ? parsePageJson<ScreenshotClip>(rectJson, 'element clip rect') : undefined;
+}
+
+async function resolveElementClip(
+  page: TabHandle,
+  snapshot: TabSnapshot,
+  ref: string
+): Promise<ScreenshotClip | undefined> {
+  const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+  if (backendNodeId) {
+    return clipFromBackendNode(page, backendNodeId);
+  }
+  const selector = snapshot.refToSelector.get(ref);
+  if (!selector) {
+    throw new Error(`Unknown ref "${ref}"`);
+  }
+  return clipFromSelector(page, selector);
+}
+
+export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags, onTab }) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const noIframes = flags['no-iframes'] === 'true';
+  const depthRaw = flags['depth'];
+
+  if (depthRaw !== undefined && !/^[1-9][0-9]*$/.test(depthRaw)) {
+    return {
+      stdout: '',
+      stderr: `snapshot: --depth must be a positive integer, got "${depthRaw}"\n`,
+      exitCode: 1,
+    };
+  }
+  const depth = depthRaw === undefined ? undefined : parseInt(depthRaw, 10);
+  const boxes = flags['boxes'] === 'true';
+  if (boxes && flags['frame']) {
+    return {
+      stdout: '',
+      stderr:
+        'snapshot: --boxes is not supported with --frame (child-frame rects live in another coordinate space)\n',
+      exitCode: 1,
+    };
+  }
+  let output = await onTab(tab.targetId, async (page) => {
+    const frame = await resolveFrame(page, flags);
+    if (frame) return takeFrameSnapshot(page, state, tab.targetId, frame);
+    const { snapshot, output: text } = await takeSnapshot(page, state, tab.targetId, {
+      noIframes,
+    });
+    if (!boxes) return text;
+    const { annotateBoxes } = await loadSnapshotFeatures();
+    return annotateBoxes(page, snapshot.refToBackendNodeId, text);
+  });
+  if (depth !== undefined) {
+    const { limitSnapshotDepth } = await loadSnapshotFeatures();
+    output = limitSnapshotDepth(output, depth);
+  }
+  if (flags['filename']) {
+    await fs.writeFile(flags['filename'], output);
+    return {
+      stdout: `Snapshot saved to ${flags['filename']}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  return { stdout: output + '\n', stderr: '', exitCode: 0 };
+};
+
+export const findHandler: PlaywrightHandler = async (ctx) => {
+  const { findHandlerImpl } = await loadSnapshotFeatures();
+  return findHandlerImpl(ctx);
+};
+
+export const framesHandler: PlaywrightHandler = async ({ browser, flags, onTab }) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const output = await onTab(tab.targetId, async (page) => {
+    const frames = await page.getFrameTree();
+    const lines = frames.map((f) => {
+      const type = f.parentFrameId ? 'child' : 'main';
+      const parent = f.parentFrameId ? ` parentFrameId=${f.parentFrameId}` : '';
+      return `  [${type}] frameId=${f.frameId}${parent} - ${f.url}`;
+    });
+    return `Frame IDs (use with --frame, never --tab):\n${lines.join('\n')}`;
+  });
+  return { stdout: output + '\n', stderr: '', exitCode: 0 };
+};
+
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratchDir, onTab }) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
+
+  const savePath =
+    flags['filename'] || `${scratchDir}/page-${filenameSafeTimestamp(new Date())}.pdf`;
+
+  try {
+    await onTab(tab.targetId, async ({ sessionId, transport }) => {
+      const result = await transport.send('Page.printToPDF', {}, sessionId);
+      const data = (result as { data: string }).data;
+      const bytes = base64ToBytes(data);
+      await fs.writeFile(savePath, bytes);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    const isExtension = isExtensionRealm();
+    if (isExtension) {
+      return {
+        stdout: '',
+        stderr: 'pdf: not available in extension mode — use screenshot --full-page\n',
+        exitCode: 1,
+      };
+    }
+    return { stdout: '', stderr: `pdf: ${msg}\n`, exitCode: 1 };
+  }
+
+  return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
+};
+
+async function resolveRefClipOrError(
+  page: TabHandle,
+  state: PlaywrightState,
+  targetId: string,
+  ref: string
+): Promise<{ clip: ScreenshotClip } | { error: string }> {
+  const snapshot = state.snapshots.get(targetId);
+  if (!snapshot) {
+    throw new Error('No snapshot available. Run "snapshot" first.');
+  }
+  const clip = await resolveElementClip(page, snapshot, ref);
+  if (!clip || clip.width <= 0 || clip.height <= 0) {
+    return {
+      error:
+        `could not resolve element ${ref} to a visible box — the snapshot is ` +
+        'likely stale (navigation, reload, or layout change). Re-run "snapshot" and retry ' +
+        'with a fresh ref, or omit the ref to capture the viewport deliberately.',
+    };
+  }
+  return { clip };
+}
+
+const SCREENSHOT_FORMATS = new Set(['png', 'jpeg', 'webp'] as const);
+type ScreenshotFormat = 'png' | 'jpeg' | 'webp';
+
+function screenshotFormat(flags: Record<string, string>): ScreenshotFormat {
+  const type = flags['type'];
+  if (type && SCREENSHOT_FORMATS.has(type as ScreenshotFormat)) return type as ScreenshotFormat;
+  const filename = flags['filename'] ?? '';
+  if (/\.jpe?g$/i.test(filename)) return 'jpeg';
+  if (/\.webp$/i.test(filename)) return 'webp';
+  return 'png';
+}
+
+export const screenshotHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+  scratchDir,
+  onTab,
+}) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  if (flags['type'] && !SCREENSHOT_FORMATS.has(flags['type'] as ScreenshotFormat)) {
+    return {
+      stdout: '',
+      stderr: `screenshot: --type must be png, jpeg, or webp, got "${flags['type']}"\n`,
+      exitCode: 1,
+    };
+  }
+
+  if (flags['max-width'] && screenshotFormat(flags) !== 'png') {
+    return {
+      stdout: '',
+      stderr:
+        'screenshot: --max-width requires png output (the downscale pass measures PNG headers); drop --type/--filename extension or --max-width\n',
+      exitCode: 1,
+    };
+  }
+  const output = await onTab(tab.targetId, async (page) => {
+    let clip: ScreenshotClip | undefined;
+    if (positional[0]?.startsWith('e')) {
+      const resolved = await resolveRefClipOrError(page, state, tab.targetId, positional[0]);
+      if ('error' in resolved) return resolved;
+      clip = resolved.clip;
+    }
+
+    const fullPage = flags['fullPage'] === 'true' || flags['full-page'] === 'true';
+    if (flags['hires'] === 'true') {
+      const { hiresClip } = await loadSnapshotFeatures();
+      clip = await hiresClip(page, clip, fullPage);
+    }
+
+    const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
+    const format = screenshotFormat(flags);
+    const base64 = await page.screenshot({
+      format,
+      fullPage,
+      ...(clip ? { clip } : {}),
+      ...(maxWidth ? { maxWidth } : {}),
+    });
+    const extension = format === 'jpeg' ? 'jpg' : format;
+    const savePath = flags['filename'] || `${scratchDir}/screenshot-${Date.now()}.${extension}`;
+    const bytes = base64ToBytes(base64);
+    await fs.writeFile(savePath, bytes);
+
+    try {
+      await ensureSessionDirs(fs, state);
+      const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.${extension}`;
+      await fs.writeFile(archivePath, bytes);
+    } catch {}
+    const sizeKB = Math.round(bytes.length / 1024);
+    return { message: `Screenshot saved to ${savePath} (${sizeKB} KB)` };
+  });
+  if ('error' in output) {
+    return { stdout: '', stderr: `screenshot: ${output.error}\n`, exitCode: 1 };
+  }
+  return { stdout: output.message + '\n', stderr: '', exitCode: 0 };
+};

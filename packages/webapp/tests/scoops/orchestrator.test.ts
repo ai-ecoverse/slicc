@@ -1,0 +1,3816 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { FsError } from '../../src/fs/index.js';
+import {
+  clearAllMessages,
+  getAllScoops,
+  getMessagesForScoop,
+  initDB,
+  saveScoop,
+} from '../../src/scoops/db.js';
+import type { OrchestratorCallbacks } from '../../src/scoops/orchestrator.js';
+import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
+import {
+  type ChannelMessage,
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+} from '../../src/scoops/types.js';
+
+const cone: RegisteredScoop = {
+  jid: 'cone_main_1',
+  name: 'Main',
+  folder: 'main',
+  parentJid: null,
+  requiresTrigger: false,
+  assistantLabel: 'sliccy',
+  addedAt: new Date().toISOString(),
+};
+
+const testScoop: RegisteredScoop = {
+  jid: 'scoop_test_1',
+  name: 'test',
+  folder: 'test-scoop',
+  trigger: '@test-scoop',
+  parentJid: 'cone_main_1',
+  requiresTrigger: true,
+  assistantLabel: 'test-scoop',
+  addedAt: new Date().toISOString(),
+};
+
+const otherScoop: RegisteredScoop = {
+  jid: 'scoop_other_1',
+  name: 'other',
+  folder: 'other-scoop',
+  trigger: '@other-scoop',
+  parentJid: 'cone_main_1',
+  requiresTrigger: true,
+  assistantLabel: 'other-scoop',
+  addedAt: new Date().toISOString(),
+};
+
+function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
+  return {
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    chatJid: cone.jid,
+    senderId: 'user',
+    senderName: 'User',
+    content: 'hello',
+    timestamp: new Date().toISOString(),
+    fromAssistant: false,
+    channel: 'web',
+    ...overrides,
+  };
+}
+
+function extractVfsPath(content: string): string {
+  const match = content.match(/^VFS path: (.+)$/m);
+  expect(match).not.toBeNull();
+  return match![1];
+}
+
+async function settleAndDisposeSharedFs(
+  sharedFs: ReturnType<Orchestrator['getSharedFS']>
+): Promise<void> {
+  if (!sharedFs) return;
+
+  await sharedFs.dispose();
+}
+
+describe('Orchestrator Message Routing (DB-level)', () => {
+  beforeAll(async () => {
+    await initDB();
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+    await saveScoop(otherScoop);
+  });
+
+  beforeEach(async () => {
+    await clearAllMessages();
+  });
+
+  describe('Message persistence', () => {
+    it('messages saved with correct chatJid are retrievable', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+      const msg = makeMessage({ chatJid: testScoop.jid, content: 'hello scoop' });
+      await saveMessage(msg);
+
+      const messages = await getMessagesForScoop(testScoop.jid);
+      expect(messages).toHaveLength(1);
+      expect(messages[0].content).toBe('hello scoop');
+    });
+
+    it('messages for different scoops are isolated', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+      await saveMessage(makeMessage({ chatJid: cone.jid, content: 'cone msg' }));
+      await saveMessage(makeMessage({ chatJid: testScoop.jid, content: 'scoop msg' }));
+
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
+      expect(coneMessages).toHaveLength(1);
+      expect(scoopMessages).toHaveLength(1);
+      expect(coneMessages[0].content).toBe('cone msg');
+      expect(scoopMessages[0].content).toBe('scoop msg');
+    });
+  });
+
+  describe('Delegation message routing', () => {
+    it('delegation message is saved with scoop chatJid', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+
+      const delegationMsg = makeMessage({
+        id: `delegate-${Date.now()}`,
+        chatJid: testScoop.jid,
+        senderId: 'cone',
+        senderName: 'sliccy',
+        content: 'Please download images from https://example.com',
+        fromAssistant: true,
+        channel: 'delegation',
+      });
+      await saveMessage(delegationMsg);
+
+      const messages = await getMessagesForScoop(testScoop.jid);
+      expect(messages).toHaveLength(1);
+      expect(messages[0].channel).toBe('delegation');
+      expect(messages[0].senderName).toBe('sliccy');
+    });
+
+    it('delegation message does not appear in cone messages', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+      const delegationMsg = makeMessage({
+        chatJid: testScoop.jid,
+        channel: 'delegation',
+      });
+      await saveMessage(delegationMsg);
+
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      expect(coneMessages).toHaveLength(0);
+    });
+  });
+
+  describe('Completion notification routing', () => {
+    it('scoop-notify message is saved with cone chatJid', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+
+      const notifyMsg = makeMessage({
+        id: `scoop-done-${testScoop.jid}-${Date.now()}`,
+        chatJid: cone.jid,
+        senderId: testScoop.folder,
+        senderName: testScoop.assistantLabel,
+        content:
+          `[@${testScoop.assistantLabel} completed]\n` +
+          `VFS path: /shared/scoop-notifications/test-scoop.md\n` +
+          `Total lines: 1\n` +
+          `Preview (up to 1000 chars):\nDownloaded 15 images`,
+        fromAssistant: false,
+        channel: 'scoop-notify',
+      });
+      await saveMessage(notifyMsg);
+
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      expect(coneMessages).toHaveLength(1);
+      expect(coneMessages[0].content).toContain('@test-scoop completed');
+      expect(coneMessages[0].channel).toBe('scoop-notify');
+    });
+
+    it('scoop-notify does not appear in scoop messages', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+      const notifyMsg = makeMessage({
+        chatJid: cone.jid,
+        channel: 'scoop-notify',
+        content:
+          '[@test-scoop completed]\n' +
+          'VFS path: /shared/scoop-notifications/test-scoop.md\n' +
+          'Total lines: 1\n' +
+          'Preview (up to 1000 chars):\ndone',
+      });
+      await saveMessage(notifyMsg);
+
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
+      expect(scoopMessages).toHaveLength(0);
+    });
+  });
+
+  describe('Message filtering (getMessagesSince)', () => {
+    it('excludes messages from specified sender', async () => {
+      const { saveMessage, getMessagesSince } = await import('../../src/scoops/db.js');
+      const ts = new Date(Date.now() - 5000).toISOString();
+
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'User',
+          content: 'user message',
+        })
+      );
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'test-scoop',
+          content: 'scoop own response',
+        })
+      );
+
+      const messages = await getMessagesSince(testScoop.jid, ts, 'test-scoop');
+      expect(messages).toHaveLength(1);
+      expect(messages[0].senderName).toBe('User');
+    });
+
+    it('does NOT exclude cone messages from scoop queue', async () => {
+      const { saveMessage, getMessagesSince } = await import('../../src/scoops/db.js');
+      const ts = new Date(Date.now() - 5000).toISOString();
+
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'sliccy',
+          content: 'cone delegation message',
+        })
+      );
+
+      const messages = await getMessagesSince(testScoop.jid, ts, 'test-scoop');
+      expect(messages).toHaveLength(1);
+      expect(messages[0].senderName).toBe('sliccy');
+    });
+  });
+
+  describe('Routing rules', () => {
+    it('user messages go to cone only (no @mention routing)', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+
+      const userMsg = makeMessage({
+        chatJid: cone.jid,
+        content: 'tell @test-scoop to download images',
+      });
+      await saveMessage(userMsg);
+
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
+      expect(coneMessages).toHaveLength(1);
+      expect(scoopMessages).toHaveLength(0);
+    });
+
+    it('fromAssistant messages are not @mention-routed', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+
+      const assistantMsg = makeMessage({
+        chatJid: cone.jid,
+        senderName: 'sliccy',
+        content: '@test-scoop please download images',
+        fromAssistant: true,
+      });
+      await saveMessage(assistantMsg);
+
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
+      expect(scoopMessages).toHaveLength(0);
+    });
+
+    it('scoop-notify messages are not @mention-routed (prevents loops)', async () => {
+      const { saveMessage } = await import('../../src/scoops/db.js');
+
+      const notifyMsg = makeMessage({
+        chatJid: cone.jid,
+        content:
+          '[@test-scoop completed]\n' +
+          'VFS path: /shared/scoop-notifications/test-scoop.md\n' +
+          'Total lines: 1\n' +
+          'Preview (up to 1000 chars):\nI finished downloading',
+        channel: 'scoop-notify',
+      });
+      await saveMessage(notifyMsg);
+
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
+      expect(scoopMessages).toHaveLength(0);
+    });
+  });
+
+  describe('Scoop role validation', () => {
+    it('cone has correct properties', () => {
+      expect(cone.parentJid).toBeNull();
+      expect(cone.requiresTrigger).toBe(false);
+      expect(cone.trigger).toBeUndefined();
+      expect(cone.assistantLabel).toBe('sliccy');
+    });
+
+    it('scoop has correct properties', () => {
+      expect(testScoop.parentJid).not.toBeNull();
+      expect(testScoop.requiresTrigger).toBe(true);
+      expect(testScoop.trigger).toBe('@test-scoop');
+      expect(testScoop.assistantLabel).toBe('test-scoop');
+    });
+
+    it('scoop trigger matches the expected format', () => {
+      expect(testScoop.trigger).toBe(`@${testScoop.folder}`);
+    });
+  });
+});
+
+describe('Orchestrator SessionStore integration', () => {
+  it('unregisterScoop deletes the session for that scoop JID', async () => {
+    const mockSessionStore = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      clearAll: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const jid = testScoop.jid;
+
+    await mockSessionStore.delete(jid);
+
+    expect(mockSessionStore.delete).toHaveBeenCalledWith(jid);
+  });
+
+  it('clearAllMessages clears all sessions', async () => {
+    const mockSessionStore = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      clearAll: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await clearAllMessages();
+    await mockSessionStore.clearAll();
+
+    expect(mockSessionStore.clearAll).toHaveBeenCalled();
+  });
+
+  it('session delete failure does not prevent scoop cleanup', async () => {
+    const mockSessionStore = {
+      delete: vi.fn().mockRejectedValue(new Error('DB locked')),
+    };
+
+    const deleteResult = mockSessionStore.delete(testScoop.jid).catch(() => {});
+
+    await expect(deleteResult).resolves.toBeUndefined();
+  });
+
+  it('session clearAll failure does not prevent message cleanup', async () => {
+    const mockSessionStore = {
+      clearAll: vi.fn().mockRejectedValue(new Error('DB locked')),
+    };
+
+    const clearResult = mockSessionStore.clearAll().catch(() => {});
+
+    await expect(clearResult).resolves.toBeUndefined();
+  });
+});
+
+describe('Scoop idle detection', () => {
+  beforeAll(async () => {
+    await initDB();
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+    await saveScoop(otherScoop);
+  });
+
+  beforeEach(async () => {
+    await clearAllMessages();
+  });
+
+  it('SCOOP_IDLE_TIMEOUT_MS is exported and equals 120000', () => {
+    expect(SCOOP_IDLE_TIMEOUT_MS).toBe(120000);
+  });
+
+  it('idle notification message has correct format', async () => {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+
+    const idleMsg = makeMessage({
+      id: `scoop-idle-${testScoop.jid}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: testScoop.folder,
+      senderName: testScoop.assistantLabel,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
+      fromAssistant: false,
+      channel: 'scoop-idle',
+    });
+    await saveMessage(idleMsg);
+
+    const coneMessages = await getMessagesForScoop(cone.jid);
+    expect(coneMessages).toHaveLength(1);
+    expect(coneMessages[0].channel).toBe('scoop-idle');
+    expect(coneMessages[0].senderId).toBe(testScoop.folder);
+    expect(coneMessages[0].senderName).toBe(testScoop.assistantLabel);
+    expect(coneMessages[0].content).toContain(`[@${testScoop.assistantLabel} idle]`);
+    expect(coneMessages[0].content).toBe(
+      `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`
+    );
+    expect(coneMessages[0].fromAssistant).toBe(false);
+  });
+
+  it('idle notification does not appear in scoop messages', async () => {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+
+    const idleMsg = makeMessage({
+      chatJid: cone.jid,
+      senderId: testScoop.folder,
+      senderName: testScoop.assistantLabel,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
+      fromAssistant: false,
+      channel: 'scoop-idle',
+    });
+    await saveMessage(idleMsg);
+
+    const scoopMessages = await getMessagesForScoop(testScoop.jid);
+    expect(scoopMessages).toHaveLength(0);
+  });
+});
+
+describe('Orchestrator session-restore compat for path config', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  async function initOrchestrator(): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+    return orch;
+  }
+
+  it('backfills the work-unit parent edge on restore and persists it (#1666)', async () => {
+    const legacyCone = {
+      jid: 'cone_legacy_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    } as unknown as RegisteredScoop;
+    const legacyScoop = {
+      jid: 'scoop_orphan_1',
+      name: 'orphan',
+      folder: 'orphan-scoop',
+      trigger: '@orphan-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'orphan-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    } as unknown as RegisteredScoop;
+    await saveScoop(legacyCone);
+    await saveScoop(legacyScoop);
+
+    const o = await initOrchestrator();
+    expect(o.getScoop('cone_legacy_1')?.parentJid).toBeNull();
+    expect(o.getScoop('scoop_orphan_1')?.parentJid).toBe('cone_legacy_1');
+
+    const persisted = await getAllScoops();
+    expect(persisted['cone_legacy_1'].parentJid).toBeNull();
+    expect(persisted['scoop_orphan_1'].parentJid).toBe('cone_legacy_1');
+
+    expect(o.getScoop('cone_legacy_1')).not.toHaveProperty('isCone');
+    expect(o.getScoop('cone_legacy_1')).not.toHaveProperty('type');
+    expect(o.getScoop('scoop_orphan_1')).not.toHaveProperty('isCone');
+
+    const units = o.getWorkUnits();
+    expect(units.roots().map((u) => u.descriptor.id)).toEqual(['cone_legacy_1']);
+    expect(units.getParent('scoop_orphan_1')?.descriptor.id).toBe('cone_legacy_1');
+    expect(units.getChildren('cone_legacy_1').map((u) => u.descriptor.id)).toEqual([
+      'scoop_orphan_1',
+    ]);
+  });
+
+  it('leaves an explicit parentJid alone on restore', async () => {
+    const cone: RegisteredScoop = {
+      jid: 'cone_a',
+      name: 'Cone',
+      folder: 'cone',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    const nested: RegisteredScoop = {
+      jid: 'scoop_nested_1',
+      name: 'nested',
+      folder: 'nested-scoop',
+      trigger: '@nested-scoop',
+      parentJid: 'scoop_parent_1',
+      requiresTrigger: true,
+      assistantLabel: 'nested-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(cone);
+    await saveScoop(nested);
+
+    const o = await initOrchestrator();
+    expect(o.getScoop('scoop_nested_1')?.parentJid).toBe('scoop_parent_1');
+  });
+
+  it('re-points a v2 scoop of an extra cone at its owner workspace', async () => {
+    const primary: RegisteredScoop = {
+      jid: 'cone_primary',
+      name: 'Cone',
+      folder: 'cone',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const extra: RegisteredScoop = {
+      ...primary,
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+      addedAt: '2026-01-02T00:00:00.000Z',
+    };
+    const v2 = (jid: string, folder: string, parentJid: string, visiblePaths: string[]) =>
+      ({
+        jid,
+        name: folder,
+        folder,
+        trigger: `@${folder}`,
+        isCone: false,
+        parentJid,
+        type: 'scoop',
+        requiresTrigger: true,
+        assistantLabel: folder,
+        addedAt: new Date().toISOString(),
+        config: { visiblePaths, writablePaths: [`/scoops/${folder}/`, '/shared/'] },
+        configSchemaVersion: 2,
+      }) as RegisteredScoop;
+
+    await saveScoop(primary);
+    await saveScoop(extra);
+    await saveScoop(v2('scoop_beta', 'beta-worker', extra.jid, ['/workspace/']));
+    await saveScoop(v2('scoop_primary', 'primary-worker', primary.jid, ['/workspace/']));
+
+    await saveScoop(v2('scoop_explicit', 'explicit-worker', extra.jid, ['/workspace/', '/mnt/']));
+
+    const o = await initOrchestrator();
+
+    expect(o.getScoop('scoop_beta')?.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+    expect(o.getScoop('scoop_primary')?.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(o.getScoop('scoop_explicit')?.config?.visiblePaths).toEqual(['/workspace/', '/mnt/']);
+  });
+
+  it('backfills both visiblePaths and writablePaths for truly-legacy non-cone scoops', async () => {
+    const legacy: RegisteredScoop = {
+      jid: 'scoop_legacy_1',
+      name: 'legacy',
+      folder: 'legacy-scoop',
+      trigger: '@legacy-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: true,
+      assistantLabel: 'legacy-scoop',
+      addedAt: new Date().toISOString(),
+    };
+    await saveScoop(legacy);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_legacy_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(restored?.config?.writablePaths).toEqual(['/scoops/legacy-scoop/', '/shared/']);
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('bumps a v1-schema record to v2 by filling writablePaths only', async () => {
+    const v1: RegisteredScoop = {
+      jid: 'scoop_v1_1',
+      name: 'v1',
+      folder: 'v1-scoop',
+      trigger: '@v1-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: true,
+      assistantLabel: 'v1-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: ['/custom/'] },
+      configSchemaVersion: 1,
+    };
+    await saveScoop(v1);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_v1_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/custom/']);
+    expect(restored?.config?.writablePaths).toEqual(['/scoops/v1-scoop/', '/shared/']);
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('preserves an explicitly-set writablePaths under the current schema', async () => {
+    const configured: RegisteredScoop = {
+      jid: 'scoop_configured_writable_1',
+      name: 'configured-writable',
+      folder: 'configured-writable-scoop',
+      trigger: '@configured-writable-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: true,
+      assistantLabel: 'configured-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: ['/custom-write/'] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(configured);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_configured_writable_1');
+    expect(restored?.config?.writablePaths).toEqual(['/custom-write/']);
+    expect(restored?.config?.visiblePaths).toEqual([]);
+  });
+
+  it('preserves an explicit undefined writablePaths on a current-schema record (no silent backfill)', async () => {
+    const strict: RegisteredScoop = {
+      jid: 'scoop_strict_writable_1',
+      name: 'strict-writable',
+      folder: 'strict-writable-scoop',
+      trigger: '@strict-writable-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: true,
+      assistantLabel: 'strict-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { modelId: 'claude-sonnet-4-6' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_strict_writable_1');
+    expect(restored?.config?.writablePaths).toBeUndefined();
+    expect(restored?.config?.visiblePaths).toBeUndefined();
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('preserves an explicit empty-array writablePaths across restart', async () => {
+    const strict: RegisteredScoop = {
+      jid: 'scoop_empty_writable_1',
+      name: 'empty-writable',
+      folder: 'empty-writable-scoop',
+      trigger: '@empty-writable-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: true,
+      assistantLabel: 'empty-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_empty_writable_1');
+    expect(restored?.config?.writablePaths).toEqual([]);
+  });
+
+  it('does not touch cone records (cones ignore path config)', async () => {
+    const legacyCone: RegisteredScoop = {
+      jid: 'cone_legacy_1',
+      name: 'Cone',
+      folder: 'cone',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    await saveScoop(legacyCone);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('cone_legacy_1');
+    expect(restored?.config?.visiblePaths).toBeUndefined();
+    expect(restored?.config?.writablePaths).toBeUndefined();
+
+    expect(restored?.configSchemaVersion).toBeUndefined();
+  });
+});
+
+describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  async function initOrchestrator(): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+    return orch;
+  }
+
+  interface OrchestratorPrivate {
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
+    handleMessage(msg: ChannelMessage): Promise<void>;
+  }
+
+  it('writes a scoop-notify to the cone when notifyOnComplete is unset (default)', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_notify_default_1',
+      name: 'notify-default',
+      folder: 'notify-default-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'notify-default-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    const responseText = 'all done\nwith details';
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    expect(captured[0].chatJid).toBe(cone.jid);
+    expect(captured[0].content).toContain('VFS path: /shared/scoop-notifications/');
+    expect(captured[0].content).toContain('Total lines: 2');
+    expect(captured[0].content).toContain(responseText);
+    expect(captured[0].senderId).toBe(notifyingScoop.folder);
+    const sharedFs = o.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(responseText);
+
+    expect(priv.completionService.scoopResponseBuffer.has(notifyingScoop.jid)).toBe(false);
+  });
+
+  it('falls back to an inline preview notification when artifact persistence fails', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_notify_fallback_1',
+      name: 'notify-fallback',
+      folder: 'notify-fallback-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'notify-fallback-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate & {
+      completionService: OrchestratorPrivate['completionService'] & {
+        writeScoopCompletionArtifact(scoop: RegisteredScoop, responseText: string): Promise<string>;
+      };
+    };
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+    priv.completionService.writeScoopCompletionArtifact = vi
+      .fn()
+      .mockRejectedValue(new Error('quota exceeded'));
+
+    const responseText = 'artifact fallback result\nsecond line';
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).toContain('VFS path: unavailable');
+    expect(captured[0].content).toContain('Artifact persistence error: quota exceeded');
+    expect(captured[0].content).toContain('Total lines: 2');
+    expect(captured[0].content).toContain(responseText);
+  });
+
+  it('suppresses the scoop-notify when notifyOnComplete is false', async () => {
+    const ephemeralScoop: RegisteredScoop = {
+      jid: 'scoop_ephemeral_1',
+      name: 'ephemeral',
+      folder: 'agent-ephemeral',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'agent-ephemeral',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      notifyOnComplete: false,
+    };
+    await saveScoop(ephemeralScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.completionService.scoopResponseBuffer.set(ephemeralScoop.jid, 'final ephemeral output');
+    await priv.completionService.notifyCompletion(ephemeralScoop.jid);
+
+    expect(captured).toHaveLength(0);
+
+    expect(priv.completionService.scoopResponseBuffer.has(ephemeralScoop.jid)).toBe(false);
+  });
+
+  it('clears the response buffer and skips notify when the scoop produced no output', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_noout_default_1',
+      name: 'noout',
+      folder: 'noout-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'noout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
+
+    expect(captured).toHaveLength(0);
+  });
+
+  it('emits the complete lifecycle beacon even when the scoop produced no output', async () => {
+    const { setScoopTelemetrySink } = await import('../../src/scoops/scoop-telemetry-hook.js');
+    const sink = vi.fn();
+    setScoopTelemetrySink(sink);
+
+    try {
+      const emptyScoop: RegisteredScoop = {
+        jid: 'scoop_empty_lifecycle_1',
+        name: 'empty-lifecycle',
+        folder: 'empty-lifecycle-scoop',
+        parentJid: 'cone_main_1',
+        requiresTrigger: false,
+        assistantLabel: 'empty-lifecycle-scoop',
+        addedAt: new Date().toISOString(),
+        configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      };
+      await saveScoop(emptyScoop);
+      const o = await initOrchestrator();
+      const priv = o as unknown as OrchestratorPrivate;
+      priv.handleMessage = async () => {};
+
+      sink.mockClear();
+
+      await priv.completionService.notifyCompletion(emptyScoop.jid);
+
+      const completeEmits = sink.mock.calls.filter((c) => c[0] === 'complete');
+      expect(completeEmits).toHaveLength(1);
+      expect(completeEmits[0][1]).toBe('empty-lifecycle-scoop');
+    } finally {
+      setScoopTelemetrySink(null);
+    }
+  });
+});
+
+describe('Orchestrator scoop-notify file artifacts', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorPrivate {
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
+    handleMessage(msg: ChannelMessage): Promise<void>;
+  }
+
+  it('writes the full response to VFS and sends only a 1000-char preview to the cone', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_truncate_test_1',
+      name: 'truncate-test',
+      folder: 'truncate-test-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'truncate-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    const preview = 'a'.repeat(1000);
+    const hiddenMarker = 'SECOND-LINE-HIDDEN-FROM-PREVIEW';
+    const longResponse = `${preview}\n${hiddenMarker}\nthird line`;
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, longResponse);
+    await priv.completionService.notifyCompletion(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    expect(captured[0].content).toContain(`[@${scoop.assistantLabel} completed]`);
+    expect(captured[0].content).toContain('VFS path: /shared/scoop-notifications/');
+    expect(captured[0].content).toContain('Total lines: 3');
+    expect(captured[0].content).toContain(preview);
+    expect(captured[0].content).not.toContain(hiddenMarker);
+
+    const sharedFs = orch.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(longResponse);
+  });
+
+  it('includes the full short response in the preview metadata', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_no_truncate_test_1',
+      name: 'no-truncate-test',
+      folder: 'no-truncate-test-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'no-truncate-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    const shortResponse = 'Short completion message\nwith two lines';
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, shortResponse);
+    await priv.completionService.notifyCompletion(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    expect(captured[0].content).toContain(`[@${scoop.assistantLabel} completed]`);
+    expect(captured[0].content).toContain('Total lines: 2');
+    expect(captured[0].content).toContain(shortResponse);
+
+    const sharedFs = orch.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(shortResponse);
+  });
+
+  it('counts trailing-newline output as a single line', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_trailing_newline_1',
+      name: 'trailing-newline',
+      folder: 'trailing-newline-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'trailing-newline-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'line one\n');
+    await priv.completionService.notifyCompletion(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).toContain('Total lines: 1');
+  });
+
+  it('prunes old scoop notification artifacts to keep the directory bounded', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_prune_test_1',
+      name: 'prune-test',
+      folder: 'prune-test-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'prune-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const sharedFs = orch.getSharedFS()!;
+    await sharedFs.mkdir('/shared/scoop-notifications', { recursive: true });
+    await sharedFs.writeFile('/shared/scoop-notifications/2026-01-01T00-00-00-000Z-a.md', 'a');
+    await sharedFs.writeFile('/shared/scoop-notifications/2026-01-01T00-00-01-000Z-b.md', 'b');
+    await sharedFs.writeFile('/shared/scoop-notifications/2026-01-01T00-00-02-000Z-c.md', 'c');
+
+    const priv = orch as unknown as OrchestratorPrivate & {
+      completionService: OrchestratorPrivate['completionService'] & {
+        pruneScoopCompletionArtifacts(maxArtifacts?: number): Promise<void>;
+      };
+    };
+    await priv.completionService.pruneScoopCompletionArtifacts(2);
+
+    const entries = await sharedFs.readDir('/shared/scoop-notifications');
+    const names = entries
+      .filter((entry) => entry.type === 'file')
+      .map((entry) => entry.name)
+      .sort();
+
+    expect(names).toEqual(['2026-01-01T00-00-01-000Z-b.md', '2026-01-01T00-00-02-000Z-c.md']);
+  });
+});
+
+describe('Orchestrator observer cleanup on scoop teardown', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorObserverInternals {
+    lifecycle: {
+      dispatchEvent(jid: string, event: 'onSendMessage', text: string): void;
+    };
+  }
+
+  const hasObservers = (o: Orchestrator, jid: string) =>
+    (o.getLiveUnit(jid)?.observerCount ?? 0) > 0;
+  const dispatch = (o: Orchestrator, jid: string, ev: 'onSendMessage', text: string) =>
+    (o as unknown as OrchestratorObserverInternals).lifecycle.dispatchEvent(jid, ev, text);
+
+  it('drops lingering observers when unregisterScoop runs', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_1',
+      name: 'observer-leak',
+      folder: 'observer-leak-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
+
+    await orch.unregisterScoop(scoop.jid);
+
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
+
+    dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('notifies onScoopUnregistered with the scoop snapshot on programmatic unregister', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_unreg_cb_1',
+      name: 'unreg-cb',
+      folder: 'unreg-cb-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'unreg-cb-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const onScoopUnregistered = vi.fn();
+    orch = new Orchestrator(container, { ...noopCallbacks(), onScoopUnregistered });
+    await orch.init();
+
+    await orch.unregisterScoop(scoop.jid);
+
+    expect(onScoopUnregistered).toHaveBeenCalledTimes(1);
+    expect(onScoopUnregistered.mock.calls[0][0]).toMatchObject({
+      jid: scoop.jid,
+      folder: scoop.folder,
+    });
+  });
+
+  it('drops observers when destroyScoopTab runs standalone (shutdown / reset paths)', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_2',
+      name: 'observer-leak-2',
+      folder: 'observer-leak-2-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-2-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
+
+    await orch.destroyScoopTab(scoop.jid);
+
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
+    dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('Orchestrator registerScoop init-failure rollback', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  it('logs destroyScoopTab rollback failure via log.warn and still surfaces the init error', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_init_rollback_1',
+      name: 'init-rollback',
+      folder: 'init-rollback-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'init-rollback-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const initErr = new Error('createScoopTab boom');
+    const destroyErr = new Error('destroyScoopTab boom');
+    const lifecycle = (
+      orch as unknown as { lifecycle: { createTab: unknown; destroyTab: unknown } }
+    ).lifecycle;
+    vi.spyOn(lifecycle as { createTab: () => Promise<void> }, 'createTab').mockRejectedValueOnce(
+      initErr
+    );
+    vi.spyOn(lifecycle as { destroyTab: () => void }, 'destroyTab').mockImplementationOnce(() => {
+      throw destroyErr;
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(orch.registerScoop(scoop)).rejects.toBe(initErr);
+
+      const rollbackCall = warnSpy.mock.calls.find(
+        (call) =>
+          typeof call[1] === 'string' &&
+          call[1].includes('Failed to destroy scoop runtime during init rollback')
+      );
+      expect(rollbackCall).toBeDefined();
+      expect(rollbackCall![2]).toMatchObject({
+        jid: scoop.jid,
+        name: scoop.name,
+        error: destroyErr.message,
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  interface OrchestratorPrivate {
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      mutedScoops: Set<string>;
+      pendingCompletions: Map<string, { responseText: string; timestamp: string }>;
+      completionWaiters: Map<string, Array<(s: string | null) => void>>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
+    handleMessage(msg: ChannelMessage): Promise<void>;
+    muteScoops(jids: readonly string[]): void;
+    unmuteScoops(
+      jids: readonly string[]
+    ): Promise<
+      Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+    >;
+  }
+
+  function noopCallbacksWith(
+    incomingCapture: (scoopJid: string, msg: ChannelMessage) => void
+  ): OrchestratorCallbacks {
+    return {
+      onResponse: vi.fn<OrchestratorCallbacks['onResponse']>(),
+      onResponseDone: vi.fn<OrchestratorCallbacks['onResponseDone']>(),
+      onSendMessage: vi.fn<OrchestratorCallbacks['onSendMessage']>(),
+      onStatusChange: vi.fn<OrchestratorCallbacks['onStatusChange']>(),
+      onError: vi.fn<OrchestratorCallbacks['onError']>(),
+      getBrowserAPI: vi.fn<OrchestratorCallbacks['getBrowserAPI']>(() => ({}) as any),
+      onIncomingMessage: incomingCapture,
+    };
+  }
+
+  it('fires onIncomingMessage with the scoop-notify so the UI renders a lick', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_incoming_1',
+      name: 'notify-vis',
+      folder: 'notify-vis-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'notify-vis-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: Array<{ scoopJid: string; msg: ChannelMessage }> = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((scoopJid, msg) => {
+        incoming.push({ scoopJid, msg });
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'scoop output');
+    await priv.completionService.notifyCompletion(scoop.jid);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].scoopJid).toBe(cone.jid);
+    expect(incoming[0].msg.channel).toBe('scoop-notify');
+    expect(incoming[0].msg.content).toContain('scoop output');
+  });
+
+  it('muteScoops stashes the completion and unmuteScoops returns it WITHOUT firing new events', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_mute_1',
+      name: 'mute-scoop',
+      folder: 'mute-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'mute-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'muted output');
+    await priv.completionService.notifyCompletion(scoop.jid);
+
+    expect(incoming).toHaveLength(0);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(true);
+
+    const consumed = await priv.unmuteScoops([scoop.jid]);
+
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0].jid).toBe(scoop.jid);
+    expect(consumed[0].summary).toBe('muted output');
+
+    expect(consumed[0].notificationPath).toMatch(/^\/shared\/scoop-notifications\/.+\.md$/);
+    expect(incoming).toHaveLength(0);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('unmuteScoops returns an empty list for scoops without stashed completions', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_unmute_noop_1',
+      name: 'unmute-noop',
+      folder: 'unmute-noop-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'unmute-noop-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    const consumed = await priv.unmuteScoops([scoop.jid]);
+    expect(consumed).toHaveLength(0);
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops resolves with captured summaries and does not ping the cone', async () => {
+    const a: RegisteredScoop = {
+      jid: 'scoop_wait_a',
+      name: 'wait-a',
+      folder: 'wait-a-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const b: RegisteredScoop = {
+      ...a,
+      jid: 'scoop_wait_b',
+      folder: 'wait-b-scoop',
+      assistantLabel: 'wait-b-scoop',
+    };
+    await saveScoop(a);
+    await saveScoop(b);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const waitPromise = orch.waitForScoops([a.jid, b.jid], 2000);
+
+    priv.completionService.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.completionService.notifyCompletion(a.jid);
+    priv.completionService.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.completionService.notifyCompletion(b.jid);
+
+    const results = await waitPromise;
+    expect(results).toHaveLength(2);
+    const mapped = new Map(results.map((r) => [r.jid, r]));
+    expect(mapped.get(a.jid)?.summary).toBe('result A');
+    expect(mapped.get(a.jid)?.timedOut).toBe(false);
+    expect(mapped.get(b.jid)?.summary).toBe('result B');
+    expect(mapped.get(b.jid)?.timedOut).toBe(false);
+
+    expect(incoming).toHaveLength(0);
+
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(a.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(b.jid)).toBe(false);
+  });
+
+  it('waitForScoops times out scoops that never complete', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_timeout_1',
+      name: 'wait-timeout',
+      folder: 'wait-timeout-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-timeout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const results = await orch.waitForScoops([scoop.jid], 20);
+    expect(results).toHaveLength(1);
+    expect(results[0].timedOut).toBe(true);
+    expect(results[0].summary).toBeNull();
+
+    expect(priv.completionService.completionWaiters.has(scoop.jid)).toBe(false);
+
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops consumes an already-pending completion without pinging the cone', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_prepend_1',
+      name: 'wait-prepend',
+      folder: 'wait-prepend-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-prepend-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'stashed output');
+    await priv.completionService.notifyCompletion(scoop.jid);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(true);
+
+    const results = await orch.waitForScoops([scoop.jid], 50);
+    expect(results[0].summary).toBe('stashed output');
+    expect(results[0].timedOut).toBe(false);
+    expect(incoming).toHaveLength(0);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops dedupes duplicate jids so a single completion resolves all entries', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_dedup_1',
+      name: 'wait-dedup',
+      folder: 'wait-dedup-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-dedup-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const waitPromise = orch.waitForScoops([scoop.jid, scoop.jid]);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'dedup output');
+    await priv.completionService.notifyCompletion(scoop.jid);
+    const results = await waitPromise;
+
+    expect(results).toHaveLength(2);
+    expect(results[0].summary).toBe('dedup output');
+    expect(results[1].summary).toBe('dedup output');
+    expect(priv.completionService.completionWaiters.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops treats timeout 0 as immediate (does not hang)', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_zero_1',
+      name: 'wait-zero',
+      folder: 'wait-zero-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-zero-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const started = Date.now();
+    const results = await orch.waitForScoops([scoop.jid], 0);
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(500);
+    expect(results[0].timedOut).toBe(true);
+    expect(results[0].summary).toBeNull();
+  });
+
+  it('shutdown drains pending scoop_wait waiters so in-flight calls resolve', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_shutdown_1',
+      name: 'wait-shutdown',
+      folder: 'wait-shutdown-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'wait-shutdown-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const localOrch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await localOrch.init();
+
+    const priv = localOrch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    const sharedFs = localOrch.getSharedFS();
+    const waitPromise = localOrch.waitForScoops([scoop.jid]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(priv.completionService.completionWaiters.size).toBeGreaterThan(0);
+
+    await localOrch.shutdown();
+    await sharedFs?.dispose();
+
+    const results = await waitPromise;
+    expect(results[0].summary).toBeNull();
+    expect(results[0].timedOut).toBe(true);
+    expect(priv.completionService.completionWaiters.size).toBe(0);
+    expect(priv.completionService.mutedScoops.size).toBe(0);
+    expect(priv.completionService.pendingCompletions.size).toBe(0);
+
+    orch = undefined as unknown as Orchestrator;
+  });
+
+  it('scheduleScoopWait returns synchronously, mutes targets, and fires a scoop-wait lick on completion', async () => {
+    const a: RegisteredScoop = {
+      jid: 'scoop_sched_a',
+      name: 'sched-a',
+      folder: 'sched-a-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'sched-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const b: RegisteredScoop = {
+      ...a,
+      jid: 'scoop_sched_b',
+      folder: 'sched-b-scoop',
+      assistantLabel: 'sched-b-scoop',
+    };
+    await saveScoop(a);
+    await saveScoop(b);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const start = Date.now();
+    const ack = orch.scheduleScoopWait([a.jid, b.jid], 2000);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(500);
+    expect(ack.scheduled).toEqual([a.jid, b.jid]);
+    expect(ack.unknown).toEqual([]);
+
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(true);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(true);
+
+    priv.completionService.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.completionService.notifyCompletion(a.jid);
+    priv.completionService.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.completionService.notifyCompletion(b.jid);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+    expect(lick.content).toContain('[scoop_wait completed]');
+    expect(lick.content).toContain('2 completed, 0 timed out');
+    expect(lick.content).toContain('--- sched-a-scoop ---');
+    expect(lick.content).toContain('result A');
+    expect(lick.content).toContain('--- sched-b-scoop ---');
+    expect(lick.content).toContain('result B');
+
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(false);
+  });
+
+  it('scheduleScoopWait fires a scoop-wait lick when the timeout elapses', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_timeout_1',
+      name: 'sched-timeout',
+      folder: 'sched-timeout-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'sched-timeout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    orch.scheduleScoopWait([scoop.jid], 30);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+    expect(lick.content).toContain('0 completed, 1 timed out');
+    expect(lick.content).toContain('--- sched-timeout-scoop (timed out) ---');
+  });
+
+  it('scheduleScoopWait reports unknown jids in the sync ack and skips them in the lick', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_partial_1',
+      name: 'sched-partial',
+      folder: 'sched-partial-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'sched-partial-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const ack = orch.scheduleScoopWait([scoop.jid, 'scoop_unknown_42'], 10);
+    expect(ack.scheduled).toEqual([scoop.jid]);
+    expect(ack.unknown).toEqual(['scoop_unknown_42']);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+
+    expect(lick.content).not.toContain('scoop_unknown_42');
+    expect(lick.content).toContain('--- sched-partial-scoop (timed out) ---');
+    expect(lick.content).toContain('0 completed, 1 timed out');
+  });
+
+  it('scheduleScoopWait collapses duplicate jids into a single lick row', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_dedup_1',
+      name: 'sched-dedup',
+      folder: 'sched-dedup-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'sched-dedup-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const ack = orch.scheduleScoopWait([scoop.jid, scoop.jid], 30);
+    expect(ack.scheduled).toEqual([scoop.jid]);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+
+    const rowCount = (lick.content.match(/--- sched-dedup-scoop /g) ?? []).length;
+    expect(rowCount).toBe(1);
+    expect(lick.content).toContain('0 completed, 1 timed out');
+  });
+
+  it('scheduleScoopWait stamps unique message IDs for back-to-back schedules', async () => {
+    const scoopA: RegisteredScoop = {
+      jid: 'scoop_sched_id_a',
+      name: 'sched-id-a',
+      folder: 'sched-id-a-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'sched-id-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const scoopB: RegisteredScoop = {
+      ...scoopA,
+      jid: 'scoop_sched_id_b',
+      folder: 'sched-id-b-scoop',
+      assistantLabel: 'sched-id-b-scoop',
+    };
+    await saveScoop(scoopA);
+    await saveScoop(scoopB);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    orch.scheduleScoopWait([scoopA.jid], 0);
+    orch.scheduleScoopWait([scoopB.jid], 0);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(incoming).toHaveLength(2);
+    expect(incoming[0].id).not.toBe(incoming[1].id);
+    expect(incoming[0].id.startsWith('scoop-wait-')).toBe(true);
+    expect(incoming[1].id.startsWith('scoop-wait-')).toBe(true);
+  });
+});
+
+describe('Orchestrator handleMessage external-lick visibility', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  async function makeOrch(
+    capture: (scoopJid: string, msg: ChannelMessage) => void
+  ): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const o = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+      onIncomingMessage: capture,
+    });
+    await o.init();
+    return o;
+  }
+
+  it('fires onIncomingMessage exactly once for a navigate lick routed via handleMessage', async () => {
+    const incoming: Array<{ jid: string; msg: ChannelMessage }> = [];
+    orch = await makeOrch((jid, msg) => incoming.push({ jid, msg }));
+
+    const navigateMsg: ChannelMessage = {
+      id: 'navigate-test-1',
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:https://example.com/',
+      content: '[Navigate Event: https://example.com/]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+    };
+
+    await orch.handleMessage(navigateMsg);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].jid).toBe(cone.jid);
+    expect(incoming[0].msg.channel).toBe('navigate');
+    expect(incoming[0].msg.id).toBe('navigate-test-1');
+  });
+
+  it('fires onIncomingMessage exactly once for a webhook lick routed via handleMessage', async () => {
+    const incoming: Array<{ jid: string; msg: ChannelMessage }> = [];
+    orch = await makeOrch((jid, msg) => incoming.push({ jid, msg }));
+
+    const webhookMsg: ChannelMessage = {
+      id: 'webhook-test-1',
+      chatJid: cone.jid,
+      senderId: 'webhook',
+      senderName: 'webhook:demo',
+      content: '[Webhook Event: demo]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'webhook',
+    };
+
+    await orch.handleMessage(webhookMsg);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].msg.channel).toBe('webhook');
+  });
+
+  it.each([['cron'], ['sprinkle'], ['fswatch'], ['session-reload'], ['upgrade']] as const)(
+    'fires onIncomingMessage once for %s channel',
+    async (channel) => {
+      const incoming: ChannelMessage[] = [];
+      orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+      const msg: ChannelMessage = {
+        id: `${channel}-test-1`,
+        chatJid: cone.jid,
+        senderId: channel,
+        senderName: `${channel}:demo`,
+        content: `[${channel}]`,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: channel as ChannelMessage['channel'],
+      };
+
+      await orch.handleMessage(msg);
+
+      expect(incoming).toHaveLength(1);
+      expect(incoming[0].channel).toBe(channel);
+    }
+  );
+
+  it('does NOT fire onIncomingMessage from inside handleMessage for scoop-notify (avoids double-fire with upstream)', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+    const notifyMsg: ChannelMessage = {
+      id: 'scoop-notify-test-1',
+      chatJid: cone.jid,
+      senderId: 'some-scoop',
+      senderName: 'some-scoop',
+      content: '[@some-scoop completed]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-notify',
+    };
+
+    await orch.handleMessage(notifyMsg);
+
+    expect(incoming).toHaveLength(0);
+  });
+
+  it('does NOT fire onIncomingMessage from inside handleMessage for scoop-idle / scoop-wait / scoop-error / delegation / web', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+    for (const channel of [
+      'scoop-idle',
+      'scoop-wait',
+      'scoop-error',
+      'delegation',
+      'web',
+    ] as const) {
+      await orch.handleMessage({
+        id: `${channel}-test`,
+        chatJid: cone.jid,
+        senderId: 'x',
+        senderName: 'x',
+        content: 'noop',
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: channel as ChannelMessage['channel'],
+      });
+    }
+
+    expect(incoming).toHaveLength(0);
+  });
+
+  it('catches handler exceptions so message routing is not broken', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => {
+      incoming.push(msg);
+      throw new Error('handler boom');
+    });
+
+    const navigateMsg: ChannelMessage = {
+      id: 'navigate-throws',
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:demo',
+      content: 'boom',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+    };
+
+    await expect(orch.handleMessage(navigateMsg)).resolves.toBeUndefined();
+    expect(incoming).toHaveLength(1);
+  });
+});
+
+describe('Orchestrator legacy cone-memory migration', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface MigrationPrivate {
+    memoryStore: { migrateLegacyConeMemory(): Promise<void> };
+  }
+
+  async function readUtf8(fs: NonNullable<ReturnType<Orchestrator['getSharedFS']>>, path: string) {
+    const raw = await fs.readFile(path, { encoding: 'utf-8' });
+    return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  }
+
+  it('lifts legacy ## Auto-extracted blocks from /shared/CLAUDE.md into /workspace/CLAUDE.md while leaving the bundled default intact', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const bundledDefault = await readUtf8(fs, '/shared/CLAUDE.md');
+
+    const polluted =
+      bundledDefault + '\n## Auto-extracted (2024-01-01, compaction)\n\n- legacy bullet\n';
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2024-01-01, compaction)');
+    expect(coneMemory).toContain('legacy bullet');
+
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toBe(bundledDefault);
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+  });
+
+  it('preserves user-authored header and footer around the lifted auto-block', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const header = ['# User Notes', '', 'Header paragraph the user wrote.', ''].join('\n');
+    const autoBlock = [
+      '## Auto-extracted (2024-01-01, compaction)',
+      '',
+      '- legacy bullet',
+      '',
+    ].join('\n');
+    const footer = ['## User Footer', '', 'Footer paragraph the user wrote.', ''].join('\n');
+    const polluted = header + autoBlock + footer;
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2024-01-01, compaction)');
+    expect(coneMemory).toContain('legacy bullet');
+
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toBe(header + footer);
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+    expect(sharedAfter).toContain('# User Notes');
+    expect(sharedAfter).toContain('Header paragraph the user wrote.');
+    expect(sharedAfter).toContain('## User Footer');
+    expect(sharedAfter).toContain('Footer paragraph the user wrote.');
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+  });
+
+  it('terminates the auto-block at a top-level `# ` heading footer (not just `## `)', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const polluted = [
+      '# User header',
+      '',
+      'Initial user notes.',
+      '',
+      '## Auto-extracted (2026-01-01, compaction)',
+      '- bullet 1',
+      '- bullet 2',
+      '',
+      '# Hand-written footer',
+      '',
+      'User footer content.',
+      '',
+    ].join('\n');
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2026-01-01, compaction)');
+    expect(coneMemory).toContain('- bullet 1');
+    expect(coneMemory).toContain('- bullet 2');
+
+    expect(coneMemory).not.toContain('# Hand-written footer');
+    expect(coneMemory).not.toContain('User footer content.');
+
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toContain('# User header');
+    expect(sharedAfter).toContain('Initial user notes.');
+    expect(sharedAfter).toContain('# Hand-written footer');
+    expect(sharedAfter).toContain('User footer content.');
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+    expect(sharedAfter).not.toContain('bullet 1');
+  });
+
+  it('treats a `### Subheading` inside an auto-block as part of the block', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const polluted = [
+      '## Auto-extracted (2026-01-01, compaction)',
+      '- bullet a',
+      '',
+      '### Subheading inside the auto block',
+      '- bullet b',
+      '',
+      '# Real footer',
+      '',
+      'Footer text.',
+      '',
+    ].join('\n');
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2026-01-01, compaction)');
+    expect(coneMemory).toContain('- bullet a');
+    expect(coneMemory).toContain('### Subheading inside the auto block');
+    expect(coneMemory).toContain('- bullet b');
+
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toContain('# Real footer');
+    expect(sharedAfter).toContain('Footer text.');
+    expect(sharedAfter).not.toContain('bullet a');
+    expect(sharedAfter).not.toContain('bullet b');
+    expect(sharedAfter).not.toContain('### Subheading');
+  });
+
+  it('is a no-op (just drops the sentinel) when /shared/CLAUDE.md has no Auto-extracted blocks', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+
+  it('is idempotent — second call short-circuits on the sentinel', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const polluted = '## Auto-extracted (2024-09-09, compaction)\n\n- should not move\n';
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
+
+    expect(await readUtf8(fs, '/shared/CLAUDE.md')).toBe(polluted);
+
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+
+  it('appends to the cone memory file named by meta.memoryPath, creating its directory', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await orch.appendConeMemory('- beta learned something', {
+      source: 'compaction',
+      memoryPath: '/cones/cone-beta/CLAUDE.md',
+    });
+
+    const betaMemory = await readUtf8(fs, '/cones/cone-beta/CLAUDE.md');
+    expect(betaMemory).toContain('- beta learned something');
+    expect(betaMemory).toMatch(/## Auto-extracted \(\d{4}-\d{2}-\d{2}, compaction\)/);
+
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+
+    await orch.appendConeMemory('- primary learned something', { source: 'new-session' });
+    expect(await readUtf8(fs, '/workspace/CLAUDE.md')).toContain('- primary learned something');
+    expect(await readUtf8(fs, '/cones/cone-beta/CLAUDE.md')).not.toContain(
+      '- primary learned something'
+    );
+  });
+
+  it('does not clobber /workspace/CLAUDE.md (or drop the sentinel) on a non-ENOENT read fault', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const durable = '# My cone notes\n\nImportant stuff I wrote.\n';
+    await fs.writeFile('/workspace/CLAUDE.md', durable);
+
+    await fs.writeFile(
+      '/shared/CLAUDE.md',
+      '## Auto-extracted (2024-01-01, compaction)\n\n- legacy bullet\n'
+    );
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+
+    const realReadFile = fs.readFile.bind(fs);
+    const readSpy = vi
+      .spyOn(fs, 'readFile')
+      .mockImplementation((path: string, ...rest: unknown[]) => {
+        if (path === '/workspace/CLAUDE.md') {
+          throw new FsError('EIO', 'transient VFS fault', path);
+        }
+        return (realReadFile as (...args: unknown[]) => unknown)(path, ...rest) as ReturnType<
+          typeof fs.readFile
+        >;
+      });
+
+    await expect(
+      (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory()
+    ).rejects.toBeInstanceOf(FsError);
+
+    readSpy.mockRestore();
+
+    expect(await readUtf8(fs, '/workspace/CLAUDE.md')).toBe(durable);
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).rejects.toBeDefined();
+  });
+});
+
+describe('Orchestrator.handleCherryHostEvent', () => {
+  function makeOrch(): Orchestrator {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  it('emits a cherry lick with the host event name, runtime id, and detail', () => {
+    const orch = makeOrch();
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+
+    orch.handleCherryHostEvent('follower-b1', 'cart.updated', { items: 3 });
+
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    const evt = emitEvent.mock.calls[0][0];
+    expect(evt.type).toBe('cherry');
+    expect(evt.cherryName).toBe('cart.updated');
+    expect(evt.cherryRuntimeId).toBe('follower-b1');
+    expect(evt.cherryOrigin).toBeUndefined();
+    expect(evt.body).toEqual({ items: 3 });
+    expect(typeof evt.timestamp).toBe('string');
+  });
+
+  it('does not throw when no lick manager is set', () => {
+    const orch = makeOrch();
+    expect(() => orch.handleCherryHostEvent('rt', 'evt')).not.toThrow();
+  });
+});
+
+describe('Orchestrator.resolveSudoRequestAndPersist', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorPrivateSudo {
+    approvalRouter: {
+      registry: {
+        register: (scoopJid: string, request: any) => { id: string; pending: any };
+        list: () => Array<{ id: string }>;
+      };
+    };
+    lifecycle: {
+      getContext: (jid: string) => {
+        getFS: () => import('../../src/fs/restricted-fs.js').RestrictedFS;
+      };
+    };
+  }
+
+  it('persists read+always and widens the live and restored scoop ACL to the approved glob', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const sharedFs = orch.getSharedFS();
+    if (!sharedFs) throw new Error('Expected initialized shared filesystem');
+    await sharedFs.mkdir('/recordings', { recursive: true });
+    await sharedFs.writeFile('/recordings/first.har', 'approved capture');
+    await sharedFs.writeFile('/recordings/notes.txt', 'not approved');
+    const scoopFs = priv.lifecycle.getContext(testScoop.jid).getFS();
+    await expect(scoopFs.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
+
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
+      kind: 'read',
+      detail: '/recordings/first.har',
+    });
+
+    const result = await orch.resolveSudoRequestAndPersist(id, {
+      decision: 'always',
+      pattern: '/recordings/*.har',
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(true);
+    expect(result.persistedPattern).toBe('/recordings/*.har');
+    expect(result.persistError).toBeUndefined();
+    expect(result.kind).toBe('read');
+    expect(result.scoopFolder).toBe(testScoop.folder);
+    expect(await scoopFs.readTextFile('/recordings/first.har')).toBe('approved capture');
+    await expect(scoopFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
+
+    const sudoers = (await sharedFs.readFile('/scoops/test-scoop/etc/sudoers', {
+      encoding: 'utf-8',
+    })) as string;
+    expect(sudoers).toContain('NOPASSWD Read /recordings/*.har');
+
+    await orch.destroyScoopTab(testScoop.jid);
+    await orch.createScoopTab(testScoop.jid);
+    const restoredFs = priv.lifecycle.getContext(testScoop.jid).getFS();
+    expect(await restoredFs.readTextFile('/recordings/first.har')).toBe('approved capture');
+    await expect(restoredFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
+
+    await sharedFs.writeFile('/scoops/test-scoop/etc/sudoers', '# grant revoked\n');
+    await vi.waitFor(async () => {
+      expect(await restoredFs.exists('/recordings/first.har')).toBe(false);
+    });
+    await expect(restoredFs.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
+  });
+
+  it('still persists write+always', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
+    });
+
+    const result = await orch.resolveSudoRequestAndPersist(id, {
+      decision: 'always',
+      pattern: '/workspace/build/**',
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(true);
+    expect(result.persistedPattern).toBe('/workspace/build/**');
+    expect(result.persistError).toBeUndefined();
+    expect(result.kind).toBe('write');
+  });
+
+  it('does not persist read+allow (one-off allow is not a grant)', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivateSudo;
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
+      kind: 'read',
+      detail: '/shared/secrets/api.key',
+    });
+
+    const result = await orch.resolveSudoRequestAndPersist(id, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.persisted).toBe(false);
+    expect(result.persistError).toBeUndefined();
+  });
+});
+
+describe('Orchestrator.enqueueSudoRequest lick emission', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  it('emits one sudo-request lick and one cone delivery (no double-fire)', async () => {
+    const onIncoming = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: onIncoming,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
+      suggestedPattern: '/workspace/build/**',
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    const lick = emitEvent.mock.calls[0][0];
+    expect(lick.type).toBe('sudo-request');
+    expect(typeof lick.lickId).toBe('string');
+    expect(lick.lickId.length).toBeGreaterThan(0);
+    expect(lick.sudoKind).toBe('write');
+    expect(lick.sudoDetail).toBe('/workspace/build/output.txt');
+    expect(lick.sudoSuggestedPattern).toBe('/workspace/build/**');
+    expect(typeof lick.sudoScoopName).toBe('string');
+
+    const coneFires = onIncoming.mock.calls.filter(
+      ([jid, msg]) => jid === cone.jid && msg?.channel === 'sudo-request'
+    );
+    expect(coneFires).toHaveLength(1);
+    expect(coneFires[0][1].content).toContain('Lick ID:');
+    expect(coneFires[0][1].content).toContain('lick_confirm');
+
+    orch.resolveSudoRequest(lick.lickId, { decision: 'deny' });
+    await pendingDecision;
+  });
+
+  it('skips the cone when the scoop policy already grants the subject (issue #2853)', async () => {
+    const onIncoming = vi.fn();
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: onIncoming,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const emitEvent = vi.fn();
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+
+    await expect(
+      orch.enqueueSudoRequest(testScoop.jid, { kind: 'command', detail: 'git status' })
+    ).resolves.toEqual({ decision: 'allow' });
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(onIncoming).not.toHaveBeenCalled();
+    expect(orch.listPendingSudoRequests()).toHaveLength(0);
+  });
+
+  it.each([
+    ['allow', 'confirmed'],
+    ['always', 'confirmed'],
+    ['deny', 'dismissed'],
+  ] as const)(
+    'resolveSudoRequestAndPersist (%s) flips the stored lick message + fires onMessageUpdate (%s)',
+    async (decision, expectedState) => {
+      const onMessageUpdate = vi.fn();
+      const container =
+        typeof document !== 'undefined'
+          ? document.createElement('div')
+          : ({ appendChild: () => {} } as unknown as HTMLElement);
+      orch = new Orchestrator(container, {
+        onResponse: vi.fn(),
+        onResponseDone: vi.fn(),
+        onSendMessage: vi.fn(),
+        onStatusChange: vi.fn(),
+        onError: vi.fn(),
+        onIncomingMessage: vi.fn(),
+        onMessageUpdate,
+        getBrowserAPI: vi.fn(() => ({}) as any),
+      });
+      await orch.init();
+
+      const emitEvent = vi.fn();
+      orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+
+      const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+        kind: 'write',
+        detail: '/workspace/build/output.txt',
+        suggestedPattern: '/workspace/build/**',
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const lickId = emitEvent.mock.calls[0][0].lickId as string;
+
+      const { getMessagesForScoop } = await import('../../src/scoops/db.js');
+      const before = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+      expect(before).toBeDefined();
+      expect(before?.lickState).toBe('pending');
+
+      const result = await orch.resolveSudoRequestAndPersist(lickId, { decision });
+      expect(result.settled).toBe(true);
+
+      expect(onMessageUpdate).toHaveBeenCalledTimes(1);
+      expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+        messageId: `sudo-request-${lickId}`,
+        lickId,
+        lickState: expectedState,
+      });
+
+      const after = await getMessagesForScoop(cone.jid);
+      const flipped = after.filter((m) => m.lickId === lickId);
+      expect(flipped).toHaveLength(1);
+      expect(flipped[0].lickState).toBe(expectedState);
+
+      await pendingDecision;
+    }
+  );
+
+  it('does not throw when no lick manager is registered', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+
+    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+      kind: 'write',
+      detail: '/workspace/build/output.txt',
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    orch.resolveSudoRequest(orch.listPendingSudoRequests()[0]?.id ?? '', {
+      decision: 'deny',
+    });
+    await expect(pendingDecision).resolves.toBeDefined();
+  });
+});
+
+describe('Orchestrator navigate-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const o = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    return o;
+  }
+
+  async function saveNavigateMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `navigate-https://x-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:https://origin',
+      content: '[Navigate Event: https://origin]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+      lickId,
+    });
+  }
+
+  it('upskill lick_confirm runs upskill (with branch/path) and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'upskill',
+        target: 'https://github.com/o/r',
+        branch: 'main',
+        path: 'skills/foo',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'Installed skill "foo"\n', stderr: '', exitCode: 0 });
+    const coneCtx = orch.getScoopContext(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toBe(
+      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r'"
+    );
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Installed skill');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('upskill lick_dismiss drops the install and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: { url: 'https://origin', verb: 'upskill', target: 'https://github.com/o/r' },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const executeCommand = vi.fn();
+    const coneCtx = orch.getScoopContext(cone.jid);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `navigate-https://x-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('handoff licks are NOT agent-resolvable via lick_confirm (human gate preserved)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerNavigateLick({
+      type: 'navigate',
+      timestamp: new Date().toISOString(),
+      body: {
+        url: 'https://origin',
+        verb: 'handoff',
+        target: 'https://origin',
+        instruction: 'do x',
+      },
+    } as any);
+    await saveNavigateMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+  });
+
+  it.each([
+    [true, 'confirmed'],
+    [false, 'dismissed'],
+  ] as const)(
+    'handoff card flips when the human resolves the dip (accepted=%s → %s)',
+    async (accepted, expectedState) => {
+      const onMessageUpdate = vi.fn();
+      orch = makeOrch(onMessageUpdate);
+      await orch.init();
+
+      const lickId = orch.registerNavigateLick({
+        type: 'navigate',
+        timestamp: new Date().toISOString(),
+        body: { url: 'https://origin', verb: 'handoff', target: 'https://origin' },
+      } as any);
+      await saveNavigateMessage(lickId);
+
+      const ok = await orch.resolveNavigateHandoffByHuman(lickId, accepted);
+      expect(ok).toBe(true);
+      expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+        messageId: `navigate-https://x-${lickId}`,
+        lickId,
+        lickState: expectedState,
+      });
+      const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+      expect(after?.lickState).toBe(expectedState);
+
+      expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
+    }
+  );
+});
+
+describe('Orchestrator session-reload-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  async function saveSessionReloadMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `session-reload-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'session-reload',
+      senderName: 'session-reload:reload',
+      content: '[Session Reload]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'session-reload',
+      lickId,
+    });
+  }
+
+  function spyConeShell(executeCommand = vi.fn()) {
+    const coneCtx = orch.getScoopContext(cone.jid);
+    expect(coneCtx).toBeDefined();
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
+    return executeCommand;
+  }
+
+  it('mount-recovery lick_confirm re-runs the mount commands and flips the card to confirmed', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [
+          { kind: 'local', path: '/mnt/proj', dirName: 'proj' },
+          { kind: 's3', path: '/mnt/bucket', source: 's3://bucket', profile: 'prod', reason: 'x' },
+          { kind: 'da', path: '/mnt/da', source: 'da://o/r', profile: 'default', reason: 'y' },
+        ],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'mounted\n', stderr: '', exitCode: 0 });
+    spyConeShell(executeCommand);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(executeCommand).toHaveBeenCalledTimes(3);
+    expect(executeCommand.mock.calls[0][0]).toBe("mount '/mnt/proj'");
+    expect(executeCommand.mock.calls[1][0]).toBe(
+      "mount --source 's3://bucket' --profile 'prod' '/mnt/bucket'"
+    );
+    expect(executeCommand.mock.calls[2][0]).toBe("mount --source 'da://o/r' '/mnt/da'");
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('mounted');
+
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+  });
+
+  it('mount-recovery lick_dismiss leaves the mounts unmounted and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {
+        reason: 'mount-recovery',
+        mounts: [{ kind: 'local', path: '/mnt/proj', dirName: 'proj' }],
+      },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const executeCommand = spyConeShell();
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.settled).toBe(true);
+    expect(result.message).toBeUndefined();
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_dismiss acknowledges and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: {},
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toBe('Session-reload notice acknowledged.');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+
+  it('plain session-reload lick_confirm is a no-op that leaves the card pending', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'soft-reload' },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(result.message).toContain('Nothing to confirm');
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBeUndefined();
+
+    const dismiss = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+    expect(dismiss.settled).toBe(true);
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `session-reload-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+  });
+
+  it('mount-recovery with an empty mounts payload is not registered (falls through)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerSessionReloadLick({
+      type: 'session-reload',
+      timestamp: new Date().toISOString(),
+      body: { reason: 'mount-recovery', mounts: [] },
+    } as any);
+    await saveSessionReloadMessage(lickId);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(result.settled).toBe(false);
+    expect(onMessageUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Orchestrator upgrade-lick actionable resolution', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function makeOrch(onMessageUpdate = vi.fn()) {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    return new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onMessageUpdate,
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+  }
+
+  async function saveUpgradeMessage(lickId: string): Promise<void> {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    await saveMessage({
+      id: `upgrade-0.5.0-${lickId}`,
+      chatJid: cone.jid,
+      senderId: 'upgrade',
+      senderName: 'upgrade:0.4.1→0.5.0',
+      content: '[Upgrade Event: 0.4.1→0.5.0]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'upgrade',
+      lickId,
+    });
+  }
+
+  it('upgrade lick_confirm runs upgrade apply through the cone shell and flips the card', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+    const executeCommand = vi.fn().mockResolvedValue({
+      stdout: '{"ok":true,"results":[]}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    const coneCtx = orch.getScoopContext(cone.jid);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+
+    expect(result.settled).toBe(true);
+    expect(executeCommand).toHaveBeenCalledWith("upgrade apply --from='0.4.1' --to='0.5.0'");
+    expect(result.message).toBe('{"ok":true,"results":[]}');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'confirmed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('confirmed');
+
+    const again = await orch.resolveActionableLick(lickId, { decision: 'allow' });
+    expect(again.settled).toBe(false);
+  });
+
+  it('upgrade lick_dismiss leaves files unchanged and mutes the card (dismissed)', async () => {
+    const onMessageUpdate = vi.fn();
+    orch = makeOrch(onMessageUpdate);
+    await orch.init();
+
+    const lickId = orch.registerUpgradeLick({
+      type: 'upgrade',
+      timestamp: new Date().toISOString(),
+      upgradeFromVersion: '0.4.1',
+      upgradeToVersion: '0.5.0',
+      body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
+    } as any);
+    await saveUpgradeMessage(lickId);
+    const executeCommand = vi.fn();
+    const coneCtx = orch.getScoopContext(cone.jid);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
+
+    const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
+
+    expect(result.settled).toBe(true);
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(result.message).toContain('dismissed');
+    expect(result.message).not.toContain('Update workspace files');
+    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+      messageId: `upgrade-0.5.0-${lickId}`,
+      lickId,
+      lickState: 'dismissed',
+    });
+    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+    expect(after?.lickState).toBe('dismissed');
+  });
+});
+
+describe('Orchestrator boot resilience to a corrupt scoop file', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+    vi.restoreAllMocks();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  it('skips a scoop whose context init throws a size-mismatch and still loads the rest', async () => {
+    const corruptScoop: RegisteredScoop = {
+      jid: 'scoop_corrupt_boot_1',
+      name: 'corrupt-boot',
+      folder: 'corrupt-boot-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'corrupt-boot-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const healthyScoop: RegisteredScoop = {
+      jid: 'scoop_healthy_boot_1',
+      name: 'healthy-boot',
+      folder: 'healthy-boot-scoop',
+      parentJid: 'cone_main_1',
+      requiresTrigger: false,
+      assistantLabel: 'healthy-boot-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(cone);
+    await saveScoop(corruptScoop);
+    await saveScoop(healthyScoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+
+    const lifecycle = (
+      orch as unknown as {
+        lifecycle: {
+          createTab(jid: string): Promise<void>;
+          getContext(jid: string): unknown;
+          getTab(jid: string): { status: string; error?: string } | undefined;
+        };
+      }
+    ).lifecycle;
+    const realCreateTab = lifecycle.createTab.bind(lifecycle);
+    const sizeMismatch = new Error('Unexpected mismatch in file data size');
+    vi.spyOn(lifecycle, 'createTab').mockImplementation(async (jid: string) => {
+      if (jid === corruptScoop.jid) throw sizeMismatch;
+      return realCreateTab(jid);
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(orch.init()).resolves.toBeUndefined();
+
+    expect(lifecycle.getContext(healthyScoop.jid)).toBeDefined();
+    expect(lifecycle.getContext(cone.jid)).toBeDefined();
+
+    expect(lifecycle.getContext(corruptScoop.jid)).toBeUndefined();
+
+    const corruptTab = lifecycle.getTab(corruptScoop.jid);
+    expect(corruptTab).toBeDefined();
+    expect(corruptTab!.status).toBe('error');
+    expect(corruptTab!.error).toBe(sizeMismatch.message);
+
+    const skipCall = warnSpy.mock.calls.find(
+      (call) =>
+        typeof call[1] === 'string' &&
+        call[1].includes('Skipping scoop whose context failed to initialize during boot')
+    );
+    expect(skipCall).toBeDefined();
+    expect(skipCall![2]).toMatchObject({
+      jid: corruptScoop.jid,
+      folder: corruptScoop.folder,
+      error: sizeMismatch.message,
+    });
+  });
+});
+
+describe('Orchestrator directed approvals (biscotto tiers)', () => {
+  let orch: Orchestrator;
+
+  async function bootWithUnits(): Promise<void> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      // biome-ignore lint/suspicious/noExplicitAny: test double for the browser surface.
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+  }
+
+  it('denies a directive naming a unit that is not registered', async () => {
+    await bootWithUnits();
+    const decision = await orch.enqueueDirectedApproval(
+      { kind: 'cone', unitJid: 'no-such-unit' },
+      { kind: 'guest-message', detail: 'hello' }
+    );
+    expect(decision.decision).toBe('deny');
+  });
+
+  it('denies a scoop tier whose named approver does not exist', async () => {
+    await bootWithUnits();
+    const root = orch.getScoops().find((scoop) => scoop.parentJid === null);
+    const unitJid = root?.jid;
+    if (!unitJid) return;
+    const decision = await orch.enqueueDirectedApproval(
+      { kind: 'scoop', scoopName: 'nobody', unitJid },
+      { kind: 'guest-message', detail: 'hello' }
+    );
+
+    expect(decision.decision).toBe('deny');
+  });
+
+  it('denies the user tier — it must never be routed here', async () => {
+    await bootWithUnits();
+    const decision = await orch.enqueueDirectedApproval({ kind: 'user' } as never, {
+      kind: 'guest-message',
+      detail: 'hello',
+    });
+    expect(decision.decision).toBe('deny');
+  });
+});

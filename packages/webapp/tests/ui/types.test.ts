@@ -1,0 +1,89 @@
+import { describe, expect, it } from 'vitest';
+import type {
+  AgentEvent,
+  AgentHandle,
+  ChatMessage,
+  Session,
+  ToolCall,
+} from '../../src/ui/types.js';
+
+describe('UI types', () => {
+  it('AgentHandle contract is well-formed', () => {
+    const handle: AgentHandle = {
+      sendMessage(_text: string) {},
+      onEvent(_cb: (event: AgentEvent) => void) {
+        return () => {};
+      },
+      stop() {},
+    };
+
+    expect(handle.sendMessage).toBeDefined();
+    expect(handle.onEvent).toBeDefined();
+    expect(handle.stop).toBeDefined();
+  });
+
+  it('AgentEvent union covers all expected event types', () => {
+    const events: AgentEvent[] = [
+      { type: 'message_start', messageId: '1' },
+      { type: 'content_delta', messageId: '1', text: 'hello' },
+      { type: 'content_done', messageId: '1' },
+      { type: 'tool_use_start', messageId: '1', toolName: 'bash', toolInput: {} },
+      { type: 'tool_result', messageId: '1', toolName: 'bash', result: 'ok' },
+      { type: 'turn_end', messageId: '1' },
+      { type: 'error', error: 'something failed' },
+      { type: 'screenshot', base64: 'abc123' },
+      { type: 'terminal_output', text: 'output' },
+    ];
+
+    expect(events).toHaveLength(9);
+  });
+
+  it('ChatMessage has required fields', () => {
+    const msg: ChatMessage = {
+      id: 'm1',
+      role: 'user',
+      content: 'Hello',
+      attachments: [
+        {
+          id: 'a1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          kind: 'text',
+          text: 'hello',
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    expect(msg.id).toBe('m1');
+    expect(msg.role).toBe('user');
+    expect(msg.attachments?.[0].name).toBe('notes.txt');
+  });
+
+  it('ChatMessage supports tool calls', () => {
+    const tc: ToolCall = {
+      id: 't1',
+      name: 'read_file',
+      input: { path: '/test' },
+      result: 'file content',
+    };
+    const msg: ChatMessage = {
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      toolCalls: [tc],
+    };
+    expect(msg.toolCalls).toHaveLength(1);
+  });
+
+  it('Session has required fields', () => {
+    const session: Session = {
+      id: 's1',
+      messages: [],
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+    expect(session.id).toBe('s1');
+  });
+});

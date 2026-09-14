@@ -1,0 +1,28 @@
+{
+  "path": ["packages"],
+  "format": ["typescript", "tsx", "javascript", "jsx", "swift", "go"],
+  "minTokens": 50,
+  "minLines": 5,
+  "threshold": 7.5,
+  "reporters": ["silent", "threshold"],
+  "absolute": false,
+  "ignore": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/.build/**",
+    "**/coverage/**",
+    "**/.vite/**",
+    "**/playwright-report/**",
+    "**/test-results/**",
+    "**/*.d.ts",
+    "**/*.min.js",
+    "**/tests/fixtures/**",
+    "packages/dev-tools/**",
+    "packages/vfs-root/**",
+    "packages/assets/**",
+    "packages/webapp/src/ui/lucide-icons.ts",
+    "packages/webapp/src/kernel/rum.js",
+    "packages/webapp/src/scoops/tray-sync-protocol-corpus.ts",
+    "packages/cloudflare-worker/src/preview-bridge-assets.ts"
+  ]
+}

@@ -1,0 +1,342 @@
+import type { Api, Model } from '@earendil-works/pi-ai';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const streamMocks = vi.hoisted(() => ({
+  streamOpenAICompletions: vi.fn(),
+  streamSimpleOpenAICompletions: vi.fn(),
+}));
+
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
+  return {
+    ...original,
+    registerApiProvider: vi.fn(),
+    streamOpenAICompletions: streamMocks.streamOpenAICompletions,
+    streamSimpleOpenAICompletions: streamMocks.streamSimpleOpenAICompletions,
+  };
+});
+
+vi.mock('../../src/providers/account-store.js', () => ({
+  getApiKeyForProvider: vi.fn(() => 'test-api-key'),
+}));
+
+const storage = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+  getItem: (k: string) => storage.get(k) ?? null,
+  setItem: (k: string, v: string) => storage.set(k, v),
+  removeItem: (k: string) => storage.delete(k),
+  get length() {
+    return storage.size;
+  },
+  key: (i: number) => [...storage.keys()][i] ?? null,
+  clear: () => storage.clear(),
+});
+
+import {
+  createAssistantMessageEventStream,
+  registerApiProvider,
+} from '@earendil-works/pi-ai/compat';
+import { config, register } from '../../providers/cerebras.js';
+
+const STORAGE_KEY = 'slicc-cerebras-models';
+const CEREBRAS_API = 'cerebras-openai' as Api;
+const context = { systemPrompt: '', messages: [], tools: [] };
+
+function endedStream() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => stream.end());
+  return stream;
+}
+
+async function collectEvents(
+  stream: ReturnType<typeof createAssistantMessageEventStream>
+): Promise<unknown[]> {
+  const events: unknown[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
+}
+
+function sampleModel(): Model<Api> {
+  return {
+    id: 'gpt-oss-120b',
+    name: 'GPT OSS 120B',
+    api: CEREBRAS_API,
+    provider: 'cerebras',
+  } as Model<Api>;
+}
+
+beforeEach(() => {
+  storage.clear();
+  vi.mocked(registerApiProvider).mockClear();
+  streamMocks.streamOpenAICompletions.mockReset();
+  streamMocks.streamSimpleOpenAICompletions.mockReset();
+  streamMocks.streamOpenAICompletions.mockImplementation(endedStream);
+  streamMocks.streamSimpleOpenAICompletions.mockImplementation(endedStream);
+});
+
+describe('cerebras provider config', () => {
+  it('targets the cerebras provider ID with API key auth', () => {
+    expect(config.id).toBe('cerebras');
+    expect(config.requiresApiKey).toBe(true);
+    expect(config.requiresBaseUrl).toBe(false);
+    expect(config.isOAuth).toBeFalsy();
+  });
+
+  it('exposes getModelIds and refreshModels', () => {
+    expect(config.getModelIds).toBeTypeOf('function');
+    expect(config.refreshModels).toBeTypeOf('function');
+  });
+});
+
+describe('getModelIds — seed list fallback', () => {
+  it('returns the seed list when cache and localStorage are empty', () => {
+    const ids = config.getModelIds!().map((m) => m.id);
+    expect(ids).toContain('gpt-oss-120b');
+    expect(ids).toContain('gemma-4-31b');
+    expect(ids).toContain('zai-glm-4.7');
+    expect(ids).not.toContain('llama3.1-8b');
+  });
+
+  it('seed gemma-4-31b has paid-tier limits and multimodal input', () => {
+    const gemma = config.getModelIds!().find((m) => m.id === 'gemma-4-31b')!;
+
+    expect(gemma.context_window).toBe(131072);
+    expect(gemma.max_tokens).toBe(40960);
+    expect(gemma.input).toContain('image');
+    expect(gemma.reasoning).toBe(false);
+  });
+
+  it('seed gpt-oss-120b has corrected max_tokens (40960, not stale pi-ai 32768)', () => {
+    const gpt = config.getModelIds!().find((m) => m.id === 'gpt-oss-120b')!;
+    expect(gpt.max_tokens).toBe(40960);
+    expect(gpt.reasoning).toBe(true);
+  });
+
+  it('seed zai-glm-4.7 has correct max_tokens (40960, not 40000)', () => {
+    const glm = config.getModelIds!().find((m) => m.id === 'zai-glm-4.7')!;
+    expect(glm.max_tokens).toBe(40960);
+    expect(glm.context_window).toBe(131072);
+  });
+
+  it('all seed models use openai api routing', () => {
+    for (const m of config.getModelIds!()) {
+      expect(m.api).toBe('openai');
+    }
+  });
+});
+
+describe('getModelIds — localStorage fallback', () => {
+  it('returns persisted models when localStorage is populated', () => {
+    const persisted = [
+      { id: 'custom-model-1', name: 'Custom 1', api: 'openai' as const },
+      { id: 'custom-model-2', name: 'Custom 2', api: 'openai' as const },
+    ];
+    storage.set(STORAGE_KEY, JSON.stringify(persisted));
+
+    const stored = storage.get(STORAGE_KEY);
+    expect(stored).not.toBeNull();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stored!);
+    } catch {
+      parsed = null;
+    }
+    expect(parsed).toEqual(persisted);
+  });
+
+  it('ignores an empty persisted array', () => {
+    storage.set(STORAGE_KEY, JSON.stringify([]));
+
+    const ids = config.getModelIds!().map((m) => m.id);
+    expect(ids.length).toBeGreaterThan(0);
+  });
+
+  it('ignores malformed JSON in localStorage', () => {
+    storage.set(STORAGE_KEY, 'not-json{{{');
+    const ids = config.getModelIds!().map((m) => m.id);
+    expect(ids.length).toBeGreaterThan(0);
+  });
+});
+
+describe('refreshModels', () => {
+  it('fetches /v1/models and updates the cache', async () => {
+    const apiResponse = {
+      data: [
+        {
+          id: 'new-model-a',
+          name: 'New Model A',
+          capabilities: { vision: false, reasoning: true },
+          limits: { max_context_length: 65536, max_completion_tokens: 8192 },
+        },
+        {
+          id: 'new-model-b',
+          name: 'New Model B',
+          capabilities: { vision: true, reasoning: false },
+          limits: { max_context_length: 131072, max_completion_tokens: 40960 },
+        },
+      ],
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => apiResponse,
+      }))
+    );
+
+    await config.refreshModels!('test-key');
+
+    const ids = config.getModelIds!().map((m) => m.id);
+    expect(ids).toContain('new-model-a');
+    expect(ids).toContain('new-model-b');
+
+    const modelA = config.getModelIds!().find((m) => m.id === 'new-model-a')!;
+    expect(modelA.input).toEqual(['text']);
+
+    const modelB = config.getModelIds!().find((m) => m.id === 'new-model-b')!;
+    expect(modelB.input).toContain('image');
+    expect(modelB.context_window).toBe(131072);
+    expect(modelB.max_tokens).toBe(40960);
+
+    const raw = storage.get(STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    let stored: Array<{ id: string }> = [];
+    try {
+      stored = JSON.parse(raw!) as Array<{ id: string }>;
+    } catch {
+      stored = [];
+    }
+    expect(stored.map((m) => m.id)).toContain('new-model-a');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the accessToken arg when provided', async () => {
+    let capturedAuth = '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        capturedAuth = (init?.headers as Record<string, string>)?.Authorization ?? '';
+        return { ok: true, json: async () => ({ data: [] }) };
+      })
+    );
+
+    await config.refreshModels!('my-explicit-key');
+    expect(capturedAuth).toBe('Bearer my-explicit-key');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('silently ignores network errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('Network failure');
+      })
+    );
+
+    await expect(config.refreshModels!('key')).resolves.toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('silently ignores non-ok responses', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 401, statusText: 'Unauthorized' }))
+    );
+
+    await expect(config.refreshModels!('bad-key')).resolves.toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('skips the fetch when no API key is available', async () => {
+    const { getApiKeyForProvider } = await import('../../src/providers/account-store.js');
+    vi.mocked(getApiKeyForProvider).mockReturnValueOnce(null);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await config.refreshModels!();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('register()', () => {
+  it('registers the cerebras-openai API with stream and streamSimple', () => {
+    register();
+    expect(registerApiProvider).toHaveBeenCalledOnce();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    expect(call.api).toBe('cerebras-openai');
+    expect(call.stream).toBeTypeOf('function');
+    expect(call.streamSimple).toBeTypeOf('function');
+  });
+});
+
+describe('stream pumps', () => {
+  it('stream routes through openai-completions at the Cerebras base URL', async () => {
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.stream(sampleModel(), context, {}) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toEqual([]);
+    expect(streamMocks.streamOpenAICompletions).toHaveBeenCalledOnce();
+    const proxyModel = streamMocks.streamOpenAICompletions.mock.calls[0]![0] as {
+      baseUrl: string;
+      api: string;
+    };
+    expect(proxyModel.baseUrl).toBe('https://api.cerebras.ai/v1');
+    expect(proxyModel.api).toBe('openai-completions');
+  });
+
+  it('streamSimple routes through openai-completions at the Cerebras base URL', async () => {
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.streamSimple!(sampleModel(), context) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toEqual([]);
+    expect(streamMocks.streamSimpleOpenAICompletions).toHaveBeenCalledOnce();
+    const proxyModel = streamMocks.streamSimpleOpenAICompletions.mock.calls[0]![0] as {
+      baseUrl: string;
+      api: string;
+    };
+    expect(proxyModel.baseUrl).toBe('https://api.cerebras.ai/v1');
+    expect(proxyModel.api).toBe('openai-completions');
+  });
+
+  it('stream surfaces inner failures as error events without rejecting', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    streamMocks.streamOpenAICompletions.mockImplementation(() => {
+      throw new Error('upstream boom');
+    });
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.stream(sampleModel(), context, {}) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        type: 'error',
+        reason: 'error',
+        error: expect.objectContaining({
+          errorMessage: 'upstream boom',
+          provider: 'cerebras',
+          model: 'gpt-oss-120b',
+        }),
+      })
+    );
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});

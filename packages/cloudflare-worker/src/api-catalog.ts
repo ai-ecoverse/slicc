@@ -1,0 +1,112 @@
+interface CatalogEntry {
+  anchor: string;
+  methods: string[];
+  description: string;
+}
+
+const ENTRIES: CatalogEntry[] = [
+  {
+    anchor: '/api/tray/:trayId/preview-transfer',
+    methods: ['POST'],
+    description:
+      'Transfer previews to another tray. Bearer is the source controller capability; JSON supplies targetTrayId and targetControllerToken. Retry the same target on 503.',
+  },
+  {
+    anchor: '/tray',
+    methods: ['POST'],
+    description: 'Create a tray; returns join/controller/webhook capability URLs.',
+  },
+  {
+    anchor: '/handoff',
+    methods: ['GET'],
+    description:
+      'Convenience endpoint for cross-agent handoff. Accepts ?upskill=, ?handoff=, or legacy ?msg=. Response carries an RFC 8288 Link header with the handoff or upskill rel.',
+  },
+  {
+    anchor: '/status',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, version }`.',
+  },
+  {
+    anchor: '/join/:token',
+    methods: ['GET', 'POST'],
+    description: 'Follower join + bootstrap polling for a tray.',
+  },
+  {
+    anchor: '/controller/:token',
+    methods: ['GET', 'POST'],
+    description: 'Leader attach for a tray; WebSocket upgrade for live signaling.',
+  },
+  {
+    anchor: '/webhook/:token/:webhookId',
+    methods: ['POST'],
+    description: 'Forward webhook events to the live leader of a tray.',
+  },
+  {
+    anchor: '/auth/callback',
+    methods: ['GET'],
+    description: 'OAuth callback relay; redirects to the localhost runtime.',
+  },
+  {
+    anchor: '/auth/mcp-callback',
+    methods: ['GET'],
+    description: 'MCP OAuth callback capture; preserves opaque state for the opener.',
+  },
+  {
+    anchor: '/oauth/token',
+    methods: ['POST', 'OPTIONS'],
+    description: 'Generic OAuth authorization-code grant exchange.',
+  },
+  {
+    anchor: '/oauth/revoke',
+    methods: ['POST', 'OPTIONS'],
+    description: 'Generic OAuth token revocation.',
+  },
+  {
+    anchor: '/api/runtime-config',
+    methods: ['GET'],
+    description: 'Public runtime configuration for the served webapp.',
+  },
+  {
+    anchor: '/download/slicc.dmg',
+    methods: ['GET', 'HEAD'],
+    description: 'Latest macOS launcher download (302 to the GitHub release).',
+  },
+  {
+    anchor: '/install-cli',
+    methods: ['GET', 'HEAD'],
+    description:
+      'POSIX shell installer for the headless slicc follower CLI (curl -fsSL …/install-cli | sh).',
+  },
+  {
+    anchor: '/install-cli.ps1',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Native-Windows PowerShell installer for the headless slicc follower CLI (irm …/install-cli.ps1 | iex).',
+  },
+  {
+    anchor: '/download/slicc-cli/:target',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Latest slicc follower CLI binary for a target such as darwin-arm64 or linux-amd64 (302 to the GitHub release asset).',
+  },
+];
+
+export function buildApiCatalogResponse(request: Request): Response {
+  const url = new URL(request.url);
+  const origin = `${url.protocol}//${url.host}`;
+  const linkset = ENTRIES.map((entry) => ({
+    anchor: `${origin}${entry.anchor}`,
+    'http-method': entry.methods,
+    description: [{ value: entry.description, lang: 'en' }],
+  }));
+  const body = JSON.stringify({ linkset }, null, 2);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/linkset+json',
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
+}

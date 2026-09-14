@@ -1,0 +1,71 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import 'fake-indexeddb/auto';
+import { setState } from '../../src/scoops/db.js';
+import {
+  __test__,
+  detectUpgrade,
+  getLastSeenVersion,
+  readBundledVersion,
+  recordVersionSeen,
+  setLastSeenVersion,
+} from '../../src/scoops/upgrade-detection.js';
+
+describe('upgrade-detection', () => {
+  beforeEach(async () => {
+    await setState(__test__.LAST_SEEN_STATE_KEY, '');
+  });
+
+  describe('readBundledVersion', () => {
+    it('returns the build-time injected version and releasedAt', () => {
+      const result = readBundledVersion();
+      expect(result.version).toBe(__SLICC_VERSION__);
+      expect(result.releasedAt).toBe(__SLICC_RELEASED_AT__);
+    });
+  });
+
+  describe('detectUpgrade', () => {
+    it('records the bundled version silently on first boot (no upgrade)', async () => {
+      const result = await detectUpgrade();
+      expect(result.isUpgrade).toBe(false);
+      expect(result.lastSeen).toBeNull();
+      expect(await getLastSeenVersion()).toBe(__SLICC_VERSION__);
+    });
+
+    it('does nothing when the bundled version matches the last-seen one', async () => {
+      await setLastSeenVersion(__SLICC_VERSION__);
+      const result = await detectUpgrade();
+      expect(result.isUpgrade).toBe(false);
+      expect(result.lastSeen).toBe(__SLICC_VERSION__);
+      expect(await getLastSeenVersion()).toBe(__SLICC_VERSION__);
+    });
+
+    it('reports an upgrade WITHOUT advancing the marker so the caller can defer it until the lick is routed', async () => {
+      await setLastSeenVersion('0.0.0-old');
+      const result = await detectUpgrade();
+      expect(result.isUpgrade).toBe(true);
+      expect(result.lastSeen).toBe('0.0.0-old');
+      expect(result.bundled.version).toBe(__SLICC_VERSION__);
+
+      expect(await getLastSeenVersion()).toBe('0.0.0-old');
+    });
+  });
+
+  describe('recordVersionSeen', () => {
+    it('advances the last-seen marker (used by callers after routing the upgrade lick)', async () => {
+      await setLastSeenVersion('0.0.0-old');
+      const detected = await detectUpgrade();
+      expect(detected.isUpgrade).toBe(true);
+
+      expect(await getLastSeenVersion()).toBe('0.0.0-old');
+
+      await recordVersionSeen(detected.bundled.version);
+      expect(await getLastSeenVersion()).toBe(__SLICC_VERSION__);
+    });
+
+    it('is a no-op when called repeatedly with the same version', async () => {
+      await recordVersionSeen('3.0.0');
+      await recordVersionSeen('3.0.0');
+      expect(await getLastSeenVersion()).toBe('3.0.0');
+    });
+  });
+});

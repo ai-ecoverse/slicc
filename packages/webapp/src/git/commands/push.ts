@@ -1,0 +1,75 @@
+import * as git from 'isomorphic-git';
+import { parseArgs } from '../../shell/arg-parser.js';
+import { gitHttp } from '../git-http.js';
+import { annotateGitHubAuthFailure, GIT_FLAG_SPECS } from './shared.js';
+import type { GitCommandContext, GitCommandResult } from './types.js';
+
+export async function push(
+  ctx: GitCommandContext,
+  cwd: string,
+  args: string[]
+): Promise<GitCommandResult> {
+  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.push);
+  const force = flags.force === true;
+  const setUpstream = flags['set-upstream'] === true;
+  const dryRun = flags['dry-run'] === true;
+  const remote = positionals[0] ?? 'origin';
+  const branch = positionals[1] ?? (await git.currentBranch({ fs: ctx.lfs, dir: cwd }));
+
+  if (dryRun) {
+    return {
+      stdout: `Would push to ${remote}...\n   ${branch} -> ${branch}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  let output = `Pushing to ${remote}...\n`;
+
+  const result = await git.push({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    http: gitHttp,
+    dir: cwd,
+    remote,
+    ref: branch ?? undefined,
+    corsProxy: ctx.corsProxy,
+    force,
+    onAuth: ctx.getOnAuth(),
+    onAuthFailure: ctx.getOnAuthFailure(),
+    onProgress: (event) => {
+      output += `${event.phase}: ${event.loaded}/${event.total}\n`;
+    },
+  });
+
+  if (result.ok) {
+    output += `To ${remote}\n`;
+    output += `   ${branch} -> ${branch}\n`;
+
+    if (setUpstream && branch) {
+      await git.setConfig({
+        fs: ctx.lfs,
+        dir: cwd,
+        path: `branch.${branch}.remote`,
+        value: remote,
+      });
+      await git.setConfig({
+        fs: ctx.lfs,
+        dir: cwd,
+        path: `branch.${branch}.merge`,
+        value: `refs/heads/${branch}`,
+      });
+      output += `Branch '${branch}' set up to track remote branch '${branch}' from '${remote}'.\n`;
+    }
+  } else {
+    const remotes = await git.listRemotes({ fs: ctx.lfs, dir: cwd }).catch(() => []);
+    const remoteUrl = remotes.find((item) => item.remote === remote)?.url;
+    return {
+      stdout: '',
+      stderr: `error: failed to push to '${remote}': ${annotateGitHubAuthFailure(String(result.error), remoteUrl)}\n`,
+      exitCode: 1,
+    };
+  }
+
+  return { stdout: output, stderr: '', exitCode: 0 };
+}

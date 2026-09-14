@@ -1,0 +1,364 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { VirtualFS } from '../../src/fs/index.js';
+import {
+  getSharedHidRegistry,
+  type HidApi,
+  type HidDevice,
+  type HidInputReportEvent,
+} from '../../src/kernel/hid-device-registry.js';
+import {
+  getSharedUsbRegistry,
+  type UsbApi,
+  type UsbDevice,
+} from '../../src/kernel/usb-device-registry.js';
+import type { LickEvent } from '../../src/scoops/lick-manager.js';
+import { SprinkleBridge, type SprinkleHidInputReport } from '../../src/ui/sprinkle-bridge.js';
+
+function makeFakeHidDevice(over: Partial<HidDevice> = {}) {
+  const listeners = new Set<(ev: HidInputReportEvent) => void>();
+  const state = { opened: false };
+  const device: HidDevice = {
+    get opened() {
+      return state.opened;
+    },
+    vendorId: 0x320f,
+    productId: 0x5000,
+    productName: 'Test HID',
+    collections: [{ usagePage: 0xff60, usage: 0x61 }],
+    open: vi.fn(async () => {
+      state.opened = true;
+    }),
+    close: vi.fn(async () => {
+      state.opened = false;
+    }),
+    sendReport: vi.fn(async () => undefined),
+    sendFeatureReport: vi.fn(async () => undefined),
+    receiveFeatureReport: vi.fn(async () => new DataView(new ArrayBuffer(0))),
+    addEventListener: vi.fn((type, listener) => {
+      if (type === 'inputreport') listeners.add(listener);
+    }),
+    removeEventListener: vi.fn((type, listener) => {
+      if (type === 'inputreport') listeners.delete(listener);
+    }),
+    ...over,
+  };
+  return {
+    device,
+    fire(reportId: number, bytes: Uint8Array) {
+      const ev = {
+        device,
+        reportId,
+        data: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      } as HidInputReportEvent;
+      for (const l of listeners) l(ev);
+    },
+    listenerCount: () => listeners.size,
+  };
+}
+
+function buildBridge(iframePusher?: (name: string, channel: string, payload: unknown) => void) {
+  const mockFs = {
+    readFile: vi.fn(),
+    writeFile: vi.fn(),
+    readDir: vi.fn(),
+    exists: vi.fn(),
+    stat: vi.fn(),
+    mkdir: vi.fn(),
+    rm: vi.fn(),
+  } as unknown as VirtualFS;
+  return new SprinkleBridge(
+    mockFs,
+    vi.fn() as unknown as (event: LickEvent) => void,
+    vi.fn() as unknown as (name: string) => void,
+    vi.fn(),
+    vi.fn(),
+    vi.fn(),
+    vi.fn().mockResolvedValue({ base64: '', width: 0, height: 0, mimeType: 'image/png' }),
+    undefined,
+    iframePusher
+  );
+}
+
+function makeFakeUsbDevice(over: Partial<UsbDevice> = {}): UsbDevice {
+  return {
+    vendorId: 0x22b8,
+    productId: 0x2e76,
+    productName: 'Fake Phone',
+    manufacturerName: 'Test',
+    serialNumber: 'USB-1',
+    opened: false,
+    open: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    reset: vi.fn(async () => undefined),
+    selectConfiguration: vi.fn(async () => undefined),
+    claimInterface: vi.fn(async () => undefined),
+    releaseInterface: vi.fn(async () => undefined),
+    clearHalt: vi.fn(async () => undefined),
+    controlTransferIn: vi.fn(async () => ({
+      status: 'ok',
+      data: { buffer: new Uint8Array([1, 2, 3]).buffer, byteOffset: 0, byteLength: 3 },
+    })),
+    controlTransferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 2 })),
+    transferIn: vi.fn(async () => ({
+      status: 'ok',
+      data: {
+        buffer: new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer,
+        byteOffset: 0,
+        byteLength: 4,
+      },
+    })),
+    transferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 4 })),
+    ...over,
+  } as UsbDevice;
+}
+
+function stubNavigatorUsb(usb: UsbApi): () => void {
+  const nav = (globalThis as { navigator?: { usb?: UsbApi } }).navigator;
+  if (!nav) {
+    (globalThis as { navigator?: { usb?: UsbApi } }).navigator = { usb };
+    return () => {
+      delete (globalThis as { navigator?: { usb?: UsbApi } }).navigator;
+    };
+  }
+  const prev = nav.usb;
+  nav.usb = usb;
+  return () => {
+    if (prev) nav.usb = prev;
+    else delete nav.usb;
+  };
+}
+
+function stubNavigatorHid(hid: HidApi): () => void {
+  const nav = (globalThis as { navigator?: { hid?: HidApi } }).navigator;
+  if (!nav) {
+    (globalThis as { navigator?: { hid?: HidApi } }).navigator = { hid };
+    return () => {
+      delete (globalThis as { navigator?: { hid?: HidApi } }).navigator;
+    };
+  }
+  const prev = nav.hid;
+  nav.hid = hid;
+  return () => {
+    if (prev) nav.hid = prev;
+    else delete nav.hid;
+  };
+}
+
+describe('SprinkleBridge — slicc.hid surface', () => {
+  let restoreHid: (() => void) | null = null;
+
+  afterEach(() => {
+    const reg = getSharedHidRegistry();
+    for (const { handle } of reg.list()) reg.remove(handle);
+    if (restoreHid) {
+      restoreHid();
+      restoreHid = null;
+    }
+  });
+
+  it('hid.list() returns descriptors for previously granted devices', async () => {
+    const { device } = makeFakeHidDevice();
+    const hid: HidApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreHid = stubNavigatorHid(hid);
+    const bridge = buildBridge();
+    const api = bridge.createAPI('demo');
+    const infos = await api.hid.list();
+    expect(infos).toHaveLength(1);
+    expect(infos[0].vendorId).toBe(0x320f);
+    expect(infos[0].handle).toMatch(/^hid\d+$/);
+  });
+
+  it('list → open → on(inputreport) → sendReport → push delivers a report', async () => {
+    const fake = makeFakeHidDevice();
+    const hid: HidApi = {
+      getDevices: vi.fn().mockResolvedValue([fake.device]),
+      requestDevice: vi.fn(),
+    };
+    restoreHid = stubNavigatorHid(hid);
+    const pusher = vi.fn();
+    const bridge = buildBridge(pusher);
+    const api = bridge.createAPI('demo');
+
+    const [info] = await api.hid.list();
+    await api.hid.open(info.handle);
+    expect(fake.device.open).toHaveBeenCalledTimes(1);
+    expect(fake.listenerCount()).toBe(1);
+
+    const received: SprinkleHidInputReport[] = [];
+    api.hid.on('inputreport', (r) => received.push(r));
+
+    await api.hid.sendReport(info.handle, 0, new Uint8Array([0x01, 0x02]));
+    expect(fake.device.sendReport).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+
+    fake.fire(7, new Uint8Array([0xaa, 0xbb, 0xcc]));
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].handle).toBe(info.handle);
+    expect(received[0].reportId).toBe(7);
+    expect(Array.from(received[0].data)).toEqual([0xaa, 0xbb, 0xcc]);
+
+    expect(pusher).toHaveBeenCalledWith('demo', 'hid:inputreport', {
+      handle: info.handle,
+      reportId: 7,
+      data: expect.any(Uint8Array),
+    });
+  });
+
+  it('hid.close() and removeSprinkle() detach the input-report listener', async () => {
+    const fake = makeFakeHidDevice();
+    const hid: HidApi = {
+      getDevices: vi.fn().mockResolvedValue([fake.device]),
+      requestDevice: vi.fn(),
+    };
+    restoreHid = stubNavigatorHid(hid);
+    const bridge = buildBridge();
+    const api = bridge.createAPI('demo');
+    const [info] = await api.hid.list();
+
+    await api.hid.open(info.handle);
+    expect(fake.listenerCount()).toBe(1);
+
+    await api.hid.close(info.handle);
+    expect(fake.listenerCount()).toBe(0);
+    expect(fake.device.close).toHaveBeenCalledTimes(1);
+
+    await api.hid.open(info.handle);
+    expect(fake.listenerCount()).toBe(1);
+    bridge.removeSprinkle('demo');
+    expect(fake.listenerCount()).toBe(0);
+  });
+
+  it('off() removes a single listener without tearing down the subscription', async () => {
+    const fake = makeFakeHidDevice();
+    const hid: HidApi = {
+      getDevices: vi.fn().mockResolvedValue([fake.device]),
+      requestDevice: vi.fn(),
+    };
+    restoreHid = stubNavigatorHid(hid);
+    const bridge = buildBridge();
+    const api = bridge.createAPI('demo');
+    const [info] = await api.hid.list();
+    await api.hid.open(info.handle);
+
+    const a = vi.fn();
+    const b = vi.fn();
+    api.hid.on('inputreport', a);
+    api.hid.on('inputreport', b);
+    api.hid.off('inputreport', a);
+
+    fake.fire(0, new Uint8Array([1]));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(a).not.toHaveBeenCalled();
+    expect(b).toHaveBeenCalledTimes(1);
+
+    expect(fake.listenerCount()).toBe(1);
+  });
+
+  it('_device() routes through the same per-channel dispatcher', async () => {
+    const fake = makeFakeHidDevice();
+    const hid: HidApi = {
+      getDevices: vi.fn().mockResolvedValue([fake.device]),
+      requestDevice: vi.fn(),
+    };
+    restoreHid = stubNavigatorHid(hid);
+    const bridge = buildBridge();
+    const api = bridge.createAPI('demo');
+    const infos = (await api._device('hid', 'list', [])) as Array<{ handle: string }>;
+    expect(infos).toHaveLength(1);
+    await expect(api._device('hid', 'unknown-op', [])).rejects.toThrow(/unknown op/);
+    await expect(api._device('bogus' as 'hid', 'list', [])).rejects.toThrow(
+      /unknown device channel/
+    );
+  });
+});
+
+describe('SprinkleBridge — slicc.usb transfers', () => {
+  let restoreUsb: (() => void) | null = null;
+
+  afterEach(() => {
+    const reg = getSharedUsbRegistry();
+    for (const { handle } of reg.list()) reg.remove(handle);
+    if (restoreUsb) {
+      restoreUsb();
+      restoreUsb = null;
+    }
+  });
+
+  async function grant(device: UsbDevice) {
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const api = buildBridge().createAPI('demo');
+    const [info] = await api.usb.list();
+    return { api, handle: info.handle };
+  }
+
+  it('routes the interface lifecycle ops to the device', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    await api.usb.selectConfiguration(handle, 1);
+    await api.usb.claimInterface(handle, 1);
+    await api.usb.clearHalt(handle, 'in', 3);
+    await api.usb.releaseInterface(handle, 1);
+    await api.usb.reset(handle);
+    expect(device.selectConfiguration).toHaveBeenCalledWith(1);
+    expect(device.claimInterface).toHaveBeenCalledWith(1);
+    expect(device.clearHalt).toHaveBeenCalledWith('in', 3);
+    expect(device.releaseInterface).toHaveBeenCalledWith(1);
+    expect(device.reset).toHaveBeenCalled();
+  });
+
+  it('transferIn decodes the base64 the boundary carries back into bytes', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const r = await api.usb.transferIn(handle, 3, 64);
+    expect(device.transferIn).toHaveBeenCalledWith(3, 64);
+    expect(r.status).toBe('ok');
+    expect(r.bytes).toBeInstanceOf(Uint8Array);
+    expect([...r.bytes]).toEqual([0xde, 0xad, 0xbe, 0xef]);
+  });
+
+  it('transferOut delivers the caller bytes to the device unchanged', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const payload = new Uint8Array([0x00, 0x01, 0xfe, 0xff]);
+    const r = await api.usb.transferOut(handle, 2, payload);
+    expect(r.bytesWritten).toBe(4);
+    const sent = (device.transferOut as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(sent[0]).toBe(2);
+    expect([...new Uint8Array(sent[1] as ArrayBuffer)]).toEqual([0x00, 0x01, 0xfe, 0xff]);
+  });
+
+  it('round-trips bytes that are not valid UTF-8', async () => {
+    const payload = new Uint8Array([0x80, 0xff, 0x00, 0xed, 0xa0, 0x80]);
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    await api.usb.transferOut(handle, 2, payload);
+    const sent = (device.transferOut as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect([...new Uint8Array(sent[1] as ArrayBuffer)]).toEqual([...payload]);
+  });
+
+  it('controlTransferIn/Out carry the setup packet through', async () => {
+    const device = makeFakeUsbDevice();
+    const { api, handle } = await grant(device);
+    const setup = {
+      requestType: 'standard' as const,
+      recipient: 'device' as const,
+      request: 6,
+      value: 0x0200,
+      index: 0,
+    };
+    const inResult = await api.usb.controlTransferIn(handle, setup, 9);
+    expect(device.controlTransferIn).toHaveBeenCalledWith(setup, 9);
+    expect([...inResult.bytes]).toEqual([1, 2, 3]);
+    await api.usb.controlTransferOut(handle, setup, new Uint8Array([0xaa, 0xbb]));
+    expect(device.controlTransferOut).toHaveBeenCalled();
+  });
+});

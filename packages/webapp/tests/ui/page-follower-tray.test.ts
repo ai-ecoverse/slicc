@@ -1,0 +1,185 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { StartPageFollowerTrayOptions } from '../../src/ui/page-follower-tray.js';
+import {
+  applyFollowerLeaderTheme,
+  buildAdvertisedTargets,
+  CHERRY_RUNTIME_TAG,
+  startPageFollowerTray,
+} from '../../src/ui/page-follower-tray.js';
+
+const themeEngine = vi.hoisted(() => ({
+  importTheme: vi.fn(() => ({ id: 'leader-theme' })),
+  saveCustomTheme: vi.fn(),
+  setActiveTheme: vi.fn(),
+  clearActiveTheme: vi.fn(),
+  applyThemeOverrides: vi.fn(),
+}));
+
+vi.mock('../../src/ui/theme-engine.js', () => themeEngine);
+
+function makeFakeBrowserAPI(): StartPageFollowerTrayOptions['browserAPI'] {
+  return {
+    setTrayTargetProvider: vi.fn(),
+    getTransport: vi.fn(),
+    listPages: vi.fn().mockResolvedValue([]),
+  } as unknown as StartPageFollowerTrayOptions['browserAPI'];
+}
+
+function makeBaseOptions(): StartPageFollowerTrayOptions {
+  const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+
+  const sleep = vi.fn(() => new Promise<void>(() => {}));
+  return {
+    joinUrl: 'https://tray.example.com/join/token',
+    onSnapshot: vi.fn(),
+    onUserMessage: vi.fn(),
+    onStatus: vi.fn(),
+    setChatAgent: vi.fn(),
+    browserAPI: makeFakeBrowserAPI(),
+    _fetchImpl: fetchImpl,
+    _sleep: sleep,
+    _refreshIntervalMs: 60_000,
+  };
+}
+
+describe('startPageFollowerTray', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('applies and clears leader themes through the UI theme engine', async () => {
+    applyFollowerLeaderTheme('{"id":"leader-theme"}');
+
+    await vi.waitFor(() => expect(themeEngine.applyThemeOverrides).toHaveBeenCalledOnce());
+    expect(themeEngine.importTheme).toHaveBeenCalledWith('{"id":"leader-theme"}');
+    expect(themeEngine.saveCustomTheme).toHaveBeenCalledWith({ id: 'leader-theme' });
+    expect(themeEngine.setActiveTheme).toHaveBeenCalledWith('leader-theme');
+
+    vi.clearAllMocks();
+    applyFollowerLeaderTheme(null);
+
+    await vi.waitFor(() => expect(themeEngine.applyThemeOverrides).toHaveBeenCalledOnce());
+    expect(themeEngine.clearActiveTheme).toHaveBeenCalledOnce();
+    expect(themeEngine.importTheme).not.toHaveBeenCalled();
+  });
+
+  it('returns a handle whose currentSync is null before any connection', () => {
+    const opts = makeBaseOptions();
+    const handle = startPageFollowerTray(opts);
+    try {
+      expect(handle.currentSync).toBeNull();
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('stop() before any connection does not throw', () => {
+    const opts = makeBaseOptions();
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('stop() is idempotent — calling twice is safe', () => {
+    const opts = makeBaseOptions();
+    const handle = startPageFollowerTray(opts);
+    handle.stop();
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('accepts an onLeaderStalled option without throwing', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      onLeaderStalled: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('accepts model catalog and selection state callbacks', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      onModelsList: vi.fn(),
+      onModelState: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('accepts an onCherrySliccEvent option (cherry outbound bridge) without throwing', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      runtime: CHERRY_RUNTIME_TAG,
+      onCherrySliccEvent: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('uses the supplied joinUrl when starting the follower', async () => {
+    const opts = makeBaseOptions();
+    const handle = startPageFollowerTray(opts);
+    try {
+      await vi.waitFor(() => expect(opts._fetchImpl).toHaveBeenCalled());
+      const firstUrl = (opts._fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(firstUrl).toContain('tray.example.com');
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('accepts an onForwardingToggle option without throwing', () => {
+    const toggle = vi.fn();
+    const opts = { ...makeBaseOptions(), onForwardingToggle: toggle };
+    const handle = startPageFollowerTray(opts);
+    try {
+      expect(handle.currentSync).toBeNull();
+    } finally {
+      handle.stop();
+    }
+  });
+});
+
+describe('buildAdvertisedTargets', () => {
+  const pages = [
+    { targetId: 't1', title: 'One', url: 'https://a.example/1' },
+    { targetId: 't2', title: 'Two', url: 'https://a.example/2' },
+  ];
+
+  it('advertises browser targets with explicit full capabilities for non-cherry runtimes', () => {
+    const out = buildAdvertisedTargets(pages, 'slicc-standalone');
+    expect(out).toEqual([
+      {
+        targetId: 't1',
+        title: 'One',
+        url: 'https://a.example/1',
+        kind: 'browser',
+        capabilities: { navigate: true, network: true, screenshot: true },
+      },
+      {
+        targetId: 't2',
+        title: 'Two',
+        url: 'https://a.example/2',
+        kind: 'browser',
+        capabilities: { navigate: true, network: true, screenshot: true },
+      },
+    ]);
+  });
+
+  it("tags cherry runtime targets with kind:'cherry' and network:false capabilities", () => {
+    const out = buildAdvertisedTargets(pages, CHERRY_RUNTIME_TAG);
+    expect(out).toHaveLength(2);
+    for (const [i, t] of out.entries()) {
+      expect(t.targetId).toBe(pages[i].targetId);
+      expect(t.title).toBe(pages[i].title);
+      expect(t.url).toBe(pages[i].url);
+      expect(t.kind).toBe('cherry');
+
+      expect(t.capabilities).toEqual({ navigate: true, network: false, screenshot: true });
+    }
+  });
+
+  it('returns an empty list for empty input regardless of runtime', () => {
+    expect(buildAdvertisedTargets([], CHERRY_RUNTIME_TAG)).toEqual([]);
+    expect(buildAdvertisedTargets([], 'slicc-standalone')).toEqual([]);
+  });
+});

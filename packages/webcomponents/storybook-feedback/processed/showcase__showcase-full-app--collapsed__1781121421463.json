@@ -1,0 +1,8 @@
+{
+  "storyId": "showcase-full-app--collapsed",
+  "storyTitle": "Showcase/Full App",
+  "subsystem": "showcase",
+  "importPath": "./src/showcase/app.stories.ts",
+  "comment": "<span class=\"slicc-act__ic\" part=\"icon\">pencil</span>\nthis actually says \"pencil\" in the UI, here, so the pencil icon is not loaded.",
+  "createdAt": "2026-06-10T19:57:01.463Z"
+}

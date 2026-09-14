@@ -1,0 +1,716 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../src/cdp/browser-api.js';
+import {
+  EXTENSION_BRIDGE_PORT_NAME,
+  EXTENSION_BRIDGE_PROTOCOL_VERSION,
+} from '../../src/cdp/extension-bridge-protocol.js';
+import {
+  type ExtensionBridgePort,
+  ExtensionBridgeTransport,
+} from '../../src/cdp/extension-bridge-transport.js';
+import type { CDPConnectOptions } from '../../src/cdp/types.js';
+import { startPageCdpForwarder } from '../../src/kernel/cdp-page-forwarder.js';
+import { WorkerCdpProxy } from '../../src/kernel/cdp-worker-proxy.js';
+
+interface FakePort extends ExtensionBridgePort {
+  posted: unknown[];
+  receive: (msg: unknown) => void;
+  disconnected: boolean;
+  triggerDisconnect: () => void;
+}
+
+function makeFakePort(): FakePort {
+  const messageListeners: Array<(msg: unknown) => void> = [];
+  const disconnectListeners: Array<() => void> = [];
+  const port: FakePort = {
+    posted: [],
+    disconnected: false,
+    postMessage: (msg) => port.posted.push(msg),
+    disconnect: () => {
+      port.disconnected = true;
+    },
+    onMessage: { addListener: (cb) => messageListeners.push(cb) },
+    onDisconnect: { addListener: (cb) => disconnectListeners.push(cb) },
+    receive: (msg) => {
+      for (const cb of messageListeners) cb(msg);
+    },
+    triggerDisconnect: () => {
+      for (const cb of disconnectListeners) cb();
+    },
+  };
+  return port;
+}
+
+function lastChannelId(port: FakePort): string {
+  const hello = port.posted.find(
+    (m): m is { channelId: string } =>
+      typeof m === 'object' && m !== null && (m as { kind?: string }).kind === 'handshake.hello'
+  );
+  if (!hello) throw new Error('no hello posted');
+  return hello.channelId;
+}
+
+describe('ExtensionBridgeTransport', () => {
+  let port: FakePort;
+  let ports: FakePort[];
+  let transport: ExtensionBridgeTransport;
+  let connectCalls: Array<{ extensionId: string; info: { name: string } }>;
+
+  beforeEach(() => {
+    port = makeFakePort();
+    ports = [port];
+    connectCalls = [];
+    transport = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+
+      connect: (extensionId, info) => {
+        connectCalls.push({ extensionId, info });
+        return port;
+      },
+    });
+  });
+
+  it('advertises isExtensionBridge so the kernel host skips the NavigationWatcher', () => {
+    expect(transport.isExtensionBridge).toBe(true);
+  });
+
+  function nextPort(): FakePort {
+    port = makeFakePort();
+    ports.push(port);
+    return port;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens the port with the bridge name and posts handshake.hello', async () => {
+    const p = transport.connect();
+
+    await Promise.resolve();
+    expect(connectCalls).toEqual([
+      { extensionId: 'fake-ext-id', info: { name: EXTENSION_BRIDGE_PORT_NAME } },
+    ]);
+    const hello = port.posted[0] as { bridge: number; kind: string; channelId: string };
+    expect(hello.kind).toBe('handshake.hello');
+    expect(hello.bridge).toBe(EXTENSION_BRIDGE_PROTOCOL_VERSION);
+    expect(hello.channelId).toMatch(/^bridge-/);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+    });
+    await p;
+    expect(transport.state).toBe('connected');
+  });
+
+  it('rejects connect() on handshake.rejected', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    const channelId = lastChannelId(port);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.rejected',
+      reason: 'leader-tab-not-pinned',
+    });
+    await expect(p).rejects.toThrow(/leader-tab-not-pinned/);
+    expect(transport.state).toBe('disconnected');
+  });
+
+  it('rejects connect() immediately with a distinct error on a version-mismatched envelope', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    const channelId = lastChannelId(port);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      port.receive({ bridge: 2, channelId, kind: 'handshake.welcome' });
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('version mismatch');
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    await expect(p).rejects.toThrow(/version mismatch \(peer v2, ours v1\)/);
+  });
+
+  it('does not fail the handshake on a mismatched envelope for a different channelId', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    const channelId = lastChannelId(port);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      port.receive({ bridge: 2, channelId: 'bridge-someone-else', kind: 'handshake.welcome' });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.welcome',
+    });
+    await p;
+    expect(transport.state).toBe('connected');
+  });
+
+  it('rejects connect() if the port disconnects before welcome', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    port.triggerDisconnect();
+    await expect(p).rejects.toThrow(/disconnected before welcome/);
+  });
+
+  it('rejects connect() on handshake timeout', async () => {
+    vi.useFakeTimers();
+
+    const p = transport.connect({ timeout: 50 } as CDPConnectOptions);
+    await Promise.resolve();
+    vi.advanceTimersByTime(60);
+    await expect(p).rejects.toThrow(/handshake timed out/);
+    expect(port.disconnected).toBe(true);
+  });
+
+  it('round-trips a CDP command and resolves on cdp.response', async () => {
+    const channelId = await connect(transport, port);
+    const promise = transport.send('Page.navigate', { url: 'https://example.com' }, 'sess-1');
+    await Promise.resolve();
+    const req = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.request') as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+      sessionId: string;
+    };
+    expect(req.method).toBe('Page.navigate');
+    expect(req.params).toEqual({ url: 'https://example.com' });
+    expect(req.sessionId).toBe('sess-1');
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'cdp.response',
+      id: req.id,
+      result: { frameId: 'F1' },
+    });
+    await expect(promise).resolves.toEqual({ frameId: 'F1' });
+  });
+
+  it('rejects a CDP command on cdp.response.error', async () => {
+    const channelId = await connect(transport, port);
+    const promise = transport.send('Runtime.evaluate', { expression: 'boom' }, 'sess-1');
+    await Promise.resolve();
+    const req = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.request') as {
+      id: number;
+    };
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'cdp.response',
+      id: req.id,
+      error: 'sandbox forbidden',
+    });
+    await expect(promise).rejects.toThrow(/sandbox forbidden/);
+  });
+
+  it('routes cdp.event envelopes to subscribed listeners with sessionId', async () => {
+    const channelId = await connect(transport, port);
+    const received: Array<Record<string, unknown>> = [];
+    transport.on('Page.loadEventFired', (params) => received.push(params));
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'cdp.event',
+      method: 'Page.loadEventFired',
+      params: { timestamp: 123 },
+      sessionId: 'sess-9',
+    });
+    expect(received).toEqual([{ timestamp: 123, sessionId: 'sess-9' }]);
+  });
+
+  it('disconnects after an external debugger detach so the client reacquires its session', async () => {
+    const channelId = await connect(transport, port);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: 'sess-9', targetId: '9' },
+    });
+
+    expect(port.disconnected).toBe(true);
+    expect(transport.state).toBe('disconnected');
+  });
+
+  it('makes BrowserAPI reacquire the same target session after external debugger detach', async () => {
+    const api = new BrowserAPI(transport);
+    const firstAttach = api.attachToPage('9');
+    await Promise.resolve();
+    const firstChannelId = lastChannelId(port);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: firstChannelId,
+      kind: 'handshake.welcome',
+    });
+    await replyToCdpRequest(port, 'Target.attachToTarget', { sessionId: '9' });
+    await replyToCdpRequest(port, 'Page.enable', {});
+    await expect(firstAttach).resolves.toBe('9');
+
+    const firstPort = port;
+    firstPort.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: firstChannelId,
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: '9', targetId: '9' },
+    });
+
+    const secondPort = nextPort();
+    const secondAttach = api.attachToPage('9');
+    await Promise.resolve();
+    const secondChannelId = lastChannelId(secondPort);
+    secondPort.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: secondChannelId,
+      kind: 'handshake.welcome',
+    });
+    await replyToCdpRequest(secondPort, 'Target.attachToTarget', { sessionId: '9' });
+    await replyToCdpRequest(secondPort, 'Page.enable', {});
+
+    await expect(secondAttach).resolves.toBe('9');
+    expect(cdpRequests(firstPort, 'Target.attachToTarget')).toHaveLength(1);
+    expect(cdpRequests(secondPort, 'Target.attachToTarget')).toHaveLength(1);
+  });
+
+  it('ignores envelopes whose channelId does not match', async () => {
+    await connect(transport, port);
+    const received: Array<Record<string, unknown>> = [];
+    transport.on('Page.loadEventFired', (p) => received.push(p));
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'cdp.event',
+      method: 'Page.loadEventFired',
+      params: { stray: true },
+    });
+    expect(received).toEqual([]);
+  });
+
+  it('ignores non-bridge envelopes (e.g. cherry leakage)', async () => {
+    await connect(transport, port);
+    const received: Array<Record<string, unknown>> = [];
+    transport.on('Page.loadEventFired', (p) => received.push(p));
+    port.receive({ cherry: 1, channelId: 'x', kind: 'cdp.event', method: 'Page.loadEventFired' });
+    expect(received).toEqual([]);
+  });
+
+  it('invokes onLick with a channelId-matched extension.lick envelope', async () => {
+    const licks: unknown[] = [];
+    const onLick = vi.fn((lick: unknown) => licks.push(lick));
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onLick,
+    });
+    const channelId = await connect(t, port);
+    const envelope = {
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.lick' as const,
+      verb: 'handoff' as const,
+      target: 'https://github.com/acme/repo',
+      url: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
+      instruction: 'fix the bug',
+    };
+    t.testReceive(envelope);
+    expect(onLick).toHaveBeenCalledTimes(1);
+    expect(licks[0]).toEqual(envelope);
+  });
+
+  it('drops an extension.lick envelope whose channelId does not match', async () => {
+    const onLick = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onLick,
+    });
+    await connect(t, port);
+    t.testReceive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.lick',
+      verb: 'upskill',
+      target: 'https://github.com/acme/skill',
+      url: 'https://www.sliccy.ai/handoff?upskill=https://github.com/acme/skill',
+    });
+    expect(onLick).not.toHaveBeenCalled();
+  });
+
+  it('invokes onDiscovery with a channelId-matched extension.discovery envelope', async () => {
+    const discoveries: unknown[] = [];
+    const onDiscovery = vi.fn((d: unknown) => discoveries.push(d));
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onDiscovery,
+    });
+    const channelId = await connect(t, port);
+    const envelope = {
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.discovery' as const,
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog' as const,
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    };
+    t.testReceive(envelope);
+    expect(onDiscovery).toHaveBeenCalledTimes(1);
+    expect(discoveries[0]).toEqual(envelope);
+  });
+
+  it('drops an extension.discovery envelope whose channelId does not match', async () => {
+    const onDiscovery = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onDiscovery,
+    });
+    await connect(t, port);
+    t.testReceive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      url: 'https://example.com/',
+    });
+    expect(onDiscovery).not.toHaveBeenCalled();
+  });
+
+  it('invokes onOpenSettings for a channelId-matched extension.open-settings envelope', async () => {
+    const onOpenSettings = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onOpenSettings,
+    });
+    const channelId = await connect(t, port);
+    t.testReceive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.open-settings',
+    });
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an extension.open-settings envelope whose channelId does not match', async () => {
+    const onOpenSettings = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onOpenSettings,
+    });
+    await connect(t, port);
+    t.testReceive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.open-settings',
+    });
+    expect(onOpenSettings).not.toHaveBeenCalled();
+  });
+
+  it('disconnect() tears down the port and the bridge state', async () => {
+    await connect(transport, port);
+    transport.disconnect();
+    expect(port.disconnected).toBe(true);
+    expect(transport.state).toBe('disconnected');
+  });
+
+  it('resets state to disconnected on a post-welcome port drop', async () => {
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    port.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+  });
+
+  it('rejects in-flight commands on a post-welcome port drop', async () => {
+    await connect(transport, port);
+    const promise = transport.send('Page.enable');
+    await Promise.resolve();
+    port.triggerDisconnect();
+    await expect(promise).rejects.toThrow(/ExtensionBridgeTransport disconnected/);
+  });
+
+  it('reconnects after a drop with a fresh port and a new handshake', async () => {
+    await connect(transport, port);
+    const firstPort = ports[0];
+    firstPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    expect(ports).toHaveLength(2);
+    const freshPort = ports[1];
+    expect(freshPort).not.toBe(firstPort);
+    expect(freshPort.posted.some((m) => (m as { kind?: string }).kind === 'handshake.hello')).toBe(
+      true
+    );
+  });
+
+  it('allows a reconnect after an intentional disconnect', async () => {
+    await connect(transport, port);
+    transport.disconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+  });
+
+  it('ignores a stale disconnect from an old port after reconnect', async () => {
+    await connect(transport, port);
+    const oldPort = ports[0];
+    oldPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    oldPort.triggerDisconnect();
+    expect(transport.state).toBe('connected');
+  });
+
+  describe('onStateChange', () => {
+    it('notifies connected on connect and disconnected on a post-welcome port drop', async () => {
+      const seen: Array<[string, string | undefined]> = [];
+      transport.onStateChange((state, reason) => seen.push([state, reason]));
+
+      await connect(transport, port);
+      expect(seen).toEqual([['connected', undefined]]);
+
+      port.triggerDisconnect();
+      expect(seen.at(-1)?.[0]).toBe('disconnected');
+      expect(seen.at(-1)?.[1]).toContain('ExtensionBridgeTransport disconnected');
+    });
+
+    it('notifies connected again after a lazy reconnect on a fresh port', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      ports[0].triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+
+      expect(seen).toEqual(['disconnected', 'connected']);
+    });
+
+    it('notifies on an intentional disconnect() too', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      transport.disconnect();
+
+      expect(seen).toEqual(['disconnected']);
+    });
+
+    it('keeps state subscribers across a drop — only CDP event listeners are cleared', async () => {
+      const channelId = await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+      const cdpListener = vi.fn();
+      transport.on('Page.frameNavigated', cdpListener);
+
+      port.triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+      port.receive({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+        kind: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frameId: 'f1' },
+      });
+
+      expect(cdpListener).not.toHaveBeenCalled();
+
+      expect(seen).toEqual(['disconnected', 'connected']);
+    });
+
+    it('stops notifying after unsubscribe', async () => {
+      await connect(transport, port);
+      const seen: string[] = [];
+      const off = transport.onStateChange((state) => seen.push(state));
+
+      off();
+      port.triggerDisconnect();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('does not notify when a stale port from before a reconnect drops', async () => {
+      await connect(transport, port);
+      const oldPort = ports[0];
+      oldPort.triggerDisconnect();
+      nextPort();
+      await connect(transport, port);
+      const seen: string[] = [];
+      transport.onStateChange((state) => seen.push(state));
+
+      oldPort.triggerDisconnect();
+
+      expect(seen).toEqual([]);
+      expect(transport.state).toBe('connected');
+    });
+  });
+
+  it('crosses the kernel hop: a Port loss resets the worker and the reconnect re-arms events', async () => {
+    const channel = new MessageChannel();
+    const channelId = await connect(transport, port);
+    const stop = startPageCdpForwarder(channel.port1, transport);
+    const worker = new WorkerCdpProxy(channel.port2);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const frameNavigated = (): void => {
+      port.receive({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+        kind: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frameId: 'f1' },
+      });
+    };
+    try {
+      await worker.connect();
+      const seen: unknown[] = [];
+      worker.on('Page.frameNavigated', (params) => seen.push(params));
+      await settle();
+
+      frameNavigated();
+      await settle();
+      expect(seen).toHaveLength(1);
+
+      port.triggerDisconnect();
+      await settle();
+      expect(worker.state).toBe('disconnected');
+
+      nextPort();
+      expect(await connect(transport, port)).toBe(channelId);
+      await settle();
+      await worker.connect();
+
+      frameNavigated();
+      await settle();
+      expect(seen).toHaveLength(2);
+    } finally {
+      worker.disconnect();
+      stop();
+      channel.port1.close();
+      channel.port2.close();
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  it('sendLeaderJoinUrl posts a leader.join-url envelope over the connected port', async () => {
+    const channelId = await connect(transport, port);
+    port.posted = [];
+    transport.sendLeaderJoinUrl('https://worker.test/join/t.secret');
+    expect(port.posted).toHaveLength(1);
+    const msg = port.posted[0] as {
+      bridge: number;
+      channelId: string;
+      kind: string;
+      joinUrl: string;
+    };
+    expect(msg.kind).toBe('leader.join-url');
+    expect(msg.bridge).toBe(EXTENSION_BRIDGE_PROTOCOL_VERSION);
+    expect(msg.channelId).toBe(channelId);
+    expect(msg.joinUrl).toBe('https://worker.test/join/t.secret');
+  });
+
+  it('sendLeaderJoinUrl before connect remembers the value and does not throw', () => {
+    expect(() => transport.sendLeaderJoinUrl('https://worker.test/join/t.secret')).not.toThrow();
+  });
+
+  it('re-sends the last joinUrl automatically after a bridge reconnect', async () => {
+    await connect(transport, port);
+    transport.sendLeaderJoinUrl('https://worker.test/join/t.secret');
+    const firstPort = ports[0];
+    firstPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    const newPort = ports[1];
+    const channelId = await connect(transport, newPort);
+    const joinUrlMsg = newPort.posted.find(
+      (m) => (m as { kind?: string }).kind === 'leader.join-url'
+    ) as { bridge: number; channelId: string; kind: string; joinUrl: string } | undefined;
+    expect(joinUrlMsg).toBeDefined();
+    expect(joinUrlMsg!.bridge).toBe(EXTENSION_BRIDGE_PROTOCOL_VERSION);
+    expect(joinUrlMsg!.channelId).toBe(channelId);
+    expect(joinUrlMsg!.joinUrl).toBe('https://worker.test/join/t.secret');
+  });
+
+  it('sendLeaderJoinUrl accepts null to signal tray dropped', async () => {
+    const channelId = await connect(transport, port);
+    port.posted = [];
+    transport.sendLeaderJoinUrl(null);
+    expect(port.posted).toHaveLength(1);
+    const msg = port.posted[0] as {
+      bridge: number;
+      channelId: string;
+      kind: string;
+      joinUrl: null;
+    };
+    expect(msg.kind).toBe('leader.join-url');
+    expect(msg.channelId).toBe(channelId);
+    expect(msg.joinUrl).toBeNull();
+  });
+});
+
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+async function connect(t: ExtensionBridgeTransport, port: FakePort): Promise<string> {
+  const p = t.connect();
+  await Promise.resolve();
+  const channelId = lastChannelId(port);
+  port.receive({
+    bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    channelId,
+    kind: 'handshake.welcome',
+  });
+  await p;
+  return channelId;
+}
+
+function cdpRequests(port: FakePort, method: string): Array<{ id: number }> {
+  return port.posted.filter(
+    (message): message is { id: number } & Record<string, unknown> =>
+      typeof message === 'object' &&
+      message !== null &&
+      (message as { kind?: string }).kind === 'cdp.request' &&
+      (message as { method?: string }).method === method
+  );
+}
+
+async function replyToCdpRequest(
+  port: FakePort,
+  method: string,
+  result: Record<string, unknown>
+): Promise<void> {
+  await vi.waitFor(() => expect(cdpRequests(port, method)).toHaveLength(1));
+  const request = cdpRequests(port, method)[0];
+  port.receive({
+    bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    channelId: lastChannelId(port),
+    kind: 'cdp.response',
+    id: request.id,
+    result,
+  });
+}

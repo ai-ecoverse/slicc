@@ -1,0 +1,236 @@
+import { type ChildProcess, spawn } from 'child_process';
+import { app, BrowserWindow, nativeTheme, session } from 'electron';
+import { readFile } from 'fs/promises';
+import { resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+import { mintBridgeToken } from './bridge-security.js';
+import {
+  BRIDGE_ROLE_LEADER,
+  buildThinOverlayAppUrl,
+  resolveHostedLeaderOrigin,
+} from './electron-controller.js';
+import {
+  buildElectronOverlayInjectionCall,
+  buildElectronServerSpawnConfig,
+  getElectronOverlayEntryDistPath,
+  getElectronServeOrigin,
+  parseElectronFloatFlags,
+} from './electron-runtime.js';
+
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
+const FLAGS = parseElectronFloatFlags(process.argv.slice(2));
+const SERVE_ORIGIN = getElectronServeOrigin(FLAGS.servePort);
+const ELECTRON_PARTITION = 'persist:slicc-electron-float';
+
+const BRIDGE_TOKEN = mintBridgeToken();
+const HOSTED_LEADER_ORIGIN = resolveHostedLeaderOrigin(process.env);
+const BRIDGE_WS_URL = `ws://localhost:${FLAGS.servePort}/cdp`;
+
+const OVERLAY_APP_URL = buildThinOverlayAppUrl({
+  hostedLeaderOrigin: HOSTED_LEADER_ORIGIN,
+  bridgeWsUrl: BRIDGE_WS_URL,
+  bridgeToken: BRIDGE_TOKEN,
+  role: BRIDGE_ROLE_LEADER,
+});
+
+app.commandLine.appendSwitch('remote-debugging-port', String(FLAGS.cdpPort));
+
+let cliServerProcess: ChildProcess | null = null;
+let quitting = false;
+
+function pipeChildOutput(child: ChildProcess, label: string): void {
+  child.stdout?.on('data', (data: Buffer) => {
+    process.stdout.write(`[${label}:out] ${data}`);
+  });
+  child.stderr?.on('data', (data: Buffer) => {
+    process.stderr.write(`[${label}:err] ${data}`);
+  });
+}
+
+async function waitForServerReady(origin: string, retries = 60, delayMs = 500): Promise<void> {
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      const response = await fetch(origin);
+      if (response.ok || response.status < 500) return;
+    } catch {}
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+  }
+
+  throw new Error(`Electron float server did not become ready at ${origin}`);
+}
+
+async function loadOverlayBundleSource(): Promise<string> {
+  return await readFile(getElectronOverlayEntryDistPath(PROJECT_ROOT), 'utf8');
+}
+
+async function injectOverlay(window: BrowserWindow): Promise<void> {
+  const bundleSource = await loadOverlayBundleSource();
+
+  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
+  await window.webContents.executeJavaScript(`${themeScript}\n${bundleSource}`, true);
+  await window.webContents.executeJavaScript(
+    buildElectronOverlayInjectionCall({ appUrl: OVERLAY_APP_URL }),
+    true
+  );
+}
+
+function wireOverlayReinjection(window: BrowserWindow): void {
+  const reinject = () => {
+    void injectOverlay(window).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[electron-float] Overlay injection failed:', message);
+    });
+  };
+
+  window.webContents.on('did-finish-load', reinject);
+  window.webContents.on('did-navigate-in-page', reinject);
+}
+
+function configureElectronSession(): void {
+  const electronSession = session.fromPartition(ELECTRON_PARTITION);
+  electronSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = { ...(details.responseHeaders ?? {}) };
+    delete responseHeaders['content-security-policy'];
+    delete responseHeaders['Content-Security-Policy'];
+    delete responseHeaders['content-security-policy-report-only'];
+    delete responseHeaders['Content-Security-Policy-Report-Only'];
+    callback({ responseHeaders });
+  });
+}
+
+async function createFloatWindow(targetUrl: string): Promise<BrowserWindow> {
+  const window = new BrowserWindow({
+    width: 1440,
+    height: 960,
+    minWidth: 1024,
+    minHeight: 720,
+    autoHideMenuBar: true,
+    title: 'slicc electron float',
+    webPreferences: {
+      partition: ELECTRON_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      allowRunningInsecureContent: true,
+    },
+  });
+
+  wireOverlayReinjection(window);
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    void createFloatWindow(url);
+    return { action: 'deny' };
+  });
+
+  try {
+    await window.loadURL(targetUrl);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[electron-float] Failed to load ${targetUrl}: ${message}`);
+    await window.loadURL('about:blank');
+  }
+
+  return window;
+}
+
+function startCliServer(): ChildProcess {
+  const spawnConfig = buildElectronServerSpawnConfig(PROJECT_ROOT, {
+    cdpPort: FLAGS.cdpPort,
+    nodePath: process.env['npm_node_execpath'] ?? 'node',
+  });
+
+  const child = spawn(spawnConfig.command, spawnConfig.args, {
+    cwd: PROJECT_ROOT,
+    env: {
+      ...process.env,
+      PORT: String(FLAGS.servePort),
+
+      SLICC_BRIDGE_TOKEN: BRIDGE_TOKEN,
+      SLICC_HOSTED_LEADER_ORIGIN: HOSTED_LEADER_ORIGIN,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  pipeChildOutput(child, 'electron-server');
+
+  child.on('exit', (code) => {
+    if (quitting) return;
+    console.error(`[electron-float] CLI server exited unexpectedly with code ${code}`);
+    app.quit();
+  });
+
+  return child;
+}
+
+async function stopCliServer(): Promise<void> {
+  if (!cliServerProcess) return;
+
+  const child = cliServerProcess;
+  cliServerProcess = null;
+
+  await new Promise<void>((resolvePromise) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      resolvePromise();
+    };
+
+    child.once('exit', finish);
+    child.kill('SIGTERM');
+
+    setTimeout(() => {
+      if (child.exitCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+      }
+      finish();
+    }, 3000);
+  });
+}
+
+async function main(): Promise<void> {
+  await app.whenReady();
+  configureElectronSession();
+
+  cliServerProcess = startCliServer();
+  await waitForServerReady(SERVE_ORIGIN);
+
+  const sanitizedOverlayUrl = OVERLAY_APP_URL.replace(
+    /([?&])bridgeToken=[^&]+/,
+    '$1bridgeToken=<redacted>'
+  );
+  console.log(`[electron-float] Hosted overlay URL: ${sanitizedOverlayUrl}`);
+
+  await createFloatWindow(FLAGS.targetUrl);
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void createFloatWindow(FLAGS.targetUrl);
+    }
+  });
+}
+
+app.on('before-quit', () => {
+  quitting = true;
+});
+
+app.on('window-all-closed', () => {
+  app.quit();
+});
+
+app.on('will-quit', () => {
+  void stopCliServer();
+});
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[electron-float] Fatal error:', message);
+  void stopCliServer().finally(() => {
+    app.exit(1);
+  });
+});

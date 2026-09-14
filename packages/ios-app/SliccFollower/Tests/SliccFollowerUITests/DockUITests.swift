@@ -1,0 +1,71 @@
+import XCTest
+
+
+
+final class DockUITests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+    }
+
+    func testDockShowsDisconnectedTerminalState() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "disconnected"]
+        app.launch()
+
+        let term = app.buttons["dock-term"]
+        XCTAssertTrue(term.waitForExistence(timeout: 60))
+        term.tap()
+
+        let placeholder = app.staticTexts["terminal-disconnected"]
+        XCTAssertTrue(
+            placeholder.waitForExistence(timeout: 10),
+            "the terminal surface asks for an active leader")
+        XCTAssertTrue(placeholder.isHittable)
+
+        
+        
+        term.tap()
+        let collapsed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: placeholder)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [collapsed], timeout: 3), .completed,
+            "tap-active removes the collapsed placeholder from accessibility")
+    }
+
+    func testNewChatLivesInTheTopControlNotTheRail() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "connected"]
+        app.launch()
+
+        let newChat = app.buttons["new-chat-button"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 60))
+        XCTAssertFalse(
+            app.buttons["dock-freezer"].exists,
+            "the rail belongs to sprinkles and tools — session actions live up top")
+        newChat.tap()
+
+        XCTAssertTrue(
+            app.buttons["Save & start new"].waitForExistence(timeout: 10),
+            "the top-control New chat opens the shared disposition dialog")
+    }
+
+    func testLeftHandedDockKeepsTheRailUsable() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-joinUrl", "", "-uiTestConnectionState", "connected",
+            "-leftHandedDock", "YES",
+            "-uiTestTerminalFixture", "YES",
+        ]
+        app.launch()
+
+        let term = app.buttons["dock-term"]
+        XCTAssertTrue(term.waitForExistence(timeout: 60))
+        term.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["terminal-surface"].waitForExistence(timeout: 10),
+            "the mirrored rail toggles surfaces exactly like the trailing one")
+    }
+}

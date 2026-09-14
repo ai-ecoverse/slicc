@@ -1,0 +1,1164 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserAPI } from '../../src/cdp/index.js';
+import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
+import { registerProviderConfig, unregisterProviderConfig } from '../../src/providers/index.js';
+import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../src/scoops/workflow-run-manager.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
+import {
+  decodeForbiddenResponseHeaders,
+  encodeForbiddenRequestHeaders,
+  isTextContentType,
+} from '../../src/shell/proxied-fetch.js';
+
+describe('isTextContentType', () => {
+  it('identifies text/* as text', () => {
+    expect(isTextContentType('text/html')).toBe(true);
+    expect(isTextContentType('text/plain')).toBe(true);
+    expect(isTextContentType('text/css')).toBe(true);
+    expect(isTextContentType('text/xml')).toBe(true);
+  });
+
+  it('identifies JSON as text', () => {
+    expect(isTextContentType('application/json')).toBe(true);
+    expect(isTextContentType('application/json; charset=utf-8')).toBe(true);
+  });
+
+  it('identifies XML as text', () => {
+    expect(isTextContentType('application/xml')).toBe(true);
+    expect(isTextContentType('application/xhtml+xml')).toBe(true);
+  });
+
+  it('identifies JavaScript as text', () => {
+    expect(isTextContentType('application/javascript')).toBe(true);
+    expect(isTextContentType('text/javascript')).toBe(true);
+    expect(isTextContentType('application/ecmascript')).toBe(true);
+  });
+
+  it('identifies HTML as text', () => {
+    expect(isTextContentType('text/html')).toBe(true);
+    expect(isTextContentType('text/html; charset=utf-8')).toBe(true);
+  });
+
+  it('identifies CSS as text', () => {
+    expect(isTextContentType('text/css')).toBe(true);
+  });
+
+  it('identifies SVG as text', () => {
+    expect(isTextContentType('image/svg+xml')).toBe(true);
+  });
+
+  it('identifies image types as binary', () => {
+    expect(isTextContentType('image/jpeg')).toBe(false);
+    expect(isTextContentType('image/png')).toBe(false);
+    expect(isTextContentType('image/gif')).toBe(false);
+    expect(isTextContentType('image/webp')).toBe(false);
+  });
+
+  it('identifies archive types as binary', () => {
+    expect(isTextContentType('application/zip')).toBe(false);
+    expect(isTextContentType('application/gzip')).toBe(false);
+    expect(isTextContentType('application/octet-stream')).toBe(false);
+  });
+
+  it('identifies PDF as binary', () => {
+    expect(isTextContentType('application/pdf')).toBe(false);
+  });
+
+  it('identifies audio/video as binary', () => {
+    expect(isTextContentType('audio/mpeg')).toBe(false);
+    expect(isTextContentType('video/mp4')).toBe(false);
+  });
+
+  it('treats empty content-type as binary (byte-safe default)', () => {
+    expect(isTextContentType('')).toBe(false);
+  });
+
+  it('is case-insensitive', () => {
+    expect(isTextContentType('Application/JSON')).toBe(true);
+    expect(isTextContentType('IMAGE/JPEG')).toBe(false);
+    expect(isTextContentType('Text/HTML')).toBe(true);
+  });
+});
+
+describe('encodeForbiddenRequestHeaders', () => {
+  it('returns empty object for undefined input', () => {
+    expect(encodeForbiddenRequestHeaders(undefined)).toEqual({});
+  });
+
+  it('returns empty object for empty object input', () => {
+    expect(encodeForbiddenRequestHeaders({})).toEqual({});
+  });
+
+  it('passes through normal headers unchanged', () => {
+    const headers = { Authorization: 'Bearer tok', 'Content-Type': 'application/json' };
+    expect(encodeForbiddenRequestHeaders(headers)).toEqual(headers);
+  });
+
+  it('encodes Cookie → X-Proxy-Cookie', () => {
+    expect(encodeForbiddenRequestHeaders({ Cookie: 'sid=abc' })).toEqual({
+      'X-Proxy-Cookie': 'sid=abc',
+    });
+  });
+
+  it('encodes cookie (lowercase) → X-Proxy-Cookie', () => {
+    expect(encodeForbiddenRequestHeaders({ cookie: 'sid=abc' })).toEqual({
+      'X-Proxy-Cookie': 'sid=abc',
+    });
+  });
+
+  it('encodes Origin → X-Proxy-Origin', () => {
+    expect(encodeForbiddenRequestHeaders({ Origin: 'https://suno.com' })).toEqual({
+      'X-Proxy-Origin': 'https://suno.com',
+    });
+  });
+
+  it('encodes origin (lowercase) → X-Proxy-Origin', () => {
+    expect(encodeForbiddenRequestHeaders({ origin: 'https://suno.com' })).toEqual({
+      'X-Proxy-Origin': 'https://suno.com',
+    });
+  });
+
+  it('encodes Referer → X-Proxy-Referer', () => {
+    expect(encodeForbiddenRequestHeaders({ Referer: 'https://example.com/page' })).toEqual({
+      'X-Proxy-Referer': 'https://example.com/page',
+    });
+  });
+
+  it('encodes Proxy-Authorization → X-Proxy-Proxy-Authorization', () => {
+    expect(encodeForbiddenRequestHeaders({ 'Proxy-Authorization': 'Basic abc' })).toEqual({
+      'X-Proxy-Proxy-Authorization': 'Basic abc',
+    });
+  });
+
+  it('encodes proxy-authorization (lowercase) → X-Proxy-proxy-authorization', () => {
+    expect(encodeForbiddenRequestHeaders({ 'proxy-authorization': 'Basic abc' })).toEqual({
+      'X-Proxy-proxy-authorization': 'Basic abc',
+    });
+  });
+
+  it('handles mixed headers (some normal, some forbidden)', () => {
+    const result = encodeForbiddenRequestHeaders({
+      Accept: 'text/html',
+      Cookie: 'sid=abc',
+      Origin: 'https://example.com',
+      Referer: 'https://example.com/page',
+      'Proxy-Authorization': 'Basic xyz',
+      'Content-Type': 'application/json',
+    });
+    expect(result).toEqual({
+      Accept: 'text/html',
+      'X-Proxy-Cookie': 'sid=abc',
+      'X-Proxy-Origin': 'https://example.com',
+      'X-Proxy-Referer': 'https://example.com/page',
+      'X-Proxy-Proxy-Authorization': 'Basic xyz',
+      'Content-Type': 'application/json',
+    });
+  });
+});
+
+describe('decodeForbiddenResponseHeaders', () => {
+  it('passes through normal headers unchanged', () => {
+    const headers = { 'content-type': 'text/html', 'x-request-id': '123' };
+    expect(decodeForbiddenResponseHeaders(headers)).toEqual(headers);
+  });
+
+  it('decodes X-Proxy-Set-Cookie → set-cookie', () => {
+    const headers = { 'X-Proxy-Set-Cookie': '["sid=abc; Path=/"]' };
+    expect(decodeForbiddenResponseHeaders(headers)).toEqual({
+      'set-cookie': '["sid=abc; Path=/"]',
+    });
+  });
+
+  it('decodes x-proxy-set-cookie (lowercase) → set-cookie', () => {
+    const headers = { 'x-proxy-set-cookie': '["sid=abc"]' };
+    expect(decodeForbiddenResponseHeaders(headers)).toEqual({
+      'set-cookie': '["sid=abc"]',
+    });
+  });
+
+  it('preserves JSON array string value when decoding Set-Cookie', () => {
+    const jsonArray = '["sid=abc; Path=/", "theme=dark; HttpOnly"]';
+    const result = decodeForbiddenResponseHeaders({
+      'X-Proxy-Set-Cookie': jsonArray,
+    });
+    expect(result['set-cookie']).toBe(jsonArray);
+  });
+
+  it('handles empty object input', () => {
+    expect(decodeForbiddenResponseHeaders({})).toEqual({});
+  });
+
+  it('handles headers with no transport headers (passthrough)', () => {
+    const headers = { 'cache-control': 'no-cache', etag: '"v1"' };
+    expect(decodeForbiddenResponseHeaders(headers)).toEqual(headers);
+  });
+
+  it('handles mixed headers (transport + normal)', () => {
+    const result = decodeForbiddenResponseHeaders({
+      'content-type': 'text/html',
+      'X-Proxy-Set-Cookie': '["sid=abc"]',
+      'x-request-id': '42',
+    });
+    expect(result).toEqual({
+      'content-type': 'text/html',
+      'set-cookie': '["sid=abc"]',
+      'x-request-id': '42',
+    });
+  });
+});
+
+describe('AlmostBashShellHeadless playwright command discoverability', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-almost-bash-shell-${dbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  it('exposes playwright aliases and host through which, commands, and /usr/bin when browserAPI is provided', async () => {
+    const shell = new AlmostBashShellHeadless({
+      fs,
+      browserAPI: {} as BrowserAPI,
+    });
+
+    const whichResult = await shell.executeCommand(
+      'which playwright-cli playwright puppeteer host'
+    );
+    expect(whichResult.exitCode).toBe(0);
+    expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+    expect(whichResult.stdout).toContain('/usr/bin/playwright');
+    expect(whichResult.stdout).toContain('/usr/bin/puppeteer');
+    expect(whichResult.stdout).toContain('/usr/bin/host');
+
+    const commandsResult = await shell.executeCommand('commands | grep playwright');
+    expect(commandsResult.exitCode).toBe(0);
+    expect(commandsResult.stdout).toContain('playwright');
+    expect(commandsResult.stdout).toContain('playwright-cli');
+
+    const hostCommandsResult = await shell.executeCommand('commands | grep host');
+    expect(hostCommandsResult.exitCode).toBe(0);
+    expect(hostCommandsResult.stdout).toContain('host');
+
+    const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
+    expect(usrBinResult.exitCode).toBe(0);
+    expect(usrBinResult.stdout).toContain('playwright');
+    expect(usrBinResult.stdout).toContain('playwright-cli');
+  });
+
+  it('keeps playwright aliases and host discoverable even without browserAPI', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const whichResult = await shell.executeCommand('which playwright-cli host');
+    expect(whichResult.exitCode).toBe(0);
+    expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+    expect(whichResult.stdout).toContain('/usr/bin/host');
+
+    const commandsResult = await shell.executeCommand('commands | grep playwright');
+    expect(commandsResult.exitCode).toBe(0);
+    expect(commandsResult.stdout).toContain('playwright-cli');
+    expect(commandsResult.stdout).toContain('puppeteer');
+
+    const hostCommandsResult = await shell.executeCommand('commands | grep host');
+    expect(hostCommandsResult.exitCode).toBe(0);
+    expect(hostCommandsResult.stdout).toContain('host');
+
+    const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
+    expect(usrBinResult.exitCode).toBe(0);
+    expect(usrBinResult.stdout).toContain('playwright');
+    expect(usrBinResult.stdout).toContain('playwright-cli');
+
+    const openResult = await shell.executeCommand('playwright-cli open https://example.com');
+    expect(openResult.exitCode).toBe(1);
+    expect(openResult.stderr).toContain('browser APIs are unavailable');
+  });
+  it('accepts an external AbortSignal when executing commands programmatically', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const controller = new AbortController();
+    const execSpy = vi.spyOn((shell as any).bash, 'exec');
+
+    const result = await shell.executeCommand('pwd', controller.signal);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/');
+    expect(execSpy).toHaveBeenCalledWith(
+      'pwd',
+      expect.objectContaining({
+        signal: controller.signal,
+      })
+    );
+  });
+
+  it('shares BSH discovery through the shell-owned script catalog', async () => {
+    fs.setWatcher(new FsWatcher());
+    await fs.writeFile('/workspace/login.example.com.bsh', 'console.log("login");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    expect((await shell.getScriptCatalog().getBshEntries()).map((entry) => entry.path)).toEqual([
+      '/workspace/login.example.com.bsh',
+    ]);
+  });
+});
+
+describe('AlmostBashShellHeadless GitHub token renewal wiring', () => {
+  it('uses the registered expiry-gated hook only for git network operations', async () => {
+    const fs = await VirtualFS.create({ dbName: 'test-shell-github-renewal', wipe: true });
+    const getValidAccessToken = vi.fn(async () => 'ghp_fresh');
+    const onSilentRenew = vi.fn(async () => 'ghp_forced');
+    registerProviderConfig({
+      id: 'github',
+      name: 'GitHub',
+      description: 'GitHub test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getValidAccessToken,
+      onSilentRenew,
+    });
+
+    try {
+      const shell = new AlmostBashShellHeadless({ fs });
+      await shell.executeCommand('git fetch');
+      expect(getValidAccessToken).toHaveBeenCalledTimes(1);
+      expect(onSilentRenew).not.toHaveBeenCalled();
+
+      await shell.executeCommand('git status');
+      expect(getValidAccessToken).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterProviderConfig('github');
+      await fs.dispose();
+    }
+  });
+});
+
+let homeDbCounter = 0;
+
+describe('AlmostBashShellHeadless HOME and ~/.profile (#2085)', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-home-${homeDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('resolves $HOME and $USER from the onboarded /home/<slug> on a cold shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('echo "$HOME:$USER"');
+    expect(result.stdout.trim()).toBe('/home/lars:lars');
+
+    const cdHome = await shell.executeCommand('cd ~ && pwd');
+    expect(cdHome.stdout.trim()).toBe('/home/lars');
+  });
+
+  it('falls back to /home/user when onboarding never ran, without writing', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/user');
+
+    expect(await fs.exists('/home/user')).toBe(false);
+  });
+
+  it('sources ~/.profile before the first command, so exports persist', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'export GREETING="hello from profile"');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const first = await shell.executeCommand('echo "$GREETING"');
+    expect(first.stdout.trim()).toBe('hello from profile');
+
+    const second = await shell.executeCommand('echo "again: $GREETING"');
+    expect(second.stdout.trim()).toBe('again: hello from profile');
+  });
+
+  it('a broken ~/.profile must not brick the shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile(
+      '/home/lars/.profile',
+      'export GOOD=yes\nthis-command-does-not-exist-anywhere'
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('echo "ok $GOOD"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('ok yes');
+  });
+
+  it('a cd inside ~/.profile does not change the contracted working directory', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.mkdir('/workspace', { recursive: true });
+    await fs.writeFile('/home/lars/.profile', 'cd /home/lars\nexport MARKER=set');
+
+    const shell = new AlmostBashShellHeadless({ fs, cwd: '/workspace' });
+    const result = await shell.executeCommand('pwd; echo "$MARKER"');
+    expect(result.stdout.trim().split('\n')).toEqual(['/workspace', 'set']);
+  });
+
+  it('an explicit env.HOME pin wins and its own ~/.profile is sourced (scoop contract)', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/scoops/research/home/.profile', 'export SCOPE=scoop');
+
+    const shell = new AlmostBashShellHeadless({
+      fs,
+      env: { HOME: '/scoops/research/home', USER: 'research' },
+    });
+    const result = await shell.executeCommand('echo "$HOME:$USER:$SCOPE"');
+    expect(result.stdout.trim()).toBe('/scoops/research/home:research:scoop');
+  });
+
+  it('picks the most recently onboarded slug when several homes exist', async () => {
+    await fs.writeFile('/home/first/.welcome.json', '{"name":"First"}');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await fs.writeFile('/home/second/.welcome.json', '{"name":"Second"}');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/second');
+  });
+});
+
+let pathDbCounter = 0;
+
+describe('AlmostBashShellHeadless $PATH-driven command lookup (#2085)', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-path-${pathDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('a .jsh outside the PATH roots is not a command until PATH is extended', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("tool ran");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const miss = await shell.executeCommand('mytool');
+    expect(miss.exitCode).toBe(127);
+
+    const exported = await shell.executeCommand('export PATH="$PATH:/opt/tools"');
+    expect(exported.exitCode).toBe(0);
+    const hit = await shell.executeCommand('mytool');
+    expect(hit.exitCode).toBe(0);
+    expect(hit.stdout).toContain('tool ran');
+  });
+
+  it('a PATH exported from ~/.profile is live for the very first command', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'export PATH="$PATH:/opt/tools"');
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("profile path");');
+
+    await fs.writeFile('/opt/elsewhere/hidden.jsh', 'console.log("never");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const result = await shell.executeCommand('mytool | cat');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('profile path');
+
+    const hidden = await shell.executeCommand('hidden');
+    expect(hidden.exitCode).toBe(127);
+  });
+
+  it('unset in ~/.profile actually removes a pre-seeded env var (Codex P2)', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'unset PRESEEDED');
+
+    const shell = new AlmostBashShellHeadless({ fs, env: { PRESEEDED: 'leak' } });
+    const result = await shell.executeCommand('echo "${PRESEEDED:-gone}"');
+    expect(result.stdout.trim()).toBe('gone');
+  });
+
+  it('which stops reporting a script after its PATH root is removed (Codex P2)', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
+
+    const shell = new AlmostBashShellHeadless({ fs, env: { PATH: '/usr/bin:/opt/tools' } });
+    const before = await shell.executeCommand('which mytool');
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain('/opt/tools/mytool.jsh');
+
+    await shell.executeCommand('export PATH=/usr/bin');
+    const after = await shell.executeCommand('which mytool');
+    expect(after.exitCode).toBe(1);
+    expect(after.stdout).not.toContain('mytool');
+
+    const dispatch = await shell.executeCommand('mytool');
+    expect(dispatch.exitCode).toBe(127);
+  });
+
+  it('which resolves from the same PATH roots as dispatch', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const miss = await shell.executeCommand('which mytool');
+    expect(miss.exitCode).toBe(1);
+
+    const hit = await shell.executeCommand('export PATH="$PATH:/opt/tools"; which mytool');
+    expect(hit.exitCode).toBe(0);
+    expect(hit.stdout).toContain('/opt/tools/mytool.jsh');
+  });
+});
+
+let jshRegistrationDbCounter = 0;
+
+describe('AlmostBashShellHeadless .jsh command registration', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-jsh-reg-${jshRegistrationDbCounter++}`,
+      wipe: true,
+    });
+    await fs.mkdir('/workspace/skills/test-cmd/scripts', { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('registers .jsh commands as first-class bash commands available in pipelines', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/hello.jsh',
+      'console.log("hello from jsh");'
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    await shell.syncJshCommands();
+
+    const direct = await shell.executeCommand('hello');
+    expect(direct.exitCode).toBe(0);
+    expect(direct.stdout).toContain('hello from jsh');
+
+    const piped = await shell.executeCommand('hello | cat');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toContain('hello from jsh');
+  });
+
+  it('resolves .jsh in a compound command on a cold shell (no explicit sync)', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/cold.jsh', 'console.log("cold ok");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const compound = await shell.executeCommand('cold; echo done');
+    expect(compound.stdout).toContain('cold ok');
+    expect(compound.stdout).toContain('done');
+
+    const piped = await shell.executeCommand('cold | cat');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toContain('cold ok');
+  });
+
+  it('a .jsh dispatch failure surfaces its real message, not a sanitized <path> (#2146)', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/failer.jsh', 'console.log("hi");');
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const catalog = shell.getScriptCatalog();
+    vi.spyOn(catalog, 'getJshCommands').mockRejectedValue(
+      new Error("ENOTDIR: not a directory '/tmp/poisoned'")
+    );
+    const result = await shell.executeCommand('failer');
+    vi.restoreAllMocks();
+
+    expect(result.exitCode).toBe(1);
+
+    expect(result.stderr).toContain("'/tmp/poisoned'");
+    expect(result.stderr).not.toContain('<path>');
+  });
+
+  it('still resolves a bare .jsh command on a cold shell', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/bare.jsh', 'console.log("bare ok");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const result = await shell.executeCommand('bare');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('bare ok');
+  });
+
+  it('aborting the first command does not wait out the initial .jsh scan', async () => {
+    const neverFinishes = {
+      exists: async () => true,
+      async *walk(): AsyncGenerator<string> {
+        await new Promise<never>(() => {});
+      },
+      readFile: async () => '',
+    } as unknown as ConstructorParameters<typeof AlmostBashShellHeadless>[0]['jshDiscoveryFs'];
+
+    const shell = new AlmostBashShellHeadless({ fs, jshDiscoveryFs: neverFinishes });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await Promise.race([
+      shell.executeCommand('echo hi', controller.signal).then(() => 'returned'),
+      new Promise((resolve) => setTimeout(() => resolve('HUNG'), 3000)),
+    ]);
+    expect(result).toBe('returned');
+  });
+
+  it('makes .jsh commands visible via which and /usr/bin', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const whichResult = await shell.executeCommand('which mycmd');
+    expect(whichResult.exitCode).toBe(0);
+
+    const lsResult = await shell.executeCommand('ls /usr/bin | grep mycmd');
+    expect(lsResult.exitCode).toBe(0);
+    expect(lsResult.stdout).toContain('mycmd');
+  });
+
+  it('passes arguments to registered .jsh commands', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/greet.jsh',
+      'console.log("hello " + process.argv.slice(2).join(" "));'
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const result = await shell.executeCommand('greet world');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('hello world');
+  });
+
+  it('threads piped stdin into registered .jsh commands', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/upper.jsh',
+      'process.stdout.write(process.stdin.read().toUpperCase());'
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const piped = await shell.executeCommand('echo -n hello | upper');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toBe('HELLO');
+  });
+
+  it('exposes process.stdin.read() inside registered .jsh commands', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/wc-bytes.jsh',
+      'console.log(process.stdin.read().length);'
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const piped = await shell.executeCommand('echo -n abcdef | wc-bytes');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout.trim()).toBe('6');
+  });
+
+  it('does not shadow built-in commands with .jsh files of the same name', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/echo.jsh', 'console.log("fake echo");');
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+
+    const result = await shell.executeCommand('echo real');
+    expect(result.stdout).toContain('real');
+    expect(result.stdout).not.toContain('fake echo');
+  });
+});
+
+let allowlistDbCounter = 0;
+
+describe('AlmostBashShellHeadless command allow-list', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-allowlist-${allowlistDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('registers all commands when allowedCommands is omitted (default)', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
+    expect((await shell.executeCommand('pwd')).exitCode).toBe(0);
+    expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
+  });
+
+  it('registers all commands when allowedCommands is the wildcard ["*"]', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['*'] });
+
+    expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
+    expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
+  });
+
+  it('blocks every command when allowedCommands is empty', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: [] });
+
+    const result = await shell.executeCommand('echo hi');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/command not found|not found/i);
+  });
+
+  it('allows listed commands and rejects unlisted ones with exit 127', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+
+    const ok = await shell.executeCommand('echo hello');
+    expect(ok.exitCode).toBe(0);
+    expect(ok.stdout).toContain('hello');
+
+    const blocked = await shell.executeCommand('ls /');
+    expect(blocked.exitCode).toBe(127);
+    expect(blocked.stderr).toMatch(/ls/);
+    expect(blocked.stderr).toMatch(/not found/i);
+  });
+
+  it('blocks disallowed commands inside a pipeline', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+
+    const piped = await shell.executeCommand('echo hi | cat');
+    expect(piped.exitCode).not.toBe(0);
+    expect(piped.stderr).toMatch(/cat/);
+    expect(piped.stderr).toMatch(/not found/i);
+  });
+
+  it('blocks disallowed commands inside command substitution', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+
+    const result = await shell.executeCommand('echo "before:$(ls /):after"');
+    expect(result.stderr).toMatch(/ls/);
+    expect(result.stderr).toMatch(/not found/i);
+    expect(result.stdout).toContain('before::after');
+  });
+
+  it('filters custom (supplemental) commands the same way as built-ins', async () => {
+    const blockedShell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+    const blocked = await blockedShell.executeCommand('mount');
+    expect(blocked.exitCode).toBe(127);
+    expect(blocked.stderr).toMatch(/mount/);
+    expect(blocked.stderr).toMatch(/not found/i);
+
+    const allowedShell = new AlmostBashShellHeadless({ fs, allowedCommands: ['mount'] });
+    const allowed = await allowedShell.executeCommand('mount');
+    expect(allowed.stderr).not.toMatch(/not found/i);
+  });
+
+  it('filters .jsh commands the same way as built-ins', async () => {
+    await fs.mkdir('/workspace/skills/allowlist-jsh/scripts', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/allowlist-jsh/scripts/greet.jsh',
+      'console.log("hello from greet");'
+    );
+
+    const blocked = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+    await blocked.syncJshCommands();
+    const blockedResult = await blocked.executeCommand('greet');
+    expect(blockedResult.exitCode).toBe(127);
+    expect(blockedResult.stderr).toMatch(/not found/i);
+
+    const allowed = new AlmostBashShellHeadless({ fs, allowedCommands: ['greet'] });
+    await allowed.syncJshCommands();
+    const allowedResult = await allowed.executeCommand('greet');
+    expect(allowedResult.exitCode).toBe(0);
+    expect(allowedResult.stdout).toContain('hello from greet');
+  });
+
+  it('omits blocked commands from the /usr/bin virtual directory', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo', 'ls'] });
+
+    const listing = await shell.executeCommand('ls /usr/bin');
+    expect(listing.exitCode).toBe(0);
+    expect(listing.stdout).toContain('echo');
+    expect(listing.stdout).toContain('ls');
+
+    expect(listing.stdout.split(/\s+/).filter((w) => w === 'cat')).toHaveLength(0);
+  });
+
+  it('blocks network commands (curl, wget) that just-bash auto-registers when fetch is set', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
+
+    const curl = await shell.executeCommand('curl http://example.com');
+    expect(curl.exitCode).toBe(127);
+    expect(curl.stderr).toMatch(/curl/);
+    expect(curl.stderr).toMatch(/not found/i);
+
+    const wget = await shell.executeCommand('wget http://example.com');
+    expect(wget.exitCode).toBe(127);
+    expect(wget.stderr).toMatch(/wget/);
+    expect(wget.stderr).toMatch(/not found/i);
+  });
+
+  it('keeps network commands available when they are on the allow-list', async () => {
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['curl'] });
+
+    const result = await shell.executeCommand('curl');
+
+    expect(result.exitCode).not.toBe(127);
+    expect(result.stderr).not.toMatch(/not found/i);
+  });
+});
+
+function installFakeWfManager(): void {
+  (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] = {
+    start: async () => ({ runId: 'r1' }),
+    getRun: () => null,
+    listRuns: () => [],
+    observeRun: () => () => {},
+  };
+}
+
+describe('AlmostBashShellHeadless workflow command registration', () => {
+  let fs: VirtualFS;
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-wf-reg-${Math.random()}`, wipe: true });
+  });
+  afterEach(async () => {
+    delete (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY];
+    await fs.dispose();
+  });
+
+  it('registers a saved workflow as a bare command that runs non-blocking', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/audit.workflow.js',
+      "export const meta = { name: 'audit' };\nreturn 1"
+    );
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('audit');
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/started/i);
+  });
+
+  it('a skill workflow is reachable as <skill>:<name>', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/skills/triage/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/triage/.workflows/sweep.workflow.js',
+      "export const meta = { name: 'sweep' };\nreturn 1"
+    );
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('triage:sweep');
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/started/i);
+  });
+
+  it('a .jsh wins the bare name over a saved workflow (precedence at dispatch)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    const res = await shell.executeCommand('foo');
+    expect(res.stdout).toContain('JSH-WON');
+  });
+
+  it('deleting the .jsh falls back to the workflow at dispatch (no re-register)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    await fs.rm('/workspace/bin/foo.jsh');
+    const res = await shell.executeCommand('foo');
+    expect(res.stdout).toMatch(/started/i);
+  });
+
+  it('a .jsh added AFTER a workflow is registered wins at dispatch (reverse transition)', async () => {
+    installFakeWfManager();
+    await fs.mkdir('/workspace/.workflows', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.workflows/foo.workflow.js',
+      "export const meta={name:'foo'};\nreturn 1"
+    );
+    const shell = new AlmostBashShellHeadless({ fs });
+    await shell.syncJshCommands();
+    const before = await shell.executeCommand('foo');
+    expect(before.stdout).toMatch(/started/i);
+
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-LATER');");
+    await shell.syncJshCommands();
+    const after = await shell.executeCommand('foo');
+    expect(after.stdout).toContain('JSH-LATER');
+  });
+});
+
+let vfsRoundTripDbCounter = 0;
+
+describe('AlmostBashShellHeadless VFS round-trip', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-vfs-roundtrip-${vfsRoundTripDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it("makes require('sliccy:exec') shell writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/exec-writer.jsh',
+      [
+        "const { exec } = require('sliccy:exec');",
+        "await exec('mkdir -p /workspace/rt');",
+        "await exec('echo exec-payload > /workspace/rt/from-exec.txt');",
+        "console.log('wrote via exec');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const run = await shell.executeScriptFile('/workspace/exec-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via exec');
+
+    const read = await shell.executeCommand('cat /workspace/rt/from-exec.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout.trim()).toBe('exec-payload');
+
+    expect(((await fs.readFile('/workspace/rt/from-exec.txt')) as string).trim()).toBe(
+      'exec-payload'
+    );
+  });
+
+  it("makes require('fs').writeFile writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/fs-writer.jsh',
+      [
+        "const fs = require('fs');",
+        "await fs.mkdir('/workspace/rt');",
+        "await fs.writeFile('/workspace/rt/from-fs.txt', 'fs-payload');",
+        "console.log('wrote via fs');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+
+    const run = await shell.executeScriptFile('/workspace/fs-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via fs');
+
+    const ls = await shell.executeCommand('ls /workspace/rt');
+    expect(ls.exitCode).toBe(0);
+    expect(ls.stdout).toContain('from-fs.txt');
+
+    const read = await shell.executeCommand('cat /workspace/rt/from-fs.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toBe('fs-payload');
+
+    expect(await fs.readFile('/workspace/rt/from-fs.txt')).toBe('fs-payload');
+  });
+
+  it("makes require('fs').fetchToFile downloads visible to the bash tool", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
+    try {
+      await fs.writeFile(
+        '/workspace/fetcher.jsh',
+        [
+          "const fs = require('fs');",
+          "await fs.mkdir('/workspace/rt');",
+          "const n = await fs.fetchToFile('https://example.com/blob.bin', '/workspace/rt/from-fetch.bin');",
+          "console.log('bytes:' + n);",
+        ].join('\n')
+      );
+
+      const shell = new AlmostBashShellHeadless({ fs });
+
+      const run = await shell.executeScriptFile('/workspace/fetcher.jsh');
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toContain('bytes:4');
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://example.com/blob.bin');
+
+      const exists = await shell.executeCommand('test -f /workspace/rt/from-fetch.bin');
+      expect(exists.exitCode).toBe(0);
+
+      const bytes = (await fs.readFile('/workspace/rt/from-fetch.bin', {
+        encoding: 'binary',
+      })) as Uint8Array;
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+let coherenceDbCounter = 0;
+
+describe('AlmostBashShellHeadless sync-fs ↔ exec coherence', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-coherence-${coherenceDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('a writeFileSync is visible to a subsequent exec in the same script', async () => {
+    await fs.writeFile(
+      '/workspace/a.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/ca', { recursive: true });",
+        "fs.writeFileSync('/workspace/ca/sync.txt', 'sync-payload');",
+        "const r = await exec('cat /workspace/ca/sync.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/a.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:sync-payload');
+  });
+
+  it("an exec's write is visible to a subsequent readFileSync in the same script", async () => {
+    await fs.writeFile(
+      '/workspace/b.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cb', { recursive: true });",
+        "await exec('echo hi-from-exec > /workspace/cb/out.txt');",
+        "const s = fs.readFileSync('/workspace/cb/out.txt', 'utf8');",
+        "console.log('READ:' + s.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/b.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('READ:hi-from-exec');
+  });
+
+  it('an async fs.writeFile is visible to a subsequent exec (existing coherent path)', async () => {
+    await fs.writeFile(
+      '/workspace/c.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cc');",
+        "await fs.writeFile('/workspace/cc/async.txt', 'async-payload');",
+        "const r = await exec('cat /workspace/cc/async.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/c.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:async-payload');
+  });
+
+  it('does not re-apply already-flushed sync mutations at end-of-script', async () => {
+    await fs.writeFile(
+      '/workspace/d.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cd', { recursive: true });",
+        "fs.writeFileSync('/workspace/cd/a.txt', 'ORIGINAL');",
+        "await exec('echo MODIFIED > /workspace/cd/a.txt');",
+        "fs.writeFileSync('/workspace/cd/b.txt', 'BEE');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/d.jsh');
+    expect(run.exitCode).toBe(0);
+
+    const a = await shell.executeCommand('cat /workspace/cd/a.txt');
+    expect(a.exitCode).toBe(0);
+    expect(a.stdout.trim()).toBe('MODIFIED');
+
+    const b = await shell.executeCommand('cat /workspace/cd/b.txt');
+    expect(b.exitCode).toBe(0);
+    expect(b.stdout.trim()).toBe('BEE');
+  });
+
+  it('preserves a sync write made while an exec.start spawn is in flight', async () => {
+    await fs.writeFile(
+      '/workspace/e.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "const h = exec.start('true');",
+        'h.stdin.end();',
+        "fs.writeFileSync('/workspace/later_e.txt', 'LATER');",
+        'await h.done;',
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/e.jsh');
+    expect(run.exitCode).toBe(0);
+
+    const later = await shell.executeCommand('cat /workspace/later_e.txt');
+    expect(later.exitCode).toBe(0);
+    expect(later.stdout.trim()).toBe('LATER');
+  });
+
+  it('a kill() during the flush window prevents exec.start from ever running', async () => {
+    await fs.writeFile(
+      '/workspace/f.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cf', { recursive: true });",
+        "const h = exec.start('echo RAN > /workspace/cf/out.txt');",
+        'h.stdin.end();',
+        "await h.kill('SIGTERM');",
+        'const r = await h.done;',
+        "console.log('EXIT:' + r.exitCode);",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShellHeadless({ fs });
+    const run = await shell.executeScriptFile('/workspace/f.jsh');
+    expect(run.exitCode).toBe(0);
+
+    expect(run.stdout).toContain('EXIT:143');
+
+    const ran = await shell.executeCommand('test -f /workspace/cf/out.txt');
+    expect(ran.exitCode).not.toBe(0);
+  });
+});

@@ -1,0 +1,8 @@
+{
+  "storyId": "showcase-full-app--collapsed",
+  "storyTitle": "Showcase/Full App",
+  "subsystem": "showcase",
+  "importPath": "./src/showcase/app.stories.ts",
+  "comment": "in the full app: only the cone should have eyes in the nav bar, the other scoops are either idle or dead (dead eyes are ok to keep), but the rule is to have only one set of eyes track the user's cursor",
+  "createdAt": "2026-06-10T14:34:33.271Z"
+}

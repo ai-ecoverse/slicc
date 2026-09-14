@@ -1,0 +1,145 @@
+import { describe, expect, it } from 'vitest';
+import {
+  EXTENSION_BRIDGE_PORT_NAME,
+  EXTENSION_BRIDGE_PROTOCOL_VERSION,
+  isBridgeVersionMismatch,
+  isExtensionBridgeEnvelope,
+} from '../src/extension-bridge-protocol.js';
+
+describe('extension-bridge-protocol', () => {
+  it('exposes a stable port name and protocol version', () => {
+    expect(EXTENSION_BRIDGE_PORT_NAME).toBe('slicc.cdp-bridge');
+    expect(EXTENSION_BRIDGE_PROTOCOL_VERSION).toBe(1);
+  });
+
+  it('accepts all valid envelope kinds', () => {
+    const ch = 'bridge-abc';
+    const kinds = [
+      { bridge: 1, channelId: ch, kind: 'handshake.hello' },
+      { bridge: 1, channelId: ch, kind: 'handshake.welcome' },
+      { bridge: 1, channelId: ch, kind: 'handshake.rejected', reason: 'x' },
+      { bridge: 1, channelId: ch, kind: 'cdp.request', id: 1, method: 'X' },
+      { bridge: 1, channelId: ch, kind: 'cdp.response', id: 1 },
+      { bridge: 1, channelId: ch, kind: 'cdp.event', method: 'X' },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 'sliccy.ai',
+        url: 'https://www.sliccy.ai/handoff?handoff=do%20a%20thing',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.lick',
+        verb: 'upskill',
+        target: 'github.com/owner/repo',
+        url: 'https://www.sliccy.ai/handoff?upskill=https://github.com/owner/repo',
+        instruction: 'install this skill',
+        branch: 'main',
+        path: 'skills/foo',
+        title: 'Foo skill',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.discovery',
+        discoveryOrigin: 'https://example.com',
+        discoveryKind: 'ai-catalog',
+        discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+        url: 'https://example.com/',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.discovery',
+        discoveryOrigin: 'https://example.com',
+        discoveryKind: 'llms-txt',
+        discoveryUrl: 'https://example.com/llms.txt',
+        url: 'https://example.com/docs',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'leader.join-url',
+        joinUrl: 'https://worker.test/join/t.secret',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'leader.join-url',
+        joinUrl: null,
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.open-settings',
+      },
+    ];
+    for (const env of kinds) {
+      expect(isExtensionBridgeEnvelope(env)).toBe(true);
+    }
+  });
+
+  it('rejects malformed envelopes', () => {
+    expect(isExtensionBridgeEnvelope(null)).toBe(false);
+    expect(isExtensionBridgeEnvelope('not-an-object')).toBe(false);
+    expect(isExtensionBridgeEnvelope({})).toBe(false);
+
+    expect(isExtensionBridgeEnvelope({ bridge: 99, channelId: 'x', kind: 'handshake.hello' })).toBe(
+      false
+    );
+
+    expect(isExtensionBridgeEnvelope({ bridge: 1, kind: 'handshake.hello' })).toBe(false);
+
+    expect(isExtensionBridgeEnvelope({ bridge: 1, channelId: 'x', kind: 'pizza' })).toBe(false);
+
+    expect(isExtensionBridgeEnvelope({ bridge: 1, channelId: 42, kind: 'handshake.hello' })).toBe(
+      false
+    );
+
+    expect(
+      isExtensionBridgeEnvelope({
+        bridge: 99,
+        channelId: 'x',
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 't',
+        url: 'u',
+      })
+    ).toBe(false);
+
+    expect(
+      isExtensionBridgeEnvelope({
+        bridge: 1,
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 't',
+        url: 'u',
+      })
+    ).toBe(false);
+  });
+
+  it('rejects envelopes that look almost right (Cherry envelopes)', () => {
+    expect(isExtensionBridgeEnvelope({ cherry: 1, channelId: 'x', kind: 'handshake.hello' })).toBe(
+      false
+    );
+  });
+
+  describe('isBridgeVersionMismatch', () => {
+    it('detects an envelope-shaped message with a different version', () => {
+      expect(isBridgeVersionMismatch({ bridge: 2, channelId: 'x', kind: 'handshake.hello' })).toBe(
+        true
+      );
+    });
+    it('is false for the current version and for noise', () => {
+      expect(isBridgeVersionMismatch({ bridge: 1, channelId: 'x', kind: 'handshake.hello' })).toBe(
+        false
+      );
+      expect(isBridgeVersionMismatch(null)).toBe(false);
+      expect(isBridgeVersionMismatch({ bridge: 2 })).toBe(false);
+      expect(isBridgeVersionMismatch({ cherry: 2, channelId: 'x', kind: 'k' })).toBe(false);
+    });
+  });
+});

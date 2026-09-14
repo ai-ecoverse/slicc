@@ -1,0 +1,19 @@
+{
+  "model": "fake-coder",
+  "models": ["fake-coder-mini"],
+  "turns": [
+    {
+      "content": "Hi! Let me check the file system.",
+      "tool_calls": [{ "name": "list_files", "arguments": { "path": "/workspace" } }]
+    },
+    {
+      "whenUserMessageMatches": "open",
+      "content": "Opening the requested URL.",
+      "tool_calls": [{ "name": "bash", "arguments": "{\"command\":\"open https://example.com\"}" }]
+    },
+    {
+      "content": "All done."
+    }
+  ],
+  "onOverflow": "error"
+}

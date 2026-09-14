@@ -1,0 +1,8 @@
+{
+  "storyId": "composer-composermeta--default",
+  "storyTitle": "Composer/ComposerMeta",
+  "subsystem": "composer",
+  "importPath": "./src/composer/slicc-composer-meta.stories.ts",
+  "comment": "pull the composer meta, I think we have useful changes in the remote",
+  "createdAt": "2026-06-10T14:01:03.063Z"
+}

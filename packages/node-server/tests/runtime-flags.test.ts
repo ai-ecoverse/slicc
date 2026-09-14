@@ -1,0 +1,446 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  DEFAULT_CLI_CDP_PORT,
+  DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+  parseCliRuntimeFlags,
+  parseMountTableMapping,
+} from '../src/runtime-flags.js';
+
+describe('parseCliRuntimeFlags', () => {
+  it('uses the default CLI runtime flags', () => {
+    expect(parseCliRuntimeFlags([])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_CLI_CDP_PORT,
+      electron: false,
+      electronApp: null,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      explicitCdpPort: false,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses the serve-only flag', () => {
+    expect(parseCliRuntimeFlags(['--serve-only'])).toEqual({
+      serveOnly: true,
+      cdpPort: DEFAULT_CLI_CDP_PORT,
+      electron: false,
+      electronApp: null,
+      explicitCdpPort: false,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses an explicit CDP port', () => {
+    expect(parseCliRuntimeFlags(['--cdp-port=9333']).cdpPort).toBe(9333);
+  });
+
+  it('ignores invalid CDP ports', () => {
+    expect(parseCliRuntimeFlags(['--cdp-port=nope']).cdpPort).toBe(DEFAULT_CLI_CDP_PORT);
+  });
+
+  it('parses electron mode with a positional app path', () => {
+    expect(parseCliRuntimeFlags(['--electron', '/Applications/Slack.app'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      explicitCdpPort: false,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('keeps an explicit CDP port in electron mode', () => {
+    expect(
+      parseCliRuntimeFlags(['--electron', '--cdp-port=9444', '/Applications/Slack.app'])
+    ).toEqual({
+      serveOnly: false,
+      cdpPort: 9444,
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      explicitCdpPort: true,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses explicit electron app and kill flags', () => {
+    expect(parseCliRuntimeFlags(['--electron-app=/Applications/Linear.app', '--kill'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: '/Applications/Linear.app',
+      explicitCdpPort: false,
+      kill: true,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('does not consume a following flag token as the electron app path', () => {
+    expect(parseCliRuntimeFlags(['--electron-app', '--kill'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: null,
+      explicitCdpPort: false,
+      kill: true,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses lead mode with an explicit worker base URL', () => {
+    expect(parseCliRuntimeFlags(['--lead', 'https://tray.example.com/base'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_CLI_CDP_PORT,
+      electron: false,
+      electronApp: null,
+      explicitCdpPort: false,
+      kill: false,
+      lead: true,
+      leadWorkerBaseUrl: 'https://tray.example.com/base',
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('supports --lead without consuming unrelated positional arguments', () => {
+    expect(parseCliRuntimeFlags(['--lead', '--electron', '/Applications/Slack.app'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      explicitCdpPort: false,
+      kill: false,
+      lead: true,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: false,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses --lead=<url> syntax', () => {
+    expect(parseCliRuntimeFlags(['--lead=https://tray.example.com'])).toMatchObject({
+      lead: true,
+      leadWorkerBaseUrl: 'https://tray.example.com',
+      profile: null,
+      join: false,
+      joinUrl: null,
+    });
+  });
+
+  it('parses a named QA profile', () => {
+    expect(parseCliRuntimeFlags(['--profile=leader'])).toMatchObject({
+      profile: 'leader',
+    });
+  });
+
+  it('does not consume another flag token as the profile name', () => {
+    expect(parseCliRuntimeFlags(['--profile', '--lead'])).toMatchObject({
+      profile: null,
+      lead: true,
+    });
+  });
+
+  it('parses join mode with an explicit join URL', () => {
+    expect(
+      parseCliRuntimeFlags(['--join', 'https://tray.example.com/base/join/tray-123.secret'])
+    ).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_CLI_CDP_PORT,
+      electron: false,
+      electronApp: null,
+      explicitCdpPort: false,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: true,
+      joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('supports --join without consuming unrelated positional arguments', () => {
+    expect(parseCliRuntimeFlags(['--join', '--electron', '/Applications/Slack.app'])).toEqual({
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      explicitCdpPort: false,
+      kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
+      profile: null,
+      join: true,
+      joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
+      prompt: null,
+      envFile: null,
+      version: false,
+      hosted: false,
+      installCli: false,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses --join=<url> syntax', () => {
+    expect(
+      parseCliRuntimeFlags(['--join=https://tray.example.com/base/join/tray-123.secret'])
+    ).toMatchObject({
+      join: true,
+      joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+    });
+  });
+
+  it('parses --electron <app> --join <url> together for the follower auto-attach flow', () => {
+    expect(
+      parseCliRuntimeFlags([
+        '--electron',
+        '/Applications/Slack.app',
+        '--join',
+        'https://tray.example.com/base/join/tray-123.secret',
+      ])
+    ).toMatchObject({
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      join: true,
+      joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+    });
+  });
+
+  it('parses --log-level flag', () => {
+    expect(parseCliRuntimeFlags(['--log-level=debug']).logLevel).toBe('debug');
+    expect(parseCliRuntimeFlags(['--log-level=error']).logLevel).toBe('error');
+    expect(parseCliRuntimeFlags(['--log-level=warn']).logLevel).toBe('warn');
+  });
+
+  it('ignores invalid log levels', () => {
+    expect(parseCliRuntimeFlags(['--log-level=verbose']).logLevel).toBe('info');
+  });
+
+  it('parses --log-dir flag', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=/tmp/my-logs']).logDir).toBe('/tmp/my-logs');
+  });
+
+  it('sets logDir to null for empty --log-dir', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=']).logDir).toBe(null);
+  });
+
+  it('parses version flag variants', () => {
+    expect(parseCliRuntimeFlags(['version']).version).toBe(true);
+    expect(parseCliRuntimeFlags(['--version']).version).toBe(true);
+    expect(parseCliRuntimeFlags(['-v']).version).toBe(true);
+  });
+
+  it('parses hosted flag', () => {
+    expect(parseCliRuntimeFlags(['--hosted'])).toMatchObject({
+      hosted: true,
+      serveOnly: false,
+    });
+  });
+
+  it('parses the install-cli flag', () => {
+    expect(parseCliRuntimeFlags(['--install-cli'])).toMatchObject({
+      installCli: true,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('parses --install-dir in both forms', () => {
+    expect(parseCliRuntimeFlags(['--install-cli', '--install-dir=/opt/bin'])).toMatchObject({
+      installCli: true,
+      installDir: '/opt/bin',
+    });
+    expect(parseCliRuntimeFlags(['--install-cli', '--install-dir', '/opt/bin'])).toMatchObject({
+      installCli: true,
+      installDir: '/opt/bin',
+    });
+  });
+
+  it('does not consume another flag token as the install dir', () => {
+    expect(parseCliRuntimeFlags(['--install-dir', '--install-cli'])).toMatchObject({
+      installCli: true,
+      installDir: null,
+      mounts: [],
+    });
+  });
+
+  it('collects repeatable --mount os:vfs mappings in both forms, deduplicated per target', () => {
+    const flags = parseCliRuntimeFlags([
+      '--mount=/Users/me/proj/:/mnt/project/',
+      '--mount',
+      '/Users/me/docs:/mnt/docs',
+      '--mount=/Users/me/other:/mnt/project',
+      '--mount=relative:/mnt/x',
+      '--mount=/mnt/one-sided',
+      '--mount=',
+    ]);
+    expect(flags.mounts).toEqual([
+      { hostPath: '/Users/me/proj', path: '/mnt/project' },
+      { hostPath: '/Users/me/docs', path: '/mnt/docs' },
+    ]);
+  });
+
+  it('does not consume another flag token as a mount mapping', () => {
+    const flags = parseCliRuntimeFlags(['--mount', '--serve-only']);
+    expect(flags.mounts).toEqual([]);
+    expect(flags.serveOnly).toBe(true);
+  });
+});
+
+describe('parseMountTableMapping', () => {
+  it('splits on the last colon and normalizes both sides', () => {
+    expect(parseMountTableMapping('/a/b/:/mnt/x//')).toEqual({ hostPath: '/a/b', path: '/mnt/x' });
+    expect(parseMountTableMapping('/we:ird/dir:/mnt/x')).toEqual({
+      hostPath: '/we:ird/dir',
+      path: '/mnt/x',
+    });
+  });
+
+  it('expands ~ against the provided home dir', () => {
+    expect(parseMountTableMapping('~/proj:/mnt/p', '/Users/me')).toEqual({
+      hostPath: '/Users/me/proj',
+      path: '/mnt/p',
+    });
+    expect(parseMountTableMapping('~/proj:/mnt/p', '')).toBeNull();
+  });
+
+  it('accepts Windows drive-letter host paths', () => {
+    expect(parseMountTableMapping('C:\\Users\\me\\proj:/mnt/proj')).toEqual({
+      hostPath: 'C:\\Users\\me\\proj',
+      path: '/mnt/proj',
+    });
+    expect(parseMountTableMapping('D:/data/:/mnt/data')).toEqual({
+      hostPath: 'D:/data',
+      path: '/mnt/data',
+    });
+    expect(parseMountTableMapping('C:\\:/mnt/c')).toEqual({ hostPath: 'C:\\', path: '/mnt/c' });
+  });
+
+  it('rejects non-canonical targets instead of resolving them', () => {
+    expect(parseMountTableMapping('/a:/mnt/a/../b')).toBeNull();
+    expect(parseMountTableMapping('/a:/mnt//b')).toBeNull();
+    expect(parseMountTableMapping('/a:/mnt/./b')).toBeNull();
+    expect(parseMountTableMapping('/a/../x:/mnt/b')).toBeNull();
+  });
+
+  it('rejects one-sided, relative, and root-target mappings', () => {
+    expect(parseMountTableMapping('/mnt/only-target')).toBeNull();
+    expect(parseMountTableMapping('rel:/mnt/x')).toBeNull();
+    expect(parseMountTableMapping('/a:rel')).toBeNull();
+    expect(parseMountTableMapping('/a:/')).toBeNull();
+    expect(parseMountTableMapping('')).toBeNull();
+  });
+});

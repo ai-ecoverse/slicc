@@ -1,0 +1,1026 @@
+// @vitest-environment jsdom
+
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installWcDomStubs } from './wc-dom-stubs.js';
+
+installWcDomStubs();
+
+vi.mock('../../../src/providers/quick-llm.js', () => ({
+  quickLabel: vi.fn(async () => 'Push the release to main'),
+}));
+
+const accountStore = vi.hoisted(() => ({
+  getAlternativeModelProviders: vi.fn<() => string[]>(() => []),
+  getSelectedProvider: vi.fn<() => string>(() => 'adobe'),
+}));
+vi.mock('../../../src/providers/account-store.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...accountStore,
+}));
+
+import { hasIcon } from '@slicc/webcomponents';
+import { createChatFixture } from '../../../src/ui/chat-fixture.js';
+import type { ChatMessage } from '../../../src/ui/types.js';
+import {
+  BASH_ICONS,
+  buildThreadChildren,
+  collateLickMessages,
+  isAuthExpiredError,
+  isInvalidModelError,
+  isNoApiKeyError,
+  lickEventLabel,
+  messageEls,
+  NO_API_KEY_ERROR_PREFIX,
+  summarizeToolInput,
+  TOOL_ICONS,
+} from '../../../src/ui/wc/wc-message-view.js';
+
+const fixture = createChatFixture();
+
+describe('buildThreadChildren', () => {
+  let children: HTMLElement[];
+
+  beforeAll(() => {
+    children = buildThreadChildren(fixture);
+  });
+
+  it('starts with a day separator', () => {
+    expect(children[0]?.tagName.toLowerCase()).toBe('slicc-day-separator');
+    expect(children[0]?.getAttribute('label')).toBeTruthy();
+  });
+
+  it('renders one day separator per local-date boundary', () => {
+    const dates = new Set(fixture.map((m) => new Date(m.timestamp).toDateString()));
+    const separators = children.filter((c) => c.tagName.toLowerCase() === 'slicc-day-separator');
+    expect(separators.length).toBe(dates.size);
+  });
+
+  it('renders every fixture lick channel as a lick card', () => {
+    const expected = fixture
+      .filter((m) => m.source === 'lick')
+      .map((m) => m.channel)
+      .sort();
+    const kinds = children
+      .filter((c) => c.tagName.toLowerCase() === 'slicc-lick-card')
+      .map((c) => c.getAttribute('kind'))
+      .sort();
+    expect(kinds).toEqual(expected);
+  });
+
+  it('extracts the lick event label from the content header', () => {
+    const webhook = children.find(
+      (c) => c.tagName.toLowerCase() === 'slicc-lick-card' && c.getAttribute('kind') === 'webhook'
+    );
+    expect(webhook?.getAttribute('event-label')).toBe('github-push');
+
+    expect(webhook?.textContent).toContain('example/repo');
+  });
+
+  it('renders lick cards collapsed by default with markdown bodies, headers stripped', () => {
+    const [card] = messageEls({
+      id: 'l1',
+      role: 'user',
+      content: '[Session Reload] Mount recovery required for `/workspace/kb` — **act now**.',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'session-reload',
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(card.hasAttribute('collapsible')).toBe(true);
+    expect(card.hasAttribute('collapsed')).toBe(true);
+
+    expect(card.querySelector('strong, b')?.textContent).toBe('act now');
+
+    expect(card.textContent).not.toContain('[Session Reload]');
+    expect(card.textContent).toContain('Mount recovery required');
+  });
+
+  it('renders a preview-channel message as a collapsed lick card', () => {
+    const [card] = messageEls({
+      id: 'preview-1',
+      role: 'user',
+      content: 'Preview tab connected from https://example.test',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'preview',
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(card.getAttribute('kind')).toBe('preview');
+    expect(card.hasAttribute('collapsible')).toBe(true);
+    expect(card.hasAttribute('collapsed')).toBe(true);
+  });
+
+  it('carries the collation count onto the card, one section per part', () => {
+    const [card] = messageEls({
+      id: 'l1',
+      role: 'user',
+      content: '[Session Reload] a\n\n[Session Reload] b',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'session-reload',
+      lickCount: 2,
+      lickParts: ['[Session Reload] a', '[Session Reload] b'],
+    });
+    expect(card.getAttribute('count')).toBe('2');
+    expect(card.children).toHaveLength(2);
+  });
+
+  it('maps an actionable lick lickState onto the card state attribute', () => {
+    const base = {
+      id: 'sudo-request-lick-1',
+      role: 'user' as const,
+      content: '[@alpha-scoop sudo-request]\nKind: command\nDetail: git push',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'sudo-request',
+      lickId: 'lick-1',
+    };
+
+    const [pending] = messageEls({ ...base, lickState: 'pending' });
+    expect(pending.hasAttribute('state')).toBe(false);
+    const [unset] = messageEls(base);
+    expect(unset.hasAttribute('state')).toBe(false);
+
+    const [confirmed] = messageEls({ ...base, lickState: 'confirmed' });
+    expect(confirmed.getAttribute('state')).toBe('confirmed');
+    const [dismissed] = messageEls({ ...base, lickState: 'dismissed' });
+    expect(dismissed.getAttribute('state')).toBe('dismissed');
+  });
+
+  it('renders plain user messages as user bubbles', () => {
+    const userCount = fixture.filter(
+      (m) => m.role === 'user' && !m.source && m.channel !== 'delegation'
+    ).length;
+    const bubbles = children.filter((c) => c.tagName.toLowerCase() === 'slicc-user-message');
+
+    const delegations = fixture.filter(
+      (m) => m.source === 'delegation' || m.channel === 'delegation'
+    ).length;
+    expect(bubbles.length).toBe(userCount + delegations);
+  });
+
+  it('renders assistant messages with rendered markdown bodies', () => {
+    const agents = children.filter((c) => c.tagName.toLowerCase() === 'slicc-agent-message');
+
+    const assistantCount = fixture.filter((m) => m.role === 'assistant' && !m.compaction).length;
+    expect(agents.length).toBe(assistantCount);
+    const withCode = agents.find((a) => a.querySelector('code'));
+    expect(withCode).toBeTruthy();
+  });
+
+  it('renders every fixture compaction marker as its own row (#2843)', () => {
+    const markers = children.filter(
+      (c) => c.tagName.toLowerCase() === 'slicc-compaction-marker'
+    ) as HTMLElement[];
+    const expected = fixture.filter((m) => m.compaction);
+    expect(markers).toHaveLength(expected.length);
+    expect(markers.length).toBeGreaterThan(0);
+
+    expect(markers.map((m) => m.getAttribute('state')).sort()).toEqual(
+      expected.map((m) => m.compaction?.state).sort()
+    );
+    for (const marker of markers) {
+      expect(marker.textContent ?? '').toBe('');
+    }
+  });
+
+  it('does not render a discarded marker at all', () => {
+    const els = messageEls({
+      id: 'gone',
+      role: 'assistant',
+      content: '',
+      timestamp: 0,
+      compaction: { trigger: 'idle', state: 'discarded' },
+    });
+    expect(els).toEqual([]);
+  });
+
+  it('marks the streaming tail message', () => {
+    const streaming = fixture.find((m) => m.isStreaming);
+    expect(streaming).toBeTruthy();
+    const agents = children.filter((c) => c.tagName.toLowerCase() === 'slicc-agent-message');
+    expect(agents.some((a) => a.hasAttribute('streaming'))).toBe(true);
+  });
+
+  it('renders every tool call as an action row (3+ runs collapse into clusters)', () => {
+    const toolCallCount = fixture.reduce((n, m) => n + (m.toolCalls?.length ?? 0), 0);
+    const host = document.createElement('div');
+    host.append(...buildThreadChildren(fixture));
+
+    const rows = host.querySelectorAll('slicc-action-row');
+    expect(rows.length).toBe(toolCallCount);
+
+    const labels = [...rows].map((r) => r.getAttribute('label') ?? '');
+    expect(labels.some((l) => l === "Use Sliccy's computer")).toBe(true);
+    expect(labels.every((l) => !/^(bash|read_file|write_file|edit_file)\b/.test(l))).toBe(true);
+
+    const clustered = fixture.filter((m) => (m.toolCalls?.length ?? 0) >= 3);
+    expect(host.querySelectorAll('slicc-tool-cluster').length).toBe(clustered.length);
+  });
+
+  it('renders the delegation as a delegation line followed by the instructions', () => {
+    const line = children.find((c) => c.tagName.toLowerCase() === 'slicc-delegation-line');
+    expect(line).toBeTruthy();
+    expect(line?.getAttribute('kind')).toBe('feed');
+    const next = children[children.indexOf(line as HTMLElement) + 1];
+    expect(next?.tagName.toLowerCase()).toBe('slicc-user-message');
+  });
+
+  it('renders queued user messages as ordinary bubbles (the stack is live-only)', () => {
+    expect(children.some((c) => c.hasAttribute('queued'))).toBe(false);
+
+    expect(children.some((c) => c.tagName.toLowerCase() === 'slicc-user-message')).toBe(true);
+  });
+});
+
+describe('messageEls', () => {
+  it('maps attachments onto the user bubble', () => {
+    const message = fixture.find((m) => m.attachments?.length);
+    expect(message).toBeTruthy();
+    const [bubble] = messageEls(message as (typeof fixture)[number]);
+    expect(bubble.tagName.toLowerCase()).toBe('slicc-user-message');
+
+    expect(bubble.shadowRoot?.querySelectorAll('.attachment-chip').length).toBe(
+      message?.attachments?.length ?? -1
+    );
+  });
+
+  it('renders a plain error message as a retry-action error card', () => {
+    const [card] = messageEls({
+      id: 'e1',
+      role: 'assistant',
+      content: 'rate limited',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+
+    expect(card.getAttribute('action')).toBeNull();
+    expect(card.getAttribute('message-id')).toBe('e1');
+  });
+
+  it('flips to action="change-model" when the body carries the invalid-model marker', () => {
+    const [card] = messageEls({
+      id: 'e-im',
+      role: 'assistant',
+      content:
+        'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('change-model');
+  });
+
+  it('flips to action="login" when the body carries the auth-expired marker', () => {
+    const [card] = messageEls({
+      id: 'e-login',
+      role: 'assistant',
+      content:
+        'Scoop "alpha" failed with unrecoverable error: Adobe session expired — please log in again',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('login');
+  });
+});
+
+describe('isInvalidModelError', () => {
+  it('matches the Bedrock CAMP wrapped form (case-insensitive)', () => {
+    expect(
+      isInvalidModelError(
+        'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
+      )
+    ).toBe(true);
+    expect(isInvalidModelError('the PROVIDED Model Identifier is INVALID — switch models')).toBe(
+      true
+    );
+  });
+
+  it('matches the bare upstream substring on other providers', () => {
+    expect(isInvalidModelError('AccessDenied: The provided model identifier is invalid')).toBe(
+      true
+    );
+  });
+
+  it('matches the Adobe proxy "Model not allowed" 403 shape (case-insensitive)', () => {
+    expect(
+      isInvalidModelError(
+        '403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+      )
+    ).toBe(true);
+    expect(
+      isInvalidModelError(
+        'Scoop "cone" failed with unrecoverable error: 403 {"error":{"type":"forbidden","message":"Model not allowed: claude-opus-4-6"}}'
+      )
+    ).toBe(true);
+    expect(isInvalidModelError('MODEL NOT ALLOWED: foo')).toBe(true);
+  });
+
+  it('rejects unrelated errors, empty strings, and nullish input', () => {
+    expect(isInvalidModelError('rate limited')).toBe(false);
+    expect(isInvalidModelError('invalid api key')).toBe(false);
+    expect(isInvalidModelError('')).toBe(false);
+    expect(isInvalidModelError(null)).toBe(false);
+    expect(isInvalidModelError(undefined)).toBe(false);
+  });
+});
+
+describe('isAuthExpiredError', () => {
+  it('matches the bare and Scoop-prefixed session-expired forms (case-insensitive)', () => {
+    expect(isAuthExpiredError('Adobe session expired — please log in again')).toBe(true);
+    expect(
+      isAuthExpiredError(
+        'Scoop "alpha" failed with unrecoverable error: Adobe session expired — please log in again'
+      )
+    ).toBe(true);
+    expect(isAuthExpiredError('Session expired. PLEASE LOG IN AGAIN.')).toBe(true);
+  });
+
+  it('rejects unrelated errors, empty strings, and nullish input', () => {
+    expect(isAuthExpiredError('rate limited')).toBe(false);
+    expect(isAuthExpiredError('No API key configured')).toBe(false);
+    expect(isAuthExpiredError('')).toBe(false);
+    expect(isAuthExpiredError(null)).toBe(false);
+    expect(isAuthExpiredError(undefined)).toBe(false);
+  });
+});
+
+describe('collateLickMessages', () => {
+  function lick(id: string, channel: string, content: string): ChatMessage {
+    return { id, role: 'user', content, timestamp: 1, source: 'lick', channel };
+  }
+
+  it('merges runs of consecutive same-channel licks into one counted message', () => {
+    const out = collateLickMessages([
+      lick('a', 'session-reload', '[Session Reload] one'),
+      lick('b', 'session-reload', '[Session Reload] two'),
+      lick('c', 'session-reload', '[Session Reload] three'),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('a');
+    expect(out[0].lickCount).toBe(3);
+    expect(out[0].lickParts).toEqual([
+      '[Session Reload] one',
+      '[Session Reload] two',
+      '[Session Reload] three',
+    ]);
+  });
+
+  it('keeps different channels and interleaved messages apart', () => {
+    const user: ChatMessage = { id: 'u', role: 'user', content: 'hi', timestamp: 1 };
+    const out = collateLickMessages([
+      lick('a', 'webhook', 'w1'),
+      lick('b', 'cron', 'c1'),
+      user,
+      lick('c', 'cron', 'c2'),
+    ]);
+    expect(out.map((m) => m.id)).toEqual(['a', 'b', 'u', 'c']);
+    expect(out.every((m) => (m.lickCount ?? 1) === 1)).toBe(true);
+  });
+
+  it('does not mutate its input', () => {
+    const first = lick('a', 'cron', 'one');
+    collateLickMessages([first, lick('b', 'cron', 'two')]);
+    expect(first.lickCount).toBeUndefined();
+    expect(first.content).toBe('one');
+  });
+
+  it('never collates actionable licks — each keeps its own row + persisted lickState', () => {
+    function actionable(
+      id: string,
+      lickId: string,
+      lickState: ChatMessage['lickState']
+    ): ChatMessage {
+      return {
+        id,
+        role: 'user',
+        content: '[Scoop Access Request: alpha]',
+        timestamp: 1,
+        source: 'lick',
+        channel: 'sudo-request',
+        lickId,
+        lickState,
+      };
+    }
+    const out = collateLickMessages([
+      actionable('a', 'lick-a', 'confirmed'),
+      actionable('b', 'lick-b', 'pending'),
+    ]);
+    expect(out.map((m) => m.id)).toEqual(['a', 'b']);
+    expect(out.every((m) => (m.lickCount ?? 1) === 1)).toBe(true);
+    expect(out[0].lickId).toBe('lick-a');
+    expect(out[0].lickState).toBe('confirmed');
+    expect(out[1].lickId).toBe('lick-b');
+    expect(out[1].lickState).toBe('pending');
+  });
+});
+
+describe('assistant bubble timestamps', () => {
+  function assistant(id: string, content: string): ChatMessage {
+    return { id, role: 'assistant', content, timestamp: 1 };
+  }
+
+  it('suppresses the timestamp on empty tool-only continuation bubbles', () => {
+    const [bubble] = messageEls(assistant('empty', '   '));
+    expect(bubble.tagName.toLowerCase()).toBe('slicc-agent-message');
+    expect(bubble.hasAttribute('data-empty')).toBe(true);
+    expect(bubble.hasAttribute('timestamp')).toBe(false);
+    expect(bubble.querySelector('.msg-ts')).toBeNull();
+  });
+
+  it('keeps the timestamp on assistant bubbles that render content', () => {
+    const [bubble] = messageEls(assistant('full', 'hello'));
+    expect(bubble.tagName.toLowerCase()).toBe('slicc-agent-message');
+    expect(bubble.hasAttribute('data-empty')).toBe(false);
+    expect(bubble.hasAttribute('timestamp')).toBe(true);
+    expect(bubble.querySelector('.msg-ts')).not.toBeNull();
+  });
+});
+
+describe('tool presentation', () => {
+  function call(name: string, input: unknown, result?: string): ChatMessage {
+    return {
+      id: `m-${name}`,
+      role: 'assistant',
+      content: 'done',
+      timestamp: 1,
+      toolCalls: [{ id: 't1', name, input, result }],
+    };
+  }
+
+  it('stamps a tool row with the paths its call named', () => {
+    const [, row] = messageEls(call('bash', { command: 'echo "test" > /home/lars/foo.md' }));
+    expect(row.getAttribute('data-file-paths')).toBe(JSON.stringify(['/home/lars/foo.md']));
+  });
+
+  it('leaves the attribute off a call that named no path', () => {
+    const [, row] = messageEls(call('bash', { command: 'ls -la' }));
+    expect(row.hasAttribute('data-file-paths')).toBe(false);
+  });
+
+  it('titles tools as human phrases with fitting lucide icons', () => {
+    const cases: Array<[string, unknown, string, string]> = [
+      ['bash', { command: 'git push origin main' }, "Use Sliccy's computer", 'git-branch'],
+      ['bash', { command: 'FOO=1 sudo npm install' }, "Use Sliccy's computer", 'package'],
+      ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
+      ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
+      ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
+      ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
+      ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
+      ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
+      ['lick_confirm', { lick_id: 'lick-1' }, 'Grant the scoop access', 'shield-check'],
+      ['lick_dismiss', { lick_id: 'lick-1' }, 'Hold the scoop back', 'shield-x'],
+      [
+        'sudo_request',
+        { kind: 'command', detail: 'git push' },
+        'Ask for command access',
+        'shield-question',
+      ],
+      ['sudo_request', {}, 'Ask for more access', 'shield-question'],
+      ['list_sudo_requests', {}, 'Check access requests', 'list-checks'],
+      ['web_search', { query: 'x' }, 'Web search', 'wrench'],
+    ];
+    for (const [name, input, title, icon] of cases) {
+      const [, row] = messageEls(call(name, input, 'ok'));
+      expect(row.getAttribute('label'), name).toBe(title);
+      expect(row.getAttribute('icon'), name).toBe(icon);
+    }
+  });
+
+  it('every quick-label icon name is a real lucide icon', () => {
+    const bad: string[] = [];
+    for (const [key, name] of Object.entries(BASH_ICONS)) {
+      if (!hasIcon(name)) bad.push(`BASH_ICONS.${key} → ${name}`);
+    }
+    for (const [key, name] of Object.entries(TOOL_ICONS)) {
+      if (!hasIcon(name)) bad.push(`TOOL_ICONS.${key} → ${name}`);
+    }
+    for (const name of ['terminal', 'wrench']) {
+      if (!hasIcon(name)) bad.push(`fallback → ${name}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('bash bodies render terminal-style: command + output, dark classes', () => {
+    const [, row] = messageEls(call('bash', { command: 'ls -la' }, 'total 42'));
+    const body = row.querySelector('.wcmsg-bash') as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(body.querySelector('.wcmsg-cmd')?.textContent).toBe('$ ls -la');
+    const out = body.querySelector('.wcmsg-out') as HTMLElement;
+
+    expect(out.textContent).toBe('total 42');
+    expect(out.querySelector('span')).toBeNull();
+  });
+
+  it('bash bodies render ANSI SGR output as colored spans', () => {
+    const [, row] = messageEls(
+      call('bash', { command: 'ls' }, '\x1b[31mred\x1b[0m plain \x1b[1;32mbold-green\x1b[0m')
+    );
+    const out = row.querySelector('.wcmsg-out') as HTMLElement;
+
+    expect(out.textContent).toBe('red plain bold-green');
+    const spans = Array.from(out.querySelectorAll('span'));
+    expect(spans.length).toBe(2);
+    expect(spans[0].textContent).toBe('red');
+    expect(spans[0].style.color).toBeTruthy();
+    expect(spans[1].textContent).toBe('bold-green');
+    expect(spans[1].style.fontWeight).toBe('bold');
+    expect(spans[1].style.color).toBeTruthy();
+  });
+
+  it('renders ordered inline images in bash output without exposing raw markers', () => {
+    const marker = '<img:data:image/png;base64,AAAA>';
+    const [, row] = messageEls(
+      call('bash', { command: 'open --view image.png' }, `image.png (1x1)\n${marker}\ndone`)
+    );
+    const out = row.querySelector('.wcmsg-out') as HTMLElement;
+    const image = out.querySelector('img.wcmsg-tool-image') as HTMLImageElement;
+    expect(image.src).toBe('data:image/png;base64,AAAA');
+    expect(image.loading).toBe('lazy');
+    expect(image.alt).toBe('image.png (1x1)');
+    expect(out.textContent).toBe('image.png (1x1)\n\ndone');
+    expect(out.textContent).not.toContain('<img:data:');
+  });
+
+  it('caps inline images per tool body and reports overflow', () => {
+    const result = Array.from(
+      { length: 6 },
+      (_, index) => `image-${index}\n<img:data:image/png;base64,AAAA>`
+    ).join('\n');
+    const [, row] = messageEls(call('bash', { command: 'for image in *' }, result));
+    expect(row.querySelectorAll('img.wcmsg-tool-image')).toHaveLength(4);
+    expect(row.querySelector('.wcmsg-image-overflow')?.textContent).toBe('+2 more images');
+  });
+
+  it('splits generic tool results before capping text around images', () => {
+    const base64 = 'A'.repeat(8000);
+    const marker = `<img:data:image/jpeg;base64,${base64}>`;
+    const [, row] = messageEls(
+      call('web_search', { query: 'images' }, `${'x'.repeat(5000)}${marker}tail`)
+    );
+    const body = row.querySelector('[slot="body"]') as HTMLElement;
+    const image = body.querySelector('img.wcmsg-tool-image') as HTMLImageElement;
+    expect(image.src).toBe(`data:image/jpeg;base64,${base64}`);
+    expect(body.textContent).toBe(`${'x'.repeat(4000)}…tail`);
+    expect(body.textContent).not.toContain('base64');
+  });
+
+  it('renders malformed and unsupported markers as capped text instead of images', () => {
+    const malformed = `<img:data:image/png;base64,${'A'.repeat(5000)}…>`;
+    const [, malformedRow] = messageEls(
+      call('bash', { command: 'open --view bad.png' }, malformed)
+    );
+    const malformedOut = malformedRow.querySelector('.wcmsg-out') as HTMLElement;
+    expect(malformedOut.querySelector('img')).toBeNull();
+    expect(malformedOut.textContent).toBe(`${malformed.slice(0, 4000)}…`);
+
+    const unsupported = '<img:data:image/svg+xml;base64,PHN2Zz4=>';
+    const [, unsupportedRow] = messageEls(call('other_tool', {}, unsupported));
+    expect(unsupportedRow.querySelector('img')).toBeNull();
+    expect(unsupportedRow.textContent).toContain(unsupported);
+  });
+
+  it('a registered slicc-bash-renderer-<cmd> takes over the bash body', () => {
+    class GitRenderer extends HTMLElement {}
+    if (!customElements.get('slicc-bash-renderer-git')) {
+      customElements.define('slicc-bash-renderer-git', GitRenderer);
+    }
+    const [, row] = messageEls(call('bash', { command: 'git status' }, 'On branch main'));
+    const custom = row.querySelector('slicc-bash-renderer-git') as HTMLElement & {
+      command?: string;
+      output?: string;
+    };
+    expect(custom).toBeTruthy();
+    expect(custom.getAttribute('command')).toBe('git status');
+    expect(custom.output).toBe('On branch main');
+  });
+
+  it('ranks chained bash segments so housekeeping preambles lose the icon', () => {
+    const cases: Array<[string, string]> = [
+      ['cd repo && git push', 'git-branch'],
+
+      ['cd /tmp && pwd', 'corner-down-right'],
+
+      ['export FOO=1 && curl https://x', 'globe'],
+
+      ['echo hi && npm test', 'package'],
+
+      ['echo hi && test foo', 'flask-conical'],
+
+      ['cat foo | grep bar', 'file-text'],
+
+      ['cd /tmp\ngit status', 'git-branch'],
+
+      ['true || rm -rf /tmp/x', 'trash-2'],
+      ['set -e; npm install', 'package'],
+    ];
+    for (const [command, icon] of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe(icon);
+    }
+  });
+
+  it('bash segments named after Object.prototype members fall back to terminal', () => {
+    const cases: string[] = [
+      'cd /tmp && toString',
+      'cd /tmp && hasOwnProperty',
+      'cd /tmp && valueOf',
+      'cd /tmp && constructor',
+    ];
+    for (const command of cases) {
+      const [, row] = messageEls(call('bash', { command }, 'ok'));
+      expect(row.getAttribute('icon'), command).toBe('terminal');
+    }
+  });
+
+  it('tool names equal to Object.prototype members fall back to wrench', () => {
+    for (const name of ['toString', 'hasOwnProperty', 'valueOf', 'constructor']) {
+      const [, row] = messageEls(call(name, {}, 'ok'));
+      expect(row.getAttribute('icon'), name).toBe('wrench');
+    }
+  });
+
+  it('edit bodies show old/new with the diff classes; writes show added content', () => {
+    const [, editRow] = messageEls(
+      call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')
+    );
+    expect(editRow.querySelector('.del')?.textContent).toBe('before');
+    expect(editRow.querySelector('.add')?.textContent).toBe('after');
+
+    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
+    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
+    expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  it('labels clusters via quickLabel from inputs alone — results not required', async () => {
+    const stamp = Date.now();
+    const calls = [1, 2, 3].map((i) => ({
+      id: `tlabel-${stamp}-${i}`,
+      name: 'bash',
+      input: { command: `step ${i}` },
+    }));
+    const children = buildThreadChildren([
+      {
+        id: `m-label-${stamp}`,
+        role: 'assistant',
+        content: 'working',
+        timestamp: 1,
+        toolCalls: calls,
+      },
+    ]);
+    const cluster = children.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(cluster).toBeTruthy();
+    document.body.append(cluster as HTMLElement);
+    await vi.waitFor(() => {
+      expect((cluster as HTMLElement).getAttribute('label')).toBe('Push the release to main');
+    });
+    (cluster as HTMLElement).remove();
+  });
+
+  it('clusters 3+ tool calls collapsed by default (streaming or settled)', () => {
+    const stamp = Date.now();
+    const calls = [1, 2, 3].map((i) => ({
+      id: `tcollapse-${stamp}-${i}`,
+      name: 'bash',
+      input: { command: `step ${i}` },
+      result: 'ok',
+    }));
+    const settled: ChatMessage = {
+      id: 'm-c',
+      role: 'assistant',
+      content: 'done',
+      timestamp: 1,
+      toolCalls: calls,
+    };
+
+    const settledChildren = buildThreadChildren([settled]);
+    const cluster = settledChildren.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(cluster).toBeTruthy();
+    expect(cluster?.getAttribute('count')).toBe('3');
+    expect(cluster?.hasAttribute('open')).toBe(false);
+    expect(cluster?.querySelectorAll('slicc-action-row')).toHaveLength(3);
+
+    const streaming = { ...settled, id: 'm-s', isStreaming: true };
+    const liveChildren = buildThreadChildren([streaming]);
+    const live = liveChildren.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
+    expect(live?.hasAttribute('open')).toBe(false);
+
+    const flat: ChatMessage = { ...settled, id: 'm-f', toolCalls: calls.slice(0, 2) };
+    const flatEls = messageEls(flat);
+    expect(flatEls.map((e) => e.tagName.toLowerCase())).toEqual([
+      'slicc-agent-message',
+      'slicc-action-row',
+      'slicc-action-row',
+    ]);
+  });
+});
+
+describe('summarizeToolInput', () => {
+  it('summarizes strings, paths, and commands', () => {
+    expect(summarizeToolInput('ls -la\nsecond line')).toBe('ls -la');
+    expect(summarizeToolInput({ path: '/workspace/a.ts' })).toBe('/workspace/a.ts');
+    expect(summarizeToolInput({ command: 'npm test' })).toBe('npm test');
+    expect(summarizeToolInput({ other: 1 })).toBe('');
+    expect(summarizeToolInput(null)).toBe('');
+  });
+
+  it('truncates long first lines', () => {
+    const long = 'x'.repeat(120);
+    expect(summarizeToolInput(long)).toHaveLength(80);
+    expect(summarizeToolInput(long).endsWith('…')).toBe(true);
+  });
+});
+
+describe('isNoApiKeyError + errorCardEl', () => {
+  it('matches both no-API-key error variants by prefix', () => {
+    expect(NO_API_KEY_ERROR_PREFIX).toBe('No API key configured');
+    expect(isNoApiKeyError('No API key configured. Open Settings to add one.')).toBe(true);
+    expect(
+      isNoApiKeyError('No API key configured for provider "adobe". Open Settings to add one.')
+    ).toBe(true);
+    expect(isNoApiKeyError('rate limited')).toBe(false);
+    expect(isNoApiKeyError('')).toBe(false);
+    expect(isNoApiKeyError(null as unknown as string)).toBe(false);
+  });
+
+  it('renders the no-API-key error as a settings-action error card', () => {
+    const [card] = messageEls({
+      id: 'err-1',
+      role: 'assistant',
+      content: 'No API key configured for provider "adobe". Open Settings to add one.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('message-id')).toBe('err-1');
+    expect(card.getAttribute('message')).toContain('No API key configured');
+  });
+
+  it('keeps the retry CTA for every other error', () => {
+    const [card] = messageEls({
+      id: 'err-2',
+      role: 'assistant',
+      content: 'The model rate-limited this turn.',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.hasAttribute('action')).toBe(false);
+  });
+});
+
+describe('quota-exceeded errorCardEl', () => {
+  const ADOBE_429 =
+    '429 {"error":{"type":"quota_exceeded","message":"Weekly budget has been fully used. Resets on 2026-09-14. You can also connect your own LLM provider.","resets_at":"2026-09-14T00:00:00.000Z"}}';
+
+  function quotaCard(content = ADOBE_429): HTMLElement {
+    const [card] = messageEls({
+      id: 'err-q',
+      role: 'assistant',
+      content,
+      timestamp: 1,
+      error: true,
+    });
+    return card;
+  }
+
+  beforeEach(() => {
+    accountStore.getAlternativeModelProviders.mockReturnValue([]);
+    accountStore.getSelectedProvider.mockReturnValue('adobe');
+  });
+
+  it('replaces the raw JSON envelope and the generic header', () => {
+    const card = quotaCard();
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Weekly budget has been fully used. Resets on 2026-09-14.'
+    );
+    expect(card.getAttribute('message')).not.toContain('quota_exceeded');
+    expect(card.getAttribute('message-id')).toBe('err-q');
+  });
+
+  it('offers only "Add a provider" when no other provider is connected', () => {
+    const card = quotaCard();
+
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('button-label')).toBe('Add a provider');
+    expect(card.hasAttribute('secondary-action')).toBe(false);
+  });
+
+  it('leads with "Switch provider and try again" when another provider is connected', () => {
+    accountStore.getAlternativeModelProviders.mockReturnValue(['openai']);
+    const card = quotaCard();
+    expect(card.getAttribute('action')).toBe('change-model');
+    expect(card.getAttribute('button-label')).toBe('Switch provider and try again');
+    expect(card.getAttribute('secondary-action')).toBe('settings');
+    expect(card.getAttribute('secondary-button-label')).toBe('Add a provider');
+  });
+
+  it('excludes the failing provider when asking for alternatives', () => {
+    accountStore.getSelectedProvider.mockReturnValue('adobe');
+    quotaCard();
+    expect(accountStore.getAlternativeModelProviders).toHaveBeenCalledWith('adobe');
+  });
+
+  it('degrades to the add-a-provider CTA when the account store throws', () => {
+    accountStore.getSelectedProvider.mockImplementation(() => {
+      throw new Error('localStorage unavailable');
+    });
+    const card = quotaCard();
+    expect(card.getAttribute('action')).toBe('settings');
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+  });
+
+  it('spells out a reset instant the provider prose omits', () => {
+    const card = quotaCard(
+      '429 {"error":{"type":"quota_exceeded","message":"Your budget is used up.","resets_at":"2026-09-14T00:00:00.000Z"}}'
+    );
+    expect(card.getAttribute('message')).toMatch(/^Your budget is used up\. Resets on .+\.$/);
+  });
+
+  it('never states the reset twice when the prose already names it', () => {
+    const card = quotaCard();
+    expect(card.getAttribute('message')?.match(/Resets on/g)).toHaveLength(1);
+  });
+
+  it('drops every CTA in a read-only transcript but keeps the readable body', () => {
+    accountStore.getAlternativeModelProviders.mockReturnValue(['openai']);
+    const [card] = messageEls(
+      { id: 'err-q', role: 'assistant', content: ADOBE_429, timestamp: 1, error: true },
+      { readOnly: true }
+    );
+    expect(card.hasAttribute('no-action')).toBe(true);
+    expect(card.hasAttribute('action')).toBe(false);
+    expect(card.hasAttribute('secondary-action')).toBe(false);
+
+    expect(card.getAttribute('label')).toBe('Out of AI budget');
+    expect(card.getAttribute('message')).toBe(
+      'Weekly budget has been fully used. Resets on 2026-09-14.'
+    );
+  });
+});
+
+describe('render-time lick classification + scoop-identity tags', () => {
+  const IDLE_BODY =
+    '[@blame-roulette-scoop idle]: Scoop "blame-roulette" has been ready for 2 minutes without receiving any work.';
+
+  it('classifies an unstamped idle notification as a lick card tagged with the scoop', () => {
+    const els = messageEls({ id: 'x', role: 'user', content: IDLE_BODY, timestamp: 1 });
+    expect(els[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(els[0].getAttribute('kind')).toBe('scoop-idle');
+
+    expect(els[0].getAttribute('event-label')).toBe('blame-roulette');
+    expect(els[0].getAttribute('hue')).toMatch(/^#/);
+  });
+
+  it('classifies completed/scoop_wait/header-marked bodies', () => {
+    const completed = messageEls({
+      id: 'a',
+      role: 'user',
+      content: '[@tool-demo-scoop completed]VFS path: /shared/x.md',
+      timestamp: 1,
+    });
+    expect(completed[0].getAttribute('kind')).toBe('scoop-notify');
+    expect(completed[0].getAttribute('event-label')).toBe('tool-demo');
+
+    const wait = messageEls({
+      id: 'b',
+      role: 'user',
+      content: '[scoop_wait completed]1 completed, 0 timed out',
+      timestamp: 1,
+    });
+    expect(wait[0].getAttribute('kind')).toBe('scoop-wait');
+
+    const sprinkle = messageEls({
+      id: 'c',
+      role: 'user',
+      content: '[Sprinkle Event: blame-roulette]\n{"action":"x"}',
+      timestamp: 1,
+    });
+    expect(sprinkle[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(sprinkle[0].getAttribute('kind')).toBe('sprinkle');
+    expect(sprinkle[0].getAttribute('event-label')).toBe('blame-roulette');
+
+    const sudo = messageEls({
+      id: 'd',
+      role: 'user',
+      content:
+        '[@pr1003-always-scoop sudo-request]\nRequest ID: sudo-mqf7gh5c-cr56age9\nKind: command\nDetail: date -u',
+      timestamp: 1,
+    });
+    expect(sudo[0].tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(sudo[0].getAttribute('kind')).toBe('sudo-request');
+    expect(sudo[0].getAttribute('event-label')).toBe('pr1003-always');
+  });
+
+  it('leaves genuine user text with brackets alone', () => {
+    const els = messageEls({
+      id: 'd',
+      role: 'user',
+      content: '[link]: see https://example.com for details',
+      timestamp: 1,
+    });
+    expect(els[0].tagName.toLowerCase()).toBe('slicc-user-message');
+  });
+
+  it('collates a run of historic unstamped idle notifications into one ×N card', () => {
+    const run = collateLickMessages([
+      { id: '1', role: 'user', content: IDLE_BODY, timestamp: 1 },
+      { id: '2', role: 'user', content: IDLE_BODY, timestamp: 2 },
+      { id: '3', role: 'user', content: IDLE_BODY, timestamp: 3 },
+    ]);
+    expect(run).toHaveLength(1);
+    expect(run[0].lickCount).toBe(3);
+    expect(run[0].channel).toBe('scoop-idle');
+  });
+});
+
+describe('navigate / discovery lick event labels', () => {
+  const longHandoffUrl =
+    'https://www.sliccy.ai/handoff?handoff=' + 'move-this-to-slicc-and-'.repeat(8);
+
+  it('uses the handoff verb for navigate licks instead of the full URL', () => {
+    const content =
+      `[Navigate Event: ${longHandoffUrl}]\n\`\`\`json\n` +
+      JSON.stringify({ url: longHandoffUrl, verb: 'handoff', target: longHandoffUrl }, null, 2) +
+      '\n```';
+    const [card] = messageEls({
+      id: 'nav-handoff',
+      role: 'user',
+      content,
+      timestamp: 1,
+      source: 'lick',
+      channel: 'navigate',
+    });
+    expect(card.getAttribute('event-label')).toBe('handoff');
+    expect((card.getAttribute('event-label') ?? '').length).toBeLessThan(20);
+  });
+
+  it('falls back to navigate when the header is a URL without a verb', () => {
+    const content = `[Navigate Event: ${longHandoffUrl}]`;
+    const header = /^\[([^:\]]+):\s*([^\]]+)\]\s*\n?/.exec(content);
+    expect(lickEventLabel(content, 'navigate', header, null)).toBe('navigate');
+  });
+
+  it('uses the hostname for discovery licks', () => {
+    const url = 'https://docs.example.com/.well-known/ai-catalog.json';
+    const content = `[Discovery Event: ${url}]\n\`\`\`json\n{"kind":"ai-catalog"}\n\`\`\``;
+    const [card] = messageEls({
+      id: 'disc',
+      role: 'user',
+      content,
+      timestamp: 1,
+      source: 'lick',
+      channel: 'discovery',
+    });
+    expect(card.getAttribute('event-label')).toBe('docs.example.com');
+  });
+});
+
+describe('gelatiere lick cards', () => {
+  it('render with their own kind, the action as pill, and a readable body', () => {
+    const body = {
+      action: 'gelatiere-suggestions',
+      data: {
+        added: 2,
+        open: 3,
+        suggestions: [{ title: 'Install the GitHub skill' }, { title: 'Save the loop' }],
+        path: '/shared/.gelatiere/suggestions.json',
+        skill: '/workspace/skills/gelatiere/SKILL.md',
+      },
+    };
+    const els = messageEls({
+      id: 'l1',
+      role: 'user',
+      source: 'lick',
+      channel: 'sprinkle',
+      content: `[Sprinkle Event: gelatiere]\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``,
+      timestamp: 1,
+    });
+    const card = els.find((e: HTMLElement) => e.tagName.toLowerCase() === 'slicc-lick-card');
+    expect(card).toBeDefined();
+    expect(card?.getAttribute('kind')).toBe('gelatiere');
+    expect(card?.getAttribute('event-label')).toBe('suggestions');
+    expect(card?.textContent).toContain('2 new suggestions (3 open)');
+    expect(card?.textContent).toContain('Install the GitHub skill');
+    expect(card?.textContent).not.toContain('"action"');
+  });
+
+  it('leaves other sprinkle licks on the generic rendering', () => {
+    const els = messageEls({
+      id: 'l2',
+      role: 'user',
+      source: 'lick',
+      channel: 'sprinkle',
+      content: '[Sprinkle Event: welcome]\n```json\n{"action":"first-run"}\n```',
+      timestamp: 1,
+    });
+    const card = els.find((e: HTMLElement) => e.tagName.toLowerCase() === 'slicc-lick-card');
+    expect(card?.getAttribute('kind')).toBe('sprinkle');
+    expect(card?.getAttribute('event-label')).toBe('welcome');
+  });
+});

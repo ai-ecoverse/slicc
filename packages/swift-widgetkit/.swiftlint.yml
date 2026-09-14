@@ -1,0 +1,5 @@
+parent_config: ../../.swiftlint.yml
+
+excluded:
+  - .build
+  - Package.resolved

@@ -1,0 +1,8 @@
+{
+  "storyId": "primitives-sendbutton--busy",
+  "storyTitle": "Primitives/SendButton",
+  "subsystem": "primitives",
+  "importPath": "./src/primitives/slicc-send-button.stories.ts",
+  "comment": "for the busy indication, keep the breathing, but fill the icon slowly, first inside out, then left to right, then top to bottom, then right to left, then bottom to top, then outside in. each fill takes 10 seconds. The whole loop takes one minute.",
+  "createdAt": "2026-06-10T14:30:24.593Z"
+}

@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-lickcard--cron",
+  "storyTitle": "Chat/LickCard",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-lick-card.stories.ts",
+  "comment": "cron lick should have a clock icon",
+  "createdAt": "2026-06-10T13:58:29.031Z"
+}

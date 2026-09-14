@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ai-ecoverse/cherry — local embed harness</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+      }
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+        display: grid;
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      label {
+        font-size: 12px;
+        opacity: 0.8;
+        min-width: 96px;
+      }
+      input[type='text'] {
+        flex: 1;
+        min-width: 280px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      button {
+        padding: 6px 14px;
+        font: inherit;
+        cursor: pointer;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        min-height: 0;
+      }
+      #mount {
+        min-height: 0;
+        border-right: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      }
+      #log {
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .hint {
+        font-size: 12px;
+        opacity: 0.7;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="row">
+        <strong>@ai-ecoverse/cherry embed harness</strong>
+        <span class="hint"
+          >Serve this from the repo root (<code>npx http-server . -p 8080</code>) on an origin
+          <em>different</em> from <code>sliccOrigin</code>.</span
+        >
+      </div>
+      <div class="row">
+        <label for="origin">sliccOrigin</label>
+        <input id="origin" type="text" value="http://localhost:5710" />
+      </div>
+      <div class="row">
+        <label for="join">joinToken</label>
+        <input
+          id="join"
+          type="text"
+          placeholder="Paste the leader's /join/… URL (avatar → Enable multi-browser sync)"
+        />
+      </div>
+      <div class="row">
+        <label for="shot">screenshot</label>
+        <select id="shot">
+          <option value="none" selected>none</option>
+          <option value="html2canvas">html2canvas</option>
+        </select>
+        <button id="mountBtn">Mount</button>
+        <button id="destroyBtn" disabled>Destroy</button>
+        <span class="hint"
+          >navigate / openUrl are enabled; deny a CDP domain by editing
+          <code>onPermissionRequest</code>.</span
+        >
+      </div>
+      <div class="row">
+        <label>features</label>
+        <label><input id="featTerminal" type="checkbox" checked /> terminal</label>
+        <label><input id="featFiles" type="checkbox" checked /> files</label>
+        <label><input id="featMemory" type="checkbox" checked /> memory</label>
+        <label><input id="featBrowser" type="checkbox" checked /> browser</label>
+        <label><input id="featModelPicker" type="checkbox" checked /> model picker</label>
+        <label><input id="featHistory" type="checkbox" checked /> history</label>
+        <label><input id="featNav" type="checkbox" checked /> nav</label>
+        <label><input id="featMonitor" type="checkbox" checked /> monitor</label>
+        <span class="hint">Uncheck to hide a panel in the embedded follower.</span>
+      </div>
+      <div class="row">
+        <label for="theme">theme</label>
+        <select id="theme">
+          <option value="none" selected>none (default)</option>
+          <option value="vanilla">Vanilla (light)</option>
+          <option value="midnight-scoop">Midnight Scoop (dark)</option>
+          <option value="matcha-float">Matcha Float (dark)</option>
+          <option value="berry-cone">Berry Cone (dark)</option>
+          <option value="caramel-swirl">Caramel Swirl (light)</option>
+          <option value="sorbet">Sorbet (light)</option>
+          <option value="custom">custom JSON…</option>
+        </select>
+        <span class="hint">Applies a brand theme inside the embedded follower (fixed at mount time).</span>
+      </div>
+      <div class="row" id="themeJsonRow" style="display:none;">
+        <label for="themeJson">theme JSON</label>
+        <textarea
+          id="themeJson"
+          rows="6"
+          style="flex:1;min-width:280px;font-family:ui-monospace,monospace;font-size:12px;"
+          placeholder='{"id":"my-theme","name":"My Theme","base":"dark","tokens":{"--accent":"#ff5f72"}}'
+        ></textarea>
+        <span class="hint">Paste a SliccTheme object (id, name, base, tokens, css?, components?).</span>
+      </div>
+      <div class="row">
+        <label for="layoutJson">layout JSON</label>
+        <textarea
+          id="layoutJson"
+          rows="6"
+          style="flex:1;min-width:280px;font-family:ui-monospace,monospace;font-size:12px;"
+          placeholder='{"zones":{"top":null,"left":{"type":"leaf","surfaceId":"chat"},"middle":null,"right":null,"bottom":null},"rowFr":{"top":1,"center":1,"bottom":1},"colFr":{"left":1,"middle":1,"right":1},"locked":true}'
+        ></textarea>
+        <span class="hint"
+          >Paste a DockTreeSpec (see `@slicc/webcomponents`' `slicc-dock-tree.ts`). Set
+          <code>locked: true</code> so the follower can't drag/resize/close it. Applied once at
+          mount, in place of the follower's own persisted/default layout.</span
+        >
+      </div>
+      <div class="row">
+        <label for="evtName">send event</label>
+        <input id="evtName" type="text" placeholder="event name (e.g. checkout-done)" />
+        <input id="evtDetail" type="text" placeholder='detail JSON (optional, e.g. {"id":7})' />
+        <button id="emitBtn" disabled>Emit to cone</button>
+        <span class="hint"
+          >Fires <code>handle.emitHostEvent(name, detail)</code> → surfaces as a
+          <code>[cherry]</code> lick on the cone.</span
+        >
+      </div>
+      <div class="row">
+        <label>export</label>
+        <button id="exportBtn" disabled>Export active transcript</button>
+        <button id="cancelExportBtn" disabled>Cancel export</button>
+        <span class="hint"
+          >Calls <code>handle.exportSession()</code>, logs progress phases, and downloads the
+          returned zip. Does not log transcript content or byte contents.</span
+        >
+      </div>
+    </header>
+    <main>
+      <div id="mount"></div>
+      <pre id="log"></pre>
+    </main>
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    <script type="importmap">
+      {
+        "imports": {
+          "@ai-ecoverse/cherry": "../dist/index.js",
+          "html2canvas-pro": "../../../node_modules/html2canvas-pro/dist/html2canvas-pro.esm.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      // Authored exactly as a real embedder would import the SDK. (Run
+      // `npm run build -w @ai-ecoverse/cherry` first; the import map above maps
+      // this bare specifier to the local build.)
+      import { mountSlicc } from '@ai-ecoverse/cherry';
+
+      // Hardcoded theme presets (subset of webapp theme-presets.ts) so the
+      // harness can exercise theme injection without importing webapp internals.
+      const THEME_PRESETS = {
+        vanilla: {
+          id: 'vanilla', name: 'Vanilla', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fffdf8', '--s2-bg-layer-1': '#faf6f0',
+            '--s2-bg-layer-2': '#f5f0e8', '--s2-bg-elevated': '#ede7dc',
+            '--s2-accent': '#a0522d', '--s2-accent-hover': '#8b4513',
+            '--slicc-cone': '#d2691e', '--s2-border-default': '#d4cbbf',
+            '--canvas': '#fffdf8', '--bg': '#f5f0e8', '--ink': '#1a1008',
+            '--txt-2': '#6b5f50', '--txt-3': '#8c7f6f', '--line': '#d4cbbf',
+            '--ctx': '#a0522d', '--shaderbg': '#fffdf8',
+          },
+        },
+        'midnight-scoop': {
+          id: 'midnight-scoop', name: 'Midnight Scoop', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#0d1117', '--s2-bg-layer-1': '#131a24',
+            '--s2-bg-layer-2': '#1a2332', '--s2-bg-elevated': '#212d40',
+            '--s2-accent': '#58a6ff', '--s2-accent-hover': '#79b8ff',
+            '--slicc-cone': '#f0883e', '--s2-border-default': '#3a4a63',
+            '--canvas': '#0d1117', '--bg': '#080c12', '--ink': '#e8eef5',
+            '--txt-2': '#8899b3', '--txt-3': '#6b7f99', '--line': '#3a4a63',
+            '--ctx': '#58a6ff', '--shaderbg': '#0d1117',
+          },
+        },
+        'matcha-float': {
+          id: 'matcha-float', name: 'Matcha Float', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#0f1a14', '--s2-bg-layer-1': '#14221b',
+            '--s2-bg-layer-2': '#1a2d23', '--s2-bg-elevated': '#21382c',
+            '--s2-accent': '#6bce9a', '--s2-accent-hover': '#88dbb0',
+            '--slicc-cone': '#a8d86c', '--s2-border-default': '#3a5c48',
+            '--canvas': '#0f1a14', '--bg': '#0a120e', '--ink': '#e8f2ec',
+            '--txt-2': '#88b09c', '--txt-3': '#6b9480', '--line': '#3a5c48',
+            '--ctx': '#6bce9a', '--shaderbg': '#0f1a14',
+          },
+        },
+        'berry-cone': {
+          id: 'berry-cone', name: 'Berry Cone', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#150a1a', '--s2-bg-layer-1': '#1e1024',
+            '--s2-bg-layer-2': '#281830', '--s2-bg-elevated': '#33203d',
+            '--s2-accent': '#e06be0', '--s2-accent-hover': '#e88ae8',
+            '--slicc-cone': '#ff6b9d', '--s2-border-default': '#574063',
+            '--canvas': '#150a1a', '--bg': '#0f0614', '--ink': '#f0e8f4',
+            '--txt-2': '#a88cb3', '--txt-3': '#8c7099', '--line': '#574063',
+            '--ctx': '#e06be0', '--shaderbg': '#150a1a',
+          },
+        },
+        'caramel-swirl': {
+          id: 'caramel-swirl', name: 'Caramel Swirl', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fdf9f3', '--s2-bg-layer-1': '#f8f2e8',
+            '--s2-bg-layer-2': '#f2eadd', '--s2-bg-elevated': '#e8dfd0',
+            '--s2-accent': '#c87830', '--s2-accent-hover': '#b06828',
+            '--slicc-cone': '#e89040', '--s2-border-default': '#d0c3b0',
+            '--canvas': '#fdf9f3', '--bg': '#f2eadd', '--ink': '#1a1408',
+            '--txt-2': '#6b5a42', '--txt-3': '#8f7a60', '--line': '#d0c3b0',
+            '--ctx': '#c87830', '--shaderbg': '#fdf9f3',
+          },
+        },
+        sorbet: {
+          id: 'sorbet', name: 'Sorbet', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fff8f6', '--s2-bg-layer-1': '#fef0ed',
+            '--s2-bg-layer-2': '#fce8e3', '--s2-bg-elevated': '#f8ddd6',
+            '--s2-accent': '#e86050', '--s2-accent-hover': '#d04840',
+            '--slicc-cone': '#ff7860', '--s2-border-default': '#e8c0b8',
+            '--canvas': '#fff8f6', '--bg': '#fce8e3', '--ink': '#1e1412',
+            '--txt-2': '#80605c', '--txt-3': '#a8807a', '--line': '#e8c0b8',
+            '--ctx': '#e86050', '--shaderbg': '#fff8f6',
+          },
+        },
+      };
+
+      const logEl = document.getElementById('log');
+      const log = (...parts) => {
+        const line = `[${new Date().toLocaleTimeString()}] ${parts
+          .map((p) => (typeof p === 'string' ? p : JSON.stringify(p)))
+          .join(' ')}`;
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+
+      let handle = null;
+      const mountBtn = document.getElementById('mountBtn');
+      const destroyBtn = document.getElementById('destroyBtn');
+      const emitBtn = document.getElementById('emitBtn');
+      const exportBtn = document.getElementById('exportBtn');
+      const cancelExportBtn = document.getElementById('cancelExportBtn');
+      let activeExportController = null;
+
+      mountBtn.addEventListener('click', () => {
+        if (handle) return;
+        const sliccOrigin = document.getElementById('origin').value.trim();
+        const joinToken = document.getElementById('join').value.trim();
+        const screenshot = document.getElementById('shot').value;
+        if (!joinToken) {
+          log('joinToken is required — paste a /join/… URL from a running leader.');
+          return;
+        }
+        log('mounting against', sliccOrigin);
+        const features = {
+          terminal: document.getElementById('featTerminal').checked,
+          files: document.getElementById('featFiles').checked,
+          memory: document.getElementById('featMemory').checked,
+          browser: document.getElementById('featBrowser').checked,
+          modelPicker: document.getElementById('featModelPicker').checked,
+          history: document.getElementById('featHistory').checked,
+          nav: document.getElementById('featNav').checked,
+          monitor: document.getElementById('featMonitor').checked,
+        };
+        const themeId = document.getElementById('theme').value;
+        let theme;
+        if (themeId === 'custom') {
+          const raw = document.getElementById('themeJson').value.trim();
+          if (raw) {
+            try {
+              theme = JSON.parse(raw);
+            } catch (err) {
+              log('custom theme JSON is invalid — ignoring:', err.message);
+            }
+          }
+        } else if (themeId !== 'none') {
+          theme = THEME_PRESETS[themeId];
+        }
+        let layout;
+        const layoutRaw = document.getElementById('layoutJson').value.trim();
+        if (layoutRaw) {
+          try {
+            layout = JSON.parse(layoutRaw);
+          } catch (err) {
+            log('layout JSON is invalid — ignoring:', err.message);
+          }
+        }
+        log('features', features);
+        if (theme) log('theme', theme.name || theme.id || '(custom)');
+        if (layout) log('layout', layout);
+        handle = mountSlicc({
+          container: document.getElementById('mount'),
+          sliccOrigin,
+          capabilities: { navigate: true, screenshot, openUrl: true },
+          features,
+          theme,
+          layout,
+          joinToken,
+          hooks: {
+            onSliccEvent: (name, detail) => log('onSliccEvent', name, detail ?? {}),
+            onOpenUrl: (url) => {
+              log('onOpenUrl', url);
+              window.open(url, '_blank', 'noopener');
+            },
+            onPermissionRequest: (domain) => {
+              // Baseline: allow everything. Return false to deny a synthetic CDP
+              // domain (the SDK then answers the leader with code -32601).
+              log('onPermissionRequest', domain, '→ allow');
+              return true;
+            },
+          },
+        });
+        mountBtn.disabled = true;
+        destroyBtn.disabled = false;
+        emitBtn.disabled = false;
+        exportBtn.disabled = false;
+      });
+
+      destroyBtn.addEventListener('click', () => {
+        handle?.destroy();
+        handle = null;
+        document.getElementById('mount').replaceChildren();
+        log('destroyed');
+        mountBtn.disabled = false;
+        destroyBtn.disabled = true;
+        emitBtn.disabled = true;
+        exportBtn.disabled = true;
+      });
+
+      emitBtn.addEventListener('click', () => {
+        if (!handle) return;
+        const name = document.getElementById('evtName').value.trim();
+        if (!name) {
+          log('event name is required.');
+          return;
+        }
+        const raw = document.getElementById('evtDetail').value.trim();
+        let detail;
+        if (raw) {
+          try {
+            detail = JSON.parse(raw);
+          } catch {
+            log('detail is not valid JSON — sending it as a string.');
+            detail = raw;
+          }
+        }
+        handle.emitHostEvent(name, detail);
+        log('emitHostEvent', name, detail ?? {});
+      });
+
+      exportBtn.addEventListener('click', async () => {
+        if (!handle) return;
+        exportBtn.disabled = true;
+        cancelExportBtn.disabled = false;
+        const controller = new AbortController();
+        activeExportController = controller;
+        log('export: requesting active transcript…');
+        try {
+          const blob = await handle.exportSession({
+            sessionId: 'active',
+            signal: controller.signal,
+            onProgress: ({ phase }) => log('export: phase →', phase),
+          });
+          // Download the Blob without logging its content or byte size
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `transcript-${Date.now()}.zip`;
+          a.click();
+          URL.revokeObjectURL(url);
+          log('export: download started.');
+        } catch (err) {
+          log('export failed:', err instanceof Error ? err.message : String(err));
+        } finally {
+          activeExportController = null;
+          exportBtn.disabled = !handle;
+          cancelExportBtn.disabled = true;
+        }
+      });
+
+      cancelExportBtn.addEventListener('click', () => {
+        if (!activeExportController) return;
+        activeExportController.abort();
+        log('export: cancellation requested.');
+      });
+
+      const themeSelect = document.getElementById('theme');
+      const themeJsonRow = document.getElementById('themeJsonRow');
+      themeSelect.addEventListener('change', () => {
+        themeJsonRow.style.display = themeSelect.value === 'custom' ? 'flex' : 'none';
+      });
+
+      log('ready — paste a joinToken and press Mount.');
+    </script>
+  </body>
+</html>

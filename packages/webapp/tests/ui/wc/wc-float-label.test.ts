@@ -1,0 +1,53 @@
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
+import {
+  floatKindForRuntimeMode,
+  floatLabelForKind,
+  resolveStandaloneFloatKind,
+} from '../../../src/ui/wc/wc-float-label.js';
+
+function okJson(body: unknown): typeof fetch {
+  return vi.fn(async () => ({ ok: true, json: async () => body })) as unknown as typeof fetch;
+}
+
+afterEach(() => {
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
+});
+
+describe('resolveStandaloneFloatKind', () => {
+  it('detects the native Sliccstart server', async () => {
+    await expect(
+      resolveStandaloneFloatKind({ fetchFn: okJson({ status: 'ok', service: 'slicc-server' }) })
+    ).resolves.toBe('sliccstart');
+  });
+
+  it('detects the Node CLI', async () => {
+    await expect(
+      resolveStandaloneFloatKind({
+        fetchFn: okJson({ status: 'ok', service: 'slicc-node-server' }),
+      })
+    ).resolves.toBe('npx');
+  });
+
+  it('falls back to standalone for unknown services', async () => {
+    await expect(
+      resolveStandaloneFloatKind({ fetchFn: okJson({ status: 'ok', service: 'mystery' }) })
+    ).resolves.toBe('standalone');
+  });
+});
+
+describe('floatKindForRuntimeMode', () => {
+  it('maps electron-overlay to electron without server fingerprinting', () => {
+    expect(floatKindForRuntimeMode('electron-overlay')).toBe('electron');
+  });
+});
+
+describe('floatLabelForKind', () => {
+  it('returns the float kind name without tray suffixes', () => {
+    expect(floatLabelForKind('npx')).toBe('npx');
+    expect(floatLabelForKind('extension')).toBe('extension');
+  });
+});

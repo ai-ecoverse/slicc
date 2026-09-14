@@ -1,0 +1,198 @@
+#!/bin/bash
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+set -euo pipefail
+
+
+
+GH_BIN="${GH_BIN:-/opt/homebrew/bin/gh}"
+if [ ! -x "$GH_BIN" ]; then
+  GH_BIN="$(command -v gh || true)"
+fi
+if [ -z "$GH_BIN" ] || [ ! -x "$GH_BIN" ]; then
+  echo "error: gh CLI not found. Install with 'brew install gh' or set GH_BIN." >&2
+  exit 1
+fi
+
+REPO="${GITHUB_REPO:-ai-ecoverse/slicc}"
+
+KEY_ID="${APPLE_API_KEY_ID:-}"
+ISSUER_ID="${APPLE_API_KEY_ISSUER_ID:-}"
+P8_PATH="${APPLE_API_KEY_P8_PATH:-}"
+PROFILE_PATH="${APPLE_PROVISIONING_PROFILE_PATH:-}"
+FILEPROVIDER_PROFILE_PATH="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH:-}"
+PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
+FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
+FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.fileprovider}"
+SHARE_PROFILE_PATH="${APPLE_SHARE_PROVISIONING_PROFILE_PATH:-}"
+SHARE_PROFILE_NAME="${APPLE_SHARE_PROVISIONING_PROFILE_NAME:-Slicc Follower Share App Store}"
+SHARE_BUNDLE_ID="${APPLE_SHARE_BUNDLE_ID:-com.sliccy.follower.share}"
+WIDGETS_PROFILE_PATH="${APPLE_WIDGETS_PROVISIONING_PROFILE_PATH:-}"
+WIDGETS_PROFILE_NAME="${APPLE_WIDGETS_PROVISIONING_PROFILE_NAME:-Slicc Follower Widgets App Store}"
+WIDGETS_BUNDLE_ID="${APPLE_WIDGETS_BUNDLE_ID:-com.sliccy.follower.widgets}"
+CERT_P12_PATH="${APPLE_DISTRIBUTION_CERT_P12:-}"
+CERT_PASSWORD="${APPLE_DISTRIBUTION_CERT_PASSWORD:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --key-id) KEY_ID="$2"; shift 2;;
+    --issuer-id) ISSUER_ID="$2"; shift 2;;
+    --p8) P8_PATH="$2"; shift 2;;
+    --profile) PROFILE_PATH="$2"; shift 2;;
+    --fileprovider-profile) FILEPROVIDER_PROFILE_PATH="$2"; shift 2;;
+    --profile-name) PROFILE_NAME="$2"; shift 2;;
+    --fileprovider-profile-name) FILEPROVIDER_PROFILE_NAME="$2"; shift 2;;
+    --fileprovider-bundle-id) FILEPROVIDER_BUNDLE_ID="$2"; shift 2;;
+    --share-profile) SHARE_PROFILE_PATH="$2"; shift 2;;
+    --share-profile-name) SHARE_PROFILE_NAME="$2"; shift 2;;
+    --share-bundle-id) SHARE_BUNDLE_ID="$2"; shift 2;;
+    --widgets-profile) WIDGETS_PROFILE_PATH="$2"; shift 2;;
+    --widgets-profile-name) WIDGETS_PROFILE_NAME="$2"; shift 2;;
+    --widgets-bundle-id) WIDGETS_BUNDLE_ID="$2"; shift 2;;
+    --cert-p12) CERT_P12_PATH="$2"; shift 2;;
+    --cert-password) CERT_PASSWORD="$2"; shift 2;;
+    --repo) REPO="$2"; shift 2;;
+    -h|--help)
+      sed -n '2,40p' "$0"
+      exit 0;;
+    *)
+      echo "error: unknown flag: $1" >&2
+      exit 2;;
+  esac
+done
+
+
+if [ -z "$P8_PATH" ] && [ -n "$KEY_ID" ]; then
+  candidate="$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+  if [ -f "$candidate" ]; then
+    P8_PATH="$candidate"
+  fi
+fi
+if [ -z "$P8_PATH" ]; then
+  found=$(ls "$HOME/.appstoreconnect/private_keys/AuthKey_"*.p8 2>/dev/null | head -1)
+  if [ -n "$found" ]; then
+    P8_PATH="$found"
+    if [ -z "$KEY_ID" ]; then
+      KEY_ID="$(basename "$P8_PATH" | sed -E 's/^AuthKey_(.*)\.p8$/\1/')"
+      echo "  inferred APPLE_API_KEY_ID=$KEY_ID from $P8_PATH"
+    fi
+  fi
+fi
+
+missing=()
+[ -z "$KEY_ID" ]        && missing+=("--key-id / APPLE_API_KEY_ID")
+[ -z "$ISSUER_ID" ]     && missing+=("--issuer-id / APPLE_API_KEY_ISSUER_ID")
+[ -z "$P8_PATH" ]       && missing+=("--p8 / APPLE_API_KEY_P8_PATH")
+[ -z "$PROFILE_PATH" ]  && missing+=("--profile / APPLE_PROVISIONING_PROFILE_PATH")
+[ -z "$FILEPROVIDER_PROFILE_PATH" ] && missing+=("--fileprovider-profile / APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH")
+[ -z "$SHARE_PROFILE_PATH" ] && missing+=("--share-profile / APPLE_SHARE_PROVISIONING_PROFILE_PATH")
+[ -z "$WIDGETS_PROFILE_PATH" ] && missing+=("--widgets-profile / APPLE_WIDGETS_PROVISIONING_PROFILE_PATH")
+[ -z "$CERT_P12_PATH" ] && missing+=("--cert-p12 / APPLE_DISTRIBUTION_CERT_P12")
+[ -z "$CERT_PASSWORD" ] && missing+=("--cert-password / APPLE_DISTRIBUTION_CERT_PASSWORD")
+if [ ${#missing[@]} -ne 0 ]; then
+  echo "error: missing required arguments:" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  echo >&2
+  echo "Run '$0 --help' for usage." >&2
+  exit 2
+fi
+
+for f in "$P8_PATH" "$PROFILE_PATH" "$FILEPROVIDER_PROFILE_PATH" "$SHARE_PROFILE_PATH" "$CERT_P12_PATH"; do
+  if [ ! -f "$f" ]; then
+    echo "error: file not found: $f" >&2
+    exit 2
+  fi
+done
+
+
+if ! openssl pkcs12 -in "$CERT_P12_PATH" -passin "pass:$CERT_PASSWORD" -nokeys -noout >/dev/null 2>&1; then
+  echo "error: cannot decrypt $CERT_P12_PATH with the supplied password." >&2
+  echo "       Re-export the cert from Keychain Access and try again." >&2
+  exit 2
+fi
+
+set_secret() {
+  local name="$1" value="$2"
+  printf '  %-40s ' "$name"
+
+
+
+
+  if printf '%s' "$value" | "$GH_BIN" secret set "$name" -R "$REPO" >/dev/null; then
+    echo "ok ($(printf '%s' "$value" | wc -c | tr -d ' ') bytes)"
+  else
+    echo "FAILED"
+    return 1
+  fi
+}
+
+echo "Setting TestFlight secrets on $REPO via $GH_BIN..."
+set_secret APPLE_API_KEY_ID "$KEY_ID"
+set_secret APPLE_API_KEY_ISSUER_ID "$ISSUER_ID"
+set_secret APPLE_API_KEY_P8_BASE64 "$(base64 < "$P8_PATH")"
+set_secret APPLE_DISTRIBUTION_CERT_BASE64 "$(base64 < "$CERT_P12_PATH")"
+set_secret APPLE_DISTRIBUTION_CERT_PASSWORD "$CERT_PASSWORD"
+set_secret APPLE_PROVISIONING_PROFILE_BASE64 "$(base64 < "$PROFILE_PATH")"
+set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 "$(base64 < "$FILEPROVIDER_PROFILE_PATH")"
+set_secret APPLE_PROVISIONING_PROFILE_NAME "$PROFILE_NAME"
+set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME "$FILEPROVIDER_PROFILE_NAME"
+set_secret APPLE_FILEPROVIDER_BUNDLE_ID "$FILEPROVIDER_BUNDLE_ID"
+set_secret APPLE_SHARE_PROVISIONING_PROFILE_BASE64 "$(base64 < "$SHARE_PROFILE_PATH")"
+set_secret APPLE_SHARE_PROVISIONING_PROFILE_NAME "$SHARE_PROFILE_NAME"
+set_secret APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64 "$(base64 < "$WIDGETS_PROFILE_PATH")"
+set_secret APPLE_WIDGETS_PROVISIONING_PROFILE_NAME "$WIDGETS_PROFILE_NAME"
+set_secret APPLE_SHARE_BUNDLE_ID "$SHARE_BUNDLE_ID"
+set_secret APPLE_WIDGETS_BUNDLE_ID "$WIDGETS_BUNDLE_ID"
+
+echo
+echo "Done. Verify with:"
+echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER|APPLE_SHARE|APPLE_WIDGETS'"

@@ -1,0 +1,20 @@
+{
+  "model": "fake-cone-primary",
+  "models": ["fake-cone-primary", "fake-cone-alternate"],
+  "turns": [
+    {
+      "whenUserMessageMatches": "review the docs",
+      "content": "Reviewer cone online.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "spawn a helper",
+      "tool_calls": [{ "name": "scoop_scoop", "arguments": { "name": "helper" } }]
+    },
+    {
+      "whenUserMessageMatches": "spawn a helper",
+      "content": "Helper scoop is ready.",
+      "contentChunkSize": 64
+    }
+  ]
+}

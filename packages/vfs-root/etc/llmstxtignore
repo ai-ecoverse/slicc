@@ -1,0 +1,11 @@
+# /etc/llmstxtignore — llms.txt discovery suppression
+#
+# One advertising hostname or glob per line. Matching is case-insensitive.
+# `#` starts a comment; blank lines are ignored.
+#
+# Examples:
+# example.com
+# *.example.com
+
+github.com
+app.slack.com

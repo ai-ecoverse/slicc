@@ -1,0 +1,537 @@
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
+
+type ChromeListener = (
+  message: unknown,
+  sender: unknown,
+  sendResponse: (r?: unknown) => void
+) => boolean | void;
+
+const messageListeners: ChromeListener[] = [];
+const sentMessages: unknown[] = [];
+
+const mockChrome = {
+  runtime: {
+    id: 'test-extension-id',
+    lastError: undefined,
+    sendMessage: vi.fn(async (msg: unknown) => {
+      sentMessages.push(msg);
+
+      for (const listener of messageListeners) {
+        listener(msg, {}, () => {});
+      }
+    }),
+    onMessage: {
+      addListener: vi.fn((cb: ChromeListener) => {
+        messageListeners.push(cb);
+      }),
+      removeListener: vi.fn((cb: ChromeListener) => {
+        const i = messageListeners.indexOf(cb);
+        if (i >= 0) messageListeners.splice(i, 1);
+      }),
+    },
+  },
+};
+
+(globalThis as unknown as { chrome: typeof mockChrome }).chrome = mockChrome;
+
+const { mockSessionStore, mockHandleAction, mockHandleSprinkleOpResponse } = vi.hoisted(() => ({
+  mockSessionStore: vi.fn(function (this: Record<string, Mock>) {
+    this.init = vi.fn().mockResolvedValue(undefined);
+    this.saveMessages = vi.fn().mockResolvedValue(undefined);
+    this.delete = vi.fn().mockResolvedValue(undefined);
+  }),
+  mockHandleAction: vi.fn().mockResolvedValue(undefined),
+  mockHandleSprinkleOpResponse: vi.fn(),
+}));
+
+vi.mock('../../src/scoops/chat-session-store.js', () => ({
+  SessionStore: mockSessionStore,
+}));
+
+vi.mock('../../src/tools/tool-ui.js', () => ({
+  toolUIRegistry: {
+    handleAction: mockHandleAction,
+
+    markMounted: vi.fn(),
+  },
+  TOOL_UI_MOUNTED_ACTION: '__mounted',
+}));
+
+vi.mock('../../src/scoops/sprinkle-manager-proxy.js', () => ({
+  handleSprinkleOpResponse: mockHandleSprinkleOpResponse,
+}));
+
+const { Bridge } = await import('../../src/kernel/facade.js');
+const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
+
+import type {
+  KernelClientCallbacks,
+  KernelClientFacade,
+  KernelFacade,
+} from '../../src/kernel/types.js';
+
+function makeOrchestratorMock() {
+  return {
+    getScoops: vi.fn((): RegisteredScoop[] => [
+      {
+        jid: 'cone_1',
+        name: 'Cone',
+        folder: 'cone',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'sliccy',
+        addedAt: new Date().toISOString(),
+        model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+      },
+      {
+        jid: 'scoop_test',
+        name: 'Test',
+        folder: 'test-scoop',
+        parentJid: 'cone_1',
+        requiresTrigger: true,
+        assistantLabel: 'test-scoop',
+        addedAt: new Date().toISOString(),
+        config: { thinkingLevel: 'max' as const },
+      },
+    ]),
+    handleMessage: vi.fn().mockResolvedValue(undefined),
+    createScoopTab: vi.fn(),
+    registerScoop: vi.fn().mockResolvedValue(undefined),
+    unregisterScoop: vi.fn().mockResolvedValue(undefined),
+    stopScoop: vi.fn(),
+    clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+    deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
+    clearAllMessages: vi.fn().mockResolvedValue(undefined),
+    clearScoopMessages: vi.fn().mockResolvedValue(undefined),
+    delegateToScoop: vi.fn().mockResolvedValue(undefined),
+    refreshModels: vi.fn(),
+    setScoopModel: vi.fn().mockResolvedValue(true),
+    setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
+    resetFilesystem: vi.fn().mockResolvedValue(undefined),
+    reloadAllSkills: vi.fn().mockResolvedValue(undefined),
+    getSessionCosts: vi.fn(() => ({})),
+    getWorkUnits: vi.fn(() => ({
+      close: vi.fn().mockResolvedValue(undefined),
+    })),
+  };
+}
+
+function makeClientCallbacks(): KernelClientCallbacks & {
+  agentEvents: unknown[];
+  scoopMessagesReplaced: Array<{ scoopJid: string; messages: unknown[] }>;
+} {
+  const agentEvents: unknown[] = [];
+  const scoopMessagesReplaced: Array<{ scoopJid: string; messages: unknown[] }> = [];
+  return {
+    agentEvents,
+    scoopMessagesReplaced,
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onScoopMessagesReplaced: (scoopJid, messages) =>
+      void scoopMessagesReplaced.push({ scoopJid, messages }),
+    onReady: vi.fn(),
+  };
+}
+
+async function tick(ms = 10): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+describe('Kernel facade parity', () => {
+  let facade: KernelFacade;
+  let client: KernelClientFacade;
+  let orchestrator: ReturnType<typeof makeOrchestratorMock>;
+  let callbacks: ReturnType<typeof makeClientCallbacks>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    const bridge = new Bridge();
+    facade = bridge;
+
+    orchestrator = makeOrchestratorMock();
+    await bridge.bind(orchestrator as unknown as Parameters<typeof bridge.bind>[0]);
+
+    callbacks = makeClientCallbacks();
+    const offscreenClient = new OffscreenClient(callbacks);
+    client = offscreenClient;
+  });
+
+  it('client.requestState → bridge.buildStateSnapshot reaches the panel intact', async () => {
+    client.requestState();
+    await tick();
+
+    const snapshot = facade.buildStateSnapshot();
+    expect(snapshot.type).toBe('state-snapshot');
+    expect(snapshot.scoops).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ jid: 'cone_1', parentId: null }),
+        expect.objectContaining({
+          jid: 'scoop_test',
+          parentId: 'cone_1',
+          config: { thinkingLevel: 'max' },
+        }),
+      ])
+    );
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: expect.objectContaining({ type: 'state-snapshot' }),
+      })
+    );
+  });
+
+  it('client forwards pi-ai max thinking levels over the extension bridge', async () => {
+    client.setScoopThinkingLevel('scoop_test', 'max');
+    await tick();
+
+    expect(orchestrator.setScoopThinkingLevel).toHaveBeenCalledWith('scoop_test', 'max', undefined);
+  });
+
+  it('client.unregisterScoop("scoop_test") triggers SessionStore.delete("session-test-scoop")', async () => {
+    await client.unregisterScoop('scoop_test');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-test-scoop');
+    expect(orchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
+  });
+
+  it('cone drop with detach survivor keeps the survivor session', async () => {
+    const keeper = {
+      jid: 'scoop_keeper',
+      name: 'Keeper',
+      folder: 'keeper',
+      parentJid: 'cone_1' as string | null,
+      requiresTrigger: true,
+      assistantLabel: 'keeper',
+      addedAt: new Date().toISOString(),
+      onParentClose: 'detach' as const,
+    };
+    const otherRoot = {
+      jid: 'cone_2',
+      name: 'Other',
+      folder: 'cone-other',
+      parentJid: null as string | null,
+      requiresTrigger: false,
+      assistantLabel: 'Other',
+      addedAt: new Date().toISOString(),
+    };
+    let scoops: RegisteredScoop[] = [
+      {
+        jid: 'cone_1',
+        name: 'Cone',
+        folder: 'cone',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'sliccy',
+        addedAt: new Date().toISOString(),
+      },
+      keeper,
+      otherRoot,
+    ];
+    orchestrator.getScoops.mockImplementation(() => scoops);
+    orchestrator.getWorkUnits.mockReturnValue({
+      close: vi.fn(async (jid: string) => {
+        scoops = scoops
+          .filter((s) => s.jid !== jid)
+          .map((s) =>
+            s.jid === keeper.jid ? { ...s, parentJid: null, requiresTrigger: false } : s
+          );
+      }),
+    });
+
+    await client.unregisterScoop('cone_1');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-keeper');
+  });
+
+  it('client.deleteQueuedMessage(jid, id) → orchestrator.deleteQueuedMessage(jid, id)', async () => {
+    await client.deleteQueuedMessage('cone_1', 'msg-42');
+    await tick();
+    expect(orchestrator.deleteQueuedMessage).toHaveBeenCalledWith('cone_1', 'msg-42');
+    expect(orchestrator.clearQueuedMessages).not.toHaveBeenCalled();
+  });
+
+  it('client.clearAllMessages() → SessionStore.delete called only for the cone session', async () => {
+    void client.clearAllMessages();
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-test-scoop');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
+    expect(orchestrator.clearAllMessages).not.toHaveBeenCalled();
+  });
+
+  it('client.clearAllMessages(jid) → clears that root only', async () => {
+    orchestrator.getScoops.mockReturnValue([
+      ...orchestrator.getScoops(),
+      {
+        jid: 'cone_2',
+        name: 'Research',
+        folder: 'cone-research',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: new Date().toISOString(),
+      },
+    ]);
+
+    void client.clearAllMessages('cone_2');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone-research');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_2');
+    expect(orchestrator.clearScoopMessages).not.toHaveBeenCalledWith('cone_1');
+  });
+
+  it('client.clearAllMessages(jid, { discardLiveSnapshot }) → forwards the erase intent', async () => {
+    void client.clearAllMessages('cone_1', { discardLiveSnapshot: true });
+    await tick();
+
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1', {
+      discardLiveSnapshot: true,
+    });
+  });
+
+  it('cone-create with description + prompt registers the purpose and starts the first turn', async () => {
+    await client.registerScoop(
+      {
+        jid: 'temp',
+        name: 'Research',
+        folder: 'cone-pending-2',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: '',
+      },
+      { description: ' Paper survey ', prompt: 'Start with the abstracts.' }
+    );
+    await tick();
+
+    expect(orchestrator.registerScoop).toHaveBeenCalledOnce();
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.parentJid).toBeNull();
+    expect(record.folder).toBe('cone-research');
+    expect(record.config?.systemPromptAppend).toBe('This cone is for: Paper survey');
+    expect(orchestrator.handleMessage).toHaveBeenCalledOnce();
+    const channelMsg = orchestrator.handleMessage.mock.calls[0][0] as {
+      chatJid: string;
+      content: string;
+      senderId: string;
+    };
+    expect(channelMsg.chatJid).toBe(record.jid);
+    expect(channelMsg.content).toBe('Start with the abstracts.');
+    expect(channelMsg.senderId).toBe('user');
+  });
+
+  it('cone-create starts the new cone on the model the page sent', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Research',
+      folder: 'cone-pending-2',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'Research',
+      addedAt: '',
+      model: { provider: 'adobe', id: 'claude-sonnet-4-6' },
+    });
+    await tick();
+
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.model).toEqual({ provider: 'adobe', id: 'claude-sonnet-4-6' });
+  });
+
+  it('cone-create falls back to the default root’s model when the page sends none', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Research',
+      folder: 'cone-pending-2',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'Research',
+      addedAt: '',
+    });
+    await tick();
+
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
+  });
+
+  it('cone-create without extras registers a plain root and starts nothing', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Plain',
+      folder: 'cone-pending-2',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'Plain',
+      addedAt: '',
+    });
+    await tick();
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.config).toBeUndefined();
+    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('client.clearAllMessages(unknown jid) falls back to the default root', async () => {
+    void client.clearAllMessages('cone_gone');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('panel-cdp-command goes through BrowserAPI and returns panel-cdp-response', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, foo: 1 });
+    const browser = {
+      getTransport: () => ({ send }),
+    };
+
+    type BindFn = (
+      orch: ReturnType<typeof makeOrchestratorMock>,
+      browserAPI?: typeof browser
+    ) => Promise<void>;
+    await (facade.bind as unknown as BindFn)(orchestrator, browser);
+
+    sentMessages.length = 0;
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'panel-cdp-command',
+            id: 42,
+            method: 'Page.navigate',
+            params: { url: 'https://example.com' },
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(send).toHaveBeenCalledWith('Page.navigate', { url: 'https://example.com' }, undefined);
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: expect.objectContaining({
+          type: 'panel-cdp-response',
+          id: 42,
+          result: { ok: true, foo: 1 },
+        }),
+      })
+    );
+  });
+
+  it('tool-ui-action routes to toolUIRegistry.handleAction', async () => {
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'tool-ui-action',
+            requestId: 'req-9',
+            action: 'submit',
+            data: { value: 'hello' },
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(mockHandleAction).toHaveBeenCalledWith('req-9', {
+      action: 'submit',
+      data: { value: 'hello' },
+    });
+  });
+
+  it('text_delta deltas appear in order on the wire and reach the client agent handle in order', async () => {
+    const handle = client.createAgentHandle();
+    client.setSelectedScoopJid('cone_1');
+    const events: Array<{ type: string; text?: string }> = [];
+    handle.onEvent((event) => {
+      events.push({ type: event.type, text: 'text' in event ? event.text : undefined });
+    });
+
+    const orchCallbacks = Bridge.createCallbacks(facade as InstanceType<typeof Bridge>);
+    orchCallbacks.onResponse?.('cone_1', 'Hel', true);
+    orchCallbacks.onResponse?.('cone_1', 'lo ', true);
+    orchCallbacks.onResponse?.('cone_1', 'world', true);
+    orchCallbacks.onResponseDone?.('cone_1');
+    await tick();
+
+    const deltaTexts = events.filter((e) => e.type === 'content_delta').map((e) => e.text);
+    expect(deltaTexts).toEqual(['Hel', 'lo ', 'world']);
+    expect(events.some((e) => e.type === 'content_done')).toBe(true);
+  });
+
+  it('user-message is diverted to followerSync.sendMessage when a follower is attached', async () => {
+    const followerSendMessage = vi.fn();
+    facade.setFollowerSync({
+      sendMessage: followerSendMessage,
+    } as unknown as Parameters<typeof facade.setFollowerSync>[0]);
+
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'user-message',
+            scoopJid: 'cone_1',
+            text: 'follower hi',
+            messageId: 'msg-follower-1',
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(followerSendMessage).toHaveBeenCalledWith('follower hi', 'msg-follower-1', undefined);
+
+    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('sprinkle-op-response payloads route to handleSprinkleOpResponse', async () => {
+    for (const listener of messageListeners) {
+      listener(
+        {
+          source: 'panel',
+          payload: {
+            type: 'sprinkle-op-response',
+            id: 'req-1',
+            result: { ok: true },
+          },
+        },
+        {},
+        () => {}
+      );
+    }
+    await tick();
+
+    expect(mockHandleSprinkleOpResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sprinkle-op-response', id: 'req-1' })
+    );
+
+    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
+    expect(orchestrator.unregisterScoop).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,1321 @@
+import type { IFileSystem } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createAgentCommand } from '../../../src/shell/supplemental-commands/agent-command.js';
+
+interface SpawnArgs {
+  cwd: string;
+  allowedCommands: string[];
+  prompt: string;
+  modelId?: string;
+  visiblePaths?: string[];
+  invokingCwd?: string;
+  thinkingLevel?: string;
+  backgroundAfterSeconds?: number;
+  structuredOutputSchema?: Record<string, unknown>;
+  persistSession?: boolean;
+  workspaceMode?: string;
+}
+
+interface SpawnResult {
+  finalText?: string | null;
+  exitCode: number;
+}
+
+interface MockFsOptions {
+  stat?: IFileSystem['stat'];
+
+  exists?: IFileSystem['exists'];
+
+  canWrite?: (path: string) => boolean;
+}
+
+function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
+  const fs: Partial<IFileSystem> & { canWrite: (path: string) => boolean } = {
+    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
+    exists:
+      fsOptions.exists ??
+      (async () => {
+        return true;
+      }),
+    stat:
+      fsOptions.stat ??
+      (async () => ({
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: 0,
+        mtime: new Date(0),
+      })),
+    canWrite: fsOptions.canWrite ?? (() => true),
+  };
+  return createCommandContext({
+    fs: fs as unknown as IFileSystem,
+    cwd,
+    env: new Map<string, string>(),
+    stdin: unsafeBytesFromLatin1(''),
+  });
+}
+
+function installBridge(spawn: (args: SpawnArgs) => Promise<SpawnResult> | SpawnResult) {
+  (globalThis as Record<string, unknown>).__slicc_agent = { spawn };
+}
+
+function clearBridge() {
+  delete (globalThis as Record<string, unknown>).__slicc_agent;
+}
+
+describe('agent command', () => {
+  beforeEach(() => {
+    clearBridge();
+  });
+
+  afterEach(() => {
+    clearBridge();
+    vi.restoreAllMocks();
+  });
+
+  describe('basic registration', () => {
+    it('has the correct name', () => {
+      expect(createAgentCommand().name).toBe('agent');
+    });
+
+    it('has an execute function', () => {
+      expect(typeof createAgentCommand().execute).toBe('function');
+    });
+  });
+
+  describe('help text', () => {
+    it('prints usage on --help and exits 0', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('agent <cwd> <allowed-commands> <prompt>');
+    });
+
+    it('prints usage on -h and exits 0', async () => {
+      const result = await createAgentCommand().execute(['-h'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('agent <cwd> <allowed-commands> <prompt>');
+    });
+
+    it('help text documents all four tokens <cwd> <allowed-commands> <prompt> --model', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toContain('<cwd>');
+      expect(result.stdout).toContain('<allowed-commands>');
+      expect(result.stdout).toContain('<prompt>');
+      expect(result.stdout).toContain('--model');
+    });
+
+    it('help text documents --workspace-mode', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toContain('--workspace-mode');
+      expect(result.stdout).toContain('private');
+      expect(result.stdout).toContain('shared-readonly');
+    });
+
+    it('help text includes at least one concrete example', async () => {
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+
+      expect(result.stdout).toMatch(/agent\b[^\n]*"[^"]*"/);
+    });
+
+    it('help flag wins over positional args (help first)', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['-h', '.', '*', 'ignored prompt'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('agent <cwd> <allowed-commands> <prompt>');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('help flag in last position still wins', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['.', '*', 'prompt', '--help'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('agent <cwd> <allowed-commands> <prompt>');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('--help beats --model', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--model', 'foo', '-h'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('agent <cwd> <allowed-commands> <prompt>');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('argument count errors', () => {
+    it('errors with zero args', async () => {
+      const result = await createAgentCommand().execute([], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).not.toBe('');
+      expect(result.stdout).toBe('');
+    });
+
+    it('errors with only one positional arg', async () => {
+      const result = await createAgentCommand().execute(['.'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/allowed-commands|missing/);
+    });
+
+    it('errors with only two positional args', async () => {
+      const result = await createAgentCommand().execute(['.', '*'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/prompt|missing/);
+    });
+
+    it('errors with too many positional args', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['.', '*', 'p', 'extra'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).not.toBe('');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it("threads the command context's signal into the bridge so a killed run stops the child", async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      const controller = new AbortController();
+      const ctx = { ...createMockCtx(), signal: controller.signal };
+
+      await createAgentCommand().execute(['.', '*', 'say hi'], ctx);
+
+      expect(spawn.mock.calls[0][0].signal).toBe(controller.signal);
+    });
+
+    it('omits signal when the context has none', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+
+      await createAgentCommand().execute(['.', '*', 'say hi'], createMockCtx());
+
+      expect(spawn.mock.calls[0][0].signal).toBeUndefined();
+    });
+
+    it('three positional args are accepted as the happy path', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(['.', '*', 'say hi'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'say hi',
+      });
+    });
+  });
+
+  describe('unknown flags', () => {
+    it('errors on unknown long flag and does not call bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--foo', '.', '*', 'p'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--foo|unknown/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors on unknown short flag and does not call bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['-x', '.', '*', 'p'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/-x|unknown/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cwd resolution', () => {
+    it('resolves relative cwd against ctx.cwd', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['sub', '*', 'p'], createMockCtx('/home'));
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home/sub');
+    });
+
+    it('resolves "." to ctx.cwd', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx('/home/wiki'));
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home/wiki');
+    });
+
+    it('resolves ".." one level up', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['..', '*', 'p'], createMockCtx('/home/wiki'));
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home');
+    });
+
+    it('passes absolute cwd unchanged', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['/abs/path', '*', 'p'], createMockCtx('/home'));
+      expect(spawn.mock.calls[0][0].cwd).toBe('/abs/path');
+    });
+
+    it('errors on empty-string cwd', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['', '*', 'p'], createMockCtx('/home'));
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).not.toBe('');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cwd existence validation', () => {
+    it('errors on nonexistent cwd without calling bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        exists: async () => false,
+      });
+      const result = await createAgentCommand().execute(['/does/not/exist', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('/does/not/exist');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors on nonexistent relative cwd (resolved against ctx.cwd)', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        exists: async () => false,
+      });
+      const result = await createAgentCommand().execute(['missing-subdir', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+
+      expect(result.stderr).toMatch(/missing-subdir/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when cwd exists but is not a directory', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => ({
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+          mode: 0o644,
+          size: 42,
+          mtime: new Date(0),
+        }),
+        exists: async () => true,
+      });
+      const result = await createAgentCommand().execute(['/etc/hosts', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('/etc/hosts');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('happy path still succeeds when cwd exists and is a directory', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx('/home'));
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home');
+    });
+  });
+
+  describe('cwd writability validation (sandbox-escape guard)', () => {
+    it('errors when fs.canWrite returns false and does not call bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/scoops/agent-foo', {
+        canWrite: (path) => path.startsWith('/scoops/agent-foo'),
+      });
+      const result = await createAgentCommand().execute(['/scoops', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('not writable');
+      expect(result.stderr).toContain('/scoops');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('succeeds when fs.canWrite returns true for the resolved cwd', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      const canWrite = vi.fn().mockReturnValue(true);
+      const ctx = createMockCtx('/scoops/agent-foo', { canWrite });
+      const result = await createAgentCommand().execute(['/scoops/agent-foo/sub', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(canWrite).toHaveBeenCalledWith('/scoops/agent-foo/sub');
+      expect(spawn).toHaveBeenCalledOnce();
+    });
+
+    it('skips the writability check when fs.canWrite is absent (terminal shell case)', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+
+      const ctx = createMockCtx('/home');
+      delete (ctx.fs as unknown as { canWrite?: unknown }).canWrite;
+      const result = await createAgentCommand().execute(['/anywhere', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+    });
+
+    it('writability check runs AFTER the existence/directory check', async () => {
+      const canWrite = vi.fn().mockReturnValue(true);
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        canWrite,
+      });
+      const result = await createAgentCommand().execute(['/does/not/exist', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/not found/);
+      expect(canWrite).not.toHaveBeenCalled();
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('allowed-commands parsing', () => {
+    it('parses comma list without whitespace', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', 'ls,wc,find', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].allowedCommands).toEqual(['ls', 'wc', 'find']);
+    });
+
+    it('trims whitespace per entry', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', 'ls, wc , find ', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].allowedCommands).toEqual(['ls', 'wc', 'find']);
+    });
+
+    it('parses "*" as wildcard sentinel', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].allowedCommands).toEqual(['*']);
+    });
+
+    it('keeps "*" when mixed with named commands', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', 'ls,*,wc', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].allowedCommands).toContain('*');
+    });
+
+    it('tolerates duplicate entries', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', 'ls,ls,wc', 'p'], createMockCtx());
+      const allowed = spawn.mock.calls[0][0].allowedCommands;
+      expect(allowed).toContain('ls');
+      expect(allowed).toContain('wc');
+    });
+
+    it('parses empty-string allow-list to empty array', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].allowedCommands).toEqual([]);
+    });
+  });
+
+  describe('prompt passthrough', () => {
+    it('accepts an empty-string prompt', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: '', exitCode: 0 });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(['.', '*', ''], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(spawn.mock.calls[0][0].prompt).toBe('');
+    });
+
+    it('preserves embedded spaces', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'hello world multi word'], createMockCtx());
+      expect(spawn.mock.calls[0][0].prompt).toBe('hello world multi word');
+    });
+
+    it('preserves newlines', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'line1\nline2\nline3'], createMockCtx());
+      expect(spawn.mock.calls[0][0].prompt).toBe('line1\nline2\nline3');
+    });
+
+    it('preserves Unicode / emoji', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'résumé 日本語 🎉'], createMockCtx());
+      expect(spawn.mock.calls[0][0].prompt).toBe('résumé 日本語 🎉');
+    });
+
+    it('preserves shell metacharacters literally', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      const meta = '$(whoami) `date` && rm -rf /';
+      await createAgentCommand().execute(['.', '*', meta], createMockCtx());
+      expect(spawn.mock.calls[0][0].prompt).toBe(meta);
+    });
+
+    it('treats "-h" as the prompt when in the prompt positional slot', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(['.', '*', '-h'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn.mock.calls[0][0].prompt).toBe('-h');
+    });
+  });
+
+  describe('--model flag', () => {
+    it('accepts --model in the first position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'claude-haiku-4-5', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+      });
+    });
+
+    it('accepts --model in the middle position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['.', '--model', 'claude-haiku-4-5', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].modelId).toBe('claude-haiku-4-5');
+    });
+
+    it('accepts --model after the positional args', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['.', '*', 'p', '--model', 'claude-haiku-4-5'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].modelId).toBe('claude-haiku-4-5');
+    });
+
+    it('forwards a provider-qualified id verbatim to the bridge', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'openrouter:openai/gpt-5.6-terra-pro', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].modelId).toBe('openrouter:openai/gpt-5.6-terra-pro');
+    });
+
+    it("surfaces the bridge's model error (including ambiguity) on stderr", async () => {
+      const spawn = vi.fn().mockResolvedValue({
+        finalText:
+          'agent: ambiguous model: opus matches adobe:claude-opus-5, openrouter:anthropic/claude-opus-5-fast',
+        exitCode: 1,
+      });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--model', 'opus', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout ?? ''}${result.stderr ?? ''}`).toContain(
+        'openrouter:anthropic/claude-opus-5-fast'
+      );
+    });
+
+    it('documents provider:model in the help text', async () => {
+      installBridge(vi.fn());
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toContain("'provider:model'");
+    });
+
+    it('does NOT pass modelId when --model is absent', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      const call = spawn.mock.calls[0][0];
+      expect(call.modelId).toBeUndefined();
+    });
+
+    it('errors when --model has no value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--model'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--model/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --model has a flag-looking value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--model', '--help', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--model/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --model value is empty string', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--model', '', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--model/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('forwards model id byte-for-byte without normalization', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'WeIrD-Model_ID.42', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].modelId).toBe('WeIrD-Model_ID.42');
+    });
+  });
+
+  describe('--read-only flag', () => {
+    it('parses a comma-separated list into visiblePaths', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/,/bar/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/', '/bar/']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/, /bar/ , /baz/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/', '/bar/', '/baz/']);
+    });
+
+    it('parses a single path into a one-element array', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/workspace/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/workspace/']);
+    });
+
+    it('does NOT pass visiblePaths when --read-only is absent', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toBeUndefined();
+    });
+
+    it('forwards --workspace-mode private to the bridge', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--workspace-mode', 'private', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].workspaceMode).toBe('private');
+    });
+
+    it('does not pass workspaceMode when the flag is absent (bridge default)', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].workspaceMode).toBeUndefined();
+    });
+
+    it('rejects --workspace-mode snapshot before calling the bridge', async () => {
+      const spawn = vi.fn();
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--workspace-mode', 'snapshot', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not implemented');
+      expect(result.stderr).toContain('RFC open question 4');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown --workspace-mode', async () => {
+      const spawn = vi.fn();
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--workspace-mode', 'cow', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/unknown|not implemented/i);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('accepts --read-only in the first position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['--read-only', '/foo/', '.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('accepts --read-only in the middle position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '--read-only', '/foo/', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('accepts --read-only after the positional args', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p', '--read-only', '/foo/'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('combines with --model regardless of flag order', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'claude-haiku-4-5', '--read-only', '/foo/,/bar/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/', '/bar/'],
+      });
+    });
+
+    it('combines with --model when the flags are swapped', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/,/bar/', '--model', 'claude-haiku-4-5', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/', '/bar/'],
+      });
+    });
+
+    it('combines with --model when both flags come after the positional args', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['.', '*', 'p', '--read-only', '/foo/', '--model', 'claude-haiku-4-5'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/'],
+      });
+    });
+
+    it('errors when --read-only has no value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--read-only'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only has a flag-looking value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', '--help', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only value is an empty string', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', '', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only value parses to an empty list (commas and whitespace only)', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', ' , , ', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('invokingCwd forwarding (ctx.cwd → bridge)', () => {
+    it('forwards ctx.cwd as invokingCwd on the bridge call', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx('/home/user'));
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+    });
+
+    it('forwards invokingCwd even when --read-only is set (bridge decides whether to union)', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/', '.', '*', 'p'],
+        createMockCtx('/home/user')
+      );
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('forwards invokingCwd as an absolute path even when the positional cwd is relative', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['sub', '*', 'p'], createMockCtx('/home/user'));
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home/user/sub');
+    });
+
+    it('does not set invokingCwd when ctx.cwd is empty string', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['/abs', '*', 'p'], createMockCtx(''));
+
+      expect(spawn.mock.calls[0][0].invokingCwd).toBeUndefined();
+    });
+  });
+
+  describe('bridge output handling', () => {
+    it('writes finalText with one trailing newline on exit 0', async () => {
+      installBridge(async () => ({ finalText: 'hello', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('hello\n');
+      expect(result.stderr).toBe('');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('preserves internal newlines and normalizes to one trailing newline', async () => {
+      installBridge(async () => ({ finalText: 'line1\nline2\nline3', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('line1\nline2\nline3\n');
+    });
+
+    it('does not double the trailing newline when finalText already ends with one', async () => {
+      installBridge(async () => ({ finalText: 'hello\n', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('hello\n');
+    });
+
+    it('collapses multiple trailing newlines to one', async () => {
+      installBridge(async () => ({ finalText: 'hello\n\n\n', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('hello\n');
+    });
+
+    it('preserves whitespace-only finalText without trimming spaces', async () => {
+      installBridge(async () => ({ finalText: '   ', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('   \n');
+    });
+
+    it('preserves Unicode in finalText', async () => {
+      installBridge(async () => ({ finalText: 'résumé 日本語 🎉', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('résumé 日本語 🎉\n');
+    });
+
+    it('handles empty finalText as just "\\n" on exit 0', async () => {
+      installBridge(async () => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('\n');
+      expect(result.stderr).toBe('');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('handles null finalText as just "\\n" on exit 0', async () => {
+      installBridge(async () => ({ finalText: null, exitCode: 0 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('handles undefined finalText as just "\\n" on exit 0', async () => {
+      installBridge(async () => ({ exitCode: 0 }) as SpawnResult);
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('writes finalText to stderr on exit 1 and leaves stdout empty', async () => {
+      installBridge(async () => ({ finalText: 'boom', exitCode: 1 }));
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('boom');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('surfaces bridge promise rejection on stderr with non-zero exit', async () => {
+      installBridge(async () => {
+        throw new Error('bridge blew up');
+      });
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('bridge blew up');
+      expect(result.stdout).toBe('');
+    });
+
+    it('blocks until the bridge promise resolves', async () => {
+      const order: string[] = [];
+      let resolveSpawn!: (value: SpawnResult) => void;
+      const spawnPromise = new Promise<SpawnResult>((resolve) => {
+        resolveSpawn = resolve;
+      });
+      installBridge(async () => {
+        order.push('spawn-start');
+        const r = await spawnPromise;
+        order.push('spawn-end');
+        return r;
+      });
+      const exec = createAgentCommand()
+        .execute(['.', '*', 'p'], createMockCtx())
+        .then((r) => {
+          order.push('execute-resolved');
+          return r;
+        });
+
+      await Promise.resolve();
+      expect(order).toContain('spawn-start');
+      expect(order).not.toContain('execute-resolved');
+      resolveSpawn({ finalText: 'done', exitCode: 0 });
+      const result = await exec;
+      expect(order.at(-1)).toBe('execute-resolved');
+      expect(result.stdout).toBe('done\n');
+    });
+
+    it('invokes bridge exactly once on the happy path with the expected shape', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'claude-haiku-4-5', '/abs', 'ls,wc', 'do it'],
+        createMockCtx('/home')
+      );
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn.mock.calls[0][0]).toEqual({
+        cwd: '/abs',
+        allowedCommands: ['ls', 'wc'],
+        prompt: 'do it',
+        modelId: 'claude-haiku-4-5',
+
+        invokingCwd: '/home',
+      });
+    });
+
+    it('scenario A: writes the final assistant text (not an earlier send_message) to stdout', async () => {
+      installBridge(async () => ({ finalText: 'Summary.', exitCode: 0 }));
+      const result = await createAgentCommand().execute(
+        [
+          '.',
+          '*',
+          'First write Starting. in chat. Then run bash. Then summarize as the scoop result.',
+        ],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('Summary.\n');
+      expect(result.stderr).toBe('');
+    });
+  });
+
+  describe('missing bridge', () => {
+    it('errors gracefully when globalThis.__slicc_agent is undefined', async () => {
+      clearBridge();
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/bridge not available/i);
+      expect(result.stdout).toBe('');
+    });
+
+    it('does NOT call bridge when parse errors short-circuit', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      await createAgentCommand().execute(['--unknown'], createMockCtx());
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('--thinking flag', () => {
+    it('forwards a valid level to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--thinking', 'high', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.thinkingLevel).toBe('high');
+    });
+
+    it('accepts --effort as an alias for --thinking', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--effort', 'xhigh', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.thinkingLevel).toBe('xhigh');
+    });
+
+    it('omits the field when the flag is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.thinkingLevel).toBeUndefined();
+    });
+
+    it('rejects unknown level values without invoking the bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--thinking', 'turbo', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking must be one of/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects missing value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--thinking'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects flag-shaped value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--thinking', '--help'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('treats --thinking as a prompt when it appears in the third positional slot', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', '--thinking high'], createMockCtx());
+      expect(captured?.prompt).toBe('--thinking high');
+      expect(captured?.thinkingLevel).toBeUndefined();
+    });
+
+    it('accepts every valid level', async () => {
+      const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+      for (const level of levels) {
+        let captured: SpawnArgs | undefined;
+        installBridge((args) => {
+          captured = args;
+          return { finalText: 'ok', exitCode: 0 };
+        });
+        const result = await createAgentCommand().execute(
+          ['--thinking', level, '.', '*', 'p'],
+          createMockCtx()
+        );
+        expect(result.exitCode).toBe(0);
+        expect(captured?.thinkingLevel).toBe(level);
+      }
+    });
+
+    it('mentions --thinking in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/--thinking/);
+      expect(result.stdout).toMatch(/off, minimal, low, medium, high, xhigh/);
+    });
+  });
+
+  describe('--background-after flag', () => {
+    it('forwards the value to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--background-after', '90', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.backgroundAfterSeconds).toBe(90);
+    });
+
+    it('forwards 0 (detach every command immediately) rather than treating it as unset', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(
+        ['--background-after', '0', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(captured?.backgroundAfterSeconds).toBe(0);
+    });
+
+    it('omits the field when the flag is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.backgroundAfterSeconds).toBeUndefined();
+    });
+
+    it('rejects a non-numeric value without invoking the bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--background-after', 'soon', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--background-after must be a number of seconds >= 0/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--background-after'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--background-after requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('mentions --background-after in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toMatch(/--background-after/);
+    });
+  });
+
+  describe('--schema-b64 flag', () => {
+    it('--schema-b64 forwards a decoded schema to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: '{}', exitCode: 0 };
+      });
+      const schema = { type: 'object', properties: { n: { type: 'number' } } };
+      const b64 = Buffer.from(JSON.stringify(schema), 'utf8').toString('base64');
+      await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'go'],
+        createMockCtx('/home')
+      );
+      expect(captured?.structuredOutputSchema).toEqual(schema);
+    });
+
+    it('errors when --schema-b64 has no value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--schema-b64'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 has a flag-looking value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', '--help', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 value is not valid base64', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', '!!!invalid!!!', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 decodes to non-JSON', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const b64 = Buffer.from('not json', 'utf8').toString('base64');
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --schema-b64 decodes to non-object JSON', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const b64 = Buffer.from('"a string"', 'utf8').toString('base64');
+      const result = await createAgentCommand().execute(
+        ['--schema-b64', b64, '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--schema-b64/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('does NOT pass structuredOutputSchema when --schema-b64 is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'x', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.structuredOutputSchema).toBeUndefined();
+    });
+  });
+
+  describe('--persist-session / --no-persist-session flags', () => {
+    it('--persist-session forwards persistSession: true', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--persist-session', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.persistSession).toBe(true);
+    });
+
+    it('--no-persist-session forwards persistSession: false', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--no-persist-session', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.persistSession).toBe(false);
+    });
+
+    it('omits persistSession when neither flag is present', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.persistSession).toBeUndefined();
+    });
+
+    it('treats --persist-session as the prompt in the third positional slot', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', '--persist-session'], createMockCtx());
+      expect(captured?.prompt).toBe('--persist-session');
+      expect(captured?.persistSession).toBeUndefined();
+    });
+
+    it('mentions both flags in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/--persist-session/);
+      expect(result.stdout).toMatch(/--no-persist-session/);
+    });
+  });
+});

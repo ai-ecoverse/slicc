@@ -1,0 +1,20 @@
+{
+  "name": "@slicc/cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npx wrangler deploy --dry-run --outdir dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.worker.json",
+    "dev": "npx wrangler dev --config wrangler.jsonc"
+  },
+  "dependencies": {
+    "@slicc/cloud-core": "*",
+    "@slicc/shared-ts": "*",
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260907.1",
+    "wrangler": "4.129.0"
+  }
+}

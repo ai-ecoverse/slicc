@@ -1,0 +1,253 @@
+name: Backlog Dispatcher
+
+on:
+  schedule:
+    - cron: '35 9 * * *'
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Override: consider only this issue number (waives the settling-age wait only)'
+        required: false
+      dry_run:
+        description: 'Selector only; no labels, no comments, no Claude, no PR'
+        type: boolean
+        required: false
+        default: false
+      max_dispatches:
+        description: 'Lower the dispatch budget for this run (default 5)'
+        required: false
+
+concurrency:
+  group: backlog-dispatcher
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ensure dispatcher labels exist
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create backlog-ready --color 0e8a16 --description "Backlog Dispatcher: triage judged this ready for an authored PR" --force
+          gh label create backlog-dispatched --color 1d76db --description "Backlog Dispatcher: a PR was opened for this issue" --force
+          gh label create backlog-skipped --color cccccc --description "Backlog Dispatcher: decided against dispatching; remove this label to re-queue" --force
+          gh label create backlog-stale --color fbca04 --description "Backlog Dispatcher: dispatcher-owned PR has gone idle and needs a human" --force
+          gh label create cosmos-dispatch-failed --color b60205 --description "Backlog Dispatcher: the PR author phase did not finish" --force
+
+      - name: Select candidate issues
+        id: select
+        env:
+          REPO: ${{ github.repository }}
+
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.inputs.issue }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          MAX_DISPATCHES: ${{ github.event.inputs.max_dispatches }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node packages/dev-tools/backlog-dispatcher/select-backlog-issues.mjs
+
+      - name: Triage the candidates
+        if: steps.select.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"
+            --max-turns 150
+          prompt: ${{ steps.select.outputs.prompt }}
+
+      - name: List backlog-ready issues for the author phase
+        id: ready
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BUDGET: ${{ steps.select.outputs.dispatch_budget }}
+        run: |
+          gh issue list --repo "$REPO" --label backlog-ready --state open \
+            --limit 25 --json number,title,body > backlog-ready-issues.json
+          count=$(jq 'length' backlog-ready-issues.json)
+          echo "Found $count open backlog-ready issue(s) to author PRs for."
+          if [ "$count" -gt 0 ]; then
+            echo "has_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+          node --input-type=module -e '
+            import { appendFileSync, readFileSync } from "node:fs";
+            import { buildAuthorPrompt, CONFIG } from "./packages/dev-tools/backlog-dispatcher/lib.mjs";
+            const issues = JSON.parse(readFileSync("backlog-ready-issues.json", "utf8"));
+            const budget = Number(process.env.BUDGET) || CONFIG.MAX_DISPATCHES_PER_RUN;
+            const prompt = buildAuthorPrompt(issues, { repo: process.env.REPO, budget });
+            appendFileSync(process.env.GITHUB_OUTPUT, `prompt<<EOF_BACKLOG_PROMPT\n${prompt}\nEOF_BACKLOG_PROMPT\n`);
+          '
+
+      - name: Configure git identity
+        if: steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Author the branches for backlog-ready issues
+        if: steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+
+          GH_TOKEN: ${{ github.token }}
+
+          PR_BODY_FILE_TEMPLATE: ${{ runner.temp }}/backlog-pr-<issue-number>.md
+        with:
+          use_bedrock: 'true'
+
+          github_token: ${{ github.token }}
+
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+
+
+
+
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
+            --max-turns 200
+          prompt: ${{ steps.ready.outputs.prompt }}
+
+      - name: Open the PRs for the authored branches
+        id: prs
+        if: success() && steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+
+          TEMP_DIR: ${{ runner.temp }}
+          OPENED_FILE: ${{ runner.temp }}/backlog-opened-prs.txt
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          : > "$OPENED_FILE"
+          for n in $(jq -r '.[].number' backlog-ready-issues.json); do
+            branch="automation/backlog/issue-$n"
+            body="$TEMP_DIR/backlog-pr-$n.md"
+
+
+            git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" || true
+            if ! git rev-parse --quiet --verify "refs/remotes/origin/$branch" >/dev/null; then
+              echo "#$n: no branch pushed — nothing to open."
+              continue
+            fi
+            if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$branch")" -eq 0 ]; then
+              echo "#$n: $branch has no commits ahead of origin/main — nothing to open."
+              continue
+            fi
+            url=$(gh pr list --repo "$REPO" --base main --head "$branch" --state open --json url --jq '.[0].url // ""')
+            if [ -n "$url" ]; then
+
+
+              echo "#$n: a PR for $branch is already open: $url"
+            elif [ ! -s "$body" ]; then
+              echo "::warning::#$n: $branch was pushed but no PR body exists at $body — leaving the branch for a human."
+              continue
+            else
+              title=""
+              if [ -s "$TEMP_DIR/backlog-pr-$n.title" ]; then
+                title=$(head -n 1 "$TEMP_DIR/backlog-pr-$n.title")
+              fi
+
+
+              if [ -z "$title" ]; then
+                title=$(git log -1 --format=%s "refs/remotes/origin/$branch")
+              fi
+              url=$(gh pr create \
+                --repo "$REPO" \
+                --base main \
+                --head "$branch" \
+                --title "$title" \
+                --body-file "$body")
+              echo "#$n: opened $url"
+            fi
+            printf '%s %s\n' "$n" "$url" >> "$OPENED_FILE"
+            echo "🎫 #$n → $url" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Label the PRs and swap the issue labels
+        if: success() && steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OPENED_FILE: ${{ runner.temp }}/backlog-opened-prs.txt
+        run: |
+          set -euo pipefail
+          [ -s "$OPENED_FILE" ] || { echo "No PRs were opened — nothing to label."; exit 0; }
+
+
+
+
+          while read -r n url; do
+            [ -n "${url:-}" ] || continue
+            gh pr edit "$url" --repo "$REPO" --add-label backlog-dispatched ||
+              echo "::warning::could not label $url"
+            gh issue edit "$n" --repo "$REPO" --remove-label backlog-ready --add-label backlog-dispatched ||
+              echo "::warning::could not swap the labels on #$n"
+          done < "$OPENED_FILE"
+
+      - name: Report a failed author phase
+        if: failure() && steps.ready.outputs.has_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for n in $(gh issue list --repo "$REPO" --label backlog-ready --state open --json number --jq '.[].number'); do
+            gh issue edit "$n" --repo "$REPO" --add-label cosmos-dispatch-failed --remove-label backlog-ready || true
+            gh issue comment "$n" --repo "$REPO" --body "<sup>🎫 [Backlog Dispatcher]($RUN_URL)</sup>
+
+          **The PR author phase did not finish.** It stopped before a pull request existed (it may have run out of turns, hit something it was told not to work around, or crashed). Nothing was merged and nothing was closed; this issue now needs a human. Remove the \`cosmos-dispatch-failed\` label to put it back in the queue." || true
+          done
+
+      - name: Sweep stale dispatcher PRs
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node packages/dev-tools/backlog-dispatcher/sweep-stale-prs.mjs

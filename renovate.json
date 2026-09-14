@@ -1,0 +1,134 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": [
+    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies, v86); do not re-add a broad catch-all group.",
+    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile, renovate-patch-reconcile, renovate-swift-pin-reconcile, renovate-skill-pin-reconcile, and renovate-lockfile-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those five workflows.",
+    "skipInstalls is false so lockfile updates run a real `npm install` instead of `npm install --package-lock-only`. The lockfile-only path hits arborist's EMISSINGTARGET on this npm workspace (`packages/webapp` referenced by `node_modules/@slicc/webapp` but 'does not exist' in the rewritten lockfile) — PRs #2848, #2882, #2903, #2831, #2922 all shipped package.json bumps with a stale lockfile. The lockfile on disk is valid; only Renovate's skipInstalls rewrite is broken. rarkins' workaround for this class of npm lockfile bugs: https://github.com/renovatebot/renovate/discussions/34940. NOTE: this alone did not hold — #2957 and #2979 were opened after it landed and still carried no lockfile, with no artifact-error notice from Renovate. The deterministic repair is `npm run lint:lockfile` plus .github/workflows/renovate-lockfile-reconcile.yml; keep skipInstalls: false, but don't rely on it."
+  ],
+  "rebaseWhen": "conflicted",
+  "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": true,
+  "skipInstalls": false,
+  "minimumReleaseAge": "7 days",
+  "prHourlyLimit": 4,
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days",
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "XcodeGen project.yml `exactVersion` / `minorVersion` pins for GitHub SPM packages. Renovate's swift manager updates Package.swift / Package.resolved but not these sibling pins — missing them left WebRTC at 150 in project.yml while Package.swift required 151 (PR #2320). The regex still opens its own PR unless the package is grouped below; renovate-swift-pin-reconcile.yml raises the leftover stale side.",
+      "managerFilePatterns": ["/(^|/)project\\.yml$/"],
+      "matchStrings": [
+        "url:\\s*https://github\\.com/(?<depName>[^\\s/]+/[^\\s/]+?)(?:\\.git)?\\s*\\n\\s+(?:exactVersion|minorVersion):\\s*(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Agent-skill install pin for v86. The live canary requires packages/vfs-root/workspace/skills/v86/SKILL.md's `ipk add -g v86@X` to match the npm pin; without this manager Renovate only bumps package.json and CI fails (PR #2773). Grouped with the npm pin below; renovate-skill-pin-reconcile.yml raises a leftover stale skill line.",
+      "managerFilePatterns": ["/(^|/)packages/vfs-root/workspace/skills/v86/SKILL\\.md$/"],
+      "matchStrings": ["ipk add -g v86@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "v86"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Pin every npm dependency to an exact version. Renovate cannot see the locked version of a dep declared in a workspace package.json: npm hoists everything into the root `node_modules/`, but since renovatebot/renovate#37407 Renovate looks the dep up under `packages/<pkg>/node_modules/<dep>` and gives up when that never-written key is missing. With `lockedVersion: null` it can only offer updates that change the range, so caret-ranged workspace deps silently froze at whatever the lockfile happened to hold — `@earendil-works/pi-ai` sat on 0.84.0 under `^0.84.0` for a week, which is why Grok 4.6 never reached the model dropdown (PR #2293). Exact pins make every version change a visible package.json diff in its own PR, which is what the one-dep-per-PR philosophy above wants anyway. Scoped to dependencies/devDependencies so `engines` and `peerDependencies` keep their ranges.",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies", "devDependencies"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchPackageNames": ["pyodide"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchPackageNames": ["@semantic-release/{/,}**"],
+      "groupName": "semantic-release packages"
+    },
+    {
+      "matchPackageNames": ["@xterm/{/,}**"],
+      "groupName": "xterm packages"
+    },
+    {
+      "matchPackageNames": ["s1ntoneli/AppUpdater"],
+      "allowedVersions": "<1.0.0"
+    },
+    {
+      "description": "TypeScript 7's native Go type-checker (adopted in PR #1633) remains on the real typescript dependency, while the in-browser compiler needs the classic JS lib/typescript.js bundle; keep the typescript-js npm alias on v6 so Renovate does not re-propose the breaking v7 bump from PR #1653.",
+      "matchDepNames": ["typescript-js"],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
+      "matchPackageNames": ["@zenfs/core", "@zenfs/dom", "isomorphic-git", "just-bash", "kerium"],
+      "groupName": "patched dependencies",
+      "groupSlug": "patched-deps",
+      "addLabels": ["patched-dependency"],
+      "automerge": false
+    },
+    {
+      "description": "pi (Earendil) agent engine packages: fast-track with a shorter 3-day cooldown. Placed after the 14-day major rule so even major bumps get 3 days.",
+      "matchPackageNames": ["@earendil-works/{/,}**"],
+      "groupName": "earendil-works packages",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "just-bash: fast-track with a shorter 3-day cooldown. Placed after the 14-day major rule so even major bumps get 3 days.",
+      "matchPackageNames": ["just-bash"],
+      "groupName": "just-bash",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Formatter/linter bumps (biome, prettier) reflow existing source, so `biome check .` / `prettier --check .` in the CI lint gate fail on files the new version would reformat (e.g. biome 2.5.4's curried-call reflow, PR #1602). The Mend-hosted Renovate app can't run postUpgradeTasks, so label these and let the renovate-format-reconcile workflow run the formatter and push the reflow to the PR branch (mirrors the renovate-patch-reconcile pattern). Keep separate PRs (no groupName) per the one-dep-per-PR philosophy above.",
+      "matchPackageNames": ["@biomejs/biome", "prettier"],
+      "addLabels": ["formatter-bump"]
+    },
+    {
+      "description": "stasel/WebRTC is dual-pinned in Package.swift and xcodegen project.yml. Without a group, the swift manager and the regex customManager open two PRs for the same bump that pin different majors and SPM fails (PRs #2320 / #2348). Group them; label swift-pin so renovate-swift-pin-reconcile.yml can raise a leftover stale side. Keep this list in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["stasel/WebRTC", "WebRTC"],
+      "groupName": "stasel/WebRTC",
+      "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "Lakr233/libghostty-spm is dual-pinned (exact) in Package.swift and project.yml. Same split-PR failure mode as stasel/WebRTC; same group + swift-pin label. Include the xcodegen packages: key (GhosttyTerminal) — PR #3008 opened under that name and missed the group, so only project.yml moved. Keep in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["Lakr233/libghostty-spm", "libghostty-spm", "GhosttyTerminal"],
+      "groupName": "Lakr233/libghostty-spm",
+      "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "huggingface/swift-huggingface is dual-pinned (minorVersion / upToNextMinor) in project.yml and Package.swift. Same split-PR failure mode as stasel/WebRTC; same group + swift-pin label. Include the xcodegen packages: key (HuggingFace) the same way GhosttyTerminal is listed. Keep in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["huggingface/swift-huggingface", "swift-huggingface", "HuggingFace"],
+      "groupName": "huggingface/swift-huggingface",
+      "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "v86 is dual-pinned in packages/webapp/package.json and the agent skill install line. Without a group Renovate only bumps package.json and the lockstep canary fails (PR #2773). Group them; label skill-pin so renovate-skill-pin-reconcile.yml can raise a leftover stale skill line. Keep in sync with packages/dev-tools/skill-pin-reconcile/.",
+      "matchPackageNames": ["v86"],
+      "groupName": "v86",
+      "addLabels": ["skill-pin"]
+    },
+    {
+      "description": "go-optel is a sibling module resolved through a `replace` directive in packages/slicc-cli/go.mod, so it is never published to a proxy and every run reports it under 'Package lookup failures' on the Dependency Dashboard. Disable it so that banner only ever means a real lookup failure.",
+      "matchManagers": ["gomod"],
+      "matchDepNames": ["github.com/ai-ecoverse/go-optel"],
+      "enabled": false
+    }
+  ]
+}

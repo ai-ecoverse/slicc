@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "preserve",
+    "types": ["vite/client"],
+    "paths": {
+      "@earendil-works/pi-ai/dist/api/transform-messages.js": [
+        "./node_modules/@earendil-works/pi-ai/dist/api/transform-messages.d.ts"
+      ],
+      "@earendil-works/pi-ai/dist/api/simple-options.js": [
+        "./node_modules/@earendil-works/pi-ai/dist/api/simple-options.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/shared-ts/src/**/*.ts",
+    "packages/webapp/src/**/*.ts",
+    "packages/webapp/providers/**/*.ts",
+    "packages/webapp/tests/**/*.ts",
+    "packages/chrome-extension/src/**/*.ts",
+    "packages/chrome-extension/tests/**/*.ts",
+    "packages/dev-tools/cdp-stress/**/*.ts"
+  ],
+  "exclude": ["packages/node-server/src/**/*.ts"]
+}

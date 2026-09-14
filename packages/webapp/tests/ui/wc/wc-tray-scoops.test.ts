@@ -1,0 +1,318 @@
+import type { ScoopSummary } from '@slicc/shared-ts';
+import { describe, expect, it } from 'vitest';
+import { scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
+import type { SwitcherScoop } from '../../../src/ui/wc/wc-shell.js';
+import {
+  summaryIsRoot,
+  summaryRole,
+  summaryToWorkUnit,
+  toScoopSummaries,
+  turnsFromUnits,
+} from '../../../src/ui/wc/wc-tray-scoops.js';
+import { toTabDescriptors } from '../../../src/work-unit/client/presentation.js';
+
+const cone = {
+  jid: 'cone',
+  name: 'sliccy',
+  folder: 'cone',
+  isCone: true,
+  parentJid: null,
+  assistantLabel: 'sliccy',
+};
+
+const WIRE_PAIRS: Pick<ScoopSummary, 'state' | 'activity'>[] = [
+  { state: 'working', activity: 'thinking' },
+  { state: 'working', activity: 'tool' },
+  { state: 'idle', activity: 'awaiting' },
+  { state: 'idle' },
+  { state: 'broken' },
+  { state: 'initializing' },
+];
+
+function followerDescriptors(
+  scoops: readonly ScoopSummary[],
+  selectedJid?: string | null
+): SwitcherScoop[] {
+  return toTabDescriptors(scoops.map(summaryToWorkUnit), selectedJid, scoopColor);
+}
+
+describe('tray scoop tab adapters', () => {
+  it('keeps `state` to the four values every shipped follower switches on', () => {
+    const legacy = ['working', 'broken', 'initializing', 'idle'];
+    const rendered = [
+      { key: 'cone', state: 'working', phase: 'thinking' },
+      { key: 'cone', state: 'working', phase: 'tool' },
+      { key: 'cone', state: 'idle', awaiting: true },
+      { key: 'cone', state: 'idle' },
+      { key: 'cone', state: 'broken' },
+      { key: 'cone', state: 'initializing' },
+    ] as const;
+
+    for (const descriptor of rendered) {
+      const [summary] = toScoopSummaries([cone], [descriptor as never]);
+      expect(legacy, `state leaked a refinement for ${JSON.stringify(descriptor)}`).toContain(
+        summary?.state
+      );
+    }
+  });
+
+  it('carries each unit’s own model to followers, and omits it when there is none (#2310)', () => {
+    const research = {
+      ...cone,
+      jid: 'cone_2',
+      folder: 'cone-research',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    };
+    const [plain, withModel] = toScoopSummaries([cone, research], []);
+
+    expect(withModel.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
+
+    expect('model' in plain).toBe(false);
+  });
+
+  it('collapses the toolbar model onto a legacy state plus an activity refinement', () => {
+    const collapse = (rendered: Record<string, unknown>): Record<string, unknown> => {
+      const [summary] = toScoopSummaries([cone], [{ key: 'cone', fill: 64, ...rendered } as never]);
+      return { state: summary?.state, activity: summary?.activity };
+    };
+
+    expect(collapse({ state: 'working', phase: 'tool' })).toEqual({
+      state: 'working',
+      activity: 'tool',
+    });
+    expect(collapse({ state: 'working', phase: 'thinking' })).toEqual({
+      state: 'working',
+      activity: 'thinking',
+    });
+
+    expect(collapse({ state: 'working' })).toEqual({ state: 'working', activity: 'thinking' });
+
+    expect(collapse({ state: 'idle', awaiting: true })).toEqual({
+      state: 'idle',
+      activity: 'awaiting',
+    });
+    expect(collapse({ state: 'idle' })).toEqual({ state: 'idle', activity: undefined });
+    expect(collapse({ state: 'broken' })).toEqual({ state: 'broken', activity: undefined });
+    expect(collapse({ state: 'initializing' })).toEqual({
+      state: 'initializing',
+      activity: undefined,
+    });
+  });
+
+  it('broadcasts the leader toolbar lifecycle state and context fill', () => {
+    expect(
+      toScoopSummaries([cone], [{ key: 'cone', state: 'working', phase: 'tool', fill: 64 }])
+    ).toEqual([
+      expect.objectContaining({ jid: 'cone', state: 'working', activity: 'tool', fill: 64 }),
+    ]);
+    expect(toScoopSummaries([cone], [])).toEqual([
+      expect.objectContaining({ jid: 'cone', state: 'idle', fill: 0 }),
+    ]);
+  });
+
+  it('carries the completed-turn counter to the follower and back', () => {
+    const turns = turnsFromUnits([{ id: 'cone', turns: 4 }]);
+    const [summary] = toScoopSummaries([cone], [{ key: 'cone', state: 'idle', fill: 0 }], turns);
+    expect(summary?.turns).toBe(4);
+    expect(summaryToWorkUnit(summary as ScoopSummary).turns).toBe(4);
+
+    expect(toScoopSummaries([cone], [], turnsFromUnits([{ id: 'cone' }]))[0]).not.toHaveProperty(
+      'turns'
+    );
+    expect(toScoopSummaries([cone], [])[0]).not.toHaveProperty('turns');
+    expect(summaryToWorkUnit({ ...cone, state: 'idle' })).not.toHaveProperty('turns');
+  });
+
+  it('expands every wire pair back into follower descriptor fields', () => {
+    const expand = (pair: Pick<ScoopSummary, 'state' | 'activity'>): Record<string, unknown> => {
+      const [descriptor] = followerDescriptors([{ ...cone, ...pair, fill: 40 }]);
+      return { state: descriptor?.state, phase: descriptor?.phase, awaiting: descriptor?.awaiting };
+    };
+
+    expect(expand({ state: 'working', activity: 'thinking' })).toMatchObject({
+      state: 'working',
+      phase: 'thinking',
+    });
+    expect(expand({ state: 'working', activity: 'tool' })).toMatchObject({
+      state: 'working',
+      phase: 'tool',
+    });
+    expect(expand({ state: 'idle', activity: 'awaiting' })).toMatchObject({
+      state: 'idle',
+      awaiting: true,
+    });
+    expect(expand({ state: 'idle' })).toMatchObject({ state: 'idle' });
+    expect(expand({ state: 'broken' })).toMatchObject({ state: 'broken' });
+    expect(expand({ state: 'initializing' })).toMatchObject({ state: 'initializing' });
+  });
+
+  it('round-trips every pair, so leader and follower render the same face', () => {
+    for (const pair of WIRE_PAIRS) {
+      const [descriptor] = followerDescriptors([{ ...cone, ...pair, fill: 40 }]);
+      const [summary] = toScoopSummaries([cone], [descriptor as never]);
+      const label = JSON.stringify(pair);
+      expect(summary?.state, `state round trip broke for ${label}`).toBe(pair.state);
+
+      if (pair.activity) {
+        expect(summary?.activity, `activity round trip broke for ${label}`).toBe(pair.activity);
+      }
+    }
+  });
+
+  it('treats an older leader’s bare `working` exactly as it did before', () => {
+    const [descriptor] = followerDescriptors([{ ...cone, state: 'working', fill: 30 }]);
+    expect(descriptor).toMatchObject({ state: 'working', phase: 'thinking', eyes: 'open' });
+    expect(descriptor?.awaiting).toBeUndefined();
+  });
+
+  it('ignores an activity from a newer leader and falls back to the state', () => {
+    const [busy] = followerDescriptors([
+      { ...cone, state: 'working', activity: 'daydreaming' as never, fill: 10 },
+    ]);
+    expect(busy).toMatchObject({ state: 'working', phase: 'thinking' });
+
+    const [resting] = followerDescriptors([
+      { ...cone, state: 'idle', activity: 'daydreaming' as never, fill: 10 },
+    ]);
+    expect(resting).toMatchObject({ state: 'idle' });
+    expect(resting?.awaiting).toBeUndefined();
+  });
+
+  it('preserves lifecycle state and fill for follower and Cherry descriptors', () => {
+    const descriptors = followerDescriptors([
+      { ...cone, state: 'broken', fill: 82 },
+      {
+        ...cone,
+        jid: 'research',
+        name: 'research',
+        isCone: false,
+        state: 'initializing',
+        fill: 12,
+      },
+    ]);
+
+    expect(descriptors.map(({ state, fill, eyes }) => ({ state, fill, eyes }))).toEqual([
+      { state: 'broken', fill: 82, eyes: 'dead' },
+      { state: 'initializing', fill: 12, eyes: 'none' },
+    ]);
+  });
+
+  it('keeps a refined scoop open-eyed rather than dead or eyeless', () => {
+    const descriptors = followerDescriptors([
+      { ...cone, state: 'working', activity: 'thinking' },
+      { ...cone, jid: 'b', state: 'idle', activity: 'awaiting' },
+    ]);
+    expect(descriptors.map((descriptor) => descriptor.eyes)).toEqual(['open', 'open']);
+  });
+
+  it('defaults lifecycle state and fill from an older leader payload', () => {
+    const [descriptor] = followerDescriptors([cone]);
+    expect(descriptor).toMatchObject({ state: 'idle', fill: 0, eyes: 'open' });
+  });
+});
+
+describe('parentId on the wire (#1666 / #2270)', () => {
+  const research = { ...cone, jid: 'cone_2', name: 'Research', assistantLabel: 'Research' };
+  const a = { ...cone, jid: 'scoop_a', name: 'a', isCone: false, parentJid: 'cone' };
+  const b = { ...cone, jid: 'scoop_b', name: 'b', isCone: false, parentJid: 'cone_2' };
+
+  it('toScoopSummaries carries the ownership edge', () => {
+    const summaries = toScoopSummaries([cone, a, research, b], []);
+    expect(summaries.map((s) => [s.jid, s.parentId])).toEqual([
+      ['cone', null],
+      ['scoop_a', 'cone'],
+      ['cone_2', null],
+      ['scoop_b', 'cone_2'],
+    ]);
+  });
+
+  it('summaryIsRoot uses the edge when sent and the flag when it is not', () => {
+    expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
+    expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
+
+    expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
+
+    expect(summaryIsRoot({ isCone: true })).toBe(true);
+    expect(summaryIsRoot({ isCone: false })).toBe(false);
+
+    expect(summaryIsRoot({})).toBe(false);
+  });
+
+  it('resolves the role from the edge for a summary with no isCone flag (#2358)', () => {
+    const { isCone: _isCone, ...rootNoFlag } = toScoopSummaries([cone], [])[0];
+    const { isCone: _childFlag, ...childNoFlag } = toScoopSummaries([a], [])[0];
+    expect(rootNoFlag).not.toHaveProperty('isCone');
+    expect(summaryRole(rootNoFlag)).toBe('cone');
+    expect(summaryRole(childNoFlag)).toBe('scoop');
+  });
+
+  it('lists every cone first, then scoops grouped by owner (#2272)', () => {
+    const descriptors = followerDescriptors(toScoopSummaries([b, a, research, cone], []));
+    expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual([
+      'cone:cone_2',
+      'cone:cone',
+      'scoop:scoop_b',
+      'scoop:scoop_a',
+    ]);
+    expect(descriptors.map((d) => d.label)).toEqual(['Research', 'sliccy', 'b', 'a']);
+  });
+
+  it("puts the selected cone's scoops right after the cones (#2272)", () => {
+    const summaries = toScoopSummaries([b, a, research, cone], []);
+
+    expect(followerDescriptors(summaries, 'cone').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_a',
+      'scoop_b',
+    ]);
+    expect(followerDescriptors(summaries, 'scoop_a').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_a',
+      'scoop_b',
+    ]);
+
+    expect(followerDescriptors(summaries, 'nope').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_b',
+      'scoop_a',
+    ]);
+  });
+
+  it('keeps a nested scoop inside its cone group (depth-first by owner)', () => {
+    const grandchild = {
+      ...cone,
+      jid: 'scoop_aa',
+      name: 'aa',
+      isCone: false,
+      parentJid: 'scoop_a',
+    };
+    const orphan = { ...cone, jid: 'scoop_x', name: 'x', isCone: false, parentJid: 'gone' };
+    const descriptors = followerDescriptors(
+      toScoopSummaries([orphan, grandchild, b, a, research, cone], [])
+    );
+    expect(descriptors.map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_b',
+      'scoop_a',
+      'scoop_aa',
+      'scoop_x',
+    ]);
+  });
+
+  it('keeps the legacy cone-first order when a leader sends no parentId', () => {
+    const legacy = [
+      { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
+      { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+    ];
+    expect(followerDescriptors(legacy).map((d) => d.key)).toEqual(['c', 's']);
+  });
+
+  it('keeps a summary with neither edge nor flag as an unknown-owner child (#2358)', () => {
+    const edgeless = [{ jid: 'x', name: 'x', folder: 'x', assistantLabel: 'x' }];
+    expect(followerDescriptors(edgeless).map((d) => `${d.type}:${d.key}`)).toEqual(['scoop:x']);
+  });
+});

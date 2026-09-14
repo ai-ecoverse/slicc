@@ -1,0 +1,1645 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
+const sentMessages: unknown[] = [];
+
+const mockChrome = {
+  runtime: {
+    id: 'test-extension-id',
+    getURL: (path: string) => `chrome-extension://test/${path}`,
+    lastError: undefined,
+    sendMessage: vi.fn(async (msg: unknown) => {
+      sentMessages.push(msg);
+    }),
+    onMessage: {
+      addListener: vi.fn((cb: any) => {
+        messageListeners.push(cb);
+      }),
+      removeListener: vi.fn(),
+    },
+  },
+};
+
+(globalThis as any).chrome = mockChrome;
+
+const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
+
+function simulateMessage(source: string, payload: unknown): void {
+  for (const listener of messageListeners) {
+    listener({ source, payload }, {}, () => {});
+  }
+}
+
+describe('OffscreenClient', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onMessageUpdate: vi.fn(),
+    onLickBackpressure: vi.fn(),
+    onScoopActivity: vi.fn(),
+    onScoopPhaseChange: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  it('sends user-message to offscreen', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+
+    handle.sendMessage('Hello world', 'msg-1');
+
+    expect(sentMessages.length).toBe(1);
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.source).toBe('panel');
+    expect(envelope.payload.type).toBe('user-message');
+    expect(envelope.payload.scoopJid).toBe('cone_123');
+    expect(envelope.payload.text).toBe('Hello world');
+    expect(envelope.payload.messageId).toBe('msg-1');
+  });
+
+  it('forwards the steer flag on a steering send and leaves it unset otherwise', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+
+    handle.sendMessage('interrupt', 'msg-1', undefined, { steer: true });
+    handle.sendMessage('enqueue', 'msg-2');
+
+    const payloads = sentMessages.map((m) => (m as { payload: any }).payload);
+    expect(payloads[0].steer).toBe(true);
+    expect(payloads[1].steer).toBeUndefined();
+  });
+
+  it('sends attachments with user-message payloads', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const attachments = [
+      {
+        id: 'a1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        kind: 'text' as const,
+        text: 'hello',
+      },
+    ];
+
+    handle.sendMessage('Hello world', 'msg-1', attachments);
+
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.attachments).toEqual(attachments);
+  });
+
+  it('sends abort on stop', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+
+    handle.stop();
+
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.type).toBe('abort');
+    expect(envelope.payload.scoopJid).toBe('cone_123');
+  });
+
+  it('emits error when no scoop selected', () => {
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    handle.sendMessage('Hello');
+
+    expect(events).toEqual([{ type: 'error', error: 'No scoop selected' }]);
+    expect(sentMessages.length).toBe(0);
+  });
+
+  it('handles agent-event text_delta', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'Hello',
+    });
+
+    expect(events.length).toBe(2);
+    expect((events[0] as any).type).toBe('message_start');
+    expect((events[1] as any).type).toBe('content_delta');
+    expect((events[1] as any).text).toBe('Hello');
+  });
+
+  it('ignores agent-events for non-selected scoops', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'other_scoop',
+      eventType: 'text_delta',
+      text: 'Hello',
+    });
+
+    expect(events.length).toBe(0);
+  });
+
+  it('fires onScoopActivity for non-selected scoop agent events while not rendering them', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    for (const eventType of ['text_delta', 'tool_start', 'tool_ui', 'turn_end']) {
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid: 'other_scoop',
+        eventType,
+        text: 'x',
+        toolName: 't',
+        requestId: 'r',
+        html: '<i/>',
+      });
+    }
+
+    expect(callbacks.onScoopActivity).toHaveBeenCalledTimes(4);
+    expect(callbacks.onScoopActivity).toHaveBeenCalledWith('other_scoop');
+
+    expect(events.length).toBe(0);
+  });
+
+  it('renders a scoop’s ROUTED tool_ui in the owning cone without touching its stream (#2312, Codex P1)', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: Array<{ type: string; messageId?: string }> = [];
+    handle.onEvent((e) => events.push(e as { type: string; messageId?: string }));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'scoop_worker',
+      displayScoopJid: 'cone_123',
+      eventType: 'tool_ui',
+      toolName: 'mount',
+      requestId: 'req-1',
+      html: '<i/>',
+    });
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'scoop_worker',
+      displayScoopJid: 'cone_123',
+      eventType: 'tool_ui_done',
+      requestId: 'req-1',
+    });
+
+    expect(events.map((e) => e.type)).toEqual(['tool_ui', 'tool_ui_done']);
+
+    expect(events.every((e) => e.messageId === 'tool-ui-req-1')).toBe(true);
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'hello',
+    });
+    expect(events.map((e) => e.type)).toEqual([
+      'tool_ui',
+      'tool_ui_done',
+      'message_start',
+      'content_delta',
+    ]);
+  });
+
+  it('does not fire onScoopActivity for tool_end / response_done', () => {
+    client.setSelectedScoopJid('cone_123');
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'tool_end',
+      toolName: 't',
+      toolResult: 'ok',
+    });
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'response_done',
+    });
+
+    expect(callbacks.onScoopActivity).not.toHaveBeenCalled();
+  });
+
+  describe('per-scoop busy phase (onScoopPhaseChange)', () => {
+    function agentEvent(eventType: string, jid = 'other_scoop'): void {
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid: jid,
+        eventType,
+        toolName: 't',
+        toolResult: 'ok',
+      });
+    }
+
+    function reported(): string[] {
+      return callbacks.onScoopPhaseChange.mock.calls.map(([jid, phase]) => `${jid}:${phase}`);
+    }
+
+    beforeEach(() => client.setSelectedScoopJid('cone_123'));
+
+    it('crosses to tool on tool_start and back to thinking on tool_end', () => {
+      agentEvent('tool_start');
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('tracks scoops the user is NOT looking at (the whole point of the tab pin)', () => {
+      agentEvent('tool_start', 'other_scoop');
+      expect(reported()).toEqual(['other_scoop:tool']);
+    });
+
+    it('reports only zero crossings, so nested tool calls do not flap the pin', () => {
+      agentEvent('tool_start');
+      agentEvent('tool_start');
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool']);
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('never drops below zero on an unmatched tool_end', () => {
+      agentEvent('tool_end');
+      expect(reported()).toEqual([]);
+      agentEvent('tool_start');
+      expect(reported()).toEqual(['other_scoop:tool']);
+    });
+
+    it('resets at turn_end so a turn that died mid-tool cannot strand the pin', () => {
+      agentEvent('tool_start');
+      agentEvent('turn_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('resets on a CHANGED scoop status, but not on a repeated one', () => {
+      function status(value: string): void {
+        simulateMessage('offscreen', {
+          type: 'scoop-status',
+          scoopJid: 'other_scoop',
+          status: value,
+        });
+      }
+
+      status('processing');
+      agentEvent('tool_start');
+      callbacks.onScoopPhaseChange.mockClear();
+
+      status('processing');
+      status('processing');
+      expect(reported()).toEqual([]);
+
+      status('error');
+      expect(reported()).toEqual(['other_scoop:thinking']);
+    });
+
+    it('keeps a separate count per scoop', () => {
+      agentEvent('tool_start', 'a');
+      agentEvent('tool_start', 'b');
+      agentEvent('tool_end', 'a');
+      expect(reported()).toEqual(['a:tool', 'b:tool', 'a:thinking']);
+    });
+  });
+
+  it('relays message-updated to onMessageUpdate (live lick flip)', () => {
+    simulateMessage('offscreen', {
+      type: 'message-updated',
+      scoopJid: 'cone_123',
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
+
+    expect(callbacks.onMessageUpdate).toHaveBeenCalledWith('cone_123', {
+      messageId: 'sudo-request-lick-1',
+      lickId: 'lick-1',
+      lickState: 'confirmed',
+    });
+  });
+
+  it('handles scoop-status changes', () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-status',
+      scoopJid: 'cone_123',
+      status: 'processing',
+    });
+
+    expect(callbacks.onStatusChange).toHaveBeenCalledWith('cone_123', 'processing');
+    expect(client.isProcessing('cone_123')).toBe(true);
+  });
+
+  it('handles scoop-created', () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-created',
+      scoop: {
+        jid: 'scoop_test_1',
+        name: 'Test',
+        folder: 'test-scoop',
+        parentId: 'cone_1',
+        assistantLabel: 'test-scoop',
+        status: 'ready',
+      },
+    });
+
+    expect(callbacks.onScoopCreated).toHaveBeenCalled();
+    expect(client.getScoops().length).toBe(1);
+    expect(client.getScoop('scoop_test_1')?.name).toBe('Test');
+
+    expect(client.getScoop('scoop_test_1')?.parentJid).toBe('cone_1');
+    expect(client.getScoop('scoop_test_1')?.requiresTrigger).toBe(true);
+  });
+
+  it('handles state-snapshot', () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'scoop_1',
+          name: 'Worker',
+          folder: 'worker-scoop',
+          parentId: 'cone_1',
+          assistantLabel: 'worker-scoop',
+          status: 'processing',
+        },
+      ],
+      activeScoopJid: 'cone_1',
+    });
+
+    expect(client.getScoops().length).toBe(2);
+    expect(client.getScoops().map((s) => s.parentJid)).toEqual([null, 'cone_1']);
+    expect(client.isProcessing('scoop_1')).toBe(true);
+    expect(client.isProcessing('cone_1')).toBe(false);
+    expect(callbacks.onScoopListUpdate).toHaveBeenCalled();
+  });
+
+  it('handles error for selected scoop', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'error',
+      scoopJid: 'cone_123',
+      error: 'Something went wrong',
+    });
+
+    expect(events).toEqual([{ type: 'error', error: 'Something went wrong' }]);
+  });
+
+  it('routes lick backpressure through its dedicated callback', () => {
+    simulateMessage('offscreen', {
+      type: 'lick-backpressure',
+      scoopJid: 'cone_123',
+      count: 4,
+      waitingMs: 300_000,
+    });
+
+    expect(callbacks.onLickBackpressure).toHaveBeenCalledWith('cone_123', {
+      count: 4,
+      waitingMs: 300_000,
+    });
+  });
+
+  it('sends request-state', () => {
+    client.requestState();
+
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.type).toBe('request-state');
+  });
+
+  it('sends clear-chat with a requestId and resolves once the ack arrives', async () => {
+    const pending = client.clearAllMessages();
+
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.type).toBe('clear-chat');
+    expect(typeof envelope.payload.requestId).toBe('string');
+    expect(envelope.payload.requestId.length).toBeGreaterThan(0);
+
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: envelope.payload.requestId,
+    });
+    await pending;
+  });
+
+  it('omits scoopJid when no cone is named, carries it when one is (#2272)', async () => {
+    const bare = client.clearAllMessages();
+    const bareEnvelope = sentMessages[0] as { source: string; payload: any };
+    expect('scoopJid' in bareEnvelope.payload).toBe(false);
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: bareEnvelope.payload.requestId,
+    });
+    await bare;
+
+    sentMessages.length = 0;
+    const targeted = client.clearAllMessages('cone_2');
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.scoopJid).toBe('cone_2');
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: envelope.payload.requestId,
+    });
+    await targeted;
+  });
+
+  it('awaits thinking acknowledgment and updates the cached scoop before resolving', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+          config: { thinkingLevel: 'off' },
+        },
+      ],
+    });
+    const pending = client.setScoopThinkingLevel('cone_1', 'xhigh', 'max');
+    const envelope = sentMessages[0] as { payload: any };
+
+    expect(envelope.payload).toMatchObject({
+      type: 'set-thinking-level',
+      scoopJid: 'cone_1',
+      level: 'xhigh',
+      effortOverride: 'max',
+    });
+    simulateMessage('offscreen', {
+      type: 'set-thinking-level-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_1',
+      level: 'xhigh',
+      effortOverride: 'max',
+      applied: true,
+    });
+
+    await expect(pending).resolves.toBe(true);
+
+    expect(client.getScoop('cone_1')?.thinking).toMatchObject({
+      level: 'xhigh',
+      effortOverride: 'max',
+    });
+  });
+
+  it('setScoopModel applies a picked model to one cone and mirrors the ack (#2310)', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Research',
+          folder: 'cone-research',
+          parentId: null,
+          assistantLabel: 'Research',
+          status: 'ready',
+        },
+      ],
+    });
+    const pending = client.setScoopModel('cone_2', {
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+    const envelope = sentMessages.at(-1) as { payload: any };
+    expect(envelope.payload).toMatchObject({
+      type: 'set-scoop-model',
+      scoopJid: 'cone_2',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    });
+
+    callbacks.onScoopListUpdate.mockClear();
+    simulateMessage('offscreen', {
+      type: 'set-scoop-model-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_2',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+      applied: true,
+    });
+
+    await expect(pending).resolves.toBe(true);
+    expect(client.getScoop('cone_2')?.model).toEqual({
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+
+    expect(client.getScoop('cone_1')?.model).toBeUndefined();
+
+    expect(callbacks.onScoopListUpdate).toHaveBeenCalledTimes(1);
+    const pushed = callbacks.onScoopListUpdate.mock.calls[0]?.[0] as Array<{
+      jid: string;
+      config?: { modelId?: string; modelProviderId?: string };
+    }>;
+    expect(pushed.map((unit) => unit.jid)).toEqual(['cone_1', 'cone_2']);
+
+    expect(pushed.find((unit) => unit.jid === 'cone_2')?.config).toMatchObject({
+      modelId: 'claude-opus-4-6',
+      modelProviderId: 'anthropic',
+    });
+    expect(pushed.find((unit) => unit.jid === 'cone_1')?.config?.modelId).toBeUndefined();
+  });
+
+  it('does not announce a roster change for a model pick the kernel refused', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
+    });
+    callbacks.onScoopListUpdate.mockClear();
+    const pending = client.setScoopModel('cone_1', { provider: 'anthropic', id: 'nope' });
+    const envelope = sentMessages.at(-1) as { payload: { requestId: string } };
+    simulateMessage('offscreen', {
+      type: 'set-scoop-model-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_1',
+      applied: false,
+    });
+
+    await expect(pending).resolves.toBe(false);
+
+    expect(callbacks.onScoopListUpdate).not.toHaveBeenCalled();
+  });
+
+  it('bounds a thinking update when the worker does not acknowledge it', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = client.setScoopThinkingLevel('cone_1', 'xhigh', 'max');
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clear-chat resolves on timeout if no ack arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = client.clearAllMessages();
+
+      vi.advanceTimersByTime(5000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('blocks outbound messages when locked', () => {
+    client.updateModel();
+    const beforeLockCount = sentMessages.length;
+
+    client.setLocked(true);
+    client.updateModel();
+    expect(sentMessages.length).toBe(beforeLockCount);
+
+    client.setLocked(false);
+    client.updateModel();
+    expect(sentMessages.length).toBeGreaterThan(beforeLockCount);
+  });
+
+  it('ignores messages from non-offscreen sources', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('panel', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'Hello',
+    });
+
+    expect(events.length).toBe(0);
+  });
+
+  it('registerScoop sends scoop-create message', () => {
+    client.registerScoop({
+      jid: 'temp',
+      name: 'Cone',
+      folder: 'cone',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '',
+    });
+    const envelope = sentMessages[0] as { payload: any };
+    expect(envelope.payload.type).toBe('cone-create');
+    expect(envelope.payload.name).toBe('Cone');
+
+    expect(envelope.payload.isCone).toBeUndefined();
+
+    expect(envelope.payload.description).toBeUndefined();
+    expect(envelope.payload.prompt).toBeUndefined();
+  });
+
+  it('registerScoop forwards the purpose and first message when given (#2272)', () => {
+    client.registerScoop(
+      {
+        jid: 'temp',
+        name: 'Research',
+        folder: 'cone-pending-2',
+        parentJid: null,
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: '',
+      },
+      { description: 'Paper survey', prompt: 'Start with the abstracts.' }
+    );
+    const envelope = sentMessages[0] as { payload: any };
+    expect(envelope.payload).toEqual({
+      type: 'cone-create',
+      name: 'Research',
+      description: 'Paper survey',
+      prompt: 'Start with the abstracts.',
+    });
+  });
+
+  it('registerScoop rejects when called with a non-cone scoop', async () => {
+    await expect(
+      client.registerScoop({
+        jid: 'temp',
+        name: 'Rogue',
+        folder: 'rogue-scoop',
+        parentJid: 'cone_1',
+        requiresTrigger: true,
+        assistantLabel: 'rogue-scoop',
+        addedAt: '',
+      })
+    ).rejects.toThrow(/cone-only/i);
+  });
+
+  it('unregisterScoop sends scoop-drop and removes locally', () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'scoop_1',
+          name: 'Test',
+          folder: 'test',
+          parentId: 'cone_1',
+          assistantLabel: 'test',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    expect(client.getScoops().length).toBe(1);
+
+    client.unregisterScoop('scoop_1');
+    expect(client.getScoops().length).toBe(0);
+    const envelope = sentMessages[0] as { payload: any };
+    expect(envelope.payload.type).toBe('scoop-drop');
+  });
+
+  it('takes ownership straight from the wire parentId (#2358)', () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Two',
+          folder: 'cone-two',
+          parentId: null,
+          assistantLabel: 'Two',
+          status: 'ready',
+        },
+        {
+          jid: 'scoop_b',
+          name: 'b',
+          folder: 'b-scoop',
+          parentId: 'cone_2',
+          assistantLabel: 'b',
+          status: 'ready',
+        },
+
+        {
+          jid: 'scoop_a',
+          name: 'a',
+          folder: 'a-scoop',
+          parentId: 'cone_1',
+          assistantLabel: 'a',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    expect(client.getScoops().map((s) => [s.jid, s.parentJid])).toEqual([
+      ['cone_1', null],
+      ['cone_2', null],
+      ['scoop_b', 'cone_2'],
+      ['scoop_a', 'cone_1'],
+    ]);
+
+    expect(client.getScoops().map((s) => s.requiresTrigger)).toEqual([false, false, true, true]);
+  });
+
+  it('unregisterScoop refuses to drop the last cone and drops an extra cone', async () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    await expect(client.unregisterScoop('cone_1')).rejects.toThrow(/last cone/);
+    expect(client.getScoops().length).toBe(1);
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-drop')).toBe(false);
+
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Two',
+          folder: 'cone-two',
+          parentId: null,
+          assistantLabel: 'Two',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+
+    expect(client.getScoops().map((s) => s.parentJid)).toEqual([null, null]);
+    await client.unregisterScoop('cone_2');
+    expect(client.getScoops().map((s) => s.jid)).toEqual(['cone_1']);
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-drop')).toBe(true);
+  });
+
+  it('stopScoop sends abort', () => {
+    client.stopScoop('cone_123');
+    const envelope = sentMessages[0] as { payload: any };
+    expect(envelope.payload.type).toBe('abort');
+    expect(envelope.payload.scoopJid).toBe('cone_123');
+  });
+
+  it('marks ready after state-snapshot', () => {
+    expect(client.isReady()).toBe(false);
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: 'cone_1',
+    });
+    expect(client.isReady()).toBe(true);
+  });
+
+  it('calls onReady after state-snapshot', () => {
+    const onReady = vi.fn();
+
+    const c2 = new OffscreenClient({ ...callbacks, onReady });
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [],
+      activeScoopJid: null,
+    });
+    expect(onReady).toHaveBeenCalled();
+  });
+
+  it('resets ready and re-requests state when offscreen restarts mid-session', () => {
+    const onReady = vi.fn();
+    const c2 = new OffscreenClient({ ...callbacks, onReady });
+
+    simulateMessage('offscreen', { type: 'offscreen-ready' });
+    simulateMessage('offscreen', { type: 'state-snapshot', scoops: [], activeScoopJid: null });
+    expect(c2.isReady()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    sentMessages.length = 0;
+
+    simulateMessage('offscreen', { type: 'offscreen-ready' });
+    expect(c2.isReady()).toBe(false);
+    const requestStateMsg = (sentMessages[0] as { payload: any })?.payload;
+    expect(requestStateMsg?.type).toBe('request-state');
+
+    simulateMessage('offscreen', { type: 'state-snapshot', scoops: [], activeScoopJid: null });
+    expect(c2.isReady()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles tool_start and tool_end events', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'tool_start',
+      toolName: 'bash',
+      toolInput: { command: 'ls' },
+    });
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'tool_end',
+      toolName: 'bash',
+      toolResult: 'file1.txt\nfile2.txt',
+      isError: false,
+    });
+
+    expect(events.length).toBe(3);
+    expect((events[1] as any).type).toBe('tool_use_start');
+    expect((events[1] as any).toolName).toBe('bash');
+    expect((events[2] as any).type).toBe('tool_result');
+    expect((events[2] as any).result).toBe('file1.txt\nfile2.txt');
+  });
+
+  it('sendSetFollowerForwarding posts the toggle to the worker', () => {
+    client.sendSetFollowerForwarding(true);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.source).toBe('panel');
+    expect(env.payload).toEqual({ type: 'set-follower-forwarding', enabled: true });
+  });
+
+  it('sendForwardedLick posts the event to the worker', () => {
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    client.sendForwardedLick(event as any);
+    const env = sentMessages.at(-1) as { source: string; payload: any };
+    expect(env.payload).toEqual({ type: 'inject-forwarded-lick', event });
+  });
+
+  it('dispatches inbound forward-lick to the registered handler', () => {
+    const handler = vi.fn();
+    client.setForwardLickHandler(handler);
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    simulateMessage('offscreen', { type: 'forward-lick', event });
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+});
+
+describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {
+  let localClient: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    localClient = new OffscreenClient(callbacks);
+  });
+
+  it('setSelectedScoopJid updates the field and fires listeners', () => {
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-1');
+    expect(localClient.selectedScoopJid).toBe('scoop-1');
+    expect(calls).toEqual(['scoop-1']);
+  });
+
+  it('does not fire when the same jid is set twice', () => {
+    localClient.setSelectedScoopJid('scoop-1');
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-1');
+    expect(calls).toEqual([]);
+  });
+
+  it('returns an unsubscribe that stops firing', () => {
+    const off = localClient.onScoopSelected(() => {
+      throw new Error('should not fire after off()');
+    });
+    off();
+    expect(() => localClient.setSelectedScoopJid('scoop-2')).not.toThrow();
+  });
+
+  it('handler throws are logged but do not break other listeners', () => {
+    const calls: string[] = [];
+    localClient.onScoopSelected(() => {
+      throw new Error('first handler bad');
+    });
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-3');
+    expect(calls).toEqual(['scoop-3']);
+  });
+
+  it('setSelectedScoopJid(null) updates the field but does NOT fire listeners', () => {
+    localClient.setSelectedScoopJid('scoop-1');
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid(null);
+    expect(localClient.selectedScoopJid).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('setSelectedScoopJid(null) followed by non-null fires the listener', () => {
+    localClient.setSelectedScoopJid('scoop-1');
+    localClient.setSelectedScoopJid(null);
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-2');
+    expect(calls).toEqual(['scoop-2']);
+  });
+});
+
+describe('OffscreenClient.getScoopTranscript', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  it('sends request-scoop-transcript and resolves on matching reply', async () => {
+    const pending = client.getScoopTranscript('cone_1');
+    expect(sentMessages.length).toBe(1);
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.source).toBe('panel');
+    expect(envelope.payload.type).toBe('request-scoop-transcript');
+    expect(envelope.payload.scoopJid).toBe('cone_1');
+    const requestId = envelope.payload.requestId;
+    expect(typeof requestId).toBe('string');
+
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId,
+      scoopJid: 'cone_1',
+      transcript: 'user: hi\nassistant: hello',
+    });
+
+    await expect(pending).resolves.toBe('user: hi\nassistant: hello');
+  });
+
+  it('ignores replies for unrelated requestIds', async () => {
+    const pending = client.getScoopTranscript('cone_1');
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    const requestId = envelope.payload.requestId;
+
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId: 'tr-other',
+      scoopJid: 'cone_1',
+      transcript: 'spurious',
+    });
+
+    simulateMessage('offscreen', {
+      type: 'scoop-transcript',
+      requestId,
+      scoopJid: 'cone_1',
+      transcript: 'real',
+    });
+    await expect(pending).resolves.toBe('real');
+  });
+});
+
+describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onScoopMessagesReplaced: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  it('adopts the replay streaming-tail id so resumed deltas extend that bubble', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'before',
+    });
+    expect(events[0].type).toBe('message_start');
+    const syntheticId = events[0].messageId;
+
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'u1', role: 'user', content: 'hi', timestamp: 1 },
+        { id: 'buf-stream', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+      ],
+    });
+    expect(callbacks.onScoopMessagesReplaced).toHaveBeenCalledWith(
+      'cone_123',
+      expect.any(Array),
+
+      undefined
+    );
+
+    events.length = 0;
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: ' after',
+    });
+    expect(events.map((e) => e.type)).toEqual(['content_delta']);
+    expect(events[0].messageId).toBe('buf-stream');
+    expect(events[0].messageId).not.toBe(syntheticId);
+  });
+
+  it('finds the streaming assistant even when a queued user message is buffered after it', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'before',
+    });
+
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'buf-stream', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
+        { id: 'queued-1', role: 'user', content: 'do this next', timestamp: 3 },
+      ],
+    });
+
+    events.length = 0;
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: ' after',
+    });
+
+    expect(events.map((e) => e.type)).toEqual(['content_delta']);
+    expect(events[0].messageId).toBe('buf-stream');
+  });
+
+  it('drops the pointer when the replay tail is settled so the next delta opens a fresh bubble', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: any[] = [];
+    handle.onEvent((e) => events.push(e));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'turn one',
+    });
+
+    simulateMessage('offscreen', {
+      type: 'scoop-messages-replaced',
+      scoopJid: 'cone_123',
+      messages: [
+        { id: 'a1', role: 'assistant', content: 'turn one', timestamp: 2, isStreaming: false },
+      ],
+    });
+
+    events.length = 0;
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'turn two',
+    });
+
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta']);
+    expect(events[0].messageId).not.toBe('a1');
+  });
+});
+
+describe('OffscreenClient compaction notices (#1985)', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onMessageUpdate: vi.fn(),
+    onLickBackpressure: vi.fn(),
+    onScoopActivity: vi.fn(),
+    onCompactionStateChange: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  type CollectedEvent = {
+    type: string;
+    messageId?: string;
+    text?: string;
+    marker?: { trigger: string; state: string; transcriptPath?: string };
+  };
+
+  function collect(): CollectedEvent[] {
+    const events: CollectedEvent[] = [];
+    client.createAgentHandle().onEvent((e) => events.push(e as CollectedEvent));
+    return events;
+  }
+
+  function phase(state: string, extra: Record<string, unknown> = {}, jid = 'cone_123'): void {
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: jid,
+      state,
+      ...extra,
+    });
+  }
+
+  it('emits one compaction_notice for the opening phase, not a fake turn', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+
+    expect(events.map((e) => e.type)).toEqual(['compaction_notice']);
+    expect(events[0].marker).toEqual({ trigger: 'threshold', state: 'summarizing' });
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
+      trigger: 'threshold',
+    });
+  });
+
+  it('settles the SAME row on the terminal phase instead of appending a second', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle' });
+    phase('idle', { trigger: 'idle' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
+  it('ignores extracting-memory: it changes nothing the row shows', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('extracting-memory');
+
+    expect(events).toHaveLength(1);
+
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks a degraded round fallback', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('fallback');
+    phase('idle');
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'fallback']);
+  });
+
+  it('retracts the row when the round was cancelled', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle' });
+    phase('cancelled', { trigger: 'idle' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'discarded']);
+    expect(events[1].messageId).toBe(events[0].messageId);
+  });
+
+  it('stays silent for a terminal phase with no open row', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    for (const state of ['idle', 'fallback', 'cancelled', 'extracting-memory']) {
+      phase(state);
+    }
+
+    expect(events).toHaveLength(0);
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(4);
+  });
+
+  it('retracts a settled row when its own round is discarded afterwards', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized', 'discarded']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
+  it('leaves a settled row alone when a DIFFERENT round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-2' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+  });
+
+  it('leaves a settled row alone when an unnamed round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { roundId: 'idle-1' });
+    phase('idle', { roundId: 'idle-1' });
+    phase('cancelled');
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'summarized']);
+  });
+
+  it('retracts a settled row at most once', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('idle', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.filter((e) => e.marker?.state === 'discarded')).toHaveLength(1);
+  });
+
+  it('retracts a settled FALLBACK row when its round is discarded', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', roundId: 'idle-1' });
+    phase('fallback', { trigger: 'idle', roundId: 'idle-1' });
+    phase('cancelled', { trigger: 'idle', roundId: 'idle-1' });
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarizing', 'fallback', 'discarded']);
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+  });
+
+  it('gives each round its own row', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+    phase('idle');
+    phase('summarizing');
+    phase('idle');
+
+    const ids = events.map((e) => e.messageId as string);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[0]).not.toBe(ids[2]);
+  });
+
+  it('renders the row under the id the kernel sent', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { rowId: 'compaction-cone_123-kernel' });
+    phase('idle', { rowId: 'compaction-cone_123-kernel' });
+
+    expect(events.map((e) => e.messageId)).toEqual([
+      'compaction-cone_123-kernel',
+      'compaction-cone_123-kernel',
+    ]);
+  });
+
+  it('settles a named row for a round whose opening phase it missed', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('idle', { rowId: 'compaction-cone_123-kernel' });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      messageId: 'compaction-cone_123-kernel',
+      marker: { state: 'summarized' },
+    });
+  });
+
+  it('does not disturb an in-flight assistant stream', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'part one ',
+    });
+    const streamId = events[0].messageId;
+
+    phase('summarizing');
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'part two',
+    });
+
+    const tail = events[events.length - 1];
+    expect(tail).toMatchObject({ type: 'content_delta', text: 'part two', messageId: streamId });
+    const markers = events.filter((e) => e.type === 'compaction_notice');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].messageId).not.toBe(streamId);
+  });
+
+  it('drops rows for non-selected scoops but still forwards the state callback', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', {}, 'scoop_other');
+
+    expect(events).toHaveLength(0);
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'summarizing', {
+      trigger: 'threshold',
+    });
+  });
+
+  it('closes out a round whose scoop was selected only for the terminal phase', () => {
+    client.setSelectedScoopJid('scoop_other');
+    const events = collect();
+
+    phase('summarizing');
+    client.setSelectedScoopJid('cone_123');
+    phase('idle');
+
+    phase('summarizing');
+
+    expect(events.map((e) => e.marker?.state)).toEqual(['summarized', 'summarizing']);
+    expect(events[0].messageId).not.toBe(events[1].messageId);
+  });
+
+  it('carries the erase intent on clear-chat only when asked', async () => {
+    void client.clearAllMessages('cone_123', { discardLiveSnapshot: true });
+    void client.clearAllMessages('cone_123');
+    const clears = sentMessages
+      .map((m) => (m as { payload: { type: string } }).payload)
+      .filter((payload) => payload.type === 'clear-chat');
+    expect(clears[0]).toMatchObject({ scoopJid: 'cone_123', discardLiveSnapshot: true });
+    expect(clears[1]).not.toHaveProperty('discardLiveSnapshot');
+  });
+
+  it('carries the trigger and the transcript pointer, not prose', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'idle', transcriptPath: '/sessions/live-cone-abc.md' });
+
+    expect(events[0].marker).toEqual({
+      trigger: 'idle',
+      state: 'summarizing',
+      transcriptPath: '/sessions/live-cone-abc.md',
+    });
+    expect(events[0].text).toBeUndefined();
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing', {
+      trigger: 'idle',
+      transcriptPath: '/sessions/live-cone-abc.md',
+    });
+  });
+
+  it('omits transcriptPath entirely when the round wrote no snapshot', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing', { trigger: 'overflow' });
+
+    expect(events[0].marker).toEqual({ trigger: 'overflow', state: 'summarizing' });
+    expect(events[0].marker).not.toHaveProperty('transcriptPath');
+  });
+
+  it('defaults a trigger-less phase to threshold', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    phase('summarizing');
+
+    expect(events[0].marker?.trigger).toBe('threshold');
+  });
+});
+
+describe('OffscreenClient.spawnAgent wire-safe cancel (#1972)', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  function payloads(type: string): any[] {
+    return sentMessages.map((m) => (m as { payload: any }).payload).filter((p) => p?.type === type);
+  }
+
+  it('strips the AbortSignal from the wired options (not structured-cloneable)', () => {
+    const controller = new AbortController();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+
+    const req = payloads('agent-spawn-request')[0];
+    expect(req).toBeDefined();
+    expect('signal' in req.options).toBe(false);
+    expect(req.options.prompt).toBe('go');
+    expect(typeof req.requestId).toBe('string');
+  });
+
+  it('translates a later abort into agent-spawn-abort with the same requestId', () => {
+    const controller = new AbortController();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+    const requestId = payloads('agent-spawn-request')[0].requestId;
+    expect(payloads('agent-spawn-abort')).toHaveLength(0);
+
+    controller.abort();
+
+    const abort = payloads('agent-spawn-abort');
+    expect(abort).toHaveLength(1);
+    expect(abort[0].requestId).toBe(requestId);
+  });
+
+  it('sends the abort immediately when the signal is already aborted', () => {
+    const controller = new AbortController();
+    controller.abort();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+
+    const req = payloads('agent-spawn-request')[0];
+    const abort = payloads('agent-spawn-abort');
+    expect(abort).toHaveLength(1);
+    expect(abort[0].requestId).toBe(req.requestId);
+  });
+
+  it('sends no abort message when no signal is provided', () => {
+    void client.spawnAgent({ cwd: '/workspace', allowedCommands: ['*'], prompt: 'go' });
+    expect(payloads('agent-spawn-abort')).toHaveLength(0);
+  });
+});
+
+describe('OffscreenClient.getSessionStats budget round-trip', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+
+  beforeEach(() => {
+    messageListeners.length = 0;
+    sentMessages.length = 0;
+    client = new OffscreenClient({
+      onStatusChange: vi.fn(),
+      onScoopCreated: vi.fn(),
+      onScoopListUpdate: vi.fn(),
+      onMessage: vi.fn(),
+      onScoopStatusChange: vi.fn(),
+      onReady: vi.fn(),
+    } as never);
+  });
+
+  function replyWithStats(extra: Record<string, unknown>): void {
+    const envelope = sentMessages
+      .map((m) => m as { payload?: { type?: string; requestId?: string } })
+      .find((m) => m?.payload?.type === 'request-session-stats');
+    simulateMessage('offscreen', {
+      type: 'session-stats',
+      requestId: envelope?.payload?.requestId,
+      totalCost: 29.06,
+      burnRate: 1.4,
+      fills: [],
+      models: [],
+      scoops: [],
+      ...extra,
+    });
+  }
+
+  it('carries the provider budget through to the caller', async () => {
+    const pending = client.getSessionStats();
+    replyWithStats({
+      budget: {
+        percent: 9.5,
+        status: 'ok',
+        window: 'weekly',
+        resetsAt: '2026-09-14T00:00:00.000Z',
+        providerId: 'adobe',
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      totalCost: 29.06,
+      budget: { percent: 9.5, status: 'ok', window: 'weekly', providerId: 'adobe' },
+    });
+  });
+
+  it('leaves the key ABSENT for a metered provider', async () => {
+    const pending = client.getSessionStats();
+    replyWithStats({});
+    const stats = await pending;
+    expect(stats && 'budget' in stats).toBe(false);
+  });
+});

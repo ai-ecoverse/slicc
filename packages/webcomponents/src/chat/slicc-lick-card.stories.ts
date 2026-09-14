@@ -1,0 +1,225 @@
+import type { Meta, StoryObj } from '@storybook/web-components-vite';
+import './slicc-lick-card.js';
+
+interface LickCardArgs {
+  kind?: string;
+  'event-label'?: string;
+  body?: string;
+  bodyHtml?: string;
+  hue?: string;
+  'no-animate'?: boolean;
+  collapsible?: boolean;
+  collapsed?: boolean;
+  theme?: 'light' | 'dark';
+  state?: 'pending' | 'confirmed' | 'dismissed';
+}
+
+function appendRichBody(el: HTMLElement, markup: string): void {
+  markup.split(/<b>(.*?)<\/b>/g).forEach((part, i) => {
+    if (part === '') return;
+    if (i % 2 === 1) {
+      const b = document.createElement('b');
+      b.textContent = part;
+      el.append(b);
+    } else {
+      el.append(document.createTextNode(part));
+    }
+  });
+}
+
+function build(args: LickCardArgs): HTMLElement {
+  const el = document.createElement('slicc-lick-card');
+  if (args.kind != null) el.setAttribute('kind', args.kind);
+  if (args['event-label'] != null) el.setAttribute('event-label', args['event-label']);
+  if (args['no-animate']) el.setAttribute('no-animate', '');
+  if (args.collapsible) el.setAttribute('collapsible', '');
+  if (args.collapsed) el.setAttribute('collapsed', '');
+  if (args.theme) el.setAttribute('theme', args.theme);
+  if (args.hue) el.setAttribute('hue', args.hue);
+  if (args.state) el.setAttribute('state', args.state);
+
+  if (args.bodyHtml != null) appendRichBody(el, args.bodyHtml);
+  else if (args.body != null) el.setAttribute('body', args.body);
+  return el;
+}
+
+const meta: Meta<LickCardArgs> = {
+  title: 'Chat/LickCard',
+  component: 'slicc-lick-card',
+  tags: ['autodocs'],
+  argTypes: {
+    kind: { control: 'text', description: 'Lick kind shown after "lick · "' },
+    'event-label': { control: 'text', description: 'Right-aligned amber pill text' },
+    body: { control: 'text', description: 'Body text (escaped)' },
+    bodyHtml: { control: 'text', description: 'Rich slotted body markup (overrides body)' },
+    'no-animate': { control: 'boolean', description: 'Suppress the slide-in entrance' },
+    collapsible: { control: 'boolean', description: 'Header toggles body visibility' },
+    collapsed: { control: 'boolean', description: 'Hide the body (header stays)' },
+    theme: { control: 'inline-radio', options: ['light', 'dark'], description: 'Theme override' },
+    state: {
+      control: 'inline-radio',
+      options: ['pending', 'confirmed', 'dismissed'],
+      description: 'Result state: pending (no glyph) / confirmed / dismissed',
+    },
+  },
+  render: build,
+};
+
+export default meta;
+type Story = StoryObj<LickCardArgs>;
+
+export const Webhook: Story = {
+  args: {
+    kind: 'webhook',
+    bodyHtml: 'A <b>lick</b> arrives — an external event. A support webhook pings the session.',
+  },
+};
+
+export const HeaderIcon: Story = {
+  args: {
+    kind: 'webhook',
+    'no-animate': true,
+    bodyHtml: 'The header glyph is a <b>lucide</b> icon, not an emoji — vector, themeable, crisp.',
+  },
+};
+
+export const Dark: Story = {
+  args: {
+    kind: 'webhook',
+    theme: 'dark',
+    bodyHtml: 'A <b>lick</b> in dark mode — the lucide bell inherits the lightened header color.',
+  },
+};
+
+export const Cron: Story = {
+  args: {
+    kind: 'cron',
+    bodyHtml: 'Nightly <b>cron</b> fired. sliccy spins a <b>one-shot scoop</b> to triage.',
+  },
+};
+
+export const WorkflowDone: Story = {
+  args: {
+    kind: 'workflow',
+    'event-label': 'done',
+    bodyHtml: 'Workflow <b>nightly-build</b> finished — 3 scoops fanned out, all green.',
+  },
+};
+
+export const PlainBody: Story = {
+  args: {
+    kind: 'webhook',
+    body: 'A plain-text lick body with no emphasis spans, set via the body attribute.',
+  },
+};
+
+export const Wrapping: Story = {
+  args: {
+    kind: 'webhook',
+    bodyHtml:
+      'A <b>lick</b> arrives carrying a long payload summary that must wrap across multiple lines: ' +
+      'the inbound support ticket references three prior threads, two attachments, and an SLA timer ' +
+      'that sliccy now needs to triage before the next business hour.',
+  },
+};
+
+export const NoAnimation: Story = {
+  args: {
+    kind: 'webhook',
+    'no-animate': true,
+    bodyHtml: 'A settled <b>lick</b> with the entrance animation suppressed.',
+  },
+};
+
+export const CollapsibleOpen: Story = {
+  args: {
+    kind: 'webhook',
+    collapsible: true,
+    bodyHtml: 'Click the header to <b>collapse</b> this lick. Click again to re-expand.',
+  },
+};
+
+export const CollapsibleClosed: Story = {
+  args: {
+    kind: 'webhook',
+    collapsible: true,
+    collapsed: true,
+    bodyHtml: 'This body is hidden until the header is clicked.',
+  },
+};
+
+export const IconsByKind: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;max-width:560px;';
+    const rows: [string, string][] = [
+      ['webhook', 'A support <b>webhook</b> pings the session.'],
+      ['cron', 'A nightly <b>cron</b> job fired on schedule.'],
+      ['workflow', 'A <b>workflow</b> run finished, all green.'],
+      ['ping', 'An <b>unknown</b> kind keeps the default bell.'],
+    ];
+    for (const [kind, body] of rows) {
+      const el = build({ kind, 'no-animate': true, bodyHtml: body });
+      wrap.appendChild(el);
+    }
+    return wrap;
+  },
+};
+
+export const RightAligned: Story = {
+  args: {
+    kind: 'workflow',
+    'event-label': 'done',
+    collapsible: true,
+    bodyHtml:
+      'A right-aligned <b>workflow</b> lick. Collapsing hides this body, but the card stays pinned to the right.',
+  },
+};
+
+export const ScoopIdentityTag: Story = {
+  args: {
+    kind: 'scoop-idle',
+    'event-label': 'blame-roulette',
+    hue: '#06b6d4',
+    collapsible: true,
+    collapsed: true,
+    bodyHtml:
+      'Scoop <b>blame-roulette</b> has been ready for 2 minutes without receiving any work.',
+  },
+};
+
+export const Confirmed: Story = {
+  args: {
+    kind: 'sudo-request',
+    'event-label': 'sudo',
+    state: 'confirmed',
+    'no-animate': true,
+    bodyHtml:
+      'A <b>sudo request</b> the user <b>confirmed</b> — a green check marks the resolved lick.',
+  },
+};
+
+export const Dismissed: Story = {
+  args: {
+    kind: 'sudo-request',
+    'event-label': 'sudo',
+    state: 'dismissed',
+    'no-animate': true,
+    bodyHtml:
+      'A <b>sudo request</b> the user <b>dismissed</b> — a red cross and the whole card mutes.',
+  },
+};
+
+export const LongCodeBody: Story = {
+  args: { kind: 'cron', 'event-label': 'pr277-ci-poll', collapsible: true, 'no-animate': true },
+  render: (args) => {
+    const el = build(args);
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-json';
+    code.textContent = `{\n  "task": "check CI on ai-ecoverse/skills PR 277 with: gh pr checks 277 --repo ai-ecoverse/skills. If every check has settled, report the review (slack) Tessl score to Lars and delete this crontask."\n}`;
+    pre.append(code);
+    el.append(pre);
+    return el;
+  },
+};

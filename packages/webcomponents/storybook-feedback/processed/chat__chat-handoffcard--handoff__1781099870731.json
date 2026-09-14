@@ -1,0 +1,8 @@
+{
+  "storyId": "chat-handoffcard--handoff",
+  "storyTitle": "Chat/HandoffCard",
+  "subsystem": "chat",
+  "importPath": "./src/chat/slicc-handoff-card.stories.ts",
+  "comment": "maybe add a hand icon here.",
+  "createdAt": "2026-06-10T13:57:50.731Z"
+}

@@ -1,0 +1,56 @@
+---
+name: package-execution
+description: |
+  Use this when the user asks to run or install a JavaScript/npm package with
+  `npx` or `ipx`, or to run a `package.json` script with `npm run`. Covers
+  built-in hints, any required `ipk add` bootstrap, the `--force` bypass, and
+  how script bodies resolve installed bins.
+allowed-tools: bash
+---
+
+# JavaScript package execution
+
+`ipx` runs package bins from the nearest installed `node_modules`; `npx` is an alias with the same behavior. If no local bin or installed package resolves, it normally installs the requested package and runs its bin.
+
+Before that network install, mapped package names that duplicate SLICC built-ins redirect to the built-in instead. The command exits non-zero and prints an actionable stderr hint naming the built-in and suggesting an invocation with the original arguments. The hint may also include an exact `ipk add` bootstrap; run that bootstrap first when present, then use the suggested built-in.
+
+Prefer the built-in. To deliberately preserve install-and-run behavior for the npm package, put `--force` before its name:
+
+```bash
+npx --force <package> [args...]
+ipx --force <package> [args...]
+```
+
+Already-installed packages, locally resolved bins, and unmapped package names keep their normal behavior. Use `commands` to discover available built-ins instead of maintaining a package mapping here.
+
+## Installing and removing packages
+
+`ipk install <pkg>` (also `npm install`, `npm i`, `ipk add`) installs into `<cwd>/node_modules` and records the package in the nearest `package.json` — in the section it already occupies, or in `dependencies` if it is new. `ipk install -D <pkg>` / `npm install --save-dev <pkg>` records new packages in `devDependencies`. A bare name that is already declared is resolved against that existing range, not latest. Unknown install flags fail instead of being ignored. `ipk install` with no package names installs declared `dependencies` and `devDependencies` without rewriting `package.json`. `ipk install -g <pkg>` installs into the shared global prefix at `/shared/lib/node_modules`, records direct dependencies in `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under `/shared/bin` for package bins.
+
+```bash
+ipk install lodash              # local project install
+ipk install -D eslint           # record in devDependencies
+npm install --save-dev eslint@8.57.1
+ipk install -g typescript       # global install (shared prefix + PATH bin)
+npm uninstall -g typescript     # remove from global manifest and reconcile tree
+npm list -g                     # list direct global dependencies
+npm root -g                     # print /shared/lib/node_modules
+```
+
+Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd (delegators run `ipx --global <bin>` so a same-named local package does not shadow the global install). Local uninstall/list/root work without `-g` against the cwd `package.json`.
+
+## Running package.json scripts
+
+`npm run <script>` (also `ipk run`, `npm run-script`, and the `npm test` / `start` / `stop` / `restart` shortcuts) runs a `scripts` entry from the nearest `package.json`, in that package's directory. `npm run` with no script name lists what is available — read that list instead of guessing a script name.
+
+```bash
+npm run                      # list scripts
+npm run build                # run build, with prebuild/postbuild around it
+npm run build -- --watch     # pass extra args to the script body
+npm run build --silent       # no banner, script output only (either side of the name)
+npm run lint -- --help       # --help after -- goes to the script, not to npm
+```
+
+`--silent`/`-s` and `--if-present` are npm's own flags anywhere before `--`; everything after `--` reaches the script untouched. Missing `start` falls back to `node server.js` when the package has one, and missing `restart` to `npm stop --if-present && npm start`.
+
+A bare bin word in a script body (`vitest run`) is rewritten to `ipx vitest run` when that package is installed, because `$PATH` does not cover `node_modules/.bin` shims. This also applies after keywords like `if`/`then`/`do`. A SLICC built-in with the same name wins, and an unknown word is not installed implicitly — install it with `ipk add <pkg>` first.

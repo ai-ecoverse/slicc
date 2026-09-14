@@ -1,0 +1,707 @@
+import Foundation
+import XCTest
+
+@testable import slicc_server
+
+final class ChromeLauncherTests: XCTestCase {
+    func testFindChromeExecutablePrefersChromePathEnvironmentVariable() {
+        let chromePath = "/custom/chrome"
+        let launcher = makeLauncher(
+            existingPaths: [chromePath],
+            environment: ["CHROME_PATH": chromePath]
+        )
+
+        XCTAssertEqual(launcher.findChromeExecutable(), chromePath)
+    }
+
+    func testFindChromeExecutablePrefersInstalledChromeBeforeChromeForTesting() {
+        let installed = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let cached =
+            "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+        let launcher = makeLauncher(
+            existingPaths: [installed, cached],
+            directoryListings: ["/project/node_modules/.cache/puppeteer/chrome": ["mac-123"]],
+            currentDirectory: "/project"
+        )
+
+        XCTAssertEqual(launcher.findChromeExecutable(), installed)
+    }
+
+    func testFindChromeExecutableFindsChromeForTestingInProjectNodeModulesCache() {
+        let cached =
+            "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+        let launcher = makeLauncher(
+            existingPaths: [cached],
+            directoryListings: ["/project/node_modules/.cache/puppeteer/chrome": ["mac-123"]],
+            currentDirectory: "/project"
+        )
+
+        XCTAssertEqual(launcher.findChromeExecutable(), cached)
+    }
+
+    func testBuildLaunchArgsIncludesExtensionFlagsAndLaunchURLLast() {
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "http://127.0.0.1:5710",
+            userDataDir: "/tmp/profile",
+            extensionPath: "/tmp/ext"
+        )
+
+        XCTAssertEqual(args[0], "--remote-debugging-port=9333")
+        XCTAssertTrue(args.contains("--user-data-dir=/tmp/profile"))
+        XCTAssertTrue(args.contains("--disable-extensions-except=/tmp/ext"))
+        XCTAssertTrue(args.contains("--load-extension=/tmp/ext"))
+        XCTAssertEqual(args.last, "http://127.0.0.1:5710")
+    }
+
+    func testBuildLaunchArgsAppendsRestoredTabsAfterTheSliccURL() {
+        
+        
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["https://example.com/a", "https://example.org/b"]
+        )
+
+        XCTAssertEqual(
+            Array(args.suffix(3)),
+            [
+                "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+                "https://example.com/a",
+                "https://example.org/b",
+            ]
+        )
+    }
+
+    func testBuildLaunchArgsRejectsRestoredEntriesThatCouldBeReadAsChromeFlags() {
+        
+        
+        
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["--headless=new", "file:///etc/passwd", "https://example.com/a"]
+        )
+
+        XCTAssertEqual(args.last, "https://example.com/a")
+        XCTAssertFalse(args.contains("--headless=new"))
+        XCTAssertFalse(args.contains("file:///etc/passwd"))
+    }
+
+    func testBuildLaunchArgsDisablesLocalNetworkAccessChecks() {
+        
+        
+        
+        
+        
+        
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+
+        XCTAssertTrue(
+            args.contains(
+                "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard"
+            )
+        )
+        
+        
+        
+        XCTAssertTrue(args.contains("--disable-background-timer-throttling"))
+        XCTAssertTrue(args.contains("--disable-backgrounding-occluded-windows"))
+        XCTAssertTrue(args.contains("--disable-renderer-backgrounding"))
+    }
+
+    func testSeedProfilePreferencesCreatesSeededFileOnFreshProfile() throws {
+        
+        
+        
+        
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let prefsPath = dir + "/Default/Preferences"
+        let data = try Data(contentsOf: URL(fileURLWithPath: prefsPath))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(prefs["tab_freezing_enabled"] as? Bool, false)
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let memorySaver = try XCTUnwrap(tuning["high_efficiency_mode"] as? [String: Any])
+        XCTAssertEqual(memorySaver["state"] as? Int, 0)
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        XCTAssertEqual(
+            discarding["exceptions"] as? [String],
+            ChromeLauncher.tabLifecycleExemptSites
+        )
+    }
+
+    func testSeedProfilePreferencesMergesAndDeduplicatesExistingPrefs() throws {
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let defaultDir = dir + "/Default"
+        try FileManager.default.createDirectory(
+            atPath: defaultDir, withIntermediateDirectories: true)
+        let existing: [String: Any] = [
+            "profile": ["name": "keep-me"],
+            "performance_tuning": [
+                "high_efficiency_mode": ["state": 2, "aggressiveness": 1],
+                "tab_discarding": ["exceptions": ["example.com", "www.sliccy.ai"]],
+            ],
+        ]
+        let seedData = try JSONSerialization.data(withJSONObject: existing)
+        try seedData.write(to: URL(fileURLWithPath: defaultDir + "/Preferences"))
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+        
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: defaultDir + "/Preferences"))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["name"] as? String, "keep-me")
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let memorySaver = try XCTUnwrap(tuning["high_efficiency_mode"] as? [String: Any])
+        XCTAssertEqual(memorySaver["state"] as? Int, 0)
+        XCTAssertEqual(memorySaver["aggressiveness"] as? Int, 1)
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        XCTAssertEqual(
+            discarding["exceptions"] as? [String],
+            ["example.com", "www.sliccy.ai", "sliccy.ai", "localhost"]
+        )
+    }
+
+    func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {
+        let launcher = makeLauncher()
+
+        XCTAssertEqual(
+            launcher.resolveAppBundle(
+                forExecutable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ),
+            "/Applications/Google Chrome.app"
+        )
+    }
+
+    func testResolveAppBundleHandlesChromeForTestingPath() {
+        let launcher = makeLauncher()
+        let cached = "/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+
+        XCTAssertEqual(
+            launcher.resolveAppBundle(forExecutable: cached),
+            "/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app"
+        )
+    }
+
+    func testResolveAppBundleReturnsNilForBareBinary() {
+        let launcher = makeLauncher()
+
+        XCTAssertNil(launcher.resolveAppBundle(forExecutable: "/usr/local/bin/chromium"))
+        XCTAssertNil(launcher.resolveAppBundle(forExecutable: "/tmp/just-a-binary"))
+    }
+
+    func testBuildOpenLaunchArgsRoutesThroughLaunchServicesWithChromeArgs() {
+        let launcher = makeLauncher()
+        let chromeArgs = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "http://127.0.0.1:5710",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+        let args = launcher.buildOpenLaunchArgs(
+            appBundlePath: "/Applications/Google Chrome.app",
+            chromeArgs: chromeArgs
+        )
+
+        
+        
+        
+        
+        XCTAssertEqual(args[0], "-n")
+        XCTAssertEqual(args[1], "-a")
+        XCTAssertEqual(args[2], "/Applications/Google Chrome.app")
+        XCTAssertEqual(args[3], "-W")
+        XCTAssertEqual(args[4], "--args")
+        XCTAssertEqual(Array(args.suffix(chromeArgs.count)), chromeArgs)
+    }
+
+    func testResolveUserDataDirDefaultsToApplicationSupportInHomeDir() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(),
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
+        )
+    }
+
+    func testResolveUserDataDirAddsSuffixForNonDefaultServePort() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(servePort: 5720),
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome-5720"
+        )
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(servePort: 5710),
+            "/Users/test/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome"
+        )
+    }
+
+    func testResolveUserDataDirHonorsExplicitTmpDirOverride() {
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        XCTAssertEqual(
+            launcher.resolveUserDataDir(tmpDir: "/custom/profiles", servePort: 5720),
+            "/custom/profiles/browser-coding-agent-chrome-5720"
+        )
+    }
+
+    func testLegacyChromeCandidatesOrdersPreviousSliccProfilesFirst() {
+        
+        
+        
+        
+        
+        let launcher = makeLauncher(homeDirectory: "/Users/test")
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
+        )
+    }
+
+    func testLegacyChromeCandidatesIncludesTmpDirBetweenHomeAndTmp() {
+        
+        
+        
+        
+        let launcher = makeLauncher(
+            environment: ["TMPDIR": "/var/tmpx"],
+            homeDirectory: "/Users/test"
+        )
+
+        let candidates = launcher.legacyChromeCandidates(profileDirName: "browser-coding-agent-chrome")
+
+        XCTAssertEqual(
+            candidates,
+            [
+                "/Users/test/.slicc/profiles/browser-coding-agent-chrome",
+                "/var/tmpx/browser-coding-agent-chrome",
+                "/tmp/browser-coding-agent-chrome",
+            ]
+        )
+    }
+
+    func testMigrateLegacyProfileCopiesFromOldLocationToNew() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let legacyProfile = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        try fm.createDirectory(at: legacyProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: legacyProfile.appendingPathComponent("marker.txt").path, contents: Data("legacy-data".utf8))
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        let launcher = makeLauncher()
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+
+        let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
+        XCTAssertEqual(content, "legacy-data")
+    }
+
+    func testMigrateLegacyProfileSkipsWhenNewProfileExists() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        try fm.createDirectory(at: newProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: newProfile.appendingPathComponent("marker.txt").path, contents: Data("existing-data".utf8))
+
+        let legacyProfile = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        try fm.createDirectory(at: legacyProfile, withIntermediateDirectories: true)
+        fm.createFile(atPath: legacyProfile.appendingPathComponent("marker.txt").path, contents: Data("legacy-data".utf8))
+
+        let launcher = makeLauncher()
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [legacyProfile.path])
+
+        let content = try String(contentsOfFile: newProfile.appendingPathComponent("marker.txt").path, encoding: .utf8)
+        XCTAssertEqual(content, "existing-data")
+    }
+
+    func testMigrateLegacyProfileIsNoOpWhenNoLegacyExists() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let newProfile = root.appendingPathComponent("new/browser-coding-agent-chrome")
+        let missingLegacy = root.appendingPathComponent("legacy/browser-coding-agent-chrome")
+        let launcher = makeLauncher()
+
+        launcher.migrateLegacyDefaultChromeProfile(newDir: newProfile.path, candidates: [missingLegacy.path])
+        XCTAssertFalse(fm.fileExists(atPath: newProfile.path))
+    }
+
+    func testClearChromeSessionRestoreDropsSnapshotButKeepsOtherProfileData() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        let sessionsDir = defaultDir.appendingPathComponent("Sessions")
+        try fm.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        fm.createFile(atPath: sessionsDir.appendingPathComponent("Session_123").path, contents: Data("x".utf8))
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Last Session").path, contents: Data("x".utf8))
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Last Tabs").path, contents: Data("x".utf8))
+        
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Cookies").path, contents: Data("keep".utf8))
+
+        let launcher = makeLauncher()
+        launcher.clearChromeSessionRestore(userDataDir: root.path)
+
+        XCTAssertFalse(fm.fileExists(atPath: sessionsDir.path))
+        XCTAssertFalse(fm.fileExists(atPath: defaultDir.appendingPathComponent("Last Session").path))
+        XCTAssertFalse(fm.fileExists(atPath: defaultDir.appendingPathComponent("Last Tabs").path))
+        XCTAssertTrue(fm.fileExists(atPath: defaultDir.appendingPathComponent("Cookies").path))
+    }
+
+    func testClearChromeSessionRestoreIsNoOpOnFirstRun() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        
+        let launcher = makeLauncher()
+        launcher.clearChromeSessionRestore(userDataDir: root.path)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Default").path))
+    }
+
+    func testClearChromeRestoreStateRewritesCrashedToNormalAndKeepsOtherKeys() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        let original: [String: Any] = [
+            "profile": ["exit_type": "Crashed", "exited_cleanly": false, "name": "keep"],
+            "other": "keep",
+        ]
+        try JSONSerialization.data(withJSONObject: original).write(to: prefsPath)
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        let data = try Data(contentsOf: prefsPath)
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["exit_type"] as? String, "Normal")
+        XCTAssertEqual(profile["exited_cleanly"] as? Bool, true)
+        XCTAssertEqual(profile["name"] as? String, "keep")
+        XCTAssertEqual(prefs["other"] as? String, "keep")
+    }
+
+    func testClearChromeRestoreStateLeavesAlreadyCleanPreferencesValid() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        let clean: [String: Any] = ["profile": ["exit_type": "Normal", "exited_cleanly": true]]
+        try JSONSerialization.data(withJSONObject: clean).write(to: prefsPath)
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        let prefs = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: prefsPath)) as? [String: Any]
+        )
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["exit_type"] as? String, "Normal")
+        XCTAssertEqual(profile["exited_cleanly"] as? Bool, true)
+    }
+
+    func testClearChromeRestoreStateIsNoOpOnFirstRun() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Default/Preferences").path))
+    }
+
+    func testClearChromeRestoreStateLeavesCorruptPreferencesUntouched() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        fm.createFile(atPath: prefsPath.path, contents: Data("{not json".utf8))
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        
+        let content = try String(contentsOf: prefsPath, encoding: .utf8)
+        XCTAssertEqual(content, "{not json")
+    }
+
+    func testParseCdpPortFromStderrExtractsPort() {
+        XCTAssertEqual(
+            ChromeLauncher.parseCdpPortFromStderr(
+                "DevTools listening on ws://127.0.0.1:9333/devtools/browser/test"
+            ),
+            9333
+        )
+        XCTAssertNil(ChromeLauncher.parseCdpPortFromStderr("something else"))
+    }
+
+    func testWaitForCDPRetriesUntilWebSocketDebuggerUrlAppears() async throws {
+        let response = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9333/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        var attempts = 0
+        let launcher = ChromeLauncher(
+            fetchData: { _ in
+                attempts += 1
+                if attempts < 3 {
+                    return (Data("{}".utf8), response)
+                }
+                return (
+                    Data(#"{"webSocketDebuggerUrl":"ws:
+                    response
+                )
+            }
+        )
+
+        let webSocketURL = try await launcher.waitForCDP(port: 9333, retries: 5, delay: 0.001)
+
+        XCTAssertEqual(webSocketURL, "ws://127.0.0.1:9333/devtools/browser/test")
+        XCTAssertEqual(attempts, 3)
+    }
+
+    func testProbeExistingChromeReturnsBrowserWhenCdpIsLive() async {
+        let payload = Data(#"{"Browser":"Chrome/147.0.7727.101","webSocketDebuggerUrl":"ws:
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let launcher = ChromeLauncher(
+            fetchData: { _ in (payload, okResponse) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertEqual(browser, "Chrome/147.0.7727.101")
+    }
+
+    func testProbeExistingChromeReturnsNilWhenNothingResponds() async {
+        let launcher = ChromeLauncher(
+            fetchData: { _ in throw URLError(.cannotConnectToHost) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertNil(browser)
+    }
+
+    func testProbeExistingChromeRejectsNonCdpHttpResponses() async {
+        
+        
+        let payload = Data(#"{"hello":"world"}"#.utf8)
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let launcher = ChromeLauncher(
+            fetchData: { _ in (payload, okResponse) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertNil(browser)
+    }
+
+    func testEveryLaunchFailureExplainsItselfToTheUser() {
+        
+        
+        let descriptions: [String] = [
+            ChromeLauncherError.chromeExecutableNotFound,
+            .invalidChromeExecutable("/no/such/chrome"),
+            .chromeExitedBeforeReportingPort(9),
+            .timedOutWaitingForPort(2.5),
+            .cdpUnavailable(9222),
+            .openLaunchFailed(exitCode: 1, executable: "/Applications/Google Chrome.app"),
+            .chromeAlreadyRunning(port: 9222, browser: "Chrome/147"),
+            .chromeAlreadyRunning(port: 9222, browser: nil),
+        ].map(\.localizedDescription)
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+        XCTAssertTrue(descriptions.contains { $0.contains("2500ms") })
+        XCTAssertTrue(descriptions.contains { $0.contains("(Chrome/147)") })
+    }
+
+    func testLaunchFailsFastWhenCdpPortIsAlreadyServingChrome() async throws {
+        let chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let cdpResponse = Data(#"{"Browser":"Chrome/147.0.7727.101","webSocketDebuggerUrl":"ws:
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        final class SpawnCounter: @unchecked Sendable {
+            var count = 0
+        }
+        let spawns = SpawnCounter()
+
+        let launcher = ChromeLauncher(
+            fileExists: { $0 == chromePath },
+            processFactory: {
+                spawns.count += 1
+                return Process()
+            },
+            fetchData: { _ in (cdpResponse, okResponse) }
+        )
+
+        do {
+            _ = try await launcher.launch(
+                config: ChromeLaunchConfig(
+                    cdpPort: 9222,
+                    launchUrl: "http://localhost:5710",
+                    userDataDir: "/tmp/user-data",
+                    executablePath: chromePath
+                ))
+            XCTFail("expected chromeAlreadyRunning but launch succeeded")
+        } catch ChromeLauncherError.chromeAlreadyRunning(let port, let browser) {
+            XCTAssertEqual(port, 9222)
+            XCTAssertEqual(browser, "Chrome/147.0.7727.101")
+        } catch {
+            XCTFail("expected chromeAlreadyRunning but got \(error)")
+        }
+
+        XCTAssertEqual(spawns.count, 0, "processFactory must not be invoked when a Chrome is already on the CDP port")
+    }
+
+    func testDiscoverLaunchedChromePidReturnsSetDifferenceImmediately() async {
+        
+        
+        
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { url in
+                XCTAssertEqual(url.standardizedFileURL, bundleURL.standardizedFileURL)
+                return [100, 200, 300]
+            }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 1.0
+        )
+
+        XCTAssertEqual(pid, 300)
+    }
+
+    func testDiscoverLaunchedChromePidWaitsForNewPidToAppear() async {
+        
+        
+        
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let snapshots = AtomicSnapshotBox(values: [[100, 200], [100, 200, 555]])
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { _ in snapshots.next() }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 1.0
+        )
+
+        XCTAssertEqual(pid, 555)
+    }
+
+    func testDiscoverLaunchedChromePidReturnsNilOnTimeout() async {
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { _ in [100, 200] }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 0.2
+        )
+
+        XCTAssertNil(pid)
+    }
+
+    private func makeLauncher(
+        existingPaths: Set<String> = [],
+        directoryListings: [String: [String]] = [:],
+        environment: [String: String] = [:],
+        currentDirectory: String = "/workspace",
+        homeDirectory: String = "/Users/test"
+    ) -> ChromeLauncher {
+        ChromeLauncher(
+            fileExists: { existingPaths.contains($0) },
+            directoryContents: { path in directoryListings[path] ?? [] },
+            environmentProvider: { environment },
+            currentDirectoryProvider: { currentDirectory },
+            homeDirectoryProvider: { homeDirectory }
+        )
+    }
+}
+
+private final class AtomicSnapshotBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queue: [Set<pid_t>]
+
+    init(values: [Set<pid_t>]) {
+        self.queue = values
+    }
+
+    func next() -> Set<pid_t> {
+        lock.lock()
+        defer { lock.unlock() }
+        if queue.count > 1 {
+            return queue.removeFirst()
+        }
+        return queue.first ?? []
+    }
+}

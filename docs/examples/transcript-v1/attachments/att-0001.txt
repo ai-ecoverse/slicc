@@ -1,0 +1,2 @@
+API_KEY=⟦REDACTED:credential:r2⟧
+API_ENDPOINT=https://api.example.com/v1

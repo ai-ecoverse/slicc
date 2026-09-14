@@ -1,0 +1,76 @@
+name: SliccstartFileProvider
+options:
+  bundleIdPrefix: com.slicc
+  deploymentTarget:
+    macOS: '14.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    GENERATE_INFOPLIST_FILE: NO
+targets:
+  SliccFileProvider:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SliccFileProvider
+    info:
+      path: SliccFileProvider/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccy
+        CFBundleIconFile: AppIcon
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: S8LB56P782.com.slicc.sliccstart.fileprovider
+          NSExtensionFileProviderSupportsEnumeration: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slicc.sliccstart.fileprovider
+        PRODUCT_NAME: SliccFileProvider
+        CODE_SIGN_ENTITLEMENTS: SliccFileProvider.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
+    dependencies:
+      - package: SliccTrayVFS
+      - package: WebRTC
+      - sdk: FileProvider.framework
+      - sdk: UniformTypeIdentifiers.framework
+  SliccstartWidgets:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SliccstartWidgets
+    info:
+      path: SliccstartWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccstart
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slicc.sliccstart.widgets
+        PRODUCT_NAME: SliccstartWidgets
+        CODE_SIGN_ENTITLEMENTS: SliccstartWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
+    dependencies:
+      - package: SliccWidgetKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+schemes:
+  SliccFileProvider:
+    build:
+      targets:
+        SliccFileProvider: all
+  SliccstartWidgets:
+    build:
+      targets:
+        SliccstartWidgets: all
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 152.0.0
+  SliccTrayVFS:
+    path: ../swift-traykit
+  SliccWidgetKit:
+    path: ../swift-widgetkit

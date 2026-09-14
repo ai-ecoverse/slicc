@@ -1,0 +1,8 @@
+{
+  "storyId": "freezer-freezercard--expanded",
+  "storyTitle": "Freezer/FreezerCard",
+  "subsystem": "freezer",
+  "importPath": "./src/freezer/slicc-freezer-card.stories.ts",
+  "comment": "for the freezer cards, the snowflake should be the default icon, but we want the ability to set custom icons.",
+  "createdAt": "2026-06-10T14:09:03.793Z"
+}

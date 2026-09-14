@@ -1,0 +1,107 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import express, { type Express } from 'express';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FETCH_PROXY_SKIP_HEADERS } from '../src/fetch-proxy-headers.js';
+
+function buildApp(): Express {
+  const app = express();
+  app.use(
+    express.json({
+      limit: '50mb',
+      type: (req) =>
+        req.headers['x-slicc-raw-body'] !== '1' &&
+        (req.headers['content-type'] ?? '').includes('application/json'),
+    })
+  );
+  app.post('/echo', (req, res) => {
+    if (req.body && Object.keys(req.body).length > 0) {
+      res.json({ rawHex: '', parsed: req.body });
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(Buffer.from(c)));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks);
+      res.json({ rawHex: raw.toString('hex'), parsed: null });
+    });
+  });
+  return app;
+}
+
+describe('express.json with X-Slicc-Raw-Body bypass', () => {
+  let server: http.Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    const app = buildApp();
+    server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as AddressInfo).port;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('parses JSON normally without the bypass header', async () => {
+    const res = await fetch(`${baseUrl}/echo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' }),
+    });
+    const data = (await res.json()) as { rawHex: string; parsed: unknown };
+
+    expect(data.rawHex).toBe('');
+    expect(data.parsed).toEqual({ hello: 'world' });
+  });
+
+  it('preserves raw bytes when X-Slicc-Raw-Body: 1 is set', async () => {
+    const raw = '{"b":2,  "a":1}';
+    const res = await fetch(`${baseUrl}/echo`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Slicc-Raw-Body': '1',
+      },
+      body: raw,
+    });
+    const data = (await res.json()) as { rawHex: string; parsed: unknown };
+    expect(Buffer.from(data.rawHex, 'hex').toString()).toBe(raw);
+    expect(data.parsed).toBeNull();
+  });
+});
+
+describe('FETCH_PROXY_SKIP_HEADERS contract', () => {
+  it('contains the X-Slicc-Raw-Body internal marker so it does not leak upstream', () => {
+    expect(FETCH_PROXY_SKIP_HEADERS.has('x-slicc-raw-body')).toBe(true);
+  });
+
+  it('contains the standard hop-by-hop and proxy-internal headers', () => {
+    for (const header of [
+      'host',
+      'connection',
+      'x-target-url',
+      'content-length',
+      'transfer-encoding',
+      'x-proxy-cookie',
+      'x-proxy-origin',
+      'x-proxy-referer',
+      'accept-encoding',
+    ]) {
+      expect(FETCH_PROXY_SKIP_HEADERS.has(header)).toBe(true);
+    }
+  });
+
+  it('contains the thin-bridge token header so it never leaks to upstream targets', () => {
+    expect(FETCH_PROXY_SKIP_HEADERS.has('x-bridge-token')).toBe(true);
+  });
+
+  it('does not skip headers that should be forwarded (sanity)', () => {
+    for (const header of ['authorization', 'x-amz-date', 'x-amz-content-sha256', 'content-type']) {
+      expect(FETCH_PROXY_SKIP_HEADERS.has(header)).toBe(false);
+    }
+  });
+});

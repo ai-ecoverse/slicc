@@ -1,0 +1,101 @@
+import { stripDictationMarkers } from '../../speech/dictation-priming.js';
+import type { ChatMessage } from '../types.js';
+
+const TRANSCRIPT_USER_MAX = 400;
+const TRANSCRIPT_ASSISTANT_MAX = 800;
+
+const SYSTEM =
+  "You suggest the user's next prompt in a coding-agent chat. Based on the recent " +
+  'conversation, output ONE concrete follow-up the user might type next. Reply with just ' +
+  'the prompt text — no quotes, no preamble, no list. Max 80 characters. If nothing useful ' +
+  'comes to mind, reply exactly: What shall we build?';
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+export function placeholderTranscript(messages: readonly ChatMessage[]): string | null {
+  const finalized = messages.filter((m) => !m.isStreaming && !m.queued && m.source !== 'lick');
+  const lastAssistant = [...finalized].reverse().find((m) => m.role === 'assistant');
+  const recentUsers = finalized.filter((m) => m.role === 'user').slice(-3);
+  if (!lastAssistant || recentUsers.length === 0) return null;
+
+  return [
+    ...recentUsers.map(
+      (m) => `[user]: ${truncate(stripDictationMarkers(m.content), TRANSCRIPT_USER_MAX)}`
+    ),
+    `[assistant]: ${truncate(lastAssistant.content, TRANSCRIPT_ASSISTANT_MAX)}`,
+  ].join('\n\n');
+}
+
+export interface RefreshPlaceholderOptions {
+  messages: readonly ChatMessage[];
+
+  currentValue: string;
+  setPlaceholder(text: string): void;
+  defaultPlaceholder: string;
+  signal?: AbortSignal;
+
+  quickLabelFn?: (opts: {
+    system: string;
+    prompt: string;
+    maxTokens: number;
+    signal?: AbortSignal;
+  }) => Promise<string | null>;
+}
+
+export async function refreshSuggestedPlaceholder(opts: RefreshPlaceholderOptions): Promise<void> {
+  if (opts.currentValue.length > 0) return;
+  const transcript = placeholderTranscript(opts.messages);
+  if (!transcript) {
+    opts.setPlaceholder(opts.defaultPlaceholder);
+    return;
+  }
+  const quickLabelFn =
+    opts.quickLabelFn ?? (await import('../../providers/quick-llm.js')).quickLabel;
+  const suggestion = await quickLabelFn({
+    system: SYSTEM,
+    prompt: `Recent conversation:\n${transcript}`,
+    maxTokens: 40,
+    signal: opts.signal,
+  });
+  if (opts.signal?.aborted) return;
+  if (opts.currentValue.length > 0) return;
+  opts.setPlaceholder(suggestion && suggestion.length > 0 ? suggestion : opts.defaultPlaceholder);
+}
+
+export interface WirePlaceholderDeps {
+  inputCard: HTMLElement & { value?: string };
+  getMessages(): ChatMessage[];
+  defaultPlaceholder: string;
+}
+
+export function applySuggestedPlaceholder(
+  inputCard: HTMLElement,
+  text: string,
+  defaultPlaceholder: string
+): void {
+  if (text === defaultPlaceholder) {
+    inputCard.removeAttribute('suggestion');
+    inputCard.setAttribute('placeholder', text);
+  } else {
+    inputCard.setAttribute('suggestion', text);
+  }
+}
+
+export function createPlaceholderRefresher(deps: WirePlaceholderDeps): () => void {
+  let abort: AbortController | null = null;
+  return () => {
+    if (deps.inputCard.hasAttribute('disabled')) return;
+    abort?.abort();
+    abort = new AbortController();
+    void refreshSuggestedPlaceholder({
+      messages: deps.getMessages(),
+      currentValue: deps.inputCard.value ?? '',
+      setPlaceholder: (text) =>
+        applySuggestedPlaceholder(deps.inputCard, text, deps.defaultPlaceholder),
+      defaultPlaceholder: deps.defaultPlaceholder,
+      signal: abort.signal,
+    }).catch(() => undefined);
+  };
+}

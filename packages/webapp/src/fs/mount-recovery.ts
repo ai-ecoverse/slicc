@@ -1,0 +1,219 @@
+import type { MountBackend } from './mount/backend.js';
+import { LocalMountBackend } from './mount/backend-local.js';
+import {
+  AemMountBackend,
+  DaMountBackend,
+  makeSignedFetchDa,
+  makeSignedFetchS3,
+  RemoteMountCache,
+  S3MountBackend,
+} from './mount/index.js';
+import { type MountIndexLimits, RESTORED_MOUNT_INDEX_LIMITS } from './mount-index.js';
+import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
+import { loadMountHandle } from './mount-table-store.js';
+
+export type MountRecoveryEntry =
+  | { kind: 'local'; path: string; dirName: string }
+  | { kind: 's3'; path: string; source: string; profile: string; reason: string }
+  | { kind: 'da'; path: string; source: string; profile: string; reason: string }
+  | { kind: 'aem'; path: string; source: string; profile: string; reason: string };
+
+export interface MountRecoveryResult {
+  restored: MountRecoveryEntry[];
+
+  needsRecovery: MountRecoveryEntry[];
+}
+
+export interface MountRecoveryFS {
+  mount(
+    path: string,
+    backend: MountBackend,
+    opts?: { limits?: MountIndexLimits }
+  ): Promise<void> | void;
+}
+
+export interface MountRecoveryLogger {
+  info?: (msg: string, data?: unknown) => void;
+  warn?: (msg: string, data?: unknown) => void;
+}
+
+interface RecoveryOutcome {
+  entry: MountRecoveryEntry;
+  ok: boolean;
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function recoverLocalMount(
+  targetPath: string,
+  descriptor: Extract<BackendDescriptor, { kind: 'local' }>,
+  fs: MountRecoveryFS,
+  log?: MountRecoveryLogger
+): Promise<RecoveryOutcome> {
+  const handle = await loadMountHandle(descriptor.idbHandleKey);
+  const dirName = typeof handle?.name === 'string' ? handle.name : '';
+  const entry: MountRecoveryEntry = { kind: 'local', path: targetPath, dirName };
+
+  if (!handle || !('queryPermission' in handle)) return { entry, ok: false };
+
+  let perm: string;
+  try {
+    perm = await (
+      handle as unknown as {
+        queryPermission: (desc: { mode: string }) => Promise<string>;
+      }
+    ).queryPermission({ mode: 'readwrite' });
+  } catch (err) {
+    log?.warn?.('queryPermission threw on persisted handle', {
+      path: targetPath,
+      error: errMessage(err),
+    });
+    return { entry, ok: false };
+  }
+  if (perm !== 'granted') return { entry, ok: false };
+
+  try {
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
+
+    await fs.mount(targetPath, backend, { limits: RESTORED_MOUNT_INDEX_LIMITS });
+    log?.info?.('Restored mount from previous session', { path: targetPath, name: dirName });
+    return { entry, ok: true };
+  } catch (err) {
+    log?.warn?.('Failed to re-mount persisted handle', {
+      path: targetPath,
+      error: errMessage(err),
+    });
+    return { entry, ok: false };
+  }
+}
+
+async function recoverRemoteMount(
+  targetPath: string,
+  descriptor: Extract<BackendDescriptor, { kind: 's3' | 'da' | 'aem' }>,
+  fs: MountRecoveryFS,
+  log?: MountRecoveryLogger
+): Promise<RecoveryOutcome> {
+  const { kind, source, profile, mountId } = descriptor;
+  const label = kind === 's3' ? 'S3' : kind === 'aem' ? 'AEM' : 'DA';
+  try {
+    const cache = new RemoteMountCache({ mountId, ttlMs: 30_000 });
+    const opts = { source, profile, cache, mountId };
+    const backend =
+      kind === 's3'
+        ? new S3MountBackend({ ...opts, signedFetch: makeSignedFetchS3(profile) })
+        : kind === 'aem'
+          ? new AemMountBackend({ ...opts, signedFetch: makeSignedFetchDa() })
+          : new DaMountBackend({ ...opts, signedFetch: makeSignedFetchDa() });
+    await fs.mount(targetPath, backend);
+    log?.info?.(`Restored ${label} mount from previous session`, { path: targetPath, source });
+
+    return { entry: { kind, path: targetPath, source, profile, reason: '' }, ok: true };
+  } catch (err) {
+    const reason = errMessage(err);
+    log?.warn?.(`Failed to restore ${label} mount`, { path: targetPath, error: reason });
+    return { entry: { kind, path: targetPath, source, profile, reason }, ok: false };
+  }
+}
+
+export async function recoverMounts(
+  entries: MountTableEntry[],
+  fs: MountRecoveryFS,
+  log?: MountRecoveryLogger
+): Promise<MountRecoveryResult> {
+  const restored: MountRecoveryEntry[] = [];
+  const needsRecovery: MountRecoveryEntry[] = [];
+
+  for (const { targetPath, descriptor } of entries) {
+    if (descriptor.kind === 'hostfs') {
+      continue;
+    }
+    const outcome =
+      descriptor.kind === 'local'
+        ? await recoverLocalMount(targetPath, descriptor, fs, log)
+        : await recoverRemoteMount(targetPath, descriptor, fs, log);
+    (outcome.ok ? restored : needsRecovery).push(outcome.entry);
+  }
+
+  return { restored, needsRecovery };
+}
+
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function mdInlineCode(value: string): string {
+  const collapsed = value.replace(/\r\n|[\r\n]/g, ' ');
+  const runs = collapsed.match(/`+/g);
+  const delimLen = runs ? Math.max(...runs.map((r) => r.length)) + 1 : 1;
+  const delim = '`'.repeat(delimLen);
+  const needsPad = collapsed.startsWith('`') || collapsed.endsWith('`');
+  const body = needsPad ? ` ${collapsed} ` : collapsed;
+  return `${delim}${body}${delim}`;
+}
+
+export function formatMountRecoveryPrompt(mounts: MountRecoveryEntry[]): string | null {
+  if (!Array.isArray(mounts) || mounts.length === 0) return null;
+
+  const noun = mounts.length === 1 ? 'mount point' : 'mount points';
+  const pronoun = mounts.length === 1 ? 'it' : 'them';
+
+  const localMounts = mounts.filter(
+    (m): m is { kind: 'local'; path: string; dirName: string } => m.kind === 'local'
+  );
+  const remoteMounts = mounts.filter(
+    (
+      m
+    ): m is {
+      kind: 's3' | 'da' | 'aem';
+      path: string;
+      source: string;
+      profile: string;
+      reason: string;
+    } => m.kind === 's3' || m.kind === 'da' || m.kind === 'aem'
+  );
+
+  const lines: string[] = [
+    `[Session Reload] Mount recovery required for ${mounts.length} ${noun}.`,
+    '',
+  ];
+
+  if (localMounts.length > 0) {
+    const localListLines = localMounts.map(({ path, dirName }) => {
+      const origin = dirName ? ` (previously mounted from ${mdInlineCode(dirName)})` : '';
+      return `- ${mdInlineCode(path)}${origin}`;
+    });
+    const localCmds = localMounts.map(({ path }) => `    mount ${shellQuote(path)}`);
+    lines.push(
+      `The page was reloaded and the following local ${noun} lost filesystem permission. The browser cannot restore access without a fresh user gesture, so ${pronoun} cannot be used until the user re-authorizes:`,
+      '',
+      ...localListLines,
+      '',
+      'Please tell the user what happened and ask whether they want to re-mount. If yes, run the corresponding command(s) so the folder picker opens and they can re-select the same directory:',
+      '',
+      ...localCmds,
+      ''
+    );
+  }
+
+  if (remoteMounts.length > 0) {
+    const remoteListLines = remoteMounts.map(({ path, source, profile, reason }) => {
+      const profileFlag = profile === 'default' ? '' : ` --profile ${shellQuote(profile)}`;
+      const retry = `mount --source ${shellQuote(source)}${profileFlag} ${shellQuote(path)}`;
+      return `- ${mdInlineCode(path)} (${mdInlineCode(source)}, profile ${mdInlineCode(profile)}) — ${reason}\n  Retry: ${mdInlineCode(retry)}`;
+    });
+    lines.push(
+      `The following remote ${noun} could not be auto-restored:`,
+      '',
+      ...remoteListLines,
+      ''
+    );
+  }
+
+  lines.push(
+    'If the user no longer needs a mount, run `mount unmount <path>` (with the path shell-quoted the same way) to clear the stale entry instead.'
+  );
+
+  return lines.join('\n');
+}

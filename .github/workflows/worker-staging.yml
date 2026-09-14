@@ -1,0 +1,250 @@
+name: Worker Staging Deploy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/cloudflare-worker/**'
+      - 'packages/cloud-core/**'
+      - 'packages/webapp/src/providers/**'
+      - 'packages/webapp/providers/**'
+
+      - '.github/workflows/worker-staging.yml'
+
+concurrency:
+  group: worker-staging-e2b-slicc-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy-staging:
+    name: Deploy staging + smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Create GitHub deployment
+        id: gh_deployment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.payload.pull_request.head.sha,
+              environment: 'staging',
+              auto_merge: false,
+              required_contexts: [],
+              production_environment: false,
+              description: 'Cloudflare staging worker deploy',
+            });
+            core.setOutput('deployment_id', deployment.data.id);
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'in_progress',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Deploying staging worker',
+            });
+
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
+
+      - name: Verify worker unit tests before deploy
+        run: npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/index.test.ts
+
+      - name: Build dependencies for e2b template
+        run: npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/node-server
+
+      - name: Build and push e2b template (isolated staging alias)
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          SLICC_E2B_TEMPLATE_NAME: slicc-staging
+        run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
+
+      - name: Archive assets to R2 (staging)
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node packages/cloudflare-worker/scripts/verify-preview-lifecycle.mjs sliccy-now-basic-storage
+          node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
+
+      - name: Deploy staging worker (attempt 1)
+        id: deploy_attempt_1
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+
+      - name: Upload staging secrets (attempt 1)
+        id: deploy_attempt_1_secrets
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            APNS_TEAM_ID
+            APNS_KEY_ID
+            APNS_PRIVATE_KEY
+            APNS_TOPIC
+            E2B_API_KEY
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+
+          APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID_STAGING }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY_STAGING }}
+          APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+
+      - name: Wait before staging deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy staging worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+
+      - name: Upload staging secrets (attempt 2)
+        id: deploy_attempt_2_secrets
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            APNS_TEAM_ID
+            APNS_KEY_ID
+            APNS_PRIVATE_KEY
+            APNS_TOPIC
+            E2B_API_KEY
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+
+          APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID_STAGING }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY_STAGING }}
+          APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+
+      - name: Finalize staging deploy metadata
+        id: deploy
+        env:
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
+          DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
+          DEPLOY_A_2: ${{ steps.deploy_attempt_2.outcome }}
+          DEPLOY_B_2: ${{ steps.deploy_attempt_2_secrets.outcome }}
+        run: |
+          DEPLOYMENT_URL=""
+          SUCCESSFUL_ATTEMPT=
+          if [ "$DEPLOY_A_1" = "success" ] && [ "$DEPLOY_B_1" = "success" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
+            SUCCESSFUL_ATTEMPT=1
+          fi
+          if [ -z "$DEPLOYMENT_URL" ] && [ "$DEPLOY_A_2" = "success" ] && [ "$DEPLOY_B_2" = "success" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"
+            SUCCESSFUL_ATTEMPT=2
+          fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "Cloudflare staging deploy failed after 2 attempts"
+            echo "Attempt outcomes: 1=(deploy=${DEPLOY_A_1:-not-run}, secrets=${DEPLOY_B_1:-not-run}), 2=(deploy=${DEPLOY_A_2:-not-run}, secrets=${DEPLOY_B_2:-not-run})"
+            exit 1
+          fi
+          echo "Cloudflare staging deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Run deployed smoke test against staging
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+          SLICC_ARCHIVE_SMOKE: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
+        run: |
+          if [ -z "$WORKER_BASE_URL" ]; then
+            echo "Missing deployment URL from cloudflare/wrangler-action output"
+            exit 1
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
+            sleep 15
+          done
+
+      - name: Mark deployment successful
+        if: success()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.gh_deployment.outputs.deployment_id }}',
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.deployment-url }}',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Staging worker deployed; smoke tests passed',
+            });
+
+      - name: Mark deployment failed
+        if: failure() && steps.gh_deployment.outputs.deployment_id != ''
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.gh_deployment.outputs.deployment_id }}',
+              state: 'failure',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Staging worker deploy failed',
+            });

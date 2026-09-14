@@ -1,0 +1,144 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const handleByKey = new Map<string, FileSystemDirectoryHandle>();
+vi.mock('../../src/fs/mount-table-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/fs/mount-table-store.js')>();
+  return {
+    ...actual,
+    loadMountHandle: async (key: string) => handleByKey.get(key) ?? null,
+  };
+});
+
+function makeFakeHandle(): FileSystemDirectoryHandle {
+  return { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
+}
+
+const channelRegistry = new Map<string, Set<MockBroadcastChannel>>();
+
+class MockBroadcastChannel {
+  readonly name: string;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+
+  constructor(name: string) {
+    this.name = name;
+    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
+    channelRegistry.get(name)!.add(this);
+  }
+
+  postMessage(data: unknown): void {
+    const peers = channelRegistry.get(this.name);
+    if (!peers) return;
+    for (const peer of peers) {
+      if (peer === this) continue;
+      peer.onmessage?.({ data } as MessageEvent);
+    }
+  }
+
+  close(): void {
+    channelRegistry.get(this.name)?.delete(this);
+  }
+}
+
+(globalThis as any).BroadcastChannel = MockBroadcastChannel;
+
+const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+const { LocalMountBackend } = await import('../../src/fs/mount/backend-local.js');
+
+describe('VirtualFS mount-point sync via BroadcastChannel', () => {
+  let vfsA: Awaited<ReturnType<typeof VirtualFS.create>>;
+  let vfsB: Awaited<ReturnType<typeof VirtualFS.create>>;
+
+  beforeEach(async () => {
+    channelRegistry.clear();
+    vfsA = await VirtualFS.create({ dbName: 'sync-test', wipe: true });
+    vfsB = await VirtualFS.create({ dbName: 'sync-test' });
+  });
+
+  afterEach(async () => {
+    await vfsA.dispose();
+    await vfsB.dispose();
+    channelRegistry.clear();
+    await new Promise((r) => setTimeout(r, 600));
+  });
+
+  it('syncs mount from A to B', async () => {
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
+
+    expect(vfsA.listMounts()).toContain('/mnt/real');
+    expect(vfsB.listMounts()).toContain('/mnt/real');
+  });
+
+  it('syncs unmount from A to B', async () => {
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
+    expect(vfsB.listMounts()).toContain('/mnt/real');
+
+    vfsA.unmount('/mnt/real');
+    expect(vfsA.listMounts()).not.toContain('/mnt/real');
+    expect(vfsB.listMounts()).not.toContain('/mnt/real');
+  });
+
+  it('notifies watchers on peers when mount sync updates arrive', async () => {
+    const watcher = new FsWatcher();
+    const callback = vi.fn();
+    vfsB.setWatcher(watcher);
+    watcher.watch('/mnt', () => true, callback);
+
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
+    expect(callback).toHaveBeenCalledWith([
+      { type: 'modify', path: '/mnt/real', entryType: 'directory' },
+    ]);
+
+    callback.mockClear();
+    vfsA.unmount('/mnt/real');
+    expect(callback).toHaveBeenCalledWith([
+      { type: 'modify', path: '/mnt/real', entryType: 'directory' },
+    ]);
+  });
+
+  it('does not sync between different dbNames', async () => {
+    const vfsOther = await VirtualFS.create({ dbName: 'other-db', wipe: true });
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
+
+    expect(vfsOther.listMounts()).not.toContain('/mnt/real');
+    await vfsOther.dispose();
+  });
+
+  it('stops syncing after dispose', async () => {
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsB.dispose();
+
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
+
+    const channelSet = channelRegistry.get('vfs-mount-sync:sync-test');
+
+    expect(channelSet?.size ?? 0).toBe(1);
+
+    vfsB = await VirtualFS.create({ dbName: 'sync-test' });
+  });
+});

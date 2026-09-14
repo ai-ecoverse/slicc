@@ -1,0 +1,52 @@
+name: AI Comment Detection
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+  issues:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+  pull_request_review_comment:
+    types: [created, edited]
+
+concurrency:
+  group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  classify:
+    if: >-
+      github.event.pull_request == null ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - name: Ensure thread labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ai-generated --color 5319E7 \
+            --description "Every contribution on this thread is bot/AI" --force
+          gh label create human-in-the-loop --color 0E8A16 \
+            --description "At least one human has contributed to this thread" --force
+
+      - name: Classify thread contributions and apply label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PANGRAM_API_KEY: ${{ secrets.PANGRAM_API_KEY }}
+        run: node packages/dev-tools/ai-comment-detection/detect-comment-authors.mjs

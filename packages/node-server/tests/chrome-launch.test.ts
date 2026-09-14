@@ -1,0 +1,1321 @@
+import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  buildChromeLaunchArgs,
+  clearChromeRestoreState,
+  clearChromeSessionRestore,
+  clearStaleDevToolsActivePort,
+  DEFAULT_CDP_LAUNCH_TIMEOUT_MS,
+  ensureQaProfileScaffold,
+  findChromeExecutable,
+  getDefaultCdpLaunchTimeoutMs,
+  legacyChromeCandidates,
+  migrateLegacyDefaultChromeProfile,
+  parseCdpPortFromStderr,
+  planChromeSpawn,
+  probeCdpAlive,
+  resolveChromeAppBundle,
+  resolveChromeLaunchProfile,
+  resolveProfilesDir,
+  seedChromeProfilePreferences,
+  TAB_LIFECYCLE_EXEMPT_SITES,
+  terminateExistingProfileChrome,
+  waitForCdpPort,
+  waitForCdpPortFromActivePortFile,
+  waitForCdpPortFromStderr,
+} from '../src/chrome-launch.js';
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe('resolveProfilesDir', () => {
+  it('returns Application Support path on darwin', () => {
+    expect(resolveProfilesDir('darwin', '/Users/test', {})).toBe(
+      '/Users/test/Library/Application Support/Slicc/profiles'
+    );
+  });
+
+  it('returns ~/.local/state path on linux when XDG_STATE_HOME is not set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', {})).toBe(
+      '/home/test/.local/state/slicc/profiles'
+    );
+  });
+
+  it('uses XDG_STATE_HOME on linux when set', () => {
+    expect(resolveProfilesDir('linux', '/home/test', { XDG_STATE_HOME: '/custom/state' })).toBe(
+      '/custom/state/slicc/profiles'
+    );
+  });
+
+  it('returns LOCALAPPDATA path on win32 when set', () => {
+    expect(resolveProfilesDir('win32', '/home/test', { LOCALAPPDATA: '/fake/AppData/Local' })).toBe(
+      join('/fake/AppData/Local', 'Slicc', 'profiles')
+    );
+  });
+
+  it('falls back to tmpdir on unknown platforms', () => {
+    expect(resolveProfilesDir('freebsd' as NodeJS.Platform, '/home/test', {})).toBe(tmpdir());
+  });
+});
+
+describe('legacyChromeCandidates', () => {
+  it('includes $TMPDIR-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {
+      TMPDIR: '/private/tmp/userXYZ',
+    });
+    expect(candidates).toContain('/private/tmp/userXYZ/browser-coding-agent-chrome');
+  });
+
+  it('includes /tmp-based path', () => {
+    const candidates = legacyChromeCandidates('browser-coding-agent-chrome', {});
+    expect(candidates).toContain('/tmp/browser-coding-agent-chrome');
+  });
+});
+
+describe('chrome-launch', () => {
+  it('defaults to platform-appropriate profiles dir when no tmpDir override is given', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+    });
+
+    expect(profile.userDataDir).not.toContain('.slicc');
+  });
+
+  it('uses an explicit tmpDir override when provided', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      tmpDir: '/tmp/test-root',
+    });
+
+    expect(profile).toEqual({
+      id: null,
+      displayName: 'Chrome',
+      userDataDir: '/tmp/test-root/browser-coding-agent-chrome',
+      extensionPath: null,
+    });
+  });
+
+  it('resolves the extension QA profile inside the repo and points at dist/extension', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      profile: 'extension',
+    });
+
+    expect(profile).toEqual({
+      id: 'extension',
+      displayName: 'SLICC QA Extension',
+      userDataDir: '/repo/.qa/chrome/extension',
+      extensionPath: '/repo/dist/extension',
+    });
+  });
+
+  it('appends serve port to default profile dir when not the default port', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      tmpDir: '/tmp/test-root',
+      servePort: 5720,
+    });
+
+    expect(profile.userDataDir).toBe('/tmp/test-root/browser-coding-agent-chrome-5720');
+  });
+
+  it('omits port suffix for the default serve port 5710', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      tmpDir: '/tmp/test-root',
+      servePort: 5710,
+    });
+
+    expect(profile.userDataDir).toBe('/tmp/test-root/browser-coding-agent-chrome');
+  });
+
+  it('rejects unknown QA profile names', () => {
+    expect(() =>
+      resolveChromeLaunchProfile({
+        projectRoot: '/repo',
+        profile: 'mystery',
+      })
+    ).toThrow(/Unknown Chrome profile/);
+  });
+
+  it('builds Chrome launch args with extension flags for the extension profile', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      profile: 'extension',
+    });
+
+    expect(
+      buildChromeLaunchArgs({
+        cdpPort: 9222,
+        launchUrl: 'http://localhost:3000',
+        profile,
+      })
+    ).toEqual([
+      '--remote-debugging-port=9222',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-crash-reporter',
+      '--disable-background-tracing',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--user-data-dir=/repo/.qa/chrome/extension',
+      '--disable-extensions-except=/repo/dist/extension',
+      '--load-extension=/repo/dist/extension',
+      'http://localhost:3000',
+    ]);
+  });
+
+  describe('buildChromeLaunchArgs — hosted mode', () => {
+    const baseOpts = {
+      cdpPort: 9222,
+      launchUrl: 'http://localhost:5710/',
+      profile: {
+        id: null,
+        displayName: 'Chrome',
+        userDataDir: '/tmp/x',
+        extensionPath: null,
+      },
+    };
+
+    it('default mode does not include container flags', () => {
+      const args = buildChromeLaunchArgs(baseOpts);
+      expect(args).not.toContain('--no-sandbox');
+      expect(args).not.toContain('--disable-dev-shm-usage');
+      expect(args).not.toContain('--headless=new');
+    });
+
+    it('disables Local Network Access checks in default (headed standalone) mode', () => {
+      const args = buildChromeLaunchArgs(baseOpts);
+      expect(args).toContain(
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
+      );
+    });
+
+    it('does not duplicate the Local Network Access flag in hosted mode', () => {
+      const lnaFlag =
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard';
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args.filter((a) => a === lnaFlag)).toHaveLength(1);
+    });
+
+    it('hosted: true appends container flags', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args).toContain('--no-sandbox');
+      expect(args).toContain('--disable-dev-shm-usage');
+      expect(args).toContain('--disable-gpu');
+      expect(args).toContain('--headless=new');
+      expect(args).toContain('--font-render-hinting=none');
+      expect(args).toContain(
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
+      );
+    });
+
+    it('hosted mode preserves existing flags (user-data-dir, etc.)', () => {
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args).toContain('--user-data-dir=/tmp/x');
+      expect(args).toContain('--remote-debugging-port=9222');
+    });
+  });
+
+  describe('resolveChromeAppBundle', () => {
+    it('walks up to the canonical Chrome .app bundle on darwin', () => {
+      expect(
+        resolveChromeAppBundle(
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          'darwin'
+        )
+      ).toBe('/Applications/Google Chrome.app');
+    });
+
+    it('walks up to a Chrome for Testing bundle on darwin', () => {
+      const exe =
+        '/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+      expect(resolveChromeAppBundle(exe, 'darwin')).toBe(
+        '/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app'
+      );
+    });
+
+    it('returns null on non-darwin platforms even when given a .app-style path', () => {
+      const exe = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      expect(resolveChromeAppBundle(exe, 'linux')).toBeNull();
+      expect(resolveChromeAppBundle(exe, 'win32')).toBeNull();
+    });
+
+    it('returns null for bare-binary paths on darwin', () => {
+      expect(resolveChromeAppBundle('/usr/local/bin/chromium', 'darwin')).toBeNull();
+      expect(resolveChromeAppBundle('/tmp/just-a-binary', 'darwin')).toBeNull();
+    });
+  });
+
+  describe('planChromeSpawn', () => {
+    const baseArgs = [
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/tmp/profile',
+      'about:blank',
+    ];
+
+    it('routes darwin Chrome through /usr/bin/open with -n -a <bundle> -W --args …', () => {
+      const plan = planChromeSpawn({
+        executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        chromeArgs: baseArgs,
+        platform: 'darwin',
+      });
+      expect(plan.command).toBe('/usr/bin/open');
+      expect(plan.args.slice(0, 5)).toEqual([
+        '-n',
+        '-a',
+        '/Applications/Google Chrome.app',
+        '-W',
+        '--args',
+      ]);
+      expect(plan.args.slice(5)).toEqual(baseArgs);
+      expect(plan.usesLaunchServices).toBe(true);
+    });
+
+    it('uses a direct exec on linux and windows', () => {
+      const linuxPlan = planChromeSpawn({
+        executablePath: '/usr/bin/google-chrome',
+        chromeArgs: baseArgs,
+        platform: 'linux',
+      });
+      expect(linuxPlan).toEqual({
+        command: '/usr/bin/google-chrome',
+        args: baseArgs,
+        usesLaunchServices: false,
+      });
+
+      const winPlan = planChromeSpawn({
+        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        chromeArgs: baseArgs,
+        platform: 'win32',
+      });
+      expect(winPlan.command).toBe('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
+      expect(winPlan.usesLaunchServices).toBe(false);
+    });
+
+    it('falls back to direct exec for bare-binary paths on darwin', () => {
+      const plan = planChromeSpawn({
+        executablePath: '/opt/chromium/chromium-bin',
+        chromeArgs: baseArgs,
+        platform: 'darwin',
+      });
+      expect(plan).toEqual({
+        command: '/opt/chromium/chromium-bin',
+        args: baseArgs,
+        usesLaunchServices: false,
+      });
+    });
+  });
+
+  it('prefers CHROME_PATH over discovered installations', () => {
+    expect(
+      findChromeExecutable({
+        env: { CHROME_PATH: '/custom/chrome' },
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) === '/custom/chrome',
+        readdirSyncImpl: () => [],
+      })
+    ).toBe('/custom/chrome');
+  });
+
+  it('resolves a macOS .app bundle CHROME_PATH to the inner executable', () => {
+    const appPath = '/Applications/Google Chrome.app';
+    const binaryPath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        env: { CHROME_PATH: appPath },
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) === appPath || String(path) === binaryPath,
+        readdirSyncImpl: () => [],
+      })
+    ).toBe(binaryPath);
+  });
+
+  it('falls back to the raw CHROME_PATH when .app binary is missing', () => {
+    const appPath = '/Applications/Weird Browser.app';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        env: { CHROME_PATH: appPath },
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) => String(path) === appPath,
+        readdirSyncImpl: () => [],
+      })
+    ).toBe(appPath);
+  });
+
+  it('keeps Chrome for Testing first by default when both it and installed Chrome exist', () => {
+    const installedChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          [installedChrome, chromeForTesting].includes(String(path)),
+      })
+    ).toBe(chromeForTesting);
+  });
+
+  it('prefers installed Chrome when explicitly requested', () => {
+    const installedChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        executablePreference: 'installed',
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          [installedChrome, chromeForTesting].includes(String(path)),
+      })
+    ).toBe(installedChrome);
+  });
+
+  it('finds the newest Chrome for Testing binary in the Puppeteer cache', () => {
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-130.0.6723.58', 'mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) ===
+          '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      })
+    ).toBe(
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
+    );
+  });
+
+  it('falls back to Chrome for Testing when installed-preferred mode has no installed Chrome', () => {
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        executablePreference: 'installed',
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) === chromeForTesting,
+      })
+    ).toBe(chromeForTesting);
+  });
+
+  it('creates seeded QA profile directories and profile metadata files', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'slicc-qa-'));
+    tempDirs.push(projectRoot);
+
+    const profiles = await ensureQaProfileScaffold(projectRoot);
+    expect(profiles.map((profile) => profile.id)).toEqual(['leader', 'follower', 'extension']);
+
+    const localState = JSON.parse(
+      await readFile(join(projectRoot, '.qa', 'chrome', 'leader', 'Local State'), 'utf8')
+    ) as {
+      profile?: { info_cache?: { Default?: { name?: string; profile_highlight_color?: number } } };
+    };
+    expect(localState.profile?.info_cache?.Default?.name).toBe('SLICC QA Leader');
+    expect(typeof localState.profile?.info_cache?.Default?.profile_highlight_color).toBe('number');
+
+    const preferences = JSON.parse(
+      await readFile(
+        join(projectRoot, '.qa', 'chrome', 'extension', 'Default', 'Preferences'),
+        'utf8'
+      )
+    ) as { profile?: { name?: string } };
+    expect(preferences.profile?.name).toBe('SLICC QA Extension');
+  });
+});
+
+describe('parseCdpPortFromStderr', () => {
+  it('extracts the port from a standard Chrome DevTools line', () => {
+    expect(
+      parseCdpPortFromStderr('DevTools listening on ws://127.0.0.1:9222/devtools/browser/abc-123')
+    ).toBe(9222);
+  });
+
+  it('extracts a non-default port', () => {
+    expect(
+      parseCdpPortFromStderr('DevTools listening on ws://127.0.0.1:41567/devtools/browser/abc-123')
+    ).toBe(41567);
+  });
+
+  it('returns null for unrelated stderr output', () => {
+    expect(parseCdpPortFromStderr('[0312/120000:WARNING] something else')).toBe(null);
+  });
+
+  it('returns null for empty string', () => {
+    expect(parseCdpPortFromStderr('')).toBe(null);
+  });
+
+  it('handles 0.0.0.0 host binding', () => {
+    expect(
+      parseCdpPortFromStderr('DevTools listening on ws://0.0.0.0:9333/devtools/browser/xyz')
+    ).toBe(9333);
+  });
+});
+
+describe('waitForCdpPortFromStderr', () => {
+  it('resolves with the port when Chrome prints the DevTools line', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:44123/devtools/browser/id\n')
+    );
+
+    await expect(promise).resolves.toBe(44123);
+  });
+
+  it('handles multi-line chunks with the DevTools line after noise', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '[WARNING] some noise\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/id\n'
+      )
+    );
+
+    await expect(promise).resolves.toBe(9222);
+  });
+
+  it('rejects when Chrome exits before printing the DevTools line', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    child.emit('exit', 1);
+
+    await expect(promise).rejects.toThrow(/exited with code 1/);
+  });
+
+  it('rejects on timeout', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 50);
+
+    await expect(promise).rejects.toThrow(/Timed out/);
+  });
+
+  it('parses the DevTools line when it spans multiple chunks (the original flake)', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    stderr.emit('data', Buffer.from('[noise] starting up\nDevTools listening'));
+    stderr.emit('data', Buffer.from(' on ws://127.0.0.1:'));
+    stderr.emit('data', Buffer.from('57321/devtools/browser/abc-123\n'));
+
+    await expect(promise).resolves.toBe(57321);
+  });
+});
+
+describe('getDefaultCdpLaunchTimeoutMs', () => {
+  it('returns the built-in default when the env var is unset', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({})).toBe(DEFAULT_CDP_LAUNCH_TIMEOUT_MS);
+  });
+
+  it('honors a positive integer override', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '45000' })).toBe(45000);
+  });
+
+  it('falls back to the default for non-positive or non-numeric overrides', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '0' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '-100' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: 'not-a-number' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+  });
+});
+
+describe('waitForCdpPortFromActivePortFile', () => {
+  const trustingVerify = async (_port: number, _ws: string | null) => true;
+
+  it('resolves with the port written to DevToolsActivePort', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10, {
+      verifyPort: trustingVerify,
+    });
+
+    setTimeout(() => {
+      void writeFile(join(dir, 'DevToolsActivePort'), '49321\n/devtools/browser/abc-123\n');
+    }, 30);
+
+    await expect(promise).resolves.toBe(49321);
+  });
+
+  it('forwards the websocket path from the file to the verifier', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '49322\n/devtools/browser/0001-fingerprint\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let seenPort: number | null = null;
+    let seenPath: string | null = null;
+    const verifyPort = async (port: number, ws: string | null) => {
+      seenPort = port;
+      seenPath = ws;
+      return true;
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 2000, 10, { verifyPort })
+    ).resolves.toBe(49322);
+    expect(seenPort).toBe(49322);
+    expect(seenPath).toBe('/devtools/browser/0001-fingerprint');
+  });
+
+  it('rejects on timeout when the file never appears', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 100, 10, { verifyPort: trustingVerify })
+    ).rejects.toThrow(/Timed out waiting for DevToolsActivePort/);
+  });
+
+  it('rejects when Chrome exits before writing the file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 5000, 10, {
+      verifyPort: trustingVerify,
+    });
+    setTimeout(() => child.emit('exit', 1), 20);
+
+    await expect(promise).rejects.toThrow(/exited with code 1/);
+  });
+
+  it('treats the file content as stale when verifyPort returns false, waiting for a live port', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'DevToolsActivePort');
+    await writeFile(filePath, '11111\n/devtools/browser/stale\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    const probedPorts: number[] = [];
+    const verifyPort = async (port: number, _ws: string | null) => {
+      probedPorts.push(port);
+      return port === 22222;
+    };
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10, { verifyPort });
+    setTimeout(() => {
+      void writeFile(filePath, '22222\n/devtools/browser/fresh\n');
+    }, 50);
+
+    await expect(promise).resolves.toBe(22222);
+    expect(probedPorts).toContain(11111);
+    expect(probedPorts).toContain(22222);
+
+    expect(probedPorts.indexOf(11111)).toBeLessThan(probedPorts.indexOf(22222));
+  });
+
+  it('keeps polling when verifyPort never returns true and eventually times out with a stale-port message', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '33333\n/devtools/browser/zombie\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let probeCount = 0;
+    const verifyPort = async (_port: number, _ws: string | null) => {
+      probeCount += 1;
+      return false;
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 200, 10, { verifyPort })
+    ).rejects.toThrow(/Port 33333 from DevToolsActivePort.*never answered CDP/);
+    expect(probeCount).toBeGreaterThan(1);
+  });
+
+  it('treats a synchronously-throwing verifier as not-alive and keeps polling', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '44444\n/devtools/browser/anything\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let probeCount = 0;
+    const verifyPort = async (_port: number, _ws: string | null) => {
+      probeCount += 1;
+      throw new Error('rude verifier');
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 150, 10, { verifyPort })
+    ).rejects.toThrow(/never answered CDP/);
+
+    expect(probeCount).toBeGreaterThan(1);
+  });
+});
+
+describe('waitForCdpPort (race)', () => {
+  const trustingVerify = async (_port: number, _ws: string | null) => true;
+
+  it('resolves from stderr when the active-port file is delayed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 5000,
+      verifyPort: trustingVerify,
+    });
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:11111/devtools/browser/id\n')
+    );
+
+    await expect(promise).resolves.toBe(11111);
+  });
+
+  it('resolves from the active-port file when stderr never prints the line', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 2000,
+      verifyPort: trustingVerify,
+    });
+    setTimeout(() => {
+      void writeFile(join(dir, 'DevToolsActivePort'), '22222\n/devtools/browser/zzz\n');
+    }, 30);
+
+    await expect(promise).resolves.toBe(22222);
+  });
+
+  it('forwards verifyPort to the active-port-file leg so stale ports are rejected end-to-end', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '11111\n/devtools/browser/stale\n');
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 2000,
+      verifyPort: async () => false,
+    });
+    setTimeout(() => {
+      stderr.emit(
+        'data',
+        Buffer.from('DevTools listening on ws://127.0.0.1:55555/devtools/browser/fresh\n')
+      );
+    }, 30);
+
+    await expect(promise).resolves.toBe(55555);
+  });
+
+  it('falls back to plain stderr-only waiting when no userDataDir is provided', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, { timeoutMs: 5000 });
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:33333/devtools/browser/id\n')
+    );
+
+    await expect(promise).resolves.toBe(33333);
+  });
+});
+
+describe('clearStaleDevToolsActivePort', () => {
+  it('deletes an existing DevToolsActivePort file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-active-port-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'DevToolsActivePort');
+    await writeFile(filePath, '49321\n/devtools/browser/abc-123\n');
+    expect(fsExistsSync(filePath)).toBe(true);
+
+    await clearStaleDevToolsActivePort(dir);
+
+    expect(fsExistsSync(filePath)).toBe(false);
+
+    await expect(stat(dir)).resolves.toBeDefined();
+  });
+
+  it('is a no-op when no file exists (ENOENT swallowed)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-active-port-'));
+    tempDirs.push(dir);
+    await expect(clearStaleDevToolsActivePort(dir)).resolves.toBeUndefined();
+  });
+
+  it('does not throw when the directory itself is missing', async () => {
+    const missing = join(
+      tmpdir(),
+      `slicc-clear-active-port-missing-${Date.now()}-${Math.random()}`
+    );
+    await expect(clearStaleDevToolsActivePort(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('clearChromeRestoreState', () => {
+  it('rewrites a crashed exit_type to Normal so Chrome does not restore tabs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(
+      prefsPath,
+      JSON.stringify({
+        profile: { exit_type: 'Crashed', exited_cleanly: false, name: 'keep-me' },
+        session: { restore_on_startup: 1 },
+      })
+    );
+
+    await clearChromeRestoreState(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      profile: { exit_type: string; exited_cleanly: boolean; name: string };
+      session: { restore_on_startup: number };
+    };
+    expect(after.profile.exit_type).toBe('Normal');
+    expect(after.profile.exited_cleanly).toBe(true);
+
+    expect(after.profile.name).toBe('keep-me');
+    expect(after.session.restore_on_startup).toBe(1);
+  });
+
+  it('is a no-op when no Preferences file exists (first run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    await expect(clearChromeRestoreState(dir)).resolves.toBeUndefined();
+
+    expect(fsExistsSync(join(dir, 'Default', 'Preferences'))).toBe(false);
+  });
+
+  it('leaves a corrupt Preferences file untouched for Chrome to regenerate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(prefsPath, 'not valid json {');
+
+    await expect(clearChromeRestoreState(dir)).resolves.toBeUndefined();
+    expect(await readFile(prefsPath, 'utf8')).toBe('not valid json {');
+  });
+
+  it('does not throw when the directory itself is missing', async () => {
+    const missing = join(tmpdir(), `slicc-clear-restore-missing-${Date.now()}-${Math.random()}`);
+    await expect(clearChromeRestoreState(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('seedChromeProfilePreferences', () => {
+  it('creates a seeded Preferences file on a fresh profile (pre-first-run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+      tab_freezing_enabled: boolean;
+      performance_tuning: {
+        high_efficiency_mode: { state: number };
+        tab_discarding: { exceptions: string[] };
+      };
+    };
+    expect(after.tab_freezing_enabled).toBe(false);
+    expect(after.performance_tuning.high_efficiency_mode.state).toBe(0);
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
+  });
+
+  it('merges into existing prefs, preserving unrelated keys and user exceptions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(
+      prefsPath,
+      JSON.stringify({
+        profile: { name: 'keep-me' },
+        performance_tuning: {
+          high_efficiency_mode: { state: 2, aggressiveness: 1 },
+          tab_discarding: { exceptions: ['example.com', 'www.sliccy.ai'] },
+        },
+      })
+    );
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      profile: { name: string };
+      performance_tuning: {
+        high_efficiency_mode: { state: number; aggressiveness: number };
+        tab_discarding: { exceptions: string[] };
+      };
+    };
+    expect(after.profile.name).toBe('keep-me');
+    expect(after.performance_tuning.high_efficiency_mode.state).toBe(0);
+
+    expect(after.performance_tuning.high_efficiency_mode.aggressiveness).toBe(1);
+
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual([
+      'example.com',
+      'www.sliccy.ai',
+      'sliccy.ai',
+      'localhost',
+    ]);
+  });
+
+  it('is idempotent — a second run does not duplicate exceptions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+
+    await seedChromeProfilePreferences(dir);
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+      performance_tuning: { tab_discarding: { exceptions: string[] } };
+    };
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
+  });
+
+  it('replaces a corrupt Preferences file with a valid seeded one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(prefsPath, 'not valid json {');
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      tab_freezing_enabled: boolean;
+    };
+    expect(after.tab_freezing_enabled).toBe(false);
+  });
+});
+
+describe('clearChromeSessionRestore', () => {
+  it('removes the session-restore files so Chrome does not reopen prior tabs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-sessions-'));
+    tempDirs.push(dir);
+    const sessionsDir = join(dir, 'Default', 'Sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, 'Session_123'), 'x');
+    await writeFile(join(sessionsDir, 'Tabs_123'), 'x');
+    await writeFile(join(dir, 'Default', 'Last Session'), 'x');
+    await writeFile(join(dir, 'Default', 'Last Tabs'), 'x');
+
+    await writeFile(join(dir, 'Default', 'Preferences'), '{}');
+
+    await clearChromeSessionRestore(dir);
+
+    expect(fsExistsSync(sessionsDir)).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Last Session'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Last Tabs'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Preferences'))).toBe(true);
+  });
+
+  it('is a no-op when the profile has no session files (first run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-sessions-'));
+    tempDirs.push(dir);
+    await expect(clearChromeSessionRestore(dir)).resolves.toBeUndefined();
+  });
+});
+
+describe('terminateExistingProfileChrome', () => {
+  it('kills a live Chrome holding the profile and clears the Singleton lock files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+
+    await symlink('silver-air-4242', join(dir, 'SingletonLock'));
+    await writeFile(join(dir, 'SingletonCookie'), '');
+    let alive = true;
+    const killed: Array<[number, string]> = [];
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => alive,
+      kill: (pid, sig) => {
+        killed.push([pid, sig]);
+        if (sig === 'SIGTERM') alive = false;
+      },
+      sleep: async () => {},
+    });
+    expect(killed).toContainEqual([4242, 'SIGTERM']);
+    expect(killed).not.toContainEqual([4242, 'SIGKILL']);
+    expect(fsExistsSync(join(dir, 'SingletonLock'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'SingletonCookie'))).toBe(false);
+  });
+
+  it('escalates to SIGKILL when SIGTERM does not stop it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    await symlink('host-99', join(dir, 'SingletonLock'));
+    const signals: string[] = [];
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => true,
+      kill: (_pid, sig) => signals.push(sig),
+      sleep: async () => {},
+    });
+    expect(signals).toContain('SIGTERM');
+    expect(signals).toContain('SIGKILL');
+  });
+
+  it('does not kill a stale lock (dead PID) but still removes it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    await symlink('host-123', join(dir, 'SingletonLock'));
+    let killCalls = 0;
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => false,
+      kill: () => {
+        killCalls += 1;
+      },
+      sleep: async () => {},
+    });
+    expect(killCalls).toBe(0);
+    expect(fsExistsSync(join(dir, 'SingletonLock'))).toBe(false);
+  });
+
+  it('is a no-op when there is no SingletonLock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    let killCalls = 0;
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => true,
+      kill: () => {
+        killCalls += 1;
+      },
+      sleep: async () => {},
+    });
+    expect(killCalls).toBe(0);
+  });
+});
+
+describe('probeCdpAlive', () => {
+  it('returns true when /json/version answers with a valid CDP payload', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((req, res) => {
+      if (req.url === '/json/version') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            Browser: 'Chrome/148.0.7778.167',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:0/devtools/browser/abc',
+          })
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when nothing is listening on the port', async () => {
+    const { createServer } = await import('net');
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as import('net').AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    await expect(probeCdpAlive(port, { timeoutMs: 300 })).resolves.toBe(false);
+  });
+
+  it('returns false for out-of-range ports without throwing', async () => {
+    await expect(probeCdpAlive(70000)).resolves.toBe(false);
+    await expect(probeCdpAlive(-1)).resolves.toBe(false);
+    await expect(probeCdpAlive(0)).resolves.toBe(false);
+    await expect(probeCdpAlive(Number.NaN)).resolves.toBe(false);
+    await expect(probeCdpAlive(3.14)).resolves.toBe(false);
+  });
+
+  it('returns false when the server delays the response past timeoutMs', async () => {
+    const { createServer } = await import('http');
+
+    const server = createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      const started = Date.now();
+      await expect(probeCdpAlive(port, { timeoutMs: 150 })).resolves.toBe(false);
+
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when the response body exceeds the size cap', async () => {
+    const { createServer } = await import('http');
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+
+      res.write('{"webSocketDebuggerUrl":"ws://127.0.0.1:0/devtools/browser/abc","junk":"');
+      res.write('A'.repeat(32 * 1024));
+      res.end('"}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns true when the response websocket path matches expectedWebSocketPath', async () => {
+    const { createServer } = await import('http');
+    const wsPath = '/devtools/browser/match-uuid';
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:0${wsPath}` }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port, { expectedWebSocketPath: wsPath })).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when expectedWebSocketPath does not match the served URL', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: 'ws://127.0.0.1:0/devtools/browser/served-by-someone-else',
+        })
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(
+        probeCdpAlive(port, { expectedWebSocketPath: '/devtools/browser/our-uuid' })
+      ).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when the port answers HTTP but not with a CDP payload', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ hello: 'world' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when the port answers with non-2xx', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('migrateLegacyDefaultChromeProfile', () => {
+  it('copies a legacy profile to the new stable location', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('legacy-data');
+  });
+
+  it('skips migration when the new profile already exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await mkdir(newProfile, { recursive: true });
+    await writeFile(join(newProfile, 'marker.txt'), 'existing-data');
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('existing-data');
+  });
+
+  it('does not throw and leaves no partial copy when cp fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const newParent = join(root, 'new');
+    await writeFile(newParent, 'i-am-a-file-not-a-dir');
+    const newProfile = join(newParent, 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
+  it('is a no-op when no legacy profile exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    const missingLegacy = join(root, 'legacy', 'browser-coding-agent-chrome');
+
+    await expect(
+      migrateLegacyDefaultChromeProfile(newProfile, [missingLegacy])
+    ).resolves.not.toThrow();
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+
+  it('tries candidates in order and stops at the first match', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const first = join(root, 'first', 'browser-coding-agent-chrome');
+    const second = join(root, 'second', 'browser-coding-agent-chrome');
+    await mkdir(first, { recursive: true });
+    await writeFile(join(first, 'marker.txt'), 'first-data');
+    await mkdir(second, { recursive: true });
+    await writeFile(join(second, 'marker.txt'), 'second-data');
+
+    const newProfile = join(root, 'new', 'browser-coding-agent-chrome');
+    await migrateLegacyDefaultChromeProfile(newProfile, [first, second]);
+
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('first-data');
+  });
+
+  it('does not resurrect the profile after a deliberate delete (runs at most once)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-migrate-'));
+    tempDirs.push(root);
+
+    const legacyProfile = join(root, 'legacy', 'browser-coding-agent-chrome');
+    await mkdir(legacyProfile, { recursive: true });
+    await writeFile(join(legacyProfile, 'marker.txt'), 'legacy-data');
+
+    const profilesDir = join(root, 'profiles');
+    const newProfile = join(profilesDir, 'browser-coding-agent-chrome');
+
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+    expect(await readFile(join(newProfile, 'marker.txt'), 'utf8')).toBe('legacy-data');
+
+    await rm(newProfile, { recursive: true, force: true });
+
+    await migrateLegacyDefaultChromeProfile(newProfile, [legacyProfile]);
+    expect(fsExistsSync(newProfile)).toBe(false);
+  });
+});

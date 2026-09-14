@@ -1,0 +1,8 @@
+{
+  "storyId": "memory-memrow--default",
+  "storyTitle": "Memory/Memrow",
+  "subsystem": "memory",
+  "importPath": "./src/memory/slicc-memrow.stories.ts",
+  "comment": "there are two borders around the pill. one inner red, which looks good and one outer, blue which is superflous",
+  "createdAt": "2026-06-10T14:15:55.887Z"
+}

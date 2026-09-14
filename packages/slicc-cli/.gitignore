@@ -1,0 +1,7 @@
+
+/bin/
+/dist/
+
+cover.out
+
+test-report.json

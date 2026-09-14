@@ -1,0 +1,1092 @@
+import { EXTENSION_BRIDGE_PORT_NAME, EXTENSION_BRIDGE_PROTOCOL_VERSION } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  __clearWelcomedLeaderPortsForTest,
+  BRIDGE_ALLOWED_ORIGINS,
+  type BridgeSwDeps,
+  handleBridgePortConnect,
+  notifyBridgeDebuggerDetached,
+  postDiscoveryToWelcomedLeaderPorts,
+  postLickToWelcomedLeaderPorts,
+  postOpenSettingsToWelcomedLeaderPorts,
+  validateBridgePin,
+} from '../src/bridge-sw.js';
+
+interface FakeSender {
+  origin?: string;
+  tab?: { id?: number };
+  frameId?: number;
+}
+
+interface FakePort {
+  name: string;
+  sender?: FakeSender;
+  posted: unknown[];
+  disconnected: boolean;
+  postMessage: (msg: unknown) => void;
+  disconnect: () => void;
+  onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+  receive: (msg: unknown) => void;
+  triggerDisconnect: () => void;
+}
+
+function makePort(name: string, sender?: FakeSender): FakePort {
+  const messageListeners: Array<(msg: unknown) => void> = [];
+  const disconnectListeners: Array<() => void> = [];
+  const port: FakePort = {
+    name,
+    sender,
+    posted: [],
+    disconnected: false,
+    postMessage: (msg) => port.posted.push(msg),
+    disconnect: () => {
+      port.disconnected = true;
+    },
+    onMessage: { addListener: (cb) => messageListeners.push(cb) },
+    onDisconnect: { addListener: (cb) => disconnectListeners.push(cb) },
+    receive: (msg) => {
+      for (const cb of messageListeners) cb(msg);
+    },
+    triggerDisconnect: () => {
+      for (const cb of disconnectListeners) cb();
+    },
+  };
+  return port;
+}
+
+function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
+  const sent: Array<{ tabId: number; method: string; params?: Record<string, unknown> }> = [];
+  const debuggerEventCallbacks: Array<
+    (tabId: number, method: string, params?: Record<string, unknown>) => void
+  > = [];
+  const base: BridgeSwDeps = {
+    readStoredLeaderTabId: async () => 42,
+    maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
+    attachDebugger: vi.fn(async () => true),
+    detachDebugger: vi.fn(async () => undefined),
+    sendDebuggerCommand: vi.fn(async (tabId, method, params) => {
+      sent.push({ tabId, method, params });
+      return { ok: true, tabId, method };
+    }),
+    subscribeDebuggerEvents: (handler) => {
+      debuggerEventCallbacks.push(handler);
+      return () => {
+        const i = debuggerEventCallbacks.indexOf(handler);
+        if (i >= 0) debuggerEventCallbacks.splice(i, 1);
+      };
+    },
+    queryTabs: async () => [
+      { id: 42, title: 'Leader', url: 'https://www.sliccy.ai/' },
+      { id: 43, title: 'Other', url: 'https://example.com/' },
+    ],
+    queryActiveTabId: async () => undefined,
+    getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
+    createTab: async () => 99,
+    removeTab: async () => undefined,
+    activateTab: vi.fn(async () => undefined),
+  };
+  const merged: BridgeSwDeps = { ...base, ...overrides };
+  (merged as unknown as { __sent: typeof sent }).__sent = sent;
+  (merged as unknown as { __debuggerEvents: typeof debuggerEventCallbacks }).__debuggerEvents =
+    debuggerEventCallbacks;
+  return merged;
+}
+
+const goodSender: FakeSender = {
+  origin: 'https://www.sliccy.ai',
+  tab: { id: 42 },
+  frameId: 0,
+};
+
+async function connectWithAttachedTabs(deps: BridgeSwDeps, tabIds: number[]): Promise<FakePort> {
+  const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+  await handleBridgePortConnect(port as never, deps);
+  port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+  for (const [index, tabId] of tabIds.entries()) {
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: index + 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: String(tabId) },
+    });
+  }
+  await flushMicrotasks();
+  return port;
+}
+
+async function bringToFront(port: FakePort, tabId: number, id: number): Promise<void> {
+  port.receive({
+    bridge: 1,
+    channelId: 'c',
+    kind: 'cdp.request',
+    id,
+    method: 'Page.bringToFront',
+    sessionId: String(tabId),
+  });
+  await flushMicrotasks();
+}
+
+async function sendCdpRequest(
+  port: FakePort,
+  id: number,
+  method: string,
+  params?: Record<string, unknown>,
+  sessionId?: string
+): Promise<unknown> {
+  port.receive({ bridge: 1, channelId: 'c', kind: 'cdp.request', id, method, params, sessionId });
+  await flush();
+  return port.posted.find((message) => (message as { id?: number }).id === id);
+}
+
+describe('validateBridgePin', () => {
+  it('passes for an origin in the allowlist on the stored leader tab top frame', async () => {
+    const r = await validateBridgePin(goodSender as never, {
+      readStoredLeaderTabId: async () => 42,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects when the storage key is absent and the sender is not a leader-URL page (fail closed)', async () => {
+    const r = await validateBridgePin(goodSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+    });
+    expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });
+  });
+
+  it('self-adopts the connecting leader tab when no leader is pinned yet (restart recovery)', async () => {
+    let written: number | undefined;
+    const leaderSender = {
+      ...goodSender,
+      url: 'https://www.sliccy.ai/?slicc=leader&ext=abc',
+    };
+    const r = await validateBridgePin(leaderSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+      writeStoredLeaderTabId: async (id) => {
+        written = id;
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(written).toBe(42);
+  });
+
+  it('does NOT self-adopt a same-origin top-frame tab that is not the leader page', async () => {
+    let written: number | undefined;
+    const nonLeaderSender = { ...goodSender, url: 'https://www.sliccy.ai/some/other/page' };
+    const r = await validateBridgePin(nonLeaderSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+      writeStoredLeaderTabId: async (id) => {
+        written = id;
+      },
+    });
+    expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });
+    expect(written).toBeUndefined();
+  });
+
+  it('does not self-adopt when no writeStoredLeaderTabId dep is provided', async () => {
+    const leaderSender = { ...goodSender, url: 'https://www.sliccy.ai/?slicc=leader' };
+    const r = await validateBridgePin(leaderSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+    });
+    expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });
+  });
+
+  it('rejects when the sender tab id does not match the stored leader', async () => {
+    const r = await validateBridgePin(goodSender as never, {
+      readStoredLeaderTabId: async () => 99,
+    });
+    expect(r).toEqual({ ok: false, reason: 'sender-tab-not-leader' });
+  });
+
+  it('rejects non-top frames', async () => {
+    const r = await validateBridgePin({ ...goodSender, frameId: 1 } as never, {
+      readStoredLeaderTabId: async () => 42,
+    });
+    expect(r).toEqual({ ok: false, reason: 'not-top-frame' });
+  });
+
+  it('rejects origins outside the allowlist', async () => {
+    const r = await validateBridgePin({ ...goodSender, origin: 'https://evil.example' } as never, {
+      readStoredLeaderTabId: async () => 42,
+    });
+    expect(r).toEqual({ ok: false, reason: 'origin-not-allowed' });
+  });
+
+  it('rejects when sender.tab is missing', async () => {
+    const r = await validateBridgePin({ origin: 'https://www.sliccy.ai', frameId: 0 } as never, {
+      readStoredLeaderTabId: async () => 42,
+    });
+    expect(r).toEqual({ ok: false, reason: 'no-sender-tab' });
+  });
+
+  it('rejects when sender is undefined', async () => {
+    const r = await validateBridgePin(undefined, { readStoredLeaderTabId: async () => 42 });
+    expect(r).toEqual({ ok: false, reason: 'no-sender' });
+  });
+
+  it('honors a custom allowedOrigins override', async () => {
+    const r = await validateBridgePin(
+      { origin: 'http://localhost:8787', tab: { id: 42 }, frameId: 0 } as never,
+      { readStoredLeaderTabId: async () => 42, allowedOrigins: ['http://localhost:8787'] }
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('ships a sensible default origin allowlist', () => {
+    expect(BRIDGE_ALLOWED_ORIGINS).toEqual(['https://www.sliccy.ai']);
+  });
+});
+
+describe('handleBridgePortConnect — pin gating', () => {
+  let port: FakePort;
+  beforeEach(() => {
+    port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+  });
+
+  it('ignores ports whose name does not match (defense-in-depth)', async () => {
+    const wrongName = makePort('not-the-bridge', goodSender);
+    await handleBridgePortConnect(wrongName as never, makeDeps());
+    expect(wrongName.posted).toEqual([]);
+    expect(wrongName.disconnected).toBe(false);
+  });
+
+  it('rejects + disconnects when the pin fails', async () => {
+    const deps = makeDeps({ readStoredLeaderTabId: async () => undefined });
+    await handleBridgePortConnect(port as never, deps);
+    expect(port.posted).toEqual([
+      {
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId: 'rejected',
+        kind: 'handshake.rejected',
+        reason: 'leader-tab-not-pinned',
+      },
+    ]);
+    expect(port.disconnected).toBe(true);
+  });
+
+  it('welcomes a valid hello, pinning the channelId', async () => {
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'handshake.hello',
+    });
+    expect(port.posted).toEqual([
+      {
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId: 'bridge-abc',
+        kind: 'handshake.welcome',
+      },
+    ]);
+  });
+
+  it('rejects a non-hello first message', async () => {
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-x',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Page.enable',
+    });
+    expect(port.posted[0]).toMatchObject({
+      kind: 'handshake.rejected',
+      reason: 'expected-hello-first',
+    });
+    expect(port.disconnected).toBe(true);
+  });
+
+  it('replies handshake.rejected (version-mismatch) and disconnects on a skewed envelope', async () => {
+    await handleBridgePortConnect(port as never, makeDeps());
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      port.receive({ bridge: 2, channelId: 'bridge-v2', kind: 'handshake.hello' });
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('version mismatch');
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(port.posted[0]).toMatchObject({
+      kind: 'handshake.rejected',
+      reason: 'version-mismatch',
+      channelId: 'bridge-v2',
+    });
+    expect(port.disconnected).toBe(true);
+  });
+});
+
+describe('handleBridgePortConnect — CDP pass-through', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('attaches a tab on Target.attachToTarget and pipes commands through chrome.debugger', async () => {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps();
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'handshake.hello',
+    });
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    expect(deps.attachDebugger).toHaveBeenCalledWith(43);
+    const attachResp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 1
+    );
+    expect(attachResp).toMatchObject({ result: { sessionId: '43' } });
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Page.navigate',
+      params: { url: 'https://example.com/' },
+      sessionId: '43',
+    });
+    await flush();
+    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.navigate', {
+      url: 'https://example.com/',
+    });
+  });
+
+  it('preserves a live session when one of two attachments detaches', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [42]);
+
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', {
+      targetId: '42',
+      flatten: true,
+    });
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    const commandResponse = await sendCdpRequest(
+      port,
+      4,
+      'Runtime.evaluate',
+      { expression: '1 + 1' },
+      '42'
+    );
+    expect(commandResponse).toMatchObject({ result: { ok: true, tabId: 42 } });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
+  it('detaches exactly once when duplicate attachments are balanced to zero', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [42]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '42' });
+
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(42);
+
+    const releasedResponse = await sendCdpRequest(port, 5, 'Target.detachFromTarget', {
+      sessionId: '42',
+    });
+    expect(releasedResponse).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an unknown session detach as a no-op', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, []);
+
+    const response = await sendCdpRequest(port, 1, 'Target.detachFromTarget', {
+      sessionId: 'unknown',
+    });
+    expect(response).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
+  it('keeps a leader-originated Page.bringToFront permanently focused', async () => {
+    vi.useFakeTimers();
+    let activeTabId = 42;
+    const deps = makeDeps({
+      activateTab: vi.fn(async (tabId) => {
+        activeTabId = tabId;
+      }),
+    });
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    await bringToFront(port, 43, 2);
+
+    expect(activeTabId).toBe(43);
+    expect(deps.activateTab).toHaveBeenCalledWith(43);
+    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.bringToFront', undefined);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(activeTabId).toBe(43);
+    expect(deps.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('activates the original tab for CDPRouter attach + bringToFront restoration', async () => {
+    let activeTabId = 42;
+    const deps = makeDeps({
+      activateTab: vi.fn(async (tabId) => {
+        activeTabId = tabId;
+      }),
+    });
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    await bringToFront(port, 43, 2);
+    expect(activeTabId).toBe(43);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 3,
+      method: 'Target.attachToTarget',
+      params: { targetId: '42', flatten: true },
+    });
+    await flushMicrotasks();
+    await bringToFront(port, 42, 4);
+
+    expect(activeTabId).toBe(42);
+    expect(deps.activateTab).toHaveBeenNthCalledWith(1, 43);
+    expect(deps.activateTab).toHaveBeenNthCalledWith(2, 42);
+  });
+
+  it('routes outbound CDP through maybeUnmaskCdpFrame (secrets stay SW-side)', async () => {
+    const unmask = vi.fn(
+      async (_tabId: number, _method: string, _params: Record<string, unknown> | undefined) => ({
+        expression: 'secret-from-sw',
+      })
+    );
+    const deps = makeDeps({ maybeUnmaskCdpFrame: unmask });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Runtime.evaluate',
+      params: { expression: 'SECRET_MASK_TOKEN' },
+      sessionId: '43',
+    });
+    await flush();
+    expect(unmask).toHaveBeenCalledWith(43, 'Runtime.evaluate', {
+      expression: 'SECRET_MASK_TOKEN',
+    });
+
+    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Runtime.evaluate', {
+      expression: 'secret-from-sw',
+    });
+  });
+
+  it('forwards chrome.debugger events only for tabs attached on this port', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+
+    const eventCallbacks = (
+      deps as unknown as {
+        __debuggerEvents: Array<
+          (tabId: number, method: string, params?: Record<string, unknown>) => void
+        >;
+      }
+    ).__debuggerEvents;
+    expect(eventCallbacks.length).toBe(1);
+
+    eventCallbacks[0](43, 'Page.loadEventFired', { timestamp: 123 });
+
+    eventCallbacks[0](999, 'Page.loadEventFired', { timestamp: 456 });
+
+    const events = port.posted.filter((m) => (m as { kind?: string }).kind === 'cdp.event');
+    expect(events).toEqual([
+      {
+        bridge: 1,
+        channelId: 'c',
+        kind: 'cdp.event',
+        method: 'Page.loadEventFired',
+        params: { timestamp: 123 },
+        sessionId: '43',
+      },
+    ]);
+  });
+
+  it('returns cdp.response.error when the debugger throws', async () => {
+    const deps = makeDeps({
+      sendDebuggerCommand: vi.fn(async () => {
+        throw new Error('debugger detached');
+      }),
+    });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Page.navigate',
+      params: { url: 'https://example.com/' },
+      sessionId: '43',
+    });
+    await flush();
+    const navResp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 2
+    );
+    expect(navResp).toMatchObject({ error: 'debugger detached' });
+  });
+
+  it('throws-via-error when no sessionId is attached', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Page.navigate',
+      params: { url: 'https://example.com/' },
+      sessionId: 'nope',
+    });
+    await flush();
+    const resp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 1
+    );
+    expect(resp).toMatchObject({ error: expect.stringContaining('No tab attached') });
+  });
+
+  it('notifies the leader when an external debugger detach invalidates its session', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    notifyBridgeDebuggerDetached(43);
+
+    expect(port.posted).toContainEqual({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: '43', targetId: '43' },
+    });
+  });
+
+  it('detaches a multiply-referenced owned tab once on port disconnect', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
+    port.triggerDisconnect();
+    await flush();
+    expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-releases a multiply-referenced tab when the target closes', async () => {
+    const removeTab = vi.fn(async () => undefined);
+    const deps = makeDeps({ removeTab });
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
+
+    const response = await sendCdpRequest(port, 3, 'Target.closeTarget', { targetId: '43' });
+    expect(response).toMatchObject({ result: { success: true } });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(removeTab).toHaveBeenCalledWith(43);
+
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '43' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('Target.getTargets returns a CDP-shaped target list', async () => {
+    const deps = makeDeps();
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.getTargets',
+    });
+    await flush();
+    const resp = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.response') as {
+      result: { targetInfos: Array<{ targetId: string }> };
+    };
+    expect(resp.result.targetInfos.map((t) => t.targetId).sort()).toEqual(['42', '43']);
+  });
+
+  it('cdpGetTargets marks the lastFocusedWindow active tab', async () => {
+    const deps = makeDeps({
+      queryTabs: async () => [
+        { id: 1, title: 'a', url: 'https://a.test' },
+        { id: 2, title: 'b', url: 'https://b.test' },
+      ],
+      queryActiveTabId: async () => 2,
+    });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.getTargets',
+    });
+    await flush();
+    const resp = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.response') as {
+      result: { targetInfos: Array<{ targetId: string; active?: boolean }> };
+    };
+    expect(resp.result.targetInfos.find((t) => t.targetId === '2')?.active).toBe(true);
+    expect(resp.result.targetInfos.find((t) => t.targetId === '1')?.active).toBe(false);
+  });
+});
+
+describe('handleBridgePortConnect — synchronous listener (MV3 Port race)', () => {
+  interface DropFakePort {
+    name: string;
+    sender?: FakeSender;
+    posted: unknown[];
+    disconnected: boolean;
+    messageListenerAttachedAt: number | null;
+    disconnectListenerAttachedAt: number | null;
+    postMessage: (msg: unknown) => void;
+    disconnect: () => void;
+    onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+    onDisconnect: { addListener: (cb: () => void) => void };
+    __deliverFromPage: (msg: unknown) => void;
+  }
+
+  function makeDropPort(name: string, sender?: FakeSender): DropFakePort {
+    const messageListeners: Array<(msg: unknown) => void> = [];
+    const disconnectListeners: Array<() => void> = [];
+    let counter = 0;
+    const port: DropFakePort = {
+      name,
+      sender,
+      posted: [],
+      disconnected: false,
+      messageListenerAttachedAt: null,
+      disconnectListenerAttachedAt: null,
+      postMessage: (msg) => port.posted.push(msg),
+      disconnect: () => {
+        port.disconnected = true;
+      },
+      onMessage: {
+        addListener: (cb) => {
+          messageListeners.push(cb);
+          port.messageListenerAttachedAt ??= ++counter;
+        },
+      },
+      onDisconnect: {
+        addListener: (cb) => {
+          disconnectListeners.push(cb);
+          port.disconnectListenerAttachedAt ??= ++counter;
+        },
+      },
+      __deliverFromPage: (msg) => {
+        if (messageListeners.length === 0) return;
+        for (const cb of messageListeners) cb(msg);
+      },
+    };
+    return port;
+  }
+
+  it('buffers a hello that arrives during the async pin check and still welcomes', async () => {
+    const port = makeDropPort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps({
+      readStoredLeaderTabId: async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        return 42;
+      },
+      allowedOrigins: ['https://www.sliccy.ai'],
+    });
+
+    const connectPromise = handleBridgePortConnect(port as never, deps);
+
+    port.__deliverFromPage({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c1',
+      kind: 'handshake.hello',
+    });
+
+    await connectPromise;
+    await flush();
+
+    const welcome = port.posted.find((m) => (m as { kind?: string }).kind === 'handshake.welcome');
+    expect(welcome).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c1',
+      kind: 'handshake.welcome',
+    });
+  });
+
+  it('attaches the onMessage listener synchronously, before the pin check resolves', async () => {
+    const port = makeDropPort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps({
+      readStoredLeaderTabId: async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        return 42;
+      },
+    });
+
+    const connectPromise = handleBridgePortConnect(port as never, deps);
+
+    expect(port.messageListenerAttachedAt).not.toBeNull();
+    expect(port.disconnectListenerAttachedAt).not.toBeNull();
+
+    await connectPromise;
+  });
+});
+
+describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts the lick envelope to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-abc');
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'do the thing',
+      url: 'https://example.com/',
+      instruction: 'do the thing',
+    });
+    expect(delivered).toBe(1);
+    const lick = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect(lick).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'do the thing',
+      url: 'https://example.com/',
+      instruction: 'do the thing',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-gone');
+    port.triggerDisconnect();
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'late',
+      url: 'https://example.com/late',
+    });
+    expect(delivered).toBe(0);
+    const lick = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect(lick).toBeUndefined();
+  });
+
+  it('stamps each welcomed port with its own channelId', async () => {
+    const portA = await welcome('chan-a');
+    const portB = await welcome('chan-b');
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'upskill',
+      target: 'https://github.com/acme/skill',
+      url: 'https://github.com/acme/skill',
+      branch: 'main',
+    });
+    expect(delivered).toBe(2);
+    const lickA = portA.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    const lickB = portB.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect((lickA as { channelId: string }).channelId).toBe('chan-a');
+    expect((lickB as { channelId: string }).channelId).toBe('chan-b');
+  });
+});
+
+describe('postDiscoveryToWelcomedLeaderPorts — discovery lick forwarding', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts the discovery envelope to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-disc');
+    const delivered = postDiscoveryToWelcomedLeaderPorts({
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    });
+    expect(delivered).toBe(1);
+    const disc = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.discovery');
+    expect(disc).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-disc',
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-disc-gone');
+    port.triggerDisconnect();
+    const delivered = postDiscoveryToWelcomedLeaderPorts({
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      url: 'https://example.com/',
+    });
+    expect(delivered).toBe(0);
+    const disc = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.discovery');
+    expect(disc).toBeUndefined();
+  });
+});
+
+describe('postOpenSettingsToWelcomedLeaderPorts — side-panel sign-in hand-off', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts an open-settings command to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-abc');
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(1);
+    const cmd = port.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect(cmd).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'extension.open-settings',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-gone');
+    port.triggerDisconnect();
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(0);
+    const cmd = port.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect(cmd).toBeUndefined();
+  });
+
+  it('stamps each welcomed port with its own channelId', async () => {
+    const portA = await welcome('chan-a');
+    const portB = await welcome('chan-b');
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(2);
+    const cmdA = portA.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    const cmdB = portB.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect((cmdA as { channelId: string }).channelId).toBe('chan-a');
+    expect((cmdB as { channelId: string }).channelId).toBe('chan-b');
+  });
+});
+
+describe('handleBridgePortConnect — leader.join-url message', () => {
+  it('calls onLeaderJoinUrl with joinUrl after handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith('https://worker.test/join/t.secret');
+  });
+
+  it('calls onLeaderJoinUrl with null when tray drops', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: null,
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith(null);
+  });
+
+  it('drops leader.join-url before handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('drops leader.join-url with mismatched channelId', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-channel',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('cdp.request handling is unaffected by leader.join-url', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    expect(deps.attachDebugger).toHaveBeenCalledWith(43);
+    const resp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 1
+    );
+    expect(resp).toMatchObject({ result: { sessionId: '43' } });
+  });
+});
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}

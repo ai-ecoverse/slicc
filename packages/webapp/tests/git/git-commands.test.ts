@@ -1,0 +1,4139 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+
+vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
+
+import * as isoGit from 'isomorphic-git';
+import { parseSudoers } from '../../src/base/sudoers.js';
+import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
+import { RestrictedFS } from '../../src/fs/restricted-fs.js';
+import { createSudoFs } from '../../src/fs/sudo-fs.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { GitCommands } from '../../src/git/git-commands.js';
+import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
+
+describe('GitCommands', () => {
+  let vfs: VirtualFS;
+  let git: GitCommands;
+  let globalDbName: string;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    const testId = dbCounter++;
+    globalDbName = `git-global-test-${testId}`;
+    vfs = await VirtualFS.create({ dbName: `git-test-${testId}`, wipe: true });
+    git = new GitCommands({
+      fs: vfs,
+      authorName: 'Test User',
+      authorEmail: 'test@example.com',
+      globalDbName,
+    });
+  });
+
+  it('shows help', async () => {
+    const result = await git.execute(['help'], '/');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Available commands');
+    expect(result.stdout).toContain('init');
+    expect(result.stdout).toContain('commit');
+    expect(result.stdout).toContain('symbolic-ref');
+  });
+
+  it('returns error for unknown command', async () => {
+    const result = await git.execute(['unknown'], '/');
+    expect(result.exitCode).toBe(127);
+    expect(result.stderr).toContain('is not a git command');
+  });
+
+  it('initializes a repository', async () => {
+    const result = await git.execute(['init'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Initialized empty Git repository');
+
+    const exists = await vfs.exists('/project/.git');
+    expect(exists).toBe(true);
+  });
+
+  it('shows status after init', async () => {
+    await git.execute(['init'], '/project');
+    const result = await git.execute(['status'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('On branch main');
+  });
+
+  it('adds and commits a file', async () => {
+    await git.execute(['init'], '/project');
+
+    await vfs.writeFile('/project/readme.txt', 'Hello World');
+
+    const addResult = await git.execute(['add', 'readme.txt'], '/project');
+    expect(addResult.exitCode).toBe(0);
+
+    const commitResult = await git.execute(['commit', '-m', 'Initial commit'], '/project');
+    expect(commitResult.exitCode).toBe(0);
+    expect(commitResult.stdout).toContain('Initial commit');
+  });
+
+  it('git add . does NOT stage deletions (use -A for that)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+
+    await vfs.rm('/project/file.txt');
+    await git.execute(['add', '.'], '/project');
+
+    const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+    const row = matrix.find((r) => r[0] === 'file.txt');
+    expect(row).toBeTruthy();
+
+    expect(row?.slice(1)).toEqual([1, 0, 1]);
+  });
+
+  it('shows commit log', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Test commit'], '/project');
+
+    const result = await git.execute(['log', '--oneline'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Test commit');
+  });
+
+  it('creates and lists branches', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+
+    const createResult = await git.execute(['branch', 'feature'], '/project');
+    expect(createResult.exitCode).toBe(0);
+
+    const listResult = await git.execute(['branch'], '/project');
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain('main');
+    expect(listResult.stdout).toContain('feature');
+  });
+
+  it('checks out a branch', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+    await git.execute(['branch', 'feature'], '/project');
+
+    const result = await git.execute(['checkout', 'feature'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Switched to branch 'feature'");
+  });
+
+  it('checkout -b with start point creates branch at the specified commit', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'v1');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'first'], '/project');
+
+    await vfs.writeFile('/project/file.txt', 'v2');
+    await vfs.writeFile('/project/new.txt', 'hello');
+    await git.execute(['add', '-A'], '/project');
+    await git.execute(['commit', '-m', 'second'], '/project');
+
+    const logResult = await git.execute(['log', '--format', '%H'], '/project');
+    const commits = logResult.stdout.trim().split('\n');
+    const firstCommit = commits[commits.length - 1];
+
+    const result = await git.execute(['checkout', '-b', 'feature', firstCommit], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Switched to a new branch 'feature'");
+
+    const headResult = await git.execute(['log', '--format', '%H', '-1'], '/project');
+    expect(headResult.stdout.trim()).toBe(firstCommit);
+
+    expect(await vfs.readTextFile('/project/file.txt')).toBe('v1');
+    expect(await vfs.exists('/project/new.txt')).toBe(false);
+    expect((await git.execute(['status', '-s'], '/project')).stdout.trim()).toBe('');
+  });
+
+  it('sets and gets config', async () => {
+    await git.execute(['init'], '/project');
+
+    const setResult = await git.execute(['config', 'user.name', 'New User'], '/project');
+    expect(setResult.exitCode).toBe(0);
+
+    const getResult = await git.execute(['config', 'user.name'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout).toContain('New User');
+  });
+
+  it('persists github token in global virtual filesystem', async () => {
+    const setResult = await git.execute(['config', 'github.token', 'ghp_test_token'], '/project');
+    expect(setResult.exitCode).toBe(0);
+
+    const getResult = await git.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_test_token');
+  });
+
+  it('shares github token across git command instances', async () => {
+    await git.execute(['config', 'github.token', 'ghp_shared_token'], '/project');
+
+    const secondFs = await VirtualFS.create({
+      dbName: `git-test-second-${dbCounter++}`,
+      wipe: true,
+    });
+    const second = new GitCommands({
+      fs: secondFs,
+      authorName: 'Another User',
+      authorEmail: 'another@example.com',
+      globalDbName,
+    });
+
+    const getResult = await second.execute(['config', 'github.token'], '/another');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_shared_token');
+  });
+
+  it('picks up github token written by another writer after a git command has run', async () => {
+    await git.execute(['init'], '/project');
+
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_post_login_token');
+
+    const getResult = await git.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_post_login_token');
+  });
+
+  it('reads token written via the shared GLOBAL_FS_DB_NAME (writer/reader contract)', async () => {
+    const isolatedFs = await VirtualFS.create({
+      dbName: `git-test-isolated-${dbCounter++}`,
+      wipe: true,
+    });
+    const defaultGit = new GitCommands({
+      fs: isolatedFs,
+      authorName: 'Test',
+      authorEmail: 'test@example.com',
+    });
+    await defaultGit.execute(['init'], '/project');
+
+    const sharedGlobalFs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await sharedGlobalFs.writeFile('/workspace/.git/github-token', 'ghp_via_shared_const');
+
+    const getResult = await defaultGit.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_via_shared_const');
+  });
+
+  it('renews before a network operation, reloads the bridge, and skips renewal for local ops', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_expired');
+    const ensureFreshGithubToken = vi.fn(async () => {
+      await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_fresh');
+    });
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      const cloneResult = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(cloneResult.exitCode).toBe(0);
+      expect(ensureFreshGithubToken).toHaveBeenCalledTimes(1);
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+      };
+      expect(cloneOptions.onAuth?.()).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked_fresh',
+      });
+
+      await renewingGit.execute(['init'], '/local');
+      expect(ensureFreshGithubToken).toHaveBeenCalledTimes(1);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('continues a network operation with existing auth when token renewal fails', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_existing');
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken: vi.fn(async () => {
+        throw new Error('refresh unavailable');
+      }),
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const result = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+      };
+      expect(cloneOptions.onAuth?.().password).toBe('ghp_masked_existing');
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('onAuthFailure force-renews once and retries with the refreshed bridge token (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale');
+    const ensureFreshGithubToken = vi.fn(async (opts?: { force?: boolean }) => {
+      if (opts?.force) {
+        await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_renewed');
+      }
+    });
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      const result = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(ensureFreshGithubToken).toHaveBeenCalled();
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      expect(cloneOptions.onAuthFailure).toBeTypeOf('function');
+
+      const retryAuth = await cloneOptions.onAuthFailure?.();
+      expect(ensureFreshGithubToken).toHaveBeenCalledWith({ force: true });
+      expect(retryAuth).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked_renewed',
+      });
+
+      await expect(cloneOptions.onAuthFailure?.()).resolves.toBeUndefined();
+      expect(ensureFreshGithubToken.mock.calls.filter((c) => c[0]?.force).length).toBe(1);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('gives each overlapping network command its own onAuthFailure latch (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
+    const ensureFreshGithubToken = vi.fn(async (_opts?: { force?: boolean }) => {});
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      await renewingGit.execute(['clone', 'https://github.com/example/a.git', 'a'], '/workspace');
+      await renewingGit.execute(['clone', 'https://github.com/example/b.git', 'b'], '/workspace');
+      const first = cloneSpy.mock.calls[0]?.[0] as {
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      const second = cloneSpy.mock.calls[1]?.[0] as {
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      expect(first.onAuthFailure).not.toBe(second.onAuthFailure);
+
+      await first.onAuthFailure?.();
+
+      await expect(first.onAuthFailure?.()).resolves.toBeUndefined();
+      await expect(second.onAuthFailure?.()).resolves.toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked',
+      });
+      expect(
+        ensureFreshGithubToken.mock.calls.filter(
+          (c) => (c[0] as { force?: boolean } | undefined)?.force
+        ).length
+      ).toBe(2);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('annotates push 401 errors with an actionable GitHub-auth hint (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
+    await git.execute(['init'], '/project');
+    await git.execute(['commit', '--allow-empty', '-m', 'init'], '/project');
+    await git.execute(
+      ['remote', 'add', 'origin', 'https://github.com/example/repo.git'],
+      '/project'
+    );
+
+    const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+      ok: false,
+      error: 'HTTP Error: 401 Unauthorized',
+      refs: {},
+    } as never);
+
+    try {
+      const result = await git.execute(['push', 'origin', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('HTTP Error: 401 Unauthorized');
+      expect(result.stderr).toContain('hint:');
+      expect(result.stderr).toContain('oauth-token github');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  it('does not suggest oauth-token github for a non-GitHub push 401 (#2777)', async () => {
+    await git.execute(['init'], '/gitlab');
+    await git.execute(['commit', '--allow-empty', '-m', 'init'], '/gitlab');
+    await git.execute(
+      ['remote', 'add', 'origin', 'https://gitlab.com/example/repo.git'],
+      '/gitlab'
+    );
+
+    const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+      ok: false,
+      error: 'HTTP Error: 401 Unauthorized',
+      refs: {},
+    } as never);
+
+    try {
+      const result = await git.execute(['push', 'origin', 'main'], '/gitlab');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('HTTP Error: 401 Unauthorized');
+      expect(result.stderr).not.toContain('oauth-token github');
+      expect(result.stderr).not.toContain('GitHub returned 401');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
+  describe('GH_TOKEN / GITHUB_TOKEN env fallback', () => {
+    async function captureOnAuth(
+      env?: ReadonlyMap<string, string> | Record<string, string>
+    ): Promise<(() => { username: string; password: string }) | undefined> {
+      const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+      const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+      try {
+        const result = await git.execute(
+          ['clone', 'https://github.com/example/repo.git', 'repo'],
+          '/workspace',
+          env
+        );
+        expect(result.exitCode).toBe(0);
+        const call = cloneSpy.mock.calls[0]?.[0] as
+          | { onAuth?: () => { username: string; password: string } }
+          | undefined;
+        return call?.onAuth;
+      } finally {
+        cloneSpy.mockRestore();
+        listFilesSpy.mockRestore();
+      }
+    }
+
+    it('uses $GH_TOKEN when only GH_TOKEN is set (no file)', async () => {
+      const onAuth = await captureOnAuth({ GH_TOKEN: 'ghp_from_gh_token' });
+      expect(onAuth).toBeDefined();
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_gh_token' });
+    });
+
+    it('uses $GITHUB_TOKEN when only GITHUB_TOKEN is set (no file)', async () => {
+      const onAuth = await captureOnAuth({ GITHUB_TOKEN: 'ghp_from_github_token' });
+      expect(onAuth).toBeDefined();
+      expect(onAuth?.()).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_from_github_token',
+      });
+    });
+
+    it('prefers $GH_TOKEN over $GITHUB_TOKEN when both are set', async () => {
+      const onAuth = await captureOnAuth({
+        GH_TOKEN: 'ghp_gh_wins',
+        GITHUB_TOKEN: 'ghp_github_loses',
+      });
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_gh_wins' });
+    });
+
+    it('file token wins over both env vars (file is the explicit override)', async () => {
+      await git.execute(['config', 'github.token', 'ghp_from_file'], '/project');
+      const onAuth = await captureOnAuth({
+        GH_TOKEN: 'ghp_gh_ignored',
+        GITHUB_TOKEN: 'ghp_github_ignored',
+      });
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_file' });
+    });
+
+    it('returns no onAuth when neither file nor env vars are set', async () => {
+      const onAuth = await captureOnAuth();
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('accepts a Map env (matches shell ctx.env shape) for GH_TOKEN', async () => {
+      const env = new Map<string, string>([['GH_TOKEN', 'ghp_from_map']]);
+      const onAuth = await captureOnAuth(env);
+      expect(onAuth?.()).toEqual({ username: 'x-access-token', password: 'ghp_from_map' });
+    });
+
+    it('ignores empty-string env values (treats them as unset)', async () => {
+      const onAuth = await captureOnAuth({ GH_TOKEN: '', GITHUB_TOKEN: '' });
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('does not retain env from a previous execute() call', async () => {
+      await captureOnAuth({ GH_TOKEN: 'ghp_first_call' });
+      const onAuth = await captureOnAuth();
+      expect(onAuth).toBeUndefined();
+    });
+
+    it('does not expose env tokens via `git config github.token` reads', async () => {
+      const result = await git.execute(['config', 'github.token'], '/project', {
+        GH_TOKEN: 'ghp_env_should_not_leak',
+      });
+      expect(result.stdout.trim()).toBe('');
+      expect(result.exitCode).toBe(1);
+    });
+  });
+
+  it('supports --no-single-branch for clone', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo', '--no-single-branch'],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          singleBranch: false,
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('parses url/dir from positionals when flags precede them', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        [
+          'clone',
+          '--branch',
+          'slicc-e2e-fixture',
+          '--single-branch',
+          'https://github.com/ai-ecoverse/skills.git',
+          '/workspace/skills-live-clone',
+        ],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/ai-ecoverse/skills.git',
+          dir: '/workspace/skills-live-clone',
+          ref: 'slicc-e2e-fixture',
+          singleBranch: true,
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('parses url/dir when flags follow the positionals', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo', '--depth', '1'],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/example/repo.git',
+          dir: '/workspace/repo',
+          depth: 1,
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('derives the target dir from the URL when only the url is given', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git'],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/example/repo.git',
+          dir: '/workspace/repo',
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('handles rev-parse', async () => {
+    await git.execute(['init'], '/project');
+
+    const result = await git.execute(['rev-parse', '--is-inside-work-tree'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('true');
+  });
+
+  it('handles rev-parse --show-toplevel', async () => {
+    await git.execute(['init'], '/project');
+
+    const result = await git.execute(['rev-parse', '--show-toplevel'], '/project');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('/project');
+  });
+
+  it('resolves parent revisions and rejects unsupported reflog selectors (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    const commits: string[] = [];
+
+    for (const version of ['one', 'two', 'three']) {
+      await vfs.writeFile('/project/file.txt', version);
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', version], '/project');
+      commits.push((await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim());
+    }
+
+    for (const [revision, expected] of [
+      ['HEAD~1', commits[1]],
+      ['HEAD~2', commits[0]],
+      ['HEAD^', commits[1]],
+    ] as const) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: `${expected}\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+    }
+
+    expect(await git.execute(['rev-parse', 'HEAD@{1}'], '/project')).toEqual({
+      stdout: '',
+      stderr: "fatal: ambiguous argument 'HEAD@{1}'\n",
+      exitCode: 128,
+    });
+  });
+
+  it('rejects invalid relative revisions as ambiguous arguments (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'only commit');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'only'], '/project');
+
+    for (const revision of ['HEAD~1', 'HEAD^', 'HEAD@{1}', 'HEAD~nope']) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: '',
+        stderr: `fatal: ambiguous argument '${revision}'\n`,
+        exitCode: 128,
+      });
+    }
+  });
+
+  it('honors branch-name and revision-abbreviation flags (#1727)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+    await git.execute(['checkout', '-b', 'feature'], '/project');
+
+    const fullOid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+    const short = await git.execute(['rev-parse', '--short', 'HEAD'], '/project');
+    const shortEight = await git.execute(['rev-parse', '--short=8', 'HEAD'], '/project');
+    const abbrevRef = await git.execute(['rev-parse', '--abbrev-ref', 'HEAD'], '/project');
+    const currentBranch = await git.execute(['branch', '--show-current'], '/project');
+
+    expect(short).toEqual({ stdout: `${fullOid.slice(0, 7)}\n`, stderr: '', exitCode: 0 });
+    expect(shortEight).toEqual({ stdout: `${fullOid.slice(0, 8)}\n`, stderr: '', exitCode: 0 });
+    expect(abbrevRef).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+    expect(currentBranch).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+  });
+
+  describe('status --short/-s/--porcelain', () => {
+    it('shows untracked files with ?? prefix', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/newfile.txt', 'content');
+
+      const result = await git.execute(['status', '--short'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('?? newfile.txt');
+    });
+
+    it('shows staged new file with A prefix', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/newfile.txt', 'content');
+      await git.execute(['add', 'newfile.txt'], '/project');
+
+      const result = await git.execute(['status', '-s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('A  newfile.txt');
+    });
+
+    it('shows unstaged deletion with D in workdir column', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+
+      const result = await git.execute(['status', '--short'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(' D file.txt');
+    });
+
+    it('shows staged modification with M in index column', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['status', '-s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('M  file.txt');
+    });
+
+    it('shows staged deletion with D in index column', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await vfs.rm('/project/file.txt');
+      await git.execute(['add', '-A'], '/project');
+
+      const result = await git.execute(['status', '--short'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('D  file.txt');
+    });
+
+    it('outputs nothing for clean working tree', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['status', '--porcelain'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+    });
+
+    it('--porcelain output matches --short output', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+
+      const shortResult = await git.execute(['status', '--short'], '/project');
+      const porcelainResult = await git.execute(['status', '--porcelain'], '/project');
+      expect(shortResult.stdout).toBe(porcelainResult.stdout);
+    });
+
+    it('shows multiple files with correct codes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/committed.txt', 'original');
+      await git.execute(['add', 'committed.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/untracked.txt', 'new');
+
+      await vfs.writeFile('/project/staged.txt', 'staged');
+      await git.execute(['add', 'staged.txt'], '/project');
+
+      await vfs.rm('/project/committed.txt');
+
+      const result = await git.execute(['status', '-s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(' D committed.txt');
+      expect(result.stdout).toContain('A  staged.txt');
+      expect(result.stdout).toContain('?? untracked.txt');
+    });
+  });
+
+  describe('diff', () => {
+    it('shows unified diff for unstaged changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nmodified\nline3\n');
+
+      const result = await git.execute(['diff'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('diff --git a/file.txt b/file.txt');
+      expect(result.stdout).toContain('--- a/file.txt');
+      expect(result.stdout).toContain('+++ b/file.txt');
+      expect(result.stdout).toContain('-line2');
+      expect(result.stdout).toContain('+modified');
+      expect(result.stdout).toContain('@@');
+    });
+
+    it('shows diff for added lines', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'original\nnew line\n');
+
+      const result = await git.execute(['diff'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('+new line');
+    });
+
+    it('returns empty output when no changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['diff'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+    });
+
+    it('shows diff for staged changes with --staged', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nchanged\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['diff', '--staged'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('-line2');
+      expect(result.stdout).toContain('+changed');
+    });
+
+    it('--cached is alias for --staged', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'old\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'new\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['diff', '--cached'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('-old');
+      expect(result.stdout).toContain('+new');
+    });
+
+    it('compares a supplied revision with the index for --cached', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'committed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'staged\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await vfs.writeFile('/project/file.txt', 'unstaged\n');
+
+      const result = await git.execute(['diff', '--cached', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('+staged');
+      expect(result.stdout).not.toContain('unstaged');
+    });
+
+    it('shows only filenames with --name-only', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a\n');
+      await vfs.writeFile('/project/b.txt', 'b\n');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'modified\n');
+      await vfs.writeFile('/project/b.txt', 'modified\n');
+
+      const result = await git.execute(['diff', '--name-only'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('a.txt');
+      expect(result.stdout).toContain('b.txt');
+      expect(result.stdout).not.toContain('@@');
+      expect(result.stdout).not.toContain('---');
+    });
+
+    it('shows statistics with --stat', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nchanged\nadded\n');
+
+      const result = await git.execute(['diff', '--stat'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('file.txt');
+      expect(result.stdout).toContain('file changed');
+      expect(result.stdout).toMatch(/insertion/);
+    });
+
+    it('shows diff between two commits', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'version1\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+      const log1 = await git.execute(['log', '--oneline', '-n', '1'], '/project');
+      const sha1 = log1.stdout.split(' ')[0].replace(/\x1b\[[0-9;]*m/g, '');
+
+      await vfs.writeFile('/project/file.txt', 'version2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+      const log2 = await git.execute(['log', '--oneline', '-n', '1'], '/project');
+      const sha2 = log2.stdout.split(' ')[0].replace(/\x1b\[[0-9;]*m/g, '');
+
+      const result = await git.execute(['diff', sha1, sha2], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('-version1');
+      expect(result.stdout).toContain('+version2');
+    });
+
+    it('uses color in diff output', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'old\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'new\n');
+
+      const result = await git.execute(['diff'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      expect(result.stdout).toContain('\x1b[31m');
+      expect(result.stdout).toContain('\x1b[32m');
+      expect(result.stdout).toContain('\x1b[36m');
+    });
+
+    it('handles multiple changed files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a\n');
+      await vfs.writeFile('/project/b.txt', 'b\n');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'A\n');
+      await vfs.writeFile('/project/b.txt', 'B\n');
+
+      const result = await git.execute(['diff'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('diff --git a/a.txt b/a.txt');
+      expect(result.stdout).toContain('diff --git a/b.txt b/b.txt');
+    });
+  });
+
+  describe('push -u/--set-upstream', () => {
+    it('sets upstream tracking config with -u flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+        ok: true,
+        error: null,
+        refs: {},
+        headers: {},
+      });
+      const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
+
+      try {
+        const result = await git.execute(['push', '-u', 'origin', 'main'], '/project');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("set up to track remote branch 'main' from 'origin'");
+
+        expect(setConfigSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            path: 'branch.main.remote',
+            value: 'origin',
+          })
+        );
+        expect(setConfigSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            path: 'branch.main.merge',
+            value: 'refs/heads/main',
+          })
+        );
+      } finally {
+        pushSpy.mockRestore();
+        setConfigSpy.mockRestore();
+      }
+    });
+
+    it('sets upstream tracking config with --set-upstream flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+        ok: true,
+        error: null,
+        refs: {},
+        headers: {},
+      });
+      const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
+
+      try {
+        const result = await git.execute(['push', '--set-upstream', 'origin', 'main'], '/project');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('set up to track');
+
+        expect(setConfigSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        pushSpy.mockRestore();
+        setConfigSpy.mockRestore();
+      }
+    });
+
+    it('does not set upstream without -u flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+        ok: true,
+        error: null,
+        refs: {},
+        headers: {},
+      });
+      const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
+
+      try {
+        const result = await git.execute(['push', 'origin', 'main'], '/project');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).not.toContain('set up to track');
+        expect(setConfigSpy).not.toHaveBeenCalled();
+      } finally {
+        pushSpy.mockRestore();
+        setConfigSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('show', () => {
+    it('shows HEAD commit by default', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello world');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Initial commit'], '/project');
+
+      const result = await git.execute(['show'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('commit ');
+      expect(result.stdout).toContain('Author: Test User <test@example.com>');
+      expect(result.stdout).toContain('Initial commit');
+      expect(result.stdout).toContain('file.txt');
+    });
+
+    it('shows specific commit by SHA', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'first');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'First commit'], '/project');
+
+      const logResult = await git.execute(['rev-parse', 'HEAD'], '/project');
+      const firstSha = logResult.stdout.trim();
+
+      await vfs.writeFile('/project/file.txt', 'second');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Second commit'], '/project');
+
+      const result = await git.execute(['show', firstSha], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('First commit');
+      expect(result.stdout).not.toContain('Second commit');
+    });
+
+    it('shows diff for second commit against parent', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'first');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'First'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'second');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Second'], '/project');
+
+      const result = await git.execute(['show'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Second');
+      expect(result.stdout).toContain('diff --git');
+      expect(result.stdout).toContain('file.txt');
+    });
+
+    it('shows file at commit with <sha>:<path> syntax', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Initial'], '/project');
+
+      const logResult = await git.execute(['rev-parse', 'HEAD'], '/project');
+      const sha = logResult.stdout.trim();
+
+      await vfs.writeFile('/project/file.txt', 'modified content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Modified'], '/project');
+
+      const result = await git.execute(['show', `${sha}:file.txt`], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('original content');
+    });
+
+    it('supports --stat flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello\nworld');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Initial'], '/project');
+
+      const result = await git.execute(['show', '--stat'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('file.txt');
+      expect(result.stdout).toContain('file changed');
+      expect(result.stdout).toContain('insertion');
+    });
+
+    it('supports --format flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Test message'], '/project');
+
+      const result = await git.execute(['show', '--format', '%h %s %an'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Test message');
+      expect(result.stdout).toContain('Test User');
+    });
+
+    it('shows diff for initial commit (no parent)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Initial'], '/project');
+
+      const result = await git.execute(['show'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Initial');
+      expect(result.stdout).toContain('file.txt');
+      expect(result.stdout).toContain('+');
+    });
+
+    it('returns error for invalid ref', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Initial'], '/project');
+
+      const result = await git.execute(['show', 'nonexistent'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('fatal:');
+    });
+  });
+
+  describe('log flags', () => {
+    it('--format supports common placeholders', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'Test message'], '/project');
+
+      const result = await git.execute(['log', '--format', '%h %s %an <%ae>'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Test message');
+      expect(result.stdout).toContain('Test User');
+      expect(result.stdout).toContain('<test@example.com>');
+
+      const line = result.stdout.trim();
+      expect(line.split(' ')[0]).toHaveLength(7);
+    });
+
+    it('--format supports %H for full hash', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'msg'], '/project');
+
+      const result = await git.execute(['log', '--format', '%H'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      expect(result.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
+    });
+
+    it('--format supports %ar for relative date', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'msg'], '/project');
+
+      const result = await git.execute(['log', '--format', '%ar'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      expect(result.stdout).toContain('ago');
+    });
+
+    it('--author filters commits by author name', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'by Test User'], '/project');
+
+      const result = await git.execute(['log', '--author=Test User', '--format', '%s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('by Test User');
+    });
+
+    it('--author excludes non-matching commits', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'by Test User'], '/project');
+
+      const result = await git.execute(
+        ['log', '--author=Nonexistent Author', '--format', '%s'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+    });
+
+    it('--grep filters commits by message', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'fix: resolve bug'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat: add feature'], '/project');
+
+      const result = await git.execute(['log', '--grep=fix', '--format', '%s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('fix: resolve bug');
+      expect(result.stdout).not.toContain('feat: add feature');
+    });
+
+    it('--reverse reverses commit order', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      const normal = await git.execute(['log', '--format', '%s'], '/project');
+      const reversed = await git.execute(['log', '--reverse', '--format', '%s'], '/project');
+
+      const normalLines = normal.stdout.trim().split('\n');
+      const reversedLines = reversed.stdout.trim().split('\n');
+
+      expect(normalLines[0]).toBe('second');
+      expect(normalLines[1]).toBe('first');
+      expect(reversedLines[0]).toBe('first');
+      expect(reversedLines[1]).toBe('second');
+    });
+
+    it('--all shows commits from all branches', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'on main'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'on feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+
+      const normalResult = await git.execute(['log', '--format', '%s'], '/project');
+      expect(normalResult.stdout).not.toContain('on feature');
+
+      const allResult = await git.execute(['log', '--all', '--format', '%s'], '/project');
+      expect(allResult.exitCode).toBe(0);
+      expect(allResult.stdout).toContain('on main');
+      expect(allResult.stdout).toContain('on feature');
+    });
+
+    it('--stat shows file change stats', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nmodified\nadded\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'modify file'], '/project');
+
+      const result = await git.execute(['log', '-n', '1', '--stat', '--format', '%s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('file.txt');
+      expect(result.stdout).toContain('file changed');
+    });
+
+    it('--follow shows commits touching a specific file', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'add both'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'a modified');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'modify a'], '/project');
+
+      await vfs.writeFile('/project/b.txt', 'b modified');
+      await git.execute(['add', 'b.txt'], '/project');
+      await git.execute(['commit', '-m', 'modify b'], '/project');
+
+      const result = await git.execute(['log', '--follow', 'a.txt', '--format', '%s'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('modify a');
+
+      expect(result.stdout).not.toContain('modify b');
+    });
+
+    it('--format with --stat combines both outputs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'update'], '/project');
+
+      const result = await git.execute(
+        ['log', '-n', '1', '--format', '%h %s', '--stat'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('update');
+      expect(result.stdout).toContain('file.txt');
+      expect(result.stdout).toContain('file changed');
+    });
+  });
+
+  describe('reset', () => {
+    it('unstages a specific file', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file1.txt', 'content1');
+      await vfs.writeFile('/project/file2.txt', 'content2');
+      await git.execute(['add', 'file1.txt'], '/project');
+      await git.execute(['add', 'file2.txt'], '/project');
+
+      const result = await git.execute(['reset', 'file1.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const file1 = matrix.find((r) => r[0] === 'file1.txt');
+      const file2 = matrix.find((r) => r[0] === 'file2.txt');
+      expect(file1?.slice(1)).toEqual([0, 2, 0]);
+      expect(file2?.slice(1)).toEqual([0, 2, 2]);
+    });
+
+    it('unstages via "git reset HEAD <file>"', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['reset', 'HEAD', 'file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([0, 2, 0]);
+    });
+
+    it('unstages all files with no args', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['add', 'b.txt'], '/project');
+
+      const result = await git.execute(['reset'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      for (const [, , , stage] of matrix) {
+        expect(stage).toBe(0);
+      }
+    });
+
+    it('--soft moves HEAD but keeps changes staged', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      const firstCommit = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      const result = await git.execute(['reset', '--soft', firstCommit], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('HEAD is now at');
+
+      const headOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+      expect(headOid).toBe(firstCommit);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('v2');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 2, 2]);
+    });
+
+    it('--mixed moves HEAD and unstages changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      const firstCommit = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      const result = await git.execute(['reset', '--mixed', firstCommit], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const headOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+      expect(headOid).toBe(firstCommit);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('v2');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 2, 1]);
+    });
+
+    it('--hard moves HEAD and restores workdir', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      const firstCommit = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await vfs.writeFile('/project/extra.txt', 'extra');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      const result = await git.execute(['reset', '--hard', firstCommit], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const headOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+      expect(headOid).toBe(firstCommit);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('v1');
+
+      const exists = await vfs.exists('/project/extra.txt');
+      expect(exists).toBe(false);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      for (const [, head, workdir, stage] of matrix) {
+        expect(head).toBe(1);
+        expect(workdir).toBe(stage);
+      }
+    });
+  });
+
+  describe('merge', () => {
+    it('fast-forwards when possible', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature work');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature commit'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Fast-forward');
+
+      const content = await vfs.readTextFile('/project/feature.txt');
+      expect(content).toBe('feature work');
+    });
+
+    it('creates merge commit with --no-ff', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature work');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature commit'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      const result = await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Merge made');
+
+      const content = await vfs.readTextFile('/project/feature.txt');
+      expect(content).toBe('feature work');
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.parent.length).toBe(2);
+    });
+
+    it('reports already up to date', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['merge', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Already up to date');
+    });
+
+    it('detects merge conflicts', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'feature change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'main change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('conflict');
+    });
+
+    async function setupConflictingBranches(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'theirs line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ours line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+    }
+
+    it('writes conflict markers and prints CONFLICT lines with exit 1', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<<');
+      expect(content).toContain('ours line');
+      expect(content).toContain('=======');
+      expect(content).toContain('theirs line');
+      expect(content).toContain('>>>>>>>');
+    });
+
+    it('-X ours resolves conflicts to our side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'ours', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ours line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X theirs resolves conflicts to their side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'theirs', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('theirs line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X diff3 includes the base section in conflict markers', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'diff3', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('|||||||');
+      expect(content).toContain('base line');
+    });
+
+    it('auto-merges disjoint edits to the same file (exit 0)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nFIVE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature edit'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ONE\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main edit'], '/project');
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ONE\nline2\nline3\nline4\nFIVE\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('returns error when no branch specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['merge'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('No branch specified');
+    });
+
+    it('fails with --ff-only when fast-forward not possible', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'initial\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main diverge'], '/project');
+
+      const result = await git.execute(['merge', '--ff-only', 'feature'], '/project');
+      expect(result.exitCode).not.toBe(0);
+    });
+  });
+
+  describe('cherry-pick', () => {
+    async function setupPickable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature work\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'add feature file'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      await git.execute(['checkout', 'main'], '/project');
+      return oid;
+    }
+
+    it('applies and commits a clean cherry-pick', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('add feature file');
+      expect(result.stdout).toContain('[main ');
+
+      expect(await vfs.readTextFile('/project/feature.txt')).toBe('feature work\n');
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('add feature file');
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.exists('/project/feature.txt')).toBe(true);
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupPickable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['cherry-pick', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('-x annotates the message with the source commit', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', '-x', oid], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain(`(cherry picked from commit ${oid})`);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting pick', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'feature change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'main change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+
+      const result = await git.execute(['cherry-pick', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['cherry-pick', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['cherry-pick'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['cherry-pick', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
+    });
+  });
+
+  describe('revert', () => {
+    async function setupRevertable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'changed\n');
+      await vfs.writeFile('/project/added.txt', 'added file\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['add', 'added.txt'], '/project');
+      await git.execute(['commit', '-m', 'change file and add another'], '/project');
+
+      return isoGit.resolveRef({ fs: createIsomorphicGitFs(vfs), dir: '/project', ref: 'HEAD' });
+    }
+
+    it('reverts a commit and commits the inverse', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Revert "change file and add another"');
+      expect(result.stdout).toContain('[main ');
+
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      expect(await vfs.exists('/project/added.txt')).toBe(false);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('Revert "change file and add another"');
+      expect(logs[0].commit.message).toContain(`This reverts commit ${oid}.`);
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupRevertable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['revert', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting revert', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'first change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/file.txt', 'second change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second change'], '/project');
+
+      const result = await git.execute(['revert', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['revert', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['revert'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['revert', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
+    });
+  });
+
+  describe('add -A/--all', () => {
+    it('stages all changes including new and deleted files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'original content here');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/newfile.txt', 'new');
+      await vfs.writeFile('/project/tracked.txt', 'modified');
+
+      await git.execute(['add', '-A'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const newRow = matrix.find((r) => r[0] === 'newfile.txt');
+      const trackedRow = matrix.find((r) => r[0] === 'tracked.txt');
+      expect(newRow?.slice(1)).toEqual([0, 2, 2]);
+      expect(trackedRow?.slice(1)).toEqual([1, 2, 2]);
+    });
+
+    it('stages deletions with -A flag', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+      await git.execute(['add', '--all'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 0, 0]);
+    });
+  });
+
+  describe('add -u/--update', () => {
+    it('stages modifications of tracked files but not new files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'original content');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/tracked.txt', 'modified');
+      await vfs.writeFile('/project/untracked.txt', 'new');
+
+      await git.execute(['add', '-u'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const trackedRow = matrix.find((r) => r[0] === 'tracked.txt');
+      const untrackedRow = matrix.find((r) => r[0] === 'untracked.txt');
+      expect(trackedRow?.slice(1)).toEqual([1, 2, 2]);
+      expect(untrackedRow?.slice(1)).toEqual([0, 2, 0]);
+    });
+
+    it('stages deletions of tracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+      await git.execute(['add', '--update'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 0, 0]);
+    });
+  });
+
+  describe('commit -a/--all', () => {
+    it('auto-stages tracked modified files before committing', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+
+      const result = await git.execute(['commit', '-a', '-m', 'auto-staged'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('auto-staged');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 1, 1]);
+    });
+
+    it('handles combined -am "message" form', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+
+      const result = await git.execute(['commit', '-am', 'combined flag'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('combined flag');
+    });
+
+    it('does not stage untracked files with -a', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'original content');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/untracked.txt', 'new');
+      await vfs.writeFile('/project/tracked.txt', 'modified');
+
+      const result = await git.execute(['commit', '-a', '-m', 'auto commit'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const untrackedRow = matrix.find((r) => r[0] === 'untracked.txt');
+      expect(untrackedRow?.slice(1)).toEqual([0, 2, 0]);
+    });
+  });
+
+  describe('commit --allow-empty', () => {
+    it('allows creating a commit with no changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(
+        ['commit', '--allow-empty', '-m', 'empty commit'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('empty commit');
+    });
+
+    it('errors on empty commit without --allow-empty', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['commit', '-m', 'should fail'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('nothing to commit');
+    });
+  });
+
+  describe('commit -F/--file (#2865)', () => {
+    async function stageFile(content = 'content'): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', content);
+      await git.execute(['add', 'file.txt'], '/project');
+    }
+
+    it('commits with -F <file>', async () => {
+      await stageFile();
+      await vfs.writeFile('/project/msg.txt', 'subject\n\nbody\n');
+      const result = await git.execute(['commit', '-F', 'msg.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('subject');
+      const log = await git.execute(['log', '--format', '%s', '-n', '1'], '/project');
+      expect(log.stdout.trim()).toBe('subject');
+    });
+
+    it('commits with --file=<path>', async () => {
+      await stageFile();
+      await vfs.writeFile('/project/msg.txt', 'equals-form subject\n');
+      const result = await git.execute(['commit', '--file=/project/msg.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('equals-form subject');
+    });
+
+    it('commits with --file - from stdin', async () => {
+      await stageFile();
+      const result = await git.execute(
+        ['commit', '--file', '-'],
+        '/project',
+        undefined,
+        'stdin subject\n\nbody\n'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('stdin subject');
+      const log = await git.execute(['log', '--format', '%s', '-n', '1'], '/project');
+      expect(log.stdout.trim()).toBe('stdin subject');
+    });
+
+    it('reads --file - from a shell pipe', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(
+        "printf 'piped subject\\n\\nbody\\n' | git commit --file -"
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('piped subject');
+    });
+
+    it('reads -F - from a quoted heredoc', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(`git commit -F - <<'EOF'
+heredoc subject
+
+body with 'quotes' and $not_expanded
+EOF`);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain('heredoc subject');
+      expect(result.stdout).toContain("body with 'quotes' and $not_expanded");
+      const log = await shell.executeCommand('git log --format %s -n 1');
+      expect(log.stdout.trim()).toBe('heredoc subject');
+    });
+
+    it('reads -F - from a heredoc piped through cat', async () => {
+      const shell = new AlmostBashShellHeadless({ fs: vfs, cwd: '/project' });
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await vfs.writeFile('/project/file.txt', 'content');
+      expect((await shell.executeCommand('git add file.txt')).exitCode).toBe(0);
+      const result = await shell.executeCommand(`cat <<'EOF' | git commit -F -
+piped-heredoc subject
+
+second paragraph
+EOF`);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain('piped-heredoc subject');
+    });
+
+    it('names an unknown long option instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '--bogus', 'x'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('unknown option `bogus`');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+
+    it('names an unknown short switch instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '-Q', 'y'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('unknown switch `Q`');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+
+    it('names unimplemented -C/--reuse-message instead of blaming -m', async () => {
+      await git.execute(['init'], '/project');
+      const short = await git.execute(['commit', '-C', 'HEAD'], '/project');
+      expect(short.exitCode).toBe(129);
+      expect(short.stderr).toContain('unknown switch `C`');
+      expect(short.stderr).not.toContain('switch `m`');
+      expect(short.stderr).not.toContain("`-m' or `-F'");
+
+      const long = await git.execute(['commit', '--reuse-message', 'HEAD'], '/project');
+      expect(long.exitCode).toBe(129);
+      expect(long.stderr).toContain('unknown option `reuse-message`');
+      expect(long.stderr).not.toContain('switch `m`');
+    });
+
+    it('reports that -F requires a value when --file= is empty', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['commit', '--file='], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('switch `F` requires a value');
+      expect(result.stderr).not.toContain('switch `m`');
+    });
+  });
+
+  describe('checkout -- <file> (file restoration)', () => {
+    it('restores a file from HEAD', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+
+      const result = await git.execute(['checkout', '--', 'file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('original');
+    });
+
+    it('restores a file from a specific commit', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'version1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'v1'], '/project');
+
+      const v1sha = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      await vfs.writeFile('/project/file.txt', 'version2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'v2'], '/project');
+
+      const result = await git.execute(['checkout', v1sha, '--', 'file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('version1');
+    });
+
+    it('does not break regular branch checkout', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      const result = await git.execute(['checkout', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Switched to branch 'feature'");
+    });
+
+    it('restores multiple files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'original-a');
+      await vfs.writeFile('/project/b.txt', 'original-b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'modified-a');
+      await vfs.writeFile('/project/b.txt', 'modified-b');
+
+      const result = await git.execute(['checkout', '--', 'a.txt', 'b.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const contentA = await vfs.readTextFile('/project/a.txt');
+      const contentB = await vfs.readTextFile('/project/b.txt');
+      expect(contentA).toBe('original-a');
+      expect(contentB).toBe('original-b');
+    });
+  });
+
+  describe('stash', () => {
+    it('stashes dirty changes and cleans workdir', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+
+      const result = await git.execute(['stash'], '/project');
+      expect(result.stderr).toBe('');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Saved working directory');
+      expect(result.stdout).toContain('WIP on main');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('original');
+    });
+
+    it('stash pop restores changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['stash'], '/project');
+
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('modified');
+    });
+
+    it('stash list shows stash entries', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change1');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change2');
+      await git.execute(['stash'], '/project');
+
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.exitCode).toBe(0);
+      expect(listResult.stdout).toContain('stash@{0}');
+      expect(listResult.stdout).toContain('stash@{1}');
+    });
+
+    it('stash drop removes top stash', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change1');
+      await git.execute(['stash'], '/project');
+
+      const dropResult = await git.execute(['stash', 'drop'], '/project');
+      expect(dropResult.exitCode).toBe(0);
+      expect(dropResult.stdout).toContain('Dropped refs/stash@{0}');
+
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toBe('');
+    });
+
+    it('stash show shows changed files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['stash'], '/project');
+
+      const showResult = await git.execute(['stash', 'show'], '/project');
+      expect(showResult.exitCode).toBe(0);
+      expect(showResult.stdout).toContain('file.txt');
+    });
+
+    it('returns error when no changes to stash', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['stash'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('No local changes');
+    });
+
+    it('stash pop with no stash returns error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['stash', 'pop'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('No stash entries');
+    });
+
+    it('stashes new files and removes them from workdir', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/newfile.txt', 'new content');
+      await git.execute(['add', 'newfile.txt'], '/project');
+
+      const result = await git.execute(['stash'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const exists = await vfs.exists('/project/newfile.txt');
+      expect(exists).toBe(false);
+
+      await git.execute(['stash', 'pop'], '/project');
+      const content = await vfs.readTextFile('/project/newfile.txt');
+      expect(content).toBe('new content');
+    });
+
+    it('stash apply restores changes and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['stash'], '/project');
+
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('Dropped');
+
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('modified');
+
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+    });
+
+    it('stash pop three-way merges disjoint local changes without clobbering', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'A\nB\nCHANGED_C\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\n');
+
+      await vfs.writeFile('/project/file.txt', 'CHANGED_A\nB\nC\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('CHANGED_A\nB\nCHANGED_C\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
+    it('stash pop on conflict writes markers, exits 1, and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(1);
+      expect(popResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<< Updated upstream');
+      expect(content).toContain('LOCAL');
+      expect(content).toContain('=======');
+      expect(content).toContain('STASHED');
+      expect(content).toContain('>>>>>>> Stashed changes');
+
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply on conflict writes markers and exits 1', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(1);
+      expect(applyResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply uses the stash base commit, not current HEAD, as the merge base', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nCHANGED_E\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\nD\nE\n');
+
+      await vfs.writeFile('/project/file.txt', 'MODIFIED_A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'advance HEAD'], '/project');
+
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('CONFLICT');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('MODIFIED_A\nB\nC\nD\nCHANGED_E\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
+    it('stash apply with no stash returns error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['stash', 'apply'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('No stash entries');
+    });
+  });
+
+  describe('rm', () => {
+    it('removes file from workdir and stages deletion', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rm', 'file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const exists = await vfs.exists('/project/file.txt');
+      expect(exists).toBe(false);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 0, 0]);
+    });
+
+    it('--cached removes from index only, keeps workdir copy', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rm', '--cached', 'file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const exists = await vfs.exists('/project/file.txt');
+      expect(exists).toBe(true);
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+
+      expect(row).toBeTruthy();
+    });
+
+    it('returns error without -r for directories', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.mkdir('/project/subdir', { recursive: true });
+      await vfs.writeFile('/project/subdir/file.txt', 'content');
+      await git.execute(['add', 'subdir/file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rm', 'subdir'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('not removing');
+      expect(result.stderr).toContain('without -r');
+    });
+
+    it('-r removes directory contents recursively', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.mkdir('/project/subdir', { recursive: true });
+      await vfs.writeFile('/project/subdir/a.txt', 'a');
+      await vfs.writeFile('/project/subdir/b.txt', 'b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rm', '-r', 'subdir'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const existsA = await vfs.exists('/project/subdir/a.txt');
+      const existsB = await vfs.exists('/project/subdir/b.txt');
+      expect(existsA).toBe(false);
+      expect(existsB).toBe(false);
+    });
+
+    it('returns error when no pathspec given', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['rm'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('No pathspec');
+    });
+  });
+
+  describe('mv', () => {
+    it('moves file and stages both operations', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/old.txt', 'content');
+      await git.execute(['add', 'old.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['mv', 'old.txt', 'new.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const existsOld = await vfs.exists('/project/old.txt');
+      expect(existsOld).toBe(false);
+
+      const content = await vfs.readTextFile('/project/new.txt');
+      expect(content).toBe('content');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const oldRow = matrix.find((r) => r[0] === 'old.txt');
+      const newRow = matrix.find((r) => r[0] === 'new.txt');
+      expect(oldRow?.slice(1)).toEqual([1, 0, 0]);
+      expect(newRow?.slice(1)).toEqual([0, 2, 2]);
+    });
+
+    it('returns error for missing source', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['mv', 'nonexistent.txt', 'dst.txt'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad source');
+    });
+
+    it('returns error with too few args', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['mv', 'only-one-arg.txt'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('usage');
+    });
+
+    it('moves file to a subdirectory', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.mkdir('/project/subdir', { recursive: true });
+      const result = await git.execute(['mv', 'file.txt', 'subdir/file.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const exists = await vfs.exists('/project/subdir/file.txt');
+      expect(exists).toBe(true);
+      const content = await vfs.readTextFile('/project/subdir/file.txt');
+      expect(content).toBe('content');
+    });
+  });
+
+  describe('tag', () => {
+    it('lists tags (empty)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['tag'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+    });
+
+    it('creates a lightweight tag and lists it', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const createResult = await git.execute(['tag', 'v1.0'], '/project');
+      expect(createResult.exitCode).toBe(0);
+
+      const listResult = await git.execute(['tag'], '/project');
+      expect(listResult.exitCode).toBe(0);
+      expect(listResult.stdout).toContain('v1.0');
+    });
+
+    it('creates an annotated tag with -a -m', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['tag', '-a', 'v2.0', '-m', 'Release v2.0'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const listResult = await git.execute(['tag'], '/project');
+      expect(listResult.stdout).toContain('v2.0');
+    });
+
+    it('creates a tag at a specific commit', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'v1');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+      const firstSha = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      await vfs.writeFile('/project/file.txt', 'v2');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      const result = await git.execute(['tag', 'old-tag', firstSha], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const tagOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'old-tag',
+      });
+      expect(tagOid).toBe(firstSha);
+    });
+
+    it('deletes a tag with -d', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['tag', 'temp'], '/project');
+
+      const deleteResult = await git.execute(['tag', '-d', 'temp'], '/project');
+      expect(deleteResult.exitCode).toBe(0);
+      expect(deleteResult.stdout).toContain("Deleted tag 'temp'");
+
+      const listResult = await git.execute(['tag'], '/project');
+      expect(listResult.stdout).not.toContain('temp');
+    });
+
+    it('lists tags matching a pattern with -l', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['tag', 'v1.0'], '/project');
+      await git.execute(['tag', 'v2.0'], '/project');
+      await git.execute(['tag', 'release-1'], '/project');
+
+      const result = await git.execute(['tag', '-l', 'v*'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('v1.0');
+      expect(result.stdout).toContain('v2.0');
+      expect(result.stdout).not.toContain('release-1');
+    });
+  });
+
+  describe('ls-files', () => {
+    it('lists tracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('a.txt');
+      expect(result.stdout).toContain('b.txt');
+    });
+
+    it('--cached lists tracked files (same as default)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const defaultResult = await git.execute(['ls-files'], '/project');
+      const cachedResult = await git.execute(['ls-files', '--cached'], '/project');
+      expect(defaultResult.stdout).toBe(cachedResult.stdout);
+    });
+
+    it('--others lists untracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/committed.txt', 'tracked');
+      await git.execute(['add', 'committed.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/newfile.txt', 'untracked');
+
+      const result = await git.execute(['ls-files', '--others'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('newfile.txt');
+      expect(result.stdout).not.toContain('committed.txt');
+    });
+
+    it('--deleted lists deleted files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+
+      const result = await git.execute(['ls-files', '--deleted'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('file.txt');
+    });
+
+    it('does not list untracked files in default mode', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'content');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/untracked.txt', 'new');
+
+      const result = await git.execute(['ls-files'], '/project');
+      expect(result.stdout).toContain('tracked.txt');
+      expect(result.stdout).not.toContain('untracked.txt');
+    });
+
+    it('honors a pathspec argument (scopes output to a subtree)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/root.txt', 'r');
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 's');
+      await vfs.writeFile('/project/skills/garmin/scripts/garmin.jsh', 'g');
+      await vfs.writeFile('/project/skills/other/SKILL.md', 'o');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'skills/garmin'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/scripts/garmin.jsh']);
+    });
+
+    it('honors a pathspec argument with a trailing slash', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/root.txt', 'r');
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 's');
+      await vfs.writeFile('/project/skills/garmin/scripts/garmin.jsh', 'g');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'skills/garmin/'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/scripts/garmin.jsh']);
+    });
+
+    it('honors an exact-file pathspec', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'a.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('a.txt\n');
+    });
+
+    it('unions multiple pathspecs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a/x.txt', 'x');
+      await vfs.writeFile('/project/b/y.txt', 'y');
+      await vfs.writeFile('/project/c/z.txt', 'z');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'a', 'b'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['a/x.txt', 'b/y.txt']);
+    });
+  });
+
+  describe('ls-tree', () => {
+    async function seedTree(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/README.md', 'root readme');
+      await vfs.mkdir('/project/src', { recursive: true });
+      await vfs.writeFile('/project/src/main.ts', 'main');
+      await vfs.writeFile('/project/src/util.ts', 'util');
+      await vfs.mkdir('/project/skills/garmin', { recursive: true });
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 'skill');
+      await vfs.writeFile('/project/skills/garmin/run.sh', 'run');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'seed'], '/project');
+    }
+
+    it('lists top-level tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(3);
+      const byName = new Map(lines.map((line) => [line.split('\t')[1], line]));
+      expect(byName.get('README.md')).toMatch(/^100644 blob [0-9a-f]{40}\tREADME\.md$/);
+      expect(byName.get('skills')).toMatch(/^040000 tree [0-9a-f]{40}\tskills$/);
+      expect(byName.get('src')).toMatch(/^040000 tree [0-9a-f]{40}\tsrc$/);
+    });
+
+    it('-r recurses and omits tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '-r', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const paths = result.stdout
+        .trim()
+        .split('\n')
+        .map((line) => line.split('\t')[1])
+        .sort();
+      expect(paths).toEqual([
+        'README.md',
+        'skills/garmin/SKILL.md',
+        'skills/garmin/run.sh',
+        'src/main.ts',
+        'src/util.ts',
+      ]);
+      expect(result.stdout).not.toContain(' tree ');
+    });
+
+    it('-d lists only top-level tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '-d', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      const names = lines.map((line) => line.split('\t')[1]).sort();
+      expect(names).toEqual(['skills', 'src']);
+      expect(result.stdout).not.toContain(' blob ');
+    });
+
+    it('--name-only emits paths without mode/type/oid', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '--name-only', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['README.md', 'skills', 'src']);
+    });
+
+    it('path arg pointing at a subtree shows the tree entry itself (non-recursive)', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'HEAD', 'skills/garmin'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^040000 tree [0-9a-f]{40}\tskills\/garmin$/);
+    });
+
+    it('-r with a path recursively lists blobs under that path', async () => {
+      await seedTree();
+      const result = await git.execute(
+        ['ls-tree', '-r', '--name-only', 'HEAD', 'skills'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/run.sh']);
+    });
+
+    it('path arg matching a blob shows only that blob', async () => {
+      await seedTree();
+      const result = await git.execute(
+        ['ls-tree', '--name-only', 'HEAD', 'src/main.ts'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('src/main.ts');
+    });
+
+    it('accepts branch and tag as tree-ish', async () => {
+      await seedTree();
+      await git.execute(['branch', 'feature'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+      const branchResult = await git.execute(['ls-tree', '--name-only', 'feature'], '/project');
+      const tagResult = await git.execute(['ls-tree', '--name-only', 'v1.0'], '/project');
+      expect(branchResult.exitCode).toBe(0);
+      expect(tagResult.exitCode).toBe(0);
+      expect(branchResult.stdout).toBe(tagResult.stdout);
+    });
+
+    it('missing tree-ish returns a usage error', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('usage: git ls-tree');
+    });
+
+    it('unknown ref returns a bad-object error', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'nope'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('Not a valid object name');
+    });
+  });
+
+  describe('show-ref', () => {
+    it('lists all refs (branches and tags)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      const result = await git.execute(['show-ref'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('refs/heads/main');
+      expect(result.stdout).toContain('refs/heads/feature');
+      expect(result.stdout).toContain('refs/tags/v1.0');
+
+      const lines = result.stdout.trim().split('\n');
+      for (const line of lines) {
+        expect(line).toMatch(/^[0-9a-f]{40} refs\//);
+      }
+    });
+
+    it('--heads shows only branches', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+
+      const result = await git.execute(['show-ref', '--heads'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('refs/heads/main');
+      expect(result.stdout).not.toContain('refs/tags/');
+    });
+
+    it('--tags shows only tags', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+
+      const result = await git.execute(['show-ref', '--tags'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('refs/tags/v1.0');
+      expect(result.stdout).not.toContain('refs/heads/');
+    });
+
+    it('filters refs by pattern', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      const result = await git.execute(['show-ref', 'tags'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('refs/tags/v1.0');
+      expect(result.stdout).not.toContain('refs/heads/');
+    });
+  });
+
+  describe('symbolic-ref', () => {
+    it('reads HEAD with full and shortened output', async () => {
+      await git.execute(['init'], '/project');
+
+      const full = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+      expect(full).toEqual({ stdout: 'refs/heads/main\n', stderr: '', exitCode: 0 });
+
+      const short = await git.execute(['symbolic-ref', '--short', 'HEAD'], '/project');
+      expect(short).toEqual({ stdout: 'main\n', stderr: '', exitCode: 0 });
+    });
+
+    it('honors a repeated boolean flag (mri stores it as an array)', async () => {
+      await git.execute(['init'], '/project');
+
+      const short = await git.execute(['symbolic-ref', '--short', '--short', 'HEAD'], '/project');
+      expect(short).toEqual({ stdout: 'main\n', stderr: '', exitCode: 0 });
+    });
+
+    it('creates, updates, reads, and deletes a symbolic ref', async () => {
+      await git.execute(['init'], '/project');
+
+      expect(
+        await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project')
+      ).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      expect(await git.execute(['symbolic-ref', 'refs/meta/current'], '/project')).toEqual({
+        stdout: 'refs/heads/main\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/feature'], '/project');
+      expect(await git.execute(['symbolic-ref', 'refs/meta/current'], '/project')).toEqual({
+        stdout: 'refs/heads/feature\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const deleted = await git.execute(
+        ['symbolic-ref', '--delete', 'refs/meta/current'],
+        '/project'
+      );
+      expect(deleted).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      expect(await vfs.exists('/project/.git/refs/meta/current')).toBe(false);
+    });
+
+    it('accepts -d as an alias for --delete', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project');
+
+      expect(await git.execute(['symbolic-ref', '-d', 'refs/meta/current'], '/project')).toEqual({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      });
+      expect(await vfs.exists('/project/.git/refs/meta/current')).toBe(false);
+    });
+
+    it('follows chains by default and returns the immediate target with --no-recurse', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project');
+      await git.execute(['symbolic-ref', 'HEAD', 'refs/meta/current'], '/project');
+
+      const recursive = await git.execute(['symbolic-ref', '--recurse', 'HEAD'], '/project');
+      expect(recursive.stdout).toBe('refs/heads/main\n');
+
+      const immediate = await git.execute(['symbolic-ref', '--no-recurse', 'HEAD'], '/project');
+      expect(immediate.stdout).toBe('refs/meta/current\n');
+
+      const shortImmediate = await git.execute(
+        ['symbolic-ref', '--short', '--no-recurse', 'HEAD'],
+        '/project'
+      );
+      expect(shortImmediate.stdout).toBe('meta/current\n');
+    });
+
+    it('returns status 1 for a direct ref and suppresses its diagnostic with --quiet', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const oid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      await isoGit.writeRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+        value: oid,
+        force: true,
+      });
+
+      const direct = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+      expect(direct.exitCode).toBe(1);
+      expect(direct.stderr).toContain('not a symbolic ref');
+
+      const quiet = await git.execute(['symbolic-ref', '--quiet', 'HEAD'], '/project');
+      expect(quiet).toEqual({ stdout: '', stderr: '', exitCode: 1 });
+      expect(await git.execute(['symbolic-ref', '-q', 'HEAD'], '/project')).toEqual(quiet);
+      expect(await git.execute(['symbolic-ref', '--quiet', '--quiet', 'HEAD'], '/project')).toEqual(
+        quiet
+      );
+    });
+
+    it('does not delete a direct ref', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['symbolic-ref', '--delete', 'refs/heads/main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not a symbolic ref');
+      expect((await git.execute(['rev-parse', 'main'], '/project')).exitCode).toBe(0);
+    });
+
+    it('rejects invalid arguments and -m without changing the ref', async () => {
+      await git.execute(['init'], '/project');
+      const before = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+
+      const invalidTarget = await git.execute(['symbolic-ref', 'HEAD', 'main'], '/project');
+      expect(invalidTarget.exitCode).toBe(128);
+      expect(invalidTarget.stderr).toContain('outside of refs/');
+
+      const invalidFullTarget = await git.execute(
+        ['symbolic-ref', 'HEAD', 'refs/heads/bad..target'],
+        '/project'
+      );
+      expect(invalidFullTarget.exitCode).toBe(128);
+      expect(invalidFullTarget.stderr).toContain('invalid ref');
+
+      const message = await git.execute(
+        ['symbolic-ref', '-m', 'reason', 'HEAD', 'refs/heads/feature'],
+        '/project'
+      );
+      expect(message.exitCode).toBe(128);
+      expect(message.stderr).toContain('not supported');
+      expect(message.stderr).toContain('reflogs');
+
+      expect(await git.execute(['symbolic-ref', 'HEAD'], '/project')).toEqual(before);
+      expect((await git.execute(['symbolic-ref'], '/project')).exitCode).toBe(129);
+      expect((await git.execute(['symbolic-ref', 'DOES_NOT_EXIST'], '/project')).exitCode).toBe(
+        128
+      );
+    });
+  });
+
+  describe('config enhancements', () => {
+    it('--list shows all config entries', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['config', 'user.name', 'Test User'], '/project');
+      await git.execute(['config', 'user.email', 'test@example.com'], '/project');
+
+      const result = await git.execute(['config', '--list'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('user.name=Test User');
+      expect(result.stdout).toContain('user.email=test@example.com');
+    });
+
+    it('--unset removes a config entry', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['config', 'user.name', 'Test User'], '/project');
+
+      const unsetResult = await git.execute(['config', '--unset', 'user.name'], '/project');
+      expect(unsetResult.exitCode).toBe(0);
+
+      const listResult = await git.execute(['config', '--list'], '/project');
+      expect(listResult.stdout).not.toContain('user.name=Test User');
+    });
+
+    it('--global sets and gets config from global store', async () => {
+      await git.execute(['init'], '/project');
+
+      const setResult = await git.execute(
+        ['config', '--global', 'user.name', 'Global User'],
+        '/project'
+      );
+      expect(setResult.exitCode).toBe(0);
+
+      const getResult = await git.execute(['config', '--global', 'user.name'], '/project');
+      expect(getResult.exitCode).toBe(0);
+      expect(getResult.stdout.trim()).toBe('Global User');
+    });
+
+    it('--global --list shows global config', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['config', '--global', 'core.editor', 'vim'], '/project');
+
+      const result = await git.execute(['config', '--global', '--list'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('core.editor=vim');
+    });
+
+    it('--unset with github.token clears the token', async () => {
+      await git.execute(['config', 'github.token', 'ghp_test'], '/project');
+      const getResult1 = await git.execute(['config', 'github.token'], '/project');
+      expect(getResult1.stdout.trim()).toBe('ghp_test');
+
+      await git.execute(['config', '--unset', 'github.token'], '/project');
+      const getResult2 = await git.execute(['config', 'github.token'], '/project');
+      expect(getResult2.exitCode).toBe(1);
+    });
+
+    it('returns usage hint when no key provided', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['config'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('usage');
+    });
+
+    it('--global get does not read repo config', async () => {
+      await git.execute(['init'], '/project');
+
+      await git.execute(['config', 'user.name', 'Repo User'], '/project');
+
+      const result = await git.execute(['config', '--global', 'user.name'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+    });
+  });
+
+  describe('PR review fixes', () => {
+    it('#1: reset --hard preserves untracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'v1');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      const firstCommit = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/tracked.txt', 'v2');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      await vfs.writeFile('/project/untracked.txt', 'should survive');
+
+      await git.execute(['reset', '--hard', firstCommit], '/project');
+
+      const exists = await vfs.exists('/project/untracked.txt');
+      expect(exists).toBe(true);
+      const content = await vfs.readTextFile('/project/untracked.txt');
+      expect(content).toBe('should survive');
+
+      const trackedContent = await vfs.readTextFile('/project/tracked.txt');
+      expect(trackedContent).toBe('v1');
+    });
+
+    it('#2: stash drop removes deep stash entries correctly', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change1');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change2');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change3');
+      await git.execute(['stash'], '/project');
+
+      const listBefore = await git.execute(['stash', 'list'], '/project');
+      expect(listBefore.stdout).toContain('stash@{0}');
+      expect(listBefore.stdout).toContain('stash@{1}');
+      expect(listBefore.stdout).toContain('stash@{2}');
+
+      const dropResult = await git.execute(['stash', 'drop', 'stash@{1}'], '/project');
+      expect(dropResult.exitCode).toBe(0);
+
+      const listAfter = await git.execute(['stash', 'list'], '/project');
+      const lines = listAfter.stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(2);
+    });
+
+    it('#3: default diff shows only unstaged changes (index vs workdir)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nstaged-change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result1 = await git.execute(['diff'], '/project');
+      expect(result1.stdout).toBe('');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nstaged-change\nunstaged-line\n');
+
+      const result2 = await git.execute(['diff'], '/project');
+      expect(result2.stdout).toContain('+unstaged-line');
+      expect(result2.stdout).not.toContain('+staged-change');
+
+      const result3 = await git.execute(['diff', '--staged'], '/project');
+      expect(result3.stdout).toContain('+staged-change');
+      expect(result3.stdout).not.toContain('+unstaged-line');
+    });
+
+    it('#4: expandCombinedFlags preserves -m=msg style args', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['commit', '-m=inline message'], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('inline message');
+    });
+
+    it('#7: git show resolves short OIDs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'First commit'], '/project');
+
+      const logResult = await git.execute(['rev-parse', 'HEAD'], '/project');
+      const fullSha = logResult.stdout.trim();
+      const shortSha = fullSha.slice(0, 7);
+
+      const result = await git.execute(['show', shortSha], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('First commit');
+      expect(result.stdout).toContain(`commit ${fullSha}`);
+    });
+
+    it('#8: git add . does not stage deletions', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/keep.txt', 'keep');
+      await vfs.writeFile('/project/delete-me.txt', 'will be deleted');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/delete-me.txt');
+      await vfs.writeFile('/project/new.txt', 'new file');
+
+      await git.execute(['add', '.'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const deletedRow = matrix.find((r) => r[0] === 'delete-me.txt');
+      const newRow = matrix.find((r) => r[0] === 'new.txt');
+
+      expect(deletedRow?.slice(1)).toEqual([1, 0, 1]);
+
+      expect(newRow?.slice(1)).toEqual([0, 2, 2]);
+    });
+
+    it('#8: git add -A DOES stage deletions', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+      await git.execute(['add', '-A'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: createIsomorphicGitFs(vfs), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 0, 0]);
+    });
+  });
+
+  describe('author identity resolution', () => {
+    async function readLatestAuthor(
+      cwd: string
+    ): Promise<{ name: string; email: string } | undefined> {
+      const log = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: cwd, depth: 1 });
+      const entry = log[0];
+      return entry
+        ? { name: entry.commit.author.name, email: entry.commit.author.email }
+        : undefined;
+    }
+
+    it('uses constructor defaults when no config is set', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Test User',
+        email: 'test@example.com',
+      });
+    });
+
+    it('uses values written directly to /workspace/.gitconfig (OAuth provider path)', async () => {
+      await git.execute(['init'], '/project');
+      const globalFs = await VirtualFS.create({ dbName: globalDbName });
+      await globalFs.writeFile(
+        '/workspace/.gitconfig',
+        '[user]\n\tname = Octocat\n\temail = 1+octocat@users.noreply.github.com\n'
+      );
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Octocat',
+        email: '1+octocat@users.noreply.github.com',
+      });
+    });
+
+    it('prefers local repo config over global config', async () => {
+      await git.execute(['init'], '/project');
+      const globalFs = await VirtualFS.create({ dbName: globalDbName });
+      await globalFs.writeFile(
+        '/workspace/.gitconfig',
+        '[user]\n\tname = Global User\n\temail = global@example.com\n'
+      );
+      await git.execute(['config', 'user.name', 'Repo User'], '/project');
+      await git.execute(['config', 'user.email', 'repo@example.com'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Repo User',
+        email: 'repo@example.com',
+      });
+    });
+  });
+
+  describe('shared arg-parser regressions (#1119)', () => {
+    it('git --version reports the version (global --version, no subcommand)', async () => {
+      const result = await git.execute(['--version'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('git version');
+    });
+
+    it('git -h prints help (global -h alias)', async () => {
+      const result = await git.execute(['-h'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Available commands');
+    });
+
+    it('git --bare status fails (unsupported leading global stays the command)', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['--bare', 'status'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('is not a git command');
+    });
+
+    it('git --no-pagre status fails (typo\u2019d leading global is not silently dropped)', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['--no-pagre', 'status'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('is not a git command');
+    });
+
+    it('--git-dir=<dir> / --work-tree <dir> are accepted no-ops before a subcommand', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(
+        ['--git-dir=/project/.git', '--work-tree', '/project', 'status'],
+        '/project'
+      );
+      expect(result.stderr).not.toContain('is not a git command');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('On branch');
+    });
+
+    it('commit --message=--help commits with "--help" as the literal message', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'changed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['commit', '--message=--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).not.toContain('available commands');
+
+      const subject = (
+        await git.execute(['log', '--format', '%s', '-n', '1'], '/project')
+      ).stdout.trim();
+      expect(subject).toBe('--help');
+    });
+  });
+
+  describe('rebase', () => {
+    const subjects = async (cwd: string): Promise<string[]> =>
+      (await git.execute(['log', '--format', '%s'], cwd)).stdout.trim().split('\n');
+
+    it('cleanly replays a linear branch onto an advanced upstream', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-work', 'main-work', 'base']);
+      expect(await vfs.readTextFile('/project/main.txt')).toBe('main\n');
+      expect(await vfs.readTextFile('/project/feat.txt')).toBe('feat\n');
+
+      const isoFs = createIsomorphicGitFs(vfs);
+      const headOid = await isoGit.resolveRef({ fs: isoFs, dir: '/project', ref: 'HEAD' });
+      const upstreamTip = await isoGit.resolveRef({ fs: isoFs, dir: '/project', ref: 'main' });
+      const { commit } = await isoGit.readCommit({ fs: isoFs, dir: '/project', oid: headOid });
+      expect(commit.parent).toEqual([upstreamTip]);
+    });
+
+    it('stops on a conflicting commit and finishes after --continue', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT (content): Merge conflict in conflict.txt');
+      expect(result.stderr).toContain('could not apply');
+      expect(result.stderr).toContain('git rebase --continue');
+      const marked = await vfs.readTextFile('/project/conflict.txt');
+      expect(marked).toContain('<<<<<<<');
+      expect(marked).toContain('>>>>>>>');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(true);
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nRESOLVED\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      const cont = await git.execute(['rebase', '--continue'], '/project');
+      expect(cont.exitCode).toBe(0);
+      expect(cont.stdout).toContain('Successfully rebased');
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nRESOLVED\nline3\n');
+      expect(await subjects('/project')).toEqual(['feat-change', 'main-change', 'base']);
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('--abort restores the original branch tip exactly', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      const conflict = await git.execute(['rebase', 'main'], '/project');
+      expect(conflict.exitCode).toBe(1);
+
+      const abort = await git.execute(['rebase', '--abort'], '/project');
+      expect(abort.exitCode).toBe(0);
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nFEATURE\nline3\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('--skip drops the conflicting commit and applies the rest', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'base\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'MAIN\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/a.txt', 'FEATURE1\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-1'], '/project');
+      await vfs.writeFile('/project/b.txt', 'feature2\n');
+      await git.execute(['add', 'b.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-2'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('could not apply');
+
+      const skip = await git.execute(['rebase', '--skip'], '/project');
+      expect(skip.exitCode).toBe(0);
+      expect(skip.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-2', 'main-change', 'base']);
+      expect(await vfs.readTextFile('/project/a.txt')).toBe('MAIN\n');
+      expect(await vfs.readTextFile('/project/b.txt')).toBe('feature2\n');
+    });
+
+    it('fast-forwards when the branch is behind the upstream', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Fast-forwarded');
+      expect(await subjects('/project')).toEqual(['main-work', 'base']);
+      expect(await vfs.readTextFile('/project/main.txt')).toBe('main\n');
+    });
+
+    it('reports up to date when the upstream is already an ancestor', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/x.txt', 'x\n');
+      await git.execute(['add', 'x.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('up to date');
+    });
+
+    it('rejects rebasing a range that contains a merge commit', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+      await git.execute(['branch', 'side'], '/project');
+
+      await vfs.writeFile('/project/feat2.txt', 'feat2\n');
+      await git.execute(['add', 'feat2.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-2'], '/project');
+
+      await git.execute(['checkout', 'side'], '/project');
+      await vfs.writeFile('/project/side.txt', 'side\n');
+      await git.execute(['add', 'side.txt'], '/project');
+      await git.execute(['commit', '-m', 'side-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      const mergeResult = await git.execute(['merge', 'side'], '/project');
+      expect(mergeResult.exitCode).toBe(0);
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('rejects unsupported interactive rebase', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rebase', '-i', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('not supported');
+    });
+
+    it('errors when --continue is run with no rebase in progress', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rebase', '--continue'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('No rebase in progress');
+    });
+
+    it('refuses to rebase (replay path) when the working tree has tracked changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      await vfs.writeFile('/project/feat.txt', 'dirty edit\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+      expect(result.stderr).toContain('unstaged changes');
+
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/feat.txt')).toBe('dirty edit\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('refuses to fast-forward over a dirty working tree', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/base.txt', 'dirty\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/base.txt')).toBe('dirty\n');
+    });
+
+    it('allows a rebase when only untracked files are present', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      await vfs.writeFile('/project/untracked.txt', 'scratch\n');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-work', 'main-work', 'base']);
+      expect(await vfs.readTextFile('/project/untracked.txt')).toBe('scratch\n');
+    });
+
+    it('resolves conflicts toward the upstream with -X ours (no stop)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const result = await git.execute(['rebase', '-X', 'ours', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nMAIN\nline3\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+  });
+
+  describe('clean', () => {
+    async function initWithTrackedFile(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'tracked');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+    }
+
+    it('refuses to run without -f, -n, or -i', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/untracked.txt', 'x');
+
+      const result = await git.execute(['clean'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('clean.requireForce');
+      expect(await vfs.exists('/project/untracked.txt')).toBe(true);
+    });
+
+    it('-n lists untracked files without removing them', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+
+      const result = await git.execute(['clean', '-n'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Would remove a.txt');
+      expect(result.stdout).toContain('Would remove b.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(true);
+      expect(await vfs.exists('/project/b.txt')).toBe(true);
+    });
+
+    it('-f removes untracked files', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+
+      const result = await git.execute(['clean', '-f'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing a.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+      expect(await vfs.exists('/project/tracked.txt')).toBe(true);
+    });
+
+    it('without -d, silently skips untracked directories', async () => {
+      await initWithTrackedFile();
+      await vfs.mkdir('/project/subdir', { recursive: true });
+      await vfs.writeFile('/project/subdir/inside.txt', 'x');
+      await vfs.writeFile('/project/top.txt', 'top');
+
+      const result = await git.execute(['clean', '-n'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Would remove top.txt');
+      expect(result.stdout).not.toContain('subdir');
+    });
+
+    it('-fd removes untracked directories recursively', async () => {
+      await initWithTrackedFile();
+      await vfs.mkdir('/project/subdir/deep', { recursive: true });
+      await vfs.writeFile('/project/subdir/deep/inside.txt', 'x');
+      await vfs.writeFile('/project/top.txt', 'top');
+
+      const result = await git.execute(['clean', '-fd'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing top.txt');
+      expect(result.stdout).toContain('Removing subdir/');
+      expect(await vfs.exists('/project/top.txt')).toBe(false);
+      expect(await vfs.exists('/project/subdir')).toBe(false);
+      expect(await vfs.exists('/project/tracked.txt')).toBe(true);
+    });
+
+    it('keeps untracked files inside directories that also contain tracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.mkdir('/project/mixed', { recursive: true });
+      await vfs.writeFile('/project/mixed/kept.txt', 'kept');
+      await git.execute(['add', 'mixed/kept.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await vfs.writeFile('/project/mixed/dropped.txt', 'x');
+
+      const result = await git.execute(['clean', '-fd'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing mixed/dropped.txt');
+      expect(result.stdout).not.toContain('Removing mixed/\n');
+      expect(await vfs.exists('/project/mixed/kept.txt')).toBe(true);
+      expect(await vfs.exists('/project/mixed/dropped.txt')).toBe(false);
+    });
+
+    it('pathspec limits which untracked files are considered', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+
+      const result = await git.execute(['clean', '-f', 'a.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing a.txt');
+      expect(result.stdout).not.toContain('b.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+      expect(await vfs.exists('/project/b.txt')).toBe(true);
+    });
+
+    it('-q suppresses per-file output', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+
+      const result = await git.execute(['clean', '-fq'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+    });
+
+    it('by default leaves .gitignore-matched files alone', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/.gitignore', 'ignored.log\n');
+      await git.execute(['add', '.gitignore'], '/project');
+      await git.execute(['commit', '-m', 'add gitignore'], '/project');
+      await vfs.writeFile('/project/ignored.log', 'log');
+      await vfs.writeFile('/project/kept.txt', 'kept');
+
+      const result = await git.execute(['clean', '-f'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing kept.txt');
+      expect(result.stdout).not.toContain('ignored.log');
+      expect(await vfs.exists('/project/ignored.log')).toBe(true);
+    });
+
+    it('-X removes only ignored files, leaving other untracked files alone', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/.gitignore', 'ignored.log\n');
+      await git.execute(['add', '.gitignore'], '/project');
+      await git.execute(['commit', '-m', 'add gitignore'], '/project');
+      await vfs.writeFile('/project/ignored.log', 'log');
+      await vfs.writeFile('/project/other.txt', 'other');
+
+      const result = await git.execute(['clean', '-fX'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing ignored.log');
+      expect(result.stdout).not.toContain('other.txt');
+      expect(await vfs.exists('/project/ignored.log')).toBe(false);
+      expect(await vfs.exists('/project/other.txt')).toBe(true);
+    });
+  });
+});
+
+describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
+  let dbCounter = 0;
+
+  it('runs init/status/add/commit through a RestrictedFS without "isPathUnderMount is not a function"', async () => {
+    const testId = dbCounter++;
+    const vfs = await VirtualFS.create({ dbName: `git-restricted-fs-507-${testId}`, wipe: true });
+    await vfs.mkdir('/scoops/regression-507', { recursive: true });
+    const restricted = new RestrictedFS(vfs, ['/scoops/regression-507/', '/shared/']);
+
+    const git = new GitCommands({
+      fs: restricted as unknown as VirtualFS,
+      authorName: 'Test User',
+      authorEmail: 'test@example.com',
+      globalDbName: `git-restricted-fs-global-507-${testId}`,
+    });
+
+    const initResult = await git.execute(['init'], '/scoops/regression-507');
+    expect(initResult.exitCode).toBe(0);
+    expect(initResult.stdout).toContain('Initialized empty Git repository');
+
+    const statusResult = await git.execute(['status'], '/scoops/regression-507');
+    expect(statusResult.exitCode).toBe(0);
+    expect(statusResult.stdout).toContain('On branch');
+
+    await restricted.writeFile('/scoops/regression-507/readme.txt', 'hello scoop');
+    const addResult = await git.execute(['add', 'readme.txt'], '/scoops/regression-507');
+    expect(addResult.exitCode).toBe(0);
+
+    const commitResult = await git.execute(['commit', '-m', 'initial'], '/scoops/regression-507');
+    expect(commitResult.exitCode).toBe(0);
+    expect(commitResult.stdout).toContain('initial');
+  });
+});
+
+describe('GitCommands flush through production scoop filesystem wrappers', () => {
+  let dbCounter = 0;
+
+  it('flushes after clone and checkout without requesting sudo approval', async () => {
+    const testId = dbCounter++;
+    const scoopDir = '/scoops/git-flush-regression';
+    const vfs = await VirtualFS.create({
+      dbName: `git-restricted-fs-flush-${testId}`,
+      wipe: true,
+    });
+    const flushSpy = vi.spyOn(vfs, 'flush');
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      await vfs.mkdir(scoopDir, { recursive: true });
+      const restricted = new RestrictedFS(vfs, [`${scoopDir}/`, '/shared/'], [], 'sudo-delegated');
+      const approvalRequests: unknown[] = [];
+      const sudoFs = createSudoFs(restricted, {
+        broker: {
+          requestApproval: async (request) => {
+            approvalRequests.push(request);
+            return { decision: 'deny' };
+          },
+        },
+        getPolicy: () => parseSudoers(`NOPASSWD Write ${scoopDir}/**`),
+        defaultDisposition: 'require-approval',
+      });
+      const shell = new AlmostBashShellHeadless({
+        fs: sudoFs as unknown as VirtualFS,
+        cwd: scoopDir,
+      });
+
+      const cloneResult = await shell.executeCommand(
+        'git clone https://github.com/example/repo.git cloned'
+      );
+      expect(cloneResult.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ depth: 1, singleBranch: true })
+      );
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await sudoFs.writeFile(`${scoopDir}/readme.txt`, 'hello scoop');
+      expect((await shell.executeCommand('git add readme.txt')).exitCode).toBe(0);
+      expect((await shell.executeCommand('git commit -m initial')).exitCode).toBe(0);
+      expect((await shell.executeCommand('git branch feature')).exitCode).toBe(0);
+
+      const checkoutResult = await shell.executeCommand('git checkout feature');
+      expect(checkoutResult.exitCode).toBe(0);
+      expect(checkoutResult.stdout).toContain("Switched to branch 'feature'");
+      expect(flushSpy).toHaveBeenCalledTimes(2);
+      expect(approvalRequests).toHaveLength(0);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+      await vfs.dispose();
+    }
+  });
+});
