@@ -1,27 +1,28 @@
 diff --git a/node_modules/@zenfs/core/dist/mixins/async.js b/node_modules/@zenfs/core/dist/mixins/async.js
-index 55f301b..4b25fde 100644
+index 26aaf3a..0f052d0 100644
 --- a/node_modules/@zenfs/core/dist/mixins/async.js
 +++ b/node_modules/@zenfs/core/dist/mixins/async.js
-@@ -167,26 +167,67 @@ export function Async(FS) {
-         /**
-          * @internal
-          */
+@@ -219,37 +219,70 @@ export function Async(FS) {
+         /** @internal @protected */
+         _crossCopySemaphore;
+         /** @internal */
 -        async crossCopy(path) {
 -            this.checkSync();
 -            const stats = await this.stat(path);
 -            if (!isDirectory(stats)) {
--                this._sync.createFileSync(path, stats);
--                const buffer = new Uint8Array(stats.size);
--                await this.read(path, buffer, 0, stats.size);
--                this._sync.writeSync(path, buffer, 0);
--                this._sync.touchSync(path, stats);
--                return;
--            }
--            if (path !== '/') {
--                this._sync.mkdirSync(path, stats);
--                this._sync.touchSync(path, stats);
+-                const env_1 = { stack: [], error: void 0, hasError: false };
+-                try {
+-                    const _ = __addDisposableResource(env_1, (await this._crossCopySemaphore?.get()) || { [Symbol.dispose]() { } }, false);
+-                    this._sync.createFileSync(path, stats);
+-                    const buffer = new Uint8Array(stats.size);
+-                    await this.read(path, buffer, 0, stats.size);
+-                    this._sync.writeSync(path, buffer, 0);
+-                    this._sync.touchSync(path, stats);
 +        // PATCH(zen-fs/core#318): one limit and first-failure state per preload tree.
 +        // A fresh traversal gets fresh state; descendants share it across directories.
++        // 2.7.3 declares `_crossCopySemaphore` but never assigns it, so
++        // `this._crossCopySemaphore?.get()` is a no-op — the preload still fans out
++        // every leaf read at once with no cancellation. Keep the explicit limit.
 +        async crossCopy(path, preload = { active: 0, waiters: [], failure: null }) {
 +            try {
 +                if (preload.failure)
@@ -57,24 +58,33 @@ index 55f301b..4b25fde 100644
 +                        else
 +                            preload.active--;
 +                    }
-+                    return;
-+                }
+                     return;
+                 }
+-                catch (e_1) {
+-                    env_1.error = e_1;
+-                    env_1.hasError = true;
 +                if (path !== '/') {
 +                    this._sync.mkdirSync(path, stats);
 +                    this._sync.touchSync(path, stats);
-+                }
+                 }
+-                finally {
+-                    __disposeResources(env_1);
 +                const promises = [];
 +                for (const file of await this.readdir(path)) {
 +                    if (preload.failure)
 +                        break;
 +                    promises.push(this.crossCopy(join(path, file), preload));
-+                }
+                 }
 +                // Queued copies reject immediately on failure; only issued backend work
 +                // remains to drain. Preserve the first error, not directory ordering.
 +                await Promise.allSettled(promises);
 +                if (preload.failure)
 +                    throw preload.failure.error;
              }
+-            if (path !== '/') {
+-                this._sync.mkdirSync(path, stats);
+-                this._sync.touchSync(path, stats);
+-            }
 -            const promises = [];
 -            for (const file of await this.readdir(path)) {
 -                promises.push(this.crossCopy(join(path, file)));
@@ -89,7 +99,7 @@ index 55f301b..4b25fde 100644
          /**
           * @internal
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index 989b33f..e51537d 100644
+index 989b33f..204942b 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
 @@ -79,6 +79,30 @@ export class VCache {
@@ -106,7 +116,7 @@ index 989b33f..e51537d 100644
 +        // same bytes (#2034): the second open found the first file's vnode
 +        // and its cached regions, while sequential reads evicted the vnode
 +        // between calls and never collided.
-+        // 2.7.0 (zen-fs/core#314) only logs the nlink/path mismatch above;
++        // 2.7.3 (zen-fs/core#314) only logs the nlink/path mismatch above;
 +        // it still returns the shared vnode, so the refuse-to-coalesce
 +        // guard stays until upstream actually isolates non-hardlink paths.
 +        if (node && !node.paths.has(path)
