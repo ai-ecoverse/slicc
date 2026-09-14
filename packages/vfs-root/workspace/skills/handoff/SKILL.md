@@ -50,7 +50,7 @@ Each navigate lick carries a `Lick ID` line plus verb-specific guidance. The two
 
 Install or skip via the lick tools — do NOT render a dip and do NOT run `bash: upskill` yourself; `lick_confirm` performs the install.
 
-- **Install** → `lick_confirm <lick-id>`. This runs `upskill <target>`, automatically honouring any `branch` / `path` scope carried in the lick body (so a sub-path-on-a-branch install works without extra flags). The lick card flips to ✓. `upskill`'s on-disk "already exists" check still guards duplicate installs.
+- **Install** → `lick_confirm <lick-id>`. This runs `upskill <target> --all`, automatically honouring any `branch` / `path` scope carried in the lick body (so a sub-path-on-a-branch install works without extra flags). `--all` is what makes it an install: without a skill selector `upskill` only lists what it found. So a confirm installs **every** skill under the advertised `path` — a card pointing at a plugin directory can install many at once, and the result text names each one. The lick card flips to ✓. `upskill`'s on-disk "already exists" check still guards duplicate installs.
 - **Skip** → `lick_dismiss <lick-id>`. The card goes muted ✗.
 
 ### handoff (human-gated)

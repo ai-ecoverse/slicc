@@ -346,7 +346,7 @@ function formatWebhookLick(event: LickEvent, label: string): FormattedLick {
  * `Lick ID` and verb-specific guidance when the orchestrator registered one:
  *
  * - **upskill** is agent-actionable — the cone installs via `lick_confirm`
- *   (runs `upskill`, honoring any `branch` / `path` scope) or skips via
+ *   (runs `upskill … --all`, honoring any `branch` / `path` scope) or skips via
  *   `lick_dismiss`; the card flips ✓ / muted ✗.
  * - **handoff** stays human-gated — the cone shows the approval dip and must
  *   NOT self-approve; carrying the lick id in the dip action flips the card
@@ -361,7 +361,8 @@ function formatNavigateLick(event: LickEvent, label: string): FormattedLick {
     verb === 'upskill'
       ? `\n\nLick ID: ${lickId}\n` +
         `Upskill install. To install, call \`lick_confirm\` with this lick id ` +
-        `(it runs \`upskill\` with any branch/path scope from the body); to skip, call ` +
+        `(it runs \`upskill … --all\` with any branch/path scope from the body, so it ` +
+        `installs EVERY skill under that scope — a broad path can be many); to skip, call ` +
         `\`lick_dismiss\`. The card flips to ✓ on confirm / muted ✗ on dismiss.`
       : `\n\nLick ID: ${lickId}\n` +
         `External handoff — stays human-gated. Show the approval dip and wait for the user; ` +
