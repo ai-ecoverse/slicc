@@ -119,8 +119,10 @@ by `gelatiere init` as the `gelatiere-nightly` crontask), `maxSuggestions` (capp
 commands a pass may run without escalating. It is ADDITIVE — the built-in set (the read-only text
 utilities, `jq`, `rg`, `upskill`, `gelatiere`, `memory`) always stands, and the file only extends
 it; entries are bare command names, so `tree` is valid and `tree -L 2` is not. `gelatiere status`
-prints the total and whatever this block added. The unit is registered once and then persists, so
-an edit here takes effect on the next boot or the next `gelatiere init`, not mid-pass.
+prints the list actually in force and flags an edit that has not been applied yet. The unit is
+registered once and then persists, so an edit here takes effect on the next boot or the next
+`gelatiere init` — and never mid-pass: applying it rebuilds the unit, which would cancel a pass in
+flight, so `gelatiere init` leaves a busy gelatiere alone and asks to be re-run when it is idle.
 
 Adding a command grants it to an UNATTENDED agent that can read `/sessions/` and every cone's
 memory, so weigh a network command (`curl`, `wget`, `ssh`) against that: the pass reads third-party

@@ -50,12 +50,23 @@ type Globals = typeof globalThis & { __slicc_gelatiere?: unknown };
 /** What `createKernelHost` publishes through `publishGelatiereSeam`. */
 function fakeSeam(roots: Array<{ folder: string; name: string; jid: string }>) {
   let unit: { folder: string; jid: string } | undefined;
+  let inForce: readonly string[] | undefined;
   return {
     ensureUnit: vi.fn(async (allowedCommands?: readonly string[]) => {
       const created = !unit;
       unit ??= { folder: 'gelatiere', jid: 'cone_gelatiere' };
-      return { ...unit, created, updated: !created && allowedCommands !== undefined };
+      if (allowedCommands) inForce = [...allowedCommands];
+      return {
+        ...unit,
+        created,
+        ...(created ? {} : { allowList: allowedCommands ? 'updated' : 'unchanged' }),
+      };
     }),
+    unitAllowedCommands: () => (unit ? inForce : undefined),
+    /** Pretend a `GELATIERE.md` edit has not been applied to the record yet. */
+    setInForce: (commands: readonly string[] | undefined) => {
+      inForce = commands;
+    },
     unregisterOwned: vi.fn(async () => {
       const gone = unit ? [unit.jid] : [];
       unit = undefined;
@@ -135,6 +146,26 @@ describe('gelatiere command', () => {
     expect(created.stdout).not.toContain('Updated its command allow-list');
     const again = await run(fs, ['init']);
     expect(again.stdout).toContain('Updated its command allow-list from GELATIERE.md');
+  });
+
+  it('init says nothing changed when the unit is mid-pass — applying would cancel it', async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree]\n---\nbody',
+    });
+    await run(fs, ['init']);
+    seam.ensureUnit.mockResolvedValueOnce({
+      folder: 'gelatiere',
+      jid: 'cone_gelatiere',
+      created: false,
+      allowList: 'deferred',
+    });
+    const deferred = await run(fs, ['init']);
+    expect(deferred.exitCode).toBe(0);
+    expect(deferred.stdout).toContain(
+      'Left its command allow-list alone: the gelatiere is mid-pass'
+    );
+    expect(deferred.stdout).toContain('run `gelatiere init` again once it is idle');
+    expect(deferred.stdout).not.toContain('Updated its command allow-list');
   });
 
   it("init --reset drops the owner's units first, and a taken folder is reported cleanly", async () => {
@@ -306,6 +337,7 @@ describe('gelatiere command', () => {
 
   it('status reports the unit, schedule, ledger, and counts', async () => {
     await run(memoryFs(), ['init']);
+    seam.setInForce([...GELATIERE_BASE_ALLOWED_COMMANDS]);
     const fs = memoryFs({
       [GELATIERE_STATE_PATH]: JSON.stringify({
         passes: 2,
@@ -336,9 +368,30 @@ describe('gelatiere command', () => {
     const fs = memoryFs({
       [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree, xxd]\n---\nbody',
     });
+    await run(fs, ['init']);
     const result = await run(fs, ['status']);
     expect(result.stdout).toContain(
       `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} allowed without approval (+tree, xxd from GELATIERE.md)`
+    );
+  });
+
+  it('status reports the list IN FORCE, not what an unapplied GELATIERE.md asks for', async () => {
+    const fs = memoryFs({
+      [GELATIERE_INSTRUCTIONS_PATH]: '---\nallowedCommands: [tree, xxd]\n---\nbody',
+    });
+    // No unit yet: the file is a request, not policy.
+    const pending = await run(fs, ['status']);
+    expect(pending.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} configured (+tree, xxd from GELATIERE.md), pending — run \`gelatiere init\``
+    );
+
+    // Unit registered, then the file edited (or a sync deferred / failed):
+    // what the pass may actually run is still the record's list.
+    await run(fs, ['init']);
+    seam.setInForce([...GELATIERE_BASE_ALLOWED_COMMANDS]);
+    const drifted = await run(fs, ['status']);
+    expect(drifted.stdout).toContain(
+      `Commands:       ${GELATIERE_BASE_ALLOWED_COMMANDS.length} in force; GELATIERE.md asks for ${GELATIERE_BASE_ALLOWED_COMMANDS.length + 2} (+tree, xxd from GELATIERE.md) — run \`gelatiere init\``
     );
   });
 

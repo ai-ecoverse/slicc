@@ -48,8 +48,23 @@ only at creation: `ensureGelatiereUnit(orchestrator, allowedCommands)` rewrites 
 unit (`reinitLiveUnit`) — the shell reads its allow-list off the descriptor built with the context,
 so a mutated record alone would not move it. Both boot (`bootGelatiere`) and `gelatiere init` pass
 the file's list; `gelatiere run`, which has no file at hand, passes nothing and leaves the record
-alone rather than resetting it to the base set. `gelatiere status` prints the total and names the
-extras.
+alone rather than resetting it to the base set.
+
+Record and live context move TOGETHER or not at all, and that invariant is what makes the state
+readable:
+
+- **A pass in flight outranks the edit.** The rebuild disposes the live context, which aborts the
+  active turn and drops the licks queued behind it — a nightly pass the user never asked to cancel.
+  So when the unit's tab is `processing`, neither half is touched and the call reports `deferred`;
+  `gelatiere init` says so and asks to be re-run once the unit is idle.
+- **A failed store write rolls back.** `Orchestrator.persistScoop` swaps its in-memory record BEFORE
+  awaiting `db.saveScoop`, so a rejected write would leave the cache holding a list neither the
+  store nor the live context has — and the next call would compare against it, see "unchanged", and
+  skip the sync for good. The old record goes back before the failure is reported.
+- **`gelatiere status` reports the list IN FORCE**, read from the record through
+  `seam.unitAllowedCommands()`, not the one `GELATIERE.md` currently asks for: an edited-but-unapplied
+  file prints `N in force …; GELATIERE.md asks for M … — run \`gelatiere init\``, and with no unit
+registered the file's list is `configured … pending`.
 
 The egress caveat stands and is documented in the file: the pass is unattended, reads third-party
 catalog and repo content, and can see `/sessions/` and every cone's memory, so a network command

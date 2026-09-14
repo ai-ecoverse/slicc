@@ -33,7 +33,7 @@ import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { modelFor } from '../work-unit/record.js';
 import type { CronTaskEntry } from './lick-manager.js';
-import type { RegisteredScoop } from './types.js';
+import type { RegisteredScoop, ScoopTabState } from './types.js';
 
 const log = createLogger('gelatiere-unit');
 
@@ -59,13 +59,19 @@ export interface GelatiereRoot {
   jid: string;
 }
 
+/**
+ * What an allow-list sync did to an existing unit. `deferred` means the file
+ * asks for a different list and the unit is mid-pass, so nothing was touched.
+ */
+export type GelatiereAllowListOutcome = 'unchanged' | 'updated' | 'deferred';
+
 /** What `gelatiere init` gets back. */
 export interface GelatiereUnitInfo {
   folder: string;
   jid: string;
   created: boolean;
-  /** An existing unit whose allow-list `GELATIERE.md` just changed. */
-  updated?: boolean;
+  /** What the file's allow-list did to an existing record. Absent on creation. */
+  allowList?: GelatiereAllowListOutcome;
 }
 
 /** Thrown by {@link ensureGelatiereUnit} when another unit holds the folder. */
@@ -97,6 +103,13 @@ export interface GelatiereSeam {
   unregisterOwned(): Promise<string[]>;
   /** The unit, when it exists. */
   unit(): GelatiereRoot | undefined;
+  /**
+   * The allow-list the unit actually runs under — its record's, which is what
+   * its context was built from. `undefined` when there is no unit. Read by
+   * `gelatiere status`, which must report the policy in force rather than
+   * whatever `GELATIERE.md` currently asks for.
+   */
+  unitAllowedCommands(): readonly string[] | undefined;
   /** Every root cone — the delivery targets (the gelatiere is a child, never among them). */
   roots(): GelatiereRoot[];
   /**
@@ -127,6 +140,8 @@ export interface GelatiereOrchestrator {
    * live context, which is the boot case.
    */
   reinitLiveUnit(jid: string): Promise<void>;
+  /** Live tab state, for the `processing` probe that protects a pass in flight. */
+  getScoopTabState(jid: string): { status: ScoopTabState['status'] } | undefined;
 }
 
 /** The lick-manager surface the seam needs. */
@@ -177,26 +192,50 @@ export const GELATIERE_WRITABLE_PATHS = ['/shared/.gelatiere/'];
  * edit would only reach a unit dropped and re-created by
  * `gelatiere init --reset` — the curator, which spawns a fresh agent per
  * pass, has no such problem.
+ *
+ * Record and live context move TOGETHER or not at all. Making the list
+ * effective means rebuilding the context, which disposes the one in flight —
+ * so while the unit is processing, neither half is touched and the caller is
+ * told the edit is deferred. That keeps the record honest as "the list in
+ * force" (it is what the next context is built from), which is what
+ * `gelatiere status` reports.
  */
 async function syncAllowedCommands(
   orchestrator: GelatiereOrchestrator,
   unit: RegisteredScoop,
   allowedCommands: readonly string[] | undefined
-): Promise<boolean> {
-  if (!allowedCommands) return false;
+): Promise<GelatiereAllowListOutcome> {
+  if (!allowedCommands) return 'unchanged';
   const current = unit.config?.allowedCommands ?? [];
-  if (sameCommands(current, allowedCommands)) return false;
+  if (sameCommands(current, allowedCommands)) return 'unchanged';
+  // A rebuild aborts the active turn and clears the agent's queues, so a pass
+  // in flight outranks an allow-list edit — the user loses a nightly pass they
+  // never asked to cancel, and any lick queued behind it.
+  if (orchestrator.getScoopTabState(unit.jid)?.status === 'processing') {
+    log.info('gelatiere allow-list edit deferred: the unit is mid-pass', { jid: unit.jid });
+    return 'deferred';
+  }
   const record: RegisteredScoop = {
     ...unit,
     config: { ...unit.config, allowedCommands: [...allowedCommands] },
   };
-  await orchestrator.persistScoop(record);
+  try {
+    await orchestrator.persistScoop(record);
+  } catch (error) {
+    // `persistScoop` swaps its in-memory record BEFORE awaiting the store
+    // write, so a rejected write leaves the cache holding a list that neither
+    // the store nor the live context has — and the next call would compare
+    // against it, see "unchanged", and skip the sync for good. Put the old
+    // record back before reporting the failure.
+    await orchestrator.persistScoop(unit).catch(() => {});
+    throw error;
+  }
   await orchestrator.reinitLiveUnit(record.jid);
   log.info('gelatiere allow-list updated from GELATIERE.md', {
     jid: record.jid,
     commands: allowedCommands.length,
   });
-  return true;
+  return 'updated';
 }
 
 function sameCommands(a: readonly string[], b: readonly string[]): boolean {
@@ -217,8 +256,8 @@ export async function ensureGelatiereUnit(
   const existing = orchestrator.getScoops();
   const found = findGelatiereUnit(existing);
   if (found) {
-    const updated = await syncAllowedCommands(orchestrator, found, allowedCommands);
-    return { folder: found.folder, jid: found.jid, created: false, updated };
+    const allowList = await syncAllowedCommands(orchestrator, found, allowedCommands);
+    return { folder: found.folder, jid: found.jid, created: false, allowList };
   }
   // The folder is the lick address, so a foreign unit sitting on it would
   // make registration land on `gelatiere-2` — a unit nothing ever licks —
@@ -269,6 +308,7 @@ export function createGelatiereSeam(
       const found = findGelatiereUnit(orchestrator.getScoops());
       return found ? toRoot(found) : undefined;
     },
+    unitAllowedCommands: () => findGelatiereUnit(orchestrator.getScoops())?.config?.allowedCommands,
     roots: () => rootsOf(orchestrator.getScoops()).map(toRoot),
     nightly: () => {
       const found = findNightly(lickManager);
@@ -328,7 +368,7 @@ export async function bootGelatiere(
     log.info('gelatiere ready', {
       jid: unit.jid,
       created: unit.created,
-      allowListUpdated: unit.updated === true,
+      allowList: unit.allowList,
       nightly: nightly.cron,
       nightlyCreated: nightly.created,
     });
