@@ -47,9 +47,14 @@ jobs:
         run: node packages/dev-tools/no-comment/strip.mjs
 
       - name: Format the stripped tree
+        # Format only — do not lint. The first mirror (run 34830682559) ran
+        # biome's check+write path; leftover biome-ignore directives became
+        # unused suppressions once adjacent comments were gone, and that is
+        # an error. The derived tree is a comment-free snapshot, not a
+        # second lint-clean copy of main.
         run: |
           set -euo pipefail
-          npx biome check --write .
+          npx biome format --write .
           npx prettier --write .
 
       - name: Commit the stripped tree onto no-comment
@@ -91,5 +96,5 @@ jobs:
           else
             COMMIT=$(git commit-tree "$TREE" -F /tmp/no-comment-msg)
           fi
-          git push origin "$COMMIT:refs/heads/no-comment"
+          git push origin "${COMMIT}:refs/heads/no-comment"
           echo "Pushed $COMMIT to no-comment (mirrors $MAIN_SHA)"

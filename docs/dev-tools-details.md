@@ -33,7 +33,9 @@ On every push to `main` the workflow:
 
 1. Checks out that commit
 2. Runs `node packages/dev-tools/no-comment/strip.mjs`
-3. Formats the result (`biome check --write`, `prettier --write`)
+3. Formats the result (`biome format --write`, `prettier --write` — format
+   only; `biome check` would fail on leftover unused `biome-ignore`
+   suppressions after comments around them are stripped)
 4. Commits the stripped tree onto `no-comment` with a `No-Comment-Of: <sha>`
    trailer, skipping the push when the stripped tree is unchanged (a
    comment-only `main` commit)
