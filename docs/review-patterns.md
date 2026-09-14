@@ -82,6 +82,7 @@ use backoff for retries; make sure failures surface rather than hang.
 **Trigger patterns**
 
 - Activating a parked sprinkle must place its existing container as well as update attention/persistence state; assert visible content on the first rail click.
+- Async open/reload paths that can rebuild the same panel concurrently (for example a `sprinkle reload` command racing the VFS watcher); serialize by surface identity so sibling renderers cannot survive in one container.
 - `el.innerHTML = …` or `replaceChildren()` that rebuilds a subtree holding live UI state.
 - Navigation / routing / reflow that re-renders without capturing and restoring state.
 - Component teardown without cleanup, or local state updated without persisting it.
@@ -92,8 +93,9 @@ expand/collapse state, so the view reset under the user. (PR #568 was a closed f
 not a separate merged fix.)
 
 **Remediation** — capture the relevant state before the DOM mutation and restore it after;
-persist anything durable to `localStorage` / IndexedDB; prefer surgical updates over full
-rebuilds where state lives in the DOM.
+serialize async rebuilds that target the same surface; persist anything durable to
+`localStorage` / IndexedDB; prefer surgical updates over full rebuilds where state lives in
+the DOM.
 
 ### 3. Cross-runtime consistency
 

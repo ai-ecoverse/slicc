@@ -323,6 +323,14 @@ export class SprinkleManager implements SprinkleManagerHandle {
    * uninvited panels on every reload.
    */
   private attentionOnly = new Set<string>();
+  /**
+   * Per-sprinkle tails for operations that create or replace a renderer.
+   * A VFS write can schedule an automatic reload while `sprinkle open` or
+   * `sprinkle reload` is still awaiting its iframe load. Without a shared
+   * queue, both renderers append into the same container and only the last
+   * one is tracked, leaving a live orphan iframe beside it.
+   */
+  private rendererOperationTails = new Map<string, Promise<void>>();
   private inflightRefresh: Promise<void> | null = null;
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
@@ -498,12 +506,29 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.onSprinkleReloaded = hook;
   }
 
+  /** Run renderer-changing work in order for one sprinkle, but not across names. */
+  private enqueueRendererOperation(name: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.rendererOperationTails.get(name) ?? Promise.resolve();
+    const current = previous.then(operation, operation);
+    this.rendererOperationTails.set(name, current);
+    return current.finally(() => {
+      if (this.rendererOperationTails.get(name) === current) {
+        this.rendererOperationTails.delete(name);
+      }
+    });
+  }
+
   /**
    * Reload an already-open sprinkle by re-reading its `.shtml` from the
    * VFS and re-rendering. No-op if the sprinkle is not currently open.
    * Fires the reload hook so the leader can broadcast to followers.
    */
-  async reload(name: string): Promise<void> {
+  reload(name: string): Promise<void> {
+    return this.enqueueRendererOperation(name, () => this.reloadNow(name));
+  }
+
+  /** Reload implementation, called only while holding the per-sprinkle renderer queue. */
+  private async reloadNow(name: string): Promise<void> {
     const entry = this.openSprinkles.get(name);
     if (!entry) {
       log.info('Cannot reload closed sprinkle', { name });
@@ -936,7 +961,16 @@ export class SprinkleManager implements SprinkleManagerHandle {
   }
 
   /** Open a sprinkle by name, optionally in a specific zone. */
-  async open(name: string, zone?: string, options: AddSprinkleOptions = {}): Promise<void> {
+  open(name: string, zone?: string, options: AddSprinkleOptions = {}): Promise<void> {
+    return this.enqueueRendererOperation(name, () => this.openNow(name, zone, options));
+  }
+
+  /** Open implementation, called only while holding the per-sprinkle renderer queue. */
+  private async openNow(
+    name: string,
+    zone?: string,
+    options: AddSprinkleOptions = {}
+  ): Promise<void> {
     if (this.openSprinkles.has(name)) {
       log.info('Sprinkle already open', { name });
       return;
