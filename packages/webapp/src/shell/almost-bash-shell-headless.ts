@@ -77,7 +77,7 @@ import {
 import { createProxiedFetch } from './proxied-fetch.js';
 import { clearReadByteProvenance } from './request-body-provenance.js';
 import { ScriptCatalog } from './script-catalog.js';
-import { enforceCommandSudo } from './sudo/command-guard.js';
+import { commandSudoSubject, enforceCommandSudo } from './sudo/command-guard.js';
 import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
@@ -1224,7 +1224,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const sudo = this.options.sudo;
     if (!sudo) return null;
 
-    const subject = `${name} ${args.join(' ')}`.trim();
+    const subject = commandSudoSubject(name, args);
 
     // Consume a one-shot bypass when the explicit `sudo` command already
     // collected approval for this exact subject. Skips even the policy lookup

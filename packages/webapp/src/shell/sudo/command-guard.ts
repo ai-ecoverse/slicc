@@ -35,6 +35,14 @@ import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 /** stderr message emitted (and shown to the agent) when approval is denied. */
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
 
+const COMMAND_POLICY_ALIASES = new Map([['jsh', 'node']]);
+
+/** Build the canonical sudoers subject for one tokenized command dispatch. */
+export function commandSudoSubject(name: string, args: readonly string[]): string {
+  const policyName = COMMAND_POLICY_ALIASES.get(name) ?? name;
+  return `${policyName} ${args.join(' ')}`.trim();
+}
+
 /**
  * stderr message for a blocked dispatch. A refusal reads as
  * {@link COMMAND_DENIED_MESSAGE}; an unanswered request instead names the
