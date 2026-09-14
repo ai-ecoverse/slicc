@@ -1676,14 +1676,17 @@ Full gesture-bridge mechanics, extension popup routing, and the shared trust mod
 
 ---
 
-## `node` invocation forms
+## `node` / `jsh` invocation forms
 
-The `node` shim (`shell/supplemental-commands/node-command.ts`) accepts the same argument shapes as real Node:
+The Node shim (`shell/supplemental-commands/node-command.ts`) is registered as
+both `node` and `jsh`. Use `jsh` as the explicit runner for a `.jsh` skill
+script; both names accept the same argument shapes and execute identically:
 
 | Form                       | Program source               | `process.argv`                    |
 | -------------------------- | ---------------------------- | --------------------------------- |
 | `node -e CODE [ARGS…]`     | `CODE`                       | `['node', ...ARGS]`               |
 | `node SCRIPT [ARGS…]`      | VFS file at `SCRIPT`         | `['node', <abs SCRIPT>, ...ARGS]` |
+| `jsh SCRIPT [ARGS…]`       | VFS file at `SCRIPT`         | `['node', <abs SCRIPT>, ...ARGS]` |
 | `… \| node`                | piped stdin                  | `['node']`                        |
 | `node - [ARGS…]`           | stdin                        | `['node', '-', ...ARGS]`          |
 | `node /dev/stdin [ARGS…]`  | stdin                        | `['node', '/dev/stdin', ...ARGS]` |

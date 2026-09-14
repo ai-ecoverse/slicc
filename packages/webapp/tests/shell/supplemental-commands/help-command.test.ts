@@ -129,6 +129,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'html-to-markdown',
   'git',
   'node',
+  'jsh',
   'python',
   'python3',
   'sqlite3',
@@ -238,6 +239,13 @@ describe('commands command', () => {
     const result = await cmd.execute([], createMockCtx(DEFAULT_BUILTIN_COMMANDS));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('Other:');
+  });
+
+  it('groups jsh beside node under Languages', async () => {
+    const cmd = createCommandsCommand();
+    const result = await cmd.execute([], createMockCtx(['node', 'jsh']));
+    expect(result.exitCode).toBe(0);
+    expect(lineAfterCategory(result.stdout, 'Languages')?.trim()).toBe('node, jsh');
   });
 
   it('groups tsc/test/esbuild/biome under Build tools', async () => {
