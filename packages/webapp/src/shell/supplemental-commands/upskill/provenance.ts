@@ -124,27 +124,43 @@ export async function listProvenancedSkills(
 }
 
 /**
- * Resolve a ref to its commit sha.
+ * Resolve a ref (and optional repo-relative `path`) to its commit sha.
  *
- * The install path deliberately prefers codeload (not rate-limited) over the
- * API, so an anonymous *install* must not spend its one rate-limited request on
- * bookkeeping — hence the token gate, which `tessl.test.ts` pins. An explicit
- * `upskill update` passes `allowAnonymous` because there the trade runs the
- * other way: the sha is what makes "already current" exact and archive-free.
+ * With `path`, this is the latest commit that touched that path — the value
+ * `navigate·upskill` compares against the recorded install sha, so a skill
+ * whose files have not moved does not raise a card when a sibling path did.
+ * Without `path`, this is the ref's head.
+ *
+ * `upskill update` and install provenance both pass `allowAnonymous`: one
+ * ~200-byte commits response is what makes "already current" exact. The
+ * Contents API stays off the zip install path; this lookup is bookkeeping.
  */
 export async function resolveCommitSha(
   owner: string,
   repo: string,
   ref: string | undefined,
   github: GitHubRequestContext,
-  allowAnonymous = false
+  allowAnonymous = false,
+  path?: string
 ): Promise<string | undefined> {
-  // `allowAnonymous` is what `upskill update` passes: there, one ~200-byte
-  // commits response replaces a whole repo archive, so spending the request is
-  // the cheap option rather than the expensive one. Installs keep the gate.
   if (!github.hasToken && !allowAnonymous) return undefined;
   try {
     const target = ref || 'HEAD';
+    const normalizedPath = path?.replace(/^\/+|\/+$/g, '');
+    if (normalizedPath) {
+      const params = new URLSearchParams({
+        path: normalizedPath,
+        sha: target,
+        per_page: '1',
+      });
+      const response = await github.request(
+        `https://api.github.com/repos/${owner}/${repo}/commits?${params.toString()}`
+      );
+      if (response.status !== 200) return undefined;
+      const commits = parseFetchJson<Array<{ sha?: string }>>(response.body);
+      const sha = Array.isArray(commits) ? commits[0]?.sha : undefined;
+      return typeof sha === 'string' ? sha : undefined;
+    }
     const response = await github.request(
       `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(target)}`
     );

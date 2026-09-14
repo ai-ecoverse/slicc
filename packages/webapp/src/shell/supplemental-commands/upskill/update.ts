@@ -233,7 +233,14 @@ async function updateGitHubSkill(
   // Sha first: when the recorded commit still equals the ref's head and every
   // file we installed is still on disk, the skill is current by definition and
   // no archive needs downloading. One ~200-byte response replaces a repo ZIP.
-  const headSha = await resolveCommitSha(owner, repo, base.ref, github, true);
+  const headSha = await resolveCommitSha(
+    owner,
+    repo,
+    base.ref,
+    github,
+    true,
+    upstreamPath || undefined
+  );
   if (
     headSha &&
     provenance.sha === headSha &&

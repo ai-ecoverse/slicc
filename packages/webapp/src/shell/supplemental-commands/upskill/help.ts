@@ -107,10 +107,11 @@ Updating installed skills:
 
   Every install records its source in <skill>/.upskill (repo, ref, resolved
   commit, last-updated timestamp, file list), so update needs no arguments.
-  When the recorded commit still matches the ref's head, update says "already
-  current" from one small API call instead of downloading the archive. Paths
-  are classified unchanged, updated, added, removed, or kept-local — the same
-  vocabulary the "upgrade" command uses for bundled workspace files.
+  When the recorded commit still matches the latest commit on the skill's
+  upstream path, update says "already current" from one small API call
+  instead of downloading the archive. Paths are classified unchanged,
+  updated, added, removed, or kept-local — the same vocabulary the
+  "upgrade" command uses for bundled workspace files.
 
 What upskill never touches:
   - Dotfiles in a skill directory. Credentials (scripts/.config) and provenance

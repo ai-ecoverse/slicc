@@ -482,7 +482,14 @@ async function handleGitHubInstall(
     if (zip.status === 'ok') {
       // One sha lookup for the whole batch — every skill in it comes from the
       // same tree, and the lookup is the only rate-limited call on this path.
-      const sha = await resolveCommitSha(owner, repo, effectiveBranch, github);
+      const sha = await resolveCommitSha(
+        owner,
+        repo,
+        effectiveBranch,
+        github,
+        true,
+        effectiveSubPath
+      );
       const batch = await installGitHubBatchViaZip(
         skillsToInstall,
         owner,

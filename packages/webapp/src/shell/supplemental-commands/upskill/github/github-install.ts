@@ -121,7 +121,14 @@ async function recordGitHubProvenance(
   github: GitHubRequestContext,
   files: string[]
 ): Promise<void> {
-  const sha = await resolveCommitSha(owner, repo, branch, github);
+  const sha = await resolveCommitSha(
+    owner,
+    repo,
+    branch,
+    github,
+    true,
+    skillPath.replace(/^\/+|\/+$/g, '')
+  );
   await writeProvenance(fs, skillName, {
     kind: 'github',
     source: `${owner}/${repo}`,

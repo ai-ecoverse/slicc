@@ -586,8 +586,10 @@ orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
   won't prompt again.
 - **navigate·upskill** — confirm runs `upskill [--branch ..] [--path ..] <url> --all`,
   installing every skill under the advertised scope (`upskill`'s on-disk
-  "already exists" check still guards duplicate installs). Without `--all`,
-  `upskill` would only list what it found and install nothing.
+  "already exists" check still guards duplicate installs). The card itself is
+  not raised when the advertised path is already installed at the same
+  commit, or when the matching install has no recorded sha (do not spam).
+  Without `--all`, `upskill` would only list what it found and install nothing.
 - **session-reload·mount-recovery** — confirm re-runs the `mount` commands
   reconstructed from the lick's recovery entries.
 - **upgrade** — confirm triggers "Update workspace files" (the upgrade skill's
