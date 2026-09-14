@@ -28,12 +28,14 @@ Design, pieces table, and sprinkle details: `docs/gelatiere.md`.
 - `shared/GELATIERE.md` is the gelatiere's twin of `MEMORY.md`: the store's build-time fallback and
   the seeded `/shared/GELATIERE.md`, seeded only when absent, user-edited only. Same frontmatter
   dialect (`base/instruction-frontmatter.ts`); keys `intervalHours`, `nightly` (5-field cron),
-  `maxSuggestions` (≤10). No placeholders: the unit `cat`s it every pass, so keep it self-contained
+  `maxSuggestions` (≤10), `allowedCommands` (bare names, ADDITIVE over the built-in set). No placeholders: the unit `cat`s it every pass, so keep it self-contained
   (literal paths, `date` for today).
 - The gelatiere is a persistent SCOOP under a synthetic owner (`scoops/gelatiere-unit.ts`), not a
   spawned agent: charter is the record's `systemPromptAppend`, the pass recipe is this file.
   Deliverable is `gelatiere suggest <candidates.json> && gelatiere deliver`. Keep recipe commands on
-  `GELATIERE_ALLOWED_COMMANDS` (a child escalates the rest); cross-pass memory `/shared/.gelatiere/notes.md`.
+  `GELATIERE_BASE_ALLOWED_COMMANDS` (a child escalates the rest; the file's `allowedCommands` extends
+  it and is re-applied to the persisted record at boot / `gelatiere init`); cross-pass memory
+  `/shared/.gelatiere/notes.md`.
 - `shared/sprinkles/suggestions/suggestions.shtml` is the suggestion stream, split from the
   onboarding-only `shared/sprinkles/welcome/welcome.shtml` so follower/extension welcome-dip
   handling can never mask or restart it; re-posted as a dip on every delivery, rail-pickable under

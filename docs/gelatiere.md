@@ -27,17 +27,42 @@ read-only. Two exceptions are carved out for it by `isGelatiereUnit`: compact-on
 capability) applies to it whatever the flag says, and — because it is registered
 `notifyOnComplete: false` — neither a completion notice nor the "ready for 2 minutes without work"
 idle nag reaches the default root. It runs under the delegated-child policy, so its record carries
-an explicit allow-list (`GELATIERE_ALLOWED_COMMANDS`), read roots (`/sessions/`, `/shared/`,
-`/workspace/`, `/home/`, `/cones/`) and one write grant (`/shared/.gelatiere/`) beyond its sandbox
-and `/tmp/`.
+an explicit allow-list (`GELATIERE_BASE_ALLOWED_COMMANDS` plus whatever `GELATIERE.md`'s own
+`allowedCommands` block adds), read roots (`/sessions/`, `/shared/`, `/workspace/`, `/home/`,
+`/cones/`) and one write grant (`/shared/.gelatiere/`) beyond its sandbox and `/tmp/`.
+
+### The allow-list is user-editable
+
+`GELATIERE.md` carries an `allowedCommands` block, the gelatiere's half of what `MEMORY.md` gives
+the memory curator, and with the same additive contract: the parser merges the file's entries onto
+`GELATIERE_BASE_ALLOWED_COMMANDS` (`base/gelatiere-store.ts`) rather than replacing it, so a file
+that forgot `gelatiere` cannot leave a pass unable to deliver. Entries must be bare command names —
+an entry carrying arguments would match no command and silently grant nothing, so the parser rejects
+it and `loadGelatiereConfig` falls back to the bundled default with a warning, exactly as it does
+for a bad cron.
+
+Where the curator spawns a fresh agent per pass and therefore re-reads its file every time, the
+gelatiere is registered ONCE and then persists for weeks. So the list is applied to the record, not
+only at creation: `ensureGelatiereUnit(orchestrator, allowedCommands)` rewrites an existing unit's
+`config.allowedCommands` when the file changed, persists it (`persistScoop`) and rebuilds the live
+unit (`reinitLiveUnit`) — the shell reads its allow-list off the descriptor built with the context,
+so a mutated record alone would not move it. Both boot (`bootGelatiere`) and `gelatiere init` pass
+the file's list; `gelatiere run`, which has no file at hand, passes nothing and leaves the record
+alone rather than resetting it to the base set. `gelatiere status` prints the total and names the
+extras.
+
+The egress caveat stands and is documented in the file: the pass is unattended, reads third-party
+catalog and repo content, and can see `/sessions/` and every cone's memory, so a network command
+added here is a real exfiltration surface. Refusing it in the DEFAULT is right; refusing an explicit
+edit by the user is not.
 
 ## Pieces
 
 | Piece                                                                  | Role                                                                                                                                                                                                                              |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/vfs-root/shared/GELATIERE.md`                                | User-editable pass instructions + config block (`intervalHours`, `nightly`, `maxSuggestions`), seeded to `/shared/GELATIERE.md` when absent; the unit `cat`s it per pass                                                          |
+| `packages/vfs-root/shared/GELATIERE.md`                                | User-editable pass instructions + config block (`intervalHours`, `nightly`, `maxSuggestions`, `allowedCommands`), seeded to `/shared/GELATIERE.md` when absent; the unit `cat`s it per pass                                       |
 | `packages/webapp/src/base/instruction-frontmatter.ts`                  | The strict YAML subset `MEMORY.md` and `GELATIERE.md` share                                                                                                                                                                       |
-| `packages/webapp/src/base/gelatiere-store.ts`                          | The deterministic half: config, suggestion store (id-keyed merge, dismissal ledger), pass/delivery ledger, lick body. `base/` so shell and ui can both use it                                                                     |
+| `packages/webapp/src/base/gelatiere-store.ts`                          | The deterministic half: config (incl. the base allow-list and its additive merge), suggestion store (id-keyed merge, dismissal ledger), pass/delivery ledger, lick body. `base/` so shell and ui can both use it                  |
 | `packages/webapp/src/scoops/gelatiere-unit.ts`                         | The unit: charter, allow-list and path grants, `ensureGelatiereUnit`, the `GelatiereSeam` the host publishes on `globalThis.__slicc_gelatiere`, `bootGelatiere`                                                                   |
 | `packages/webapp/src/kernel/host.ts` (`publishGelatiere`)              | Publishes the seam after the lick manager; under the flag boots the unit + nightly crontask (fire-and-forget, store module loaded lazily)                                                                                         |
 | `packages/webapp/src/shell/supplemental-commands/gelatiere-command.ts` | `gelatiere init / run / suggest / deliver / list / dismiss / status`                                                                                                                                                              |
@@ -167,7 +192,7 @@ Bakery cone.
   the child policy the pass ran without approval prompts except one: the model reflowed long
   output with `fold -w 120`, the escalation landed on the default cone as a command lick, and
   the cone approved it once by itself. `fold` (and the other read-only text utilities a pass
-  plausibly reaches for) is now on `GELATIERE_ALLOWED_COMMANDS`.
+  plausibly reaches for) is now on `GELATIERE_BASE_ALLOWED_COMMANDS`.
 - **Fresh pass after a reset**: a unit whose conversation still remembers an earlier pass
   answers a `run` from memory ("same four sessions, nothing to add") even when the store was
   wiped underneath it; `gelatiere init --reset && gelatiere run` gives a clean pass. With the

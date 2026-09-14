@@ -6,7 +6,7 @@ import {
   createGelatiereSeam,
   ensureGelatiereUnit,
   findGelatiereUnit,
-  GELATIERE_ALLOWED_COMMANDS,
+  GELATIERE_BASE_ALLOWED_COMMANDS,
   GELATIERE_CHARTER,
   GELATIERE_SEAM_GLOBAL_KEY,
   GelatiereFolderTakenError,
@@ -44,6 +44,11 @@ function fakeOrchestrator(initial: RegisteredScoop[]) {
       const index = scoops.findIndex((s) => s.jid === jid);
       if (index >= 0) scoops.splice(index, 1);
     }),
+    persistScoop: vi.fn(async (scoop: RegisteredScoop) => {
+      const index = scoops.findIndex((s) => s.jid === scoop.jid);
+      if (index >= 0) scoops.splice(index, 1, scoop);
+    }),
+    reinitLiveUnit: vi.fn(async () => {}),
   };
   return orchestrator;
 }
@@ -117,7 +122,7 @@ describe('gelatiere unit', () => {
       systemPromptAppend: GELATIERE_CHARTER,
       visiblePaths: ['/sessions/', '/shared/', '/workspace/', '/home/', '/cones/'],
       writablePaths: ['/shared/.gelatiere/'],
-      allowedCommands: GELATIERE_ALLOWED_COMMANDS,
+      allowedCommands: GELATIERE_BASE_ALLOWED_COMMANDS,
     });
     for (const cmd of [
       'cat',
@@ -132,20 +137,58 @@ describe('gelatiere unit', () => {
       // must never escalate through the sudo gate on an unattended pass.
       'memory',
     ]) {
-      expect(GELATIERE_ALLOWED_COMMANDS).toContain(cmd);
+      expect(GELATIERE_BASE_ALLOWED_COMMANDS).toContain(cmd);
     }
     // `allowedCommands` is a child unit's only network gate, and this unit
     // reads third-party content on every unattended pass while seeing
     // /sessions/ — general egress would be an exfiltration channel. Its web
     // surface is `gelatiere catalog|commands|man` (pinned host) only.
     for (const cmd of ['curl', 'wget', 'fetch', 'nc', 'ssh']) {
-      expect(GELATIERE_ALLOWED_COMMANDS).not.toContain(cmd);
+      expect(GELATIERE_BASE_ALLOWED_COMMANDS).not.toContain(cmd);
     }
     expect(GELATIERE_CHARTER).toContain('cat /shared/GELATIERE.md');
     expect(GELATIERE_CHARTER).toContain('gelatiere deliver');
     const second = await ensureGelatiereUnit(orchestrator);
-    expect(second).toEqual({ folder: 'gelatiere', jid: first.jid, created: false });
+    expect(second).toEqual({ folder: 'gelatiere', jid: first.jid, created: false, updated: false });
     expect(orchestrator.registerScoop).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies GELATIERE.md's allow-list at creation and to an existing unit", async () => {
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const merged = [...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree'];
+    const created = await ensureGelatiereUnit(orchestrator, merged);
+    expect(created.created).toBe(true);
+    const record = () => orchestrator.scoops.find((s) => s.folder === 'gelatiere');
+    expect(record()?.config?.allowedCommands).toEqual(merged);
+
+    // The same list again is not a change: no write, no runtime rebuild.
+    const unchanged = await ensureGelatiereUnit(orchestrator, [...merged]);
+    expect(unchanged.updated).toBe(false);
+    expect(orchestrator.persistScoop).not.toHaveBeenCalled();
+
+    // A changed list reaches the PERSISTED unit — it is registered once and
+    // then lives for weeks, so an edit must not need `init --reset`.
+    const widened = [...merged, 'xxd'];
+    const updated = await ensureGelatiereUnit(orchestrator, widened);
+    expect(updated).toEqual({
+      folder: 'gelatiere',
+      jid: created.jid,
+      created: false,
+      updated: true,
+    });
+    expect(record()?.config?.allowedCommands).toEqual(widened);
+    // The shell reads its allow-list off the descriptor built with the
+    // context, so the live unit has to be rebuilt for the change to bite.
+    expect(orchestrator.reinitLiveUnit).toHaveBeenCalledWith(created.jid);
+    // Other config the record carries survives the update.
+    expect(record()?.config?.writablePaths).toEqual(['/shared/.gelatiere/']);
+    expect(record()?.config?.systemPromptAppend).toBe(GELATIERE_CHARTER);
+
+    // A caller without the file at hand (`gelatiere run`) leaves it alone
+    // rather than resetting the unit to the base set.
+    const untouched = await ensureGelatiereUnit(orchestrator);
+    expect(untouched.updated).toBe(false);
+    expect(record()?.config?.allowedCommands).toEqual(widened);
   });
 
   it('refuses to register while a foreign unit holds the folder, and --reset drops only its own', async () => {
@@ -236,13 +279,16 @@ describe('gelatiere unit', () => {
   it('publishGelatiereSeam publishes on the given target; bootGelatiere never throws', async () => {
     resetLoggerDedupForTests();
     const target: Record<string, unknown> = {};
-    const seam = createGelatiereSeam(fakeOrchestrator([root('cone')]), fakeLickManager());
+    const orchestrator = fakeOrchestrator([root('cone')]);
+    const seam = createGelatiereSeam(orchestrator, fakeLickManager());
     publishGelatiereSeam(seam, target);
     expect(target[GELATIERE_SEAM_GLOBAL_KEY]).toBe(seam);
     expect(GELATIERE_SEAM_GLOBAL_KEY).toBe('__slicc_gelatiere');
 
-    await bootGelatiere(seam, '0 3 * * *');
+    await bootGelatiere(seam, '0 3 * * *', [...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree']);
     expect(seam.unit()).toBeDefined();
+    const booted = orchestrator.scoops.find((s) => s.folder === 'gelatiere');
+    expect(booted?.config?.allowedCommands).toContain('tree');
     const broken = {
       ...seam,
       ensureUnit: async () => {

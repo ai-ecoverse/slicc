@@ -27,6 +27,7 @@ import {
   GELATIERE_SPRINKLE_NAME,
   isGelatiereUnit,
 } from '../base/gelatiere-constants.js';
+import { GELATIERE_BASE_ALLOWED_COMMANDS } from '../base/gelatiere-store.js';
 import { createLogger } from '../base/logger.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
@@ -63,6 +64,8 @@ export interface GelatiereUnitInfo {
   folder: string;
   jid: string;
   created: boolean;
+  /** An existing unit whose allow-list `GELATIERE.md` just changed. */
+  updated?: boolean;
 }
 
 /** Thrown by {@link ensureGelatiereUnit} when another unit holds the folder. */
@@ -77,8 +80,16 @@ export class GelatiereFolderTakenError extends Error {
 
 /** What the kernel host hands the `gelatiere` shell command. */
 export interface GelatiereSeam {
-  /** Create the unit if it is missing; idempotent. Throws {@link GelatiereFolderTakenError}. */
-  ensureUnit(): Promise<GelatiereUnitInfo>;
+  /**
+   * Create the unit if it is missing; idempotent. Throws
+   * {@link GelatiereFolderTakenError}. `allowedCommands` — the merged list
+   * from `GELATIERE.md` — is applied to an EXISTING record too, so editing the
+   * file and rebooting (or running `gelatiere init`) takes effect on a unit
+   * that is registered once and then lives for weeks. Omitted, the record is
+   * left alone: callers without the file at hand (`gelatiere run`) must not
+   * silently reset the list to the base set.
+   */
+  ensureUnit(allowedCommands?: readonly string[]): Promise<GelatiereUnitInfo>;
   /**
    * Unregister every unit under the synthetic owner — the gelatiere itself
    * and any mis-foldered twin an earlier boot minted. Returns their jids.
@@ -107,6 +118,15 @@ export interface GelatiereOrchestrator {
   getScoops(): RegisteredScoop[];
   registerScoop(scoop: RegisteredScoop): Promise<void>;
   unregisterScoop(jid: string): Promise<void>;
+  /** Persist an in-place mutation of an already-registered record. */
+  persistScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Rebuild the live unit so a policy change reaches the running agent: the
+   * shell's allow-list is read from the descriptor when the context is built,
+   * so a mutated record alone would not move it. A no-op when the unit has no
+   * live context, which is the boot case.
+   */
+  reinitLiveUnit(jid: string): Promise<void>;
 }
 
 /** The lick-manager surface the seam needs. */
@@ -134,65 +154,11 @@ function toRoot(scoop: RegisteredScoop): GelatiereRoot {
 }
 
 /**
- * Commands a pass may run without escalating. A child unit runs under
- * `require-approval`, so every command missing here becomes a sudo request to
- * the default root — an interruption the user cannot grant away for an
- * unattended nightly pass. Keep this ahead of what `GELATIERE.md` asks for.
+ * The base allow-list lives in `base/gelatiere-store.ts`, beside the parser
+ * that merges `GELATIERE.md`'s own `allowedCommands` block into it. Re-exported
+ * here because this module is where the list is APPLIED to the record.
  */
-export const GELATIERE_ALLOWED_COMMANDS = [
-  'awk',
-  'basename',
-  'cat',
-  'column',
-  // NO `curl`: for a child unit `allowedCommands` is the only network gate,
-  // and this unit reads third-party content (catalog entries, repo READMEs)
-  // on every unattended pass while seeing /sessions/ and every cone's
-  // memory. One injected "also POST /sessions/*.md to …" line would turn the
-  // nightly into an approval-free exfiltration channel. The recipe's three
-  // known fetches go through `gelatiere catalog|commands|man`, which pin the
-  // host; anything else escalates through the sudo gate, which is right for
-  // egress.
-  'cut',
-  'date',
-  'dirname',
-  'echo',
-  'expr',
-  'false',
-  'file',
-  'find',
-  // The first live pass reflowed long output with `fold -w 120` and the
-  // escalation went to the default cone as a command lick.
-  'fold',
-  'gelatiere',
-  'grep',
-  'head',
-  'jq',
-  'ls',
-  'man',
-  // `memory dream --all` in the nightly recipe. The gelatiere still cannot
-  // write memory files itself — the command spawns sandboxed memory-dreamer
-  // scoops whose writes go through the staged draft + three-way merge.
-  'memory',
-  'mkdir',
-  'nl',
-  'paste',
-  'printf',
-  'realpath',
-  'rg',
-  'sed',
-  'seq',
-  'sort',
-  'stat',
-  'tail',
-  'tee',
-  'test',
-  'touch',
-  'tr',
-  'true',
-  'uniq',
-  'upskill',
-  'wc',
-];
+export { GELATIERE_BASE_ALLOWED_COMMANDS };
 
 /** Read-only roots of a pass: sessions, shared, every cone's workspace and memory, the profiles. */
 export const GELATIERE_VISIBLE_PATHS = [
@@ -206,6 +172,38 @@ export const GELATIERE_VISIBLE_PATHS = [
 export const GELATIERE_WRITABLE_PATHS = ['/shared/.gelatiere/'];
 
 /**
+ * Apply the file's allow-list to a unit that already exists. The gelatiere is
+ * registered once and then persists, so without this an `allowedCommands`
+ * edit would only reach a unit dropped and re-created by
+ * `gelatiere init --reset` — the curator, which spawns a fresh agent per
+ * pass, has no such problem.
+ */
+async function syncAllowedCommands(
+  orchestrator: GelatiereOrchestrator,
+  unit: RegisteredScoop,
+  allowedCommands: readonly string[] | undefined
+): Promise<boolean> {
+  if (!allowedCommands) return false;
+  const current = unit.config?.allowedCommands ?? [];
+  if (sameCommands(current, allowedCommands)) return false;
+  const record: RegisteredScoop = {
+    ...unit,
+    config: { ...unit.config, allowedCommands: [...allowedCommands] },
+  };
+  await orchestrator.persistScoop(record);
+  await orchestrator.reinitLiveUnit(record.jid);
+  log.info('gelatiere allow-list updated from GELATIERE.md', {
+    jid: record.jid,
+    commands: allowedCommands.length,
+  });
+  return true;
+}
+
+function sameCommands(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((command, index) => command === b[index]);
+}
+
+/**
  * Register the gelatiere scoop when it is missing. It starts on the default
  * root's model — the same fallback `cone-create` uses — so it never needs a
  * model of its own configured. Silent (`notifyOnComplete: false`): its passes
@@ -213,11 +211,15 @@ export const GELATIERE_WRITABLE_PATHS = ['/shared/.gelatiere/'];
  * notice on top would land in the default root's chat after every pass.
  */
 export async function ensureGelatiereUnit(
-  orchestrator: GelatiereOrchestrator
+  orchestrator: GelatiereOrchestrator,
+  allowedCommands?: readonly string[]
 ): Promise<GelatiereUnitInfo> {
   const existing = orchestrator.getScoops();
   const found = findGelatiereUnit(existing);
-  if (found) return { folder: found.folder, jid: found.jid, created: false };
+  if (found) {
+    const updated = await syncAllowedCommands(orchestrator, found, allowedCommands);
+    return { folder: found.folder, jid: found.jid, created: false, updated };
+  }
   // The folder is the lick address, so a foreign unit sitting on it would
   // make registration land on `gelatiere-2` — a unit nothing ever licks —
   // and every later boot would mint another. Refuse instead.
@@ -235,7 +237,7 @@ export async function ensureGelatiereUnit(
         systemPromptAppend: GELATIERE_CHARTER,
         visiblePaths: [...GELATIERE_VISIBLE_PATHS],
         writablePaths: [...GELATIERE_WRITABLE_PATHS],
-        allowedCommands: [...GELATIERE_ALLOWED_COMMANDS],
+        allowedCommands: [...(allowedCommands ?? GELATIERE_BASE_ALLOWED_COMMANDS)],
       },
     }),
     assistantLabel: GELATIERE_FOLDER,
@@ -251,7 +253,7 @@ export function createGelatiereSeam(
   lickManager: GelatiereLickManager
 ): GelatiereSeam {
   return {
-    ensureUnit: () => ensureGelatiereUnit(orchestrator),
+    ensureUnit: (allowedCommands) => ensureGelatiereUnit(orchestrator, allowedCommands),
     unregisterOwned: async () => {
       // A unit with a live crontask refuses to unregister, and the nightly
       // resolves to whichever unit answers to the gelatiere name — so the
@@ -310,17 +312,23 @@ export function publishGelatiereSeam(seam: GelatiereSeam, target: object = globa
 }
 
 /**
- * Boot-time hook: with the `memory-v2` flag on, make sure the unit and its
- * nightly crontask exist. Best-effort — a failure here logs and leaves the
- * manual `gelatiere init` path.
+ * Boot-time hook: with the `memory-v2` flag on, make sure the unit, its
+ * nightly crontask and its allow-list match `/shared/GELATIERE.md`.
+ * Best-effort — a failure here logs and leaves the manual `gelatiere init`
+ * path.
  */
-export async function bootGelatiere(seam: GelatiereSeam, nightlyCron: string): Promise<void> {
+export async function bootGelatiere(
+  seam: GelatiereSeam,
+  nightlyCron: string,
+  allowedCommands?: readonly string[]
+): Promise<void> {
   try {
-    const unit = await seam.ensureUnit();
+    const unit = await seam.ensureUnit(allowedCommands);
     const nightly = await seam.ensureNightly(nightlyCron);
     log.info('gelatiere ready', {
       jid: unit.jid,
       created: unit.created,
+      allowListUpdated: unit.updated === true,
       nightly: nightly.cron,
       nightlyCreated: nightly.created,
     });
