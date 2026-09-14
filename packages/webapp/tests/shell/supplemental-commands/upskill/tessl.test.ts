@@ -9,7 +9,7 @@ import {
   _resetGlobalFsCache,
   createUpskillCommand,
 } from '../../../../src/shell/supplemental-commands/upskill/index.js';
-import { createMockCtx, response } from './test-helpers.js';
+import { createMockCtx, githubCommitsResponse, response } from './test-helpers.js';
 
 describe('upskill Tessl registry integration', () => {
   let fs: VirtualFS;
@@ -167,6 +167,8 @@ describe('upskill Tessl registry integration', () => {
       if (url.includes('raw.githubusercontent.com') && url.includes('SKILL.md')) {
         return response(200, '---\nname: postgres-pro\n---\n# PostgreSQL Pro\n');
       }
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -202,6 +204,8 @@ describe('upskill Tessl registry integration', () => {
           '---\nname: alpha\nrequires:\n  bins:\n    - ffmpeg\n    - magick\n---\n# Alpha\n'
         );
       }
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -212,7 +216,7 @@ describe('upskill Tessl registry integration', () => {
     expect(result.stdout).toContain('alpha');
   });
 
-  it('lists and installs skills via codeload ZIP without GitHub API (no rate limit)', async () => {
+  it('lists and installs skills via codeload ZIP (contents API not used)', async () => {
     // Build a fake ZIP with a skill inside
     const encoder = new TextEncoder();
     const zipBytes = zipSync({
@@ -224,7 +228,9 @@ describe('upskill Tessl registry integration', () => {
       if (url.includes('codeload.github.com')) {
         return response(200, zipBytes);
       }
-      // GitHub API should NOT be called — fail if it is
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
+      // Contents API should NOT be called — zip is the install path
       if (url.includes('api.github.com')) {
         return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
       }
@@ -253,9 +259,12 @@ describe('upskill Tessl registry integration', () => {
       'console.log'
     );
 
-    // Verify no GitHub API calls were made
+    // Zip supplies the files; the only GitHub API call is the sha lookup.
     for (const [url] of fetchMock.mock.calls) {
-      expect(url).not.toContain('api.github.com');
+      if (String(url).includes('api.github.com')) {
+        expect(String(url)).toContain('/commits');
+        expect(String(url)).not.toContain('/contents');
+      }
     }
   });
 
@@ -271,6 +280,8 @@ describe('upskill Tessl registry integration', () => {
     });
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      const commits = githubCommitsResponse(url);
+      if (commits) return commits;
       // Any Tessl call would simulate that host being down — install must still succeed.
       if (url.includes('api.tessl.io')) throw new TypeError('Failed to fetch');
       throw new Error(`unexpected url: ${url}`);

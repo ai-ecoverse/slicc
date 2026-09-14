@@ -8,7 +8,7 @@ import {
   _resetGlobalFsCache,
   createUpskillCommand,
 } from '../../../../src/shell/supplemental-commands/upskill/index.js';
-import { createMockCtx, response } from './test-helpers.js';
+import { createMockCtx, githubCommitsResponse, response } from './test-helpers.js';
 
 let dbCounter = 0;
 
@@ -24,9 +24,8 @@ function repoFetch(files: Record<string, string>, sha = 'a'.repeat(40)) {
   return vi.fn(async (url: string) => {
     if (url.includes('raw.githubusercontent.com')) throw new Error(`unexpected url: ${url}`);
     if (url.includes('codeload.github.com')) return response(200, repoZip(files));
-    if (url.includes('api.github.com') && url.includes('/commits/')) {
-      return response(200, JSON.stringify({ sha }));
-    }
+    const commits = githubCommitsResponse(url, sha);
+    if (commits) return commits;
     throw new Error(`unexpected url: ${url}`);
   });
 }

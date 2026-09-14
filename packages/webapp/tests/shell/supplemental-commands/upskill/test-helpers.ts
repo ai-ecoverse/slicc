@@ -26,3 +26,10 @@ export function response(
     url: 'https://example.test',
   };
 }
+
+/** GitHub commits lookup used to stamp `.upskill` sha (path query or ref object). */
+export function githubCommitsResponse(url: string, sha = 'a'.repeat(40)) {
+  if (!url.includes('api.github.com') || !url.includes('/commits')) return null;
+  if (url.includes('?')) return response(200, JSON.stringify([{ sha }]));
+  return response(200, JSON.stringify({ sha }));
+}

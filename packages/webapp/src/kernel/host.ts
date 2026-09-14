@@ -363,13 +363,13 @@ export function defaultLickEventHandler(event: LickEvent, ctx: LickRoutingContex
     });
     return;
   }
-  routeFormattedLickToCone(event, ctx);
+  void routeFormattedLickToCone(event, ctx);
 }
 
-function routeFormattedLickToCone(
+async function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
-): void {
+): Promise<void> {
   const scoops = orchestrator.getScoops();
   const roots = rootsOf(scoops);
   // Two dispositions for a target that resolves to nothing, deliberately
@@ -408,6 +408,21 @@ function routeFormattedLickToCone(
   // formatter can surface the stable lickId and the built ChannelMessage
   // carries it onto the persisted message + UI chip.
   if (event.type === 'navigate') {
+    try {
+      const { shouldSkipNavigateUpskill } = await import('../scoops/upskill-lick-skip.js');
+      const getConeFs =
+        typeof orchestrator.getDefaultConeFs === 'function'
+          ? () => orchestrator.getDefaultConeFs()
+          : () => null;
+      if (await shouldSkipNavigateUpskill(event, getConeFs)) {
+        log.debug?.(
+          'dropping navigate·upskill lick; advertised skill already installed at that commit'
+        );
+        return;
+      }
+    } catch (err) {
+      log.warn('navigate·upskill skip check failed; raising card', err);
+    }
     event.lickId = orchestrator.registerNavigateLick(event);
   } else if (event.type === 'session-reload') {
     // Session-reload·mount-recovery licks are agent-actionable (lick_confirm

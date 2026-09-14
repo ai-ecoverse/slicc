@@ -1164,6 +1164,12 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lickRegistry.registerNavigate(event);
   }
 
+  /** Cone VFS used by navigate·upskill skip-before-card (#3100). */
+  getDefaultConeFs() {
+    const cone = this.defaultRoot();
+    return cone ? (this.lifecycle.getContext(cone.jid)?.getFS() ?? null) : null;
+  }
+
   /**
    * Mint a stable `lickId` for a session-reload lick and register it so a later
    * resolution can flip the rendered card. Mount-recovery licks (non-empty
