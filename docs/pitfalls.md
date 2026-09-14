@@ -584,7 +584,9 @@ Unbounded recursion starts every payload read and file-sized buffer allocation
 at once. A real Chromium reproduction with 30,000 static one-byte files (30 KB)
 fails with `NotReadableError`; a 16-read control over the same tree succeeds.
 No writer is active during mounting. The failure also reproduces on upstream
-core 2.7.2 / dom 1.2.13: [zen-fs/core#318](https://github.com/zen-fs/core/issues/318).
+core 2.7.3 / dom 1.2.13: [zen-fs/core#318](https://github.com/zen-fs/core/issues/318).
+2.7.3 added a `_crossCopySemaphore` field but never assigns it, so its guard is a
+dead no-op and the preload is still unbounded.
 
 The `@zenfs/core` patch caps payload copies at 16 **across the entire tree**,
 including buffer allocations. Limiting each directory independently multiplies
@@ -706,7 +708,7 @@ committed before that File's `arrayBuffer()` read can invalidate it, causing
 Chromium's `NotReadableError` even though a fresh snapshot is readable.
 One six-byte file is enough; limiting concurrency to one does not prevent the
 interleaving. See [zen-fs/dom#46](https://github.com/zen-fs/dom/issues/46), reproduced
-on upstream dom 1.2.13 / core 2.7.2 as well as our pinned versions.
+on upstream dom 1.2.13 / core 2.7.3 as well as our pinned versions.
 
 The `@zenfs/dom` read patch obtains a fresh File for each byte-read attempt and
 retries native `NotReadableError` at most twice (three total attempts). Retrying
