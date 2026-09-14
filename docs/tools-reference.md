@@ -584,9 +584,10 @@ orchestrator dispatches by `lick_id` to the right resolver. Actionable kinds:
   the orchestrator additionally appends a `NOPASSWD <directive> <pattern>` rule
   to the requesting scoop's `/scoops/<folder>/etc/sudoers` so the same action
   won't prompt again.
-- **navigate·upskill** — confirm runs `upskill <url> [--branch ..] [--path ..]`
-  to install the skill (`upskill`'s on-disk "already exists" check still guards
-  duplicate installs).
+- **navigate·upskill** — confirm runs `upskill [--branch ..] [--path ..] <url> --all`,
+  installing every skill under the advertised scope (`upskill`'s on-disk
+  "already exists" check still guards duplicate installs). Without `--all`,
+  `upskill` would only list what it found and install nothing.
 - **session-reload·mount-recovery** — confirm re-runs the `mount` commands
   reconstructed from the lick's recovery entries.
 - **upgrade** — confirm triggers "Update workspace files" (the upgrade skill's

@@ -3437,7 +3437,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
 
     expect(executeCommand).toHaveBeenCalledTimes(1);
     expect(executeCommand.mock.calls[0][0]).toBe(
-      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r'"
+      "upskill --branch 'main' --path 'skills/foo' 'https://github.com/o/r' --all"
     );
     expect(result.settled).toBe(true);
     expect(result.message).toContain('Installed skill');

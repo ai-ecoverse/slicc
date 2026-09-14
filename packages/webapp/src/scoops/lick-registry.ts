@@ -192,8 +192,8 @@ export class LickRegistry {
   }
 
   /**
-   * On allow/always: run `upskill <target> [--branch ..] [--path ..]` in the
-   * cone's shell (upskill's on-disk "already exists" check still guards
+   * On allow/always: run `upskill [--branch ..] [--path ..] <target> --all` in
+   * the cone's shell (upskill's on-disk "already exists" check still guards
    * duplicate installs); on deny: drop.
    */
   private async resolveUpskill(
@@ -216,6 +216,11 @@ export class LickRegistry {
    * `path` originate from an attacker-controlled `Link` header — never
    * interpolate them raw. Returns the combined stdout/stderr (or an error
    * line) for the tool to surface verbatim.
+   *
+   * `--all` is required: without a skill selector `upskill` stays in discovery
+   * mode and only prints its listing, so the card would flip to ✓ having
+   * installed nothing. It installs everything the origin advertised, scoped by
+   * `--path` when the lick carries one.
    */
   private async runUpskillInstall(entry: {
     target: string;
@@ -229,6 +234,7 @@ export class LickRegistry {
     if (entry.branch) parts.push('--branch', quote(entry.branch));
     if (entry.path) parts.push('--path', quote(entry.path));
     parts.push(quote(entry.target));
+    parts.push('--all');
     try {
       const result = await shell.executeCommand(parts.join(' '));
       const out = `${result.stdout}${result.stderr}`.trim();
