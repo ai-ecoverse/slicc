@@ -1659,13 +1659,13 @@ if (toggle) {
 }
 ```
 
-The sprinkle subsystem is the canonical reference for full bidirectional dispatch: a `globalThis.__slicc_sprinkleManager` proxy is published in both realms and dispatches `sprinkle-op` request/response RPCs over the kernel transport.
+The sprinkle subsystem is the canonical reference for full bidirectional dispatch: a `globalThis.__slicc_sprinkleManager` proxy is published on the worker `globalThis` and dispatches request/response RPCs to the real page-side `SprinkleManager`. The transport differs by float — the standalone/CLI worker uses a same-origin `BroadcastChannel` (`sprinkle-op-request`/`sprinkle-op-response`); the extension offscreen orchestrator relays `sprinkle-op` over the kernel transport instead.
 
 **Related Files**
 
-- `packages/webapp/src/scoops/sprinkle-bridge-channel.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
-- `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the page-side handler is registered)
-- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
+- `packages/webapp/src/scoops/sprinkle-bridge-channel.ts` (standalone path: worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays over the `BroadcastChannel` as `sprinkle-op-request`/`sprinkle-op-response`, plus the matching page-side handler)
+- `packages/webapp/src/ui/wc/wc-sprinkles.ts` (installs the page-side handler for both floats: `installSprinkleManagerHandlerOverChannel(...)` on the `BroadcastChannel` for standalone, or `client.setSprinkleOpHandler(...)` for the extension)
+- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (extension path: routes `sprinkle-op` payloads to the registered handler)
 
 Historical note: prior to the thin-bridge release the equivalent split was the chrome-extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
 
