@@ -354,6 +354,45 @@ describe('usb-operations — two consumers on one handle', () => {
     expect(device.claimInterface).toHaveBeenCalledOnce();
   });
 
+  it('cancels an in-flight grant so a timed-out waiter does not keep the interface', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    let finishSecond!: () => void;
+    let resolveStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    device.claimInterface = vi.fn(async () => {
+      resolveStarted();
+      await new Promise<void>((resolve) => {
+        finishSecond = resolve;
+      });
+    });
+    const waiting = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    await secondStarted;
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBeUndefined();
+    finishSecond();
+    await expect(waiting).rejects.toThrow(/cancelled/);
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBeUndefined();
+    expect(device.releaseInterface).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not drop a live claim when cancel arrives after the grant completed', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell' });
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBe('shell');
+    expect(device.releaseInterface).not.toHaveBeenCalled();
+  });
+
   it('treats a same-owner re-claim as idempotent', async () => {
     const reg = new DeviceHandleRegistry();
     const device = fakeDevice();

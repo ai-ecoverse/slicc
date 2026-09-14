@@ -164,6 +164,7 @@ Options:
   --force   Close/reset even if another consumer holds a claim (emits
             claim-lost/disconnect to the displaced holder)
   --wait    Queue a claim until the current holder releases
+            (bridged waits time out after 5 minutes and drop the waiter)
   -h, --help
 
 Transfers are capped at ${MAX_USB_TRANSFER_BYTES} bytes (4 MiB).

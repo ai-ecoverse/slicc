@@ -105,13 +105,33 @@ export async function usbClaimInterface(
     opts?.wait ?? false,
     opts?.signal
   );
+  const holder = () => claims.claimOwner(registry, handle, interfaceNumber);
+  const stillOurs = () => holder() === owner;
+  const throwIfLost = async (releaseDevice: boolean) => {
+    if (stillOurs()) return;
+    if (!holder()) {
+      if (releaseDevice) {
+        try {
+          await device.releaseInterface(interfaceNumber);
+        } catch {
+          /* already gone */
+        }
+      }
+      claims.wakeInterfaceWaiter(registry, handle, interfaceNumber);
+    }
+    throw claims.claimWaitCancelledError(handle, interfaceNumber, owner);
+  };
   try {
+    await throwIfLost(false);
     await device.claimInterface(interfaceNumber);
+    await throwIfLost(true);
   } catch (err) {
-    if (result === 'acquired') {
+    if (result === 'acquired' && stillOurs()) {
       claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
     }
     throw err;
+  } finally {
+    claims.clearPendingGrant(registry, handle, interfaceNumber, owner);
   }
 }
 
@@ -122,7 +142,10 @@ export async function usbCancelClaimWait(
   owner: string
 ): Promise<void> {
   const claims = await broker();
-  claims.cancelClaimWait(registry, handle, interfaceNumber, owner);
+  if (claims.cancelClaimWait(registry, handle, interfaceNumber, owner)) return;
+  if (!claims.takePendingGrant(registry, handle, interfaceNumber, owner)) return;
+  // In-flight `usbClaimInterface` sees the owner mismatch, releases
+  // WebUSB if no successor holds it, and wakes the next waiter.
 }
 
 export async function usbDropOwner(registry: DeviceHandleRegistry, owner: string): Promise<void> {
