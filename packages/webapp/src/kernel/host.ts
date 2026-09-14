@@ -1075,7 +1075,7 @@ function publishGelatiere(
       }
       const { loadGelatiereConfig } = await import('../base/gelatiere-store.js');
       const config = await loadGelatiereConfig(sharedFs);
-      await unit.bootGelatiere(seam, config.nightly);
+      await unit.bootGelatiere(seam, config.nightly, config.allowedCommands);
     })
     .catch((err) => log.warn('gelatiere seam failed to publish', err));
 }

@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_SUGGESTIONS,
   describeGelatiereLick,
   dismissGelatiereSuggestion,
+  GELATIERE_BASE_ALLOWED_COMMANDS,
   GELATIERE_INSTRUCTIONS_PATH,
   GELATIERE_SKILL_PATH,
   GELATIERE_STATE_PATH,
@@ -79,6 +80,42 @@ describe('parseGelatiereDocument', () => {
     expect(config.instructions).not.toContain('curl ');
     // The unit reads the file raw — no runtime placeholders may be left in it.
     expect(config.instructions).not.toMatch(/\{\{[A-Z_]+\}\}/);
+  });
+
+  it("extends the built-in allow-list with the file's own, deduped", () => {
+    const base = parseGelatiereDocument(DEFAULT_GELATIERE_MD);
+    // The bundled file adds nothing: the base set is the whole default.
+    expect(base.allowedCommands).toEqual(GELATIERE_BASE_ALLOWED_COMMANDS);
+    // Every command the recipe leans on is reachable without an approval
+    // round-trip on an unattended pass.
+    for (const command of ['jq', 'rg', 'upskill', 'gelatiere', 'memory']) {
+      expect(base.allowedCommands).toContain(command);
+    }
+    // No egress by default — `allowedCommands` is a child unit's only network
+    // gate and the pass reads third-party content.
+    for (const command of ['curl', 'wget', 'nc', 'ssh']) {
+      expect(base.allowedCommands).not.toContain(command);
+    }
+
+    const extended = parseGelatiereDocument(`---\nallowedCommands: [tree, xxd, jq]\n---\nBody`);
+    // Additive, never replacing: a file that dropped the base set would take
+    // `gelatiere suggest` with it.
+    expect(extended.allowedCommands).toEqual([...GELATIERE_BASE_ALLOWED_COMMANDS, 'tree', 'xxd']);
+    const block = parseGelatiereDocument(
+      `---\nallowedCommands:\n  - tree # a directory view\n---\nBody`
+    );
+    expect(block.allowedCommands).toContain('tree');
+  });
+
+  it('rejects an allow-list entry that is not a bare command name', () => {
+    // An entry with arguments matches no command, so it would silently grant
+    // nothing; say so instead.
+    expect(() => parseGelatiereDocument('---\nallowedCommands: ["curl -sS"]\n---\nbody')).toThrow(
+      'allowedCommands must contain bare command names, not "curl -sS"'
+    );
+    expect(() => parseGelatiereDocument('---\nallowedCommands: ["rm -rf /"]\n---\nbody')).toThrow(
+      'allowedCommands must contain bare command names'
+    );
   });
 
   it('honours custom values and clamps the per-pass cap', () => {

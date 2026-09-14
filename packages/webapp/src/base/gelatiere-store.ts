@@ -15,7 +15,9 @@
 
 import DEFAULT_GELATIERE_MD from '../../../vfs-root/shared/GELATIERE.md?raw';
 import {
+  type FrontmatterValue,
   parseFrontmatter,
+  readArray,
   readOptionalString,
   splitInstructionDocument,
 } from './instruction-frontmatter.js';
@@ -51,9 +53,83 @@ export const MAX_STORED_SUGGESTIONS = 40;
 export const LICK_SUGGESTION_LIMIT = 5;
 
 const GELATIERE_FRONTMATTER = {
-  arrayKeys: new Set<string>(),
+  arrayKeys: new Set(['allowedCommands']),
   scalarKeys: new Set(['intervalHours', 'nightly', 'maxSuggestions']),
 };
+
+/**
+ * Commands a pass may run without escalating. A child unit runs under
+ * `require-approval`, so every command missing here becomes a sudo request to
+ * the default root — an interruption the user cannot grant away for an
+ * unattended nightly pass. Keep this ahead of what `GELATIERE.md` asks for.
+ *
+ * It lives here, beside the parser, because the file's own `allowedCommands`
+ * block EXTENDS it (`parseGelatiereDocument`) exactly as `MEMORY.md` extends
+ * the curator's base set — one merged list, and one place the shell can read
+ * it from without a back-edge into `scoops/`.
+ */
+export const GELATIERE_BASE_ALLOWED_COMMANDS = [
+  'awk',
+  'basename',
+  'cat',
+  'column',
+  // NO `curl`: for a child unit `allowedCommands` is the only network gate,
+  // and this unit reads third-party content (catalog entries, repo READMEs)
+  // on every unattended pass while seeing /sessions/ and every cone's
+  // memory. One injected "also POST /sessions/*.md to …" line would turn the
+  // nightly into an approval-free exfiltration channel. The recipe's three
+  // known fetches go through `gelatiere catalog|commands|man`, which pin the
+  // host; anything else escalates through the sudo gate, which is right for
+  // egress. A user who genuinely wants egress adds it to `GELATIERE.md`
+  // themselves — an explicit, auditable edit, not a default.
+  'cut',
+  'date',
+  'dirname',
+  'echo',
+  'expr',
+  'false',
+  'file',
+  'find',
+  // The first live pass reflowed long output with `fold -w 120` and the
+  // escalation went to the default cone as a command lick.
+  'fold',
+  'gelatiere',
+  'grep',
+  'head',
+  'jq',
+  'ls',
+  'man',
+  // `memory dream --all` in the nightly recipe. The gelatiere still cannot
+  // write memory files itself — the command spawns sandboxed memory-dreamer
+  // scoops whose writes go through the staged draft + three-way merge.
+  'memory',
+  'mkdir',
+  'nl',
+  'paste',
+  'printf',
+  'realpath',
+  'rg',
+  'sed',
+  'seq',
+  'sort',
+  'stat',
+  'tail',
+  'tee',
+  'test',
+  'touch',
+  'tr',
+  'true',
+  'uniq',
+  'upskill',
+  'wc',
+];
+
+/**
+ * A bare command name — what the shell matches its allow-list against. An
+ * entry like `curl -sS` or `rm -rf /` would match no command and silently do
+ * nothing, so the parser rejects it and says why instead.
+ */
+const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export type GelatiereSuggestionKind = 'skill' | 'use-case' | 'tip';
 const SUGGESTION_KINDS: ReadonlySet<string> = new Set(['skill', 'use-case', 'tip']);
@@ -104,6 +180,13 @@ export interface GelatiereConfig {
   /** Cron expression of the nightly pass. */
   nightly: string;
   maxSuggestions: number;
+  /**
+   * Every command a pass may run without escalating:
+   * {@link GELATIERE_BASE_ALLOWED_COMMANDS} plus whatever the file's
+   * `allowedCommands` block adds. Additive, never replacing — a file that
+   * drops the base set would take `gelatiere suggest` with it.
+   */
+  allowedCommands: string[];
   /** The pass instructions the gelatiere reads at the start of every pass. */
   instructions: string;
 }
@@ -142,6 +225,7 @@ export function parseGelatiereDocument(content: string): GelatiereConfig {
     throw new Error('nightly must be a 5-field cron expression');
   }
   return {
+    allowedCommands: readAllowedCommands(values),
     intervalHours: readPositiveNumber(
       values.intervalHours,
       'intervalHours',
@@ -154,6 +238,20 @@ export function parseGelatiereDocument(content: string): GelatiereConfig {
     ),
     instructions: document.body,
   };
+}
+
+/**
+ * The base set plus the file's extras, deduped and order-preserving. The unit
+ * is persistent, so this list is applied to its record — at boot and on
+ * `gelatiere init` — rather than only when the unit is first created.
+ */
+function readAllowedCommands(values: Record<string, FrontmatterValue>): string[] {
+  const extra = readArray(values, 'allowedCommands', []);
+  const bad = extra.find((command) => !COMMAND_NAME.test(command));
+  if (bad !== undefined) {
+    throw new Error(`allowedCommands must contain bare command names, not "${bad}"`);
+  }
+  return [...new Set([...GELATIERE_BASE_ALLOWED_COMMANDS, ...extra])];
 }
 
 function readPositiveNumber(

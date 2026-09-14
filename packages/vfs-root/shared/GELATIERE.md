@@ -2,6 +2,9 @@
 intervalHours: 24
 nightly: '0 3 * * *'
 maxSuggestions: 5
+# allowedCommands adds to the built-in set a pass may run without asking you
+# for approval; it never replaces it. Bare command names only:
+# allowedCommands: [tree, xxd]
 ---
 
 # Gelatiere pass
@@ -109,7 +112,22 @@ gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
 Add instructions above, for example: prefer skills from a company repo, or always check a team
 wiki at /mnt/kb before suggesting. The config block sets `intervalHours` (minimum hours between
 session-end passes; the nightly pass ignores it), `nightly` (a 5-field cron expression, registered
-by `gelatiere init` as the `gelatiere-nightly` crontask) and `maxSuggestions` (capped at 10).
+by `gelatiere init` as the `gelatiere-nightly` crontask), `maxSuggestions` (capped at 10) and
+`allowedCommands`.
+
+`allowedCommands` is the gelatiere's half of what `MEMORY.md` gives the memory curator: extra shell
+commands a pass may run without escalating. It is ADDITIVE — the built-in set (the read-only text
+utilities, `jq`, `rg`, `upskill`, `gelatiere`, `memory`) always stands, and the file only extends
+it; entries are bare command names, so `tree` is valid and `tree -L 2` is not. `gelatiere status`
+prints the list actually in force and flags an edit that has not been applied yet. The unit is
+registered once and then persists, so an edit here takes effect on the next boot or the next
+`gelatiere init` — and never mid-pass: applying it rebuilds the unit, which would cancel a pass in
+flight, so `gelatiere init` leaves a busy gelatiere alone and asks to be re-run when it is idle.
+
+Adding a command grants it to an UNATTENDED agent that can read `/sessions/` and every cone's
+memory, so weigh a network command (`curl`, `wget`, `ssh`) against that: the pass reads third-party
+catalog and repo content, and general egress would make one injected line enough to exfiltrate an
+archive. That is why the built-in set has none, and why leaving them out is the right default.
 
 The gelatiere is a persistent scoop no cone owns (folder `gelatiere`); its own conversation is
 compacted while it idles. Dismissed suggestions are kept with a dismissedAt stamp so the next pass does not

@@ -8,7 +8,7 @@
  * runs its passes in its own conversation; this command is how those passes
  * land and how anyone else pokes it:
  *
- *   init                 create the unit + its nightly crontask (idempotent)
+ *   init                 create the unit + its nightly crontask, apply its allow-list (idempotent)
  *   run                  lick the unit: "do a pass now"
  *   suggest <file>       the gelatiere's last step — fold candidates into the store
  *   deliver              the gelatiere's other last step — lick every other cone
@@ -34,10 +34,14 @@ interface GelatiereRootLike {
   name: string;
   jid: string;
 }
+type AllowListOutcome = 'unchanged' | 'updated' | 'deferred';
 interface GelatiereSeamLike {
-  ensureUnit(): Promise<{ folder: string; jid: string; created: boolean }>;
+  ensureUnit(
+    allowedCommands?: readonly string[]
+  ): Promise<{ folder: string; jid: string; created: boolean; allowList?: AllowListOutcome }>;
   unregisterOwned(): Promise<string[]>;
   unit(): GelatiereRootLike | undefined;
+  unitAllowedCommands(): readonly string[] | undefined;
   roots(): GelatiereRootLike[];
   ensureNightly(cron: string): Promise<{ id: string; cron: string; created: boolean }>;
   nightly(): { id: string; cron: string } | undefined;
@@ -78,7 +82,8 @@ deliver options:
   --force              Send even when nothing is new since the last delivery
 
 Files:
-  /shared/GELATIERE.md                 Pass instructions + config (intervalHours, nightly, maxSuggestions)
+  /shared/GELATIERE.md                 Pass instructions + config (intervalHours, nightly, maxSuggestions,
+                                       allowedCommands — extra shell commands a pass may run unattended)
   /shared/.gelatiere/suggestions.json  Every suggestion; takenAt when acted on, dismissedAt when waved away
   /shared/.gelatiere/state.json        Pass and delivery ledger
 
@@ -122,9 +127,12 @@ async function handleInit(args: string[], fs: VirtualFS): Promise<CommandResult>
     const jids = await host.unregisterOwned();
     dropped = jids.length ? `Dropped ${jids.length} gelatiere unit(s): ${jids.join(', ')}\n` : '';
   }
-  let unit: { folder: string; jid: string; created: boolean };
+  let unit: { folder: string; jid: string; created: boolean; allowList?: AllowListOutcome };
   try {
-    unit = await host.ensureUnit();
+    // The file's `allowedCommands` reaches an EXISTING unit here — the unit is
+    // registered once and then persists, so `init` (and boot) is where an edit
+    // to the allow-list lands.
+    unit = await host.ensureUnit(config.allowedCommands);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }
@@ -132,9 +140,23 @@ async function handleInit(args: string[], fs: VirtualFS): Promise<CommandResult>
   return ok(
     dropped +
       `${unit.created ? 'Created' : 'Found'} the gelatiere (${unit.jid}, folder ${unit.folder})\n` +
+      allowListLine(unit.allowList) +
       `${nightly.created ? 'Registered' : 'Found'} nightly pass: cron "${nightly.cron}" (${nightly.id})\n` +
       'Suggestions render in the suggestions card; `gelatiere run` asks for a pass now.\n'
   );
+}
+
+/**
+ * What `init` says about the file's allow-list. A deferred edit is the one the
+ * user has to hear about: nothing changed, and re-running once the pass ends
+ * is what applies it.
+ */
+function allowListLine(outcome: AllowListOutcome | undefined): string {
+  if (outcome === 'updated') return 'Updated its command allow-list from GELATIERE.md\n';
+  if (outcome === 'deferred') {
+    return 'Left its command allow-list alone: the gelatiere is mid-pass and applying it would\ncancel the pass — run `gelatiere init` again once it is idle\n';
+  }
+  return '';
 }
 
 async function handleRun(env: LickTargetEnv): Promise<CommandResult> {
@@ -329,12 +351,42 @@ async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
   const nightly = host?.nightly();
   output += `Nightly:        ${nightly ? `registered, cron "${nightly.cron}" (${nightly.id})` : `not registered — run \`gelatiere init\` (cron "${config.nightly}")`}\n`;
   output += `Interval:       ${config.intervalHours}h between session-end passes\n`;
+  output += commandsLine(config.allowedCommands, host?.unitAllowedCommands(), store);
   output += `Passes:         ${state.passes}\n`;
   output += `Last pass:      ${state.lastPassAt ?? 'never'}\n`;
   output += `Last trigger:   ${state.lastTriggeredAt ?? 'never'}\n`;
   output += `Last delivery:  ${state.lastDeliveredAt ?? 'never'}\n`;
   output += `Suggestions:    ${store.openSuggestions(all).length} open, ${store.takenSuggestions(all).length} taken, ${all.length} total\n`;
   return ok(output);
+}
+
+/**
+ * The allow-list line of `gelatiere status`. What the unit RUNS UNDER is its
+ * record's list; `GELATIERE.md` is only a request until a boot or a
+ * `gelatiere init` applies it, so an edited-but-unapplied file must not read
+ * as policy.
+ */
+function commandsLine(
+  configured: readonly string[],
+  inForce: readonly string[] | undefined,
+  store: Awaited<ReturnType<typeof loadStore>>
+): string {
+  const extras = (list: readonly string[]): string => {
+    const found = list.filter(
+      (command) => !store.GELATIERE_BASE_ALLOWED_COMMANDS.includes(command)
+    );
+    return found.length ? ` (+${found.join(', ')} from GELATIERE.md)` : '';
+  };
+  if (!inForce) {
+    return `Commands:       ${configured.length} configured${extras(configured)}, pending — run \`gelatiere init\`\n`;
+  }
+  const same =
+    inForce.length === configured.length && inForce.every((cmd, i) => cmd === configured[i]);
+  if (same) return `Commands:       ${inForce.length} allowed without approval${extras(inForce)}\n`;
+  return (
+    `Commands:       ${inForce.length} in force${extras(inForce)}; GELATIERE.md asks for ` +
+    `${configured.length}${extras(configured)} — run \`gelatiere init\`\n`
+  );
 }
 
 /** The command body: `args` after the `gelatiere` word, the shell context, the shared FS. */
