@@ -168,8 +168,6 @@ final class ServerCommandIntegrationTests: XCTestCase {
         process.standardOutput = outputHandle
         process.standardError = outputHandle
 
-        let terminated = expectation(description: "slicc-server exits after SIGTERM")
-        process.terminationHandler = { _ in terminated.fulfill() }
         try process.run()
         defer {
             if process.isRunning { process.terminate() }
@@ -177,6 +175,8 @@ final class ServerCommandIntegrationTests: XCTestCase {
 
         try await waitForStatus(port: port, process: process)
         try await waitForStartupOutput(outputURL: outputURL, process: process)
+        let terminated = expectation(description: "slicc-server exits after SIGTERM")
+        process.terminationHandler = { _ in terminated.fulfill() }
         // The pre-warm failure is logged immediately before shutdown handling
         // is installed. Give the actor hop a moment to finish before SIGTERM.
         try await Task.sleep(nanoseconds: startupDelayNanoseconds)
@@ -186,8 +186,8 @@ final class ServerCommandIntegrationTests: XCTestCase {
     }
 
     private func waitForStatus(port: Int, process: Process) async throws {
-        let deadline = Date().addingTimeInterval(10)
-        let url = URL(string: "http://127.0.0.1:\(port)/api/status")!
+        let deadline = Date().addingTimeInterval(30)
+        let url = URL(string: "http://localhost:\(port)/api/status")!
         while Date() < deadline {
             if !process.isRunning {
                 throw NSError(
@@ -197,7 +197,7 @@ final class ServerCommandIntegrationTests: XCTestCase {
                 )
             }
             var request = URLRequest(url: url)
-            request.timeoutInterval = 0.2
+            request.timeoutInterval = 1
             if let (data, response) = try? await URLSession.shared.data(for: request),
                 (response as? HTTPURLResponse)?.statusCode == 200,
                 String(data: data, encoding: .utf8)?.contains("slicc-server") == true

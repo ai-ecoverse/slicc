@@ -604,7 +604,7 @@ final class SignAndForwardTests: XCTestCase {
                 SignAndForward.registerRoutes(
                     router: proxyRouter,
                     httpClient: httpClient,
-                    daOrigin: "http://127.0.0.1:\(port)"
+                    daOrigin: "http://localhost:\(port)"
                 )
                 let proxyApp = Application(responder: proxyRouter.buildResponder())
                 let requestBytes = Data("request bytes".utf8).base64EncodedString()
@@ -650,7 +650,7 @@ final class SignAndForwardTests: XCTestCase {
             try await upstreamApp.test(.live) { upstreamClient in
                 let port = try XCTUnwrap(upstreamClient.port)
                 let response = await SignAndForward.forward(
-                    url: URL(string: "http://127.0.0.1:\(port)/bodyless")!,
+                    url: URL(string: "http://localhost:\(port)/bodyless")!,
                     method: .GET,
                     headers: ["Host": "discarded", "X-Dropped-Host": "kept"],
                     body: nil,
@@ -671,7 +671,7 @@ final class SignAndForwardTests: XCTestCase {
             try await upstreamApp.test(.live) { upstreamClient in
                 let port = try XCTUnwrap(upstreamClient.port)
                 let response = await SignAndForward.forward(
-                    url: URL(string: "http://127.0.0.1:\(port)/large")!,
+                    url: URL(string: "http://localhost:\(port)/large")!,
                     method: .GET,
                     headers: [:],
                     body: nil,
