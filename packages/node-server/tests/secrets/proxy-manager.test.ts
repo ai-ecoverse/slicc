@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
-import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
+import {
+  buildFetchProxySecretSource,
+  SecretProxyManager,
+} from '../../src/secrets/proxy-manager.js';
 
 function createTempSecretsFile(content: string): string {
   const dir = join(tmpdir(), `slicc-test-${randomUUID()}`);
@@ -50,6 +53,23 @@ describe('SecretProxyManager', () => {
     const oai = entries.find((e) => e.name === 'OPENAI_KEY');
     expect(oai).toBeDefined();
     expect(oai!.maskedValue.startsWith('sk-')).toBe(true);
+  });
+
+  it('exposes session metadata, raw single-secret lookup, and header scrubbing', async () => {
+    await manager.reload();
+    expect(manager.sessionId).toBe('test-session-id');
+    const masked = await manager.rawPipeline.maskOne(
+      'GITHUB_TOKEN',
+      'ghp_realtoken123456789abcdef'
+    );
+    expect(masked).not.toBe('ghp_realtoken123456789abcdef');
+    const headers = manager.scrubHeaders(
+      new Headers({ authorization: 'Bearer ghp_realtoken123456789abcdef' })
+    );
+    expect(headers.authorization).not.toContain('ghp_realtoken123456789abcdef');
+    await expect(
+      manager.signHmac('GITHUB_TOKEN:x-signature', Buffer.from('body'), 'api.github.com')
+    ).resolves.toMatchObject({ headerName: 'x-signature', signatureHex: expect.any(String) });
   });
 
   it('unmasks text when domain is allowed', async () => {
@@ -208,6 +228,23 @@ describe('SecretProxyManager', () => {
 });
 
 describe('SecretProxyManager — OauthSecretStore chaining', () => {
+  it('resolves direct source lookups with OAuth precedence and env fallback', async () => {
+    const envPath = createTempSecretsFile(
+      'SHARED=env\nSHARED_DOMAINS=example.com\nENV_ONLY=env-only\nENV_ONLY_DOMAINS=example.com'
+    );
+    const envStore = new EnvSecretStore(envPath);
+    const oauthStore = new OauthSecretStore();
+    oauthStore.set('SHARED', 'oauth', ['example.com']);
+    const source = buildFetchProxySecretSource(
+      () => envStore,
+      () => oauthStore
+    );
+
+    await expect(source.get('SHARED')).resolves.toBe('oauth');
+    await expect(source.get('ENV_ONLY')).resolves.toBe('env-only');
+    await expect(source.get('MISSING')).resolves.toBeUndefined();
+  });
+
   it('unmasks a token sourced from OauthSecretStore', async () => {
     const oauthStore = new OauthSecretStore();
     oauthStore.set('oauth.github.token', 'ghp_realtoken', ['api.github.com']);
@@ -219,6 +256,12 @@ describe('SecretProxyManager — OauthSecretStore chaining', () => {
     const r = proxy.unmaskHeaders(headers, 'api.github.com');
     expect(r.forbidden).toBeUndefined();
     expect(headers.authorization).toBe('Bearer ghp_realtoken');
+    expect(await proxy.rawPipeline.maskOne('oauth.github.token', 'ghp_realtoken')).not.toBe(
+      'ghp_realtoken'
+    );
+    await expect(
+      proxy.signHmac('oauth.github.token:x-signature', Buffer.from('body'), 'api.github.com')
+    ).resolves.toMatchObject({ headerName: 'x-signature', signatureHex: expect.any(String) });
   });
 
   it('setOauthStore allows late binding', async () => {

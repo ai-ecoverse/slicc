@@ -17,7 +17,7 @@ export interface TtyDeps {
   createRl?: () => Pick<ReadlineInterface, 'question' | 'close'>;
 }
 
-function defaultRl(): Pick<ReadlineInterface, 'question' | 'close'> {
+export function defaultRl(): Pick<ReadlineInterface, 'question' | 'close'> {
   return createInterface({ input: process.stdin, output: process.stdout });
 }
 

@@ -30,6 +30,13 @@ describe('parseCloudArgs', () => {
     expect(r).toEqual({ subcommand: 'list', args: { substrate: 'e2b' } });
   });
 
+  it('accepts the explicit e2b substrate', () => {
+    expect(parseCloudArgs(['--cloud', 'list', '--substrate', 'e2b'])).toEqual({
+      subcommand: 'list',
+      args: { substrate: 'e2b' },
+    });
+  });
+
   it('parses --cloud pause/resume/kill with positional query', () => {
     expect(parseCloudArgs(['--cloud', 'pause', 'task-1'])).toEqual({
       subcommand: 'pause',
@@ -52,6 +59,16 @@ describe('parseCloudArgs', () => {
 
   it('rejects unknown subcommands', () => {
     expect(() => parseCloudArgs(['--cloud', 'banana'])).toThrow(/unknown subcommand/i);
+  });
+
+  it('rejects unsupported substrates, stray flags, and missing queries', () => {
+    expect(() => parseCloudArgs(['--cloud', 'list', '--substrate', 'docker'])).toThrow(
+      'unsupported substrate'
+    );
+    expect(() => parseCloudArgs(['--cloud', 'start', '--unknown'])).toThrow('unrecognized arg');
+    for (const subcommand of ['pause', 'resume', 'kill']) {
+      expect(() => parseCloudArgs(['--cloud', subcommand])).toThrow('requires a query');
+    }
   });
 
   it('returns null when --cloud is absent', () => {

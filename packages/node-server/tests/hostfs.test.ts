@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import express from 'express';
 import {
   chmod,
@@ -7,20 +8,26 @@ import {
   realpath,
   stat,
   symlink,
+  truncate,
   utimes,
   writeFile,
 } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
 import {
+  HOSTFS_MAX_BODY_BYTES,
   HOSTFS_STABLE_MAX_BODY_BYTES,
+  hostFsBodyErrorHandler,
   isHostFsStableBodyRequest,
   parseByteRange,
   registerHostFsRoutes,
   resolveHostMountRoots,
   resolveWithinRoot,
+  sendFsError,
+  streamFileBody,
+  toFsCodeError,
 } from '../src/hostfs.js';
 
 interface StatIdentity {
@@ -78,6 +85,68 @@ beforeAll(async () => {
       listening.closeAllConnections?.();
       listening.close(() => r());
     });
+});
+
+describe('hostfs error and stream helpers', () => {
+  it('maps unknown failures to EIO and destroys an already-started response', () => {
+    expect(toFsCodeError(new Error('boom'))).toEqual({ status: 500, code: 'EIO', message: 'boom' });
+    const destroy = vi.fn();
+    sendFsError({ headersSent: true, destroy } as never, new Error('late failure'));
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('passes unrelated body parser failures to the next middleware', () => {
+    const next = vi.fn();
+    hostFsBodyErrorHandler(
+      Object.assign(new Error('bad body'), { type: 'entity.parse.failed' }),
+      { path: '/api/elsewhere' } as never,
+      { headersSent: false } as never,
+      next
+    );
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('handles read-stream failures before and after response commitment', async () => {
+    function fixture() {
+      const stream = Object.assign(new EventEmitter(), {
+        pipe: vi.fn(),
+        destroy: vi.fn(),
+      });
+      const response = Object.assign(new EventEmitter(), {
+        status: vi.fn(),
+        setHeader: vi.fn(),
+        destroy: vi.fn(),
+      });
+      const createStream = vi.fn(() => stream) as unknown as typeof import('fs').createReadStream;
+      return { stream, response, createStream };
+    }
+
+    const early = fixture();
+    const rejected = streamFileBody(
+      early.response as never,
+      '/file',
+      200,
+      {},
+      undefined,
+      early.createStream
+    );
+    early.stream.emit('error', new Error('open failed'));
+    await expect(rejected).rejects.toThrow('open failed');
+
+    const late = fixture();
+    const resolved = streamFileBody(
+      late.response as never,
+      '/file',
+      200,
+      {},
+      undefined,
+      late.createStream
+    );
+    late.stream.emit('open');
+    late.stream.emit('error', new Error('read failed'));
+    await expect(resolved).resolves.toBeUndefined();
+    expect(late.response.destroy).toHaveBeenCalledOnce();
+  });
 });
 
 afterAll(async () => {
@@ -177,6 +246,35 @@ describe('hostfs routes', () => {
     });
     expect(res.status).toBe(200);
     expect(await readFile(join(root, 'new/deep/file.txt'), 'utf8')).toBe('written from test');
+  });
+
+  it('refuses to overwrite a directory and validates per-op rename parameters', async () => {
+    const directory = await api('/api/hostfs/write?mount=%2Fmnt%2Fproj&path=sub', {
+      method: 'PUT',
+      body: 'nope',
+    });
+    expect(directory.status).toBe(409);
+    const rename = await api('/api/hostfs/rename?mount=%2Fmnt%2Fproj&path=hello.txt', {
+      method: 'POST',
+    });
+    expect(rename.status).toBe(400);
+  });
+
+  it('returns 413 for an unranged file above the whole-file cap', async () => {
+    const large = join(root, 'large.bin');
+    await writeFile(large, Buffer.alloc(0));
+    await truncate(large, HOSTFS_MAX_BODY_BYTES + 1);
+    const response = await api('/api/hostfs/read?mount=%2Fmnt%2Fproj&path=large.bin');
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: 'EFBIG' });
+  });
+
+  it('keeps dangling directory entries as name-only files', async () => {
+    const dangling = join(root, 'dangling-link');
+    await symlink(join(root, 'missing-target'), dangling);
+    const response = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    const body = (await response.json()) as { entries: Array<{ name: string; kind: string }> };
+    expect(body.entries).toContainEqual({ name: 'dangling-link', kind: 'file' });
   });
 
   it('mkdir, rename, and remove work and refuse the mount root', async () => {
@@ -654,5 +752,18 @@ describe('resolveWithinRoot', () => {
     await expect(resolveWithinRoot(root, 'escape-link/new-file.txt')).rejects.toMatchObject({
       code: 'EACCES',
     });
+  });
+});
+
+describe('resolveHostMountRoots edge cases', () => {
+  it('skips files and missing roots using the default warning sink', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const roots = await resolveHostMountRoots([
+      { hostPath: join(root, 'hello.txt'), path: '/mnt/file' },
+      { hostPath: join(root, 'missing-root'), path: '/mnt/missing' },
+    ]);
+    expect(roots).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 });

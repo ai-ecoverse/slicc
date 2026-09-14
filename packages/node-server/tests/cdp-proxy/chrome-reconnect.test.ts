@@ -68,6 +68,28 @@ describe('ChromeReconnectController', () => {
     h = makeHarness();
   });
 
+  it('uses the production timer when no sleep seam is supplied', async () => {
+    vi.useFakeTimers();
+    const discover = vi.fn(async () => 'ws://fresh');
+    const controller = new ChromeReconnectController({
+      discoverChromeWsUrl: discover,
+      connectChrome: vi.fn(async () => undefined),
+      resetClient: vi.fn(),
+      activeClientId: () => null,
+      isShuttingDown: () => false,
+      log: vi.fn(),
+      delayMs: 5,
+    });
+    try {
+      controller.schedule('test');
+      await vi.advanceTimersByTimeAsync(5);
+      await controller.settled();
+      expect(discover).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('schedules a reconnect, re-discovers the ws URL and reconnects', async () => {
     h.controller.schedule('close code=1006');
     await h.controller.settled();

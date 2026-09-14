@@ -1,7 +1,16 @@
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
+import express from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
-import { createHttpCdp, findSliccPageTarget, restartLeader } from '../src/leader-restart.js';
+import {
+  CdpClient,
+  type CdpLike,
+  createHttpCdp,
+  findSliccPageTarget,
+  registerLeaderRestartEndpoint,
+  restartLeader,
+} from '../src/leader-restart.js';
 
 describe('findSliccPageTarget', () => {
   it('returns the page target whose URL starts with the local URL', () => {
@@ -92,6 +101,56 @@ describe('restartLeader', () => {
     const result = await restartLeader(fakeCdp, 'http://localhost:5710/');
     expect(result).toMatchObject({ ok: false, code: 'NO_LEADER_TAB' });
   });
+
+  it('classifies target-list failures and malformed targets', async () => {
+    await expect(
+      restartLeader({ send: vi.fn().mockRejectedValue(new Error('connection timeout')) }, 'x')
+    ).resolves.toMatchObject({ ok: false, code: 'CDP_NOT_READY' });
+    await expect(
+      restartLeader({ send: vi.fn().mockRejectedValue('protocol broke') }, 'x')
+    ).resolves.toEqual({ ok: false, code: 'CDP_ERROR', message: 'protocol broke' });
+    await expect(
+      restartLeader(
+        {
+          send: vi.fn().mockResolvedValue({
+            targetInfos: [{ type: 'page', url: 'x/page', attached: true }],
+          }),
+        },
+        'x/'
+      )
+    ).resolves.toMatchObject({ ok: false, code: 'INTERNAL', message: 'target missing id' });
+  });
+
+  it('returns INTERNAL when attach or reload fails', async () => {
+    const cdp = {
+      send: vi.fn(async (method: string) => {
+        if (method === 'Target.getTargets') {
+          return { targetInfos: [{ id: 'page', type: 'page', url: 'x/page', attached: true }] };
+        }
+        throw new Error('attach failed');
+      }),
+    };
+    await expect(restartLeader(cdp, 'x/')).resolves.toMatchObject({
+      ok: false,
+      code: 'INTERNAL',
+      message: 'Error: attach failed',
+    });
+  });
+});
+
+describe('CdpClient', () => {
+  it('rejects and removes a pending call when WebSocket send fails', async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      send: vi.fn((_frame: string, callback: (error?: Error) => void) =>
+        callback(new Error('write failed'))
+      ),
+      close: vi.fn(),
+    });
+    const client = new CdpClient(socket as never);
+    await expect(client.send('Page.reload')).rejects.toThrow('write failed');
+    client.close();
+    expect(socket.close).toHaveBeenCalledOnce();
+  });
 });
 
 describe('registerLeaderRestartEndpoint — localhost guard', () => {
@@ -123,6 +182,9 @@ describe('registerLeaderRestartEndpoint — localhost guard', () => {
 });
 
 describe('createHttpCdp — real WebSocket roundtrip', () => {
+  it('requires target discovery before a WebSocket command', async () => {
+    await expect(createHttpCdp(1).send('Page.reload')).rejects.toThrow('no ws url cached');
+  });
   it('attaches to a target and sends Page.reload', async () => {
     // Stand up a fake CDP target: HTTP /json returns a target descriptor;
     // a ws server accepts the connection and echoes Target.attachToTarget +
@@ -238,5 +300,55 @@ describe('createHttpCdp — real WebSocket roundtrip', () => {
       wss.close();
       httpServer.close();
     }
+  });
+});
+
+describe('registerLeaderRestartEndpoint', () => {
+  async function requestWith(cdp: CdpLike): Promise<Response> {
+    const app = express();
+    registerLeaderRestartEndpoint(app, { cdp, pageUrlPrefix: 'http://leader/' });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      return await fetch(`http://127.0.0.1:${port}/api/leader-restart`, { method: 'POST' });
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  it('returns the success response', async () => {
+    const response = await requestWith({
+      send: vi.fn(async (method: string) => {
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [
+              { id: 'leader', type: 'page', url: 'http://leader/page', attached: true },
+            ],
+          };
+        }
+        if (method === 'Target.attachToTarget') return { sessionId: 'session' };
+        return {};
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+  });
+
+  it('maps retriable and fatal failures to 503 and 500', async () => {
+    const missing = await requestWith({
+      send: vi.fn(async () => ({ targetInfos: [] })),
+    });
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toMatchObject({ error: 'NO_LEADER_TAB' });
+
+    const fatal = await requestWith({
+      send: vi.fn(async () => {
+        throw new Error('protocol error');
+      }),
+    });
+    expect(fatal.status).toBe(500);
+    expect(await fatal.json()).toMatchObject({ error: 'CDP_ERROR' });
   });
 });

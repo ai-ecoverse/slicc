@@ -86,8 +86,8 @@
       "entry": [
         "src/index.ts!",
         "src/electron-main.ts!",
-        "src/release-package.ts!",
-        "src/publish-chrome-web-store.ts!",
+        "src/release-package-main.ts!",
+        "src/publish-chrome-web-store-main.ts!",
         "src/qa-setup.ts!",
         "src/secrets/index.ts!",
         "tests/**/*.test.ts"

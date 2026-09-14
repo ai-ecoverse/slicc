@@ -1,23 +1,43 @@
+import { type ChildProcess, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
 import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from '../src/bridge-security.js';
 import {
   BRIDGE_ROLE_FOLLOWER,
   BRIDGE_ROLE_LEADER,
   BRIDGE_ROLE_QUERY_PARAM,
+  buildFulfillResponseHeaders,
   buildThinOverlayAppUrl,
   decodeCdpRequestPostBody,
   ElectronOverlayInjector,
   findMatchingElectronAppPids,
+  findRunningElectronAppPids,
   isOverlayEgressBlockError,
+  isPidAlive,
+  launchElectronApp,
+  listRunningProcesses,
+  logNavigationReinjectionFailure,
+  logOverlayReinjectionFailure,
+  logPresenceReinjectionFailure,
   OVERLAY_EGRESS_BLOCK_ERROR_TEXTS,
   OVERLAY_LOADED_PROBE_EXPRESSION,
+  parseUnixProcessList,
+  parseWindowsProcessList,
   resolveFetchProxyOrigin,
   resolveHostedLeaderOrigin,
   resolveOverlayThinBridge,
+  terminateRunningApp,
+  waitForPidsToExit,
 } from '../src/electron-controller.js';
-import type { ElectronInspectableTarget } from '../src/electron-runtime.js';
+import {
+  type ElectronInspectableTarget,
+  getElectronOverlayEntryDistPath,
+} from '../src/electron-runtime.js';
 
 describe('findMatchingElectronAppPids', () => {
   it('excludes the current CLI pid while keeping other matching Electron app pids', () => {
@@ -290,6 +310,195 @@ describe('findMatchingElectronAppPids', () => {
         999
       )
     ).toEqual([70]);
+  });
+});
+
+describe('Electron process discovery and lifecycle', () => {
+  it('parses Unix process listings and rejects malformed pid rows', () => {
+    expect(
+      parseUnixProcessList(`
+        12 /Applications/Slack.app/Contents/MacOS/Slack --flag
+        nonsense
+        0 invalid
+        -1 invalid
+        13
+        14   /Applications/Linear.app/Contents/MacOS/Linear
+      `)
+    ).toEqual([
+      {
+        pid: 12,
+        commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --flag',
+        executablePath: null,
+      },
+      {
+        pid: 14,
+        commandLine: '/Applications/Linear.app/Contents/MacOS/Linear',
+        executablePath: null,
+      },
+    ]);
+  });
+
+  it('parses empty, singleton, and array-shaped Windows process listings', () => {
+    expect(parseWindowsProcessList('   ')).toEqual([]);
+    expect(
+      parseWindowsProcessList(
+        JSON.stringify({ ProcessId: 21, CommandLine: null, ExecutablePath: 'C:\\Slack.exe' })
+      )
+    ).toEqual([{ pid: 21, commandLine: '', executablePath: 'C:\\Slack.exe' }]);
+    expect(
+      parseWindowsProcessList(
+        JSON.stringify([
+          { ProcessId: '22', CommandLine: 'Slack.exe', ExecutablePath: null },
+          { ProcessId: 0, CommandLine: 'invalid' },
+          { ProcessId: 'not-a-number', CommandLine: 'invalid' },
+        ])
+      )
+    ).toEqual([{ pid: 22, commandLine: 'Slack.exe', executablePath: null }]);
+  });
+
+  it('uses the platform-specific process-list command', async () => {
+    const calls: Array<[string, string[]]> = [];
+    const run = async (command: string, args: string[]) => {
+      calls.push([command, args]);
+      return {
+        stdout:
+          command === 'powershell'
+            ? '{"ProcessId":31,"CommandLine":"Slack.exe","ExecutablePath":null}'
+            : '32 Slack --remote-debugging-port=9223',
+      };
+    };
+    await expect(listRunningProcesses('win32', run)).resolves.toHaveLength(1);
+    await expect(listRunningProcesses('darwin', run)).resolves.toHaveLength(1);
+    expect(calls[0]?.[0]).toBe('powershell');
+    expect(calls[1]).toEqual(['ps', ['-ax', '-o', 'pid=', '-o', 'command=']]);
+  });
+
+  it('probes pid liveness without leaking process errors', () => {
+    expect(isPidAlive(1, () => {})).toBe(true);
+    expect(
+      isPidAlive(1, () => {
+        throw new Error('missing');
+      })
+    ).toBe(false);
+  });
+
+  it('waits for process exit and reports a bounded timeout', async () => {
+    let aliveChecks = 0;
+    const exited = {
+      isAlive: () => aliveChecks++ === 0,
+      kill: () => {},
+      now: () => 0,
+      sleep: async () => {},
+    };
+    await expect(waitForPidsToExit([1], 100, exited)).resolves.toBe(true);
+
+    let now = 0;
+    const stuck = {
+      isAlive: () => true,
+      kill: () => {},
+      now: () => (now += 100),
+      sleep: async () => {},
+    };
+    await expect(waitForPidsToExit([1], 50, stuck)).resolves.toBe(false);
+  });
+
+  it('terminates live pids gracefully and force-kills survivors', async () => {
+    const gracefulSignals: Array<[number, NodeJS.Signals | undefined]> = [];
+    const alive = new Set([2]);
+    await terminateRunningApp([1, 2], {
+      isAlive: (pid) => alive.has(pid),
+      kill: (pid, signal) => {
+        gracefulSignals.push([pid, signal]);
+        alive.delete(pid);
+      },
+      now: () => 0,
+      sleep: async () => {},
+    });
+    expect(gracefulSignals).toEqual([[2, undefined]]);
+
+    const forceSignals: Array<NodeJS.Signals | undefined> = [];
+    let now = 0;
+    await terminateRunningApp([3], {
+      isAlive: () => true,
+      kill: (_pid, signal) => {
+        forceSignals.push(signal);
+        throw new Error('simulated refusal');
+      },
+      now: () => (now += 10_000),
+      sleep: async () => {},
+    });
+    expect(forceSignals).toEqual([undefined, 'SIGKILL']);
+  });
+
+  it('validates, elects, terminates, and spawns direct Electron executables', async () => {
+    let existsCalls = 0;
+    await expect(
+      launchElectronApp(
+        { appPath: '/missing/app', cdpPort: 9223, kill: false, platform: 'linux' },
+        { exists: () => false }
+      )
+    ).rejects.toThrow('Electron app not found');
+    await expect(
+      launchElectronApp(
+        { appPath: '/missing/command', cdpPort: 9223, kill: false, platform: 'linux' },
+        { exists: () => ++existsCalls === 1 }
+      )
+    ).rejects.toThrow('Electron executable not found');
+
+    await expect(
+      launchElectronApp(
+        { appPath: '/opt/Slack', cdpPort: 9223, kill: false, platform: 'linux' },
+        { exists: () => true, findRunningPids: async () => [44] }
+      )
+    ).rejects.toMatchObject({ name: 'ElectronAppAlreadyRunningError' });
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const child = { pid: 99 } as ChildProcess;
+    const terminated: number[][] = [];
+    const result = await launchElectronApp(
+      { appPath: '/opt/Slack', cdpPort: 9223, kill: true, platform: 'linux' },
+      {
+        exists: () => true,
+        findRunningPids: async () => [44],
+        terminate: async (pids) => {
+          terminated.push(pids);
+        },
+        spawn: (command, args) => {
+          calls.push({ command, args });
+          return child;
+        },
+      }
+    );
+    expect(result).toEqual({ child, displayName: 'Slack' });
+    expect(terminated).toEqual([[44]]);
+    expect(calls[0]?.command).toBe('/opt/Slack');
+    expect(calls[0]?.args).toContain('--remote-debugging-port=9223');
+  });
+
+  it('launches macOS app bundles through open with a new instance', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const child = {} as ChildProcess;
+    await expect(
+      launchElectronApp(
+        { appPath: '/Applications/Slack.app', cdpPort: 9223, kill: false, platform: 'darwin' },
+        {
+          exists: () => true,
+          findRunningPids: async () => [],
+          spawn: (command, args) => {
+            calls.push({ command, args });
+            return child;
+          },
+        }
+      )
+    ).resolves.toEqual({ child, displayName: 'Slack' });
+    expect(calls[0]?.command).toBe('open');
+    expect(calls[0]?.args.slice(0, 5)).toEqual([
+      '-n',
+      '-a',
+      '/Applications/Slack.app',
+      '-W',
+      '--args',
+    ]);
   });
 });
 
@@ -1887,6 +2096,251 @@ describe('ElectronOverlayInjector Fetch proxy document POST (#2886)', () => {
     } finally {
       await origin.close();
       await harness.close();
+    }
+  });
+});
+
+describe('Electron controller defensive adapters', () => {
+  it('uses the real process listing and default process lifecycle safely', async () => {
+    await expect(
+      findRunningElectronAppPids('/definitely/not/a/running/electron-app', 'linux')
+    ).resolves.toEqual([]);
+    await expect(waitForPidsToExit([process.pid], 1)).resolves.toBe(false);
+
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+    await new Promise<void>((resolve) => child.once('spawn', resolve));
+    const exit = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    try {
+      await terminateRunningApp([child.pid!]);
+      await exit;
+    } finally {
+      if (child.pid && isPidAlive(child.pid)) child.kill('SIGKILL');
+    }
+  });
+
+  it('translates CSP, content-length, and repeated response headers for CDP', () => {
+    expect(
+      buildFulfillResponseHeaders(
+        {
+          'content-security-policy': "default-src 'self'",
+          'content-length': '999',
+          'set-cookie': ['a=1', 'b=2'],
+          connection: 'close',
+          'x-test': 'kept',
+        },
+        12
+      )
+    ).toEqual({
+      strippedCSP: true,
+      responseHeaders: [
+        { name: 'content-length', value: '12' },
+        { name: 'set-cookie', value: 'a=1' },
+        { name: 'set-cookie', value: 'b=2' },
+        { name: 'x-test', value: 'kept' },
+      ],
+    });
+  });
+
+  it('loads the built overlay when creating the production injector', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'slicc-electron-create-'));
+    try {
+      const bundlePath = getElectronOverlayEntryDistPath(root);
+      await mkdir(dirname(bundlePath), { recursive: true });
+      await writeFile(bundlePath, 'globalThis.__overlayBundleLoaded = true;');
+      const injector = await ElectronOverlayInjector.create({
+        cdpPort: 9223,
+        servePort: 5711,
+        projectRoot: root,
+        thinBridge: {
+          hostedLeaderOrigin: 'https://www.sliccy.ai',
+          bridgeWsUrl: 'ws://localhost:5711/cdp',
+          bridgeToken: 'create-test-token',
+        },
+      });
+      expect(injector).toBeInstanceOf(ElectronOverlayInjector);
+      injector.stop();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('starts, serializes syncs, reports listing failures, and removes stale connections', async () => {
+    type Mode = 'delayed-empty' | 'error' | 'targets' | 'empty';
+    let mode: Mode = 'delayed-empty';
+    const targets: ElectronInspectableTarget[] = [
+      {
+        type: 'page',
+        title: 'Primary',
+        url: 'https://app.example/main',
+        webSocketDebuggerUrl: 'ws://target/primary',
+      },
+      {
+        type: 'page',
+        title: 'Popup',
+        url: 'https://app.example/popup',
+        webSocketDebuggerUrl: 'ws://target/popup',
+      },
+    ];
+    const server = createServer((_req, res) => {
+      if (mode === 'error') {
+        res.writeHead(503, 'Unavailable').end();
+        return;
+      }
+      const reply = () => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(mode === 'targets' ? targets : []));
+      };
+      if (mode === 'delayed-empty') setTimeout(reply, 20);
+      else reply();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('failed to bind list server');
+    const injector = ElectronOverlayInjector._createForTesting({
+      cdpPort: address.port,
+      servePort: 5711,
+    });
+    try {
+      const firstSync = injector._testingSyncTargets();
+      await injector._testingSyncTargets();
+      await firstSync;
+
+      mode = 'error';
+      await injector._testingSyncTargets();
+
+      let closed = 0;
+      const connection = { close: () => closed++ };
+      injector._testingSeedConnection('ws://target/primary', connection);
+      injector._testingSeedConnection('ws://target/popup', connection);
+      injector._testingSeedConnection('ws://target/stale', connection);
+      mode = 'targets';
+      await injector._testingSyncTargets();
+      expect(closed).toBe(2);
+
+      mode = 'empty';
+      await injector.start();
+      await injector._testingRunScheduledSync();
+      injector.stop();
+      expect(closed).toBe(3);
+    } finally {
+      injector.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('stops seeded connections and identity-guards targeted cleanup', () => {
+    const injector = ElectronOverlayInjector._createForTesting({ servePort: 5711 });
+    const close = vi.fn();
+    const current = { close };
+    injector._testingSeedConnection('target', current);
+    injector._testingDropConnection('target', { close: vi.fn() } as never);
+    injector.stop();
+    expect(close).toHaveBeenCalledOnce();
+
+    close.mockClear();
+    injector._testingSeedConnection('target', current);
+    injector._testingDropConnection('target', current as never);
+    injector.stop();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('times out both one-shot overlay probes and removes their listeners', async () => {
+    vi.useFakeTimers();
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({ servePort: 5711 });
+      const loadedWs = new EventEmitter();
+      const evictedWs = new EventEmitter();
+      const loaded = injector._testingProbeOverlayIframeLoaded(loadedWs as never, () => 1);
+      const evicted = injector._testingProbeOverlayEvicted(evictedWs as never, () => 2);
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(loaded).resolves.toBe(false);
+      await expect(evicted).resolves.toBe(false);
+      expect(loadedWs.listenerCount('message')).toBe(0);
+      expect(evictedWs.listenerCount('message')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handles missing, non-document, CSP, and failed paused requests', async () => {
+    const injector = ElectronOverlayInjector._createForTesting({ servePort: 5711 });
+    const ws = { readyState: 1 };
+    const sent: Array<{ method: string; params: unknown }> = [];
+    const send = (method: string, params?: unknown) => {
+      sent.push({ method, params });
+      return sent.length;
+    };
+
+    injector._testingHandleFetchRequestPaused(ws as never, send as never, {});
+    injector._testingHandleFetchRequestPaused(ws as never, send as never, {
+      params: { requestId: 'asset', request: { url: 'http://example.test/a.js' } },
+    });
+    expect(sent.some((entry) => entry.method === 'Fetch.continueRequest')).toBe(true);
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-security-policy': "default-src 'self'",
+        'content-length': '13',
+      });
+      res.end('<html></html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('failed to bind origin');
+    try {
+      injector._testingHandleFetchRequestPaused(ws as never, send as never, {
+        params: {
+          requestId: 'document',
+          request: {
+            url: `http://127.0.0.1:${address.port}/`,
+            headers: { Accept: 'text/html' },
+          },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(sent.some((entry) => entry.method === 'Fetch.fulfillRequest')).toBe(true);
+      });
+
+      injector._testingHandleFetchRequestPaused(ws as never, send as never, {
+        params: {
+          requestId: 'failed-document',
+          request: { url: 'http://127.0.0.1:1/', headers: { Accept: 'text/html' } },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(
+          sent.some(
+            (entry) =>
+              entry.method === 'Fetch.failRequest' &&
+              (entry.params as { requestId?: string }).requestId === 'failed-document'
+          )
+        ).toBe(true);
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('formats reinjection failures from Error and non-Error values', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      logOverlayReinjectionFailure('Presence-check', new Error('boom'));
+      logOverlayReinjectionFailure('Navigation', 'gone');
+      logPresenceReinjectionFailure(new Error('presence'));
+      logNavigationReinjectionFailure('navigation');
+      expect(warn).toHaveBeenCalledWith(
+        '[electron-float] Presence-check re-injection failed: boom'
+      );
+      expect(warn).toHaveBeenCalledWith('[electron-float] Navigation re-injection failed: gone');
+      expect(warn).toHaveBeenCalledWith(
+        '[electron-float] Presence-check re-injection failed: presence'
+      );
+      expect(warn).toHaveBeenCalledWith(
+        '[electron-float] Navigation re-injection failed: navigation'
+      );
+    } finally {
+      warn.mockRestore();
     }
   });
 });

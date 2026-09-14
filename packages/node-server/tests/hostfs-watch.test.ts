@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import type { FSWatcher } from 'fs';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -33,6 +34,35 @@ describe('buildHostfsInvalidateEvent', () => {
 });
 
 describe('startHostFsWatchers', () => {
+  it('logs watcher errors and startup failures without throwing', () => {
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handle = startHostFsWatchers(
+      [
+        { path: '/mnt/works', root: '/host/works' },
+        { path: '/mnt/fails', root: '/host/fails' },
+      ],
+      vi.fn(),
+      {
+        watchFn: vi.fn((root: string) => {
+          if (root.endsWith('fails')) throw new Error('watch unavailable');
+          return watcher as unknown as FSWatcher;
+        }) as unknown as typeof import('fs').watch,
+      }
+    );
+    watcher.emit('error', new Error('watch broke'));
+    expect(warn).toHaveBeenCalledWith(
+      '[hostfs-watch] watcher error for /mnt/works:',
+      expect.any(Error)
+    );
+    expect(warn).toHaveBeenCalledWith(
+      '[hostfs-watch] failed to watch /host/fails (/mnt/fails):',
+      'watch unavailable'
+    );
+    handle.stop();
+    warn.mockRestore();
+  });
+
   it('debounces and broadcasts coalesced hostfs_invalidate events', async () => {
     vi.useFakeTimers();
     const events: unknown[] = [];

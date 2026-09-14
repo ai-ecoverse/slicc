@@ -88,7 +88,7 @@ function errnoCode(err: unknown): string | null {
 }
 
 /** Map an fs errno (or traversal rejection) to an HTTP status + FsError code. */
-function toFsCodeError(err: unknown): FsCodeError {
+export function toFsCodeError(err: unknown): FsCodeError {
   const code = errnoCode(err) ?? 'EIO';
   const message = err instanceof Error ? err.message : String(err);
   switch (code) {
@@ -107,7 +107,7 @@ function toFsCodeError(err: unknown): FsCodeError {
   }
 }
 
-function sendFsError(res: Response, err: unknown): void {
+export function sendFsError(res: Response, err: unknown): void {
   // A streamed body may already have committed the status line; the only
   // honest signal left is a broken connection.
   if (res.headersSent) {
@@ -229,14 +229,15 @@ export function parseByteRange(header: string | undefined, size: number): Parsed
  * reported by destroying the connection — a truncated body the client's
  * `fetch` rejects on, which its retry path already handles.
  */
-async function streamFileBody(
+export async function streamFileBody(
   res: Response,
   target: string,
   status: number,
   headers: Record<string, string>,
-  window?: { start: number; end: number }
+  window?: { start: number; end: number },
+  createStream: typeof createReadStream = createReadStream
 ): Promise<void> {
-  const stream = createReadStream(target, window);
+  const stream = createStream(target, window);
   await new Promise<void>((resolveStream, rejectStream) => {
     let committed = false;
     stream.once('open', () => {
@@ -465,7 +466,7 @@ export function isHostFsStableBodyRequest(req: { method?: string; url?: string }
  * Anything that is not a body-parser error, and every non-hostfs path, is
  * passed through untouched.
  */
-const hostFsBodyErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
+export const hostFsBodyErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   const type = (err as { type?: unknown } | null)?.type;
   if (typeof type !== 'string' || res.headersSent || !isHostFsPath(req.path)) {
     next(err);

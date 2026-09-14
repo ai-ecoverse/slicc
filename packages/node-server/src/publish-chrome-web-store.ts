@@ -348,7 +348,7 @@ async function fetchUploadStatus(
   return expectJsonResponse<FetchStatusResponse>(response, 'Chrome Web Store upload status');
 }
 
-async function cancelPendingSubmission(
+export async function cancelPendingSubmission(
   config: ChromeWebStoreConfig,
   accessToken: string,
   fetchImpl: typeof fetch
@@ -372,7 +372,7 @@ async function cancelPendingSubmission(
   }
 }
 
-async function waitForPendingReviewCancellation(
+export async function waitForPendingReviewCancellation(
   config: ChromeWebStoreConfig,
   accessToken: string,
   fetchImpl: typeof fetch,
@@ -633,19 +633,4 @@ export async function publishChromeWebStoreRelease(
       uploadResponse.uploadState === 'IN_PROGRESS' ? 'SUCCEEDED' : uploadResponse.uploadState,
     publishState: publishResponse.state,
   };
-}
-
-async function main(): Promise<void> {
-  const manifestPath = process.argv[2]
-    ? resolve(PROJECT_ROOT, process.argv[2])
-    : DEFAULT_RELEASE_MANIFEST_PATH;
-  await publishChromeWebStoreRelease({ manifestPath });
-}
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  void main().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[publish-chrome-web-store] ${message}`);
-    process.exit(1);
-  });
 }

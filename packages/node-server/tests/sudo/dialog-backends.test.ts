@@ -132,6 +132,17 @@ describe('kdialog backend', () => {
       pattern: 'edited*',
     });
   });
+
+  it('falls back to the suggested pattern when the entry dialog fails', async () => {
+    const exec = vi
+      .fn<ExecFn>()
+      .mockRejectedValueOnce({ code: 2 })
+      .mockRejectedValueOnce(new Error('entry closed'));
+    expect(await createKdialogBackend(exec).prompt(REQ)).toEqual({
+      decision: 'always',
+      pattern: 'git push*',
+    });
+  });
 });
 
 describe('deny backend', () => {

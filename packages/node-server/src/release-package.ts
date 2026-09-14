@@ -1,3 +1,4 @@
+import type { SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { spawnSync } from 'child_process';
 import {
   existsSync,
@@ -9,30 +10,26 @@ import {
   writeFileSync,
 } from 'fs';
 import { join, relative, resolve } from 'path';
-import { fileURLToPath } from 'url';
 import { deflateRawSync } from 'zlib';
 
-const Dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(Dirname, '..', '..');
-const RELEASE_DIR = resolve(PROJECT_ROOT, 'artifacts', 'release');
 const FIXED_ZIP_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
 const ZIP_VERSION = 20;
 const ZIP_UTF8_FLAG = 0x0800;
 const ZIP_METHOD_DEFLATE = 8;
 const ZIP_FILE_MODE = 0o100644;
 
-interface PackageMetadata {
+export interface PackageMetadata {
   name: string;
   version: string;
 }
 
-interface ZipEntry {
+export interface ZipEntry {
   path: string;
   data: Buffer;
   mode: number;
 }
 
-interface ReleaseManifest {
+export interface ReleaseManifest {
   version: string;
   extensionArchive: string;
   npmPackageTarball: string;
@@ -40,7 +37,7 @@ interface ReleaseManifest {
 
 const CRC32_TABLE = buildCrc32Table();
 
-function comparePaths(left: string, right: string): number {
+export function comparePaths(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
@@ -189,7 +186,7 @@ function readJsonFile<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
 }
 
-function requirePath(path: string, description: string): void {
+export function requirePath(path: string, description: string): void {
   if (!existsSync(path)) {
     throw new Error(
       `${description} was not found at ${path}. Run the required build command(s) first.`
@@ -197,18 +194,20 @@ function requirePath(path: string, description: string): void {
   }
 }
 
-function toProjectRelative(path: string): string {
-  return relative(PROJECT_ROOT, path).split('\\').join('/');
+export function toProjectRelative(projectRoot: string, path: string): string {
+  return relative(projectRoot, path).split('\\').join('/');
 }
 
-function resolveNpmCommand(): { command: string; argsPrefix: string[] } {
-  const npmExecPath = process.env['npm_execpath'];
+export function resolveNpmCommand(
+  options: { npmExecPath?: string; execPath?: string; platform?: NodeJS.Platform } = {}
+): { command: string; argsPrefix: string[] } {
+  const npmExecPath = options.npmExecPath ?? process.env['npm_execpath'];
   if (npmExecPath) {
-    return { command: process.execPath, argsPrefix: [npmExecPath] };
+    return { command: options.execPath ?? process.execPath, argsPrefix: [npmExecPath] };
   }
 
   return {
-    command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+    command: (options.platform ?? process.platform) === 'win32' ? 'npm.cmd' : 'npm',
     argsPrefix: [],
   };
 }
@@ -223,12 +222,16 @@ export function parseNpmPackFilename(output: string): string {
   return filename;
 }
 
-function createExtensionArchive(metadata: PackageMetadata): string {
-  const extensionDir = resolve(PROJECT_ROOT, 'dist', 'extension');
+export function createExtensionArchive(
+  metadata: PackageMetadata,
+  projectRoot: string,
+  releaseDir: string
+): string {
+  const extensionDir = resolve(projectRoot, 'dist', 'extension');
   requirePath(extensionDir, 'Extension build output');
 
   const zipPath = resolve(
-    RELEASE_DIR,
+    releaseDir,
     `${sanitizeArtifactName(metadata.name)}-extension-v${metadata.version}.zip`
   );
   const zipBuffer = createDeterministicZip(collectZipEntries(extensionDir));
@@ -236,67 +239,75 @@ function createExtensionArchive(metadata: PackageMetadata): string {
   return zipPath;
 }
 
-function createNpmPackageTarball(): string {
-  requirePath(resolve(PROJECT_ROOT, 'dist', 'node-server'), 'CLI build output');
-  requirePath(resolve(PROJECT_ROOT, 'dist', 'ui'), 'UI build output');
+interface NpmPackResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
 
-  const npm = resolveNpmCommand();
-  const result = spawnSync(
-    npm.command,
-    [...npm.argsPrefix, 'pack', '--json', '--ignore-scripts', '--pack-destination', RELEASE_DIR],
-    {
-      cwd: PROJECT_ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  );
+export function createNpmPackageTarball(options: {
+  projectRoot: string;
+  releaseDir: string;
+  npm?: { command: string; argsPrefix: string[] };
+  spawn?: (command: string, args: string[], options: object) => NpmPackResult;
+}): string {
+  requirePath(resolve(options.projectRoot, 'dist', 'node-server'), 'CLI build output');
+  requirePath(resolve(options.projectRoot, 'dist', 'ui'), 'UI build output');
+
+  const npm = options.npm ?? resolveNpmCommand();
+  const args = [
+    ...npm.argsPrefix,
+    'pack',
+    '--json',
+    '--ignore-scripts',
+    '--pack-destination',
+    options.releaseDir,
+  ];
+  const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
+    cwd: options.projectRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  };
+  const result: NpmPackResult = options.spawn
+    ? options.spawn(npm.command, args, spawnOptions)
+    : spawnSync(npm.command, args, spawnOptions);
 
   if (result.status !== 0) {
     throw new Error((result.stderr || result.stdout || 'npm pack failed').trim());
   }
 
-  return resolve(RELEASE_DIR, parseNpmPackFilename(result.stdout));
+  return resolve(options.releaseDir, parseNpmPackFilename(result.stdout));
 }
 
-function writeReleaseManifest(manifest: ReleaseManifest): string {
-  const manifestPath = resolve(RELEASE_DIR, 'release-artifacts.json');
+export function writeReleaseManifest(manifest: ReleaseManifest, releaseDir: string): string {
+  const manifestPath = resolve(releaseDir, 'release-artifacts.json');
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifestPath;
 }
 
-export function packageReleaseArtifacts(): ReleaseManifest {
-  const packageJson = readJsonFile<PackageMetadata>(resolve(PROJECT_ROOT, 'package.json'));
+export function packageReleaseArtifacts(options: {
+  projectRoot: string;
+  releaseDir?: string;
+  spawn?: (command: string, args: string[], options: object) => NpmPackResult;
+}): ReleaseManifest {
+  const releaseDir = options.releaseDir ?? resolve(options.projectRoot, 'artifacts', 'release');
+  const packageJson = readJsonFile<PackageMetadata>(resolve(options.projectRoot, 'package.json'));
 
-  rmSync(RELEASE_DIR, { recursive: true, force: true });
-  mkdirSync(RELEASE_DIR, { recursive: true });
+  rmSync(releaseDir, { recursive: true, force: true });
+  mkdirSync(releaseDir, { recursive: true });
 
-  const extensionArchive = createExtensionArchive(packageJson);
-  const npmPackageTarball = createNpmPackageTarball();
+  const extensionArchive = createExtensionArchive(packageJson, options.projectRoot, releaseDir);
+  const npmPackageTarball = createNpmPackageTarball({
+    projectRoot: options.projectRoot,
+    releaseDir,
+    spawn: options.spawn,
+  });
   const manifest: ReleaseManifest = {
     version: packageJson.version,
-    extensionArchive: toProjectRelative(extensionArchive),
-    npmPackageTarball: toProjectRelative(npmPackageTarball),
+    extensionArchive: toProjectRelative(options.projectRoot, extensionArchive),
+    npmPackageTarball: toProjectRelative(options.projectRoot, npmPackageTarball),
   };
 
-  writeReleaseManifest(manifest);
+  writeReleaseManifest(manifest, releaseDir);
   return manifest;
-}
-
-function main(): void {
-  const manifest = packageReleaseArtifacts();
-  console.log(`Created extension archive: ${manifest.extensionArchive}`);
-  console.log(`Created npm package tarball: ${manifest.npmPackageTarball}`);
-  console.log(
-    `Created release manifest: ${toProjectRelative(resolve(RELEASE_DIR, 'release-artifacts.json'))}`
-  );
-}
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  try {
-    main();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[package:release] ${message}`);
-    process.exit(1);
-  }
 }

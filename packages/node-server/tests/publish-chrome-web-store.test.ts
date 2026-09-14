@@ -6,10 +6,14 @@ import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  type ChromeWebStoreConfig,
+  cancelPendingSubmission,
   createServiceAccountAssertion,
   parseServiceAccountCredentials,
   publishChromeWebStoreRelease,
   readChromeWebStoreConfig,
+  waitForPendingReviewCancellation,
+  waitForUploadCompletion,
 } from '../src/publish-chrome-web-store.js';
 
 interface TestFixture {
@@ -63,7 +67,162 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
+function testConfig(overrides: Partial<ChromeWebStoreConfig> = {}): ChromeWebStoreConfig {
+  return {
+    publisherId: 'publisher-123',
+    itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+    serviceAccount: parseServiceAccountCredentials(createServiceAccountJson(), undefined)!,
+    ...overrides,
+  };
+}
+
 describe('publish-chrome-web-store', () => {
+  it('validates optional settings and required service-account fields', () => {
+    expect(
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+        CHROME_WEB_STORE_ITEM_ID: 'item',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_DRY_RUN: 'false',
+        CHROME_WEB_STORE_FORCE_CANCEL_PENDING: '0',
+        CHROME_WEB_STORE_SKIP_REVIEW: '1',
+        CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '100',
+        CHROME_WEB_STORE_PUBLISH_TYPE: 'DEFAULT_PUBLISH',
+      })
+    ).toMatchObject({
+      dryRun: false,
+      forceCancelPendingReview: false,
+      skipReview: true,
+      deployPercentage: 100,
+      publishType: 'DEFAULT_PUBLISH',
+    });
+    expect(() =>
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+        CHROME_WEB_STORE_ITEM_ID: 'item',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_DRY_RUN: 'maybe',
+      })
+    ).toThrow('CHROME_WEB_STORE_DRY_RUN must be one of');
+    expect(() =>
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+        CHROME_WEB_STORE_ITEM_ID: 'item',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '101',
+      })
+    ).toThrow('integer between 0 and 100');
+    expect(() =>
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+        CHROME_WEB_STORE_ITEM_ID: 'item',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_PUBLISH_TYPE: 'IMMEDIATE',
+      })
+    ).toThrow('must be DEFAULT_PUBLISH or STAGED_PUBLISH');
+    expect(() => parseServiceAccountCredentials('{"private_key":"key"}', undefined)).toThrow(
+      'client_email'
+    );
+    expect(() => parseServiceAccountCredentials('{"client_email":"mail"}', undefined)).toThrow(
+      'private_key'
+    );
+  });
+
+  it('reports missing manifests and archives before attempting OAuth', async () => {
+    const env = {
+      CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+      CHROME_WEB_STORE_ITEM_ID: 'item',
+      CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+    };
+    await expect(
+      publishChromeWebStoreRelease({ env, manifestPath: '/definitely/missing/manifest.json' })
+    ).rejects.toThrow('Release manifest was not found');
+
+    const fixture = createFixture();
+    try {
+      rmSync(join(fixture.root, 'artifacts', 'release', 'slicc-extension-v1.2.3.zip'));
+      await expect(
+        publishChromeWebStoreRelease({
+          env,
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+        })
+      ).rejects.toThrow('extension archive was not found');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('surfaces OAuth error responses and missing access tokens', async () => {
+    const fixture = createFixture();
+    const env = {
+      CHROME_WEB_STORE_PUBLISHER_ID: 'publisher',
+      CHROME_WEB_STORE_ITEM_ID: 'item',
+      CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+    };
+    try {
+      await expect(
+        publishChromeWebStoreRelease({
+          env,
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+          fetchImpl: vi
+            .fn()
+            .mockResolvedValue(jsonResponse({ error: 'denied' }, { status: 401 })) as never,
+        })
+      ).rejects.toThrow('OAuth token exchange failed with 401');
+      await expect(
+        publishChromeWebStoreRelease({
+          env,
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+          fetchImpl: vi.fn().mockResolvedValue(jsonResponse({})) as never,
+        })
+      ).rejects.toThrow('did not return an access_token');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('classifies failed, unknown, timed-out, and empty upload polling', async () => {
+    const config = testConfig();
+    const run = (state: string | undefined, maxAttempts = 1) =>
+      waitForUploadCompletion(
+        config,
+        'token',
+        vi.fn().mockResolvedValue(jsonResponse({ lastAsyncUploadState: state })) as never,
+        async () => undefined,
+        1,
+        maxAttempts
+      );
+    await expect(run('FAILED')).rejects.toThrow('finished in state FAILED');
+    await expect(run('MYSTERY')).rejects.toThrow('unknown state MYSTERY');
+    await expect(run('IN_PROGRESS')).rejects.toThrow('did not complete after 1');
+    await expect(run(undefined, 0)).rejects.toThrow('polling failed unexpectedly');
+  });
+
+  it('surfaces cancellation failures and polling exhaustion', async () => {
+    const config = testConfig();
+    await expect(
+      cancelPendingSubmission(
+        config,
+        'token',
+        vi.fn().mockResolvedValue(new Response('denied', { status: 409 })) as never
+      )
+    ).rejects.toThrow('cancel submission failed with 409');
+    const pendingFetch = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ submittedItemRevisionStatus: { state: 'PENDING_REVIEW' } })
+      ) as never;
+    await expect(
+      waitForPendingReviewCancellation(config, 'token', pendingFetch, async () => undefined, 1, 1)
+    ).rejects.toThrow('did not complete after 1');
+    await expect(
+      waitForPendingReviewCancellation(config, 'token', pendingFetch, async () => undefined, 1, 0)
+    ).rejects.toThrow('polling failed unexpectedly');
+  });
+
   it('returns null when Chrome Web Store publishing is not configured', async () => {
     const fetchMock = vi.fn();
 
@@ -319,6 +478,7 @@ describe('publish-chrome-web-store', () => {
           name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
           itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
           warned: true,
+          takenDown: true,
         })
       );
 
@@ -345,6 +505,7 @@ describe('publish-chrome-web-store', () => {
       expect(logs[0]).toContain('Dry run: verified Chrome Web Store access');
       expect(logs[0]).toContain('would upload artifacts/release/slicc-extension-v1.2.3.zip');
       expect(warnings[0]).toContain('currently warned');
+      expect(warnings[1]).toContain('currently taken down');
     } finally {
       destroyFixture(fixture);
     }
@@ -659,6 +820,37 @@ describe('publish-chrome-web-store', () => {
         })
       ).rejects.toThrow('Chrome Web Store upload finished immediately in state FAILED.');
       expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('rejects unknown upload states and mismatched accepted versions', async () => {
+    const fixture = createFixture();
+    const env = {
+      CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+      CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+      CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+    };
+    const run = (upload: object) =>
+      publishChromeWebStoreRelease({
+        env,
+        manifestPath: fixture.manifestPath,
+        projectRoot: fixture.root,
+        log: { log: vi.fn(), warn: vi.fn() },
+        fetchImpl: vi
+          .fn()
+          .mockResolvedValueOnce(jsonResponse({ access_token: 'token' }))
+          .mockResolvedValueOnce(jsonResponse({ itemId: env.CHROME_WEB_STORE_ITEM_ID }))
+          .mockResolvedValueOnce(jsonResponse(upload)) as never,
+      });
+    try {
+      await expect(run({ uploadState: 'MYSTERY' })).rejects.toThrow(
+        'upload returned unknown state MYSTERY'
+      );
+      await expect(run({ uploadState: 'SUCCEEDED', crxVersion: '9.9.9' })).rejects.toThrow(
+        'accepted version 9.9.9'
+      );
     } finally {
       destroyFixture(fixture);
     }

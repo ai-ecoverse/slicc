@@ -29,6 +29,21 @@ export { imsTokenExpiry };
 
 const CONE_CONFIG_PATH = '/slicc/cone-config.json';
 
+export function readHostedConeConfig(
+  path: string = CONE_CONFIG_PATH,
+  read: (path: string, encoding: BufferEncoding) => string = readFileSync,
+  warn: (...args: unknown[]) => void = console.warn
+): string | null {
+  try {
+    return read(path, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      warn('[hosted-bootstrap] failed to read cone-config.json:', err);
+    }
+    return null;
+  }
+}
+
 export interface HostedBootstrapPayload {
   model?: string;
   effortLevel?: string;
@@ -81,19 +96,7 @@ export function registerHostedBootstrapEndpoint(
 ): void {
   app.get('/api/hosted-bootstrap', requireLoopback, (_req, res) => {
     const payload = buildHostedBootstrapPayload({
-      readConeConfig: () => {
-        try {
-          return readFileSync(CONE_CONFIG_PATH, 'utf-8');
-        } catch (err) {
-          // A missing file is the normal pre-feature/back-compat case. Any other
-          // error (EACCES, EIO, …) means the config exists but is unreadable —
-          // log it so a silent fallback to legacy/empty doesn't hide the cause.
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            console.warn('[hosted-bootstrap] failed to read cone-config.json:', err);
-          }
-          return null;
-        }
-      },
+      readConeConfig: () => readHostedConeConfig(),
       getLegacyAdobeToken: () => options.secretStore.get('ADOBE_IMS_TOKEN')?.value,
     });
     res.json(payload);

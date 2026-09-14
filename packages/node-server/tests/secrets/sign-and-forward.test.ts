@@ -4,7 +4,14 @@ import {
   handleDaSignAndForward,
   handleS3SignAndForward,
   type S3SignAndForwardEnvelope,
+  statusForErrorCode,
 } from '../../src/secrets/sign-and-forward.js';
+
+it('maps internal and unknown runtime error codes to 500', () => {
+  expect(statusForErrorCode('internal')).toBe(500);
+  expect(statusForErrorCode('future-code' as never)).toBe(500);
+});
+
 import type { Secret, SecretEntry, SecretStore } from '../../src/secrets/types.js';
 
 // ----------------- helpers -----------------

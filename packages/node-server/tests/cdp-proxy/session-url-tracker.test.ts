@@ -102,6 +102,28 @@ describe('createCdpSessionUrlTracker', () => {
       })
     );
     expect(t.getHostname('S1')).toBe(null);
+    t.observeChromeToClient(
+      frame({
+        method: 'Target.attachedToTarget',
+        params: { sessionId: 'S2', targetInfo: { targetId: 'T2', url: 'not a url' } },
+      })
+    );
+    expect(t.getHostname('S2')).toBe(null);
+  });
+
+  it('clears all session and target state', () => {
+    const t = createCdpSessionUrlTracker();
+    t.observeChromeToClient({
+      method: 'Target.attachedToTarget',
+      params: {
+        sessionId: 'S1',
+        targetInfo: { targetId: 'T1', url: 'https://example.com/' },
+      },
+    });
+    expect(t.size()).toBe(1);
+    t.clear();
+    expect(t.size()).toBe(0);
+    expect(t.getUrl('S1')).toBeNull();
   });
 
   it('silently ignores malformed JSON and non-tracked methods', () => {

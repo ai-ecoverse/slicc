@@ -71,3 +71,8 @@ Chrome's browser-level socket can drop on its own (`messageTooLarge`, inbound-qu
 
 - Packages (`packages/<name>/CLAUDE.md`): `webapp` (served browser code), `chrome-extension` (extension float), `cloud-core` (`--cloud` lifecycle), `shared-ts` (masking primitives).
 - Docs: `docs/development.md` + `docs/electron.md` (workflows) · `docs/mounts.md` (`/api/hostfs` wire contract) · `docs/pitfalls.md` (CDP-leg drops, keep-alive, CSP-strip hop, Local Network Access) · `docs/transcript-export.md` (export bundle).
+
+The `node-server` coverage gate measures only `packages/node-server`; imported
+`@slicc/shared-ts` code is owned by the separate `shared` coverage gate. Keep
+that package boundary explicit in `coverage-thresholds.json` so adding a shared
+barrel export cannot silently lower node-server coverage.

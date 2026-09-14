@@ -5,16 +5,26 @@
  * end-to-end with a real SecretProxyManager.
  */
 import { createHmac, randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough, Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { FETCH_PROXY_CONTENT_LENGTH_HEADER } from '../../src/fetch-proxy-headers.js';
 import { AgentActivityTracker } from '../../src/routes/agent-activity.js';
-import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
+import {
+  attachUpstreamAbort,
+  buildForwardHeaders,
+  collectRawBody,
+  createScrubStream,
+  injectRequestSecrets,
+  registerFetchProxyRoute,
+  streamUpstreamBody,
+} from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 
@@ -40,6 +50,7 @@ let upstreamUrl = '';
 let proxyBase = '';
 let masked = '';
 let maskedForm = '';
+let proxyManager: SecretProxyManager;
 type LogMock = Mock<(...args: unknown[]) => void>;
 let logger: { log: LogMock; warn: LogMock; error: LogMock };
 
@@ -75,10 +86,7 @@ async function setup(handler: UpstreamHandler, secretDomains?: string): Promise<
   const upstreamPort = await listen(upstream);
   upstreamUrl = `http://127.0.0.1:${upstreamPort}`;
 
-  const proxyManager = new SecretProxyManager(
-    new EnvSecretStore(tempSecrets(secretDomains)),
-    'sess'
-  );
+  proxyManager = new SecretProxyManager(new EnvSecretStore(tempSecrets(secretDomains)), 'sess');
   await proxyManager.reload();
   masked = proxyManager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!.maskedValue;
   maskedForm = proxyManager.getMaskedEntries().find((e) => e.name === 'FORM_SECRET')!.maskedValue;
@@ -104,6 +112,133 @@ afterEach(async () => {
 });
 
 describe('registerFetchProxyRoute', () => {
+  it('aborts unfinished upstream work on client close and detaches cleanly', () => {
+    const response = Object.assign(new EventEmitter(), { writableEnded: false });
+    const unfinished = attachUpstreamAbort(response as never);
+    response.emit('close');
+    expect(unfinished.controller.signal.aborted).toBe(true);
+
+    const finishedResponse = Object.assign(new EventEmitter(), { writableEnded: true });
+    const finished = attachUpstreamAbort(finishedResponse as never);
+    finishedResponse.emit('close');
+    expect(finished.controller.signal.aborted).toBe(false);
+    finished.detach();
+    finishedResponse.writableEnded = false;
+    finishedResponse.emit('close');
+    expect(finished.controller.signal.aborted).toBe(false);
+  });
+
+  it('destroys an already-started response when the upstream stream fails', async () => {
+    const response = new PassThrough() as PassThrough & {
+      headersSent: boolean;
+      removeHeader: Mock;
+    };
+    Object.defineProperty(response, 'headersSent', { value: true });
+    response.removeHeader = vi.fn();
+    response.on('error', () => {});
+    const destroy = vi.spyOn(response, 'destroy');
+    const detach = vi.fn();
+    const upstream = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('upstream broke'));
+        },
+      }),
+      { headers: { 'content-type': 'application/octet-stream' } }
+    );
+    const secretProxy = { hasSecrets: () => false } as unknown as SecretProxyManager;
+
+    streamUpstreamBody(response as never, upstream, secretProxy, detach);
+    await vi.waitFor(() => expect(destroy).toHaveBeenCalledWith(expect.any(Error)));
+    expect(detach).toHaveBeenCalled();
+  });
+
+  it('re-serializes an already parsed JSON request body', async () => {
+    const body = await collectRawBody({ body: { parsed: true } } as never);
+    expect(body.toString()).toBe('{"parsed":true}');
+  });
+
+  it('restores browser-forbidden transport headers and strips loopback defaults', async () => {
+    await setup((_req, res) => res.end('ok'));
+    const restored = buildForwardHeaders(
+      {
+        headers: {
+          'x-proxy-origin': 'https://app.example',
+          'x-proxy-referer': 'https://app.example/page',
+          'x-proxy-proxy-authorization': 'Basic abc',
+        },
+      } as never,
+      upstreamUrl
+    );
+    expect(restored.origin).toBe('https://app.example');
+    expect(restored.referer).toBe('https://app.example/page');
+    expect(restored['proxy-authorization']).toBe('Basic abc');
+    expect(restored['x-proxy-proxy-authorization']).toBeUndefined();
+
+    const stripped = buildForwardHeaders(
+      {
+        headers: {
+          origin: 'http://localhost:5710',
+          referer: 'http://127.0.0.1:5710/page',
+        },
+      } as never,
+      'not a URL'
+    );
+    expect(stripped.origin).toBeUndefined();
+    expect(stripped.referer).toBeUndefined();
+  });
+
+  it('injects URL credentials as Basic authorization', async () => {
+    await setup((_req, res) => res.end('ok'));
+    const result = injectRequestSecrets(
+      proxyManager,
+      {},
+      `http://${masked}:password@127.0.0.1/resource`,
+      '127.0.0.1'
+    );
+    expect(result).toHaveProperty('cleanedUrl');
+    const headers: Record<string, string> = {};
+    injectRequestSecrets(
+      proxyManager,
+      headers,
+      `http://${masked}:password@127.0.0.1/resource`,
+      '127.0.0.1'
+    );
+    expect(headers.authorization).toMatch(/^Basic /);
+  });
+
+  it('buffers partial UTF-8 and propagates scrubber failures', async () => {
+    await setup((_req, res) => res.end('ok'));
+    const chunks: Buffer[] = [];
+    for await (const chunk of Readable.from([Buffer.from([0xe2])]).pipe(
+      createScrubStream(proxyManager, true)
+    )) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).toString()).toBe('�');
+
+    const failing = {
+      hasSecrets: () => true,
+      scrubResponse: () => {
+        throw new Error('scrub broke');
+      },
+    } as unknown as SecretProxyManager;
+    await expect(async () => {
+      for await (const _chunk of Readable.from([Buffer.from('text')]).pipe(
+        createScrubStream(failing, true)
+      )) {
+        // consume
+      }
+    }).rejects.toThrow('scrub broke');
+    await expect(async () => {
+      for await (const _chunk of Readable.from([Buffer.from([0xe2])]).pipe(
+        createScrubStream(failing, true)
+      )) {
+        // consume
+      }
+    }).rejects.toThrow('scrub broke');
+  });
+
   it('exposes recent non-OPTIONS activity', async () => {
     await setup((_req, res) => res.end('ok'));
     const proxied = await fetch(`${proxyBase}/api/fetch-proxy`, {
@@ -399,6 +534,39 @@ describe('registerFetchProxyRoute', () => {
     });
     expect(res.status).toBe(502);
     expect(res.headers.get('x-proxy-error')).toBe('1');
+  });
+
+  it('returns 502 for a malformed target URL', async () => {
+    await setup((_req, res) => res.end('unused'));
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': 'not a URL' },
+    });
+    expect(res.status).toBe(502);
+  });
+
+  it('ends a HEAD response whose upstream body is null', async () => {
+    await setup((_req, res) => {
+      res.statusCode = 204;
+      res.end();
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'HEAD',
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe('');
+  });
+
+  it('returns a proxy stream error when gzip decoding fails before headers are sent', async () => {
+    await setup((_req, res) => {
+      res.setHeader('content-type', 'text/plain');
+      res.end(Buffer.from([0x1f, 0x8b, 0, 0, 0, 0, 0, 0]));
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain('Proxy stream failed');
   });
 
   it('logs the method, target URL, and upstream status on a successful proxy', async () => {

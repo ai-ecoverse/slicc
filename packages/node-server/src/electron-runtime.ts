@@ -54,7 +54,7 @@ export function hashString(str: string, max: number): number {
 /**
  * Try to listen on a specific port and host, returning the assigned port.
  */
-async function tryListenOnPort(port: number, host: string): Promise<number> {
+export async function tryListenOnPort(port: number, host: string): Promise<number> {
   const { createServer } = await import('net');
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -71,11 +71,14 @@ async function tryListenOnPort(port: number, host: string): Promise<number> {
  * Check if a port is available on both IPv4 (127.0.0.1) and IPv6 (::1).
  * On macOS, `localhost` resolves to `::1`, so we need to check both.
  */
-async function isPortAvailable(port: number): Promise<boolean> {
+export async function isPortAvailable(
+  port: number,
+  listen: (port: number, host: string) => Promise<number> = tryListenOnPort
+): Promise<boolean> {
   try {
-    await tryListenOnPort(port, '127.0.0.1');
+    await listen(port, '127.0.0.1');
     try {
-      await tryListenOnPort(port, '::1');
+      await listen(port, '::1');
     } catch (err: unknown) {
       // ::1 may not be available on some systems — only fail on EADDRINUSE
       if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
@@ -91,10 +94,14 @@ async function isPortAvailable(port: number): Promise<boolean> {
 /**
  * Find an available port starting from the given port.
  */
-async function findAvailablePort(startPort: number, maxAttempts = 100): Promise<number> {
+export async function findAvailablePort(
+  startPort: number,
+  maxAttempts = 100,
+  available: (port: number) => Promise<boolean> = isPortAvailable
+): Promise<number> {
   for (let i = 0; i < maxAttempts; i++) {
     const port = startPort + i;
-    if (await isPortAvailable(port)) {
+    if (await available(port)) {
       return port;
     }
   }
@@ -106,16 +113,20 @@ async function findAvailablePort(startPort: number, maxAttempts = 100): Promise<
  * Uses hash-based offset from base port, with fallback to next available port
  * starting from the preferred port (to stay in the app's "slot" range).
  */
-export async function getElectronAppPort(appPath: string, basePort: number): Promise<number> {
+export async function getElectronAppPort(
+  appPath: string,
+  basePort: number,
+  available: (port: number) => Promise<boolean> = isPortAvailable
+): Promise<number> {
   const offset = hashString(appPath, PORT_HASH_RANGE);
   const preferredPort = basePort + offset;
 
-  if (await isPortAvailable(preferredPort)) {
+  if (await available(preferredPort)) {
     return preferredPort;
   }
 
   // Fallback: find next available port starting from preferred (stay in slot range)
-  return findAvailablePort(preferredPort + 1);
+  return findAvailablePort(preferredPort + 1, 100, available);
 }
 
 /**
@@ -140,7 +151,7 @@ export function getElectronAppDisplayName(appPath: string): string {
   return fileName || trimmedPath;
 }
 
-function isExecutableFile(path: string): boolean {
+export function isExecutableFile(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
     return true;

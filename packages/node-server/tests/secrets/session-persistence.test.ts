@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 import { readOrCreateSessionId } from '../../src/secrets/session-id-file.js';
@@ -39,6 +39,32 @@ describe('session-id-file', () => {
     const id = readOrCreateSessionId(dir);
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
     expect(readFileSync(path, 'utf-8').trim()).toBe(id);
+  });
+
+  it('reports chmod failures on POSIX and tolerates them on Windows', () => {
+    const reportError = vi.fn();
+    readOrCreateSessionId(dir, {
+      chmod: () => {
+        throw new Error('permission denied');
+      },
+      platform: 'linux',
+      reportError,
+    });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.stringContaining('session-id may be world-readable'),
+      'permission denied'
+    );
+
+    rmSync(join(dir, 'session-id'));
+    reportError.mockClear();
+    readOrCreateSessionId(dir, {
+      chmod: () => {
+        throw 'ignored';
+      },
+      platform: 'win32',
+      reportError,
+    });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });
 
