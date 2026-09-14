@@ -93,6 +93,11 @@ Globs:
 Precedence: a matching `NOPASSWD` grant wins (no prompt); otherwise any plain
 match requires approval; no match is never gated.
 
+Aliases that expose the same runtime share a canonical command subject. In
+particular, `jsh script.jsh` is checked as `node script.jsh`, so `Cmnd node *`
+and `NOPASSWD Cmnd node *` rules cover both names; explicit `sudo jsh …`
+prompts and persists grants under that same `node …` subject.
+
 A default template ships on a fresh VFS (`packages/vfs-root/etc/sudoers`). Every
 example rule in it is commented out; the one **active** rule is `Write /etc/models`
 — see [Model access policy](#model-access-policy----etcmodels) for why that file

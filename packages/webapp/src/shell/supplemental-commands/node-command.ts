@@ -281,6 +281,8 @@ type NodeInvocation =
  * The `-e` and script-file branches keep the upstream pipeline's stdin intact.
  */
 async function resolveInvocation(args: string[], ctx: CommandContext): Promise<NodeInvocation> {
+  // Keep argv[0] Node-like for both registered names: `jsh` selects the
+  // runner, but scripts should observe the same process identity as `node`.
   if (args.length > 0 && (args[0] === '-e' || args[0] === '--eval')) {
     if (!args[1]) {
       return {
@@ -361,9 +363,12 @@ async function resolveInvocation(args: string[], ctx: CommandContext): Promise<N
   };
 }
 
-export function createNodeCommand(options: NodeCommandOptions = {}): Command {
+export function createNodeCommand(
+  options: NodeCommandOptions = {},
+  name: 'node' | 'jsh' = 'node'
+): Command {
   return {
-    name: 'node',
+    name,
     // just-bash monkey-patches async primitives in its defense-in-depth box for
     // untrusted commands. `executeJsCode` runs the script in a worker realm whose
     // cross-thread RPC (graph build + the `realm-done` carrying the exit code)

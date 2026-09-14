@@ -256,6 +256,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createEsbuildCommand(),
     createBiomeCommand(),
     createNodeCommand({ buildProcessConfig: options.buildProcessConfig }),
+    createNodeCommand({ buildProcessConfig: options.buildProcessConfig }, 'jsh'),
     createPython3LikeCommand('python3', { buildProcessConfig: options.buildProcessConfig }),
     createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
     ...packageManagerCommands(options),

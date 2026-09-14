@@ -6,9 +6,10 @@
  * are all correct for both relative and absolute invocations.
  */
 
-import type { FsStat, IFileSystem, ResolvedCommandContext } from 'just-bash';
+import type { CommandContext, FsStat, IFileSystem, ResolvedCommandContext } from 'just-bash';
 import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
+import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import { createNodeCommand } from '../../../src/shell/supplemental-commands/node-command.js';
 import { NODE_VERSION } from '../../../src/shell/supplemental-commands/shared.js';
 
@@ -134,6 +135,39 @@ describe('node command — trusted dispatch', () => {
     // await and drops a failing require's non-zero exit on the floor (exit 0).
     // The command must be trusted, like the `.jsh` script command.
     expect(createNodeCommand().trusted).toBe(true);
+  });
+});
+
+describe('node command — jsh alias', () => {
+  it('registers jsh alongside node', () => {
+    const names = createSupplementalCommands().map((command) => command.name);
+    expect(names).toContain('node');
+    expect(names).toContain('jsh');
+  });
+
+  it('runs a real script identically with sliccy module resolution and argument passthrough', async () => {
+    const ctx = createMockCtx({
+      '/workspace/alias.jsh': `
+        const exec = require('sliccy:exec');
+        const result = await exec('echo bridged');
+        console.log(JSON.stringify({ argv: process.argv, bridge: result.stdout.trim() }));
+      `,
+    });
+    ctx.exec = (async (command: string) => ({
+      stdout: `ran: ${command}\n`,
+      stderr: '',
+      exitCode: 0,
+    })) as CommandContext['exec'];
+    const args = ['./alias.jsh', '--help', 'value'];
+
+    const nodeResult = await createNodeCommand().execute(args, ctx);
+    const jshResult = await createNodeCommand({}, 'jsh').execute(args, ctx);
+
+    expect(jshResult).toEqual(nodeResult);
+    expect(JSON.parse(jshResult.stdout.trim())).toEqual({
+      argv: ['node', '/workspace/alias.jsh', '--help', 'value'],
+      bridge: 'ran: echo bridged',
+    });
   });
 });
 

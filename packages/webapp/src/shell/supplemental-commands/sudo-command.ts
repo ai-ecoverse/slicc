@@ -2,6 +2,7 @@ import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
+import { commandSudoSubject } from '../sudo/command-guard.js';
 
 const SUDO_HELP = `usage: sudo <command> [args...]
 
@@ -88,9 +89,9 @@ export function createSudoCommand(options: SudoCommandOptions = {}): Command {
       return { stdout: '', stderr: `${SUDO_NO_EXEC_MESSAGE}\n`, exitCode: 1 };
     }
 
-    // Canonical subject must match the form the transparent gate uses
-    // (`name + ' ' + args.join(' ')`) so the one-shot bypass key lines up.
-    const subject = args.join(' ').trim();
+    // Canonical subject must match the transparent gate, including shared-
+    // runtime aliases such as `jsh` -> `node`, so its one-shot bypass lines up.
+    const subject = commandSudoSubject(args[0], args.slice(1));
 
     const decision = await broker.requestApproval({ kind: 'command', detail: subject });
 

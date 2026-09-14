@@ -3,6 +3,7 @@ import { parseSudoers } from '../../../src/base/sudoers.js';
 import {
   COMMAND_DENIED_MESSAGE,
   commandSudoMessage,
+  commandSudoSubject,
   enforceCommandSudo,
 } from '../../../src/shell/sudo/command-guard.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
@@ -14,6 +15,15 @@ function brokerReturning(decision: SudoDecision): SudoBroker {
 }
 
 describe('enforceCommandSudo', () => {
+  it('uses node as the canonical policy subject for jsh', () => {
+    expect(commandSudoSubject('jsh', ['/workspace/tool.jsh', '--help'])).toBe(
+      'node /workspace/tool.jsh --help'
+    );
+    expect(commandSudoSubject('node', ['/workspace/tool.jsh', '--help'])).toBe(
+      'node /workspace/tool.jsh --help'
+    );
+  });
+
   it('match -> approve -> run (allows, one prompt)', async () => {
     const broker = brokerReturning({ decision: 'allow' });
     const persistGrant = vi.fn(async () => {});
