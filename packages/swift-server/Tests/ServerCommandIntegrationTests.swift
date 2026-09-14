@@ -72,37 +72,26 @@ final class ServerCommandIntegrationTests: XCTestCase {
 
     private func makeFakeBrowserExecutable(at url: URL) throws {
         let script = #"""
-            #!/usr/bin/env python3
-            import http.server
-            import json
-            import sys
+            #!/bin/sh
+            port=""
+            for argument in "$@"; do
+                case "$argument" in
+                    --remote-debugging-port=*) port=${argument#*=} ;;
+                esac
+            done
+            [ -n "$port" ] || exit 64
 
-            port = int(next(arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--remote-debugging-port=")))
+            body='{"Browser":"Fake Chrome/1.0",'
+            body="${body}\"webSocketDebuggerUrl\":\"ws://127.0.0.1:${port}/devtools/browser/test\"}"
+            content_length=$(/usr/bin/printf '%s' "$body" | /usr/bin/wc -c | /usr/bin/tr -d ' ')
+            /usr/bin/printf 'DevTools listening on ws://127.0.0.1:%s/devtools/browser/test\n' "$port" >&2
 
-            class Handler(http.server.BaseHTTPRequestHandler):
-                def do_GET(self):
-                    if self.path == "/json/version":
-                        body = json.dumps({
-                            "Browser": "Fake Chrome/1.0",
-                            "webSocketDebuggerUrl": f"ws://127.0.0.1:{port}/devtools/browser/test"
-                        }).encode()
-                    elif self.path == "/json/list":
-                        body = b"[]"
-                    else:
-                        self.send_response(404)
-                        self.end_headers()
-                        return
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-
-                def log_message(self, format, *args):
-                    pass
-
-            print(f"DevTools listening on ws://127.0.0.1:{port}/devtools/browser/test", file=sys.stderr, flush=True)
-            http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+            while :; do
+                /usr/bin/printf \
+                    'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+                    "$content_length" "$body" \
+                    | /usr/bin/nc -l -w 1 127.0.0.1 "$port" >/dev/null
+            done
             """#
         try Data(script.utf8).write(to: url)
         try FileManager.default.setAttributes(
@@ -117,20 +106,28 @@ final class ServerCommandIntegrationTests: XCTestCase {
         startupDelayNanoseconds: UInt64 = 100_000_000
     ) async throws {
         let port = try await findAvailablePort(
-            startingFrom: 62_000 + Int.random(in: 0..<500)
+            startingFrom: 50_000 + Int.random(in: 0..<10_000)
         )
-        let chromeProfileURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent("Library/Application Support/Slicc/profiles", isDirectory: true)
-            .appendingPathComponent("browser-coding-agent-chrome-\(port)", isDirectory: true)
+        let chromeProfileURL: URL?
         if additions["CHROME_PATH"] != nil {
-            guard !FileManager.default.fileExists(atPath: chromeProfileURL.path) else {
+            let profileURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+                .appendingPathComponent("Library/Application Support/Slicc/profiles", isDirectory: true)
+                .appendingPathComponent("browser-coding-agent-chrome-\(port)", isDirectory: true)
+            guard !FileManager.default.fileExists(atPath: profileURL.path) else {
                 throw NSError(
                     domain: "ServerCommandIntegrationTests",
                     code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "refusing to overwrite existing profile at \(chromeProfileURL.path)"]
+                    userInfo: [NSLocalizedDescriptionKey: "refusing to overwrite existing profile at \(profileURL.path)"]
                 )
             }
-            defer { try? FileManager.default.removeItem(at: chromeProfileURL) }
+            chromeProfileURL = profileURL
+        } else {
+            chromeProfileURL = nil
+        }
+        defer {
+            if let chromeProfileURL {
+                try? FileManager.default.removeItem(at: chromeProfileURL)
+            }
         }
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -217,7 +214,10 @@ final class ServerCommandIntegrationTests: XCTestCase {
         outputURL: URL,
         process: Process
     ) async throws {
-        let deadline = Date().addingTimeInterval(10)
+        // CDPProxy's WebSocket connect timeout is 10 seconds. Leave enough
+        // headroom to observe and flush the resulting pre-warm log on loaded
+        // CI runners instead of racing the same deadline in this test.
+        let deadline = Date().addingTimeInterval(30)
         while Date() < deadline {
             let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
             if output.contains("CDP proxy at ws://localhost:")
