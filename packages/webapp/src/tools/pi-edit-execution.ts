@@ -225,6 +225,16 @@ class VfsEditExecutionEnv implements ExecutionEnv {
   async cleanup(): Promise<void> {}
 }
 
+const editEnvironments = new WeakMap<VirtualFS, Map<string, VfsEditExecutionEnv>>();
+
+function editEnvironment(fs: VirtualFS, cwd: string): VfsEditExecutionEnv {
+  let byCwd = editEnvironments.get(fs);
+  if (!byCwd) editEnvironments.set(fs, (byCwd = new Map()));
+  let env = byCwd.get(cwd);
+  if (!env) byCwd.set(cwd, (env = new VfsEditExecutionEnv(fs, cwd)));
+  return env;
+}
+
 /** Execute an edit with Pi's public implementation against SLICC's VFS. */
 export async function executePiEdit(
   fs: VirtualFS,
@@ -234,7 +244,9 @@ export async function executePiEdit(
 ): Promise<ToolResult> {
   const piTool = await loadPiEditTool();
   const result = await piTool.execute('slicc-edit', input as EditToolInput, signal, undefined, {
-    env: new VfsEditExecutionEnv(fs, cwd),
+    // Pi keys its file-mutation queues by ExecutionEnv identity. Reusing the
+    // environment per VFS view + cwd serializes concurrent same-file edits.
+    env: editEnvironment(fs, cwd),
   });
   return {
     content: result.content

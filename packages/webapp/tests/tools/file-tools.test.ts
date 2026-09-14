@@ -354,6 +354,23 @@ describe('File Tools', () => {
       expect(await fs.readTextFile('/multi.txt')).toBe('one\nbeta\nthree\n');
     });
 
+    it("serializes concurrent edits to the same file through Pi's mutation queue", async () => {
+      await fs.writeFile('/concurrent.txt', 'alpha beta');
+
+      await Promise.all([
+        edit.execute({
+          path: '/concurrent.txt',
+          edits: [{ oldText: 'alpha', newText: 'one' }],
+        }),
+        edit.execute({
+          path: '/concurrent.txt',
+          edits: [{ oldText: 'beta', newText: 'two' }],
+        }),
+      ]);
+
+      expect(await fs.readTextFile('/concurrent.txt')).toBe('one two');
+    });
+
     it('resolves relative paths from the work-unit cwd', async () => {
       await fs.writeFile('/scoops/vanilla/workspace/note.txt', 'old');
       const scopedEdit = createFileTools(fs, '/scoops/vanilla/workspace').find(
