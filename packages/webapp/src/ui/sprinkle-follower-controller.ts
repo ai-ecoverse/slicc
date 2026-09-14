@@ -109,6 +109,8 @@ function followerUsbApi(): SprinkleUsbApi {
     controlTransferOut: unsupported,
     transferIn: unsupported,
     transferOut: unsupported,
+    on: () => undefined,
+    off: () => undefined,
   } as SprinkleUsbApi;
 }
 

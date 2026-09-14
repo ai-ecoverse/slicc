@@ -359,9 +359,14 @@ slicc.serial.list() / request(filters?) / open(handle, options) / close(handle)
 // USB — full transfer surface, so a sprinkle can drive a device itself.
 slicc.usb.list(): Promise<UsbDeviceInfo[]>
 slicc.usb.request(filters?): Promise<UsbDeviceInfo>      // needs button-click gesture
-slicc.usb.open(handle) / close(handle) / reset(handle): Promise<void>
+slicc.usb.open(handle) / close(handle, opts?) / reset(handle, opts?): Promise<void>
 slicc.usb.selectConfiguration(handle, value): Promise<void>
-slicc.usb.claimInterface(handle, n) / releaseInterface(handle, n): Promise<void>
+slicc.usb.claimInterface(handle, n, opts?) / releaseInterface(handle, n): Promise<void>
+slicc.usb.on('disconnect' | 'claim-lost', cb) / off(...): void
+  // Handles are shared with the `usb` shell command and `require('sliccy:usb')`.
+  // Interface claims are exclusive: a second claim is refused naming the
+  // holder; close/reset refuse while another consumer holds a claim unless
+  // `{ force: true }`. Forced displacement delivers claim-lost then disconnect.
 slicc.usb.clearHalt(handle, 'in' | 'out', endpoint): Promise<void>
 slicc.usb.transferIn(handle, endpoint, length): Promise<{ status, bytes: Uint8Array }>
 slicc.usb.transferOut(handle, endpoint, bytes: Uint8Array): Promise<{ status, bytesWritten }>

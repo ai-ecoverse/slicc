@@ -396,11 +396,13 @@ console.log([...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' '));
 
 ```typescript
 device.open(): Promise<void>
-device.close(): Promise<void>
-device.reset(): Promise<void>
+device.close(opts?: { force?: boolean }): Promise<void>
+device.reset(opts?: { force?: boolean }): Promise<void>
 device.selectConfiguration(configurationValue: number): Promise<void>
-device.claimInterface(interfaceNumber: number): Promise<void>
+device.claimInterface(interfaceNumber: number, opts?: { wait?: boolean }): Promise<void>
 device.releaseInterface(interfaceNumber: number): Promise<void>
+device.addEventListener('disconnect' | 'claim-lost', cb): void
+device.removeEventListener('disconnect' | 'claim-lost', cb): void
 device.controlTransferIn(setup, length): Promise<{ status: string; data: DataView }>
 device.controlTransferOut(setup, data): Promise<{ status: string; bytesWritten: number }>
 device.transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>
@@ -411,8 +413,12 @@ device.clearHalt(direction: 'in' | 'out', endpointNumber: number): Promise<void>
 So it is `claimInterface(1)`, not `claim(1)`; `controlTransferIn(...)`, not `controlIn(...)`. Note the read results resolve `{ status, data }` where `data` is a **`DataView`** — wrap it (`new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)`) before treating it as bytes.
 
 `clearHalt` recovers a single stalled bulk/interrupt endpoint. Prefer it to
-`reset()`, which re-enumerates the whole device and drops any claim another
-client (a host `adb` server, say) holds on it.
+`reset()`, which re-enumerates the whole device. Handles are shared with the
+`usb` shell command and `slicc.usb`, but interface claims are exclusive: a
+second `claimInterface` is refused with the current holder named (or queued
+with `{ wait: true }`). `close()` / `reset()` refuse while another consumer
+holds a claim unless `{ force: true }`, which emits `claim-lost` then
+`disconnect` so the displaced consumer is told.
 
 Each device also carries its **configuration descriptors** as plain data, so an
 interface can be located by class/subclass/protocol without opening the device
@@ -447,7 +453,7 @@ branch on it. Endpoints reported with a direction or type outside the vocabulary
 above are omitted rather than passed through, so matching on those fields is
 safe.
 
-Neither `serial.*` nor `usb.*` carries the `EventTarget` shape — those transports are explicit-poll.
+`serial.*` still has no `EventTarget` shape — that transport is explicit-poll.
 
 For ESP32 / ESP8266 work, drive `esptool` through `require('sliccy:exec')` (there is no bare `exec` global). Beyond the existing `chip_id` / `read_mac` / `erase_flash` / `write_flash` verbs, the read/inspect set is now `flash_id`, `read_reg <addr>`, `read_flash <addr> <size> <outfile>`, `erase_region <addr> <size>`, and `run`. Pass `--port <handle>` to reuse a port from `serial request` so no second picker fires:
 

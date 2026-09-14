@@ -436,10 +436,21 @@ export type PanelRpcRequest =
   | { op: 'usb-request'; payload: { filters: UsbDeviceFilter[] } }
   | { op: 'usb-device-info'; payload: { handle: string } }
   | { op: 'usb-open'; payload: { handle: string } }
-  | { op: 'usb-close'; payload: { handle: string } }
+  | { op: 'usb-close'; payload: { handle: string; owner?: string; force?: boolean } }
   | { op: 'usb-select-configuration'; payload: { handle: string; configurationValue: number } }
-  | { op: 'usb-claim-interface'; payload: { handle: string; interfaceNumber: number } }
-  | { op: 'usb-release-interface'; payload: { handle: string; interfaceNumber: number } }
+  | {
+      op: 'usb-claim-interface';
+      payload: { handle: string; interfaceNumber: number; owner?: string; wait?: boolean };
+    }
+  | {
+      op: 'usb-release-interface';
+      payload: { handle: string; interfaceNumber: number; owner?: string };
+    }
+  | {
+      op: 'usb-cancel-claim-wait';
+      payload: { handle: string; interfaceNumber: number; owner?: string };
+    }
+  | { op: 'usb-drop-owner'; payload: { owner: string } }
   | {
       op: 'usb-control-transfer-in';
       payload: { handle: string; setup: UsbControlSetup; length: number };
@@ -453,7 +464,7 @@ export type PanelRpcRequest =
       op: 'usb-transfer-out';
       payload: { handle: string; endpointNumber: number; bytes: ArrayBuffer };
     }
-  | { op: 'usb-reset'; payload: { handle: string } }
+  | { op: 'usb-reset'; payload: { handle: string; owner?: string; force?: boolean } }
   | {
       op: 'usb-clear-halt';
       payload: { handle: string; direction: 'in' | 'out'; endpointNumber: number };
@@ -863,6 +874,8 @@ export interface PanelRpcResults {
   'usb-select-configuration': { done: true };
   'usb-claim-interface': { done: true };
   'usb-release-interface': { done: true };
+  'usb-cancel-claim-wait': { done: true };
+  'usb-drop-owner': { done: true };
   'usb-control-transfer-in': { status: string; bytes: ArrayBuffer };
   'usb-control-transfer-out': { status: string; bytesWritten: number };
   'usb-transfer-in': { status: string; bytes: ArrayBuffer };
@@ -1036,6 +1049,13 @@ export interface HidInputReportEventPayload {
   reportId: number;
   bytes: ArrayBuffer;
 }
+
+/**
+ * Payload pushed on the `usb-claim-event` channel when a force close/reset
+ * displaces another consumer's interface claim. `type` is `claim-lost`
+ * (per interface) or `disconnect` (once per displaced holder).
+ */
+export type { UsbClaimEvent as UsbClaimEventPayload } from './usb-device-registry.js';
 
 export type PanelRpcOp = PanelRpcRequest['op'];
 export type PanelRpcPayloadFor<O extends PanelRpcOp> = Extract<

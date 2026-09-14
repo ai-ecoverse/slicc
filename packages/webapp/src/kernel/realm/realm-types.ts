@@ -243,8 +243,9 @@ export interface RealmRpcResponse {
  * and any in-realm subscriber registered via `RealmRpcClient.onEvent`
  * receives them. Used today by the HID bridge to stream `inputreport`
  * payloads to in-realm device listeners (channel `hid-input-report`,
- * payload `{ handle, reportId, bytes }`), mirroring the `panel-rpc-event`
- * page→worker fan-out one layer below.
+ * payload `{ handle, reportId, bytes }`) and by the USB bridge for
+ * `claim-lost`/`disconnect` (channel `usb-claim-event`), mirroring the
+ * `panel-rpc-event` page→worker fan-out one layer below.
  */
 export interface RealmEventMsg {
   type: 'realm-event';

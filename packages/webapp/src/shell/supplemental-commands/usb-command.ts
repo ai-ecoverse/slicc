@@ -138,13 +138,16 @@ Subcommands:
   request [--vid 0x.. --pid 0x.. --class N --serial S]
                                     Open the device picker; prints a handle
   open <handle>                     Open a device
-  close <handle>                    Close a device
-  reset <handle>                    Reset a device
+  close <handle> [--force]          Close a device (refused while another
+                                    consumer holds a claim, unless --force)
+  reset <handle> [--force]          Reset a device (same claim rule as close)
   clear-halt <handle> <in|out> <endpoint>
                                     Clear a stalled endpoint (targeted; unlike
                                     reset it does not re-enumerate the device)
   select-config <handle> <value>    Select a configuration
-  claim <handle> <interface>        Claim an interface
+  claim <handle> <interface> [--wait]
+                                    Claim an interface (refused if another
+                                    consumer holds it; --wait queues instead)
   release <handle> <interface>      Release an interface
   control-in <handle> <length> [setup flags]
   control-out <handle> [setup flags]            (payload from stdin)
@@ -158,6 +161,9 @@ Control setup flags:
 
 Options:
   --raw     Emit raw bytes for *-in transfers (default: hex dump)
+  --force   Close/reset even if another consumer holds a claim (emits
+            claim-lost/disconnect to the displaced holder)
+  --wait    Queue a claim until the current holder releases
   -h, --help
 
 Transfers are capped at ${MAX_USB_TRANSFER_BYTES} bytes (4 MiB).
@@ -218,13 +224,15 @@ async function cmdRequest(flags: Map<string, string>, backend: UsbBackend): Prom
 async function cmdOpenCloseReset(
   sub: string,
   positionals: string[],
-  backend: UsbBackend
+  backend: UsbBackend,
+  bools: Set<string>
 ): Promise<CmdResult> {
   const handle = positionals[1];
   if (!handle) return fail(`${sub}: handle required`);
+  const force = bools.has('--force');
   if (sub === 'open') await backend.open(handle);
-  else if (sub === 'close') await backend.close(handle);
-  else await backend.reset(handle);
+  else if (sub === 'close') await backend.close(handle, { force });
+  else await backend.reset(handle, { force });
   return ok('');
 }
 
@@ -250,12 +258,14 @@ async function cmdSelectConfig(positionals: string[], backend: UsbBackend): Prom
 async function cmdClaimRelease(
   sub: string,
   positionals: string[],
-  backend: UsbBackend
+  backend: UsbBackend,
+  bools: Set<string>
 ): Promise<CmdResult> {
   const [, handle, iface] = positionals;
   if (!handle || iface === undefined) return fail(`${sub}: handle and interface required`);
-  const fn = sub === 'claim' ? backend.claim : backend.release;
-  await fn.call(backend, handle, parseIntArg(iface, 'interface'));
+  const n = parseIntArg(iface, 'interface');
+  if (sub === 'claim') await backend.claim(handle, n, { wait: bools.has('--wait') });
+  else await backend.release(handle, n);
   return ok('');
 }
 
@@ -331,14 +341,14 @@ async function dispatch(args: string[], ctx: UsbCtx, backend: UsbBackend): Promi
     case 'open':
     case 'close':
     case 'reset':
-      return cmdOpenCloseReset(sub, positionals, backend);
+      return cmdOpenCloseReset(sub, positionals, backend, bools);
     case 'clear-halt':
       return cmdClearHalt(positionals, backend);
     case 'select-config':
       return cmdSelectConfig(positionals, backend);
     case 'claim':
     case 'release':
-      return cmdClaimRelease(sub, positionals, backend);
+      return cmdClaimRelease(sub, positionals, backend, bools);
     case 'control-in':
       return cmdControlIn(positionals, flags, backend, raw);
     case 'control-out':

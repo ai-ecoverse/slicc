@@ -37,6 +37,7 @@ import {
   type SerialPort,
 } from '../kernel/serial-port-registry.js';
 import {
+  DEFAULT_USB_OWNER,
   getNavigatorUsb,
   getSharedUsbRegistry,
   type UsbDevice,
@@ -298,7 +299,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),
     ...buildSliccSidecarHandlers(options),
-    ...buildUsbHandlers(),
+    ...buildUsbHandlers(options),
     ...buildHidHandlers(options, hidSubscriptions),
     ...buildSerialHandlers(),
     ...buildEsptoolHandlers(options),
@@ -950,7 +951,8 @@ function buildSliccSidecarHandlers(options: StandalonePanelRpcHandlerOptions) {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
-function buildUsbHandlers() {
+function buildUsbHandlers(options: StandalonePanelRpcHandlerOptions) {
+  ensureUsbClaimEventRelay(options.emitEvent);
   return {
     'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
 
@@ -967,8 +969,8 @@ function buildUsbHandlers() {
       return { done: true };
     },
 
-    'usb-close': async ({ handle }) => {
-      await usbOps.usbClose(usbRegistry(), handle);
+    'usb-close': async ({ handle, owner, force }) => {
+      await usbOps.usbClose(usbRegistry(), handle, { owner, force });
       return { done: true };
     },
 
@@ -977,13 +979,28 @@ function buildUsbHandlers() {
       return { done: true };
     },
 
-    'usb-claim-interface': async ({ handle, interfaceNumber }) => {
-      await usbOps.usbClaimInterface(usbRegistry(), handle, interfaceNumber);
+    'usb-claim-interface': async ({ handle, interfaceNumber, owner, wait }) => {
+      await usbOps.usbClaimInterface(usbRegistry(), handle, interfaceNumber, { owner, wait });
       return { done: true };
     },
 
-    'usb-release-interface': async ({ handle, interfaceNumber }) => {
-      await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber);
+    'usb-release-interface': async ({ handle, interfaceNumber, owner }) => {
+      await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber, { owner });
+      return { done: true };
+    },
+
+    'usb-cancel-claim-wait': async ({ handle, interfaceNumber, owner }) => {
+      await usbOps.usbCancelClaimWait(
+        usbRegistry(),
+        handle,
+        interfaceNumber,
+        owner ?? DEFAULT_USB_OWNER
+      );
+      return { done: true };
+    },
+
+    'usb-drop-owner': async ({ owner }) => {
+      await usbOps.usbDropOwner(usbRegistry(), owner);
       return { done: true };
     },
 
@@ -999,8 +1016,8 @@ function buildUsbHandlers() {
     'usb-transfer-out': async ({ handle, endpointNumber, bytes }) =>
       usbOps.usbTransferOut(usbRegistry(), handle, endpointNumber, bytes),
 
-    'usb-reset': async ({ handle }) => {
-      await usbOps.usbReset(usbRegistry(), handle);
+    'usb-reset': async ({ handle, owner, force }) => {
+      await usbOps.usbReset(usbRegistry(), handle, { owner, force });
       return { done: true };
     },
 
@@ -1370,6 +1387,26 @@ function buildPermissionRequestHandler(options: StandalonePanelRpcHandlerOptions
 /** Shared page-side WebUSB registry (lazy singleton). */
 function usbRegistry() {
   return getSharedUsbRegistry();
+}
+
+let usbClaimRelay: (() => void) | null = null;
+let usbClaimEmit: ((channel: string, payload: unknown) => void) | undefined;
+
+/**
+ * One page-side subscription so worker-side shell/realm consumers hear
+ * `claim-lost`/`disconnect` over the panel-RPC event channel. Rebinding
+ * `emitEvent` (tests constructing handlers more than once) does not
+ * stack listeners on the shared registry.
+ */
+function ensureUsbClaimEventRelay(emitEvent?: (channel: string, payload: unknown) => void): void {
+  usbClaimEmit = emitEvent;
+  if (usbClaimRelay || !emitEvent) return;
+  void import('../kernel/usb-claim-broker.js').then((m) => {
+    if (usbClaimRelay) return;
+    usbClaimRelay = m.addClaimListener(usbRegistry(), (event) => {
+      usbClaimEmit?.('usb-claim-event', event);
+    });
+  });
 }
 
 /** Resolve `navigator.usb` or throw a clear error for the worker side. */

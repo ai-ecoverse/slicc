@@ -361,6 +361,88 @@ describe('SprinkleBridge — slicc.usb transfers', () => {
     expect([...new Uint8Array(sent[1] as ArrayBuffer)]).toEqual([...payload]);
   });
 
+  it('refuses a second sprinkle claiming the same interface and names the holder', async () => {
+    const device = makeFakeUsbDevice();
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const bridge = buildBridge();
+    const phone = bridge.createAPI('phone-view');
+    const shell = bridge.createAPI('adb');
+    const [info] = await phone.usb.list();
+    await phone.usb.claimInterface(info.handle, 0);
+    await expect(shell.usb.claimInterface(info.handle, 0)).rejects.toThrow(
+      /held by sprinkle:phone-view/
+    );
+    expect(device.claimInterface).toHaveBeenCalledOnce();
+  });
+
+  it('delivers claim-lost and disconnect when another consumer force-closes', async () => {
+    const device = makeFakeUsbDevice();
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const pusher = vi.fn();
+    const bridge = buildBridge(pusher);
+    const phone = bridge.createAPI('phone-view');
+    const [info] = await phone.usb.list();
+    const lost: unknown[] = [];
+    const gone: unknown[] = [];
+    phone.usb.on('claim-lost', (e) => lost.push(e));
+    phone.usb.on('disconnect', (e) => gone.push(e));
+    await phone.usb.claimInterface(info.handle, 0);
+    await expect(phone.usb.close(info.handle)).resolves.toBeUndefined();
+    // Same sprinkle is the holder — close without force is allowed.
+    expect(device.close).toHaveBeenCalledOnce();
+
+    const device2 = makeFakeUsbDevice({ serialNumber: 'USB-2' });
+    const usb2: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device2]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb();
+    restoreUsb = stubNavigatorUsb(usb2);
+    const phone2 = bridge.createAPI('phone-view');
+    const thief = bridge.createAPI('thief');
+    const [info2] = await phone2.usb.list();
+    const lost2: unknown[] = [];
+    phone2.usb.on('claim-lost', (e) => lost2.push(e));
+    await phone2.usb.claimInterface(info2.handle, 0);
+    await thief.usb.close(info2.handle, { force: true });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(device2.close).toHaveBeenCalledOnce();
+    expect(lost2).toHaveLength(1);
+    expect(lost2[0]).toMatchObject({
+      type: 'claim-lost',
+      holder: 'sprinkle:phone-view',
+      displacedBy: 'sprinkle:thief',
+    });
+  });
+
+  it('does not deliver claim-lost to an unrelated sprinkle', async () => {
+    const device = makeFakeUsbDevice({ serialNumber: 'USB-BYSTANDER' });
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const bridge = buildBridge();
+    const phone = bridge.createAPI('phone-view');
+    const dashboard = bridge.createAPI('dashboard');
+    const thief = bridge.createAPI('thief');
+    const [info] = await phone.usb.list();
+    const bystander: unknown[] = [];
+    dashboard.usb.on('claim-lost', (e) => bystander.push(e));
+    await phone.usb.claimInterface(info.handle, 0);
+    await thief.usb.close(info.handle, { force: true });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(bystander).toEqual([]);
+  });
+
   it('controlTransferIn/Out carry the setup packet through', async () => {
     const device = makeFakeUsbDevice();
     const { api, handle } = await grant(device);

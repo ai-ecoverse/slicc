@@ -27,9 +27,12 @@ import {
 import {
   getNavigatorUsb,
   getSharedUsbRegistry,
+  parseUsbSprinkleOwner,
+  type UsbClaimEvent,
   type UsbControlSetup,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
+  usbSprinkleOwner,
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -193,6 +196,9 @@ export interface SprinkleHidInputReport {
 
 export type SprinkleHidInputReportListener = (report: SprinkleHidInputReport) => void;
 
+export type SprinkleUsbClaimEvent = UsbClaimEvent;
+export type SprinkleUsbClaimListener = (event: SprinkleUsbClaimEvent) => void;
+
 /**
  * `slicc.hid` — stateful WebHID surface. `list`/`request`/`open`/`close`/
  * `sendReport` dispatch page-direct against the shared page-side
@@ -240,10 +246,10 @@ export interface SprinkleUsbApi {
   list(): Promise<UsbDeviceInfo[]>;
   request(filters?: UsbDeviceFilter[]): Promise<UsbDeviceInfo>;
   open(handle: string): Promise<void>;
-  close(handle: string): Promise<void>;
-  reset(handle: string): Promise<void>;
+  close(handle: string, opts?: { force?: boolean }): Promise<void>;
+  reset(handle: string, opts?: { force?: boolean }): Promise<void>;
   selectConfiguration(handle: string, configurationValue: number): Promise<void>;
-  claimInterface(handle: string, interfaceNumber: number): Promise<void>;
+  claimInterface(handle: string, interfaceNumber: number, opts?: { wait?: boolean }): Promise<void>;
   releaseInterface(handle: string, interfaceNumber: number): Promise<void>;
   clearHalt(handle: string, direction: 'in' | 'out', endpointNumber: number): Promise<void>;
   controlTransferIn(
@@ -266,6 +272,8 @@ export interface SprinkleUsbApi {
     endpointNumber: number,
     bytes: Uint8Array
   ): Promise<{ status: string; bytesWritten: number }>;
+  on(event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener): void;
+  off(event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener): void;
 }
 
 // ── Tier 1 jsh bridge: node -e command builder + result parser ──
@@ -614,6 +622,8 @@ export class SprinkleBridge {
    */
   private hidSubs = new Map<string, Map<string, () => void | Promise<void>>>();
   private iframePusher: SprinkleIframePusher | undefined;
+  private usbClaimUnsub: (() => void) | null = null;
+  private usbClaimRelayReady: Promise<void> | null = null;
 
   constructor(
     fs: VirtualFS,
@@ -748,11 +758,13 @@ export class SprinkleBridge {
    * transfers stay on the realm-side `usb` global (out of scope for v1).
    */
   private async usbOp(
-    _sprinkleName: string,
+    sprinkleName: string,
     op: string,
     args: readonly unknown[]
   ): Promise<unknown> {
     const reg = getSharedUsbRegistry();
+    const owner = usbSprinkleOwner(sprinkleName);
+    await this.ensureUsbClaimRelay();
     switch (op) {
       case 'list': {
         const usb = getNavigatorUsb();
@@ -771,11 +783,17 @@ export class SprinkleBridge {
         return { ok: true };
       }
       case 'close': {
-        await usbOps.usbClose(reg, args[0] as string);
+        await usbOps.usbClose(reg, args[0] as string, {
+          owner,
+          force: Boolean((args[1] as { force?: boolean } | null | undefined)?.force),
+        });
         return { ok: true };
       }
       case 'reset': {
-        await usbOps.usbReset(reg, args[0] as string);
+        await usbOps.usbReset(reg, args[0] as string, {
+          owner,
+          force: Boolean((args[1] as { force?: boolean } | null | undefined)?.force),
+        });
         return { ok: true };
       }
       case 'selectConfig': {
@@ -783,11 +801,14 @@ export class SprinkleBridge {
         return { ok: true };
       }
       case 'claim': {
-        await usbOps.usbClaimInterface(reg, args[0] as string, args[1] as number);
+        await usbOps.usbClaimInterface(reg, args[0] as string, args[1] as number, {
+          owner,
+          wait: Boolean((args[2] as { wait?: boolean } | null | undefined)?.wait),
+        });
         return { ok: true };
       }
       case 'release': {
-        await usbOps.usbReleaseInterface(reg, args[0] as string, args[1] as number);
+        await usbOps.usbReleaseInterface(reg, args[0] as string, args[1] as number, { owner });
         return { ok: true };
       }
       case 'clearHalt': {
@@ -924,6 +945,48 @@ export class SprinkleBridge {
     }
     try {
       this.iframePusher?.(sprinkleName, 'hid:inputreport', report);
+    } catch {
+      /* a broken pusher must not break delivery to other consumers */
+    }
+  }
+
+  private ensureUsbClaimRelay(): Promise<void> {
+    if (!this.usbClaimRelayReady) {
+      this.usbClaimRelayReady = import('../kernel/usb-claim-broker.js').then((m) => {
+        if (this.usbClaimUnsub) return;
+        this.usbClaimUnsub = m.addClaimListener(getSharedUsbRegistry(), (event) => {
+          this.deliverUsbClaimEvent(event);
+        });
+      });
+    }
+    return this.usbClaimRelayReady;
+  }
+
+  /**
+   * Fan a displaced-claim event to inline `slicc.usb.on` listeners and
+   * the iframe of the sprinkle that held the claim (when the holder is
+   * `sprinkle:<name>`).
+   */
+  private deliverUsbClaimEvent(event: UsbClaimEvent): void {
+    const holderSprinkle = parseUsbSprinkleOwner(event.holder);
+    if (!holderSprinkle) return;
+    const channel = `usb:${event.type}` as const;
+    const set = this.listeners.get(`${holderSprinkle}:usb:${event.type}`);
+    if (set) {
+      for (const cb of set) {
+        const currentSet = set;
+        setTimeout(() => {
+          if (!currentSet.has(cb)) return;
+          try {
+            (cb as unknown as SprinkleUsbClaimListener)(event);
+          } catch {
+            /* ignore listener errors */
+          }
+        }, 0);
+      }
+    }
+    try {
+      this.iframePusher?.(holderSprinkle, channel, event);
     } catch {
       /* a broken pusher must not break delivery to other consumers */
     }
@@ -1096,17 +1159,21 @@ export class SprinkleBridge {
       open: async (handle: string) => {
         await this.usbOp(sprinkleName, 'open', [handle]);
       },
-      close: async (handle: string) => {
-        await this.usbOp(sprinkleName, 'close', [handle]);
+      close: async (handle: string, opts?: { force?: boolean }) => {
+        await this.usbOp(sprinkleName, 'close', [handle, opts ?? null]);
       },
-      reset: async (handle: string) => {
-        await this.usbOp(sprinkleName, 'reset', [handle]);
+      reset: async (handle: string, opts?: { force?: boolean }) => {
+        await this.usbOp(sprinkleName, 'reset', [handle, opts ?? null]);
       },
       selectConfiguration: async (handle: string, configurationValue: number) => {
         await this.usbOp(sprinkleName, 'selectConfig', [handle, configurationValue]);
       },
-      claimInterface: async (handle: string, interfaceNumber: number) => {
-        await this.usbOp(sprinkleName, 'claim', [handle, interfaceNumber]);
+      claimInterface: async (
+        handle: string,
+        interfaceNumber: number,
+        opts?: { wait?: boolean }
+      ) => {
+        await this.usbOp(sprinkleName, 'claim', [handle, interfaceNumber, opts ?? null]);
       },
       releaseInterface: async (handle: string, interfaceNumber: number) => {
         await this.usbOp(sprinkleName, 'release', [handle, interfaceNumber]);
@@ -1140,6 +1207,19 @@ export class SprinkleBridge {
           endpointNumber,
           u8ToBase64(bytes),
         ]) as Promise<{ status: string; bytesWritten: number }>,
+      on: (event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener) => {
+        void this.ensureUsbClaimRelay();
+        const key = `${sprinkleName}:usb:${event}`;
+        let set = this.listeners.get(key);
+        if (!set) {
+          set = new Set();
+          this.listeners.set(key, set);
+        }
+        set.add(cb as unknown as UpdateCallback);
+      },
+      off: (event: 'disconnect' | 'claim-lost', cb: SprinkleUsbClaimListener) => {
+        this.listeners.get(`${sprinkleName}:usb:${event}`)?.delete(cb as unknown as UpdateCallback);
+      },
     };
   }
 
