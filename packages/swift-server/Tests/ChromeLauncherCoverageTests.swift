@@ -226,6 +226,34 @@ final class ChromeLauncherCoverageTests: XCTestCase {
             XCTAssertEqual(executable, failingOpen.path)
         }
 
+        let sleepingOpen = root.appendingPathComponent("sleeping-open")
+        try makeExecutable(at: sleepingOpen, script: "#!/bin/sh\nsleep 30\n")
+        let launchServicesProcessBox = ChromeProcessBox()
+        let launchServicesTimeout = ChromeLauncher(
+            logger: logger(),
+            fileExists: { $0 == chromeExecutable.path },
+            processFactory: { launchServicesProcessBox.make() },
+            launchServicesExecutablePath: sleepingOpen.path,
+            fetchData: { _ in throw URLError(.cannotConnectToHost) },
+            runningPidsForBundle: { _ in [] }
+        )
+        defer { launchServicesProcessBox.terminate() }
+
+        do {
+            _ = try await launchServicesTimeout.launch(
+                config: ChromeLaunchConfig(
+                    cdpPort: 9333,
+                    launchUrl: "https://www.sliccy.ai/",
+                    userDataDir: root.appendingPathComponent("launch-services-timeout-profile").path,
+                    executablePath: chromeExecutable.path,
+                    launchTimeout: 0.02
+                )
+            )
+            XCTFail("expected LaunchServices timeout")
+        } catch ChromeLauncherError.timedOutWaitingForPort(let timeout) {
+            XCTAssertEqual(timeout, 0.02)
+        }
+
         let sleepingExecutable = root.appendingPathComponent("silent-chrome")
         try makeExecutable(at: sleepingExecutable, script: "#!/bin/sh\nsleep 30\n")
         let processBox = ChromeProcessBox()
@@ -375,6 +403,17 @@ final class ChromeLauncherCoverageTests: XCTestCase {
             ChromeLauncher.extractBrowserIdentifier(
                 from: Data(#"{"Browser":""}"#.utf8)
             ))
+
+        let url = URL(string: "http://127.0.0.1:9333/json/version")!
+        let nonHTTPResponse = URLResponse(
+            url: url,
+            mimeType: "application/json",
+            expectedContentLength: 0,
+            textEncodingName: nil
+        )
+        let nonHTTP = ChromeLauncher(fetchData: { _ in (Data(), nonHTTPResponse) })
+        let browser = await nonHTTP.probeExistingChrome(cdpPort: 9333)
+        XCTAssertNil(browser)
     }
 
     func testOutputMonitorFlushesPartialFinalLineAndReportsEarlyExit() async throws {
