@@ -140,5 +140,7 @@ describe('lint wiring', () => {
     expect(yml).toContain('branches: [main]');
     expect(yml).toContain('refs/heads/no-comment');
     expect(yml).toContain('packages/dev-tools/no-comment/strip.mjs');
+    expect(yml).toMatch(/npx biome format --write \./);
+    expect(yml).not.toMatch(/npx biome check --write \./);
   });
 });

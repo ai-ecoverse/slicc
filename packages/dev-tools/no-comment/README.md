@@ -32,5 +32,5 @@ node packages/dev-tools/no-comment/check.mjs
 it fails if comments or developer docs come back.
 
 Pushes to `main` run `.github/workflows/no-comment-mirror.yml`, which strips
-the new tree and commits it onto `no-comment` with a `No-Comment-Of: <sha>`
-trailer.
+the new tree, formats it (`biome format`, `prettier`), and commits it onto
+`no-comment` with a `No-Comment-Of: <sha>` trailer.
