@@ -16,6 +16,7 @@ import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
+import { readoptFeatureFlagsFromCache } from '../core/feature-flags-cache.js';
 import { getBudgetWindowSnapshot, refreshBudgetWindow } from '../providers/budget-usage-source.js';
 import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
@@ -2036,16 +2037,20 @@ export class Bridge implements KernelFacade {
       // Live localStorage sync: page→worker shim (standalone-worker mode only).
       case 'local-storage-set': {
         this.applyLocalStorageOp(msg.type, (s) => s.setItem(msg.key, msg.value));
+        readoptFeatureFlagsFromCache(msg.key);
         break;
       }
 
       case 'local-storage-remove': {
         this.applyLocalStorageOp(msg.type, (s) => s.removeItem(msg.key));
+        readoptFeatureFlagsFromCache(msg.key);
         break;
       }
 
       case 'local-storage-clear': {
         this.applyLocalStorageOp(msg.type, (s) => s.clear());
+        // No key: a wholesale change always re-adopts.
+        readoptFeatureFlagsFromCache();
         break;
       }
     }

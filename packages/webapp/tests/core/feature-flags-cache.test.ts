@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getFeatureValue, initFeatureFlags } from '../../src/core/feature-flags.js';
+import {
+  applyHostFlagOverrides,
+  getFeatureValue,
+  initFeatureFlags,
+} from '../../src/core/feature-flags.js';
 import {
   type FeatureFlagsRemoteStorage,
   featureFlagsRemoteCacheKey,
   initFeatureFlagsFromRemoteCache,
+  readoptFeatureFlagsFromCache,
   resolveFeatureFlagsRemoteStorage,
   writeFeatureFlagsRemoteCache,
 } from '../../src/core/feature-flags-cache.js';
@@ -87,5 +92,60 @@ describe('feature flag remote cache', () => {
     const global = makeMemoryStorage();
     vi.stubGlobal('localStorage', global);
     expect(resolveFeatureFlagsRemoteStorage()).toBe(global);
+  });
+});
+
+/**
+ * The kernel worker adopts central values once, from the page's boot snapshot.
+ * A page write that lands later reaches its storage shim but would otherwise
+ * never be acted on — which is how an operator's kill switch used to stop at
+ * the realm that runs the unattended work.
+ */
+describe('re-adopting the cache after a later write', () => {
+  it('picks up a central value written after the initial adopt', () => {
+    const storage = makeMemoryStorage();
+    writeFeatureFlagsRemoteCache(storage, 'standalone', { 'compact-on-idle': 'on' });
+    initFeatureFlagsFromRemoteCache('standalone', storage);
+    expect(getFeatureValue('compact-on-idle')).toBe('on');
+
+    // The operator flipped the kill switch; the page cached the new payload.
+    writeFeatureFlagsRemoteCache(storage, 'standalone', { 'compact-on-idle': 'off' });
+
+    expect(readoptFeatureFlagsFromCache(featureFlagsRemoteCacheKey('standalone'), storage)).toBe(
+      true
+    );
+    expect(getFeatureValue('compact-on-idle')).toBe('off');
+  });
+
+  it('ignores a write to any other key', () => {
+    const storage = makeMemoryStorage();
+    initFeatureFlagsFromRemoteCache('standalone', storage);
+    writeFeatureFlagsRemoteCache(storage, 'standalone', { 'panel-layouts': 'on' });
+
+    expect(readoptFeatureFlagsFromCache('selected-model', storage)).toBe(false);
+    expect(getFeatureValue('panel-layouts')).toBe('off');
+  });
+
+  it('re-adopts for a keyless write (a wholesale clear)', () => {
+    const storage = makeMemoryStorage();
+    writeFeatureFlagsRemoteCache(storage, 'standalone', { 'panel-layouts': 'on' });
+    initFeatureFlagsFromRemoteCache('standalone', storage);
+    expect(getFeatureValue('panel-layouts')).toBe('on');
+
+    const cleared: FeatureFlagsRemoteStorage = { getItem: () => null, setItem: () => undefined };
+    expect(readoptFeatureFlagsFromCache(undefined, cleared)).toBe(true);
+    expect(getFeatureValue('panel-layouts')).toBe('off');
+  });
+
+  it('keeps host-pushed session overrides, which are not central values', () => {
+    const storage = makeMemoryStorage();
+    initFeatureFlagsFromRemoteCache('standalone', storage);
+    applyHostFlagOverrides({ 'panel-layouts': 'on' });
+    writeFeatureFlagsRemoteCache(storage, 'standalone', { 'agentic-memory': 'on' });
+
+    readoptFeatureFlagsFromCache(featureFlagsRemoteCacheKey('standalone'), storage);
+
+    expect(getFeatureValue('agentic-memory')).toBe('on');
+    expect(getFeatureValue('panel-layouts')).toBe('on');
   });
 });

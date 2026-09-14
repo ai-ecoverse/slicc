@@ -73,8 +73,11 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'compact-on-idle',
         label: 'Compact on idle',
-        defaultValue: 'off',
-        userToggleable: true,
+        // Graduated: on by default and out of Settings → Experimental. Uniform
+        // across floats (no `floatDefaults`) — a float that cannot compact
+        // never arms a round, so there is nothing to carve out.
+        defaultValue: 'on',
+        userToggleable: false,
       }),
       expect.objectContaining({
         id: 'memory-v2',
@@ -236,7 +239,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
-      'compact-on-idle': 'off',
+      'compact-on-idle': 'on',
       'memory-v2': 'off',
     });
     expect(
@@ -250,7 +253,7 @@ describe('feature flag registry', () => {
       'panel-layouts': 'off',
       'agentic-memory': 'off',
       'multiple-cones': 'on',
-      'compact-on-idle': 'off',
+      'compact-on-idle': 'on',
       'memory-v2': 'off',
     });
   });

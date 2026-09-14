@@ -78,8 +78,20 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Compact on idle',
     description:
       'When a cone has been idle for a while with a large context, summarize its history in the background. The full transcript is kept in /sessions.',
-    defaultValue: 'off',
-    userToggleable: true,
+    // Graduated: the background round ships ON for every float. Not
+    // `userToggleable`, so it leaves Settings → Experimental and the only
+    // remaining switch is the worker's central `FEATURE_FLAGS` — kept on
+    // purpose, because this is the one feature that spends LLM calls with
+    // nobody watching and an operator needs an off switch that is not a
+    // release. That switch reaches a session already in progress: the page
+    // re-reads `/api/flags` every `FEATURE_FLAGS_REFRESH_INTERVAL_MS` and the
+    // kernel worker re-adopts the cached payload
+    // (`readoptFeatureFlagsFromCache`), so an open tab stops within about one
+    // idle window rather than at its next reload. No `floatDefaults`: a float
+    // with no agent, model or compaction key never arms a round
+    // (`IdleCompaction.gate`), so there is nothing to carve out per float.
+    defaultValue: 'on',
+    userToggleable: false,
   }),
   Object.freeze({
     id: 'memory-v2',
@@ -200,6 +212,28 @@ export function initFeatureFlags(
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
   hostValues = {};
+}
+
+/**
+ * Replace the central values WITHOUT resetting this session's host-pushed
+ * overrides. {@link initFeatureFlags} is boot ("this realm starts here"); this
+ * is a later reading of the same boot's central configuration, so an
+ * embedder's pushed flags — which live for the session, not for one fetch —
+ * have to survive it.
+ *
+ * This is how an operator's `FEATURE_FLAGS` change reaches a realm that is
+ * already running: the page re-reads `/api/flags` periodically, and the kernel
+ * worker re-adopts the cached payload when the page's write reaches its
+ * storage shim. Without it, every realm ran for its whole lifetime on the
+ * values that happened to be cached at boot — which only mattered while no
+ * flag gated something unattended, and compact-on-idle does.
+ */
+export function updateCentralFlagValues(
+  float: FeatureFlagFloat,
+  centralValues: Readonly<FeatureFlagValues>
+): void {
+  activeFloat = float;
+  remoteValues = sanitizeValues(centralValues);
 }
 
 /**

@@ -332,12 +332,15 @@ describe('showExperimentalSettings', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the compact-on-idle flag without tunable fields', async () => {
+  it('keeps compact-on-idle out of the dialog now that it has graduated', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const result = showExperimentalSettings(log, { reload });
     const dialog = await openDialog();
     try {
-      expect(dialog.querySelector('#wcset-feature-compact-on-idle')).not.toBeNull();
+      // The feature ships on: no toggle, and — as before the graduation — no
+      // fields for the idle window or the token floor either. The only switch
+      // left is the worker's central `FEATURE_FLAGS`.
+      expect(dialog.querySelector('#wcset-feature-compact-on-idle')).toBeNull();
       expect(dialog.querySelector('#wcset-idle-compaction-minutes')).toBeNull();
       expect(dialog.querySelector('#wcset-idle-compaction-min-tokens')).toBeNull();
     } finally {

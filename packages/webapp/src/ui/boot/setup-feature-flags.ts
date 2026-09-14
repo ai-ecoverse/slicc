@@ -17,7 +17,13 @@ interface FeatureFlagsPageBootOptions extends FeatureFlagsBootOptions {
 export function setupFeatureFlags(float: FeatureFlagFloat, options: FeatureFlagsBootOptions): void {
   initFeatureFlagsFromRemoteCache(float, options.storage);
   void import('./setup-feature-flags-remote.js')
-    .then(({ refreshFeatureFlagsForPage }) => refreshFeatureFlagsForPage(float, options))
+    .then(({ refreshFeatureFlagsForPage, scheduleFeatureFlagsRefresh }) => {
+      // Re-read on a timer as well as at boot: central values are an
+      // operator's kill switch, and a tab left open for days has to be able to
+      // hear one (compact-on-idle keeps working in exactly such a tab).
+      scheduleFeatureFlagsRefresh(float, options);
+      return refreshFeatureFlagsForPage(float, options);
+    })
     .catch(() => {
       // Remote hydration is best-effort; bundled defaults and the cache stay active.
     });

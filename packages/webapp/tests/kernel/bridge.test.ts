@@ -9,6 +9,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { initFeatureFlags, isFeatureEnabled } from '../../src/core/feature-flags.js';
+import {
+  featureFlagsRemoteCacheKey,
+  initFeatureFlagsFromRemoteCache,
+} from '../../src/core/feature-flags-cache.js';
 import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../src/scoops/transcript-limits.js';
 import type { ChannelMessage } from '../../src/scoops/types.js';
 import { clearSprinkleRoute, setSprinkleRoute } from '../../src/shell/sprinkle-routes.js';
@@ -2978,6 +2983,43 @@ describe('Bridge handlePanelMessage dispatch', () => {
       expect(ls.setItem).toHaveBeenCalledWith('k', 'v');
     } finally {
       delete (globalThis as any).localStorage;
+    }
+  });
+
+  /**
+   * The worker realm adopts central flag values ONCE, at init, from the page's
+   * boot snapshot. A later `/api/flags` read (the periodic one especially)
+   * reaches this shim as an ordinary write — and has to be acted on, or an
+   * operator's kill switch never reaches the realm that runs the unattended
+   * compact-on-idle rounds.
+   */
+  it('local-storage-set of the flags cache re-adopts central values in this realm', async () => {
+    const store = new Map<string, string>();
+    const ls = {
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+      clear: () => store.clear(),
+      getItem: (key: string) => store.get(key) ?? null,
+      key: () => null,
+      length: 0,
+    };
+    (globalThis as any).localStorage = ls;
+    const cacheKey = featureFlagsRemoteCacheKey('standalone');
+    try {
+      store.set(cacheKey, JSON.stringify({ 'compact-on-idle': 'on' }));
+      initFeatureFlagsFromRemoteCache('standalone');
+      expect(isFeatureEnabled('compact-on-idle')).toBe(true);
+
+      await (bridge as any).handlePanelMessage({
+        type: 'local-storage-set',
+        key: cacheKey,
+        value: JSON.stringify({ 'compact-on-idle': 'off' }),
+      });
+
+      expect(isFeatureEnabled('compact-on-idle')).toBe(false);
+    } finally {
+      delete (globalThis as any).localStorage;
+      initFeatureFlags('standalone');
     }
   });
 

@@ -749,7 +749,10 @@ registration. A pointer into a deleted scoop is acceptable only after `drop_scoo
 down the scoop's stores (orphan session dirs under the preserved sandbox are leftover scratch).
 With `memory-v2` off, scoop behavior is unchanged (no snapshot, no pointer).
 
-**Compact on idle** (feature flag `compact-on-idle`, off by default): a cone that settles into
+**Compact on idle** (ships ON; `compact-on-idle` is no longer a user setting — what is left is the
+worker's central kill switch, the `FEATURE_FLAGS.base` entry in
+`packages/cloudflare-worker/wrangler.jsonc`, which OUTRANKS the bundled default and therefore has to
+say `on` too): a cone that settles into
 `ready` arms a timer (`scoop-context/idle-compaction.ts`). When it fires after 30 idle minutes and
 the estimated context (`estimateConversationTokens`, the same pricing the threshold uses) is at
 least 200 000 tokens, the ordinary forced compaction runs in the background with `trigger: 'idle'`.
@@ -768,11 +771,18 @@ non-idle `force` caller would have adopted it. Every non-adopted outcome of a ST
 which `ScoopContext` turns into a `cancelled` compaction state so the transcript can retract the
 marker row the round opened. Gate rejections and `below-minimum` never opened one and never fire it.
 
+The kill switch reaches a session that is already running, which matters for a feature nobody is
+watching: the page re-reads `/api/flags` every `FEATURE_FLAGS_REFRESH_INTERVAL_MS` (30 min) and the
+kernel worker re-adopts the cached payload when that write reaches its storage shim
+(`readoptFeatureFlagsFromCache`), so a tab left open stops within about one idle window instead of at
+its next reload. A round already in flight when the switch flips finishes; the next one is gated.
+
 The shipped window is 30 minutes and 200 000 tokens, but both are read LIVE (on every arm and every
 fire) from clamped `localStorage` keys — `slicc_idle_compaction_minutes` (0.01 – 1440) and
 `slicc_idle_compaction_min_tokens` (0 – 10M) — so the e2e scenario exercises the production timer,
-gates and adoption check with a window of about a second (`tests/e2e/compaction-idle.test.ts`). The
-experimental dialog still exposes only the on/off flag.
+gates and adoption check with a window of about a second (`tests/e2e/compaction-idle.test.ts`). No
+UI exposes either number, and since the graduation none exposes the flag either — the e2e runs the
+shipped default rather than seeding it, so a flip back to off fails loudly.
 
 **The marker row**: a compaction round shows up in the transcript as `<slicc-compaction-marker>` (a
 hairline seam broken by a chip), not as an assistant bubble. The `compaction_notice` AgentEvent
