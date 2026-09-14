@@ -608,9 +608,12 @@ export class ScoopContext {
   }
 
   /**
-   * Whether compact-on-idle applies to this unit right now (flag + role).
-   * The gelatiere is the exception to the flag: a persistent advisor that
-   * lives on licks for weeks must compact, or it overruns its own context.
+   * Whether compact-on-idle applies to this unit right now (role + kill
+   * switch). The feature ships ON, so the flag read is no longer a user
+   * setting — it is the central `FEATURE_FLAGS` off switch an operator can
+   * reach without a release. The gelatiere is the exception to both: a
+   * persistent advisor that lives on licks for weeks must compact, or it
+   * overruns its own context.
    */
   private idleCompactionEnabled(): boolean {
     if (isGelatiereUnit(this.scoop)) return true;

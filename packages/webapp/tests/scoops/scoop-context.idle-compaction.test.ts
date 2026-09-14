@@ -1,7 +1,11 @@
 /**
- * Compact-on-idle: the timer arms when a ROOT settles into `ready` with the
- * flag on, the round runs the ordinary forced compaction, and its result is
- * adopted only if the thread stood still the whole time.
+ * Compact-on-idle: the timer arms when a ROOT settles into `ready`, the round
+ * runs the ordinary forced compaction, and its result is adopted only if the
+ * thread stood still the whole time.
+ *
+ * The feature has graduated, so the flag is seeded ON here the way it ships;
+ * the one test that takes it away is exercising the central kill switch, which
+ * is the only switch left.
  */
 import 'fake-indexeddb/auto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -436,14 +440,14 @@ describe('ScoopContext wiring', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.enabledFlags.clear();
+    mocks.enabledFlags.add('compact-on-idle');
     mocks.settings = { idleMinutes: 1, minTokens: 1000 };
   });
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('arms on ready for a root with the flag on and adopts the compacted history', async () => {
-    mocks.enabledFlags.add('compact-on-idle');
+  it('arms on ready for a root and adopts the compacted history', async () => {
     const ctx = new ScoopContext(cone, callbacks(), {} as never);
     const compactFn = vi.fn(async () => [summary()]);
     const { internals, agent } = inject(ctx, compactFn);
@@ -456,15 +460,15 @@ describe('ScoopContext wiring', () => {
     expect(agent.state.messages).toEqual([summary()]);
   });
 
-  it('never loads for a scoop or with the flag off; processing disarms; dispose disarms', async () => {
-    mocks.enabledFlags.add('compact-on-idle');
+  it('never loads for a scoop or with the kill switch off; processing disarms; dispose disarms', async () => {
     const child = new ScoopContext(scoop, callbacks(), {} as never);
     const childInternals = inject(child, async () => []).internals;
     childInternals.setStatus('ready');
     await settled(childInternals);
     expect(childInternals.idleCompaction).toBeNull();
 
-    mocks.enabledFlags.clear();
+    // The only way the feature is off now: an operator's central value.
+    mocks.enabledFlags.delete('compact-on-idle');
     const off = new ScoopContext(cone, callbacks(), {} as never);
     const offInternals = inject(off, async () => []).internals;
     offInternals.setStatus('ready');
@@ -486,7 +490,6 @@ describe('ScoopContext wiring', () => {
   });
 
   it('stop() and clearSession() cut off a round in flight', async () => {
-    mocks.enabledFlags.add('compact-on-idle');
     const ctx = new ScoopContext(cone, callbacks(), {} as never);
     let seenSignal: AbortSignal | undefined;
     const { internals, agent } = inject(
@@ -509,7 +512,6 @@ describe('ScoopContext wiring', () => {
   });
 
   it('does not arm a unit that stopped being ready while the module was loading', async () => {
-    mocks.enabledFlags.add('compact-on-idle');
     const ctx = new ScoopContext(cone, callbacks(), {} as never);
     const { internals } = inject(ctx, async () => []);
     internals.setStatus('ready');

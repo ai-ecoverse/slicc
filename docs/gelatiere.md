@@ -24,7 +24,8 @@ because every consumer of a dangling ownership edge already falls back to the de
 (approvals, `tmpDirFor`, idle notices) and cascades only follow real parents, so no "Drop cone"
 can take it down; the folder is claimed like any scoop's. It shows in the tab strip after the cones,
 read-only. Two exceptions are carved out for it by `isGelatiereUnit`: compact-on-idle (a root-only
-capability) applies to it whatever the flag says, and — because it is registered
+capability) applies to it although it is a child, and even if the central kill switch turns the
+feature off, and — because it is registered
 `notifyOnComplete: false` — neither a completion notice nor the "ready for 2 minutes without work"
 idle nag reaches the default root. It runs under the delegated-child policy, so its record carries
 an explicit allow-list (`GELATIERE_ALLOWED_COMMANDS`), read roots (`/sessions/`, `/shared/`,

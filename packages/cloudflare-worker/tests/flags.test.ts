@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { makeEnv } from './helpers/fake-env.js';
@@ -110,5 +112,28 @@ describe('GET /api/flags', () => {
 
     expect(cache.keys.some((key) => key.endsWith('/api/flags?float=standalone'))).toBe(true);
     expect(cache.keys.some((key) => key.endsWith('/api/flags?float=cherry'))).toBe(true);
+  });
+});
+
+/**
+ * A graduated flag ships from `wrangler.jsonc`, not from the webapp's bundled
+ * default: a `base` value OUTRANKS the default, so an entry left at "off"
+ * keeps the feature off for every float that reaches the worker however the
+ * bundle ships it. This guard couples the two, so a silent revert fails here
+ * instead of in production. (It also has to hold in EVERY env — staging runs
+ * the e2e, which exercises the shipped default rather than a seeded override.)
+ */
+describe('graduated flags in wrangler.jsonc', () => {
+  // `.href`, not the URL object: this project compiles against
+  // @cloudflare/workers-types, whose `URL` is not node's.
+  const wrangler = readFileSync(
+    fileURLToPath(new URL('../wrangler.jsonc', import.meta.url).href),
+    'utf-8'
+  );
+  const values = [...wrangler.matchAll(/"compact-on-idle":\s*"([^"]*)"/g)].map((match) => match[1]);
+
+  it('pins compact-on-idle ON in every env (production + staging)', () => {
+    expect(values.length).toBeGreaterThanOrEqual(2);
+    for (const value of values) expect(value).toBe('on');
   });
 });

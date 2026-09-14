@@ -78,8 +78,16 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Compact on idle',
     description:
       'When a cone has been idle for a while with a large context, summarize its history in the background. The full transcript is kept in /sessions.',
-    defaultValue: 'off',
-    userToggleable: true,
+    // Graduated: the background round ships ON for every float. Not
+    // `userToggleable`, so it leaves Settings → Experimental and the only
+    // remaining switch is the worker's central `FEATURE_FLAGS` — kept on
+    // purpose, because this is the one feature that spends LLM calls with
+    // nobody watching and an operator needs an off switch that is not a
+    // release. No `floatDefaults`: a float with no agent, model or compaction
+    // key never arms a round (`IdleCompaction.gate`), so there is nothing to
+    // carve out per float.
+    defaultValue: 'on',
+    userToggleable: false,
   }),
   Object.freeze({
     id: 'memory-v2',

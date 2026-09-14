@@ -1,15 +1,14 @@
 /**
- * Knobs of the `compact-on-idle` experiment: how long a cone must sit idle,
- * and how large its context must be, before a background compaction round
- * starts.
+ * Knobs of compact-on-idle: how long a cone must sit idle, and how large its
+ * context must be, before a background compaction round starts.
  *
- * The experimental dialog exposes only the on/off flag — 30 minutes and 200k
- * tokens are the shipped answer and no user is asked to pick numbers. But the
- * numbers ARE readable from `localStorage`, because otherwise the feature is
- * untestable outside a real half-hour wait: an e2e scenario sets an idle
- * window of a second or two and a token floor of nothing, and exercises the
- * same production timer, gates and adoption check the shipped defaults use.
- * The keys were being written already and read by nobody (#2843).
+ * No UI exposes either number — 30 minutes and 200k tokens are the shipped
+ * answer and no user is asked to pick them. But the numbers ARE readable from
+ * `localStorage`, because otherwise the feature is untestable outside a real
+ * half-hour wait: an e2e scenario sets an idle window of a second or two and a
+ * token floor of nothing, and exercises the same production timer, gates and
+ * adoption check the shipped defaults use. The keys were being written already
+ * and read by nobody (#2843).
  *
  * Both keys are plain decimal numbers and both are CLAMPED, so a hand-edited
  * or corrupt value degrades to something survivable rather than arming a

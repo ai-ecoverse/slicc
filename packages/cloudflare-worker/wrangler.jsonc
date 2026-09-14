@@ -61,7 +61,11 @@
         "experimental-settings": "on",
         "panel-layouts": "off",
         "agentic-memory": "off",
-        "compact-on-idle": "off",
+        // Graduated: ships on. A `base` value OUTRANKS the bundled default, so
+        // this entry — not the flag definition — is what decides the answer for
+        // every float that reaches the worker. Flip it to "off" to kill the
+        // background rounds without cutting a release.
+        "compact-on-idle": "on",
         "memory-v2": "off"
       },
       "floats": {
@@ -155,7 +159,9 @@
             "experimental-settings": "on",
             "panel-layouts": "off",
             "agentic-memory": "off",
-            "compact-on-idle": "off",
+            // Keep in step with the production `base` above: this value, not
+            // the bundled default, decides the answer (and is the kill switch).
+            "compact-on-idle": "on",
             "memory-v2": "off"
           },
           "floats": {

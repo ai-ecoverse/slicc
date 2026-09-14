@@ -1,5 +1,6 @@
 /**
- * Compact-on-idle (feature flag `compact-on-idle`).
+ * Compact-on-idle. Ships on; `compact-on-idle` survives only as the central
+ * kill switch `ScoopContext.idleCompactionEnabled` reads.
  *
  * Owns: the idle timer a root unit arms every time it settles into `ready`,
  * the two gates a round must pass (idle long enough, context large enough),

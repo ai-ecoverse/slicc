@@ -64,6 +64,11 @@ vi.mock('../../src/core/context-compaction.js', () => ({
     captures.createCompactContextCalls.push(config);
     return async (messages: unknown[]) => messages;
   },
+  // Compact-on-idle ships on, so a ROOT unit reaching `ready` now loads the
+  // idle module here too. It only needs the estimator and the progress check
+  // to be *present* — this file never lets a round run.
+  estimateConversationTokens: () => 0,
+  hasCompactionProgress: () => false,
 }));
 
 vi.mock('@earendil-works/pi-ai/compat', () => ({

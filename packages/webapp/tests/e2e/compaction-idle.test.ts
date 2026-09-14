@@ -63,19 +63,20 @@ test.describe('compact-on-idle', () => {
   });
 
   /**
-   * Boot a leader with `compact-on-idle` on and the idle window turned down to
-   * seconds. Both knobs go in through the same `localStorage` the production
-   * reader consults, so nothing about the code under test is stubbed.
+   * Boot a leader with the idle window turned down to seconds. The feature
+   * itself is NOT seeded: it graduated and ships on, so this scenario runs the
+   * shipped default and a flip back to off fails here loudly instead of
+   * passing on a seeded override. (A seed would be inert anyway — the flag is
+   * no longer `userToggleable`, so `canOverride` drops a `localStorage` value
+   * for it.) The two knobs go in through the same `localStorage` the
+   * production reader consults, so nothing about the code under test is
+   * stubbed.
    */
   async function bootIdleLeader(page: Page): Promise<void> {
     await seedLocalLlmProvider(page, { modelId: 'fake-coder-compaction' });
     await page.addInitScript(
       (seed: { minutes: string; minTokens: string }) => {
         try {
-          // Flag values are STRINGS on this key (`sanitizeValues` drops
-          // anything else), so a boolean here would silently leave the
-          // experiment off and the scenario would pass by never running.
-          localStorage.setItem('slicc_feature_flags', JSON.stringify({ 'compact-on-idle': 'on' }));
           localStorage.setItem('slicc_idle_compaction_minutes', seed.minutes);
           localStorage.setItem('slicc_idle_compaction_min_tokens', seed.minTokens);
         } catch {
