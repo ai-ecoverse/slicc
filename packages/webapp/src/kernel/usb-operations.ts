@@ -102,7 +102,8 @@ export async function usbClaimInterface(
     handle,
     interfaceNumber,
     owner,
-    opts?.wait ?? false
+    opts?.wait ?? false,
+    opts?.signal
   );
   try {
     await device.claimInterface(interfaceNumber);
@@ -111,6 +112,29 @@ export async function usbClaimInterface(
       claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
     }
     throw err;
+  }
+}
+
+export async function usbCancelClaimWait(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): Promise<void> {
+  const claims = await broker();
+  claims.cancelClaimWait(registry, handle, interfaceNumber, owner);
+}
+
+export async function usbDropOwner(registry: DeviceHandleRegistry, owner: string): Promise<void> {
+  const claims = await broker();
+  const dropped = claims.takeOwnerClaims(registry, owner);
+  for (const claim of dropped) {
+    try {
+      await registry.get(claim.handle)?.releaseInterface(claim.interfaceNumber);
+    } catch {
+      /* device already gone */
+    }
+    claims.wakeInterfaceWaiter(registry, claim.handle, claim.interfaceNumber);
   }
 }
 

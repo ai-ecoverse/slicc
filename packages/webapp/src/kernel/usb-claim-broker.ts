@@ -95,8 +95,12 @@ export async function acquireInterfaceClaim(
   handle: string,
   interfaceNumber: number,
   owner: string,
-  wait = false
+  wait = false,
+  signal?: AbortSignal
 ): Promise<'held' | 'acquired'> {
+  if (signal?.aborted) {
+    throw abortError(handle, interfaceNumber, owner);
+  }
   const current = claimOwner(registry, handle, interfaceNumber);
   if (current === owner) return 'held';
   if (!current) {
@@ -111,8 +115,76 @@ export async function acquireInterfaceClaim(
       interfaceNumber,
     });
   }
-  await enqueueClaim(registry, handle, interfaceNumber, owner);
+  await enqueueClaim(registry, handle, interfaceNumber, owner, signal);
   return 'acquired';
+}
+
+/**
+ * Remove a queued waiter without granting the claim. Used when the
+ * waiting RPC times out or the consumer is disposed, so a later
+ * release cannot grant a caller that already failed.
+ */
+export function cancelClaimWait(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  const key = claimWaitKey(handle, interfaceNumber);
+  const waiters = stateOf(registry).waiters;
+  const queue = waiters.get(key);
+  if (!queue) return false;
+  const idx = queue.findIndex((w) => w.owner === owner);
+  if (idx < 0) return false;
+  const [waiter] = queue.splice(idx, 1);
+  if (queue.length === 0) waiters.delete(key);
+  waiter?.reject(abortError(handle, interfaceNumber, owner));
+  return true;
+}
+
+/**
+ * Drop every claim and queued wait belonging to `owner`. Does not
+ * wake the next waiter — the caller must {@link wakeInterfaceWaiter}
+ * after releasing the live WebUSB interface so a queued consumer
+ * does not claimInterface while the previous holder still owns it.
+ */
+export function takeOwnerClaims(
+  registry: DeviceHandleRegistry,
+  owner: string
+): UsbInterfaceClaim[] {
+  const state = stateOf(registry);
+  for (const [key, queue] of [...state.waiters]) {
+    const remaining: ClaimWaiter[] = [];
+    for (const waiter of queue) {
+      if (waiter.owner === owner) {
+        const [handle, iface] = splitWaitKey(key);
+        waiter.reject(abortError(handle, iface, owner));
+      } else {
+        remaining.push(waiter);
+      }
+    }
+    if (remaining.length === 0) state.waiters.delete(key);
+    else state.waiters.set(key, remaining);
+  }
+  const dropped: UsbInterfaceClaim[] = [];
+  for (const [handle, byIface] of [...state.claims]) {
+    for (const [interfaceNumber, heldBy] of [...byIface]) {
+      if (heldBy !== owner) continue;
+      dropped.push({ handle, interfaceNumber, owner });
+      byIface.delete(interfaceNumber);
+    }
+    if (byIface.size === 0) state.claims.delete(handle);
+  }
+  return dropped;
+}
+
+/** Grant the next queued waiter for `(handle, interfaceNumber)`, if any. */
+export function wakeInterfaceWaiter(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number
+): void {
+  wakeNextWaiter(registry, handle, interfaceNumber);
 }
 
 /**
@@ -224,18 +296,40 @@ function deleteClaim(
   if (byIface.size === 0) claims.delete(handle);
 }
 
+function abortError(handle: string, interfaceNumber: number, owner: string): Error {
+  return new Error(
+    `usb claim wait cancelled for '${handle}' interface ${interfaceNumber} (owner ${owner})`
+  );
+}
+
+function splitWaitKey(key: string): [string, number] {
+  const idx = key.lastIndexOf(':');
+  return [key.slice(0, idx), Number(key.slice(idx + 1))];
+}
+
 function enqueueClaim(
   registry: DeviceHandleRegistry,
   handle: string,
   interfaceNumber: number,
-  owner: string
+  owner: string,
+  signal?: AbortSignal
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const key = claimWaitKey(handle, interfaceNumber);
     const waiters = stateOf(registry).waiters;
     const queue = waiters.get(key) ?? [];
-    queue.push({ owner, resolve, reject });
+    const waiter: ClaimWaiter = { owner, resolve, reject };
+    queue.push(waiter);
     waiters.set(key, queue);
+    if (!signal) return;
+    const onAbort = () => {
+      cancelClaimWait(registry, handle, interfaceNumber, owner);
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

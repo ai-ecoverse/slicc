@@ -58,6 +58,11 @@ export interface UsbBackend {
    * don't have to stub a subscription.
    */
   subscribeClaimEvents?(onEvent: UsbClaimEventListener): () => void;
+  /**
+   * Drop every claim and queued wait belonging to `owner` (realm
+   * teardown). Optional so existing test mocks stay valid.
+   */
+  dropOwner?(owner: string): Promise<void>;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -150,6 +155,9 @@ class LocalUsbBackend implements UsbBackend {
       void ready.then(() => unsub?.());
     };
   }
+  dropOwner(owner: string) {
+    return usbOps.usbDropOwner(this.registry, owner);
+  }
 }
 
 function withShellOwner<T extends { owner?: string }>(opts?: T): T & { owner: string } {
@@ -161,6 +169,8 @@ class BridgedUsbBackend implements UsbBackend {
   // The picker can take many seconds while the user chooses a device,
   // so the request op gets a generous timeout.
   private static REQUEST_TIMEOUT_MS = 5 * 60_000;
+  /** `--wait` can outlive the 15s panel-RPC default; keep it aligned with the picker. */
+  private static CLAIM_WAIT_TIMEOUT_MS = 5 * 60_000;
 
   async list() {
     return (await this.rpc.call('usb-list', undefined)).devices;
@@ -191,12 +201,22 @@ class BridgedUsbBackend implements UsbBackend {
     await this.rpc.call('usb-select-configuration', { handle, configurationValue: value });
   }
   async claim(handle: string, iface: number, opts?: UsbClaimOptions) {
-    await this.rpc.call('usb-claim-interface', {
-      handle,
-      interfaceNumber: iface,
-      owner: opts?.owner ?? USB_OWNER_SHELL,
-      wait: opts?.wait ?? false,
-    });
+    const owner = opts?.owner ?? USB_OWNER_SHELL;
+    const wait = opts?.wait ?? false;
+    try {
+      await this.rpc.call(
+        'usb-claim-interface',
+        { handle, interfaceNumber: iface, owner, wait },
+        wait ? { timeoutMs: BridgedUsbBackend.CLAIM_WAIT_TIMEOUT_MS } : undefined
+      );
+    } catch (err) {
+      if (wait) {
+        await this.rpc
+          .call('usb-cancel-claim-wait', { handle, interfaceNumber: iface, owner })
+          .catch(() => undefined);
+      }
+      throw err;
+    }
   }
   async release(handle: string, iface: number, opts?: UsbClaimOptions) {
     await this.rpc.call('usb-release-interface', {
@@ -241,6 +261,9 @@ class BridgedUsbBackend implements UsbBackend {
     return this.rpc.onEvent('usb-claim-event', (payload) => {
       onEvent(payload as UsbClaimEvent);
     });
+  }
+  async dropOwner(owner: string) {
+    await this.rpc.call('usb-drop-owner', { owner });
   }
 }
 

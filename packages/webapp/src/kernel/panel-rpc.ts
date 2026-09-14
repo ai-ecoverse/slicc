@@ -447,6 +447,11 @@ export type PanelRpcRequest =
       payload: { handle: string; interfaceNumber: number; owner?: string };
     }
   | {
+      op: 'usb-cancel-claim-wait';
+      payload: { handle: string; interfaceNumber: number; owner?: string };
+    }
+  | { op: 'usb-drop-owner'; payload: { owner: string } }
+  | {
       op: 'usb-control-transfer-in';
       payload: { handle: string; setup: UsbControlSetup; length: number };
     }
@@ -869,6 +874,8 @@ export interface PanelRpcResults {
   'usb-select-configuration': { done: true };
   'usb-claim-interface': { done: true };
   'usb-release-interface': { done: true };
+  'usb-cancel-claim-wait': { done: true };
+  'usb-drop-owner': { done: true };
   'usb-control-transfer-in': { status: string; bytes: ArrayBuffer };
   'usb-control-transfer-out': { status: string; bytesWritten: number };
   'usb-transfer-in': { status: string; bytes: ArrayBuffer };

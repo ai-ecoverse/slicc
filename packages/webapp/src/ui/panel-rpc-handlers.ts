@@ -37,6 +37,7 @@ import {
   type SerialPort,
 } from '../kernel/serial-port-registry.js';
 import {
+  DEFAULT_USB_OWNER,
   getNavigatorUsb,
   getSharedUsbRegistry,
   type UsbDevice,
@@ -985,6 +986,21 @@ function buildUsbHandlers(options: StandalonePanelRpcHandlerOptions) {
 
     'usb-release-interface': async ({ handle, interfaceNumber, owner }) => {
       await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber, { owner });
+      return { done: true };
+    },
+
+    'usb-cancel-claim-wait': async ({ handle, interfaceNumber, owner }) => {
+      await usbOps.usbCancelClaimWait(
+        usbRegistry(),
+        handle,
+        interfaceNumber,
+        owner ?? DEFAULT_USB_OWNER
+      );
+      return { done: true };
+    },
+
+    'usb-drop-owner': async ({ owner }) => {
+      await usbOps.usbDropOwner(usbRegistry(), owner);
       return { done: true };
     },
 

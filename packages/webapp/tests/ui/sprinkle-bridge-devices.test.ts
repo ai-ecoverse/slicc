@@ -423,6 +423,26 @@ describe('SprinkleBridge — slicc.usb transfers', () => {
     });
   });
 
+  it('does not deliver claim-lost to an unrelated sprinkle', async () => {
+    const device = makeFakeUsbDevice({ serialNumber: 'USB-BYSTANDER' });
+    const usb: UsbApi = {
+      getDevices: vi.fn().mockResolvedValue([device]),
+      requestDevice: vi.fn(),
+    };
+    restoreUsb = stubNavigatorUsb(usb);
+    const bridge = buildBridge();
+    const phone = bridge.createAPI('phone-view');
+    const dashboard = bridge.createAPI('dashboard');
+    const thief = bridge.createAPI('thief');
+    const [info] = await phone.usb.list();
+    const bystander: unknown[] = [];
+    dashboard.usb.on('claim-lost', (e) => bystander.push(e));
+    await phone.usb.claimInterface(info.handle, 0);
+    await thief.usb.close(info.handle, { force: true });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(bystander).toEqual([]);
+  });
+
   it('controlTransferIn/Out carry the setup packet through', async () => {
     const device = makeFakeUsbDevice();
     const { api, handle } = await grant(device);

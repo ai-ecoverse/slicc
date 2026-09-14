@@ -962,10 +962,11 @@ export class SprinkleBridge {
    * `sprinkle:<name>`).
    */
   private deliverUsbClaimEvent(event: UsbClaimEvent): void {
+    const holderSprinkle = parseUsbSprinkleOwner(event.holder);
+    if (!holderSprinkle) return;
     const channel = `usb:${event.type}` as const;
-    const suffix = `:usb:${event.type}`;
-    for (const [key, set] of this.listeners) {
-      if (!key.endsWith(suffix)) continue;
+    const set = this.listeners.get(`${holderSprinkle}:usb:${event.type}`);
+    if (set) {
       for (const cb of set) {
         const currentSet = set;
         setTimeout(() => {
@@ -977,20 +978,11 @@ export class SprinkleBridge {
           }
         }, 0);
       }
-      const sprinkleName = key.slice(0, key.length - suffix.length);
-      try {
-        this.iframePusher?.(sprinkleName, channel, event);
-      } catch {
-        /* a broken pusher must not break delivery to other consumers */
-      }
     }
-    const holderSprinkle = parseUsbSprinkleOwner(event.holder);
-    if (holderSprinkle && !this.listeners.has(`${holderSprinkle}${suffix}`)) {
-      try {
-        this.iframePusher?.(holderSprinkle, channel, event);
-      } catch {
-        /* a broken pusher must not break delivery to other consumers */
-      }
+    try {
+      this.iframePusher?.(holderSprinkle, channel, event);
+    } catch {
+      /* a broken pusher must not break delivery to other consumers */
     }
   }
 

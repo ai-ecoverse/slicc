@@ -340,6 +340,20 @@ describe('usb-operations — two consumers on one handle', () => {
     );
   });
 
+  it('cancels a queued waiter so a later release does not grant it', async () => {
+    const reg = new DeviceHandleRegistry();
+    const device = fakeDevice();
+    const handle = reg.register(device);
+    await usbOps.usbClaimInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    const waiting = usbOps.usbClaimInterface(reg, handle, 0, { owner: 'shell', wait: true });
+    await Promise.resolve();
+    await usbOps.usbCancelClaimWait(reg, handle, 0, 'shell');
+    await expect(waiting).rejects.toThrow(/cancelled/);
+    await usbOps.usbReleaseInterface(reg, handle, 0, { owner: 'sprinkle:phone-view' });
+    expect(usbClaims.claimOwner(reg, handle, 0)).toBeUndefined();
+    expect(device.claimInterface).toHaveBeenCalledOnce();
+  });
+
   it('treats a same-owner re-claim as idempotent', async () => {
     const reg = new DeviceHandleRegistry();
     const device = fakeDevice();

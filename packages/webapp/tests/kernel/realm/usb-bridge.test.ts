@@ -52,8 +52,9 @@ function makeMockBackend(
     close: async (h) => rec('close', [h]) as unknown as void,
     reset: async (h) => rec('reset', [h]) as unknown as void,
     selectConfig: async (h, v) => rec('selectConfig', [h, v]) as unknown as void,
-    claim: async (h, i) => rec('claim', [h, i]) as unknown as void,
-    release: async (h, i) => rec('release', [h, i]) as unknown as void,
+    claim: async (h, i, opts) => rec('claim', [h, i, opts?.owner]) as unknown as void,
+    release: async (h, i, opts) => rec('release', [h, i, opts?.owner]) as unknown as void,
+    dropOwner: async (owner) => rec('dropOwner', [owner]) as unknown as void,
     controlIn: async (h, setup, length) => {
       rec('controlIn', [h, setup, length]);
       return { status: 'ok', bytes: new Uint8Array([1, 2, 3]) };
@@ -141,7 +142,10 @@ describe('realm usb bridge', () => {
     await device.claimInterface(0);
     await device.selectConfiguration(1);
     expect(rec).toContainEqual({ op: 'open', args: ['usb1'] });
-    expect(rec).toContainEqual({ op: 'claim', args: ['usb1', 0] });
+    expect(rec).toContainEqual({
+      op: 'claim',
+      args: ['usb1', 0, expect.stringMatching(/^realm:/)],
+    });
     expect(rec).toContainEqual({ op: 'selectConfig', args: ['usb1', 1] });
     dispose();
   });
@@ -181,6 +185,34 @@ describe('realm usb bridge', () => {
     const device = await usb.request([]);
     await expect(device.open()).rejects.toThrow(/backend open boom/);
     dispose();
+  });
+
+  it('stamps each realm host with a distinct USB claim owner and drops it on dispose', async () => {
+    const rec: Recorded[] = [];
+    const backend = makeMockBackend(rec);
+    const ctx = makeCtx();
+    const a = makePortPair();
+    const b = makePortPair();
+    const hostA = attachRealmHost(a.host, ctx, { usbBackend: backend });
+    const hostB = attachRealmHost(b.host, ctx, { usbBackend: backend });
+    const clientA = new RealmRpcClient(a.realm);
+    const clientB = new RealmRpcClient(b.realm);
+    const usbA = createUsbBridge(clientA);
+    const usbB = createUsbBridge(clientB);
+    const deviceA = await usbA.request([]);
+    const deviceB = await usbB.request([]);
+    await deviceA.claimInterface(0);
+    await deviceB.claimInterface(0);
+    const owners = rec.filter((r) => r.op === 'claim').map((r) => r.args[2] as string);
+    expect(owners).toHaveLength(2);
+    expect(owners[0]).toMatch(/^realm:/);
+    expect(owners[1]).toMatch(/^realm:/);
+    expect(owners[0]).not.toBe(owners[1]);
+    hostA.dispose();
+    hostB.dispose();
+    expect(rec.filter((r) => r.op === 'dropOwner').map((r) => r.args[0])).toEqual(owners);
+    clientA.dispose();
+    clientB.dispose();
   });
 
   it('delivers claim-lost and disconnect to device listeners', async () => {

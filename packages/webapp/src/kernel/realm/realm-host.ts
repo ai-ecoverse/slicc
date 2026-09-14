@@ -150,6 +150,8 @@ export interface RealmHostOptions {
   syncSab?: SharedArrayBuffer;
 }
 
+let realmUsbOwnerSeq = 0;
+
 /**
  * Attach an RPC server to a realm port. Returns a handle whose
  * `dispose()` removes the listener — the runner calls it when the
@@ -169,6 +171,7 @@ export function attachRealmHost(
   // on realm teardown").
   const hidSubscriptions = new Map<string, () => void | Promise<void>>();
   const usbClaimSubscriptions = new Map<string, () => void | Promise<void>>();
+  const usbOwner = `${USB_OWNER_REALM}:${++realmUsbOwnerSeq}`;
   // Mint a per-realm sync capability token only when the bridge is enabled
   // (see RealmHostOptions.syncFsBridgeEnabled). Bound to this realm's gated
   // fs + exec + cwd; revoked in dispose() so a dead realm's scope can't be
@@ -188,7 +191,11 @@ export function attachRealmHost(
     }
   };
   const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
-  const usbCtx: UsbDispatchCtx = { subscriptions: usbClaimSubscriptions, pushEvent };
+  const usbCtx: UsbDispatchCtx = {
+    subscriptions: usbClaimSubscriptions,
+    pushEvent,
+    owner: usbOwner,
+  };
   // Live `exec.start` spawns keyed by the realm-allocated `spawnId`.
   // `kill` looks up the entry to abort the in-flight `ctx.exec` and fan a
   // signal out via `pm`; `start` cleans its own entry on settle. `dispose()`
@@ -249,6 +256,14 @@ export function attachRealmHost(
         }
       }
       usbClaimSubscriptions.clear();
+      try {
+        const backend = opts.usbBackend ?? resolveUsbBackendForHost(opts);
+        void backend.dropOwner?.(usbOwner)?.catch(() => {
+          /* realm teardown must not throw */
+        });
+      } catch {
+        /* no usb backend in this realm */
+      }
     },
   };
 }
@@ -1505,6 +1520,7 @@ function safeOrigin(url: string): string | null {
 interface UsbDispatchCtx {
   subscriptions: Map<string, () => void | Promise<void>>;
   pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+  owner: string;
 }
 
 async function dispatchUsb(
@@ -1524,12 +1540,12 @@ async function dispatchUsb(
       return backend.open(args[0] as string);
     case 'close':
       return backend.close(args[0] as string, {
-        owner: USB_OWNER_REALM,
+        owner: usbCtx.owner,
         force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
       });
     case 'reset':
       return backend.reset(args[0] as string, {
-        owner: USB_OWNER_REALM,
+        owner: usbCtx.owner,
         force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
       });
     case 'clearHalt':
@@ -1538,11 +1554,11 @@ async function dispatchUsb(
       return backend.selectConfig(args[0] as string, args[1] as number);
     case 'claim':
       return backend.claim(args[0] as string, args[1] as number, {
-        owner: USB_OWNER_REALM,
+        owner: usbCtx.owner,
         wait: Boolean((args[2] as { wait?: boolean } | undefined)?.wait),
       });
     case 'release':
-      return backend.release(args[0] as string, args[1] as number, { owner: USB_OWNER_REALM });
+      return backend.release(args[0] as string, args[1] as number, { owner: usbCtx.owner });
     case 'controlIn':
       return backend.controlIn(args[0] as string, args[1] as UsbControlSetup, args[2] as number);
     case 'controlOut':

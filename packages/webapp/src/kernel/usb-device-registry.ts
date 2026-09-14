@@ -200,6 +200,11 @@ export interface UsbClaimOptions {
    * order for it to be released instead of refusing immediately.
    */
   wait?: boolean;
+  /**
+   * Abort a queued wait. Not serialized over panel-RPC — the bridged
+   * path cancels via `usb-cancel-claim-wait` when the RPC times out.
+   */
+  signal?: AbortSignal;
 }
 
 /** Options for {@link usbClose} / {@link usbReset}. */
