@@ -11,5 +11,6 @@
   "maxDeltaKb": 5,
   "pageEagerCeilingKb": 768,
   "//ceiling-raised-3053": "Approved for the durable tray/webhook lifecycle work in PR #3053: measured worker eager graph growth versus merge-base with page unchanged. Raise 4298 -> 4299 for this wiring and narrow headroom (stacked on #3005's 4298 ceiling); keep the 5 kB per-PR delta gate and page ceiling unchanged.",
-  "workerEagerCeilingKb": 4299
+  "//ceiling-raised-3091": "workerEagerCeilingKb 4299 -> 4303 for exclusive USB interface claims (issue #3091). NOT a hoist: the wait-queue and claim-lost/disconnect fan-out live in usb-claim-broker.ts behind import() from usb-operations (first claim/close/reset). Remaining +3.6 kB vs merge-base is owner/force/wait plumbing on the USB command path the kernel worker already loads. Measured worker 4302 kB; the raise buys ~1 kB of CI headroom. Delta 3.6 kB is under the 5 kB gate. Tighten it again as the worker graph shrinks.",
+  "workerEagerCeilingKb": 4303
 }

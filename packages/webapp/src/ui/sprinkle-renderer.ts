@@ -497,6 +497,8 @@ export class SprinkleRenderer {
     return `(function() {
   var _updateListeners = new Set();
   var _hidInputReportListeners = new Set();
+  var _usbDisconnectListeners = new Set();
+  var _usbClaimLostListeners = new Set();
   var _sprinkleName = '';
   var _state = null;
   var _cbId = 0;
@@ -515,6 +517,14 @@ export class SprinkleRenderer {
     } else if (msg.type === 'sprinkle-device-event') {
       if (msg.channel === 'hid:inputreport') {
         _hidInputReportListeners.forEach(function(cb) {
+          try { cb(msg.payload); } catch(e) { console.error(e); }
+        });
+      } else if (msg.channel === 'usb:disconnect') {
+        _usbDisconnectListeners.forEach(function(cb) {
+          try { cb(msg.payload); } catch(e) { console.error(e); }
+        });
+      } else if (msg.channel === 'usb:claim-lost') {
+        _usbClaimLostListeners.forEach(function(cb) {
           try { cb(msg.payload); } catch(e) { console.error(e); }
         });
       }
@@ -725,13 +735,13 @@ export class SprinkleRenderer {
       list: function() { return _deviceCall('usb', 'list', []); },
       request: function(filters) { return _deviceCall('usb', 'request', [filters || []]); },
       open: function(handle) { return _deviceCall('usb', 'open', [handle]).then(function() {}); },
-      close: function(handle) { return _deviceCall('usb', 'close', [handle]).then(function() {}); },
-      reset: function(handle) { return _deviceCall('usb', 'reset', [handle]).then(function() {}); },
+      close: function(handle, opts) { return _deviceCall('usb', 'close', [handle, opts || null]).then(function() {}); },
+      reset: function(handle, opts) { return _deviceCall('usb', 'reset', [handle, opts || null]).then(function() {}); },
       selectConfiguration: function(handle, value) {
         return _deviceCall('usb', 'selectConfig', [handle, value]).then(function() {});
       },
-      claimInterface: function(handle, n) {
-        return _deviceCall('usb', 'claim', [handle, n]).then(function() {});
+      claimInterface: function(handle, n, opts) {
+        return _deviceCall('usb', 'claim', [handle, n, opts || null]).then(function() {});
       },
       releaseInterface: function(handle, n) {
         return _deviceCall('usb', 'release', [handle, n]).then(function() {});
@@ -755,6 +765,14 @@ export class SprinkleRenderer {
       },
       transferOut: function(handle, ep, bytes) {
         return _deviceCall('usb', 'transferOut', [handle, ep, _u8ToB64(bytes)]);
+      },
+      on: function(event, cb) {
+        if (event === 'disconnect') _usbDisconnectListeners.add(cb);
+        else if (event === 'claim-lost') _usbClaimLostListeners.add(cb);
+      },
+      off: function(event, cb) {
+        if (event === 'disconnect') _usbDisconnectListeners['delete'](cb);
+        else if (event === 'claim-lost') _usbClaimLostListeners['delete'](cb);
       }
     },
     readFileBinary: function(path) { return _jshCall('readFileBinary', [path]).then(function(r) { return _b64ToU8(r.base64); }); },

@@ -9,16 +9,27 @@
  * wrap it in a `Uint8Array` as needed.
  */
 
+import { createLogger } from '../base/logger.js';
 import {
+  DEFAULT_USB_OWNER,
   type DeviceHandleRegistry,
   deviceToInfo,
   MAX_USB_TRANSFER_BYTES,
   type UsbApi,
+  type UsbClaimOptions,
   type UsbControlSetup,
   type UsbDevice,
   type UsbDeviceFilter,
   type UsbDeviceInfo,
+  type UsbExclusiveOptions,
+  UsbInterfaceClaimError,
 } from './usb-device-registry.js';
+
+const log = createLogger('usb');
+
+async function broker() {
+  return import('./usb-claim-broker.js');
+}
 
 function resolve(registry: DeviceHandleRegistry, handle: string): UsbDevice {
   const device = registry.get(handle);
@@ -61,8 +72,12 @@ export async function usbOpen(registry: DeviceHandleRegistry, handle: string): P
   await resolve(registry, handle).open();
 }
 
-export async function usbClose(registry: DeviceHandleRegistry, handle: string): Promise<void> {
-  await resolve(registry, handle).close();
+export async function usbClose(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  opts?: UsbExclusiveOptions
+): Promise<void> {
+  await exclusiveDeviceOp(registry, handle, 'close', opts);
 }
 
 export async function usbSelectConfiguration(
@@ -76,17 +91,49 @@ export async function usbSelectConfiguration(
 export async function usbClaimInterface(
   registry: DeviceHandleRegistry,
   handle: string,
-  interfaceNumber: number
+  interfaceNumber: number,
+  opts?: UsbClaimOptions
 ): Promise<void> {
-  await resolve(registry, handle).claimInterface(interfaceNumber);
+  const owner = opts?.owner ?? DEFAULT_USB_OWNER;
+  const device = resolve(registry, handle);
+  const claims = await broker();
+  const result = await claims.acquireInterfaceClaim(
+    registry,
+    handle,
+    interfaceNumber,
+    owner,
+    opts?.wait ?? false
+  );
+  try {
+    await device.claimInterface(interfaceNumber);
+  } catch (err) {
+    if (result === 'acquired') {
+      claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
+    }
+    throw err;
+  }
 }
 
 export async function usbReleaseInterface(
   registry: DeviceHandleRegistry,
   handle: string,
-  interfaceNumber: number
+  interfaceNumber: number,
+  opts?: UsbClaimOptions
 ): Promise<void> {
-  await resolve(registry, handle).releaseInterface(interfaceNumber);
+  const owner = opts?.owner ?? DEFAULT_USB_OWNER;
+  const device = resolve(registry, handle);
+  const claims = await broker();
+  const holder = claims.claimOwner(registry, handle, interfaceNumber);
+  if (holder && holder !== owner) {
+    throw new UsbInterfaceClaimError({
+      handle,
+      holder,
+      op: 'release',
+      interfaceNumber,
+    });
+  }
+  await device.releaseInterface(interfaceNumber);
+  claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
 }
 
 export async function usbControlTransferIn(
@@ -139,14 +186,39 @@ export async function usbTransferOut(
   return { status: result.status ?? 'ok', bytesWritten: result.bytesWritten };
 }
 
-export async function usbReset(registry: DeviceHandleRegistry, handle: string): Promise<void> {
-  await resolve(registry, handle).reset();
+export async function usbReset(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  opts?: UsbExclusiveOptions
+): Promise<void> {
+  await exclusiveDeviceOp(registry, handle, 'reset', opts);
+}
+
+async function exclusiveDeviceOp(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  op: 'close' | 'reset',
+  opts?: UsbExclusiveOptions
+): Promise<void> {
+  const owner = opts?.owner ?? DEFAULT_USB_OWNER;
+  const force = opts?.force ?? false;
+  const device = resolve(registry, handle);
+  const claims = await broker();
+  const held = claims.listClaims(registry, handle);
+  if (held.length > 0) {
+    const summary = held.map((c) => `${c.interfaceNumber}=${c.owner}`).join(', ');
+    log.warn(`usb ${op} ${handle} with claimed interfaces (${summary})${force ? ' [force]' : ''}`);
+  }
+  const displaced = claims.assertExclusive(registry, handle, owner, force, op);
+  if (op === 'close') await device.close();
+  else await device.reset();
+  claims.displaceHandle(registry, handle, { reason: op, displacedBy: owner, displaced });
 }
 
 /**
  * Recover a stalled bulk/interrupt endpoint. The targeted alternative to
- * {@link usbReset}, which re-enumerates the whole device and drops any claim
- * another client holds on it.
+ * {@link usbReset}, which re-enumerates the whole device and is refused
+ * while another consumer holds a claim unless `force` is set.
  */
 export async function usbClearHalt(
   registry: DeviceHandleRegistry,

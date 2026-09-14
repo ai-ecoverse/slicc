@@ -43,7 +43,12 @@ import type {
   SerialOpenOptions,
   SerialOutputSignals,
 } from '../serial-port-registry.js';
-import type { UsbControlSetup, UsbDeviceFilter } from '../usb-device-registry.js';
+import {
+  USB_OWNER_REALM,
+  type UsbClaimEvent,
+  type UsbControlSetup,
+  type UsbDeviceFilter,
+} from '../usb-device-registry.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmEventMsg,
@@ -163,6 +168,7 @@ export function attachRealmHost(
   // page-side `inputreport` listener (DOD: "no leaked subscriptions
   // on realm teardown").
   const hidSubscriptions = new Map<string, () => void | Promise<void>>();
+  const usbClaimSubscriptions = new Map<string, () => void | Promise<void>>();
   // Mint a per-realm sync capability token only when the bridge is enabled
   // (see RealmHostOptions.syncFsBridgeEnabled). Bound to this realm's gated
   // fs + exec + cwd; revoked in dispose() so a dead realm's scope can't be
@@ -182,6 +188,7 @@ export function attachRealmHost(
     }
   };
   const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
+  const usbCtx: UsbDispatchCtx = { subscriptions: usbClaimSubscriptions, pushEvent };
   // Live `exec.start` spawns keyed by the realm-allocated `spawnId`.
   // `kill` looks up the entry to abort the in-flight `ctx.exec` and fan a
   // signal out via `pm`; `start` cleans its own entry on settle. `dispose()`
@@ -193,7 +200,7 @@ export function attachRealmHost(
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts, hidCtx, execCtx);
+    void respond(port, req, ctx, opts, hidCtx, usbCtx, execCtx);
   };
   port.addEventListener('message', handler);
   // The SAB responder shares this port: the realm's blocking requests are
@@ -234,6 +241,14 @@ export function attachRealmHost(
         }
       }
       hidSubscriptions.clear();
+      for (const unsub of usbClaimSubscriptions.values()) {
+        try {
+          void Promise.resolve(unsub()).catch(() => {});
+        } catch {
+          /* swallow — realm teardown must not throw */
+        }
+      }
+      usbClaimSubscriptions.clear();
     },
   };
 }
@@ -244,10 +259,11 @@ async function respond(
   ctx: CommandContext,
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
+  usbCtx: UsbDispatchCtx,
   execCtx: ExecDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts, hidCtx, execCtx);
+    const result = await dispatch(req, ctx, opts, hidCtx, usbCtx, execCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -265,6 +281,7 @@ async function dispatch(
   ctx: CommandContext,
   opts: RealmHostOptions,
   hidCtx: HidDispatchCtx,
+  usbCtx: UsbDispatchCtx,
   execCtx: ExecDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
@@ -277,7 +294,7 @@ async function dispatch(
     case 'browser':
       return dispatchBrowser(req.op, req.args, resolveBrowser(opts), opts);
     case 'usb':
-      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts));
+      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts), usbCtx);
     case 'serial':
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
@@ -1485,7 +1502,17 @@ function safeOrigin(url: string): string | null {
  * are handed back to the realm verbatim and transferred by
  * `collectTransferables`. The realm bridge re-wraps them as `DataView`s.
  */
-async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Promise<unknown> {
+interface UsbDispatchCtx {
+  subscriptions: Map<string, () => void | Promise<void>>;
+  pushEvent(msg: RealmEventMsg, transfer?: Transferable[]): void;
+}
+
+async function dispatchUsb(
+  op: string,
+  args: unknown[],
+  backend: UsbBackend,
+  usbCtx: UsbDispatchCtx
+): Promise<unknown> {
   switch (op) {
     case 'list':
       return backend.list();
@@ -1496,17 +1523,26 @@ async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Pr
     case 'open':
       return backend.open(args[0] as string);
     case 'close':
-      return backend.close(args[0] as string);
+      return backend.close(args[0] as string, {
+        owner: USB_OWNER_REALM,
+        force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
+      });
     case 'reset':
-      return backend.reset(args[0] as string);
+      return backend.reset(args[0] as string, {
+        owner: USB_OWNER_REALM,
+        force: Boolean((args[1] as { force?: boolean } | undefined)?.force),
+      });
     case 'clearHalt':
       return backend.clearHalt(args[0] as string, args[1] as 'in' | 'out', args[2] as number);
     case 'selectConfig':
       return backend.selectConfig(args[0] as string, args[1] as number);
     case 'claim':
-      return backend.claim(args[0] as string, args[1] as number);
+      return backend.claim(args[0] as string, args[1] as number, {
+        owner: USB_OWNER_REALM,
+        wait: Boolean((args[2] as { wait?: boolean } | undefined)?.wait),
+      });
     case 'release':
-      return backend.release(args[0] as string, args[1] as number);
+      return backend.release(args[0] as string, args[1] as number, { owner: USB_OWNER_REALM });
     case 'controlIn':
       return backend.controlIn(args[0] as string, args[1] as UsbControlSetup, args[2] as number);
     case 'controlOut':
@@ -1519,6 +1555,26 @@ async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Pr
       return backend.transferIn(args[0] as string, args[1] as number, args[2] as number);
     case 'transferOut':
       return backend.transferOut(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'subscribeClaimEvents': {
+      const handle = args[0] as string;
+      if (usbCtx.subscriptions.has(handle)) return true;
+      const subscribe = backend.subscribeClaimEvents;
+      if (!subscribe) return true;
+      const off = subscribe((event: UsbClaimEvent) => {
+        if (event.handle !== handle) return;
+        usbCtx.pushEvent({ type: 'realm-event', channel: 'usb-claim-event', payload: event });
+      });
+      usbCtx.subscriptions.set(handle, off);
+      return true;
+    }
+    case 'unsubscribeClaimEvents': {
+      const handle = args[0] as string;
+      const off = usbCtx.subscriptions.get(handle);
+      if (!off) return true;
+      usbCtx.subscriptions.delete(handle);
+      await off();
+      return true;
+    }
     default:
       throw new Error(`realm-host: unknown usb op '${op}'`);
   }

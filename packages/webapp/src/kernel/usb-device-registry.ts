@@ -11,6 +11,12 @@
  * gesture-bridge code in `remote-terminal-view.ts` and the panel-RPC
  * handlers in `ui/panel-rpc-handlers.ts` share one map.
  *
+ * Interface claims are exclusive per `(handle, interfaceNumber)`. A second
+ * consumer is refused (or queued with `wait`) with the current holder named
+ * in the error; `close`/`reset` refuse while another consumer holds a claim
+ * unless `force` is set. Forced displacement emits `claim-lost`/`disconnect`
+ * so the victim is told rather than left inferring from a failed transfer.
+ *
  * Minimal WebUSB types are declared here because `lib.dom.d.ts` does
  * not ship them; only the surface the `usb` command uses is modeled.
  */
@@ -166,6 +172,96 @@ function sameDevice(a: UsbDevice, b: UsbDevice): boolean {
     (a.serialNumber ?? '') === (b.serialNumber ?? '') &&
     !!a.serialNumber
   );
+}
+
+/** Owner used when a caller does not name itself. */
+export const DEFAULT_USB_OWNER = 'usb';
+/** Shell `usb` command (local or panel-RPC bridged). */
+export const USB_OWNER_SHELL = 'shell';
+/** Realm `usb` global (`require('sliccy:usb')` / `node -e`). */
+export const USB_OWNER_REALM = 'realm';
+
+/** Owner tag for a sprinkle driving `slicc.usb`. */
+export function usbSprinkleOwner(sprinkleName: string): string {
+  return `sprinkle:${sprinkleName}`;
+}
+
+/** Sprinkle name encoded in {@link usbSprinkleOwner}, or `undefined`. */
+export function parseUsbSprinkleOwner(owner: string): string | undefined {
+  return owner.startsWith('sprinkle:') ? owner.slice('sprinkle:'.length) : undefined;
+}
+
+/** Options for {@link usbClaimInterface} / registry claim acquisition. */
+export interface UsbClaimOptions {
+  /** Named consumer; defaults to {@link DEFAULT_USB_OWNER}. */
+  owner?: string;
+  /**
+   * When the interface is already held by another consumer, wait in FIFO
+   * order for it to be released instead of refusing immediately.
+   */
+  wait?: boolean;
+}
+
+/** Options for {@link usbClose} / {@link usbReset}. */
+export interface UsbExclusiveOptions {
+  /** Named consumer; defaults to {@link DEFAULT_USB_OWNER}. */
+  owner?: string;
+  /**
+   * Displace every other holder and emit `claim-lost`/`disconnect`.
+   * Without this, close/reset refuse while another consumer holds a claim.
+   */
+  force?: boolean;
+}
+
+/** One recorded interface claim. */
+export interface UsbInterfaceClaim {
+  handle: string;
+  interfaceNumber: number;
+  owner: string;
+}
+
+/** Event delivered when a claim is stolen or the device is closed/reset. */
+export interface UsbClaimEvent {
+  type: 'claim-lost' | 'disconnect';
+  handle: string;
+  /** Set on `claim-lost` (the interface that was taken). */
+  interfaceNumber?: number;
+  /** Consumer that lost the claim. */
+  holder: string;
+  /** Consumer that forced close/reset. */
+  displacedBy: string;
+  reason: 'close' | 'reset';
+}
+
+export type UsbClaimEventListener = (event: UsbClaimEvent) => void;
+
+/**
+ * Thrown when a second consumer tries to claim, close, or reset a handle
+ * another consumer still holds. The message names the current holder.
+ */
+export class UsbInterfaceClaimError extends Error {
+  readonly handle: string;
+  readonly holder: string;
+  readonly op: string;
+  readonly interfaceNumber?: number;
+
+  constructor(args: {
+    handle: string;
+    holder: string;
+    op: string;
+    interfaceNumber?: number;
+  }) {
+    const { handle, holder, op, interfaceNumber } = args;
+    const where =
+      interfaceNumber === undefined ? `'${handle}'` : `'${handle}' interface ${interfaceNumber}`;
+    const hint = op === 'claim' ? '' : ' (pass force to override)';
+    super(`usb ${op} ${where} refused: held by ${holder}${hint}`);
+    this.name = 'UsbInterfaceClaimError';
+    this.handle = handle;
+    this.holder = holder;
+    this.op = op;
+    if (interfaceNumber !== undefined) this.interfaceNumber = interfaceNumber;
+  }
 }
 
 /** In-memory `handle → USBDevice` map for a single DOM realm. */
