@@ -42,9 +42,6 @@ Once you're in, you can:
 
 > Status: active working prototype. The macOS app is the easiest way in today; the extension has been submitted to the Chrome Web Store.
 
-Developers can verify native browser storage with `npm run test:opfs` and trial the
-[optional OPFS preload setting](docs/filesystem-preload.md).
-
 ## Why SLICC is different
 
 - **Browser-native, not browser-adjacent.** The agent runtime lives in the browser, and the agent can act on the same browser it lives in. A great mix of power and containment. If you don't like what the AI does, close the browser tab and it's over.
@@ -282,6 +279,9 @@ SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing se
 SLICC would not have been possible without the pioneering inspiration of [OpenClaw](https://github.com/openclaw/openclaw), [NanoClaw](https://github.com/qwibitai/nanoclaw), and [Pi](https://github.com/earendil-works/pi-mono). Pi is actually the frozen heart of every SLICC instance.
 
 ## Development and deeper docs
+
+Developers can verify native browser storage with `npm run test:opfs` and trial the
+[optional OPFS preload setting](docs/filesystem-preload.md).
 
 If you want to go deeper, the detailed docs live here:
 
