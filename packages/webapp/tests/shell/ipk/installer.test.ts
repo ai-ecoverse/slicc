@@ -2,11 +2,12 @@ import 'fake-indexeddb/auto';
 import { gzipSync } from 'fflate';
 import type { SecureFetch } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { VirtualFS } from '../../../src/fs/index.js';
+import { FsError, VirtualFS } from '../../../src/fs/index.js';
 import { GLOBAL_NODE_MODULES, GLOBAL_PACKAGE_JSON } from '../../../src/shell/ipk/global-prefix.js';
 import {
   installPackage,
   installPackages,
+  listLocalPackages,
   uninstallPackages,
 } from '../../../src/shell/ipk/installer.js';
 
@@ -310,6 +311,87 @@ describe('installPackage (single-package path)', () => {
     const root = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(root.devDependencies).toEqual({ eslint: '8.57.1' });
     expect(root.dependencies?.eslint).toBeUndefined();
+  });
+
+  for (const { flag, saveDev } of [
+    { flag: '--save', saveDev: false },
+    { flag: '--save-dev', saveDev: true },
+  ] as const) {
+    it(`propagates a non-ENOENT package.json read fault during ${flag} and does not truncate the manifest (#3124)`, async () => {
+      const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+      await fs.mkdir('/work', { recursive: true });
+      const existing = {
+        name: 'demo',
+        version: '0.0.1',
+        scripts: { test: 'echo hi' },
+        dependencies: { 'pre-existing': '^1.0.0' },
+        devDependencies: { 'dev-pre': '^2.0.0' },
+      };
+      const originalText = `${JSON.stringify(existing, null, 2)}\n`;
+      await fs.writeFile('/work/package.json', originalText);
+
+      const originalRead = fs.readFile.bind(fs);
+      vi.spyOn(fs, 'readFile').mockImplementation(async (path, options) => {
+        if (path === '/work/package.json') {
+          throw new FsError('EIO', 'transient read failure', path);
+        }
+        return originalRead(path, options);
+      });
+
+      await expect(
+        installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work', saveDev })
+      ).rejects.toThrow(/transient read failure/);
+
+      vi.restoreAllMocks();
+      expect(await fs.readFile('/work/package.json')).toBe(originalText);
+    });
+
+    it(`throws on corrupt package.json during ${flag} and does not truncate the manifest (#3124)`, async () => {
+      const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+      await fs.mkdir('/work', { recursive: true });
+      const corrupt = '{ not json';
+      await fs.writeFile('/work/package.json', corrupt);
+
+      await expect(
+        installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work', saveDev })
+      ).rejects.toThrow(SyntaxError);
+
+      expect(await fs.readFile('/work/package.json')).toBe(corrupt);
+    });
+  }
+
+  it('throws on an empty package.json during --save and does not truncate the manifest (#3124)', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    await fs.mkdir('/work', { recursive: true });
+    await fs.writeFile('/work/package.json', '');
+    await expect(
+      installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work' })
+    ).rejects.toThrow(SyntaxError);
+    expect(await fs.readFile('/work/package.json')).toBe('');
+  });
+
+  it('re-extracts when an already-installed package.json is unparseable', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    const fetch = fakeFetch(reg);
+    await installPackage('is-number', { fs, fetch, cwd: '/work' });
+    await fs.writeFile('/work/node_modules/is-number/package.json', '{ not json');
+    const result = await installPackage('is-number', { fs, fetch, cwd: '/work' });
+    expect(result.ok).toBe(true);
+    const installed = JSON.parse(
+      (await fs.readFile('/work/node_modules/is-number/package.json')) as string
+    );
+    expect(installed.name).toBe('is-number');
+    expect(installed.version).toBe('7.0.0');
+  });
+
+  it('lists a declared package as version ? when its installed manifest is unparseable', async () => {
+    const reg = makeRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    await installPackage('is-number', { fs, fetch: fakeFetch(reg), cwd: '/work' });
+    await fs.writeFile('/work/node_modules/is-number/package.json', '{ not json');
+    const listed = await listLocalPackages(fs, '/work');
+    expect(listed).toEqual([
+      expect.objectContaining({ name: 'is-number', version: '?', range: expect.any(String) }),
+    ]);
   });
 
   it('records --save-dev installs under devDependencies', async () => {
