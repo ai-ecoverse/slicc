@@ -25,11 +25,14 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## Shell
 
+- Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
+- `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`tst`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
+
+### Filesystem adapter
+
 - The just-bash curl patch uses optional `readFileBytes` for multipart files (binary-read fallback). It encodes multipart headers and inline values as UTF-8 before composing the raw-byte body; `curl -F` must preserve all byte values alongside Unicode form fields.
 
 - `VfsAdapter` honors just-bash's read/write/append encoding options: UTF-8 by default, explicit `binary`/`latin1` for byte-shaped strings, and `hex`/`base64` for encoded representations. `readFileBytes()` exposes the optional branded byte API. `Uint8Array` writes retain their view boundaries. Download-cache hits apply only to explicitly binary writes; they never override text encoding. Request-body provenance still preserves curl's original file bytes when UTF-8 decoding is lossy.
-- Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
-- `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`tst`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
 ## Media commands (`ffmpeg` / `ffprobe`)
 

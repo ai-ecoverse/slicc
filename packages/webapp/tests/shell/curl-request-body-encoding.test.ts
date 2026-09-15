@@ -28,7 +28,7 @@ const PAYLOAD = '{"body":"plan → build — ship ✓ café"}';
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 /** The bytes the mocked proxy hop was asked to send on its `index`-th call. */
-async function sentBytes(index = 0): Promise<Uint8Array> {
+async function sentBytes(index = 0): Promise<Uint8Array<ArrayBuffer>> {
   expect(proxyFetch.mock.calls.length).toBeGreaterThan(index);
   const init = proxyFetch.mock.calls[index][1] as RequestInit;
   return new Uint8Array(await new Response(init.body).arrayBuffer());
