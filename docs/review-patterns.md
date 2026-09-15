@@ -58,7 +58,7 @@ there are additional parity boundaries where bugs hide:
 
 ### 1. Error-path coverage gaps
 
-OPFS cache-mode changes need native-browser reload tests and asynchronous fallbacks. Serialize same-database initializers before validating shared backend configuration; a failed conflicting opener must leave the live backend usable.
+OPFS cache-mode changes need native-browser reload tests and asynchronous fallbacks. Serialize same-database initializers before validating shared backend configuration; a failed conflicting opener must leave the live backend usable. Reject wipes before touching storage while same-realm holders remain live, even when the requested cache mode matches.
 
 **Trigger patterns**
 

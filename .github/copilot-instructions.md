@@ -36,7 +36,7 @@ stream refuses IDs not in the live free catalog.
 
 ## 7. Tests
 
-Check OPFS modes with native reloads and async fallbacks.
+OPFS: test native reloads/async fallbacks; reject live wipes.
 
 Require mirrored tests, regressions, and coverage floors. OPFS retries need fresh Files, bounded attempts, and error tests.
 

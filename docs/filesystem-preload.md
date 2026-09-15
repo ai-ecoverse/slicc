@@ -22,6 +22,8 @@ API adoption, not a newly released feature or a dependency upgrade.
   per database so simultaneous callers cannot choose different modes.
 - Dispose all instances before changing modes. Reopening with the default cache
   reads the same persisted data. The memory backend ignores this option.
+- OPFS `wipe: true` fails with `EBUSY` while any same-realm holder remains live,
+  regardless of the requested cache mode. Dispose those holders before wiping.
 - No UI, environment variable, or runtime default enables the experiment.
 
 ## Native browser verification

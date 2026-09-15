@@ -18,6 +18,10 @@ async function create(options: Parameters<typeof VirtualFS.create>[0]) {
   instances.push(fs);
   return fs;
 }
+async function close(fs: VirtualFS) {
+  await fs.dispose();
+  instances.splice(instances.indexOf(fs), 1);
+}
 
 describe('optional OPFS async cache', () => {
   it.each([true, false])(
@@ -46,6 +50,29 @@ describe('optional OPFS async cache', () => {
     await (await first).writeFile('/still-live', 'yes');
     expect(await (await first).readTextFile('/still-live')).toBe('yes');
   });
+
+  it.each([undefined, false, true])(
+    'rejects a live wipe with cache=%s before touching storage or shared holders',
+    async (opfsAsyncCache) => {
+      const dbName = `async-cache-wipe-${sequence++}`;
+      const fs = await create({ dbName, backend: 'opfs', opfsAsyncCache: false });
+      await fs.writeFile('/file', 'keep');
+      const peer = await create({ dbName, backend: 'opfs' });
+      await expect(
+        VirtualFS.create({ dbName, backend: 'opfs', wipe: true, opfsAsyncCache })
+      ).rejects.toMatchObject({ code: 'EBUSY' });
+      expect(await fs.readTextFile('/file')).toBe('keep');
+      await peer.writeFile('/file', 'still shared');
+      expect(await fs.readTextFile('/file')).toBe('still shared');
+      await close(peer);
+      await close(fs);
+      const reloaded = await create({ dbName, backend: 'opfs' });
+      expect(await reloaded.readTextFile('/file')).toBe('still shared');
+      await close(reloaded);
+      const wiped = await create({ dbName, backend: 'opfs', wipe: true, opfsAsyncCache });
+      expect(await wiped.exists('/file')).toBe(false);
+    }
+  );
 
   it('does not disable the memory backend synchronous fast paths', async () => {
     const fs = await create({

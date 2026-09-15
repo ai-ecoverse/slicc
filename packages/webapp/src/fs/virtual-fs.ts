@@ -103,7 +103,7 @@ export interface VirtualFsOptions {
    * does not persist across reloads).
    */
   dbName?: string;
-  /** Wipe existing data on init. */
+  /** Wipe existing data on init. OPFS rejects this while same-realm holders are live. */
   wipe?: boolean;
   /**
    * Backend selection. Defaults to `'opfs'` in browsers; environments
@@ -451,7 +451,10 @@ export class VirtualFS {
     asyncCache?: boolean
   ): Promise<void> {
     const shared = VirtualFS.opfsBackends.get(vfs.dbName);
-    if (shared && !wipe && asyncCache !== undefined && shared.asyncCache !== asyncCache) {
+    if (shared && wipe) {
+      throw new FsError('EBUSY', 'Cannot wipe an OPFS backend with live holders', vfs.dbName);
+    }
+    if (shared && asyncCache !== undefined && shared.asyncCache !== asyncCache) {
       throw new FsError(
         'EBUSY',
         'OPFS async cache setting conflicts with the live backend',

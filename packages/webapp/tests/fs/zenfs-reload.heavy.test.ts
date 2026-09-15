@@ -148,6 +148,16 @@ d('VirtualFS — optional OPFS async cache (heavy)', () => {
         errorCode = (error as { code: string }).code;
       }
       expect(errorCode).toBe('EBUSY');
+      for (const opfsAsyncCache of [undefined, false, true]) {
+        errorCode = '';
+        try {
+          await VirtualFS.create({ dbName, backend: 'opfs', wipe: true, opfsAsyncCache });
+        } catch (error) {
+          errorCode = (error as { code: string }).code;
+        }
+        expect(errorCode).toBe('EBUSY');
+        expect(await peer.readTextFile('/work/renamed')).toBe('short');
+      }
     } finally {
       await peer?.dispose();
       await fs.dispose();
