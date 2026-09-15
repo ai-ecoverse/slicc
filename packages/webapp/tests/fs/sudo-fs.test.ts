@@ -130,6 +130,27 @@ describe('SudoFS', () => {
     expect(timeoutMessage).not.toBe(FS_DENIED_MESSAGE);
   });
 
+  it('gates append and metadata mutations, including sudoers self-protection', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    for (const path of ['/workspace/.git/config', '/etc/sudoers']) {
+      await expect(sfs.appendFile(path, 'bad')).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(sfs.chmod(path, 0o777)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(sfs.utimes(path, new Date(0), new Date(0))).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    }
+    expect(calls).toHaveLength(6);
+    expect(calls.every((call) => call.kind === 'write')).toBe(true);
+    expect(await vfs.readTextFile('/workspace/.git/config')).toBe('cfg');
+    await sfs.appendFile('/workspace/note.txt', '!');
+    await sfs.chmod('/workspace/note.txt', 0o755);
+    await sfs.utimes('/workspace/note.txt', new Date(0), new Date(123456));
+    expect(await vfs.readTextFile('/workspace/note.txt')).toBe('hi!');
+    expect((await vfs.stat('/workspace/note.txt')).mtime).toBe(123456);
+    expect(calls).toHaveLength(6);
+  });
+
   it('always-protects writes to sudoers files regardless of policy', async () => {
     policy = parseSudoers(''); // empty policy — only self-protection active
     const { calls, broker } = makeBroker({ decision: 'deny' });
@@ -187,6 +208,33 @@ describe('SudoFS', () => {
       sfs.rename('/scoops/andy/rules.txt', '/scoops/andy/etc/sudoers')
     ).rejects.toMatchObject({ code: 'EACCES' });
     expect(calls).toHaveLength(0);
+  });
+
+  it('lets approved metadata writes cross delegated prefixes while rejecting symlink escapes', async () => {
+    policy = parseSudoers('');
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const restricted = new RestrictedFS(vfs, ['/scoops/test/'], [], 'sudo-delegated');
+    const sudo = createSudoFs(restricted, {
+      broker,
+      getPolicy,
+      defaultDisposition: 'require-approval',
+    });
+    await sudo.chmod('/workspace/note.txt', 0o755);
+    await sudo.utimes('/workspace/note.txt', new Date(0), new Date(123456));
+    expect(calls).toHaveLength(2);
+    expect((await vfs.stat('/workspace/note.txt')).mode! & 0o777).toBe(0o755);
+    expect((await vfs.stat('/workspace/note.txt')).mtime).toBe(123456);
+    await vfs.mkdir('/scoops/test', { recursive: true });
+    await vfs.symlink('/workspace/note.txt', '/scoops/test/link');
+    await vfs.symlink('/workspace', '/scoops/test/dir');
+    for (const path of ['/scoops/test/link', '/scoops/test/dir/note.txt']) {
+      await expect(sudo.chmod(path, 0o777)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(sudo.utimes(path, new Date(0), new Date(1))).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    }
+    expect((await vfs.stat('/workspace/note.txt')).mode! & 0o777).toBe(0o755);
+    expect((await vfs.stat('/workspace/note.txt')).mtime).toBe(123456);
   });
 
   it('never prompts for no-op device writes even under require-approval default', async () => {

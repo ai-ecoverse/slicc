@@ -25,6 +25,8 @@ export type MountKind = 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
  * the historical synthesized values when a backend omits them.
  */
 export interface MountStatIdentity {
+  /** Device-scoped identity supplied by the backend, including its host namespace. */
+  identity?: string;
   /** Inode-change time, ms since epoch. Distinct from mtime on POSIX. */
   ctime?: number;
   /** Inode number. */

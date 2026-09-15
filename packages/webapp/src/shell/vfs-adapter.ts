@@ -71,39 +71,6 @@ function encodeWriteContent(
 }
 
 /**
- * Map a VFS inode onto just-bash's optional `FsStat.identity` — the token it
- * uses to decide whether two stats name the same file rather than the same path.
- *
- * Commands that mutate through a staging file re-identify their inputs and
- * outputs before committing, and `identitiesMatch()` fails closed for an
- * EXISTING entry whose identity is `undefined`:
- *
- *     e.existence === "existing"
- *       ? e.stableIdentity !== undefined && e.stableIdentity === t.stableIdentity
- *       : ...
- *
- * With no identity that comparison is `undefined !== undefined` → `false`, so
- * `split FILE PREFIX` threw `input identity changed during split` against a
- * file nothing had touched, rolled its staged chunks back, and reported the
- * generic `split: failed to write output`. It could never succeed in SLICC.
- * (`split - PREFIX` reading stdin was unaffected: no input file to re-identify.)
- *
- * `identity` rather than `dev`/`ino`: just-bash only accepts the inode pair
- * when BOTH halves are present, and one VfsAdapter can span several backends
- * whose inode spaces are unrelated — there is no honest single `dev` field on
- * `FsStat`. Encode `dev` into the token when the backend reports one, so a
- * hostfs file and a ZenFS file that share an inode number are not the same
- * identity. Only positive inodes qualify: ZenFS pins `/` to 0, and a sidecar
- * poisoned the way #2146 describes can hand out 0 for many entries before the
- * pre-boot repair re-numbers them. A collided identity is worse than none, so
- * 0 stays absent.
- */
-function toIdentity(ino: number | undefined, dev?: number): string | undefined {
-  if (typeof ino !== 'number' || !Number.isInteger(ino) || ino <= 0) return undefined;
-  return typeof dev === 'number' && Number.isInteger(dev) ? `vfs:${dev}:${ino}` : `vfs-ino:${ino}`;
-}
-
-/**
  * How long a directory listing may answer a `stat` of an entry it just
  * reported (issue #2716).
  *
@@ -417,46 +384,9 @@ export class VfsAdapter implements IFileSystem {
     options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     this.dropListingStats();
-    return this.trusted(async () => {
-      const normalized = normalizePath(path);
-      // Enforce POSIX EISDIR for the append target — ZenFS' InMemory backend
-      // (used in tests) silently overwrites a directory entry with file bytes
-      // on writeFile/appendFile rather than rejecting, so the contract is
-      // enforced here at the shell-facing surface.
-      try {
-        const s = await this.vfs.stat(normalized);
-        if (s.type === 'directory') {
-          throw new FsError('EISDIR', 'is a directory', normalized);
-        }
-      } catch (err) {
-        if (err instanceof FsError && err.code === 'EISDIR') throw err;
-        // Any other stat failure (most importantly ENOENT) means the target
-        // is writable as a new file — fall through to the read+concat path.
-      }
-      // Read existing content as binary to avoid encoding corruption
-      let existingBytes = new Uint8Array(0);
-      try {
-        const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
-        existingBytes =
-          existing instanceof Uint8Array
-            ? new Uint8Array(existing)
-            : new TextEncoder().encode(existing as string);
-      } catch (err) {
-        // Only treat ENOENT as "file doesn't exist yet" — re-throw other errors
-        if (err instanceof FsError && err.code === 'ENOENT') {
-          // File doesn't exist yet, start empty
-        } else {
-          throw err;
-        }
-      }
-      // Convert new content to bytes
-      const newBytes = encodeWriteContent(content, options);
-      // Concatenate and write
-      const combined = new Uint8Array(existingBytes.length + newBytes.length);
-      combined.set(existingBytes);
-      combined.set(newBytes, existingBytes.length);
-      await this.vfs.writeFile(normalized, combined);
-    });
+    return this.trusted(() =>
+      this.vfs.appendFile(normalizePath(path), encodeWriteContent(content, options))
+    );
   }
 
   async exists(path: string): Promise<boolean> {
@@ -480,10 +410,12 @@ export class VfsAdapter implements IFileSystem {
           isFile: fast.type === 'file',
           isDirectory: fast.type === 'directory',
           isSymbolicLink: !!fast.isSymlink,
-          mode: fast.type === 'directory' ? 0o755 : 0o644,
+          mode: fast.mode ?? (fast.type === 'directory' ? 0o755 : 0o644),
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino, fast.dev),
+          identity: fast.identity,
+          dev: fast.dev,
+          ino: fast.identity === undefined ? undefined : fast.ino,
         };
       }
       // What the directory listing just reported, when it reported it
@@ -493,10 +425,12 @@ export class VfsAdapter implements IFileSystem {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
         isSymbolicLink: !!s.isSymlink,
-        mode: s.type === 'directory' ? 0o755 : 0o644,
+        mode: s.mode ?? (s.type === 'directory' ? 0o755 : 0o644),
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino, s.dev),
+        identity: s.identity,
+        dev: s.dev,
+        ino: s.identity === undefined ? undefined : s.ino,
       };
     });
   }
@@ -516,10 +450,14 @@ export class VfsAdapter implements IFileSystem {
           isFile: fast.type === 'file',
           isDirectory: fast.type === 'directory',
           isSymbolicLink: fast.type === 'symlink',
-          mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
+          mode:
+            fast.mode ??
+            (fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644),
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino, fast.dev),
+          identity: fast.identity,
+          dev: fast.dev,
+          ino: fast.identity === undefined ? undefined : fast.ino,
         };
       }
       const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
@@ -527,10 +465,12 @@ export class VfsAdapter implements IFileSystem {
         isFile: s.type === 'file',
         isDirectory: s.type === 'directory',
         isSymbolicLink: s.type === 'symlink',
-        mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
+        mode: s.mode ?? (s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644),
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino, s.dev),
+        identity: s.identity,
+        dev: s.dev,
+        ino: s.identity === undefined ? undefined : s.ino,
       };
     });
   }
@@ -695,26 +635,9 @@ export class VfsAdapter implements IFileSystem {
     return [];
   }
 
-  async chmod(path: string, _mode: number): Promise<void> {
-    return this.trusted(async () => {
-      const normalized = normalizePath(path);
-      if (this.virtualUsrStat(normalized) === null) {
-        // `exists()` maps every failed stat — including transient EIO on a
-        // mount — to false, which would report ENOENT here and make mktemp
-        // take the unique name back. `stat` preserves the real errno.
-        await this.vfs.stat(normalized);
-      }
-      // Native VFS (and the adapter's fake 0644/0755 stats) cannot store an
-      // executable bit. Succeeding here is the #3109 defect: agents record
-      // `chmod +x` as done, then `./script` fails with a bare Permission
-      // denied and they invent a false cause. Fail loudly; run with the
-      // interpreter instead. Backends that can persist +x are #3108.
-      throw new FsError(
-        'EOPNOTSUPP',
-        'the VFS does not support an executable bit; run it with the interpreter, e.g. bash <file>',
-        normalized
-      );
-    });
+  async chmod(path: string, mode: number): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() => this.vfs.chmod(normalizePath(path), mode));
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
@@ -740,8 +663,9 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
-  async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {
-    // Our VFS doesn't support setting times — no-op
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    this.dropListingStats();
+    return this.trusted(() => this.vfs.utimes(normalizePath(path), atime, mtime));
   }
 
   invalidatePaths(paths: string[]): void {

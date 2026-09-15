@@ -13,6 +13,8 @@ export type EntryType = 'file' | 'directory' | 'symlink';
 
 /** Metadata about a filesystem entry. */
 export interface Stats {
+  /** Backend/device-scoped identity, stable across rename and hardlinks. */
+  identity?: string;
   type: EntryType;
   size: number;
   /** Last modification time (ms since epoch). */
@@ -29,7 +31,7 @@ export interface Stats {
    * that distinguishes "the same file" from "the same path" — which is what
    * TOCTOU-hardened commands need (`split` refuses to commit unless the
    * input it read is still the file it identified; without an inode it
-   * cannot tell and fails closed — see `shell/vfs-adapter.ts#toIdentity`).
+   * cannot tell and fails closed — see `stat-identity.ts`).
    *
    * Absent for the remote mount backends (S3/DA/AEM expose only
    * `{kind, size, mtime}`) and for the synthetic `/dev` entries, so
@@ -83,6 +85,7 @@ export interface Stats {
  * listing carries enough to stand in for a stat.
  */
 export interface DirEntryStats {
+  identity?: string;
   size?: number;
   /** Last modification time (ms since epoch). */
   mtime?: number;
@@ -131,6 +134,7 @@ export function statsFromDirEntry(entry: DirEntry): Stats | undefined {
     mtime: entry.mtime,
     ctime: entry.ctime ?? entry.mtime,
     ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.identity !== undefined ? { identity: entry.identity } : {}),
     ...(entry.dev !== undefined ? { dev: entry.dev } : {}),
     ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
     ...(entry.gid !== undefined ? { gid: entry.gid } : {}),

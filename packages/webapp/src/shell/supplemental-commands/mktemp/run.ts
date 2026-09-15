@@ -78,9 +78,9 @@ replaced with random characters; it defaults to tmp.XXXXXXXXXX. Without
 -p/-t/--tmpdir a bare TEMPLATE is relative to the current directory, while the
 default template is placed in $TMPDIR (or /tmp).
 
-What you get back is a UNIQUE name, not a private one. This VFS tracks no
-permission bits, so the usual 0600/0700 modes cannot be applied and the /tmp
-tree is readable by every unit. Do not put secrets in a mktemp file.
+What you get back is a UNIQUE name, not a private one. Local VFS entries
+store 0600/0700 modes, but access follows SLICC path policy and /tmp is
+readable by every unit. Do not put secrets in a shared mktemp file.
 
   -d, --directory        create a directory, not a file
   -u, --dry-run          do not create anything, merely print a name
@@ -413,7 +413,7 @@ function isErrno(error: unknown, code: string): boolean {
  * That is not "left a world-readable file on a mode-supporting volume":
  * privacy was never available, and the unique name is still the contract.
  * Taking the entry back would turn a successful mktemp into a spurious
- * failure the moment `VfsAdapter.chmod()` started failing loudly (#3109).
+ * failure on a mounted backend that reports unsupported metadata (#3109).
  */
 function isModeUnsupported(error: unknown): boolean {
   return isErrno(error, 'EOPNOTSUPP') || isErrno(error, 'ENOTSUP') || isErrno(error, 'ENOSYS');
@@ -448,17 +448,11 @@ async function pathIsTaken(fs: IFileSystem, path: string): Promise<boolean> {
  * one kernel worker, no other OS processes sharing the VFS — but it is real,
  * and it is a reason to delete this overlay the moment the builtin ships.
  *
- * **The mode is best-effort, and on the shell's own filesystem it cannot be
- * applied.** `VfsAdapter.chmod()` fails with `EOPNOTSUPP` — the VFS tracks no
- * permission bits — so the 0600/0700 that GNU (and upstream) promise cannot be
- * applied here, and the `/tmp` tree is writable and readable by every unit by
- * design (`builtinScoopGrants()` / `ALWAYS_WRITABLE_PREFIXES`). The call is
- * kept because it is correct on any backend that does implement it. A throw
- * that means "this FS has no mode bits" keeps the unique name; a throw that
- * means "chmod failed on a mode-supporting FS" must not leave an entry behind
- * at a mode the caller would misread as private. What this command guarantees
- * is a unique name; privacy is not ours to give, and the help text says so
- * rather than repeating a mode that would be fiction.
+ * Local VFS files store 0600/0700. Those bits do not replace SLICC's path
+ * access policy: shared `/tmp` remains readable by every unit. A mounted
+ * backend can reject mode changes as unsupported; keep its unique name in
+ * that case. Other chmod failures remove the new entry before reporting the
+ * error, so a failed metadata write is never presented as success.
  *
  * @throws an EEXIST-coded error when the name is taken, so the caller retries.
  */

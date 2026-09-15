@@ -336,7 +336,7 @@ const REFUSED: readonly RefusedBuiltin[] = [
     summary: 'display or set the file mode mask',
     usage: 'umask [-p] [-S] [mode]',
     reason: 'file-creation masks are not supported by the virtual filesystem',
-    hint: 'run scripts with their interpreter (e.g. bash file); chmod cannot store an executable bit',
+    hint: 'use chmod to change stored mode bits after creating a file',
   },
 ];
 

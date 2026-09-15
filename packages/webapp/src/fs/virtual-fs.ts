@@ -49,6 +49,7 @@ import {
   stripSidecarSelfEntry,
 } from './sidecar-merge.js';
 import { makeOpfsProbe } from './sidecar-repair.js';
+import { inodeIdentity } from './stat-identity.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
@@ -133,6 +134,9 @@ export interface VirtualFsOptions {
 interface FsPromisesLike {
   readFile(path: string, options?: unknown): Promise<unknown>;
   writeFile(path: string, data: unknown, options?: unknown): Promise<void>;
+  appendFile(path: string, data: unknown): Promise<void>;
+  chmod(path: string, mode: number): Promise<void>;
+  utimes(path: string, atime: Date, mtime: Date): Promise<void>;
   readdir(path: string): Promise<string[]>;
   mkdir(path: string, options?: unknown): Promise<unknown>;
   rmdir(path: string): Promise<void>;
@@ -184,6 +188,8 @@ function dirEntryFromMount(entry: MountDirEntry, withStats: boolean): DirEntry {
     ...(entry.lastModified !== undefined ? { mtime: entry.lastModified } : {}),
     ...(entry.ctime !== undefined ? { ctime: entry.ctime } : {}),
     ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.identity !== undefined ? { identity: entry.identity } : {}),
+    ...(entry.dev !== undefined ? { dev: entry.dev } : {}),
     ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
     ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
@@ -659,6 +665,18 @@ export class VirtualFS {
         this._readyResolved
           ? raw().writeFile(pf(p), data, opts)
           : this._ready.then(() => raw().writeFile(pf(p), data, opts)),
+      appendFile: async (p, data) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().appendFile(pf(p), data);
+      },
+      chmod: async (p, mode) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().chmod(pf(p), mode);
+      },
+      utimes: async (p, atime, mtime) => {
+        if (!this._readyResolved) await this._ready;
+        await raw().utimes(pf(p), atime, mtime);
+      },
       readdir: (p) =>
         this._readyResolved ? raw().readdir(pf(p)) : this._ready.then(() => raw().readdir(pf(p))),
       mkdir: (p, opts) =>
@@ -1206,6 +1224,10 @@ export class VirtualFS {
     return true;
   }
 
+  private localIdentity(ino?: number): string | undefined {
+    return inodeIdentity(`zenfs:${this.backend}:${this.dbName}`, ino);
+  }
+
   /**
    * Writability predicate — the unrestricted VirtualFS has no ACL, so every
    * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
@@ -1330,7 +1352,9 @@ export class VirtualFS {
                   size: s.size,
                   mtime: s.mtimeMs,
                   ctime: s.ctimeMs,
-                  ...(s.ino !== undefined ? { ino: s.ino } : {}),
+                  ...(s.ino !== undefined
+                    ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+                    : {}),
                   ...(s.uid !== undefined ? { uid: s.uid } : {}),
                   ...(s.gid !== undefined ? { gid: s.gid } : {}),
                   mode: s.mode,
@@ -1371,6 +1395,9 @@ export class VirtualFS {
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       } catch {
         return null;
@@ -1396,6 +1423,9 @@ export class VirtualFS {
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       }
       let target: string;
@@ -1431,6 +1461,9 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
+          identity: this.localIdentity(s.ino),
+          dev: s.dev,
+          mode: s.mode,
         };
       }
       return {
@@ -1439,6 +1472,9 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        identity: this.localIdentity(s.ino),
+        dev: s.dev,
+        mode: s.mode,
       };
     } catch {
       return null;
@@ -2063,6 +2099,110 @@ export class VirtualFS {
     ]);
   }
 
+  /** Append under the same mutation lock used by other local VFS writers. */
+  async appendFile(path: string, content: FileContent): Promise<void> {
+    const normalized = normalizePath(path);
+    await this.withKindMismatchRetry(normalized, () =>
+      this.withWriteLock(async () => {
+        const mount = this.findMount(normalized);
+        if (mount) {
+          await this.appendMounted(normalized, content);
+          return;
+        }
+        let resolved = normalized;
+        let wasExisting = false;
+        try {
+          resolved = await this.resolveSymlinks(normalized);
+          const stat = await this.lfs.stat(resolved);
+          if (stat.isDirectory()) throw new FsError('EISDIR', 'is a directory', normalized);
+          wasExisting = true;
+        } catch (err) {
+          const error = convertError(err, normalized);
+          if (error.code !== 'ENOENT') throw error;
+        }
+        this.markSidecarDirty(resolved);
+        const { dir } = splitPath(resolved);
+        await this.mkdirRecursiveUnlocked(dir);
+        try {
+          await this.lfs.appendFile(resolved, content);
+        } catch (err) {
+          throw convertError(err, normalized);
+        }
+        this.watcher?.notify([
+          {
+            type: wasExisting ? 'modify' : 'create',
+            path: resolved,
+            entryType: 'file',
+          },
+        ]);
+      })
+    );
+  }
+
+  /** Caller holds the VFS lock. Remote writers still require backend concurrency control. */
+  private async appendMounted(path: string, content: FileContent): Promise<void> {
+    let existing = new Uint8Array(0);
+    try {
+      const read = await this.readFileInner(path, { encoding: 'binary' });
+      existing = typeof read === 'string' ? new TextEncoder().encode(read) : new Uint8Array(read);
+    } catch (err) {
+      const error = convertError(err, path);
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+    const combined = new Uint8Array(existing.length + bytes.length);
+    combined.set(existing);
+    combined.set(bytes, existing.length);
+    await this.writeFileInner(path, combined);
+  }
+
+  /** Persist permissions where the backend supports them. */
+  async chmod(path: string, mode: number): Promise<void> {
+    if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+      throw new FsError('EINVAL', 'invalid file mode', normalizePath(path));
+    }
+    await this.changeMetadata(path, (resolved) => this.lfs.chmod(resolved, mode));
+  }
+
+  /** Persist access and modification times where the backend supports them. */
+  async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    if (!Number.isFinite(atime.getTime()) || !Number.isFinite(mtime.getTime())) {
+      throw new FsError('EINVAL', 'invalid file time', normalizePath(path));
+    }
+    await this.changeMetadata(path, (resolved) => this.lfs.utimes(resolved, atime, mtime));
+  }
+
+  private async changeMetadata(
+    path: string,
+    update: (resolved: string) => Promise<void>
+  ): Promise<void> {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) {
+      await this.stat(normalized);
+      throw new FsError('ENOSYS', 'metadata changes are not supported by this mount', normalized);
+    }
+    await this.withKindMismatchRetry(normalized, () =>
+      this.withWriteLock(async () => {
+        const resolved = await this.resolveSymlinks(normalized);
+        try {
+          const stat = await this.lfs.stat(resolved);
+          this.markSidecarDirty(resolved);
+          await update(resolved);
+          await this.writeOpfsMetadataSidecarUnlocked();
+          this.watcher?.notify([
+            {
+              type: 'modify',
+              path: resolved,
+              entryType: stat.isDirectory() ? 'directory' : 'file',
+            },
+          ]);
+        } catch (err) {
+          throw convertError(err, normalized);
+        }
+      })
+    );
+  }
+
   /**
    * List entries in a directory.
    *
@@ -2161,7 +2301,9 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
-        ...(s.ino !== undefined ? { ino: s.ino } : {}),
+        ...(s.ino !== undefined
+          ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+          : {}),
         ...(s.uid !== undefined ? { uid: s.uid } : {}),
         ...(s.gid !== undefined ? { gid: s.gid } : {}),
         mode: s.mode,
@@ -2453,6 +2595,7 @@ export class VirtualFS {
           mtime: ms.mtime,
           ctime: ms.ctime ?? ms.mtime,
           ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
+          ...(ms.identity !== undefined ? { identity: ms.identity } : {}),
           ...(ms.dev !== undefined ? { dev: ms.dev } : {}),
           ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
           ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
@@ -2472,7 +2615,8 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
-        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+        dev: s.dev,
+        identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,
@@ -2776,7 +2920,8 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
-          ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+          dev: s.dev,
+          identity: this.localIdentity(s.ino),
           uid: s.uid,
           gid: s.gid,
           mode: s.mode,
@@ -2788,7 +2933,8 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
-        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+        dev: s.dev,
+        identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,

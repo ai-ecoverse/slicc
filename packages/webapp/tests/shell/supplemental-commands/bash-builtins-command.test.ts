@@ -162,12 +162,12 @@ describe('builtins with no implementable behaviour', () => {
     }
   );
 
-  it('points fc at history and umask at the interpreter', async () => {
+  it('points fc at history and umask at chmod', async () => {
     await expect(run('fc')).resolves.toMatchObject({
       stderr: expect.stringContaining("use 'history'"),
     });
     await expect(run('umask')).resolves.toMatchObject({
-      stderr: expect.stringContaining('bash file'),
+      stderr: expect.stringContaining('use chmod'),
     });
   });
 });
