@@ -294,9 +294,9 @@ async function runProbes(
   const names = listedNames(entries);
   // Exact spellings first: a listing that returns NFD before NFC would
   // otherwise make both NFC-equivalent finds hit the same NFD entry.
-  const exactNfc = names.find((n) => n === NFC_PROBE_NAME);
-  const exactNfd = names.find((n) => n === NFD_PROBE_NAME);
-  if (exactNfc && exactNfd && exactNfc !== exactNfd) {
+  const exactNfc: string | undefined = names.find((n) => n === NFC_PROBE_NAME);
+  const exactNfd: string | undefined = names.find((n) => n === NFD_PROBE_NAME);
+  if (exactNfc && exactNfd) {
     info.unicodeStorage = 'as-written';
   } else if (exactNfd && !exactNfc) {
     info.unicodeStorage = 'nfd';
