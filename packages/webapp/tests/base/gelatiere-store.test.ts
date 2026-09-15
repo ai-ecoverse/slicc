@@ -390,6 +390,31 @@ describe('coerceSuggestions', () => {
     expect(coerceSuggestions('nope', 'now')).toEqual([]);
   });
 
+  // `skill-idea` ("write one") and `issue` ("report it") carry a `prompt` and
+  // ride the same `gelatiere-try` lick as a `use-case`, so the same rule
+  // applies: the button replays the STORED prompt, and one without it is a
+  // dead pill that stamps itself taken.
+  it('keeps skill-idea and issue when they carry a prompt, and drops them when they do not', () => {
+    const kept = coerceSuggestions(
+      [
+        { kind: 'skill-idea', title: 'no prompt', body: 'b' },
+        { kind: 'issue', title: 'no prompt', body: 'b' },
+        { kind: 'skill-idea', title: 'ok', body: 'b', prompt: 'Write a skill for my release run' },
+        {
+          kind: 'issue',
+          title: 'ok',
+          body: 'b',
+          prompt: 'File an issue against ai-ecoverse/slicc',
+        },
+      ],
+      'now'
+    );
+    expect(kept.map((s) => `${s.kind}:${s.title}`)).toEqual(['skill-idea:ok', 'issue:ok']);
+    // A `skill-idea` names a skill that does NOT exist yet, so it must survive
+    // without the `install` a `skill` card cannot do without.
+    expect(kept[0].install).toBeUndefined();
+  });
+
   it('drops non-http(s) urls — the one field that renders as an href, not text', () => {
     const entry = (url: string) => ({ kind: 'tip', title: 't', body: 'b', url });
     const urls = (raw: string[]) =>

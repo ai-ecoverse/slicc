@@ -1054,8 +1054,9 @@ Two deliberate deviations from curl, both because a page `fetch` cannot do other
 
 The shell surface of the gelatiere — SLICC's resident advisor, a persistent scoop no cone owns
 that reviews the archived sessions nightly and after a chat ends and suggests skills to install,
-use cases to try, and habits to change (design: [`gelatiere.md`](gelatiere.md)). The `memory-v2`
-flag creates the unit at boot; the command works regardless.
+use cases to try, habits to change, skills worth writing and bugs worth filing against SLICC
+(design: [`gelatiere.md`](gelatiere.md)). The `memory-v2` flag creates the unit at boot; the
+command works regardless.
 
 ```bash
 gelatiere init                        # create the unit + its nightly crontask (idempotent)
@@ -1065,14 +1066,25 @@ gelatiere deliver [--scoop <t>] [--force]   # lick every other cone with what is
 gelatiere list [--all] [--json]       # open suggestions (--all adds dismissed)
 gelatiere dismiss <id>                # mark one answered
 gelatiere status                      # unit, nightly schedule, last pass / delivery, counts
+
+# The unit has no curl; these four pinned www.sliccy.com reads are its whole web surface
+gelatiere catalog                     # the skill catalog, JSON
+gelatiere commands                    # every command with a man page, from the sitemap
+gelatiere man <command>               # one man page, plain text
+gelatiere use-cases [--limit n] [--json]   # what SLICC is for: title, summary, skills per use case
 ```
 
 - `suggest` validates and merges: known ids (open or dismissed) are never replaced, ids are
-  slugged, at most `maxSuggestions` from `/shared/GELATIERE.md` land per pass.
+  slugged, at most `maxSuggestions` from `/shared/GELATIERE.md` land per pass. Kinds are `skill`
+  (needs a validated `upskill` command), `use-case` / `skill-idea` / `issue` (each needs a
+  `prompt`) and `tip`; a candidate missing the field behind its card button is dropped.
 - `deliver` addresses every root cone except the gelatiere by folder, or one `--scoop <target>`;
   nothing new since the last delivery → no lick unless `--force`.
 - Store: `/shared/.gelatiere/suggestions.json` (every suggestion with `dismissedAt` when answered),
   `/shared/.gelatiere/state.json` (pass + delivery ledger). The suggestions sprinkle renders the open ones.
+- `use-cases` reads the site's `/use-cases/` pages for their title, summary and the skills each one
+  names. Fewer than the site has (`--limit 3`) rotates by UTC day; the suggestions sprinkle calls it
+  that way for its empty state, so the panel is never a dead end before the first pass.
 
 ---
 

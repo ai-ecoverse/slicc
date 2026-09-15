@@ -12,7 +12,7 @@
  *   run                  lick the unit: "do a pass now"
  *   suggest <file>       the gelatiere's last step — fold candidates into the store
  *   deliver              the gelatiere's other last step — lick every other cone
- *   catalog | commands | man <cmd>   pinned-host fetches (the unit has no curl)
+ *   catalog | commands | man <cmd> | use-cases   pinned-host fetches (the unit has no curl)
  *   list | dismiss | status
  *
  * `shell/` sits below `scoops/`, so the orchestrator-facing operations come
@@ -75,6 +75,13 @@ Commands:
   catalog              The skill catalog (JSON) from www.sliccy.com
   commands             Every shell command SLICC ships, from the sitemap
   man <command>        One man page, plain text
+  use-cases [options]  What SLICC is for, from the sitemap: title, summary and the
+                       skills each one wants
+
+use-cases options:
+  --limit <n>          At most n of them (default: all). Fewer than the site has
+                       rotates daily, so a second look is not the same three
+  --json               Machine-readable, for the suggestions card's empty state
 
 deliver options:
   --scoop <target>     One cone (folder, name or jid) instead of every cone; does not
@@ -92,9 +99,13 @@ Examples:
   gelatiere run
   gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver
   gelatiere dismiss skill-github
+  gelatiere use-cases --limit 3 --json
 `;
 
 const DELIVER_VALUE_FLAGS = ['--scoop'] as const;
+const USE_CASES_VALUE_FLAGS = ['--limit'] as const;
+/** Every value flag, so `--scoop --help` / `--limit --help` read as values, not a help ask. */
+const HELP_VALUE_FLAGS = [...DELIVER_VALUE_FLAGS, ...USE_CASES_VALUE_FLAGS] as const;
 
 function ok(stdout: string): CommandResult {
   return { stdout, stderr: '', exitCode: 0 };
@@ -282,6 +293,16 @@ const MAN_BYTE_CAP = 16_000;
 const FETCH_BYTE_CAP = 512_000;
 const MAN_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 /**
+ * Use-case pages are HTML; only the `<head>` is wanted and it always lands in
+ * the first kilobytes. Bounded well under the catalog cap so nine of them
+ * cannot add up to a large read.
+ */
+const USE_CASE_BYTE_CAP = 24_000;
+/** Ceiling on how many use-case pages one invocation will open. */
+const MAX_USE_CASE_PAGES = 12;
+/** Page fetches in flight at once — nine serial round trips would be slow. */
+const USE_CASE_CONCURRENCY = 4;
+/**
  * Wall clock per fetch. These verbs are the unattended nightly pass's whole
  * web surface; without this a stalled host would hang the pass until its
  * run timeout, and the byte caps only apply once a body arrives.
@@ -330,6 +351,152 @@ async function handleMan(args: string[]): Promise<CommandResult> {
   } catch (error) {
     return fail(`man fetch failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/** One row of `gelatiere use-cases`: what the page says about itself. */
+interface UseCase {
+  slug: string;
+  url: string;
+  title: string;
+  description: string;
+  /** Skills the page itself names as the ones it wants (`slicc-upskill` meta). */
+  skills: string[];
+}
+
+/** `<title>` and the two `<meta>` tags the use-case pages carry, or the slug alone. */
+function parseUseCasePage(slug: string, url: string, html: string): UseCase {
+  const meta = (name: string): string => {
+    // Capture the opening quote and require the matching delimiter so a
+    // description like content="You're ready" is not truncated at the apostrophe.
+    const found = html.match(
+      new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=(["'])((?:(?!\\1).)*)\\1`, 'i')
+    );
+    return found ? decodeEntities(found[2]).trim() : '';
+  };
+  const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  return {
+    slug,
+    url,
+    title: titleTag ? decodeEntities(titleTag[1]).trim() : humanizeSlug(slug),
+    description: meta('description'),
+    skills: meta('slicc-upskill')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  };
+}
+
+/** The handful of entities the site's meta tags actually carry. */
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  '#39': "'",
+  '#x27': "'",
+};
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, (whole, name: string) => {
+    const known = ENTITIES[name.toLowerCase()];
+    if (known) return known;
+    const numeric = name.match(/^#(x?)([0-9a-fA-F]+)$/i);
+    if (!numeric) return whole;
+    const code = Number.parseInt(numeric[2], numeric[1] ? 16 : 10);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/** `stay-on-top` → `Stay on top`. The fallback when a page will not load. */
+function humanizeSlug(slug: string): string {
+  const words = slug.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Which `limit` of `total` to show. Asking for fewer than the site has rotates
+ * by UTC day so the suggestions card's empty state is not the same three every
+ * time someone opens it — a discovery surface that never changes stops being
+ * read. Deterministic within a day, so two floats agree.
+ */
+function rotationOffset(total: number, now: number): number {
+  if (total <= 0) return 0;
+  return Math.floor(now / 86_400_000) % total;
+}
+
+function selectUseCases<T>(all: readonly T[], limit: number, now: number): T[] {
+  if (limit >= all.length) return [...all];
+  const start = rotationOffset(all.length, now);
+  return Array.from({ length: limit }, (_, i) => all[(start + i) % all.length]);
+}
+
+/** Run `task` over `items` with at most {@link USE_CASE_CONCURRENCY} in flight. */
+async function mapLimited<T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await task(items[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(USE_CASE_CONCURRENCY, items.length) }, () => worker())
+  );
+  return out;
+}
+
+/**
+ * The use-case pages of www.sliccy.com — what SLICC is FOR, as the site puts
+ * it, which neither the skill catalog (what is installable) nor the man-page
+ * sitemap (what is runnable) says. The gelatiere reads it to ground a
+ * `use-case` suggestion in something real, and the suggestions card reads
+ * three of it as its empty state, so the panel is never a dead end before the
+ * first pass. One sitemap fetch plus one per page shown; a page that will not
+ * load degrades to its slug rather than failing the command.
+ */
+async function handleUseCases(args: string[]): Promise<CommandResult> {
+  const parsed = parseKnownFlags(args, { value: USE_CASES_VALUE_FLAGS, bool: ['--json'] });
+  if ('error' in parsed) return fail(parsed.error);
+  const rawLimit = parsed.values.get('--limit');
+  const limit = rawLimit === undefined ? MAX_USE_CASE_PAGES : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    return fail(`--limit must be a positive whole number, not "${rawLimit}"`);
+  }
+  let slugs: string[];
+  try {
+    const xml = await fetchSliccy('/sitemap.xml', FETCH_BYTE_CAP);
+    slugs = [
+      ...new Set(
+        [...xml.matchAll(/<loc>[^<]*\/use-cases\/([a-z0-9-]+)(?:\.html)?<\/loc>/g)].map((m) => m[1])
+      ),
+    ].sort();
+  } catch (error) {
+    return fail(`sitemap fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (slugs.length === 0) return fail('no use cases found in the sitemap');
+  const shown = selectUseCases(slugs, Math.min(limit, MAX_USE_CASE_PAGES), Date.now());
+  const cases = await mapLimited(shown, async (slug): Promise<UseCase> => {
+    const url = `${GELATIERE_FETCH_ORIGIN}/use-cases/${slug}`;
+    try {
+      return parseUseCasePage(
+        slug,
+        url,
+        await fetchSliccy(`/use-cases/${slug}`, USE_CASE_BYTE_CAP)
+      );
+    } catch {
+      // One unreachable page must not cost the caller the other eight.
+      return { slug, url, title: humanizeSlug(slug), description: '', skills: [] };
+    }
+  });
+  if (parsed.bools.has('--json')) return ok(`${JSON.stringify(cases, null, 2)}\n`);
+  let output = '';
+  for (const entry of cases) {
+    output += `${entry.slug}\t${entry.title}\n  ${entry.url}\n`;
+    if (entry.description) output += `  ${entry.description}\n`;
+    if (entry.skills.length) output += `  skills: ${entry.skills.join(' ')}\n`;
+  }
+  return ok(output);
 }
 
 async function handleStatus(fs: VirtualFS): Promise<CommandResult> {
@@ -396,7 +563,7 @@ export async function runGelatiere(
   options: GelatiereCommandOptions
 ): Promise<CommandResult> {
   const subcommand = args[0];
-  if (!subcommand || isHelpRequest(args, { valueFlags: DELIVER_VALUE_FLAGS })) return ok(HELP);
+  if (!subcommand || isHelpRequest(args, { valueFlags: HELP_VALUE_FLAGS })) return ok(HELP);
   const rest = args.slice(1);
   switch (subcommand) {
     case 'init':
@@ -419,6 +586,8 @@ export async function runGelatiere(
       return handleCommands();
     case 'man':
       return handleMan(rest);
+    case 'use-cases':
+      return handleUseCases(rest);
     default:
       return fail(`unknown command: ${subcommand}\n${HELP}`);
   }

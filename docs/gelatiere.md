@@ -2,8 +2,9 @@
 
 SLICC's resident advisor: a persistent work unit that no cone owns, that reviews how the user
 works — nightly and after a chat session ends — and suggests skills to install, use cases to try,
-and habits to change. Suggestions render as cards in the suggestions sprinkle and every other cone
-receives a lick when new ones land.
+habits to change, skills worth writing when nothing installable fits, and bugs worth filing when
+SLICC itself is what got in the way. Suggestions render as cards in the suggestions sprinkle and
+every other cone receives a lick when new ones land.
 
 Feature flag: `memory-v2` (Settings → Experimental features, off by default; also in both
 `wrangler.jsonc` `FEATURE_FLAGS` lists — the same flag that gates session search and scoop
@@ -107,8 +108,14 @@ edit by the user is not.
    for a child unit `allowedCommands` is the only network gate, and an unattended agent that reads
    third-party content while seeing `/sessions/` and every cone's memory must not hold general
    egress — one injected catalog line could otherwise exfiltrate any archive. Its whole web surface
-   is `gelatiere catalog` / `gelatiere commands` / `gelatiere man <cmd>`, three pinned
-   `www.sliccy.com` fetches; anything else escalates through the sudo gate.
+   is `gelatiere catalog` / `gelatiere commands` / `gelatiere use-cases` / `gelatiere man <cmd>`,
+   four pinned `www.sliccy.com` reads; anything else escalates through the sudo gate.
+   `use-cases` is the newest of them and the only one that reads HTML: it pulls the `/use-cases/`
+   entries out of the sitemap and opens each page for its `<title>`, `<meta name=description>` and
+   `<meta name=slicc-upskill>`. That is what SLICC is FOR in the site's own words — neither the
+   catalog (what is installable) nor the man pages (what is runnable) says it — and the same verb
+   backs the suggestions card's empty state, which asks for `--limit 3` and gets a selection that
+   rotates by UTC day.
 3. On the nightly pass only, `GELATIERE.md` has it start the memory-dreaming pass first —
    `memory dream --all`, detached — which spawns one sandboxed `memory-dreamer` scoop per cone (one cone after another — every dreamer may write the shared wiki, whose index and log are not staged; and a dreamer never runs beside a curator over the same file: each names the other as a bridge `exclusiveWith` rival, so the second is rejected with `name already in use` — a "New chat" mid-dream leaves its archive pending for the boot catch-up, a nightly mid-curation skips that cone until the next night)
    with a memory file to consolidate it under `/shared/DREAMING.md`'s instructions
@@ -116,9 +123,10 @@ edit by the user is not.
    The gelatiere itself still cannot write memory files; `memory` is on its allow-list for this
    one command, and the dreamers' writes go through the staged draft + three-way merge.
 4. It writes `$TMPDIR/candidates.json` and runs `gelatiere suggest <file> && gelatiere deliver`.
-   `suggest` validates (`coerceSuggestions`: kind ∈ skill | use-case | tip, required id/title/body,
-   plus the kind contract from `GELATIERE.md` — a `skill` needs `skill` and a validated `install`,
-   a `use-case` needs `prompt`; the stream renders an Install / Try it button for every card and
+   `suggest` validates (`coerceSuggestions`: kind ∈ skill | use-case | tip | skill-idea | issue,
+   required id/title/body, plus the kind contract from `GELATIERE.md` — a `skill` needs `skill` and
+   a validated `install`, and every prompt-carrying kind (`use-case`, `skill-idea`, `issue`) needs
+   `prompt`; the stream renders an Install / Try it button for every card and
    stamps it taken on click, so a card without the field behind its button is dropped rather than
    shown — ids slugged, capped at `maxSuggestions`), merges (`mergeSuggestions`: known ids — open or
    dismissed — are never replaced), and stamps `lastPassAt`. `deliver` licks every root cone except
@@ -136,7 +144,7 @@ edit by the user is not.
 ## Stores
 
 - `/shared/.gelatiere/suggestions.json` — every suggestion, newest first, with `createdAt` and,
-  once answered, `takenAt` (Install / Try it) or `dismissedAt` (Not now / `gelatiere dismiss`).
+  once answered, `takenAt` (Install / Try it) or `dismissedAt` (Dismiss / `gelatiere dismiss`).
   Capped at 40; past the cap, dismissed entries are trimmed first, then taken, then the oldest open.
 - `/shared/.gelatiere/state.json` — `passes`, `lastPassAt`, `lastTriggeredAt`, `lastDeliveredAt`.
 - `/shared/.gelatiere/notes.md` — the gelatiere's own cross-pass memory (free-form).
@@ -151,20 +159,51 @@ body `{ action: 'gelatiere-suggestions', data: { added, open, suggestions, path,
 in the skill index rather than in every lick. The suggestions card does not depend on the lick — it reads
 the store through the dip bridge and renders whatever is open. Its buttons emit:
 
-| lick                | who handles it                                                                  |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `gelatiere-dismiss` | page (`setup-welcome-flow.ts`) stamps `dismissedAt`; no cone turn               |
-| `gelatiere-install` | page stamps `takenAt`, then the cone runs the `install` command (per the skill) |
-| `gelatiere-try`     | page stamps `takenAt`, then the cone acts on the `prompt` (per the skill)       |
+| lick                | who handles it                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `gelatiere-dismiss` | page (`setup-welcome-flow.ts`) stamps `dismissedAt`; no cone turn                                                  |
+| `gelatiere-install` | page stamps `takenAt`, then the cone runs the `install` command (per the skill)                                    |
+| `gelatiere-try`     | page stamps `takenAt`, then the cone acts on the `prompt` (per the skill); sent by all three prompt-carrying kinds |
 
 The stream renders the three states differently: open suggestions are flat entries (the sidebar
 panel is already a rounded container, so entries draw no box of their own — WHAT as an imperative
 title with a quiet small-caps kind label, WHY as one paragraph, one primary pill plus a text-style
-"Not now"), taken ones collapse into a "Done" ledger (single ellipsized line + installed/tried),
+"Dismiss"), taken ones collapse into a "Done" ledger (single ellipsized line +
+installed/tried/drafted/reported),
 dismissed ones disappear — the store keeps them so a later pass cannot resurrect what the user
-waved away. Copy contract (`GELATIERE.md`): `title` is the WHAT (imperative, ≤8 words), `body` is
+waved away. The **empty** state is a fourth: before the first pass there is nothing to render at
+all, and the panel a new user opens must not read as broken. It names what will land here and when
+("The gelatiere reads how you actually work — nightly, and after each chat ends…"), then appends
+three live use cases from `gelatiere use-cases --limit 3 --json` under "Meanwhile, from
+sliccy.com" — the same block backs "All caught up", so answering everything is not a dead end
+either. The rows arrive a round trip after the copy and are cached in sprinkle state for twelve
+hours, so a site that will not answer costs the panel nothing and an open-close-open does not
+re-fetch.
+
+The stream owns its own gutter: it fills a panel iframe edge to edge, neither `.sprinkle-panel`
+nor `.msg__dip` adds padding, and the `*` reset at the top of the file zeroes what the UA would
+give — so without `body { padding: … }` the cards sit flush against the panel's rounded corner.
+The entries themselves carry vertical padding only, which is what lets the hairline separators run
+the full width of the list. Copy contract (`GELATIERE.md`): `title` is the WHAT (imperative, ≤8 words), `body` is
 the WHY (1–2 grounded sentences, no title restatement); `evidence` rides the lick for cones and is
 not rendered on the entry.
+
+### Five kinds, three buttons
+
+| kind         | label     | button      | lick                |
+| ------------ | --------- | ----------- | ------------------- |
+| `skill`      | Skill     | Install     | `gelatiere-install` |
+| `use-case`   | Try this  | Try it      | `gelatiere-try`     |
+| `tip`        | Tip       | — (Dismiss) | `gelatiere-dismiss` |
+| `skill-idea` | New skill | Draft it    | `gelatiere-try`     |
+| `issue`      | Report    | Report it   | `gelatiere-try`     |
+
+`skill-idea` and `issue` were added after the first real nightly (see below) and point AWAY from
+the catalog: the first when the same hand-rolled routine shows up twice and nothing installable
+covers it, the second when the friction is SLICC's own. Both carry a `prompt` and reuse the
+`gelatiere-try` lick, so they needed no new verb, no new page-side settlement and no follower
+wiring — only a kind label honest enough that "file a bug against SLICC" does not render as "Try
+this".
 
 Under Memory v2 the suggestions sprinkle is rail-pickable (`sprinkle-discovery.ts` un-hides it when
 the flag is on; without the flag there is nothing to stream) and wears the gelatiere's
@@ -243,3 +282,40 @@ Bakery cone.
   fired and dropped out of the list; not investigated further.
 - **Not observed live**: compact-on-idle on the unit (needs an idle window on a large context;
   the gate is unit-tested), the hosted origin, the extension float.
+
+## First real nightly (2026-09-15)
+
+The first unattended nightly on the author's own install — five cones, four archives of 600 kB–1.1 MB
+plus five `live-*.md` up to 6.9 MB, a 17-entry catalog with most of it already installed. It ran
+`memory dream --all` across five cones and produced four suggestions (one tip, one skill, two
+use-cases); the user took one, dismissed one, left two open. What it exposed, and what changed here:
+
+- **The panel was squished into its own corner.** The stream fills a panel iframe edge to edge, the
+  `*` reset zeroes the UA margin, and neither `.sprinkle-panel` nor `.msg__dip` adds padding — so
+  `.gelatiere-entry { padding: 16px 4px }` put the cards 4 px from a rounded corner. The gutter is
+  now `body`'s (`14px 18px 20px`) and the entries carry vertical padding only, which is also what
+  lets the hairlines run the full width.
+- **The empty state read as a broken panel.** "Nothing from the gelatiere right now." is what a new
+  user sees for a day before the first pass ever runs. It now says what will land here and when, and
+  appends three live use cases from `gelatiere use-cases --limit 3 --json`.
+- **The catalog runs out.** The pass's own notes: "Catalog is small (17 entries) and mostly already
+  installed; do not expect a skill suggestion every pass." That is the argument for `skill-idea` —
+  when the same routine recurs and nothing installable covers it, "write one" is the honest
+  suggestion — and for `issue`, since the gelatiere reads the failures nobody reports (its one tip
+  that pass was a measured VFS surprise: `chmod 755` leaves the mode at `-rw-r--r--`, so `./x.sh`
+  can never work).
+- **`gelatiere commands` is not an inventory.** It lists what the WEBSITE documents. `crontask`,
+  `serve`, `agent` and `open` are all missing from the sitemap although they exist, and the pass
+  correctly refused to conclude they were absent. The recipe now says so; the gap is the website's
+  to close, not this code's.
+- **`live-*.md` is the freshest signal and the easiest to skip.** `ls -t /sessions/*.md | head -5`
+  returns them, but they read as noise beside the titled archives — and on this install they were
+  the largest evidence there was. Called out explicitly in the recipe now.
+- **Memory files outgrow a `cat`.** 1283 / 996 / 580 lines on three cones. The recipe now says to
+  read `grep -n '^## '` first and `sed -n` the sections that matter.
+- **No `.welcome.json`.** A long-lived install predating the wizard has no profile at all, and the
+  pass has to run on memory and archives alone. It did, and said so in its notes; nothing to fix,
+  but worth knowing the first signal in the recipe is routinely absent.
+- **Not observed:** the `/cones/gelatiere/` workspace this doc lists under Stores does not exist on
+  a live install — the unit never writes there (its durable state is `/shared/.gelatiere/`), and the
+  folder is created lazily on first write like any scoop's.

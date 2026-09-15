@@ -480,7 +480,7 @@ export interface WireWcSprinklesDeps {
    * The welcome flow's lick interceptor (page-side settlement of
    * `gelatiere-*` card clicks and onboarding branches). `true` = handled,
    * do not forward to the cone. Without it a panel-hosted welcome stream
-   * leaks every "Not now" to the cone as an unhandled lick.
+   * leaks every "Dismiss" to the cone as an unhandled lick.
    */
   interceptWelcomeLick?: (event: LickEvent) => boolean;
   log: BootStageLogger;

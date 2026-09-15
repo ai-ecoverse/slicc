@@ -458,6 +458,138 @@ describe('gelatiere command', () => {
     expect(down.stderr).toContain('HTTP 503');
   });
 
+  // The suggestions card's empty state and the pass's "what is SLICC for"
+  // signal come from here, so the shape of both is pinned: one sitemap read,
+  // one page read per use case shown, and nothing off the pinned host.
+  const sitemapWith = (slugs: string[]): string =>
+    `<urlset>${slugs.map((slug) => `<loc>https://www.sliccy.com/use-cases/${slug}</loc>`).join('')}<loc>https://www.sliccy.com/man/bash</loc></urlset>`;
+
+  const useCasePage = (title: string, description: string): string =>
+    `<html><head><title>${title}</title>` +
+    `<meta name="description" content="${description}">` +
+    '<meta name="slicc-upskill" content="https://github.com/o/r/tree/main/skills/firefly, https://github.com/o/r/tree/main/skills/suno">' +
+    '</head><body>ignored</body></html>';
+
+  it('use-cases reads the sitemap, then one page each, and reports title, summary and skills', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.endsWith('/sitemap.xml')
+          ? sitemapWith(['creative', 'web-development'])
+          : useCasePage('Your partner in creative endeavors', 'It makes things &amp; ships them.'),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    const cases = JSON.parse(result.stdout);
+    expect(cases).toHaveLength(2);
+    expect(cases[0]).toMatchObject({
+      slug: 'creative',
+      url: 'https://www.sliccy.com/use-cases/creative',
+      title: 'Your partner in creative endeavors',
+      // Entities in the meta tags survive as the characters they stand for.
+      description: 'It makes things & ships them.',
+      skills: [
+        'https://github.com/o/r/tree/main/skills/firefly',
+        'https://github.com/o/r/tree/main/skills/suno',
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/sitemap.xml', TIMED);
+    expect(fetchMock).toHaveBeenCalledWith('https://www.sliccy.com/use-cases/creative', TIMED);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('use-cases keeps an apostrophe inside a double-quoted description', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        url.endsWith('/sitemap.xml')
+          ? sitemapWith(['ready'])
+          : useCasePage('Ready when you are', "You're ready to ship."),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)[0].description).toBe("You're ready to ship.");
+  });
+
+  it('use-cases rotates the selection by day when asked for fewer than the site has', async () => {
+    const slugs = ['alpha', 'beta', 'gamma', 'delta'];
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () => (url.endsWith('/sitemap.xml') ? sitemapWith(slugs) : useCasePage('T', 'D')),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const shownOn = async (iso: string): Promise<string[]> => {
+      vi.setSystemTime(new Date(iso));
+      const result = await run(memoryFs(), ['use-cases', '--limit', '2', '--json']);
+      expect(result.exitCode).toBe(0);
+      return JSON.parse(result.stdout).map((c: { slug: string }) => c.slug);
+    };
+    try {
+      // Same day, same three: two floats reading the card must agree.
+      expect(await shownOn('2026-09-15T02:00:00.000Z')).toEqual(
+        await shownOn('2026-09-15T22:00:00.000Z')
+      );
+      // A day later, a different pair — a discovery surface that never changes
+      // stops being read.
+      expect(await shownOn('2026-09-16T02:00:00.000Z')).not.toEqual(
+        await shownOn('2026-09-15T02:00:00.000Z')
+      );
+      // Only the pages actually shown are opened.
+      expect((await shownOn('2026-09-15T02:00:00.000Z')).length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('use-cases survives a page that will not load, and rejects a bad --limit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/sitemap.xml')) {
+          return { ok: true, status: 200, text: async () => sitemapWith(['stay-on-top']) };
+        }
+        return { ok: false, status: 500, text: async () => '' };
+      })
+    );
+    const result = await run(memoryFs(), ['use-cases', '--json']);
+    expect(result.exitCode).toBe(0);
+    // One unreachable page degrades to its slug rather than failing the command.
+    expect(JSON.parse(result.stdout)).toEqual([
+      {
+        slug: 'stay-on-top',
+        url: 'https://www.sliccy.com/use-cases/stay-on-top',
+        title: 'Stay on top',
+        description: '',
+        skills: [],
+      },
+    ]);
+
+    for (const bad of ['0', '-1', 'three']) {
+      const rejected = await run(memoryFs(), ['use-cases', '--limit', bad]);
+      expect(rejected.exitCode, `--limit ${bad}`).toBe(1);
+      expect(rejected.stderr).toContain('--limit must be a positive whole number');
+    }
+  });
+
+  it('use-cases says so when the sitemap lists none, instead of printing nothing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '<urlset><loc>https://www.sliccy.com/man/bash</loc></urlset>',
+      }))
+    );
+    const result = await run(memoryFs(), ['use-cases']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no use cases found in the sitemap');
+  });
+
   it('every seam-backed verb fails cleanly before the host publishes the seam', async () => {
     delete (globalThis as Globals).__slicc_gelatiere;
     for (const args of [['init'], ['run'], ['deliver', '--force']]) {
