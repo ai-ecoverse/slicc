@@ -105,13 +105,42 @@ export async function usbClaimInterface(
     opts?.wait ?? false,
     opts?.signal
   );
+  const holder = () => claims.claimOwner(registry, handle, interfaceNumber);
+  const stillOurs = () => holder() === owner;
+  const cancelled = () => claims.wasGrantCancelled(registry, handle, interfaceNumber, owner);
+  const throwIfLost = async (releaseDevice: boolean) => {
+    if (stillOurs() && !cancelled()) return;
+    if (cancelled() || !holder()) {
+      if (releaseDevice) {
+        try {
+          await device.releaseInterface(interfaceNumber);
+        } catch {
+          /* already gone */
+        }
+      }
+      claims.settleCancelledGrant(registry, handle, interfaceNumber, owner);
+      claims.wakeInterfaceWaiter(registry, handle, interfaceNumber);
+    }
+    throw claims.claimWaitCancelledError(handle, interfaceNumber, owner);
+  };
   try {
+    await throwIfLost(false);
     await device.claimInterface(interfaceNumber);
+    await throwIfLost(true);
   } catch (err) {
     if (result === 'acquired') {
-      claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
+      if (cancelled()) {
+        claims.settleCancelledGrant(registry, handle, interfaceNumber, owner);
+        claims.wakeInterfaceWaiter(registry, handle, interfaceNumber);
+      } else if (stillOurs()) {
+        claims.releaseInterfaceClaim(registry, handle, interfaceNumber, owner);
+      } else if (!holder()) {
+        claims.wakeInterfaceWaiter(registry, handle, interfaceNumber);
+      }
     }
     throw err;
+  } finally {
+    claims.clearPendingGrant(registry, handle, interfaceNumber, owner);
   }
 }
 
@@ -122,7 +151,11 @@ export async function usbCancelClaimWait(
   owner: string
 ): Promise<void> {
   const claims = await broker();
-  claims.cancelClaimWait(registry, handle, interfaceNumber, owner);
+  if (claims.cancelClaimWait(registry, handle, interfaceNumber, owner)) return;
+  if (!claims.takePendingGrant(registry, handle, interfaceNumber, owner)) return;
+  // Tombstone stays until in-flight `usbClaimInterface` settles, so a
+  // new caller cannot jump queued waiters. That path then releases
+  // WebUSB if needed and wakes the next waiter.
 }
 
 export async function usbDropOwner(registry: DeviceHandleRegistry, owner: string): Promise<void> {

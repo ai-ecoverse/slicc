@@ -24,6 +24,14 @@ interface ClaimWaiter {
 interface RegistryClaimState {
   claims: Map<string, Map<number, string>>;
   waiters: Map<string, ClaimWaiter[]>;
+  /** Grants that have not yet finished `device.claimInterface`. */
+  pendingGrants: Map<string, string>;
+  /**
+   * In-flight grants canceled before `claimInterface` settled. The
+   * claim stays recorded so a new caller cannot jump the FIFO until
+   * the in-flight path releases WebUSB and wakes the next waiter.
+   */
+  cancelledGrants: Map<string, string>;
   listeners: Set<UsbClaimEventListener>;
 }
 
@@ -32,7 +40,13 @@ const byRegistry = new WeakMap<DeviceHandleRegistry, RegistryClaimState>();
 function stateOf(registry: DeviceHandleRegistry): RegistryClaimState {
   let state = byRegistry.get(registry);
   if (!state) {
-    state = { claims: new Map(), waiters: new Map(), listeners: new Set() };
+    state = {
+      claims: new Map(),
+      waiters: new Map(),
+      pendingGrants: new Map(),
+      cancelledGrants: new Map(),
+      listeners: new Set(),
+    };
     byRegistry.set(registry, state);
   }
   return state;
@@ -105,6 +119,7 @@ export async function acquireInterfaceClaim(
   if (current === owner) return 'held';
   if (!current) {
     setClaim(registry, handle, interfaceNumber, owner);
+    markPendingGrant(registry, handle, interfaceNumber, owner);
     return 'acquired';
   }
   if (!wait) {
@@ -143,6 +158,69 @@ export function cancelClaimWait(
 }
 
 /**
+ * Mark an in-flight grant canceled without dropping the claim.
+ * The tombstone keeps the interface busy so a new caller cannot
+ * jump queued waiters. Returns true when `owner` still had that
+ * pending grant. Does not wake the next waiter — the in-flight
+ * claim path releases WebUSB first, then {@link wakeInterfaceWaiter}.
+ */
+export function takePendingGrant(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  const key = claimWaitKey(handle, interfaceNumber);
+  const state = stateOf(registry);
+  if (state.pendingGrants.get(key) !== owner) return false;
+  state.pendingGrants.delete(key);
+  state.cancelledGrants.set(key, owner);
+  return true;
+}
+
+/** True when `owner`'s in-flight grant was canceled and not yet settled. */
+export function wasGrantCancelled(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  return stateOf(registry).cancelledGrants.get(claimWaitKey(handle, interfaceNumber)) === owner;
+}
+
+/**
+ * Drop a canceled in-flight tombstone. Returns true when `owner`
+ * had that canceled grant. Does not wake the next waiter.
+ */
+export function settleCancelledGrant(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): boolean {
+  const key = claimWaitKey(handle, interfaceNumber);
+  const state = stateOf(registry);
+  if (state.cancelledGrants.get(key) !== owner) return false;
+  state.cancelledGrants.delete(key);
+  if (claimOwner(registry, handle, interfaceNumber) === owner) {
+    deleteClaim(registry, handle, interfaceNumber);
+  }
+  return true;
+}
+
+/** The claim is live; a later cancel must not treat it as in-flight. */
+export function clearPendingGrant(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): void {
+  const key = claimWaitKey(handle, interfaceNumber);
+  const pending = stateOf(registry).pendingGrants;
+  if (pending.get(key) === owner) pending.delete(key);
+}
+
+/**
  * Drop every claim and queued wait belonging to `owner`. Does not
  * wake the next waiter — the caller must {@link wakeInterfaceWaiter}
  * after releasing the live WebUSB interface so a queued consumer
@@ -172,6 +250,9 @@ export function takeOwnerClaims(
       if (heldBy !== owner) continue;
       dropped.push({ handle, interfaceNumber, owner });
       byIface.delete(interfaceNumber);
+      const key = claimWaitKey(handle, interfaceNumber);
+      state.pendingGrants.delete(key);
+      state.cancelledGrants.delete(key);
     }
     if (byIface.size === 0) state.claims.delete(handle);
   }
@@ -207,6 +288,8 @@ export function releaseInterfaceClaim(
       interfaceNumber,
     });
   }
+  clearPendingGrant(registry, handle, interfaceNumber, owner);
+  stateOf(registry).cancelledGrants.delete(claimWaitKey(handle, interfaceNumber));
   deleteClaim(registry, handle, interfaceNumber);
   wakeNextWaiter(registry, handle, interfaceNumber);
 }
@@ -246,7 +329,15 @@ export function displaceHandle(
   opts: { reason: 'close' | 'reset'; displacedBy: string; displaced: UsbInterfaceClaim[] }
 ): void {
   rejectWaiters(registry, handle, opts.reason, opts.displacedBy);
-  stateOf(registry).claims.delete(handle);
+  const state = stateOf(registry);
+  const prefix = `${handle}:`;
+  for (const key of [...state.pendingGrants.keys()]) {
+    if (key.startsWith(prefix)) state.pendingGrants.delete(key);
+  }
+  for (const key of [...state.cancelledGrants.keys()]) {
+    if (key.startsWith(prefix)) state.cancelledGrants.delete(key);
+  }
+  state.claims.delete(handle);
   const seen = new Set<string>();
   for (const claim of opts.displaced) {
     emitClaimEvent(registry, {
@@ -296,10 +387,27 @@ function deleteClaim(
   if (byIface.size === 0) claims.delete(handle);
 }
 
-function abortError(handle: string, interfaceNumber: number, owner: string): Error {
+export function claimWaitCancelledError(
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): Error {
   return new Error(
     `usb claim wait cancelled for '${handle}' interface ${interfaceNumber} (owner ${owner})`
   );
+}
+
+function abortError(handle: string, interfaceNumber: number, owner: string): Error {
+  return claimWaitCancelledError(handle, interfaceNumber, owner);
+}
+
+function markPendingGrant(
+  registry: DeviceHandleRegistry,
+  handle: string,
+  interfaceNumber: number,
+  owner: string
+): void {
+  stateOf(registry).pendingGrants.set(claimWaitKey(handle, interfaceNumber), owner);
 }
 
 function splitWaitKey(key: string): [string, number] {
@@ -318,13 +426,23 @@ function enqueueClaim(
     const key = claimWaitKey(handle, interfaceNumber);
     const waiters = stateOf(registry).waiters;
     const queue = waiters.get(key) ?? [];
-    const waiter: ClaimWaiter = { owner, resolve, reject };
-    queue.push(waiter);
-    waiters.set(key, queue);
-    if (!signal) return;
     const onAbort = () => {
       cancelClaimWait(registry, handle, interfaceNumber, owner);
     };
+    const waiter: ClaimWaiter = {
+      owner,
+      resolve: () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      reject: (err) => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    };
+    queue.push(waiter);
+    waiters.set(key, queue);
+    if (!signal) return;
     if (signal.aborted) {
       onAbort();
       return;
@@ -348,6 +466,7 @@ function wakeNextWaiter(
   }
   if (queue && queue.length === 0) waiters.delete(key);
   setClaim(registry, handle, interfaceNumber, next.owner);
+  markPendingGrant(registry, handle, interfaceNumber, next.owner);
   next.resolve();
 }
 
