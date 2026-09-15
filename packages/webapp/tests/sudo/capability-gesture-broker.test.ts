@@ -147,6 +147,27 @@ describe('createCapabilityGestureSudoBroker', () => {
     });
   });
 
+  // The owner's own native prompt is the PRIMARY approval surface. A reason
+  // that reached only the cone and tray legs would be missing from the dialog
+  // a human actually sees most.
+  it('forwards the requester-stated reason to the native prompt', async () => {
+    const request = vi.fn(
+      (_req: ApprovalRequest) => ({ ok: true, value: { decision: 'allow' } }) as const
+    );
+    const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
+    await broker.requestApproval({ ...REQ, reason: 'the release tag is cut' });
+    expect(request.mock.calls[0]?.[0]).toMatchObject({ reason: 'the release tag is cut' });
+  });
+
+  it('omits reason entirely when the requester gave none', async () => {
+    const request = vi.fn(
+      (_req: ApprovalRequest) => ({ ok: true, value: { decision: 'allow' } }) as const
+    );
+    const broker = createCapabilityGestureSudoBroker(fakeBroker(request), { suggest });
+    await broker.requestApproval(REQ);
+    expect(request.mock.calls[0]?.[0]).not.toHaveProperty('reason');
+  });
+
   it('denies on a CapabilityFailure (transport reached but the call did not succeed)', async () => {
     const request = vi.fn(
       (_req: ApprovalRequest) =>

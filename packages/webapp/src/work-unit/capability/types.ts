@@ -326,6 +326,16 @@ export interface ApprovalRequest {
    */
   suggestedPattern?: string;
   /**
+   * The requester's own account of WHY they need this, when they gave one.
+   * Rendered after `detail` on every prompt surface.
+   *
+   * Carried through the capability layer because the owner's OWN native
+   * prompt (CLI dialog, Electron, extension panel) is the primary approval
+   * surface — a reason that reached only the cone and tray legs would be
+   * absent from the one a human sees most. Untrusted prose, like `detail`.
+   */
+  reason?: string;
+  /**
    * Route this request to a non-human approver (a cone, a delegated scoop, a
    * bounded approver agent). Absent keeps the owner's own native gesture.
    * Carried whole because "who decides" is part of what is being asked, and

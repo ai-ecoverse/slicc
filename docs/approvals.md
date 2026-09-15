@@ -157,9 +157,21 @@ who the system says is asking, before they read the requester's words about it.
 Nothing downstream parses either field, and a confident-sounding reason is never
 authority.
 
-Both cross the tray wire (`sudo.approve.request.reason`), so a delegated
-approver on a phone decides on the same information the leader's own dialog
-would have shown.
+`reason` reaches every approver the same way. It crosses the **capability
+layer** (`ApprovalRequest.reason` → `rest-ops` POST body → `/api/sudo-approve`
+→ `describeRequest` and the Electron / TTY backends; → the extension relay →
+`panel-responder`), so the owner's OWN native dialog shows it — that is the
+primary approval surface, and a reason present only on the cone and tray legs
+would be missing from the prompt a human sees most. It also crosses the **tray
+wire** (`sudo.approve.request.reason`), so a delegated approver on a phone
+decides on the same information.
+
+`note` has a narrower reach by construction: it rides the decision, and a
+decision only has somewhere to be reported where the gate has an output
+channel. An explicit `sudo_request` shows it in the tool result, and a denied
+command gate writes it to stderr. A _successful_ filesystem gate has no channel
+at all — the write simply proceeds — so a caveat attached to an allow does not
+reach a scoop that never asked explicitly. `lick_confirm`'s schema says so.
 
 ### Self-protection (always on)
 

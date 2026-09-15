@@ -35,6 +35,24 @@ describe('describeRequest', () => {
   it('formats kind + detail', () => {
     expect(describeRequest(REQ)).toBe('command: git push origin main');
   });
+
+  it('appends the stated reason below the subject', () => {
+    expect(describeRequest({ ...REQ, reason: 'the release tag is cut' })).toBe(
+      'command: git push origin main\n\nReason given: the release tag is cut'
+    );
+  });
+
+  // Ordering is the invariant: system-authenticated identity, then the subject,
+  // then prose the requester wrote. Both of the latter are untrusted.
+  it('keeps requester above the subject and the reason below it', () => {
+    expect(describeRequest({ ...REQ, requester: 'guest-42', reason: 'trust me' })).toBe(
+      'command from guest-42: git push origin main\n\nReason given: trust me'
+    );
+  });
+
+  it('adds nothing for a blank reason', () => {
+    expect(describeRequest({ ...REQ, reason: '   ' })).toBe('command: git push origin main');
+  });
 });
 
 describe('osascript backend', () => {

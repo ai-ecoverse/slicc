@@ -39,6 +39,12 @@ export interface SudoApproveRequest {
    * guest message).
    */
   requester?: string;
+  /**
+   * The requester's own account of WHY, when they gave one. Optional — older
+   * clients omit it. Untrusted prose like `detail`, so every backend renders
+   * it AFTER the subject and never above `requester`.
+   */
+  reason?: string;
   /** Editable default pattern for an "Always" grant (LLM-suggested upstream). */
   suggestedPattern: string;
 }

@@ -366,6 +366,7 @@ async function defaultRequestApproval(
     detail: request.detail,
     suggestedPattern: suggested,
     ...(request.requester ? { requester: request.requester } : {}),
+    ...(request.reason ? { reason: request.reason } : {}),
     ...(request.approver ? { approver: request.approver } : {}),
   };
   if (direct) {

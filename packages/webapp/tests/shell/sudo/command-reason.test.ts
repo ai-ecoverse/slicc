@@ -78,4 +78,28 @@ describe('normalizeSudoReason', () => {
     expect(out).toHaveLength(MAX_SUDO_REASON_LENGTH);
     expect(out.endsWith('…')).toBe(true);
   });
+
+  // A lone surrogate survives `JSON.stringify` as an unpaired `\uDxxx` escape,
+  // and Foundation's decoder rejects the whole message — the reason would
+  // silently stop `sudo.approve.request` from reaching an iOS approver.
+  it('never splits a surrogate pair at the cut', () => {
+    // The emoji straddles the UTF-16 cut: 298 ASCII + a 2-unit astral char.
+    const out = normalizeSudoReason(`${'a'.repeat(MAX_SUDO_REASON_LENGTH - 2)}😀 tail`);
+    expect(out.endsWith('…')).toBe(true);
+    expect(JSON.parse(JSON.stringify(out))).toBe(out);
+    for (const unit of out) {
+      const code = unit.codePointAt(0) ?? 0;
+      expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+    }
+  });
+
+  it('counts code points, so astral text is not truncated early', () => {
+    const out = normalizeSudoReason('😀'.repeat(MAX_SUDO_REASON_LENGTH));
+    expect(Array.from(out)).toHaveLength(MAX_SUDO_REASON_LENGTH);
+  });
+
+  it('leaves an astral reason exactly at the cap untouched', () => {
+    const exact = '😀'.repeat(MAX_SUDO_REASON_LENGTH);
+    expect(normalizeSudoReason(exact)).toBe(exact);
+  });
 });

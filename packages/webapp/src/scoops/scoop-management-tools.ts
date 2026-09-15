@@ -1306,7 +1306,7 @@ function lickConfirmTool(config: ScoopManagementToolsConfig): ToolDefinition {
         reason: {
           type: 'string',
           description:
-            'Optional note passed back to the requester — a caveat on the approval. Truncated at 300 characters.',
+            'Optional note for the requester — a caveat on the approval. Only reaches a scoop that asked via sudo_request; an implicit filesystem gate has no channel to report it on success. Truncated at 300 characters.',
         },
       },
       required: ['lick_id'],

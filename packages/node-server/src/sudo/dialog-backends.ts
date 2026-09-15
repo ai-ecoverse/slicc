@@ -20,13 +20,21 @@ export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }
 
 const defaultExec: ExecFn = promisify(nodeExecFile);
 
-/** Human-readable one-liner describing the gated action. */
+/**
+ * Human-readable description of the gated action, for every native dialog.
+ *
+ * One line for the subject, plus a second for the requester's stated reason
+ * when they gave one. Ordering is the invariant: the SYSTEM's account of who
+ * is asking comes first, then what is being authorized, and only then prose
+ * the requester wrote — `detail` and `reason` are both untrusted, and a
+ * reviewer must not read either before the parts they can rely on.
+ */
 export function describeRequest(req: SudoApproveRequest): string {
-  // Requester first: `detail` may be text the requester authored about
-  // themselves, so the system's own account of who is asking has to precede it.
-  return req.requester
+  const head = req.requester
     ? `${req.kind} from ${req.requester}: ${req.detail}`
     : `${req.kind}: ${req.detail}`;
+  const reason = req.reason?.trim();
+  return reason ? `${head}\n\nReason given: ${reason}` : head;
 }
 
 function fallbackPattern(req: SudoApproveRequest): string {

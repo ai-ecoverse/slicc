@@ -416,6 +416,10 @@ async function restRequestApproval(
       // nothing but `detail`, which for a guest message is prose the requester
       // wrote about themselves.
       ...(request.requester ? { requester: request.requester } : {}),
+      // Same reason as `requester`: without it the OS / TTY prompt shows the
+      // subject alone, and the owner's own dialog ends up knowing less than a
+      // delegated phone card does.
+      ...(request.reason ? { reason: request.reason } : {}),
       ...(request.approver ? { approver: request.approver } : {}),
     },
     // The reply IS the human's decision, so the only budget is the caller's.
