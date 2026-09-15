@@ -486,6 +486,7 @@ function toFsError(code: string, message: string, path: string | undefined): FsE
     'EFBIG',
     'EBADF',
     'ENOSYS',
+    'EOPNOTSUPP',
     'EIO',
   ];
   const narrowed: FsErrorCode = known.includes(code as FsErrorCode) ? (code as FsErrorCode) : 'EIO';

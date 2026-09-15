@@ -1109,6 +1109,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       }
     }
 
+    if (result.exitCode !== 0 && result.stderr.includes('Permission denied')) {
+      const { withShebangExecHint } = await import('./shebang-exec-hint.js');
+      return withShebangExecHint(result, this.cwd, this.vfsAdapter);
+    }
     return result;
   }
 

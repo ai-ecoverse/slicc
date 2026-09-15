@@ -329,4 +329,38 @@ describe('VfsAdapter', () => {
       expect(visited.some((p) => p.includes('/loop/a'))).toBe(false);
     });
   });
+
+  describe('chmod — no silent no-op (#3109)', () => {
+    it('fails with EOPNOTSUPP on an existing VFS file and leaves the mode unchanged', async () => {
+      await adapter.writeFile('/script.sh', '#!/bin/bash\necho ran-ok\n');
+      const before = await adapter.stat('/script.sh');
+      expect(before.mode).toBe(0o644);
+
+      await expect(adapter.chmod('/script.sh', 0o755)).rejects.toMatchObject({
+        code: 'EOPNOTSUPP',
+        message: expect.stringMatching(/executable bit/),
+      });
+
+      const after = await adapter.stat('/script.sh');
+      expect(after.mode).toBe(0o644);
+      expect(await adapter.readFile('/script.sh')).toBe('#!/bin/bash\necho ran-ok\n');
+    });
+
+    it('fails with ENOENT when the path is missing', async () => {
+      await expect(adapter.chmod('/gone.sh', 0o755)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
+    it('preserves EIO from the backend instead of mapping it to ENOENT', async () => {
+      const { FsError } = await import('../../src/fs/types.js');
+      const fake = {
+        stat: async (path: string) => {
+          throw new FsError('EIO', 'io error', path);
+        },
+      };
+      const adapterWithIo = new VfsAdapter(fake as unknown as VirtualFS);
+      await expect(adapterWithIo.chmod('/mnt/x', 0o755)).rejects.toMatchObject({ code: 'EIO' });
+    });
+  });
 });

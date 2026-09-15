@@ -192,6 +192,7 @@ export type FsErrorCode =
   | 'EFBIG' // File too large — used when remote-mount body exceeds maxBodyBytes
   | 'EBADF' // Bad file descriptor — used when an op runs against a closed/unmounted backend
   | 'ENOSYS' // Not implemented — the backend genuinely lacks the capability (e.g. no FsWatcher)
+  | 'EOPNOTSUPP' // Operation not supported on this filesystem (e.g. no mode bits)
   | 'EIO'; // I/O error — used for transient network failures, 5xx, AbortError-from-timeout
 
 /**
