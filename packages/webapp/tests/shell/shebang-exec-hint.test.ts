@@ -50,6 +50,41 @@ describe('withShebangExecHint', () => {
     expect(result.stderr).toContain('e.g. python3 /workspace/tool.py');
   });
 
+  it('skips env options such as -S when naming the interpreter', async () => {
+    const result = await withShebangExecHint(
+      {
+        stdout: '',
+        stderr: './tool: Permission denied\n',
+        exitCode: 126,
+      },
+      '/tmp',
+      fsWith({ '/tmp/tool': '#!/usr/bin/env -S python3 -u\nprint(1)\n' })
+    );
+    expect(result.stderr).toContain('e.g. python3 ./tool');
+    expect(result.stderr).not.toContain('e.g. -S');
+  });
+
+  it('reads only a prefix when readFileRange is available', async () => {
+    const fs = {
+      ...fsWith({}),
+      readFile: vi.fn(async () => {
+        throw new Error('should not read the whole file');
+      }),
+      readFileRange: vi.fn(
+        async () =>
+          new Uint8Array([0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x62, 0x61, 0x73, 0x68, 0x0a])
+      ),
+    };
+    const result = await withShebangExecHint(
+      { stdout: '', stderr: './big.sh: Permission denied\n', exitCode: 126 },
+      '/tmp',
+      fs
+    );
+    expect(fs.readFile).not.toHaveBeenCalled();
+    expect(fs.readFileRange).toHaveBeenCalledWith('/tmp/big.sh', 0, 256);
+    expect(result.stderr).toContain('e.g. bash ./big.sh');
+  });
+
   it('does not hint on success, missing shebang, or a chmod diagnostic', async () => {
     const fs = fsWith({ '/tmp/plain.txt': 'not a script\n' });
     await expect(

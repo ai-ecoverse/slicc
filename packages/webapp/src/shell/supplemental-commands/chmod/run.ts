@@ -21,7 +21,7 @@ EOPNOTSUPP rather than succeeding as a no-op. Run scripts with their
 interpreter (e.g. bash FILE); ./FILE cannot work.
 `;
 
-const FLAG = /^-R$|^--recursive$|^-v$|^--verbose$|^--$|^-[Rv]+$/;
+const FLAG = /^-R$|^--recursive$|^-v$|^--verbose$|^-[Rv]+$/;
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -45,9 +45,23 @@ async function chmodPath(ctx: CommandContext, file: string, spec: string): Promi
 }
 
 export async function runChmod(args: string[], ctx: CommandContext): Promise<CmdResult> {
-  if (args.includes('--help')) return { stdout: HELP, stderr: '', exitCode: 0 };
+  const positional: string[] = [];
+  let help = false;
+  let endOpts = false;
+  for (const arg of args) {
+    if (!endOpts && arg === '--') {
+      endOpts = true;
+      continue;
+    }
+    if (!endOpts && arg === '--help') {
+      help = true;
+      continue;
+    }
+    if (!endOpts && FLAG.test(arg)) continue;
+    positional.push(arg);
+  }
+  if (help) return { stdout: HELP, stderr: '', exitCode: 0 };
 
-  const positional = args.filter((arg) => !FLAG.test(arg));
   const spec = positional[0];
   const files = positional.slice(1);
   if (!spec || files.length === 0) {

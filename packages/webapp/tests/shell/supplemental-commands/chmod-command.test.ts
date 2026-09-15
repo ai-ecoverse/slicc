@@ -62,4 +62,16 @@ describe('chmod overlay (#3109)', () => {
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('EOPNOTSUPP');
   });
+
+  it('treats -- --help as a filename, not a help request', async () => {
+    const fs = fsStub({});
+    const result = await createChmodCommand().execute(
+      ['+x', '--', '--help'],
+      mockCommandContext({ cwd: '/tmp', fs: fs as never })
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/EOPNOTSUPP/);
+    expect(result.stdout).not.toContain('Usage: chmod');
+    expect(fs.chmod).toHaveBeenCalled();
+  });
 });

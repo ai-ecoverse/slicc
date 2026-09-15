@@ -717,10 +717,11 @@ export class VfsAdapter implements IFileSystem {
   async chmod(path: string, _mode: number): Promise<void> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      const exists =
-        this.virtualUsrStat(normalized) !== null || (await this.vfs.exists(normalized));
-      if (!exists) {
-        throw new FsError('ENOENT', 'no such file or directory', normalized);
+      if (this.virtualUsrStat(normalized) === null) {
+        // `exists()` maps every failed stat — including transient EIO on a
+        // mount — to false, which would report ENOENT here and make mktemp
+        // take the unique name back. `stat` preserves the real errno.
+        await this.vfs.stat(normalized);
       }
       // Native VFS (and the adapter's fake 0644/0755 stats) cannot store an
       // executable bit. Succeeding here is the #3109 defect: agents record

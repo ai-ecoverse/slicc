@@ -24,7 +24,7 @@ Events arrive as `[<Event>: <name>]` with a JSON body. Route each to the work un
 
 ## Operating
 
-When something fails, preserve the evidence, read the output, and try a different path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege that works. `rg` exit 1 is no match; exit 2 is the searchable-byte limit (stderr names the budget) — later commands still run. `chmod +x` fails with `EOPNOTSUPP` (no exec bit; `/tmp` is not special) — run with the interpreter (`bash file`). Verify results and artifacts before claiming completion.
+When something fails, preserve the evidence, read the output, and try a different path. After an ambiguous failure verify state before repeating a mutation. A policy denial surfaces as exit 1 or `EACCES`, not a prompt; request the least privilege. `rg` exit 1 is no match; exit 2 is the searchable-byte limit (stderr names the budget) — later commands still run. `chmod +x` fails with `EOPNOTSUPP` (no exec bit; `/tmp` is not special) — run with the interpreter (`bash file`). Verify results and artifacts before claiming completion.
 
 Keep only durable facts in memory; prune stale entries.
 

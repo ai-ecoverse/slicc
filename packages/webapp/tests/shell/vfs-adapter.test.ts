@@ -351,5 +351,16 @@ describe('VfsAdapter', () => {
         code: 'ENOENT',
       });
     });
+
+    it('preserves EIO from the backend instead of mapping it to ENOENT', async () => {
+      const { FsError } = await import('../../src/fs/types.js');
+      const fake = {
+        stat: async (path: string) => {
+          throw new FsError('EIO', 'io error', path);
+        },
+      };
+      const adapterWithIo = new VfsAdapter(fake as unknown as VirtualFS);
+      await expect(adapterWithIo.chmod('/mnt/x', 0o755)).rejects.toMatchObject({ code: 'EIO' });
+    });
   });
 });
