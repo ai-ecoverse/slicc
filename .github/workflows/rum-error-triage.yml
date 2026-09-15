@@ -29,9 +29,9 @@ on:
   workflow_dispatch:
     inputs:
       since_days:
-        description: 'Look-back window in days'
+        description: 'Look-back window in days (blank = catch up from the last successful run)'
         required: false
-        default: '1'
+        default: ''
       dry_run:
         description: 'Query + dedup only; do not open issues'
         type: boolean
@@ -77,9 +77,65 @@ jobs:
           gh label create rum-fix-ready --color 0E8A16 --description "Phase 1: fix is small/clear/low-risk — phase 2 should open a draft PR" --force
           gh label create rum-fix-pr-open --color 1D76DB --description "Phase 2: a draft fix PR is open for this issue" --force
 
+      # A fixed "last 1 day" window is anchored to when the job RUNS, so a night
+      # that failed or never ran is never re-read - those errors are simply never
+      # triaged, and nothing goes red. Deriving the window from the last SUCCESSFUL
+      # run closes that gap. Skipped when a human pins since_days, so the manual
+      # escape hatch keeps working even if watermark resolution is what is broken.
+      - name: Resolve the query window
+        id: window
+        if: github.event.inputs.since_days == ''
+        uses: adobe-rnd/resolve-window@v1
+        with:
+          workflow: rum-error-triage.yml
+          branch: main
+          exclude-run-id: ${{ github.run_id }}
+          # RUM rows can land after the window that should have contained them, and
+          # re-reading is free here: dedup in triage-rum-errors.mjs lists issues with
+          # `--state all`, so an error that already has an issue - open OR closed - is
+          # never filed twice. An hour of overlap costs a little scan and removes the
+          # boundary-miss class entirely.
+          overlap-seconds: '3600'
+          # Nightly, so anything past ~25h means a night was missed.
+          wide-window-hours: '25'
+          # First run, or after this workflow's history ages out: behave like today
+          # rather than trying to scan the whole table.
+          initial-window: '1d'
+
+      # BigQuery bills by bytes scanned and the query reads `time >= since` twice
+      # (the sess CTE and the main SELECT), so catch-up needs a ceiling. Clamping
+      # does drop the pre-ceiling range, so it is announced as a warning rather
+      # than applied quietly.
+      - name: Clamp the window to the scan ceiling
+        id: clamp
+        if: steps.window.outcome == 'success'
+        env:
+          FROM: ${{ steps.window.outputs.from }}
+          MAX_DAYS: '7'
+        run: |
+          set -euo pipefail
+          from_epoch=$(date -u -d "$FROM" +%s)
+          now_epoch=$(date -u +%s)
+          floor_epoch=$(( now_epoch - MAX_DAYS * 86400 ))
+          gap_hours=$(( (now_epoch - from_epoch) / 3600 ))
+
+          if [ "$from_epoch" -ge "$floor_epoch" ]; then
+            echo "since=$FROM" >> "$GITHUB_OUTPUT"
+            echo "window starts $FROM (${gap_hours}h back), within the ${MAX_DAYS}-day ceiling"
+            exit 0
+          fi
+
+          clamped=$(date -u -d "@$floor_epoch" +%Y-%m-%dT%H:%M:%SZ)
+          echo "since=$clamped" >> "$GITHUB_OUTPUT"
+          echo "::warning::Catch-up window of ${gap_hours}h exceeds the ${MAX_DAYS}-day scan ceiling. Querying from $clamped instead of $FROM; RUM errors between those two times will not be triaged by this run."
+
       - name: Query RUM and select new error candidates
         id: query
         env:
+          # Absolute window start from the watermark. Blank when a human pinned
+          # since_days on dispatch, in which case lib.mjs uses the day count exactly
+          # as before.
+          SINCE_TIMESTAMP: ${{ steps.clamp.outputs.since }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '1' }}
           GH_TOKEN: ${{ github.token }}
         run: node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs

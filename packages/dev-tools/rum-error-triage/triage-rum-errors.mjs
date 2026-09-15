@@ -10,6 +10,7 @@
  *
  * Env:
  *   SINCE_DAYS         look-back window in days            (default 1)
+ *   SINCE_TIMESTAMP    absolute window start, ISO-8601 UTC  (overrides SINCE_DAYS)
  *   SLICC_RUM_HOSTS    comma-separated hostnames           (default lib DEFAULT_HOSTS)
  *   RUM_BQ_PROJECT     BigQuery billing/project id         (default helix-225321)
  *   TRIAGE_LABEL       issue label used for dedup + filing (default rum-error)
@@ -23,6 +24,13 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { buildErrorQuery, DEFAULT_HOSTS, parseFingerprints, selectNewCandidates } from './lib.mjs';
 
 const SINCE_DAYS = Number(process.env.SINCE_DAYS) || 1;
+// Set by the workflow from the last successful run's start time, so a night that
+// failed or never ran is caught up instead of being skipped. Blank falls back to
+// the SINCE_DAYS day count, which is still what a manual dispatch pins.
+const SINCE_TIMESTAMP = process.env.SINCE_TIMESTAMP || '';
+const WINDOW_LABEL = SINCE_TIMESTAMP
+  ? `since ${SINCE_TIMESTAMP}`
+  : `over the last ${SINCE_DAYS} day(s)`;
 // Parse the env override into a clean list; fall back to DEFAULT_HOSTS when it
 // is unset OR empty (an empty/whitespace value must not yield zero hosts).
 const envHosts = (process.env.SLICC_RUM_HOSTS ?? '')
@@ -36,7 +44,7 @@ const OUTPUT_PATH = process.env.OUTPUT_PATH || 'rum-error-candidates.json';
 
 /** Run the error-extraction query and return raw rows. */
 function queryErrors() {
-  const sql = buildErrorQuery({ sinceDays: SINCE_DAYS, hosts: HOSTS });
+  const sql = buildErrorQuery({ sinceDays: SINCE_DAYS, since: SINCE_TIMESTAMP, hosts: HOSTS });
   const out = execFileSync(
     'bq',
     [
@@ -90,9 +98,7 @@ function setOutput(key, value) {
 }
 
 function main() {
-  console.log(
-    `🔎 Querying RUM for SLICC errors over the last ${SINCE_DAYS} day(s) on [${HOSTS.join(', ')}]…`
-  );
+  console.log(`🔎 Querying RUM for SLICC errors ${WINDOW_LABEL} on [${HOSTS.join(', ')}]…`);
   const rows = queryErrors();
   console.log(`   ${rows.length} raw error row(s) returned.`);
 
