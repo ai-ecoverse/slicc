@@ -203,11 +203,16 @@ type PendingFsOp =
   | { op: 'write'; path: string; bytes: Uint8Array }
   | { op: 'delete'; path: string };
 
-/** Live stdout/stderr + buffered host VFS mutations streamed from the realm (#3136). */
+/** Live stdout/stderr + coalesced host VFS mutations streamed from the realm (#3136). */
 interface LiveRealmCapture {
   stdout: string;
   stderr: string;
-  pendingFs: PendingFsOp[];
+  /** Latest write/delete per path — appends replace, so the buffer stays O(paths). */
+  pendingByPath: Map<string, PendingFsOp>;
+}
+
+function dropPendingPaths(capture: LiveRealmCapture, paths: readonly string[]): void {
+  for (const path of paths) capture.pendingByPath.delete(path);
 }
 
 /** Apply fire-and-forget live posts. Returns whether the message settles the run. */
@@ -223,12 +228,12 @@ function ingestLiveRealmMessage(
   }
   if (data.type === 'realm-fs-write') {
     const msg = data as RealmFsWriteMsg;
-    capture.pendingFs.push({ op: 'write', path: msg.path, bytes: msg.bytes });
+    capture.pendingByPath.set(msg.path, { op: 'write', path: msg.path, bytes: msg.bytes });
     return 'live';
   }
   if (data.type === 'realm-fs-delete') {
     const msg = data as RealmFsDeleteMsg;
-    capture.pendingFs.push({ op: 'delete', path: msg.path });
+    capture.pendingByPath.set(msg.path, { op: 'delete', path: msg.path });
     return 'live';
   }
   if (data.type === 'realm-done') return 'done';
@@ -256,18 +261,36 @@ async function applyPendingFsOp(
   }
 }
 
-async function drainLiveRealmCapture(
-  capture: LiveRealmCapture,
-  ctx: CommandContext
+async function applyCapturedFsOps(
+  ops: readonly PendingFsOp[],
+  ctx: CommandContext,
+  capture: LiveRealmCapture
 ): Promise<void> {
-  // Drain in-process fire-and-forget posts still sitting in microtasks, then
-  // apply the buffered mutations in order so write-then-rm cannot resurrect.
-  for (;;) {
-    await Promise.resolve();
-    if (capture.pendingFs.length === 0) break;
-    const ops = capture.pendingFs.splice(0);
-    for (const op of ops) await applyPendingFsOp(ctx, op, capture);
-  }
+  for (const op of ops) await applyPendingFsOp(ctx, op, capture);
+}
+
+function buildRealmInitMsg(
+  opts: RunInRealmOptions,
+  host: RealmHostHandle,
+  syncSab: SharedArrayBuffer | undefined
+): RealmInitMsg {
+  return {
+    type: 'realm-init',
+    kind: opts.kind,
+    code: opts.code,
+    argv: opts.realmArgv ?? opts.argv,
+    env: opts.env,
+    cwd: opts.cwd,
+    filename: opts.filename,
+    stdin: opts.stdin,
+    pyodideIndexURL: opts.pyodideIndexURL,
+    pyodideAssetRoot: opts.pyodideAssetRoot,
+    pyodideMountDirs: opts.pyodideMountDirs,
+    opfsMountDbName: opts.opfsMountDbName,
+    mountPoints: opts.mountPoints,
+    ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
+    ...(syncSab ? { syncSab } : {}),
+  };
 }
 
 /**
@@ -310,6 +333,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
   // (`syncFsBridgeEnabled`) is not required to mint its token. Everywhere
   // else the SW transport (when confirmed) or the snapshot remains.
   const syncSab = realm.isolatedThread ? allocateSyncSab(opts.syncSabBytes) : undefined;
+  const capture: LiveRealmCapture = { stdout: '', stderr: '', pendingByPath: new Map() };
   const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
     ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
     pm: opts.pm,
@@ -317,33 +341,36 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     ppid: proc.pid,
     syncFsBridgeEnabled: Boolean(opts.syncFsBridgeEnabled) || syncSab !== undefined,
     ...(syncSab ? { syncSab } : {}),
+    onHostFsMutation: (paths) => dropPendingPaths(capture, paths),
   });
 
   return new Promise<RealmResult>((resolve) => {
     let settling = false;
+    let stopped = false;
     let unsubSignal: (() => void) | null = null;
     let messageHandler: ((event: MessageEvent) => void) | null = null;
     let errorHandler: ((event: Event) => void) | null = null;
     let messageErrorHandler: ((event: Event) => void) | null = null;
-    const capture: LiveRealmCapture = { stdout: '', stderr: '', pendingFs: [] };
 
-    const cleanup = (): void => {
+    const hardStop = (): void => {
+      if (stopped) return;
+      stopped = true;
       if (messageHandler) realm.controlPort.removeEventListener('message', messageHandler);
       if (realm.removeEventListener) {
         if (errorHandler) realm.removeEventListener('error', errorHandler);
         if (messageErrorHandler) realm.removeEventListener('messageerror', messageErrorHandler);
       }
       unsubSignal?.();
-      host.dispose();
-    };
-
-    const finish = (result: RealmResult, exitForPm: number | null): void => {
-      cleanup();
       try {
         realm.terminate();
       } catch {
         /* idempotent on real workers / iframes */
       }
+    };
+
+    const finish = (result: RealmResult, exitForPm: number | null): void => {
+      hardStop();
+      host.dispose();
       opts.pm.exit(proc.pid, exitForPm);
       resolve(result);
     };
@@ -360,9 +387,17 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     const settleKill = (exitCode: number): void => {
       if (settling) return;
       settling = true;
-      void drainLiveRealmCapture(capture, opts.ctx).finally(() => {
-        const trailer = realmKilledTrailer(Date.now() - proc.startedAt, exitCode);
-        finish({ stdout: capture.stdout, stderr: capture.stderr + trailer, exitCode }, exitCode);
+      // One microtask so already-queued persist posts land, then hard-stop
+      // so the realm cannot keep enqueueing. Apply the snapshot after
+      // terminate — do not wait on VFS while the worker is still alive.
+      void Promise.resolve().then(() => {
+        const ops = [...capture.pendingByPath.values()];
+        capture.pendingByPath.clear();
+        hardStop();
+        void applyCapturedFsOps(ops, opts.ctx, capture).finally(() => {
+          const trailer = realmKilledTrailer(Date.now() - proc.startedAt, exitCode);
+          finish({ stdout: capture.stdout, stderr: capture.stderr + trailer, exitCode }, exitCode);
+        });
       });
     };
 
@@ -430,26 +465,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       realm.addEventListener('messageerror', messageErrorHandler);
     }
 
-    const init: RealmInitMsg = {
-      type: 'realm-init',
-      kind: opts.kind,
-      code: opts.code,
-      argv: opts.realmArgv ?? opts.argv,
-      env: opts.env,
-      cwd: opts.cwd,
-      filename: opts.filename,
-      stdin: opts.stdin,
-      pyodideIndexURL: opts.pyodideIndexURL,
-      pyodideAssetRoot: opts.pyodideAssetRoot,
-      pyodideMountDirs: opts.pyodideMountDirs,
-      opfsMountDbName: opts.opfsMountDbName,
-      mountPoints: opts.mountPoints,
-      // Thread the minted sync-fs token (present only when the bridge is
-      // enabled) so the realm can address its own ctx.fs over the SW bridge.
-      ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
-      ...(syncSab ? { syncSab } : {}),
-    };
-    realm.controlPort.postMessage(init);
+    realm.controlPort.postMessage(buildRealmInitMsg(opts, host, syncSab));
   });
 }
 

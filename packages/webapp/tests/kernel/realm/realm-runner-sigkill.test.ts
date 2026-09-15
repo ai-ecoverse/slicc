@@ -203,6 +203,69 @@ console.log('stdout: exiting normally');`;
     expect(await fsCtx.fs.readFile('/tmp/ap5.log')).toBe('file: written, then exiting normally\n');
   });
 
+  it('does not replay a flushed writeFileSync over a later exec overwrite on kill', async () => {
+    const fsCtx = makeCtx();
+    fsCtx.exec = (async (cmd: string) => {
+      if (cmd.includes('MODIFIED')) {
+        await fsCtx.fs.writeFile('/tmp/stale.log', 'MODIFIED\n');
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }) as CommandContext['exec'];
+    const pm = new ProcessManager();
+    const code = `const fs = require('fs');
+const { exec } = require('sliccy:exec');
+fs.writeFileSync('/tmp/stale.log', 'ORIGINAL\\n');
+await exec('echo MODIFIED > /tmp/stale.log');
+await new Promise(() => {});`;
+    const promise = runInRealm({
+      pm,
+      realmFactory: createInProcessJsRealmFactory(),
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code,
+      argv: ['node', '/tmp/stale.js'],
+      env: {},
+      cwd: '/',
+      filename: '/tmp/stale.js',
+      ctx: fsCtx,
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    const proc = pm.list().find((p) => p.status === 'running');
+    expect(proc).toBeDefined();
+    pm.signal(proc!.pid, 'SIGKILL');
+    const result = await promise;
+    expect(result.exitCode).toBe(137);
+    expect(await fsCtx.fs.readFile('/tmp/stale.log')).toBe('MODIFIED\n');
+  });
+
+  it('coalesces repeated appendFileSync snapshots so kill keeps the latest', async () => {
+    const fsCtx = makeCtx();
+    const pm = new ProcessManager();
+    const code = `const fs = require('fs');
+fs.appendFileSync('/tmp/log.txt', 'one\\n');
+fs.appendFileSync('/tmp/log.txt', 'two\\n');
+await new Promise(() => {});`;
+    const promise = runInRealm({
+      pm,
+      realmFactory: createInProcessJsRealmFactory(),
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code,
+      argv: ['node', '/tmp/log.js'],
+      env: {},
+      cwd: '/',
+      filename: '/tmp/log.js',
+      ctx: fsCtx,
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const proc = pm.list().find((p) => p.status === 'running');
+    expect(proc).toBeDefined();
+    pm.signal(proc!.pid, 'SIGKILL');
+    const result = await promise;
+    expect(result.exitCode).toBe(137);
+    expect(await fsCtx.fs.readFile('/tmp/log.txt')).toBe('one\ntwo\n');
+  });
+
   it('SIGTERM (timeout default) also keeps stdout and the write', async () => {
     const fsCtx = makeCtx();
     const pm = new ProcessManager();
