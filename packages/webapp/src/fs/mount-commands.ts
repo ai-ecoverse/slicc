@@ -2,7 +2,7 @@
  * mount command dispatcher — routes local, S3, DA, and AEM mount requests
  * through their respective backend factories. Handles flag parsing for
  * --source, --profile, --backend, --no-probe, --max-body-mb, --clear-cache,
- * and --bodies.
+ * --bodies, and --json.
  *
  * Local mounts (no --source) launch the picker UI via the local-mount
  * acquisition helpers (cone approval card + popup, extension terminal
@@ -84,6 +84,7 @@ interface ParsedArgs {
   maxBodyMb?: number;
   clearCache: boolean;
   bodies: boolean;
+  json: boolean;
   /** Set when `--backend` was given a value that isn't `da` or `aem`. */
   backendError?: string;
 }
@@ -94,6 +95,7 @@ function parseArgs(args: string[]): ParsedArgs {
     noProbe: false,
     clearCache: false,
     bodies: false,
+    json: false,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -113,6 +115,8 @@ function parseArgs(args: string[]): ParsedArgs {
       out.clearCache = true;
     } else if (a === '--bodies') {
       out.bodies = true;
+    } else if (a === '--json') {
+      out.json = true;
     } else {
       out.positional.push(a);
     }
@@ -206,6 +210,10 @@ export class MountCommands {
 
     if (sub === 'refresh') {
       return this.handleRefresh(args.slice(1), cwd, env);
+    }
+
+    if (sub === 'info') {
+      return this.handleInfo(args.slice(1), cwd);
     }
 
     const parsed = parseArgs(args);
@@ -568,6 +576,29 @@ export class MountCommands {
     }
   }
 
+  private async handleInfo(args: string[], cwd: string): Promise<MountCommandResult> {
+    if (isHelpRequest(args)) {
+      return this.help();
+    }
+    const parsed = parseArgs(args);
+    if (parsed.positional.length === 0) {
+      return { stdout: '', stderr: 'mount info: path required\n', exitCode: 1 };
+    }
+    const targetPath = this.resolvePath(parsed.positional[0], cwd);
+    try {
+      const { formatMountInfo, probeMountInfo } = await import('./mount/probe-info.js');
+      const info = await probeMountInfo(this.options.fs, targetPath);
+      const stdout = parsed.json ? `${JSON.stringify(info, null, 2)}\n` : formatMountInfo(info);
+      return { stdout, stderr: '', exitCode: 0 };
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `mount info: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 1,
+      };
+    }
+  }
+
   private async handleRefresh(
     args: string[],
     cwd: string,
@@ -648,6 +679,7 @@ export class MountCommands {
           '       mount list',
           '       mount --list',
           '       mount refresh [--bodies] <path>',
+          '       mount info [--json] <path>',
           '',
           'Mount a local directory, S3 bucket, or AEM authoring source into the',
           'virtual filesystem.',
@@ -671,6 +703,7 @@ export class MountCommands {
           '  unmount [--clear-cache] <path>  Remove a mount point (also spelled `umount <path>`)',
           '  list, --list, -l                Show active mount points',
           '  refresh [--bodies] <path>       Re-index or revalidate a mount',
+          '  info [--json] <path>            Probe volume semantics (case, Unicode, exec bit)',
           '',
           'Examples:',
           '  mount /mnt/myapp',
@@ -678,6 +711,8 @@ export class MountCommands {
           '  mount --source da://my-org/my-repo /mnt/da',
           '  mount --source aem://my-org/my-site /mnt/aem',
           '  mount list',
+          '  mount info /tmp',
+          '  mount info --json /mnt/kb',
           '  mount refresh /mnt/myapp',
           '  mount unmount /mnt/myapp',
           '  umount /mnt/myapp',

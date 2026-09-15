@@ -34,6 +34,13 @@ export { classifyContentSourceUrl, probeContentSource } from './content-source.j
 export type { FetchBudgetOptions } from './fetch-with-budget.js';
 export { fetchWithBudget } from './fetch-with-budget.js';
 export { newMountId } from './mount-id.js';
+export type {
+  MountInfo,
+  MountProbeFs,
+  NameSensitivity,
+  UnicodeNormalization,
+  UnicodeStorage,
+} from './probe-info.js';
 export type { AdobeImsClient, DaProfile, S3Profile, SecretStore } from './profile.js';
 export {
   getDefaultImsClient,
