@@ -2,6 +2,8 @@ import { WebAccess } from '@zenfs/dom';
 import { describe, expect, it, vi } from 'vitest';
 import { createMutableDirectoryHandle } from './fsa-test-helpers.js';
 
+const PRELOAD_LIMIT = 16;
+
 async function makeBackend() {
   const tree = Object.fromEntries(
     Array.from({ length: 8 }, (_, directory) => [
@@ -9,7 +11,10 @@ async function makeBackend() {
       Object.fromEntries(Array.from({ length: 8 }, (_, file) => [`f${file}`, 'data'])),
     ])
   );
-  return WebAccess.create({ handle: createMutableDirectoryHandle(tree).handle });
+  return WebAccess.create({
+    handle: createMutableDirectoryHandle(tree).handle,
+    maxOpenFilesForCopy: PRELOAD_LIMIT,
+  });
 }
 
 function deferred() {
@@ -41,7 +46,9 @@ describe('ZenFS preload concurrency across a directory tree', () => {
       }
     });
     await backend.ready();
-    expect(peak).toBe(16);
+    // The limiter comes from the released core 2.7.3 + dom 1.2.14 pair;
+    // SLICC configures 16 instead of accepting dom's default of 128.
+    expect(peak).toBe(PRELOAD_LIMIT);
     expect(finished).toBe(64);
     expect(active).toBe(0);
     for (const path of ['/d0/f0', '/d7/f7']) {
@@ -78,7 +85,7 @@ describe('ZenFS preload concurrency across a directory tree', () => {
       });
       vi.spyOn(backend, 'read').mockImplementation(async (...args) => {
         active++;
-        if (++started === 16) allStarted.resolve();
+        if (++started === PRELOAD_LIMIT) allStarted.resolve();
         try {
           if (failureSite === 'slot handoff' && args[0] === '/d0/f0') {
             await handoff.promise;
@@ -113,15 +120,20 @@ describe('ZenFS preload concurrency across a directory tree', () => {
         fail.reject(firstFailure);
         // Let promise continuations observe the failure while other reads stay blocked.
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(started).toBe(16);
-        const expectedActive = { read: 15, stat: 16, readdir: 16, 'slot handoff': 14 };
+        expect(started).toBe(PRELOAD_LIMIT);
+        const expectedActive = {
+          read: PRELOAD_LIMIT - 1,
+          stat: PRELOAD_LIMIT,
+          readdir: PRELOAD_LIMIT,
+          'slot handoff': PRELOAD_LIMIT - 2,
+        };
         expect(active).toBe(expectedActive[failureSite]);
         expect(settled).toBe(false);
         finish.resolve();
         expect(await outcome).toBe(firstFailure);
         expect(active).toBe(0);
-        expect(finished).toBe(16);
-        expect(started).toBe(16);
+        expect(finished).toBe(PRELOAD_LIMIT);
+        expect(started).toBe(PRELOAD_LIMIT);
         expect(backend.existsSync('/d2/f0')).toBe(false);
       } finally {
         handoff.resolve();

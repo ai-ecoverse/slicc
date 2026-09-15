@@ -18,13 +18,21 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory /tmp/zenfs-preload-test
 Open `http://127.0.0.1:8080` in a fresh Chrome for Testing profile. Keep the tab
 open while it seeds. The page reports peak active backend reads and the outcome.
 To test unmodified upstream packages, copy `worker.js` and `index.html` into an
-empty directory, install core 2.7.2 / dom 1.2.13 / esbuild 0.28.2 there, and bundle
-`worker.js` to `bundle.js` before serving that directory.
+empty directory, install core 2.7.3 / dom 1.2.14 / esbuild 0.28.2 there, and bundle
+`worker.js` to `bundle.js` before serving that directory. The fixture passes
+`maxOpenFilesForCopy: 16`, matching SLICC production. Remove that option only to
+measure dom's upstream default of 128.
 
 On Chrome 151.0.7922.34, macOS 26.5.2 arm64, unmodified core 2.7.2 / dom 1.2.13
 failed 3/3 mounts with native `NotReadableError` and peak concurrency 30,000.
 An external 16-read semaphore passed 3/3. The patched core 2.6.5 also limits reads
 to 16. The failure threshold depends on the browser and host; 30 KB is the file
 payload, not the browser's total memory or metadata usage.
+
+The released core 2.7.3 + dom 1.2.14 pair wires the same whole-tree limiter
+through `maxOpenFilesForCopy` (default 128). On Chrome 152.0.7977.83, macOS
+26.6.2 arm64, the unmodified pair passed 3/3 mounts with `peak: 128` and
+`active: 0`. SLICC configures 16 and keeps a smaller core patch only for
+first-failure preservation and drain-before-reject behavior.
 
 Unit guards: `npm test -- zenfs-preload-concurrency`.

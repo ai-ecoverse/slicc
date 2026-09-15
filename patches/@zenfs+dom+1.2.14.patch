@@ -1,5 +1,5 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index ac0cbbd..5e4d757 100644
+index ac0cbbd..a255a56 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
 @@ -58,12 +58,18 @@ export class WebAccessFS extends Async(IndexFS) {
@@ -33,40 +33,7 @@ index ac0cbbd..5e4d757 100644
              if (isKind(handle, 'file')) {
                  const file = await handle.getFile();
                  inode.update({
-@@ -142,13 +149,55 @@ export class WebAccessFS extends Async(IndexFS) {
-         const dirHandle = await this.get('directory', path);
-         return await Array.fromAsync(dirHandle.keys());
-     }
-+    // PATCH(#2157): materialize the OPFS handle at create time so every file
-+    // the index knows about also exists on disk. 1.2.14 (zen-fs/dom#45) added
-+    // WebAccessFS._create, which IndexFS.createFile now awaits and rolls back
-+    // on failure — so the create-side is covered upstream and this override is
-+    // largely redundant with it. It is retained as belt-and-braces: it repeats
-+    // the materialize (idempotent getFileHandle) and rolls back BOTH the index
-+    // AND the handle cache on an OPFS refusal (quota, permission), so `stat`
-+    // cannot report a file the store never got, the next create cannot hit a
-+    // phantom EEXIST, and a later flush cannot persist the phantom into the
-+    // sidecar. super.createFile has already added the inode, so leaving it on
-+    // the error path would recreate the exact index-knows-it / store-does-not
-+    // divergence the #2157 remove hunk below exists to clean up.
-+    async createFile(path, options) {
-+        const inode = await super.createFile(path, options);
-+        try {
-+            const parent = await this.get('directory', dirname(path));
-+            const handle = await parent.getFileHandle(basename(path), { create: true });
-+            if (!this.disableHandleCache)
-+                this._handles.set(path, handle);
-+        }
-+        catch (ex) {
-+            this.index.delete(path);
-+            this._handles.delete(path);
-+            _throw(convertException(ex, path));
-+        }
-+        return inode;
-+    }
-     async remove(path) {
-         const handle = await this.get('directory', dirname(path));
-         for (const p of this._handles.keys())
+@@ -148,7 +155,22 @@ export class WebAccessFS extends Async(IndexFS) {
              if (dirname(p) == path)
                  this._handles.delete(p);
          this._handles.delete(path);
@@ -90,7 +57,7 @@ index ac0cbbd..5e4d757 100644
      }
      removeSync() {
          throw log.crit(withErrno('ENOSYS'));
-@@ -157,8 +206,22 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -157,8 +179,22 @@ export class WebAccessFS extends Async(IndexFS) {
          if (end <= offset)
              return;
          const handle = await this.get('file', path);

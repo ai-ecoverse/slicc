@@ -62,6 +62,14 @@ import type {
 import { FsError } from './types.js';
 import { walk } from './walker.js';
 
+/**
+ * Maximum payload reads issued while ZenFS preloads OPFS into its synchronous
+ * cache. `@zenfs/dom` 1.2.14 wires this through the semaphore added in
+ * `@zenfs/core` 2.7.3 (zen-fs/core#318). The upstream default is 128; retain
+ * the 16-read limit proven by SLICC's real-Chromium reproduction.
+ */
+const OPFS_PRELOAD_MAX_OPEN_FILES = 16;
+
 /** The sliver of the Web Locks API {@link VirtualFS.withWriteLock} uses. */
 interface LockManagerLike {
   request<T>(name: string, callback: () => Promise<T>): Promise<T>;
@@ -455,6 +463,7 @@ export class VirtualFS {
           backend: WebAccess,
           handle,
           metadata: '/.metadata.json',
+          maxOpenFilesForCopy: OPFS_PRELOAD_MAX_OPEN_FILES,
         });
       const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
         './sidecar-repair.js'
