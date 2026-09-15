@@ -105,6 +105,7 @@ the DOM.
   (or vice versa) for a shared feature — HTTP endpoints, signing, mount handling.
 - A mount / VFS / secrets change in the browser without the matching extension change.
 - A new capability added to one runtime without the parity matrix being consulted.
+- A filesystem adapter guesses text/binary encoding from character values, ignores explicit encoding options, or lets a binary-response cache override a text write. Exercise direct adapter contracts and complete Unicode/binary shell pipelines; one passing layer does not establish the other.
 
 **Historical precedent** — **PR #565** (`feat(swift-server): server-side signing for S3 +
 DA mounts (Sliccstart parity)`): `node-server` already signed mount requests; `swift-server`

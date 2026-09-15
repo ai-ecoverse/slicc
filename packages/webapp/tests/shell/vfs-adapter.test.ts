@@ -20,7 +20,7 @@ describe('VfsAdapter', () => {
     adapter = new VfsAdapter(vfs);
   });
 
-  describe('writeFile — binary detection', () => {
+  describe('writeFile — explicit encodings', () => {
     it('writes ASCII text correctly', async () => {
       await adapter.writeFile('/test.txt', 'hello world');
       const content = await vfs.readFile('/test.txt', { encoding: 'binary' });
@@ -31,10 +31,10 @@ describe('VfsAdapter', () => {
       expect(bytes[4]).toBe(111); // 'o'
     });
 
-    it('preserves latin1-encoded binary data (chars <= 0xFF)', async () => {
+    it('preserves explicitly latin1-encoded binary data', async () => {
       // Simulate a latin1-encoded JPEG header
       const latin1 = String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10);
-      await adapter.writeFile('/image.jpg', latin1);
+      await adapter.writeFile('/image.jpg', latin1, 'latin1');
       const content = await vfs.readFile('/image.jpg', { encoding: 'binary' });
       const bytes = content instanceof Uint8Array ? content : new Uint8Array();
       expect(bytes[0]).toBe(0xff);
