@@ -303,7 +303,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnlinkCommand(),
     createMktempCommand(),
     // Shadows just-bash `rg` so a byte-limit miss exits instead of aborting
-    // the script (#3106). Bundled search still runs via `ctx.origCommand`.
+    // the script (#3106) and `-c` omits a zero count on stdin (#3138).
+    // Bundled search still runs via `ctx.origCommand`.
     createRgCommand(),
     createManCommand(),
     createDigCommand(),

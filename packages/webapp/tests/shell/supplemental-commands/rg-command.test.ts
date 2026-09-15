@@ -3,6 +3,11 @@
  * budget (aborts the script, empty `2>`), trips at ~½ the number it prints,
  * and charges binary-skipped files. The overlay must exit, keep the script
  * going, write capturable stderr, and count only searchable bytes.
+ *
+ * #3138: bundled `-c` / `--count-matches` prints `0` on stdin with no
+ * matches, but omits the count for a file argument. The overlay must omit
+ * zeros on stdin too so `n=$(rg -c pat || echo 0)` stays distinguishable
+ * from a measured zero.
  */
 import 'fake-indexeddb/auto';
 import { Bash } from 'just-bash';
@@ -193,6 +198,18 @@ describe('rg overlay through AlmostBashShellHeadless', () => {
     expect(result.stdout).toContain('RG:1');
   });
 
+  it('stdin -c no-match is empty stdout, exit 1 (dispatch wrap)', async () => {
+    await fs.mkdir('/d', { recursive: true });
+    await fs.writeFile('/d/m.txt', 'hello\nworld\n');
+    const shell = new AlmostBashShellHeadless({ fs, executionLimits: SMALL_LIMITS });
+    const result = await shell.executeCommand(
+      'cat /d/m.txt | rg -c ZZZ > /out.txt 2> /err.txt; echo RG:$?'
+    );
+    expect(result.stdout).toContain('RG:1');
+    expect(await fs.readFile('/out.txt', { encoding: 'utf-8' })).toBe('');
+    expect(await fs.readFile('/err.txt', { encoding: 'utf-8' })).toBe('');
+  });
+
   it('peeks only the binary-detection window via readFileRange', async () => {
     await fs.mkdir('/d', { recursive: true });
     const binary = new Uint8Array(40_000);
@@ -202,6 +219,112 @@ describe('rg overlay through AlmostBashShellHeadless', () => {
     const shell = new AlmostBashShellHeadless({ fs, executionLimits: SMALL_LIMITS });
     const result = await shell.executeCommand('rg needle /d');
     expect(result.stdout).toContain('needle');
+  });
+});
+
+describe('just-bash rg -c stdin zero (why the overlay exists)', () => {
+  it('prints 0 on stdin no-match but nothing for a file argument', async () => {
+    const b = new Bash({
+      files: { '/m.txt': 'hello\nworld\n' },
+    });
+    const file = await b.exec('rg -c ZZZ /m.txt');
+    expect(file.exitCode).toBe(1);
+    expect(file.stdout).toBe('');
+
+    const stdin = await b.exec('cat /m.txt | rg -c ZZZ');
+    expect(stdin.exitCode).toBe(1);
+    expect(stdin.stdout).toBe('0\n');
+  });
+});
+
+describe('rg overlay -c / --count-matches (#3138)', () => {
+  const files = { '/m.txt': 'hello\nworld\n', '/n.txt': 'nope\n' };
+
+  it('file no-match: empty stdout, exit 1', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('rg -c ZZZ /m.txt');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
+  it('stdin no-match: empty stdout, exit 1', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg -c ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
+  it('file match: count, exit 0', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('rg -c hello /m.txt');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1');
+  });
+
+  it('stdin match: count, exit 0', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg -c hello');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1');
+  });
+
+  it('--count stdin no-match: empty stdout, exit 1', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg --count ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
+  it('--count-matches stdin no-match: empty stdout, exit 1', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg --count-matches ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
+  it('--count-matches stdin match: count, exit 0', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg --count-matches hello');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('1');
+  });
+
+  it('clustered -ic stdin no-match still omits the zero', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg -ic ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
+  it('multi-file still omits zeros and prints only matching files', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('rg -c hello /m.txt /n.txt');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('m.txt:1');
+    expect(result.stdout).not.toContain('n.txt');
+    expect(result.stdout).not.toMatch(/(^|\n)0(\n|$)/);
+  });
+
+  it('--include-zero on stdin keeps the explicit zero count', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg -c --include-zero ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.trim()).toBe('0');
+  });
+
+  it('--include-zero on a file argument still prints 0', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('rg -c --include-zero ZZZ /m.txt');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.trim()).toBe('0');
+  });
+
+  it('pipe + || echo 0 yields a single measured-or-fallback zero', async () => {
+    const b = bashWithOverlay(files);
+    const file = await b.exec('n=$(rg -c ZZZ /m.txt || echo 0); echo N=$n');
+    expect(file.stdout).toBe('N=0\n');
+    const stdin = await b.exec('n=$(cat /m.txt | rg -c ZZZ || echo 0); echo N=$n');
+    expect(stdin.stdout).toBe('N=0\n');
   });
 });
 

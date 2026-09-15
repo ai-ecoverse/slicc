@@ -1,5 +1,5 @@
 /**
- * Registration stub for the `rg` overlay (#3106).
+ * Registration stub for the `rg` overlay (#3106, #3138).
  *
  * Behaviour lives in `rg/run.ts`, imported on FIRST USE: `index.ts` sits in
  * the kernel worker's boot-critical graph (`first-load-budget.json`).
