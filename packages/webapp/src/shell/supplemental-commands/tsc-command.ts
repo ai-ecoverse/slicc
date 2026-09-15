@@ -327,7 +327,7 @@ async function transpileOneFile(
   // Touch the script-kind helper so the import isn't dead code;
   // `transpileModule` already infers kind from `fileName`, so we
   // don't pass it through, but keeping the helper exported makes
-  // it available to the upcoming `test` command without a refactor.
+  // it available to the `tst` command without a refactor.
   void inferScriptKind(ts, inputPath);
 
   const { outputText, diagnostics } = transpileOne(

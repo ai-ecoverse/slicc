@@ -643,10 +643,10 @@ describe('tool presentation', () => {
       // Echo housekeeping loses to a known command — npm beats echo here, so
       // the row picks up npm's `package` icon rather than echo's `quote`.
       ['echo hi && npm test', 'package'],
-      // The `test` supplemental command outranks an echo preamble: this is
+      // The `tst` supplemental command outranks an echo preamble: this is
       // the literal "echo + real-command → real-command icon" case from the
-      // spec, picking `flask-conical` from BASH_ICONS.test.
-      ['echo hi && test foo', 'flask-conical'],
+      // spec, picking `flask-conical` from BASH_ICONS.tst.
+      ['echo hi && tst foo', 'flask-conical'],
       // Pipe is also a separator.
       ['cat foo | grep bar', 'file-text'],
       // Newline is a separator.

@@ -72,7 +72,7 @@ Invariants a reviewer must catch; mechanism in the linked docs.
 - **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set; `FsWatcher` cache is
   bypassed only for root sets a mount overlaps.
 - **`typescript` v7 has no browser/WASM API** (`docs/webapp-details.md`) — use `typescript-js` (v6)
-  for browser `tsc`/`test`/`esm-transpile`; `builtin-shadow-map.ts` owns `ipx`/`npx`.
+  for browser `tsc`/`tst`/`esm-transpile`; `builtin-shadow-map.ts` owns `ipx`/`npx`.
 - **`esbuild.initialize` needs `worker: false` + a bounded wait** in every browser float
   (`docs/pitfalls.md`); `worker: true` hangs forever; never cache a pending-able promise.
 - **Speech is page-realm only** (`docs/webapp-details.md`): mic/AudioContext; kernel worker bridges
