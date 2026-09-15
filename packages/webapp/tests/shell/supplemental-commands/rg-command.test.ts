@@ -6,10 +6,13 @@
  */
 import 'fake-indexeddb/auto';
 import { Bash } from 'just-bash';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
-import { searchableInputLimit } from '../../../src/shell/supplemental-commands/rg/run.js';
+import {
+  peekBytes,
+  searchableInputLimit,
+} from '../../../src/shell/supplemental-commands/rg/run.js';
 import { createRgCommand } from '../../../src/shell/supplemental-commands/rg-command.js';
 
 const SMALL_LIMITS = { maxLiveBytes: 800, maxInputBytes: 800 };
@@ -119,6 +122,37 @@ describe('rg overlay (#3106)', () => {
     expect(result.stdout).toContain('needle');
     expect(result.stderr).not.toMatch(/limit exceeded/);
   });
+
+  it('searches a leading-dash pattern after --', async () => {
+    const b = bashWithOverlay({ '/d/a.txt': '-foo lives here\n' });
+    const result = await b.exec('rg -- -foo /d');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('-foo');
+  });
+
+  it('lists multiple files under -0/--null without treating the listing as one name', async () => {
+    const b = bashWithOverlay({
+      '/d/a.txt': 'needle\n',
+      '/d/b.txt': 'needle\n',
+    });
+    const result = await b.exec('rg -0 needle /d');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('needle');
+  });
+
+  it('keeps a mixed missing-path search from succeeding as exit 0', async () => {
+    const b = bashWithOverlay({ '/d/hit.txt': 'needle\n' });
+    const result = await b.exec('rg needle /d /nope/nope');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).not.toBe(1);
+  });
+
+  it('prints the filename when the original operand is a directory with one file', async () => {
+    const b = bashWithOverlay({ '/d/hit.txt': 'needle\n' });
+    const result = await b.exec('rg needle /d');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/hit\.txt/);
+  });
 });
 
 describe('rg overlay through AlmostBashShellHeadless', () => {
@@ -157,5 +191,33 @@ describe('rg overlay through AlmostBashShellHeadless', () => {
     );
     expect(result.stdout).toContain('AFTER');
     expect(result.stdout).toContain('RG:1');
+  });
+
+  it('peeks only the binary-detection window via readFileRange', async () => {
+    await fs.mkdir('/d', { recursive: true });
+    const binary = new Uint8Array(40_000);
+    binary[0] = 0;
+    await fs.writeFile('/d/big.bin', binary);
+    await fs.writeFile('/d/hit.txt', 'needle\n');
+    const shell = new AlmostBashShellHeadless({ fs, executionLimits: SMALL_LIMITS });
+    const result = await shell.executeCommand('rg needle /d');
+    expect(result.stdout).toContain('needle');
+  });
+});
+
+describe('peekBytes', () => {
+  it('uses readFileRange for the 8 KiB window and does not full-read', async () => {
+    const readFileRange = vi.fn(async (_path: string, start: number, end: number) => {
+      expect(start).toBe(0);
+      expect(end).toBe(8192);
+      return new Uint8Array([0, 1, 2]);
+    });
+    const readFileBuffer = vi.fn(async () => {
+      throw new Error('must not full-read');
+    });
+    const bytes = await peekBytes({ readFileRange, readFileBuffer } as never, '/big.bin', 8192);
+    expect(bytes).toEqual(new Uint8Array([0, 1, 2]));
+    expect(readFileRange).toHaveBeenCalledTimes(1);
+    expect(readFileBuffer).not.toHaveBeenCalled();
   });
 });

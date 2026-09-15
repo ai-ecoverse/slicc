@@ -86,6 +86,10 @@ interface ParsedRg {
   searchBinary: boolean;
   hasPatternOption: boolean;
   unrestricted: number;
+  endOfOptions: boolean;
+  nullSeparated: boolean;
+  noFilename: boolean;
+  withFilename: boolean;
   flagTokens: string[];
   fileSelectArgs: string[];
   positionals: string[];
@@ -99,6 +103,10 @@ function emptyParsed(): ParsedRg {
     searchBinary: false,
     hasPatternOption: false,
     unrestricted: 0,
+    endOfOptions: false,
+    nullSeparated: false,
+    noFilename: false,
+    withFilename: false,
     flagTokens: [],
     fileSelectArgs: [],
     positionals: [],
@@ -129,6 +137,9 @@ function noteMeta(parsed: ParsedRg, arg: string): void {
   if (arg === '--type-list') parsed.typeList = true;
   if (arg === '--files') parsed.filesMode = true;
   if (arg === '--text' || arg === '-a') parsed.searchBinary = true;
+  if (arg === '--null' || arg === '-0') parsed.nullSeparated = true;
+  if (arg === '--no-filename' || arg === '-h') parsed.noFilename = true;
+  if (arg === '--with-filename' || arg === '-H') parsed.withFilename = true;
 }
 
 function recordLong(parsed: ParsedRg, arg: string, args: string[], i: number): number {
@@ -157,6 +168,9 @@ function recordLong(parsed: ParsedRg, arg: string, args: string[], i: number): n
 
 function noteShortLetter(parsed: ParsedRg, ch: string): void {
   if (ch === 'a') parsed.searchBinary = true;
+  if (ch === '0') parsed.nullSeparated = true;
+  if (ch === 'h') parsed.noFilename = true;
+  if (ch === 'H') parsed.withFilename = true;
   if (ch === 'u') {
     parsed.unrestricted += 1;
     parsed.fileSelectArgs.push('-u');
@@ -207,6 +221,7 @@ function parseRgArgv(args: string[]): ParsedRg {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '--') {
+      parsed.endOfOptions = true;
       parsed.positionals.push(...args.slice(i + 1));
       break;
     }
@@ -226,19 +241,31 @@ function parseRgArgv(args: string[]): ParsedRg {
   return parsed;
 }
 
-function listingArgs(parsed: ParsedRg): string[] {
-  const paths = parsed.hasPatternOption ? parsed.positionals : parsed.positionals.slice(1);
-  return ['--files', ...parsed.fileSelectArgs, ...paths];
+function operandPaths(parsed: ParsedRg): string[] {
+  return parsed.hasPatternOption ? parsed.positionals : parsed.positionals.slice(1);
 }
 
-function searchArgs(parsed: ParsedRg, files: string[]): string[] {
-  if (parsed.hasPatternOption) {
-    return [...parsed.flagTokens, ...files];
+function needsEndOfOptions(operands: string[]): boolean {
+  return operands.some((operand) => operand.startsWith('-') && operand !== '-');
+}
+
+function listingArgs(parsed: ParsedRg): string[] {
+  const out = ['--files'];
+  if (parsed.nullSeparated) out.push('--null');
+  out.push(...parsed.fileSelectArgs, ...operandPaths(parsed));
+  return out;
+}
+
+function searchArgs(parsed: ParsedRg, files: string[], withFilename: boolean): string[] {
+  const flags = [...parsed.flagTokens];
+  if (withFilename && !parsed.noFilename && !parsed.withFilename) flags.push('-H');
+  const pattern = parsed.hasPatternOption ? undefined : parsed.positionals[0];
+  // just-bash rg does not accept `--`; dash-leading patterns go through `-e`.
+  if (pattern !== undefined && (parsed.endOfOptions || needsEndOfOptions([pattern]))) {
+    flags.push('-e', pattern);
+    return [...flags, ...files];
   }
-  const pattern = parsed.positionals[0];
-  return pattern === undefined
-    ? [...parsed.flagTokens, ...files]
-    : [...parsed.flagTokens, pattern, ...files];
+  return pattern === undefined ? [...flags, ...files] : [...flags, pattern, ...files];
 }
 
 function splitListedFiles(stdout: string, nullSeparated: boolean): string[] {
@@ -254,13 +281,71 @@ function bufferHasNul(bytes: Uint8Array, limit: number): boolean {
   return false;
 }
 
-async function fileIsBinary(fs: IFileSystem, path: string): Promise<boolean> {
+interface RangeReadable {
+  readFileRange?(path: string, start: number, end: number): Promise<Uint8Array>;
+}
+
+export async function peekBytes(
+  fs: IFileSystem,
+  path: string,
+  limit: number,
+  identity?: object
+): Promise<Uint8Array> {
+  for (const candidate of [fs, identity]) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const ranged = (candidate as RangeReadable).readFileRange;
+    if (typeof ranged === 'function') return ranged.call(candidate, path, 0, limit);
+  }
+  const bytes = await fs.readFileBuffer(path);
+  return bytes.byteLength > limit ? bytes.subarray(0, limit) : bytes;
+}
+
+async function fileIsBinary(fs: IFileSystem, path: string, identity?: object): Promise<boolean> {
   try {
-    const bytes = await fs.readFileBuffer(path);
-    return bufferHasNul(bytes, RG_BINARY_PEEK_BYTES);
+    return bufferHasNul(
+      await peekBytes(fs, path, RG_BINARY_PEEK_BYTES, identity),
+      RG_BINARY_PEEK_BYTES
+    );
   } catch {
     return false;
   }
+}
+
+async function classifyOperands(
+  ctx: ResolvedCommandContext,
+  paths: string[]
+): Promise<{ missing: string[]; includeDirectory: boolean }> {
+  if (paths.length === 0) return { missing: [], includeDirectory: true };
+  const missing: string[] = [];
+  let includeDirectory = false;
+  for (const rel of paths) {
+    try {
+      const stat = await ctx.fs.stat(ctx.fs.resolvePath(ctx.cwd, rel));
+      if (stat.isDirectory) includeDirectory = true;
+    } catch {
+      missing.push(rel);
+    }
+  }
+  return { missing, includeDirectory };
+}
+
+function missingPathResult(paths: string[]): ExecResult {
+  return {
+    stdout: '',
+    stderr: paths.map((path) => `rg: ${path}: No such file or directory\n`).join(''),
+    exitCode: 2,
+  };
+}
+
+function mergeListingFailure(listed: ExecResult, result: ExecResult): ExecResult {
+  return {
+    stdout: result.stdout,
+    stderr: `${listed.stderr}${result.stderr}`,
+    exitCode:
+      result.exitCode === 0 || result.exitCode === 1
+        ? Math.max(listed.exitCode, 2)
+        : result.exitCode,
+  };
 }
 
 async function searchableFiles(
@@ -280,7 +365,7 @@ async function searchableFiles(
     } catch {
       continue;
     }
-    if (!searchBinary && (await fileIsBinary(ctx.fs, full))) continue;
+    if (!searchBinary && (await fileIsBinary(ctx.fs, full, ctx.fsIdentity))) continue;
     files.push(rel);
     bytes += size;
   }
@@ -307,24 +392,29 @@ export async function runRg(args: string[], ctx: ResolvedCommandContext): Promis
   }
 
   const stdinLen = stdinAsLatin1(ctx.stdin).length;
-  const paths = parsed.hasPatternOption ? parsed.positionals : parsed.positionals.slice(1);
+  const paths = operandPaths(parsed);
   if (paths.length === 0 && stdinLen > 0) {
     return orig(args);
   }
 
+  const { missing, includeDirectory } = await classifyOperands(ctx, paths);
   const listed = await orig(listingArgs(parsed));
-  if (listed.exitCode !== 0 && listed.stdout.length === 0) {
-    return listed;
+  const listingFailed = listed.exitCode !== 0 || missing.length > 0;
+  const listingError =
+    missing.length > 0 ? missingPathResult(missing) : listed.exitCode !== 0 ? listed : null;
+  if (listingFailed && listed.stdout.length === 0) {
+    return listingError ?? listed;
   }
-  const names = splitListedFiles(listed.stdout, args.includes('-0') || args.includes('--null'));
+  const names = splitListedFiles(listed.stdout, parsed.nullSeparated);
   const { files, bytes } = await searchableFiles(ctx, names, parsed.searchBinary);
   if (files.length === 0) {
-    return { stdout: '', stderr: '', exitCode: 1 };
+    return listingError ?? { stdout: '', stderr: '', exitCode: 1 };
   }
 
   const enforced = searchableInputLimit(ctx.limits);
   if (bytes > enforced) {
     return limitResult(enforced);
   }
-  return orig(searchArgs(parsed, files));
+  const result = await orig(searchArgs(parsed, files, includeDirectory));
+  return listingError ? mergeListingFailure(listingError, result) : result;
 }
