@@ -19,6 +19,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   addMask,
   ensureDir,
@@ -82,6 +83,17 @@ function resolveNodeServer(home) {
   return installNodeServer(home, input('slicc-version', { fallback: 'latest' }));
 }
 
+/**
+ * Remove the on-disk credential files. Called on a failed boot (before the
+ * state file exists) and by `stop-leader.mjs` at teardown: on a persistent or
+ * self-hosted runner, `/slicc/cone-config.json` would otherwise stay readable
+ * by later jobs running as the same user.
+ */
+export function removeCredentialFiles(secretsFile) {
+  rmSync(CONE_CONFIG_PATH, { force: true });
+  if (secretsFile) rmSync(secretsFile, { force: true });
+}
+
 function writeCredentialFiles(home) {
   const { coneConfigJson, secretsEnv, summary } = buildConeConfigFiles({
     coneConfigJson: input('cone-config', { raw: true }),
@@ -101,14 +113,14 @@ function writeCredentialFiles(home) {
           '`sudo mkdir -p /slicc && sudo chown "$(id -u)" /slicc` first — is sudo available on this runner?'
       );
     }
-  } else if (existsSync(CONE_CONFIG_PATH)) {
+  } else {
     rmSync(CONE_CONFIG_PATH, { force: true });
   }
   console.log(
     `[start-leader] credentials: model=${summary.model ?? '(default)'} effort=${summary.effortLevel ?? '(default)'} ` +
       `accounts=[${summary.accountProviderIds.join(', ')}] secrets=[${summary.secretNames.join(', ')}]`
   );
-  return { secretsFile, summary };
+  return { secretsFile, coneConfigWritten: Boolean(coneConfigJson), summary };
 }
 
 async function pollJoinFile({ child, logPath, startedAt, timeoutMs }) {
@@ -149,7 +161,29 @@ async function main() {
   const mounts = parseMountLines(input('mounts', { raw: true }), homedir());
 
   const entry = resolveNodeServer(home);
-  const { secretsFile } = writeCredentialFiles(home);
+  const secretsFile = join(home, 'secrets.env');
+  try {
+    await bootLeader({
+      home,
+      entry,
+      secretsFile,
+      port,
+      durationMs,
+      bootTimeoutMs,
+      cdpLaunchTimeoutMs,
+      maskJoinUrl,
+      mounts,
+    });
+  } catch (err) {
+    removeCredentialFiles(secretsFile);
+    throw err;
+  }
+}
+
+async function bootLeader(opts) {
+  const { home, entry, port, durationMs, bootTimeoutMs, cdpLaunchTimeoutMs, maskJoinUrl, mounts } =
+    opts;
+  const { secretsFile, coneConfigWritten } = writeCredentialFiles(home);
   const profileDir = ensureDir(join(home, 'profile'));
   const logPath = join(home, 'leader.log');
   rmSync(JOIN_FILE_PATH, { force: true });
@@ -192,6 +226,8 @@ async function main() {
       port,
       logPath,
       profileDir,
+      secretsFile,
+      coneConfigPath: coneConfigWritten ? CONE_CONFIG_PATH : null,
       joinUrl: joinInfo.joinUrl,
       trayId: joinInfo.trayId,
       sliccVersion: joinInfo.sliccVersion,
@@ -217,4 +253,6 @@ async function main() {
   );
 }
 
-main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+}

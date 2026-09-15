@@ -9,13 +9,18 @@
  * The full output always lands in a file; the `output` step output is a
  * truncated copy for small results.
  *
+ * The text is handed to the CLI as `@<file>`, never as a bare argument: the
+ * CLI's `readTextArg` treats a lone `@…` or `-` argument as a file/stdin
+ * reference, so a literal prompt such as `@review the patch` would otherwise
+ * be read as a filename. A file also sidesteps argv length limits.
+ *
  * Inputs: SLICC_JOIN_URL, INPUT_VERB, INPUT_TEXT, INPUT_STDIN_FILE,
  * INPUT_OUTPUT_FILE, INPUT_TIMEOUT, INPUT_OUTPUT_LIMIT, INPUT_QUIET,
  * INPUT_FAIL_ON_ERROR.
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream, openSync } from 'node:fs';
-import { join } from 'node:path';
+import { createWriteStream, mkdirSync, openSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { cliPath, ensureDir, fail, homeDir, input, joinUrl, setOutput } from './gh-io.mjs';
 import { parseBoolean, parseDuration, truncateForOutput } from './lib.mjs';
 
@@ -68,11 +73,21 @@ async function main() {
   const quiet = parseBoolean(input('quiet'), false);
   const failOnError = parseBoolean(input('fail-on-error'), true);
   const outputLimit = Number(input('output-limit', { fallback: String(256 * 1024) }));
-  const outputFile =
-    input('output-file') || join(ensureDir(join(homeDir(), 'out')), `${verb}-${Date.now()}.txt`);
+  const outDir = ensureDir(join(homeDir(), 'out'));
+  const stamp = `${verb}-${Date.now()}`;
+  const outputFile = input('output-file') || join(outDir, `${stamp}.txt`);
+  mkdirSync(dirname(outputFile), { recursive: true });
+  const textFile = join(outDir, `${stamp}.in`);
+  writeFileSync(textFile, text, { mode: 0o600 });
 
   console.log(`[slicc ${verb}] timeout=${Math.round(timeoutMs / 1000)}s output=${outputFile}`);
-  const result = await runCli({ args: [url, verb, text], stdinFile, outputFile, timeoutMs, quiet });
+  const result = await runCli({
+    args: [url, verb, `@${textFile}`],
+    stdinFile,
+    outputFile,
+    timeoutMs,
+    quiet,
+  });
   if (!quiet && result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
 
   const { text: truncated, truncated: wasTruncated } = truncateForOutput(

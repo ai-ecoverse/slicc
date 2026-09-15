@@ -4,11 +4,14 @@
  * first, then node-server (which closes its Chrome), then any Chrome left
  * holding our profile directory. Always exits 0 — this runs under
  * `if: always()` and must never mask the real failure of a job. Prints the
- * leader log tail so a failed run is diagnosable from the job page.
+ * leader log tail so a failed run is diagnosable from the job page, and
+ * deletes the credential files so nothing outlives the job on a persistent
+ * runner.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { group, homeDir, isAlive, logTail, readState, setOutput, terminate } from './gh-io.mjs';
+import { removeCredentialFiles } from './start-leader.mjs';
 
 function chromePidsForProfile(profileDir) {
   if (!profileDir || process.platform === 'win32') return [];
@@ -46,6 +49,8 @@ async function main() {
       console.log(`[stop-leader] node-server pid=${state.leader} already exited`);
     }
   }
+  removeCredentialFiles(state.secretsFile);
+  console.log('[stop-leader] credential files removed');
   for (const pid of chromePidsForProfile(state.profileDir)) {
     console.log(`[stop-leader] stopping leftover chrome pid=${pid}`);
     await terminate(pid, 5_000);

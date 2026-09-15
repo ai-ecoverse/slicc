@@ -16,9 +16,14 @@ name: SLICC leader
 #         SLICC_CONE_CONFIG: ${{ secrets.SLICC_CONE_CONFIG }}
 #
 # The join URL is a bearer capability. With `mask-join-url: true` (default)
-# it is redacted from logs — and GitHub therefore drops it from the job
-# outputs, so a follow-up job cannot read it. Pass `mask-join-url: false`
-# only for repos whose logs you treat as secret-bearing.
+# it is redacted from logs and never leaves this job. Job outputs are only
+# readable after the job — and therefore the leader — has ended, so they
+# are useless for reaching a live leader. Instead, with `mask-join-url:
+# false`, the URL is published as the `<artifact-prefix>-join` artifact
+# right after boot; a parallel job in the same run can download it (retry
+# until it exists) and use the `slicc-*.yml` workflows or actions against
+# the running leader. Do that only in repos whose run logs and artifacts you
+# treat as secret-bearing.
 
 on:
   workflow_call:
@@ -112,7 +117,7 @@ on:
         type: string
         default: ''
       mask-join-url:
-        description: Redact the join URL (drops it from job outputs).
+        description: Redact the join URL. When false it is published as the `<artifact-prefix>-join` artifact while the leader runs.
         type: boolean
         default: true
       artifact-prefix:
@@ -127,9 +132,6 @@ on:
         description: secrets.env text (`NAME=value` + `NAME_DOMAINS=…`).
         required: false
     outputs:
-      join-url:
-        description: Join URL (empty when masked).
-        value: ${{ jobs.leader.outputs.join-url }}
       tray-id:
         description: Tray id.
         value: ${{ jobs.leader.outputs.tray-id }}
@@ -186,13 +188,10 @@ jobs:
     runs-on: ${{ inputs.runs-on || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes || 360 }}
     outputs:
-      join-url: ${{ steps.start.outputs.join-url }}
       tray-id: ${{ steps.start.outputs.tray-id }}
       slicc-version: ${{ steps.start.outputs.slicc-version }}
       response: ${{ steps.prompt.outputs.response }}
       prompt-exit-code: ${{ steps.prompt.outputs.exit-code }}
-    env:
-      SLICC_GW_HOME: ${{ runner.temp }}/slicc-gw
     steps:
       # The caller's repo first: a later checkout into `.` would `git clean`
       # the tools checkout away.
@@ -224,6 +223,22 @@ jobs:
           ui-origin: ${{ inputs.ui-origin }}
           tray-worker-base-url: ${{ inputs.tray-worker-base-url }}
           mask-join-url: ${{ inputs.mask-join-url != false }}
+
+      # Published while the leader is alive so a parallel job can reach it;
+      # only when the caller opted out of masking (see the header comment).
+      - name: Publish the join URL for parallel jobs
+        if: inputs.mask-join-url == false
+        run: |
+          mkdir -p "$RUNNER_TEMP/slicc-gw/join"
+          printf '{"joinUrl":"%s","trayId":"%s"}\n' "$JOIN_URL" "$TRAY_ID" > "$RUNNER_TEMP/slicc-gw/join/join.json"
+        env:
+          JOIN_URL: ${{ steps.start.outputs.join-url }}
+          TRAY_ID: ${{ steps.start.outputs.tray-id }}
+      - if: inputs.mask-join-url == false
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-prefix || 'slicc' }}-join
+          path: ${{ runner.temp }}/slicc-gw/join/join.json
 
       - name: Install the slicc CLI
         uses: ./.slicc-gw/packages/github-workflow/actions/install-cli

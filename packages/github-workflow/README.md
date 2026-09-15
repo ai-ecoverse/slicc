@@ -33,29 +33,29 @@ jobs:
 
 What it does, in order: check out your repo (`checkout: true`), boot the leader, install the CLI, inject `inject-path` into the VFS, lend the runner as a follower (`expose-follower`), run `prompt` and wait for the turn, upload the reply (`<artifact-prefix>-response`), export the session (`<artifact-prefix>-session`), fetch `fetch-file` (`<artifact-prefix>-file`), hold until `duration` elapses (or stop right after the prompt with `stop-after-prompt: true`), tear down, upload the leader logs.
 
-| Input                    | Default         | Meaning                                                                                |
-| ------------------------ | --------------- | -------------------------------------------------------------------------------------- |
-| `duration`               | `30m`           | Leader lifetime (`90s`, `2h`, `1h30m`; max `350m`, the GitHub job ceiling minus setup) |
-| `prompt`                 | `''`            | First user message; the job waits until the turn completes                             |
-| `prompt-timeout`         | `30m`           | Wall-clock cap for that turn                                                           |
-| `stop-after-prompt`      | `false`         | Tear down once the reply arrives                                                       |
-| `model` / `effort-level` | `''`            | Override the bundle's model (pi-ai alias, e.g. `anthropic:claude-opus-4-6`) / effort   |
-| `checkout`               | `true`          | Check out the calling repository first                                                 |
-| `inject-path`            | `''`            | Workspace directory copied into the VFS at `inject-target` (default `/`)               |
-| `mounts`                 | `''`            | One `<runner-path>:<slicc-path>` per line; live host folders, no copy                  |
-| `fetch-file`             | `''`            | VFS path published as the `<artifact-prefix>-file` artifact                            |
-| `export-session`         | `false`         | Publish the redacted transcript bundle as `<artifact-prefix>-session`                  |
-| `expose-follower`        | `false`         | Run `slicc … follow <follower-runner>` on this runner (default runner `bash -c`)       |
-| `slicc-version`          | `latest`        | npm version of `sliccy` (node-server)                                                  |
-| `cli-version`            | `latest`        | Release tag of the Go CLI                                                              |
-| `slicc-ref`              | `main`          | Ref of this repo the actions are taken from                                            |
-| `runs-on`                | `ubuntu-latest` | Runner label                                                                           |
-| `mask-join-url`          | `true`          | Redact the join URL from logs — which also drops it from the job outputs (see below)   |
-| `artifact-prefix`        | `slicc`         | Prefix for uploaded artifacts                                                          |
+| Input                    | Default         | Meaning                                                                                                  |
+| ------------------------ | --------------- | -------------------------------------------------------------------------------------------------------- |
+| `duration`               | `30m`           | Leader lifetime (`90s`, `2h`, `1h30m`; max `350m`, the GitHub job ceiling minus setup)                   |
+| `prompt`                 | `''`            | First user message; the job waits until the turn completes                                               |
+| `prompt-timeout`         | `30m`           | Wall-clock cap for that turn                                                                             |
+| `stop-after-prompt`      | `false`         | Tear down once the reply arrives                                                                         |
+| `model` / `effort-level` | `''`            | Override the bundle's model (pi-ai alias, e.g. `anthropic:claude-opus-4-6`) / effort                     |
+| `checkout`               | `true`          | Check out the calling repository first                                                                   |
+| `inject-path`            | `''`            | Workspace directory copied into the VFS at `inject-target` (default `/`)                                 |
+| `mounts`                 | `''`            | One `<runner-path>:<slicc-path>` per line; live host folders, no copy                                    |
+| `fetch-file`             | `''`            | VFS path published as the `<artifact-prefix>-file` artifact                                              |
+| `export-session`         | `false`         | Publish the redacted transcript bundle as `<artifact-prefix>-session`                                    |
+| `expose-follower`        | `false`         | Run `slicc … follow <follower-runner>` on this runner (default runner `bash -c`)                         |
+| `slicc-version`          | `latest`        | npm version of `sliccy` (node-server)                                                                    |
+| `cli-version`            | `latest`        | Release tag of the Go CLI                                                                                |
+| `slicc-ref`              | `main`          | Ref of this repo the actions are taken from                                                              |
+| `runs-on`                | `ubuntu-latest` | Runner label                                                                                             |
+| `mask-join-url`          | `true`          | Redact the join URL from logs; `false` publishes it as the `<artifact-prefix>-join` artifact (see below) |
+| `artifact-prefix`        | `slicc`         | Prefix for uploaded artifacts                                                                            |
 
 Secrets: `SLICC_CONE_CONFIG` (JSON bundle, below) and `SLICC_SECRETS_ENV` (`secrets.env` text). Both optional; without them the cone boots with no provider and `prompt` cannot succeed.
 
-Outputs: `join-url` (empty when masked), `tray-id`, `slicc-version`, `response` (first 256 KB; the artifact holds all of it), `prompt-exit-code`.
+Outputs: `tray-id`, `slicc-version`, `response` (first 256 KB; the artifact holds all of it), `prompt-exit-code`.
 
 `workflow_dispatch` is wired too, with the ten most useful inputs, reading `SLICC_CONE_CONFIG` / `SLICC_SECRETS_ENV` from the repository secrets.
 
@@ -145,7 +145,12 @@ Accounts land in `/slicc/cone-config.json` and the leader's hosted bootstrap app
 
 ## The join URL
 
-`start-leader` registers the join URL as a secret with the runner (`mask-join-url: true`), so it is redacted from every log line. GitHub then refuses to pass it through _job_ outputs — inside the same job it flows freely between steps, which is what every action above relies on. To use a leader from a different job or workflow you have two options: store a long-lived leader's URL as a repository secret and use the `slicc-*.yml` workflows with `SLICC_JOIN_URL`, or set `mask-join-url: false` and treat the job's logs as secret-bearing.
+`start-leader` registers the join URL as a secret with the runner (`mask-join-url: true`), so it is redacted from every log line and never leaves the job. Inside the job it flows freely between steps, which is what every action above relies on.
+
+Reaching a leader from a **different** job needs care: a job's outputs only become readable once the job has finished, and finishing the leader job tears the leader down, so outputs cannot hand a live leader to anyone. Two options that do work:
+
+- Store a long-lived leader's URL as a repository or environment secret and use the `slicc-*.yml` workflows with `SLICC_JOIN_URL`.
+- Set `mask-join-url: false` on `slicc-leader.yml`. The URL is then published as the `<artifact-prefix>-join` artifact (`join.json`) right after boot, while the leader is still running; a parallel job in the same run downloads it (retry until it exists) and drives the leader with the actions. Treat that run's logs and artifacts as secret-bearing.
 
 ## Exposing a runner as a follower
 
