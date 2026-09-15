@@ -159,8 +159,9 @@ export function scoopFolderFromGrantsName(name: string): string | null {
 
 /**
  * The pre-#3106 per-scoop sudoers path. Retained only so `SudoManager` can
- * find a legacy file, migrate its grants into {@link scoopGrantsPath}, and
- * remove it. Nothing evaluates policy from here any more.
+ * find a legacy file and discard it fail-closed (no trustworthy provenance
+ * to promote into {@link scoopGrantsPath}). Nothing evaluates policy from
+ * here any more.
  */
 export function legacyScoopSudoersPath(folder: string): string {
   return `/scoops/${folder}/etc/sudoers`;

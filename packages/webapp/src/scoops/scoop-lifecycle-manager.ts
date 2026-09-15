@@ -364,9 +364,10 @@ export class ScoopLifecycleManager {
    * registered synchronously in memory (authoritative — a stale on-disk file,
    * folder reuse, or a reload race can neither withhold a configured
    * `writablePaths` entry nor retain authority a replacement config revoked),
-   * and the on-disk Always-grants file is loaded (legacy generated files are
-   * discarded fail-closed). Best-effort: a failure is logged and the scoop
-   * boots with whatever policy is already cached.
+   * and the on-disk Always-grants file is loaded (a pre-#3106 in-sandbox
+   * sudoers file is discarded fail-closed — no trustworthy provenance).
+   * Best-effort: a failure is logged and the scoop boots with whatever
+   * policy is already cached.
    */
   private async ensureSudoersLoaded(scoop: RegisteredScoop): Promise<void> {
     const sudoManager = this.deps.getSudoManager();

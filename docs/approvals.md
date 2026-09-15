@@ -343,9 +343,9 @@ Orchestrator.init()
 Orchestrator.createScoopTab(jid)
   ├─ if non-cone: RestrictedFS(..., 'sudo-delegated')   // writes pass through to SudoFS
   ├─ if non-cone: initScoopPolicy(folder, config)  // config grants registered in memory (#2416)
-  │                                                // + migrate any pre-#3106 in-sandbox file
+  │                                                // + discard any pre-#3106 in-sandbox file
   │                                                // + load /etc/sudoers.d/scoop-<folder>
-  │                                                //   (legacy generated files are discarded)
+  │                                                //   (legacy rules are discarded fail-closed)
   └─ new ScoopContext(scoop, callbacks, fs, ..., sudoManager)
 
 ScoopContext.init() — non-cone scoop
@@ -514,14 +514,15 @@ see it. `SudoManager` keeps `scoop-*` drop-ins OUT of the global policy merge
 (`doReload` filters them) and loads each one only for its own scoop via
 `getPolicyForScoop`, so a grant stays exactly as narrowly scoped as it was when
 the file lived in the sandbox. Before #3106 it lived at
-`/scoops/<folder>/etc/sudoers`; a file found there is migrated into the drop-in
-once and removed, and writes to that path are now
-[refused outright](#unhonoured-sudoers-paths-always-refused).
+`/scoops/<folder>/etc/sudoers`; a file found there is discarded fail-closed
+(the path had no trustworthy provenance — a scoop could omit the generated
+header and leave `NOPASSWD Cmnd *`) and removed, and writes to that path are now
+[refused outright](#unhonoured-sudoers-paths-always-refused). Legitimate Always
+grants re-prompt once through `appendScoopRule`.
 
 Since #2416 the file holds ONLY these approved "Always" grants — the `ScoopConfig` sandbox is registered in memory
 and never persisted, so replacing a scoop's config genuinely revokes the old
-authority instead of unioning with a stale file (a legacy generated file found
-on load is discarded fail-closed; its grants re-prompt once). The append is idempotent — a rule that is
+authority instead of unioning with a stale file. The append is idempotent — a rule that is
 already in the file is never duplicated (#2416) — and it is the ONLY persistence
 path for a scoop's grant: the scoop's `SudoFS` gate gets a no-op `onGrant` sink,
 so an `always` decision never leaks into the global `/etc/sudoers.d/granted`

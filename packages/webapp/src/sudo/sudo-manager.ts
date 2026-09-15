@@ -21,7 +21,7 @@
  * `/scoops/<folder>/etc/sudoers` — inside the very sandbox they governed, which
  * meant one approved write let a scoop author its own authority. That path is no
  * longer honoured (writes to it are refused outright by `matchPath`); a file
- * found there is migrated into `/etc/sudoers.d/scoop-<folder>` once and removed.
+ * found there is discarded fail-closed (no trustworthy provenance) and removed.
  *
  * `getPolicy()` returns the live snapshot — SudoFS and the command guard call
  * it per-op, so a reload is visible immediately. `getBroker()` hands out the
@@ -311,7 +311,7 @@ export class SudoManager {
   /**
    * Initialize a scoop's sudo policy: register the config-derived grants in
    * memory (authoritative — replacing a config revokes the old authority),
-   * migrate any pre-#3106 in-sandbox sudoers file
+   * discard any pre-#3106 in-sandbox sudoers file
    * ({@link migrateLegacyScoopSudoers}), and load the on-disk
    * `/etc/sudoers.d/scoop-<folder>`, which holds ONLY approved "Always"
    * grants. Writes go through the raw VFS handle, so the self-protection
@@ -320,17 +320,13 @@ export class SudoManager {
    */
   async initScoopPolicy(folder: string, config?: ScoopConfig | null): Promise<void> {
     this.registerScoopConfig(folder, config);
-    // Probe with a cheap `exists()` and pull the migration in only on a hit:
-    // `sudo-manager` is boot-critical, so the move belongs outside the kernel
+    // Probe with a cheap `exists()` and pull the cleanup in only on a hit:
+    // `sudo-manager` is boot-critical, so the discard belongs outside the kernel
     // worker's eager first-load closure. New profiles never fetch that chunk.
     const legacyPath = legacyScoopSudoersPath(folder);
     if (await this.fs.exists(legacyPath).catch(() => false)) {
       const { migrateLegacyScoopSudoers } = await import('./migrate-scoop-sudoers.js');
-      await migrateLegacyScoopSudoers(folder, {
-        fs: this.fs,
-        destPath: scoopGrantsPath(folder),
-        header: SCOOP_SUDOERS_HEADER,
-      });
+      await migrateLegacyScoopSudoers(folder, { fs: this.fs });
     }
     await this.reloadScoopPolicy(folder);
   }
@@ -622,8 +618,12 @@ export class SudoManager {
    * Watch `/etc` for policy changes. One subscription covers both legs now
    * that per-scoop grants live in `/etc/sudoers.d/` too: a `scoop-<folder>`
    * drop-in reloads only that scoop's cache, anything else reloads the global
-   * policy. Routing rather than always doing both keeps a busy scoop's grant
-   * appends from re-parsing every drop-in on the float.
+   * policy. A change to the grants directory itself (recursive `rm` / rename
+   * emits only the directory-root event) must also refresh every cached
+   * scoop drop-in — `doReload` deliberately excludes `scoop-*` files, so a
+   * global-only reload would leave deleted `NOPASSWD` grants active.
+   * Routing rather than always doing both keeps a busy scoop's grant appends
+   * from re-parsing every drop-in on the float.
    */
   private startWatching(): void {
     if (!this.watcher) return;
@@ -631,10 +631,22 @@ export class SudoManager {
     this.unwatch = this.watcher.watch('/etc', isSudoersPath, (events) => {
       const folders = new Set<string>();
       let global = false;
+      let grantsDirChanged = false;
       for (const ev of events) {
+        if (ev.path === SUDOERS_D_DIR) {
+          grantsDirChanged = true;
+          continue;
+        }
         const folder = scoopFolderFromGrantsPath(ev.path);
         if (folder) folders.add(folder);
         else global = true;
+      }
+      if (grantsDirChanged) {
+        void this.reload();
+        for (const folder of [...this.scoopPolicies.keys()]) {
+          void this.reloadScoopPolicy(folder);
+        }
+        return;
       }
       if (global) void this.reload();
       for (const folder of folders) void this.reloadScoopPolicy(folder);
