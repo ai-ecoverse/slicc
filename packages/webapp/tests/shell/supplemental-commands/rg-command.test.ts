@@ -305,6 +305,20 @@ describe('rg overlay -c / --count-matches (#3138)', () => {
     expect(result.stdout).not.toMatch(/(^|\n)0(\n|$)/);
   });
 
+  it('--include-zero on stdin keeps the explicit zero count', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('cat /m.txt | rg -c --include-zero ZZZ');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.trim()).toBe('0');
+  });
+
+  it('--include-zero on a file argument still prints 0', async () => {
+    const b = bashWithOverlay(files);
+    const result = await b.exec('rg -c --include-zero ZZZ /m.txt');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.trim()).toBe('0');
+  });
+
   it('pipe + || echo 0 yields a single measured-or-fallback zero', async () => {
     const b = bashWithOverlay(files);
     const file = await b.exec('n=$(rg -c ZZZ /m.txt || echo 0); echo N=$n');

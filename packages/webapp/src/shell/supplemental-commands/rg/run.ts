@@ -98,6 +98,7 @@ interface ParsedRg {
   noFilename: boolean;
   withFilename: boolean;
   countMode: boolean;
+  includeZero: boolean;
   flagTokens: string[];
   fileSelectArgs: string[];
   positionals: string[];
@@ -116,6 +117,7 @@ function emptyParsed(): ParsedRg {
     noFilename: false,
     withFilename: false,
     countMode: false,
+    includeZero: false,
     flagTokens: [],
     fileSelectArgs: [],
     positionals: [],
@@ -150,6 +152,7 @@ function noteMeta(parsed: ParsedRg, arg: string): void {
   if (arg === '--no-filename' || arg === '-h') parsed.noFilename = true;
   if (arg === '--with-filename' || arg === '-H') parsed.withFilename = true;
   if (arg === '--count' || arg === '--count-matches') parsed.countMode = true;
+  if (arg === '--include-zero') parsed.includeZero = true;
 }
 
 function recordLong(parsed: ParsedRg, arg: string, args: string[], i: number): number {
@@ -157,6 +160,7 @@ function recordLong(parsed: ParsedRg, arg: string, args: string[], i: number): n
   if (!long) return i;
   parsed.flagTokens.push(arg);
   if (long === 'count' || long === 'count-matches') parsed.countMode = true;
+  if (long === 'include-zero') parsed.includeZero = true;
   if (PATTERN_LONG.has(long)) parsed.hasPatternOption = true;
   const attached = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : undefined;
   if (VALUE_LONG.has(long)) {
@@ -392,9 +396,10 @@ function limitResult(enforced: number): ExecResult {
   };
 }
 
-/** #3138: `-c` on stdin printed `0`; file args already omitted zeros. Exit 1 is enough. */
-function omitZeroCount(parsed: ParsedRg, result: ExecResult): ExecResult {
-  if (!parsed.countMode || result.exitCode !== 1 || result.stdout.length === 0) return result;
+/** #3138: bundled stdin `-c` prints a lone `0`; file args omit zeros unless `--include-zero`. */
+function omitImplicitStdinZeroCount(parsed: ParsedRg, result: ExecResult): ExecResult {
+  if (!parsed.countMode || parsed.includeZero || result.exitCode !== 1) return result;
+  if (result.stdout !== '0' && result.stdout !== '0\n') return result;
   return { ...result, stdout: '' };
 }
 
@@ -412,7 +417,7 @@ export async function runRg(args: string[], ctx: ResolvedCommandContext): Promis
   const stdinLen = stdinAsLatin1(ctx.stdin).length;
   const paths = operandPaths(parsed);
   if (paths.length === 0 && stdinLen > 0) {
-    return omitZeroCount(parsed, await orig(args));
+    return omitImplicitStdinZeroCount(parsed, await orig(args));
   }
 
   const { missing, includeDirectory } = await classifyOperands(ctx, paths);
@@ -433,6 +438,6 @@ export async function runRg(args: string[], ctx: ResolvedCommandContext): Promis
   if (bytes > enforced) {
     return limitResult(enforced);
   }
-  const result = omitZeroCount(parsed, await orig(searchArgs(parsed, files, includeDirectory)));
+  const result = await orig(searchArgs(parsed, files, includeDirectory));
   return listingError ? mergeListingFailure(listingError, result) : result;
 }
