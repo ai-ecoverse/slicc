@@ -95,7 +95,7 @@ function feedLine(scoop: string, hue: string, label: string, args: string): HTML
 }
 
 /**
- * An expandable `edit_file` diff row (`<slicc-action-row>`). The square chip is
+ * An expandable `edit` diff row (`<slicc-action-row>`). The square chip is
  * a lucide icon injected into the light-DOM `::part(icon)` after connect (the
  * `icon` attribute is plain-text only, so we never set a unicode glyph there).
  */
@@ -109,7 +109,7 @@ function editFileRow(): HTMLElement {
   const label = h(
     'span',
     null,
-    'edit_file · ',
+    'edit · ',
     h('a', { class: 'vlink', 'data-file': 'hero', 'data-kind': 'css' }, 'hero.css')
   );
   row.appendChild(label);
@@ -211,7 +211,7 @@ function decorateIcons(root: ParentNode): void {
 /**
  * Populate a thread with a realistic multi-turn conversation, in DOM order:
  * day separator → user → agent (prose) → agent (plan) → agent (check) →
- * feed delegation → edit_file diff row → terminal card → PR card → lick →
+ * feed delegation → edit diff row → terminal card → PR card → lick →
  * user → agent → dip.
  */
 function populate(el: SliccChatThread): void {
@@ -255,7 +255,7 @@ function populate(el: SliccChatThread): void {
     feedLine('tester', '#f59e0b', 'audits the redesign for contrast + a11y', 'a11y, contrast')
   );
 
-  // An expandable edit_file diff row.
+  // An expandable edit diff row.
   el.append(editFileRow());
 
   // The tool run and the resulting PR, as two distinct cards.
@@ -312,7 +312,7 @@ function thread({ open, context, accent }: ThreadArgs): HTMLElement {
  * **Message history** — the headline story: a full, realistic multi-turn
  * conversation rendered in DOM order, composing every chat child by tag
  * (day separator, user/agent messages with plan + check lists, a feed
- * delegation line, an expandable `edit_file` diff row, a terminal card, a PR
+ * delegation line, an expandable `edit` diff row, a terminal card, a PR
  * card, a lick card, and an interactive dip). Every icon is a lucide `<svg>`.
  */
 export const MessageHistory: Story = {

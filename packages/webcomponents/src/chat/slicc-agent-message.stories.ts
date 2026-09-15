@@ -248,7 +248,7 @@ export const Thinking: Story = {
  * agent is doing while the body is still empty.
  */
 export const Progress: Story = {
-  render: () => buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
+  render: () => buildMessage({ thinking: true, progress: 'Running tools — edit · bash' }),
 };
 
 /** Streaming — prose with the blinking typewriter caret trailing the body. */
@@ -276,7 +276,7 @@ export const States: Story = {
 
     wrap.append(
       buildMessage({ thinking: true, progress: 'Thinking…' }),
-      buildMessage({ thinking: true, progress: 'Running tools — edit_file · bash' }),
+      buildMessage({ thinking: true, progress: 'Running tools — edit · bash' }),
       buildMessage({ thinking: true, progress: 'Waiting for your reply…' })
     );
 

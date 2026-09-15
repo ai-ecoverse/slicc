@@ -188,6 +188,20 @@ describe('adaptTool', () => {
     expect(result.details).toEqual({ isError: true });
   });
 
+  it('forwards argument preparation', () => {
+    const mockTool: ToolDefinition = {
+      name: 'edit',
+      description: 'edit',
+      inputSchema: { type: 'object', properties: {} },
+      prepareArguments: () => ({ path: '/a', edits: [] }),
+      execute: async () => ({ content: 'edited' }),
+    };
+
+    const adapted = adaptTool(mockTool);
+
+    expect(adapted.prepareArguments?.({ legacy: true })).toEqual({ path: '/a', edits: [] });
+  });
+
   it('parses image tags into ImageContent blocks', async () => {
     const content = 'Screenshot saved\n<img:data:image/png;base64,abc123>';
     const mockTool: ToolDefinition = {
@@ -416,11 +430,11 @@ describe('adaptTool — process manager wiring', () => {
     });
 
     it('prefers `file_path` over `path` when both exist', async () => {
-      const argv = await runWithParams('edit_file', {
+      const argv = await runWithParams('edit', {
         file_path: '/a',
         path: '/b',
       });
-      expect(argv).toEqual(['edit_file', '/a']);
+      expect(argv).toEqual(['edit', '/a']);
     });
 
     it('falls back to the first non-empty string param when no preferred field matches', async () => {

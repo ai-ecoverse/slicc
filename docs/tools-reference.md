@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `packages/webapp/src/tools/` contains file, bash, browser, and search tool factories, but the current scoop/cone surface wired in `packages/webapp/src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
+Complete reference for the tool modules and active agent tool surface in SLICC. `packages/webapp/src/tools/` contains file, bash, browser, and search tool factories, but the current scoop/cone surface wired in `packages/webapp/src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit`, `bash`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -297,17 +297,17 @@ compressed listings; `/dev/null` always stats as 0).
 
 ---
 
-### edit_file
+### edit
 
-**File**: `packages/webapp/src/tools/file-tools.ts`
+**File**: `packages/webapp/src/tools/edit-tool.ts`
 
-Apply a string replacement edit to an existing file.
+Pi's public edit tool, bound to the SLICC virtual filesystem. Apply one or more targeted replacements to a single existing file.
 
-| Property   | Value                                                      |
-| ---------- | ---------------------------------------------------------- |
-| **Name**   | `edit_file`                                                |
-| **Input**  | `{ path: string, old_string: string, new_string: string }` |
-| **Output** | `{ content: "Edit applied" \| error message }`             |
+| Property   | Value                                                             |
+| ---------- | ----------------------------------------------------------------- |
+| **Name**   | `edit`                                                            |
+| **Input**  | `{ path: string, edits: { oldText: string, newText: string }[] }` |
+| **Output** | Replacement count or error message                                |
 
 **Schema**:
 
@@ -315,19 +315,30 @@ Apply a string replacement edit to an existing file.
 {
   "type": "object",
   "properties": {
-    "path": { "type": "string", "description": "Absolute file path" },
-    "old_string": { "type": "string", "description": "Text to replace" },
-    "new_string": { "type": "string", "description": "Replacement text" }
+    "path": { "type": "string", "description": "Relative or absolute file path" },
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "oldText": { "type": "string" },
+          "newText": { "type": "string" }
+        },
+        "required": ["oldText", "newText"]
+      }
+    }
   },
-  "required": ["path", "old_string", "new_string"]
+  "required": ["path", "edits"]
 }
 ```
 
 **Behavior**:
 
-- Fails if `old_string` not found (case-sensitive)
-- Fails if `old_string` matches multiple times (ambiguous)
-- Use larger context to make match unique
+- Uses Pi's edit implementation directly; replacement text is literal, including JavaScript `$`-replacement sequences such as a Markdown `` `$` `` span
+- Matches every `oldText` against the original file and applies non-overlapping edits together
+- Requires each `oldText` to identify one unique region; nearby or overlapping changes must be combined
+- Preserves UTF-8 BOMs and the file's CRLF/LF line-ending style
+- Resolves relative paths from the current cone or scoop workspace
 
 ---
 
@@ -660,7 +671,7 @@ Hidden from the chat UI via `hidden-tools.ts`.
 | bash                     | ✓    | ✓              | Includes `playwright-cli` / `playwright` / `puppeteer` shell commands |
 | read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
-| edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
+| edit                     | ✓    | ✓ (restricted) | Pi edit tool bound to the gated VirtualFS view                        |
 | **request_secret**       | ✓    | ✓              | Human types the value; the agent only ever receives the mask          |
 | **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
 | **list_scoops**          | ✓    | grant          | `canManageChildren` — subtree, plus tagged rows for the leading cone  |

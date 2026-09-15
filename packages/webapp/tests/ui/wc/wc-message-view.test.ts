@@ -222,7 +222,9 @@ describe('buildThreadChildren', () => {
     // Titles are human phrases, never function-call names.
     const labels = [...rows].map((r) => r.getAttribute('label') ?? '');
     expect(labels.some((l) => l === "Use Sliccy's computer")).toBe(true);
-    expect(labels.every((l) => !/^(bash|read_file|write_file|edit_file)\b/.test(l))).toBe(true);
+    expect(labels.every((l) => !/^(bash|read_file|write_file|edit|edit_file)\b/.test(l))).toBe(
+      true
+    );
     // Any message with 3+ calls renders them behind a slicc-tool-cluster.
     const clustered = fixture.filter((m) => (m.toolCalls?.length ?? 0) >= 3);
     expect(host.querySelectorAll('slicc-tool-cluster').length).toBe(clustered.length);
@@ -492,7 +494,7 @@ describe('tool presentation', () => {
       ['bash', { command: 'frobnicate --wat' }, "Use Sliccy's computer", 'terminal'],
       ['read_file', { path: '/workspace/CLAUDE.md' }, 'Read CLAUDE.md', 'file-text'],
       ['write_file', { path: '/tmp/a.ts', content: 'x' }, 'Write a.ts', 'file-plus'],
-      ['edit_file', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
+      ['edit', { path: '/tmp/a.ts' }, 'Edit a.ts', 'file-pen'],
       ['send_message', { message: 'hi' }, 'Send a message to Sliccy', 'message-circle'],
       ['feed_scoop', { name: 'pomodoro' }, 'Feed the pomodoro scoop', 'utensils'],
       ['lick_confirm', { lick_id: 'lick-1' }, 'Grant the scoop access', 'shield-check'],
@@ -684,16 +686,40 @@ describe('tool presentation', () => {
     }
   });
 
-  it('edit bodies show old/new with the diff classes; writes show added content', () => {
+  it('Pi edit bodies show every old/new pair with diff classes; writes show added content', () => {
+    const [, editRow] = messageEls(
+      call(
+        'edit',
+        {
+          path: '/a.ts',
+          edits: [
+            { oldText: 'before one', newText: 'after one' },
+            { oldText: 'before two', newText: 'after two' },
+          ],
+        },
+        'ok'
+      )
+    );
+    expect([...editRow.querySelectorAll('.del')].map((el) => el.textContent)).toEqual([
+      'before one',
+      'before two',
+    ]);
+    expect([...editRow.querySelectorAll('.add')].map((el) => el.textContent)).toEqual([
+      'after one',
+      'after two',
+    ]);
+
+    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
+    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
+    expect(writeRow.textContent).toContain('/a.ts');
+  });
+
+  it('still renders legacy edit_file transcript bodies', () => {
     const [, editRow] = messageEls(
       call('edit_file', { path: '/a.ts', old_string: 'before', new_string: 'after' }, 'ok')
     );
     expect(editRow.querySelector('.del')?.textContent).toBe('before');
     expect(editRow.querySelector('.add')?.textContent).toBe('after');
-
-    const [, writeRow] = messageEls(call('write_file', { path: '/a.ts', content: 'body' }, 'ok'));
-    expect(writeRow.querySelector('.add')?.textContent).toBe('body');
-    expect(writeRow.textContent).toContain('/a.ts');
   });
 
   it('labels clusters via quickLabel from inputs alone — results not required', async () => {

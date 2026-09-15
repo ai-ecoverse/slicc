@@ -38,7 +38,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 The active tool surface wired in `packages/webapp/src/scoops/scoop-context.ts` is:
 
-- File tools: `read_file`, `write_file`, `edit_file`
+- File tools: `read_file`, `write_file`, `edit`
 - Execution tools: `bash`
 - NanoClaw tools: `send_message` for all scoops, plus cone-only scoop-management tools
 

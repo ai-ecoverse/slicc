@@ -8,7 +8,7 @@ description: |
   creation, modification, layout constraints, the cone-to-scoop orchestration
   rules, the `slicc.*` bridge API, and `sprinkle chat` for blocking inline
   prompts.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Sprinkles

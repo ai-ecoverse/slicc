@@ -16,7 +16,7 @@ enum SliccIcons {
         // File tools
         case "read_file": return .system("doc.text")  // FileText
         case "write_file": return .system("doc.badge.plus")  // FilePlus
-        case "edit_file": return .system("pencil")  // FilePen
+        case "edit", "edit_file": return .system("pencil")  // FilePen
         // Shell / scripting
         case "bash": return .system("terminal")  // Terminal
         case "browser": return .system("globe")  // Globe
@@ -44,7 +44,7 @@ enum SliccIcons {
         switch toolName {
         case "read_file": return "read"
         case "write_file": return "write"
-        case "edit_file": return "edit"
+        case "edit", "edit_file": return "edit"
         case "bash": return "bash"
         case "browser": return "browser"
         case "javascript": return "javascript"

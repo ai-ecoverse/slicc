@@ -1,6 +1,6 @@
 # Mounts
 
-`mount` bridges remote storage into the VFS so the agent's file tools (`read_file`, `write_file`, `edit_file`, `bash`) work transparently against S3, S3-compatible services (Cloudflare R2, MinIO), and Adobe authoring content — alongside the original local FS Access mounts.
+`mount` bridges remote storage into the VFS so the agent's file tools (`read_file`, `write_file`, `edit`, `bash`) work transparently against S3, S3-compatible services (Cloudflare R2, MinIO), and Adobe authoring content — alongside the original local FS Access mounts.
 
 ## What you get
 

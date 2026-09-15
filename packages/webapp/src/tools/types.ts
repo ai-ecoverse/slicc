@@ -90,6 +90,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
+  /** Compatibility normalization applied before Pi validates the tool schema. */
+  prepareArguments?: (args: unknown) => object;
   // The arguments the model produced for THIS tool, whose fields are declared by
   // that tool's own `inputSchema` and differ per tool. One shared interface here
   // could only restate "some string keys", which is what the type already says;

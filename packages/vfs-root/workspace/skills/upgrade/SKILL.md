@@ -9,7 +9,7 @@ description: |
   checking installed skills for updates with `upskill list --outdated`, are
   separate steps you can run first. Never auto-applies; the user resolves the
   card.
-allowed-tools: bash, read_file, write_file, edit_file
+allowed-tools: bash, read_file, write_file, edit
 ---
 
 # Upgrade

@@ -1,4 +1,5 @@
 export { createBashTool } from './bash-tool.js';
+export { createEditTool } from './edit-tool.js';
 export { createFileTools } from './file-tools.js';
 export {
   createRequestSecretTool,
