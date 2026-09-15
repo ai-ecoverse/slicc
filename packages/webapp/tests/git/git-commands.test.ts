@@ -2798,6 +2798,27 @@ EOF`);
       expect(result.stderr).toContain('usage');
     });
 
+    it('same-inode rename is a no-op and keeps the bytes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/Slicc.md', 'keep');
+      await git.execute(['add', 'Slicc.md'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const srcStat = await vfs.stat('/project/Slicc.md');
+      const realStat = vfs.stat.bind(vfs);
+      const spy = vi.spyOn(vfs, 'stat').mockImplementation(async (path: string) => {
+        if (path === '/project/SLICC.md') return srcStat;
+        return realStat(path);
+      });
+      try {
+        const result = await git.execute(['mv', 'Slicc.md', 'SLICC.md'], '/project');
+        expect(result.exitCode).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await vfs.readTextFile('/project/Slicc.md')).toBe('keep');
+      expect(await vfs.exists('/project/SLICC.md')).toBe(false);
+    });
+
     it('moves file to a subdirectory', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/file.txt', 'content');

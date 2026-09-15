@@ -7,6 +7,7 @@ import type { MenuItem } from '@slicc/webcomponents';
 import { SliccOverflowMenu, SliccQuickLook } from '@slicc/webcomponents';
 
 import { richPreviewKind, sniffFileType } from '../../core/file-type.js';
+import { sameFileIdentity } from '../../fs/same-file-identity.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import { readGitBase } from '../git-preview-source.js';
@@ -160,6 +161,26 @@ async function existsInVfs(fs: WritableVfsClient, path: string): Promise<boolean
   }
 }
 
+/** Copy+rm rename, skipped when dest is the same inode (case / NFC-NFD, #3107). */
+async function renameFileInVfs(fs: WritableVfsClient, path: string): Promise<void> {
+  const oldName = path.split('/').pop() ?? '';
+  const newName = prompt(`Rename ${path} to:`, oldName)?.trim();
+  if (!newName || newName === oldName || newName.includes('/')) return;
+  const newPath = `${path.slice(0, path.length - oldName.length)}${newName}`;
+  const fromStat = await fs.stat(path);
+  try {
+    const toStat = await fs.stat(newPath);
+    if (sameFileIdentity(fromStat, toStat)) return;
+  } catch {
+    /* dest missing */
+  }
+  if ((await existsInVfs(fs, newPath)) && !confirm(`${newPath} already exists. Overwrite?`)) {
+    return;
+  }
+  await copyFileContent(fs, path, newPath);
+  await fs.rm(path);
+}
+
 export interface FileActionDeps {
   fileTree: HTMLElement;
   openFs(): Promise<LocalVfsClient>;
@@ -278,22 +299,9 @@ export function wireFileActions(deps: FileActionDeps): void {
           }
           break;
         }
-        case 'rename': {
-          const oldName = path.split('/').pop() ?? '';
-          const newName = prompt(`Rename ${path} to:`, oldName)?.trim();
-          if (!newName || newName === oldName || newName.includes('/')) break;
-          const newPath = `${path.slice(0, path.length - oldName.length)}${newName}`;
-          const fs = await openWriter();
-          if (
-            (await existsInVfs(fs, newPath)) &&
-            !confirm(`${newPath} already exists. Overwrite?`)
-          ) {
-            break;
-          }
-          await copyFileContent(fs, path, newPath);
-          await fs.rm(path);
+        case 'rename':
+          await renameFileInVfs(await openWriter(), path);
           break;
-        }
       }
     } catch (err) {
       log.error(`Overflow action "${action}" failed`, err);

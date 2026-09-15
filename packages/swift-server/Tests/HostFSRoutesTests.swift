@@ -499,6 +499,99 @@ final class HostFSRoutesTests: XCTestCase {
         ByteBuffer(data: try JSONSerialization.data(withJSONObject: body))
     }
 
+    /// POSIX same-file rename (#3107): hard links (portable) and, on a
+    /// case-/normalization-insensitive volume, case-only / NFD→NFC names.
+    func testSameFileRenameIsANoOpAndPreservesBytes() async throws {
+        let payload = Data("same-inode-must-survive".utf8)
+        let hardDir = root + "/hardlink-rename"
+        try FileManager.default.createDirectory(atPath: hardDir, withIntermediateDirectories: true)
+        let from = hardDir + "/a.txt"
+        let to = hardDir + "/b.txt"
+        try payload.write(to: URL(fileURLWithPath: from))
+        try FileManager.default.linkItem(atPath: from, toPath: to)
+
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable([
+                    "op": "rename", "mount": "/mnt/proj",
+                    "path": "hardlink-rename/a.txt", "to": "hardlink-rename/b.txt",
+                ])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+        }
+        let names = try FileManager.default.contentsOfDirectory(atPath: hardDir)
+        XCTAssertTrue(names.contains("a.txt"))
+        XCTAssertTrue(names.contains("b.txt"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: from)), payload)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: to)), payload)
+
+        try await clientRename(
+            path: "distinct-rename/from.txt", to: "distinct-rename/to.txt",
+            seed: "distinct-rename/from.txt", body: payload)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: root + "/distinct-rename/from.txt"))
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: root + "/distinct-rename/to.txt")), payload)
+
+        let caseCollapsed = try volumeCollapses("Slicc.md", "SLICC.md")
+        try await clientRename(
+            path: "case-rename/Slicc.md", to: "case-rename/SLICC.md",
+            seed: "case-rename/Slicc.md", body: payload)
+        let caseNames = try FileManager.default.contentsOfDirectory(
+            atPath: root + "/case-rename")
+        if caseCollapsed {
+            XCTAssertEqual(caseNames, ["Slicc.md"])
+            XCTAssertEqual(
+                try Data(contentsOf: URL(fileURLWithPath: root + "/case-rename/Slicc.md")), payload)
+        } else {
+            XCTAssertEqual(caseNames, ["SLICC.md"])
+            XCTAssertEqual(
+                try Data(contentsOf: URL(fileURLWithPath: root + "/case-rename/SLICC.md")), payload)
+        }
+
+        let nfd = "Groeger-Familieo\u{0308}.md"
+        let nfc = "Groeger-Familie\u{00f6}.md"
+        let nfcCollapsed = try volumeCollapses(nfd, nfc)
+        try await clientRename(
+            path: "nfc-rename/" + nfd, to: "nfc-rename/" + nfc,
+            seed: "nfc-rename/" + nfd, body: payload)
+        let nfcNames = try FileManager.default.contentsOfDirectory(atPath: root + "/nfc-rename")
+        if nfcCollapsed {
+            XCTAssertEqual(nfcNames, [nfd])
+            XCTAssertEqual(
+                try Data(contentsOf: URL(fileURLWithPath: root + "/nfc-rename/" + nfd)), payload)
+        } else {
+            XCTAssertEqual(nfcNames, [nfc])
+            XCTAssertEqual(
+                try Data(contentsOf: URL(fileURLWithPath: root + "/nfc-rename/" + nfc)), payload)
+        }
+    }
+
+    private func volumeCollapses(_ a: String, _ b: String) throws -> Bool {
+        let probe = root + "/probe-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: probe, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: probe + "/" + a))
+        let existsB = FileManager.default.fileExists(atPath: probe + "/" + b)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: probe)) ?? []
+        try FileManager.default.removeItem(atPath: probe)
+        return existsB && names.contains(a)
+    }
+
+    private func clientRename(path: String, to: String, seed: String, body: Data) async throws {
+        let seedUrl = URL(fileURLWithPath: root + "/" + seed)
+        try FileManager.default.createDirectory(
+            at: seedUrl.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try body.write(to: seedUrl)
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable([
+                    "op": "rename", "mount": "/mnt/proj", "path": path, "to": to,
+                ])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+        }
+    }
+
     func testStableEndpointListStatMkdirRenameRemove() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(

@@ -1,9 +1,12 @@
 import { EventEmitter } from 'node:events';
 import express from 'express';
+import { existsSync } from 'fs';
 import {
   chmod,
+  link,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   stat,
@@ -25,6 +28,7 @@ import {
   registerHostFsRoutes,
   resolveHostMountRoots,
   resolveWithinRoot,
+  sameHostFileIdentity,
   sendFsError,
   streamFileBody,
   toFsCodeError,
@@ -734,6 +738,130 @@ describe('isHostFsStableBodyRequest', () => {
 
   it('ignores the query string when matching', () => {
     expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs?x=1' })).toBe(true);
+  });
+});
+
+describe('same-file rename (#3107)', () => {
+  const payload = 'same-inode-must-survive';
+  const umlautNfc = '\u00f6';
+  const umlautNfd = 'o\u0308';
+
+  async function listed(dir: string): Promise<string[]> {
+    return readdir(dir);
+  }
+
+  async function volumeCollapses(a: string, b: string): Promise<boolean> {
+    const dir = join(root, `probe-${Math.random().toString(36).slice(2, 8)}`);
+    await mkdir(dir);
+    await writeFile(join(dir, a), 'x');
+    const collapsed = existsSync(join(dir, b)) && (await listed(dir)).includes(a);
+    await writeFile(join(dir, 'cleanup'), '');
+    return collapsed;
+  }
+
+  it('sameHostFileIdentity matches on dev+ino, not on the path strings', async () => {
+    const file = join(root, 'identity.txt');
+    await writeFile(file, 'hi');
+    const a = await stat(file);
+    const b = await stat(file);
+    expect(sameHostFileIdentity(a, b)).toBe(true);
+    const other = join(root, 'hello.txt');
+    expect(sameHostFileIdentity(a, await stat(other))).toBe(false);
+  });
+
+  it('rename of two hard links to the same inode is a no-op (portable)', async () => {
+    const dir = join(root, 'hardlink-rename');
+    await mkdir(dir);
+    const from = join(dir, 'a.txt');
+    const to = join(dir, 'b.txt');
+    await writeFile(from, payload);
+    await link(from, to);
+    const before = await stat(from);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: 'hardlink-rename/a.txt',
+          to: 'hardlink-rename/b.txt',
+        })
+      ).status
+    ).toBe(200);
+    expect(await listed(dir)).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    expect(await readFile(from, 'utf8')).toBe(payload);
+    expect(await readFile(to, 'utf8')).toBe(payload);
+    expect((await stat(from)).ino).toBe(before.ino);
+    expect((await stat(from)).size).toBe(payload.length);
+  });
+
+  it('distinct names still rename', async () => {
+    const dir = join(root, 'distinct-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, 'from.txt'), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: 'distinct-rename/from.txt',
+          to: 'distinct-rename/to.txt',
+        })
+      ).status
+    ).toBe(200);
+    expect(await listed(dir)).toEqual(['to.txt']);
+    expect(await readFile(join(dir, 'to.txt'), 'utf8')).toBe(payload);
+  });
+
+  it('case-only rename is a no-op on an insensitive volume and a real rename on a sensitive one', async () => {
+    const collapsed = await volumeCollapses('Slicc.md', 'SLICC.md');
+    const dir = join(root, 'case-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, 'Slicc.md'), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: 'case-rename/Slicc.md',
+          to: 'case-rename/SLICC.md',
+        })
+      ).status
+    ).toBe(200);
+    const names = await listed(dir);
+    if (collapsed) {
+      expect(names).toEqual(['Slicc.md']);
+      expect(await readFile(join(dir, 'Slicc.md'), 'utf8')).toBe(payload);
+    } else {
+      expect(names).toEqual(['SLICC.md']);
+      expect(await readFile(join(dir, 'SLICC.md'), 'utf8')).toBe(payload);
+    }
+  });
+
+  it('NFD→NFC rename is a no-op on a normalization-insensitive volume', async () => {
+    const nfdName = `Groeger-Familie${umlautNfd}.md`;
+    const nfcName = `Groeger-Familie${umlautNfc}.md`;
+    const collapsed = await volumeCollapses(nfdName, nfcName);
+    const dir = join(root, 'nfc-rename');
+    await mkdir(dir);
+    await writeFile(join(dir, nfdName), payload);
+    expect(
+      (
+        await stable({
+          op: 'rename',
+          mount: '/mnt/proj',
+          path: `nfc-rename/${nfdName}`,
+          to: `nfc-rename/${nfcName}`,
+        })
+      ).status
+    ).toBe(200);
+    const names = await listed(dir);
+    if (collapsed) {
+      expect(names).toEqual([nfdName]);
+      expect(await readFile(join(dir, nfdName), 'utf8')).toBe(payload);
+    } else {
+      expect(names).toEqual([nfcName]);
+      expect(await readFile(join(dir, nfcName), 'utf8')).toBe(payload);
+    }
   });
 });
 

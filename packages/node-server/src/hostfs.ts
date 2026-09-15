@@ -628,7 +628,32 @@ async function mkdirOp(target: string): Promise<{ ok: true }> {
   return { ok: true };
 }
 
+/**
+ * True when `a` and `b` are the same file (device + inode), not merely
+ * similar strings. Path comparison misses the APFS case / NFC-NFD collision.
+ */
+export function sameHostFileIdentity(a: Stats, b: Stats): boolean {
+  return BigInt(a.dev) === BigInt(b.dev) && BigInt(a.ino) === BigInt(b.ino);
+}
+
+/**
+ * POSIX `rename(2)`: if both operands name the same directory entry (or
+ * hard links to the same inode), succeed and do nothing.
+ *
+ * Node's `fs.rename` on APFS is not that no-op — a case-only or NFD→NFC
+ * rename rewrites the catalog name. A copy-then-unlink rename is worse:
+ * `open(dest, O_TRUNC)` zeros the only inode, then the subsequent read of
+ * source copies 0 bytes, and `readdir` still shows the original name
+ * (#3107). Compare identity before calling `rename`.
+ */
 async function renameOp(from: string, to: string): Promise<{ ok: true }> {
+  try {
+    const fromStat = await lstat(from);
+    const toStat = await lstat(to);
+    if (sameHostFileIdentity(fromStat, toStat)) return { ok: true };
+  } catch (err) {
+    if (errnoCode(err) !== 'ENOENT') throw err;
+  }
   await rename(from, to);
   return { ok: true };
 }
@@ -784,6 +809,10 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
       }
       await mkdir(dirname(target), { recursive: true });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      // The body is fully buffered before this open. `createWriteStream`
+      // would O_TRUNC dest on open, before any byte arrived — the
+      // copy-then-unlink truncation in #3107. writeFile also truncates,
+      // but only with the complete payload already in hand.
       // Write-then-rename would break hardlinks and xattrs on user files;
       // plain writeFile matches what local tools do.
       await writeFile(target, body);

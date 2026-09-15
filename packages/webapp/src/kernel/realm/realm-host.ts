@@ -60,6 +60,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import { renameViaFs } from './rename-via-fs.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
@@ -414,14 +415,7 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'rename': {
       const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
-      const fs = ctx.fs as { rename?: (a: string, b: string) => Promise<void> };
-      if (fs.rename) {
-        await fs.rename(resolved!, newPath);
-      } else {
-        const content = await ctx.fs.readFileBuffer(resolved!);
-        await ctx.fs.writeFile(newPath, content);
-        await ctx.fs.rm(resolved!, { recursive: true });
-      }
+      await renameViaFs(ctx.fs, resolved!, newPath);
       return true;
     }
     case 'resolvePath':

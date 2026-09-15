@@ -570,7 +570,22 @@ enum HostFSRoutes {
         return try jsonBody(.object(["ok": .bool(true)]))
     }
 
+    /// POSIX `rename(2)`: if both paths name the same file (hard link, or a
+    /// case-/normalization-insensitive lookup of one directory entry), succeed
+    /// and do nothing. `FileManager.moveItem` is not that: a case-only move
+    /// rewrites the catalog name, and a same-inode dest is `EEXIST`. Compare
+    /// `lstat` identity, not the strings — they differ by construction in #3107.
+    private static func pathsDesignateSameFile(_ a: String, _ b: String) -> Bool {
+        var fromInfo = stat()
+        var toInfo = stat()
+        guard lstat(a, &fromInfo) == 0, lstat(b, &toInfo) == 0 else { return false }
+        return fromInfo.st_dev == toInfo.st_dev && fromInfo.st_ino == toInfo.st_ino
+    }
+
     private static func renameResponse(from: String, to: String) throws -> Response {
+        if pathsDesignateSameFile(from, to) {
+            return try jsonBody(.object(["ok": .bool(true)]))
+        }
         try wrapErrno { try FileManager.default.moveItem(atPath: from, toPath: to) }
         return try jsonBody(.object(["ok": .bool(true)]))
     }

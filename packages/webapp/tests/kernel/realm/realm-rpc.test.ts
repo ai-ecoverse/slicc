@@ -100,8 +100,11 @@ function makeMockFs(files: Record<string, string> = {}): IFileSystem {
     async cp() {
       /* noop */
     },
-    async mv() {
-      /* noop */
+    async mv(src: string, dest: string) {
+      const content = store.get(src);
+      if (content === undefined) throw new Error(`ENOENT: ${src}`);
+      store.set(dest, content);
+      store.delete(src);
     },
     resolvePath(base: string, path: string): string {
       if (path.startsWith('/')) return path;

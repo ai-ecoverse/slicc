@@ -178,7 +178,9 @@ export interface MountBackend {
    * Optional native rename within this mount. VirtualFS.rename() routes a
    * same-mount rename here when present (currently hostfs only); backends
    * without it keep the historical behavior (rename inside a mount fails —
-   * callers fall back to copy+delete).
+   * callers fall back to copy+delete). Hostfs must POSIX-no-op when both
+   * paths name the same inode (case / NFC-NFD / hardlink) — copy+delete of
+   * that pair truncates the only copy (#3107).
    */
   rename?(fromPath: string, toPath: string): Promise<void>;
 

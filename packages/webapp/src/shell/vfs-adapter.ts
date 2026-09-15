@@ -703,6 +703,14 @@ export class VfsAdapter implements IFileSystem {
     });
   }
 
+  /**
+   * Alias of {@link mv}. Realm `fs.rename` probes this name; without it they
+   * fall back to copy+unlink, which truncates a case-/NFC-equal dest (#3107).
+   */
+  async rename(src: string, dest: string): Promise<void> {
+    return this.mv(src, dest);
+  }
+
   resolvePath(base: string, path: string): string {
     if (path.startsWith('/')) return normalizePath(path);
     return normalizePath(joinPath(base, path));
