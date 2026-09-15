@@ -37,12 +37,16 @@ describe('git color decision (#3137)', () => {
       expect(colorWhenFromArgs(['diff', '--color=never', 'a', 'b'])).toBe('never');
       expect(colorWhenFromArgs(['diff', '--color=always', 'a', 'b'])).toBe('always');
       expect(colorWhenFromArgs(['diff', '--color', 'a', 'b'])).toBe('always');
-      expect(colorWhenFromArgs(['diff', '--color', 'auto', 'a', 'b'])).toBe('auto');
       expect(colorWhenFromArgs(['--no-color', 'diff', 'a'])).toBe('never');
     });
 
-    it('does not steal a path named never after bare --color', () => {
-      expect(colorWhenFromArgs(['diff', '--color', 'never.txt'])).toBe('always');
+    it('does not treat a token after bare --color as a when-word', () => {
+      expect(colorWhenFromArgs(['diff', '--color', 'never'])).toBe('always');
+      expect(colorWhenFromArgs(['diff', '--color', 'auto', 'a', 'b'])).toBe('always');
+    });
+
+    it('does not read --color=never when it is the value of -m', () => {
+      expect(colorWhenFromArgs(['commit', '-m', '--color=never'])).toBeUndefined();
     });
 
     it('ignores a colour flag after --', () => {
@@ -62,13 +66,22 @@ describe('git color decision (#3137)', () => {
       ).toEqual(['diff', '--no-color', '--no-index', 'a.md', 'b.md']);
     });
 
-    it('drops --color=auto and consumes a when-word after --color', () => {
+    it('drops --color=auto and leaves a path after bare --color', () => {
       expect(normalizeGitColorArgs(['diff', '--color=auto', 'a'])).toEqual(['diff', 'a']);
       expect(normalizeGitColorArgs(['diff', '--color', 'never', 'a', 'b'])).toEqual([
         'diff',
-        '--no-color',
+        '--color',
+        'never',
         'a',
         'b',
+      ]);
+    });
+
+    it('does not rewrite --color=never when it is the value of -m', () => {
+      expect(normalizeGitColorArgs(['commit', '-m', '--color=never'])).toEqual([
+        'commit',
+        '-m',
+        '--color=never',
       ]);
     });
   });
@@ -233,5 +246,15 @@ describe('git commands honour colour suppression (#3137)', () => {
     const grepped = await shell.executeCommand("grep -c '^[+-]' out.txt");
     expect(grepped.exitCode).toBe(0);
     expect(grepped.stdout.trim()).not.toBe('0');
+  });
+
+  it('keeps --color=never as the commit message of -m', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content\n');
+    await git.execute(['add', 'file.txt'], '/project');
+    const result = await git.execute(['commit', '-m', '--color=never'], '/project');
+    expect(result.exitCode, result.stderr).toBe(0);
+    const log = await git.execute(['log', '--format', '%s', '-n', '1'], '/project');
+    expect(log.stdout.trim()).toBe('--color=never');
   });
 });

@@ -7,11 +7,14 @@
  * nothing (issue #3137).
  */
 
+import { allGitValueFlagNames } from './shared.js';
+
 export type GitColorWhen = 'always' | 'never' | 'auto';
 
-const WHEN_WORDS = new Set(['always', 'never', 'auto', 'true', 'false', 'on', 'off', 'yes', 'no']);
 const NEVER_WORDS = new Set(['never', 'false', '0', 'off', 'no']);
 const ALWAYS_WORDS = new Set(['always', 'true', '1', 'on', 'yes']);
+const FLAG_RE = /^(--?)([^=]+)(=.*)?$/;
+const VALUE_FLAG_NAMES = allGitValueFlagNames();
 
 /** Map a git colour value (`always` / `never` / `auto` / bool-ish) to a when. */
 export function parseColorWhen(value: unknown): GitColorWhen | undefined {
@@ -31,28 +34,23 @@ export function parseColorWhen(value: unknown): GitColorWhen | undefined {
 }
 
 /**
- * Last `--color` / `--no-color` / `--color=<when>` before a `--` terminator.
- * `--color never` (two tokens) is accepted only when the next token is a
- * when-word, so a path named `never` is not stolen.
+ * Last `--color` / `--no-color` / `--color=<when>` in flag position.
+ * Git documents the optional value as `--color[=<when>]` (attached); a
+ * following token is a path/revision, not a when-word.
  */
 export function colorWhenFromArgs(args: readonly string[]): GitColorWhen | undefined {
   let when: GitColorWhen | undefined;
   const terminator = args.indexOf('--');
   const head = terminator === -1 ? args : args.slice(0, terminator);
   for (let i = 0; i < head.length; i++) {
+    if (isValueOfPrecedingFlag(head, i)) continue;
     const tok = head[i];
     if (tok === '--no-color') {
       when = 'never';
       continue;
     }
     if (tok === '--color') {
-      const next = head[i + 1];
-      if (next !== undefined && !next.startsWith('-') && WHEN_WORDS.has(next.toLowerCase())) {
-        when = parseColorWhen(next) ?? 'always';
-        i++;
-      } else {
-        when = 'always';
-      }
+      when = 'always';
       continue;
     }
     if (tok.startsWith('--color=')) {
@@ -63,11 +61,10 @@ export function colorWhenFromArgs(args: readonly string[]): GitColorWhen | undef
 }
 
 /**
- * Rewrite `--color=<when>` / `--color <when>` so mri's boolean `color` flag
- * cannot push the when-word onto positionals (`--color=never` would otherwise
- * become a path named `never` and `git diff --no-index` would get 3 operands).
- * The colour *decision* still reads the original argv via
- * {@link colorWhenFromArgs}.
+ * Rewrite `--color=<when>` so mri's boolean `color` flag cannot push the
+ * when-word onto positionals. Does not consume a token after bare `--color`
+ * (that token is a path). Does not rewrite a dash-prefixed *value* of another
+ * option (`git commit -m --color=never`).
  */
 export function normalizeGitColorArgs(args: readonly string[]): string[] {
   const terminator = args.indexOf('--');
@@ -78,30 +75,28 @@ export function normalizeGitColorArgs(args: readonly string[]): string[] {
       break;
     }
     const tok = args[i];
+    if (isValueOfPrecedingFlag(args, i, terminator)) {
+      out.push(tok);
+      continue;
+    }
     if (tok.startsWith('--color=')) {
       const rewritten = rewriteColorWhen(tok.slice('--color='.length));
       if (rewritten) out.push(rewritten);
       continue;
     }
-    if (tok === '--color') {
-      const next = args[i + 1];
-      if (
-        next !== undefined &&
-        (terminator === -1 || i + 1 < terminator) &&
-        !next.startsWith('-') &&
-        WHEN_WORDS.has(next.toLowerCase())
-      ) {
-        i++;
-        const rewritten = rewriteColorWhen(next);
-        if (rewritten) out.push(rewritten);
-        continue;
-      }
-      out.push('--color');
-      continue;
-    }
     out.push(tok);
   }
   return out;
+}
+
+/** True when `args[i]` is the value of a preceding value-taking flag. */
+function isValueOfPrecedingFlag(args: readonly string[], index: number, terminator = -1): boolean {
+  if (index === 0) return false;
+  if (terminator !== -1 && index - 1 >= terminator) return false;
+  const prev = args[index - 1];
+  const m = FLAG_RE.exec(prev);
+  if (!m || m[3]) return false;
+  return VALUE_FLAG_NAMES.has(m[2]);
 }
 
 function rewriteColorWhen(raw: string): '--color' | '--no-color' | undefined {

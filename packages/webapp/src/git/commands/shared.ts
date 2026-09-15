@@ -177,6 +177,19 @@ function gitValueFlagNames(spec: ArgSpec): Set<string> {
 }
 
 /**
+ * Union of every subcommand's value-taking flags plus the leading globals
+ * (`-c` / `-C` / `--git-dir` / `--work-tree`). Used so colour rewriting does
+ * not mutate a dash-prefixed *value* (`git commit -m --color=never`).
+ */
+export function allGitValueFlagNames(): Set<string> {
+  const names = new Set(['c', 'C', 'git-dir', 'work-tree']);
+  for (const spec of Object.values(GIT_FLAG_SPECS)) {
+    for (const n of gitValueFlagNames(spec)) names.add(n);
+  }
+  return names;
+}
+
+/**
  * First unrecognized dash-token in `args` (before a `--` terminator). Clustered
  * shorts report the first unknown letter. Used so an unknown flag is named
  * instead of silently stealing a positional (#3121).
