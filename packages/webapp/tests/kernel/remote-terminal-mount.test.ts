@@ -44,10 +44,12 @@ describe('parseLocalMountTarget', () => {
     expect(parseLocalMountTarget('mount ')).toBeNull();
   });
 
-  it('returns null for `mount list` / `mount unmount` / `mount refresh`', () => {
+  it('returns null for `mount list` / `mount unmount` / `mount refresh` / `mount info`', () => {
     expect(parseLocalMountTarget('mount list')).toBeNull();
     expect(parseLocalMountTarget('mount unmount /mnt/x')).toBeNull();
     expect(parseLocalMountTarget('mount refresh /mnt/x')).toBeNull();
+    expect(parseLocalMountTarget('mount info /tmp')).toBeNull();
+    expect(parseLocalMountTarget('mount info --json /mnt/kb')).toBeNull();
   });
 
   it('returns null for `mount --list` / `mount -l` even with a trailing path', () => {

@@ -2,6 +2,13 @@ export type { FsChangeEvent, FsChangeType, FsWatchCallback, FsWatchFilter } from
 export { FsWatcher } from './fs-watcher.js';
 export type { ReadDirOptions } from './mount/backend.js';
 export type {
+  MountInfo,
+  MountProbeFs,
+  NameSensitivity,
+  UnicodeNormalization,
+  UnicodeStorage,
+} from './mount/probe-info.js';
+export type {
   IndexingStatus,
   MountIndexAbortCause,
   MountIndexEntry,

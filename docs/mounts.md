@@ -15,9 +15,12 @@ ls /mnt/da                          # listing — first call hits network, then 
 read_file /mnt/da/index.html        # downloads + caches the body (TTL + ETag)
 write_file /mnt/da/new.html "..."   # ETag-conditional PUT, surfaces conflicts
 rm /mnt/da/old.html                 # DELETE
+mount info --json /mnt/da           # probed case / Unicode / exec-bit / name semantics
 mount refresh /mnt/da               # re-walk the source, diff against cache
 mount unmount /mnt/da
 ```
+
+`mount info <path>` (and `probeMountInfo()` in `packages/webapp/src/fs/mount/probe-info.ts`) measures the VFS bridge, not host `diskutil`: it creates a scratch entry, stats it back, and always removes it. Use it before assuming two names are distinct — `/tmp` is byte-exact; a macOS APFS hostfs mount is typically case- and normalization-insensitive, and renaming between those spellings is the #3107 data-loss path.
 
 Reads cache for 30 s with ETag-conditional revalidation (zero RTT within TTL, 304-on-stale costs one round trip with no body bytes). Writes use `If-Match: <etag>` (or `If-None-Match: *` for new files) and surface concurrent-edit conflicts as `EBUSY`. Mount descriptors persist across browser/server restarts.
 

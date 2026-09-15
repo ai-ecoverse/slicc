@@ -938,8 +938,8 @@ export class RemoteTerminalView {
  * Parse a typed command line and return the local-mount target
  * path if it looks like `mount /some/path` with no `--source` flag
  * and no recognized subcommand. Returns `null` for anything else
- * (`mount list`, `mount --list`, `mount unmount`, `mount /x --source s3://…`,
- * `mount` alone, …).
+ * (`mount list`, `mount --list`, `mount unmount`, `mount info`,
+ * `mount /x --source s3://…`, `mount` alone, …).
  *
  * The match is intentionally narrow — false positives would fire
  * a directory picker for commands the user didn't intend, which is
@@ -957,7 +957,8 @@ export function parseLocalMountTarget(line: string): string | null {
     tokens.includes('--help') ||
     tokens.includes('-h') ||
     tokens.includes('--list') ||
-    tokens.includes('-l')
+    tokens.includes('-l') ||
+    tokens.includes('--json')
   ) {
     return null;
   }
@@ -965,7 +966,7 @@ export function parseLocalMountTarget(line: string): string | null {
   const target = tokens.slice(1).find((t) => !t.startsWith('-'));
   if (!target) return null;
   // Skip subcommand-like tokens that don't take a directory picker.
-  if (['list', 'unmount', 'refresh', 'recover'].includes(target)) return null;
+  if (['list', 'unmount', 'refresh', 'recover', 'info'].includes(target)) return null;
   // Heuristic: only intercept absolute paths (typical mount targets).
   if (!target.startsWith('/')) return null;
   return target;
