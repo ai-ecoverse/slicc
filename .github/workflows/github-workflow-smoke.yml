@@ -50,8 +50,16 @@ jobs:
           provider-base-url: https://bedrock-runtime.${{ vars.RUM_AWS_REGION || 'us-west-2' }}.amazonaws.com
           model: bedrock-camp:${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
 
-      - name: Install the slicc CLI
+      # The CLI under test is THIS ref's, not the last release that shipped
+      # binaries: build it from the checkout.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+      - name: Install the slicc CLI (built from this checkout)
         uses: ./packages/github-workflow/actions/install-cli
+        with:
+          source: build
 
       - name: exec — uname
         id: uname
@@ -200,6 +208,7 @@ jobs:
       inject-path: packages/github-workflow/actions
       inject-target: /workspace/smoke
       fetch-file: /workspace/smoke/start-leader/action.yml
+      cli-source: build
       artifact-prefix: github-workflow-smoke
 
   reusable-prompt:
@@ -217,6 +226,7 @@ jobs:
       prompt-timeout: 5m
       fetch-file: /workspace/pong.txt
       export-session: true
+      cli-source: build
       artifact-prefix: github-workflow-smoke-prompt
     secrets:
       SLICC_PROVIDER_API_KEY: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}

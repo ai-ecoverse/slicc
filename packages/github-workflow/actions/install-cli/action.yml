@@ -4,8 +4,14 @@ description: >-
   put it on PATH, and export `SLICC_CLI` (its absolute path) for the other
   SLICC actions.
 inputs:
+  source:
+    description: '`release` downloads a published binary; `build` compiles `packages/slicc-cli` from the checkout (needs Go).'
+    default: release
+  build-dir:
+    description: Path of the slicc-cli Go module when `source` is `build`.
+    default: ''
   version:
-    description: '`latest` or a release tag (e.g. `v6.154.4`).'
+    description: '`latest` or a release tag (e.g. `v6.154.4`); ignored for `build`.'
     default: latest
   install-dir:
     description: Directory for the binary (default `$RUNNER_TEMP/slicc-gw/cli`).
@@ -29,6 +35,8 @@ runs:
     - id: install
       shell: bash
       env:
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_BUILD_DIR: ${{ inputs.build-dir }}
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_INSTALL_DIR: ${{ inputs.install-dir }}
         INPUT_TOKEN: ${{ inputs.token }}

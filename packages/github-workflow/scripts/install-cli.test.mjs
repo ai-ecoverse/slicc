@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setup } from '../tests/helpers.mjs';
@@ -123,6 +123,31 @@ describe('install-cli', () => {
       download('https://dl/v1/x', '', join(t.root, 'x'), fakeFetch({ downloadStatus: 500 }))
     ).rejects.toThrow(/download 500/);
     expect(existsSync(join(t.root, 'x'))).toBe(false);
+  });
+
+  it('builds from a checked-out Go module when source is build', async () => {
+    const mod = join(t.root, 'slicc-cli');
+    mkdirSync(mod, { recursive: true });
+    writeFileSync(join(mod, 'go.mod'), 'module x\n');
+    const exec = vi.fn((cmd, args, opts) => {
+      if (cmd === 'go') {
+        expect(args.slice(0, 2)).toEqual(['build', '-ldflags']);
+        expect(opts.cwd).toBe(mod);
+        writeFileSync(args[args.indexOf('-o') + 1], BINARY, { mode: 0o755 });
+        return '';
+      }
+      return 'slicc gw-local';
+    });
+    t.inputs({ source: 'build', 'build-dir': mod });
+    const r = await main({ exec, platform: 'linux', arch: 'x64', fetchImpl: fakeFetch() });
+    expect(r.binary).toBe(join(t.home, 'cli', 'slicc'));
+    expect(r.version).toMatch(/^gw-/);
+    expect(t.outputs().version).toMatch(/^gw-/);
+    expect(t.envFile().SLICC_CLI).toBe(r.binary);
+    t.inputs({ source: 'build', 'build-dir': join(t.root, 'nope') });
+    await expect(main({ exec, platform: 'linux', arch: 'x64' })).rejects.toThrow(/no Go module/);
+    t.inputs({ source: 'tarball' });
+    await expect(main({ exec, platform: 'linux', arch: 'x64' })).rejects.toThrow(/source must be/);
   });
 
   it('names the windows binary with .exe', async () => {

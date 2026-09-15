@@ -295,6 +295,122 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 	}
 }
 
+// promptLeader wires a bridged leader that answers the first user_message by
+// replaying `frames` in order (with the given pauses) on its data channel.
+// Every frame is a protocol struct; a time.Duration entry sleeps instead.
+func promptLeader(t *testing.T, frames []any) *bridgedLeader {
+	t.Helper()
+	leader := newBridgedLeader(t)
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var env protocol.Envelope
+		if json.Unmarshal(msg.Data, &env) != nil || env.Type != "user_message" {
+			return
+		}
+		go func() {
+			for _, f := range frames {
+				if d, ok := f.(time.Duration); ok {
+					time.Sleep(d)
+					continue
+				}
+				_ = sendJSON(leader.dc, f)
+			}
+		}()
+	})
+	return leader
+}
+
+func statusFrame(s string) protocol.Status {
+	return protocol.Status{Type: protocol.TypeStatus, ScoopStatus: s}
+}
+
+func agentFrame(eventType, id, text string) protocol.AgentEventEnvelope {
+	return protocol.AgentEventEnvelope{
+		Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+		Event: protocol.AgentEvent{Type: eventType, MessageID: id, Text: text, Error: text},
+	}
+}
+
+func runPrompt(t *testing.T, bin, joinURL string, settle time.Duration) (string, string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, joinURL, "prompt", "hi there")
+	cmd.Env = append(os.Environ(), "SLICC_PROMPT_SETTLE="+settle.String())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// TestCLIPromptWaitsThroughToolPhase: a live leader broadcasts `ready` at the
+// end of every assistant MESSAGE, so a tool-using turn flips processing →
+// ready → processing → ready. The first flip lands while the tool call is
+// pending and must NOT end the prompt — even when the tool takes longer than
+// the settle window.
+func TestCLIPromptWaitsThroughToolPhase(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		agentFrame(protocol.AgentToolUseStart, "m1", "bash"),
+		statusFrame("ready"),
+		900 * time.Millisecond, // longer than the 300 ms settle window below
+		agentFrame(protocol.AgentToolResult, "m1", "ok"),
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m2", "AFTER-TOOL-OK"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "AFTER-TOOL-OK") {
+		t.Fatalf("prompt stdout = %q, want the post-tool reply", stdout)
+	}
+}
+
+// TestCLIPromptWaitsForResumedTurn: a ready flip followed by more activity
+// inside the settle window is withdrawn; the prompt keeps streaming.
+func TestCLIPromptWaitsForResumedTurn(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m1", "FIRST-"),
+		statusFrame("ready"),
+		100 * time.Millisecond,
+		statusFrame("processing"),
+		agentFrame(protocol.AgentContentDelta, "m2", "SECOND"),
+		statusFrame("ready"),
+	})
+	stdout, stderr, err := runPrompt(t, bin, leader.joinURL, 400*time.Millisecond)
+	if err != nil {
+		t.Fatalf("prompt CLI did not exit cleanly: %v; stderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "FIRST-SECOND") {
+		t.Fatalf("prompt stdout = %q, want both messages", stdout)
+	}
+}
+
+// TestCLIPromptErrorAfterReady: the leader drops processing BEFORE it
+// broadcasts the turn's error event. The prompt must report the error and
+// exit 1, not exit 0 with an empty reply.
+func TestCLIPromptErrorAfterReady(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := promptLeader(t, []any{
+		statusFrame("processing"),
+		statusFrame("ready"),
+		50 * time.Millisecond,
+		agentFrame(protocol.AgentError, "", "Not signed in to Provider"),
+	})
+	_, stderr, err := runPrompt(t, bin, leader.joinURL, 400*time.Millisecond)
+	if err == nil {
+		t.Fatalf("prompt CLI exited 0; want exit 1 with the error; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Not signed in to Provider") {
+		t.Fatalf("stderr = %q, want the agent error", stderr)
+	}
+}
+
 // TestCLIFollowEvalPersistsState: `slicc <url> follow --eval <repl>` — the
 // leader issues two exec.requests into ONE persistent runner process and the
 // second sees state set by the first (the whole point of eval mode; per-command

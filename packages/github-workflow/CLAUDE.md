@@ -44,7 +44,7 @@ Tests are co-located `scripts/*.test.mjs`. `lib.test.mjs` is pure; every other s
 
 Coverage is gated in CI (`github-workflow` job) with an explicit `coverageInclude` so a script without a test counts as 0% instead of disappearing from the report. Only the `isMain` trampolines are `v8 ignore`d — they are unreachable in-process by construction. Floors are ratcheted by the nightly `coverage-ratchet.mjs` like every other package; never hand-lower them.
 
-The live gate is `.github/workflows/github-workflow-smoke.yml`: it boots a real leader from the published `sliccy` package against production sliccy.ai and exercises every action (the prompt legs use the repo's Bedrock key through `bedrock-camp`, so they run only for same-repo heads), then runs `slicc-leader.yml` at the PR's ref. It runs on PRs touching this package or the `slicc-*.yml` workflows and needs network egress.
+The live gate is `.github/workflows/github-workflow-smoke.yml`: it boots a real leader from the published `sliccy` package against production sliccy.ai, builds the Go CLI from the checkout (`install-cli` with `source: build`, so a CLI fix is exercised before it is released) and exercises every action (the prompt legs use the repo's Bedrock key through `bedrock-camp`, so they run only for same-repo heads), then runs `slicc-leader.yml` at the PR's ref. It runs on PRs touching this package or the `slicc-*.yml` workflows and needs network egress.
 
 ## Design Rules
 

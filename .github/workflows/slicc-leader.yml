@@ -103,6 +103,10 @@ on:
         description: Release tag of the Go `slicc` CLI, or `latest`.
         type: string
         default: latest
+      cli-source:
+        description: "`release` downloads a published CLI binary; `build` compiles it from the `slicc-ref` checkout (this repo's smoke gate)."
+        type: string
+        default: release
       slicc-ref:
         description: Ref of ai-ecoverse/slicc to take the actions from.
         type: string
@@ -219,7 +223,10 @@ jobs:
           repository: ai-ecoverse/slicc
           ref: ${{ inputs.slicc-ref || 'main' }}
           path: .slicc-gw
-          sparse-checkout: packages/github-workflow
+          sparse-checkout: |
+            packages/github-workflow
+            packages/slicc-cli
+            packages/go-optel
           persist-credentials: false
 
       - name: Start leader
@@ -257,9 +264,16 @@ jobs:
           name: ${{ inputs.artifact-prefix || 'slicc' }}-join
           path: ${{ runner.temp }}/slicc-gw/join/join.json
 
+      - uses: actions/setup-go@v7
+        if: inputs.cli-source == 'build'
+        with:
+          go-version-file: .slicc-gw/packages/slicc-cli/go.mod
+          cache-dependency-path: .slicc-gw/packages/slicc-cli/go.sum
       - name: Install the slicc CLI
         uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
         with:
+          source: ${{ inputs.cli-source || 'release' }}
+          build-dir: .slicc-gw/packages/slicc-cli
           version: ${{ inputs.cli-version || 'latest' }}
 
       - name: Inject files into the VFS

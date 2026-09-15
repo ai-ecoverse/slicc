@@ -11,12 +11,18 @@
  * it exports as `SLICC_CLI` — the npm `sliccy` package also installs a
  * `slicc` bin (node-server), and the two must never shadow each other.
  *
- * Inputs: INPUT_VERSION (`latest` or a release tag), INPUT_INSTALL_DIR,
- * INPUT_TOKEN, INPUT_TELEMETRY (`true` keeps the CLI's RUM beacon on).
+ * `source: build` compiles the CLI from a checked-out `packages/slicc-cli`
+ * instead (Go toolchain required) — how this repo's smoke gate runs a PR's
+ * CLI before it is released.
+ *
+ * Inputs: INPUT_SOURCE (`release` | `build`), INPUT_VERSION (`latest` or a
+ * release tag), INPUT_INSTALL_DIR, INPUT_TOKEN, INPUT_TELEMETRY (`true`
+ * keeps the CLI's RUM beacon on), INPUT_BUILD_DIR (the slicc-cli module,
+ * default `packages/slicc-cli` under the workspace).
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, renameSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import {
   addPath,
   ensureDir,
@@ -92,6 +98,23 @@ export async function download(url, token, destination, fetchImpl = fetch) {
   return bytes.length;
 }
 
+/** `go build` the checked-out CLI module and copy the binary into place. */
+export function buildFromSource(buildDir, binary, exec = execFileSync) {
+  const moduleDir = resolve(buildDir);
+  if (!existsSync(join(moduleDir, 'go.mod'))) {
+    throw new Error(
+      `no Go module at ${moduleDir} (expected packages/slicc-cli of a slicc checkout)`
+    );
+  }
+  const version = `gw-${(process.env.GITHUB_SHA ?? 'local').slice(0, 12)}`;
+  exec('go', ['build', '-ldflags', `-s -w -X main.version=${version}`, '-o', binary, '.'], {
+    cwd: moduleDir,
+    stdio: 'inherit',
+  });
+  chmodSync(binary, 0o755);
+  return version;
+}
+
 export async function main(options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const exec = options.exec ?? execFileSync;
@@ -101,12 +124,25 @@ export async function main(options = {}) {
   if (!assetName) throw new Error(`no slicc CLI build for ${platform}/${arch}`);
   const token = input('token');
   const version = input('version', { fallback: 'latest' });
+  const source = input('source', { fallback: 'release' });
   const installDir = ensureDir(input('install-dir') || join(homeDir(), 'cli'));
   const binary = join(installDir, platform === 'win32' ? 'slicc.exe' : 'slicc');
 
-  const hit = await resolveRelease(version, assetName, token, fetchImpl);
-  console.log(`[install-cli] ${assetName} from release ${hit.version}`);
-  const bytes = await download(hit.downloadUrl, token, binary, fetchImpl);
+  let hit;
+  let bytes = 0;
+  if (source === 'build') {
+    const buildDir =
+      input('build-dir') ||
+      join(process.env.GITHUB_WORKSPACE ?? process.cwd(), 'packages/slicc-cli');
+    hit = { version: buildFromSource(buildDir, binary, exec) };
+    console.log(`[install-cli] built ${binary} from ${buildDir}`);
+  } else if (source === 'release') {
+    hit = await resolveRelease(version, assetName, token, fetchImpl);
+    console.log(`[install-cli] ${assetName} from release ${hit.version}`);
+    bytes = await download(hit.downloadUrl, token, binary, fetchImpl);
+  } else {
+    throw new Error(`source must be release|build, got "${source}"`);
+  }
   const reported = exec(binary, ['--version'], { encoding: 'utf8' }).trim();
   console.log(`[install-cli] installed ${binary} (${bytes} bytes): ${reported}`);
 

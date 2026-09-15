@@ -94,19 +94,19 @@ jobs:
 
 All live under `packages/github-workflow/actions/` and are referenced as `ai-ecoverse/slicc/packages/github-workflow/actions/<name>@main`. Every CLI action takes `join-url`; the leader lifecycle actions share a state file under `$RUNNER_TEMP/slicc-gw`.
 
-| Action           | Purpose                                                                                | Key inputs → outputs                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `start-leader`   | Boot `node-server --hosted` + headless Chrome, seed credentials, wait for the join URL | `duration`, `mounts`, `cone-config`, `secrets-env`, `model`, `slicc-version` → `join-url`, `tray-id` |
-| `install-cli`    | Install the Go `slicc` CLI from releases, export `SLICC_CLI`                           | `version` → `path`, `version`                                                                        |
-| `prompt`         | One user turn, wait for completion                                                     | `prompt`, `timeout` → `response`, `response-file`, `exit-code`                                       |
-| `exec`           | One command in the leader's virtual shell                                              | `command`, `stdin-file`, `fail-on-error` → `stdout`, `exit-code`                                     |
-| `read-file`      | Copy a VFS file to the runner (byte-exact)                                             | `path`, `local` → `bytes`                                                                            |
-| `write-file`     | Write a runner file or inline text into the VFS                                        | `path`, `local` or `content` → `bytes`                                                               |
-| `inject-files`   | Copy a whole directory tree into the VFS in one round trip                             | `source`, `target` → `files`, `bytes`                                                                |
-| `follow`         | Lend this runner to the leader as an exec-capable follower (detached)                  | `runner`, `eval` → `pid`, `connected`                                                                |
-| `export-session` | `session export` on the leader, copy the ZIP back                                      | `local`, `session-id` → `bytes`                                                                      |
-| `keep-alive`     | Hold the job until the deadline; fail if a watched process dies                        | `watch`, `until`                                                                                     |
-| `stop-leader`    | Tear down followers, node-server, leftover Chrome; print log tails; always succeeds    | → `log-path`                                                                                         |
+| Action           | Purpose                                                                                    | Key inputs → outputs                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `start-leader`   | Boot `node-server --hosted` + headless Chrome, seed credentials, wait for the join URL     | `duration`, `mounts`, `cone-config`, `secrets-env`, `model`, `slicc-version` → `join-url`, `tray-id` |
+| `install-cli`    | Install the Go `slicc` CLI from releases (or build it from a checkout), export `SLICC_CLI` | `version`, `source` → `path`, `version`                                                              |
+| `prompt`         | One user turn, wait for completion                                                         | `prompt`, `timeout` → `response`, `response-file`, `exit-code`                                       |
+| `exec`           | One command in the leader's virtual shell                                                  | `command`, `stdin-file`, `fail-on-error` → `stdout`, `exit-code`                                     |
+| `read-file`      | Copy a VFS file to the runner (byte-exact)                                                 | `path`, `local` → `bytes`                                                                            |
+| `write-file`     | Write a runner file or inline text into the VFS                                            | `path`, `local` or `content` → `bytes`                                                               |
+| `inject-files`   | Copy a whole directory tree into the VFS in one round trip                                 | `source`, `target` → `files`, `bytes`                                                                |
+| `follow`         | Lend this runner to the leader as an exec-capable follower (detached)                      | `runner`, `eval` → `pid`, `connected`                                                                |
+| `export-session` | `session export` on the leader, copy the ZIP back                                          | `local`, `session-id` → `bytes`                                                                      |
+| `keep-alive`     | Hold the job until the deadline; fail if a watched process dies                            | `watch`, `until`                                                                                     |
+| `stop-leader`    | Tear down followers, node-server, leftover Chrome; print log tails; always succeeds        | → `log-path`                                                                                         |
 
 ```yaml
 steps:
@@ -269,7 +269,8 @@ Reaching a leader from a **different** job needs care: a job's outputs only beco
 ## Limits and gotchas
 
 - GitHub jobs end after 6 hours; `duration` is capped at 350 minutes and `timeout-minutes` defaults to 360.
-- Only Linux and macOS runners are supported for the leader (headless Chrome + `sudo mkdir /slicc`); the CLI actions also run on Windows.
+- The leader needs a **Linux** runner. Credentials are seeded through `/slicc/cone-config.json`, a path node-server reads unconditionally, and macOS's sealed root volume cannot hold that directory even with sudo (a credential-less leader still boots there). The CLI actions run on Linux, macOS and Windows.
+- `install-cli` downloads the newest release that ships binaries by default; `source: build` compiles `packages/slicc-cli` from a checkout instead (needs Go), which is how this repo's smoke gate tests the CLI at the PR's ref. `slicc-leader.yml` exposes the same switch as `cli-source`.
 - `prompt` needs a provider account in `cone-config`; without one the turn errors and the step fails.
 - Everything runs against production sliccy.ai by default. `ui-origin` and `tray-worker-base-url` point a leader at a staging UI or tray hub.
 - The leader log is always uploaded as `<artifact-prefix>-leader-logs`; `stop-leader` prints its tail in the job log.

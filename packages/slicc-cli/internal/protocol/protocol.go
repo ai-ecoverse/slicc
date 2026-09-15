@@ -203,6 +203,7 @@ const (
 
 	ScoopStatusProcessing = "processing"
 
+	AgentMessageStart = "message_start"
 	AgentContentDelta = "content_delta"
 	AgentContentDone  = "content_done"
 	AgentTurnEnd      = "turn_end"
