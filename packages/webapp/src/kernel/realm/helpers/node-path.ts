@@ -100,23 +100,33 @@ function pathExtname(path: string): string {
   return base.slice(dot);
 }
 
-function pathResolve(...parts: string[]): string {
+function defaultCwd(): string {
+  const cwd = (globalThis as { process?: { cwd?: () => string } }).process?.cwd?.();
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : '/';
+}
+
+/**
+ * Node: `path.resolve()` walks arguments right-to-left and, if none is
+ * absolute, prepends `process.cwd()`. The previous fallback prepended `/`,
+ * so `path.resolve('out.pdf')` was `/out.pdf` instead of `$cwd/out.pdf` (#3110).
+ */
+function pathResolve(getCwd: () => string, parts: string[]): string {
   let resolved = '';
   let isAbsolute = false;
-  for (let i = parts.length - 1; i >= 0 && !isAbsolute; i--) {
-    const part = parts[i];
+  for (let i = parts.length - 1; i >= -1 && !isAbsolute; i--) {
+    const part = i >= 0 ? parts[i] : getCwd();
     if (typeof part !== 'string' || part.length === 0) continue;
     resolved = resolved.length > 0 ? `${part}/${resolved}` : part;
     isAbsolute = part.charCodeAt(0) === 47;
   }
-  if (!isAbsolute) resolved = resolved.length > 0 ? `/${resolved}` : '/';
-  const normalized = posixNormalizeArray(resolved.split('/'), false).join('/');
-  return normalized.length > 0 ? `/${normalized}` : '/';
+  const normalized = posixNormalizeArray(resolved.split('/'), !isAbsolute).join('/');
+  if (isAbsolute) return normalized.length > 0 ? `/${normalized}` : '/';
+  return normalized.length > 0 ? normalized : '.';
 }
 
-function pathRelative(from: string, to: string): string {
-  const fromAbs = pathResolve(from);
-  const toAbs = pathResolve(to);
+function pathRelative(getCwd: () => string, from: string, to: string): string {
+  const fromAbs = pathResolve(getCwd, [from]);
+  const toAbs = pathResolve(getCwd, [to]);
   if (fromAbs === toAbs) return '';
   const fromParts = fromAbs.split('/').filter(Boolean);
   const toParts = toAbs.split('/').filter(Boolean);
@@ -144,17 +154,28 @@ function pathFormat(parsed: Partial<NodePathParsed>): string {
   return `${dir}/${base}`;
 }
 
-export const nodePath: NodePath = {
-  sep: '/',
-  delimiter: ':',
-  basename: pathBasename,
-  dirname: pathDirname,
-  extname: pathExtname,
-  isAbsolute: (path) => path.length > 0 && path.charCodeAt(0) === 47,
-  join: pathJoin,
-  normalize: pathNormalize,
-  resolve: pathResolve,
-  relative: pathRelative,
-  parse: pathParse,
-  format: pathFormat,
-};
+/**
+ * Per-realm `path` module. `resolve()` (and therefore `relative()`) read
+ * THIS realm's cwd — the same object `process.cwd()` returns — so a script
+ * cannot see two working directories. Host-side callers that have no realm
+ * (module-graph walks) keep the envless singleton below.
+ */
+export function createNodePath(getCwd: () => string = defaultCwd): NodePath {
+  return {
+    sep: '/',
+    delimiter: ':',
+    basename: pathBasename,
+    dirname: pathDirname,
+    extname: pathExtname,
+    isAbsolute: (path) => path.length > 0 && path.charCodeAt(0) === 47,
+    join: pathJoin,
+    normalize: pathNormalize,
+    resolve: (...parts: string[]) => pathResolve(getCwd, parts),
+    relative: (from, to) => pathRelative(getCwd, from, to),
+    parse: pathParse,
+    format: pathFormat,
+  };
+}
+
+/** Envless `path` module. A realm passes its own cwd via {@link createNodePath}. */
+export const nodePath: NodePath = createNodePath();

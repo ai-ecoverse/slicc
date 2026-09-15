@@ -132,6 +132,28 @@ describe('m4: available bare built-ins and node:-prefixed built-ins keep working
     expect(out.stdout).toContain('linux');
     expect(out.stdout).toContain('x64');
   });
+
+  it('path.resolve(rel) uses process.cwd(), not / (#3110)', async () => {
+    const ctx = makeCtx({ cwd: '/tmp' });
+    const out = await runCode(
+      `const path = require('path');
+       console.log(path.resolve('out.pdf'));
+       console.log(path.resolve('/abs/out.pdf'));
+       console.log(path.resolve(process.cwd(), 'out.pdf'));
+       console.log(path.dirname(path.resolve('fixtures/x.pdf')));
+       console.log(process.cwd());`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).toBe('');
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      '/tmp/out.pdf',
+      '/abs/out.pdf',
+      '/tmp/out.pdf',
+      '/tmp/fixtures',
+      '/tmp',
+    ]);
+  });
 });
 
 describe('m5: crypto built-in is served by the Web Crypto-backed bridge', () => {
