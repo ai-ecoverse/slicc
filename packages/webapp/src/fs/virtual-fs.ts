@@ -1353,7 +1353,7 @@ export class VirtualFS {
                   mtime: s.mtimeMs,
                   ctime: s.ctimeMs,
                   ...(s.ino !== undefined
-                    ? { ino: s.ino, identity: this.localIdentity(s.ino) }
+                    ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
                     : {}),
                   ...(s.uid !== undefined ? { uid: s.uid } : {}),
                   ...(s.gid !== undefined ? { gid: s.gid } : {}),
@@ -1396,6 +1396,7 @@ export class VirtualFS {
           ctime: s.ctimeMs,
           ino: s.ino,
           identity: this.localIdentity(s.ino),
+          dev: s.dev,
           mode: s.mode,
         };
       } catch {
@@ -1423,6 +1424,7 @@ export class VirtualFS {
           ctime: s.ctimeMs,
           ino: s.ino,
           identity: this.localIdentity(s.ino),
+          dev: s.dev,
           mode: s.mode,
         };
       }
@@ -1460,6 +1462,7 @@ export class VirtualFS {
           symlinkTarget: target,
           ino: s.ino,
           identity: this.localIdentity(s.ino),
+          dev: s.dev,
           mode: s.mode,
         };
       }
@@ -1470,6 +1473,7 @@ export class VirtualFS {
         ctime: s.ctimeMs,
         ino: s.ino,
         identity: this.localIdentity(s.ino),
+        dev: s.dev,
         mode: s.mode,
       };
     } catch {
@@ -2297,7 +2301,9 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
-        ...(s.ino !== undefined ? { ino: s.ino, identity: this.localIdentity(s.ino) } : {}),
+        ...(s.ino !== undefined
+          ? { ino: s.ino, identity: this.localIdentity(s.ino), dev: s.dev }
+          : {}),
         ...(s.uid !== undefined ? { uid: s.uid } : {}),
         ...(s.gid !== undefined ? { gid: s.gid } : {}),
         mode: s.mode,
@@ -2609,7 +2615,7 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
-        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+        dev: s.dev,
         identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,
@@ -2914,7 +2920,7 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
-          ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+          dev: s.dev,
           identity: this.localIdentity(s.ino),
           uid: s.uid,
           gid: s.gid,
@@ -2927,7 +2933,7 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
-        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
+        dev: s.dev,
         identity: this.localIdentity(s.ino),
         uid: s.uid,
         gid: s.gid,

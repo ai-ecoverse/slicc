@@ -527,6 +527,7 @@ describe('HostFsMountBackend', () => {
       size: 7,
       mtime: 1000,
       ctime: 1200,
+      identity: expect.any(String),
       ino: 42,
       dev: 16777220,
       uid: 501,

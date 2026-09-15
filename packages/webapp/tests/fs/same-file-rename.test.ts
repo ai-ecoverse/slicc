@@ -7,7 +7,7 @@
  * copy+write dest (O_TRUNC of the only copy).
  */
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   MountBackend,
   MountDescription,
@@ -161,6 +161,24 @@ describe('same-inode rename on a case-/NFC-insensitive mount (#3107)', () => {
     await vfs.copyFile('/mnt/kb/Slicc.md', '/mnt/kb/SLICC.md');
     expect(backend.writeCalls).toEqual([]);
     expect(await vfs.readTextFile('/mnt/kb/Slicc.md')).toBe('keep-me');
+  });
+
+  it('copies between backends even when their device and inode numbers collide', async () => {
+    await vfs.writeFile('/source', 'replacement');
+    backend.put('target', 'original');
+    const source = await vfs.stat('/source');
+    const nativeStat = backend.stat.bind(backend);
+    vi.spyOn(backend, 'stat').mockImplementation(async (path) => ({
+      ...(await nativeStat(path)),
+      ino: source.ino,
+      dev: source.dev,
+      identity: 'hostfs:other-backend:target',
+    }));
+
+    await vfs.copyFile('/source', '/mnt/kb/target');
+
+    expect(backend.writeCalls).toEqual(['target']);
+    expect(await vfs.readTextFile('/mnt/kb/target')).toBe('replacement');
   });
 
   it('distinct names still rename', async () => {

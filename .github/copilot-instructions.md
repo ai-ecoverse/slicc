@@ -1,4 +1,4 @@
-# SLICC — Copilot Code Review Instructions
+# SLICC — Code Review
 
 Review five runtimes (`webapp`, extension, Node, Swift, iOS). Flag concrete risks.
 Catalog: `docs/review-patterns.md`.
@@ -38,7 +38,7 @@ stream refuses IDs not in the live free catalog.
 
 Probe FS limits through real shells; custom commands must use them.
 
-Require mirrored tests and floors. Check OPFS reload/retries, concurrent append, scoped identity, metadata errors, and ACL/sudo gates.
+Require mirrored tests and floors. Check OPFS reload/retries, concurrent append, scoped identity over dev/ino, metadata errors, and ACL/sudo gates.
 
 ## 8. Follower surface wiring parity
 
