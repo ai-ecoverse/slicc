@@ -441,13 +441,18 @@ Nothing else is required for CI configuration:
 
 ### Workflow behavior
 
+- `.github/workflows/ci.yml`
+  - keeps pull-request feedback fast by running the Worker build, dry-run, typecheck, and coverage plus the reference fake-LLM E2E scenario
+  - runs the full Playwright suite on affected `merge_group` batches; the required `ci` summary waits for it before landing
+  - runs the staging R2 archive, deploy, and deployed smoke test only when the merge group changes Worker/cloud-core/shared code, provider wiring, dependency metadata/patches, or the CI workflow—not for every webapp/VFS/asset change
+  - retries staging deploys and the deployed smoke test to tolerate transient Worker propagation failures
+- `.github/workflows/worker-staging.yml`
+  - provides a specialized, non-required staging deployment on non-fork pull requests that touch Worker, cloud-core, or provider integration paths
+  - serializes runs because the staging Worker and `slicc-staging` e2b alias are shared singletons
+  - uploads the staging-only APNs secrets that the merge-queue CI path does not manage
 - `.github/workflows/worker.yml`
-  - runs staging deploy + smoke test on pull requests to `main` that touch the Worker/Wrangler config
-  - skips forked PRs because GitHub does not expose deployment secrets there
-  - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
-  - supports manual dispatch with `target=staging|production`
-  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), points Wrangler at `packages/cloudflare-worker/wrangler.jsonc`, and passes its `deployment-url` output into `packages/cloudflare-worker/tests/deployed.test.ts`
-  - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
+  - manually deploys production from `main` with `workflow_dispatch`
+  - archives assets before deploy and smoke-tests the resulting Worker URL
 
 ### Local validation commands
 
