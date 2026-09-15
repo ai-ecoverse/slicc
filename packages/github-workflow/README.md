@@ -133,10 +133,117 @@ steps:
 
 The quickest setup is one API-key provider: `provider` (`anthropic`, `openai`, `bedrock-camp`, …), the `SLICC_PROVIDER_API_KEY` secret (`provider-api-key` on the action), `provider-base-url` where the provider needs one, and `model` as `<provider>:<model>`. The smoke gate runs exactly this with the repo's Bedrock key: `provider: bedrock-camp`, `provider-base-url: https://bedrock-runtime.us-west-2.amazonaws.com`, `model: bedrock-camp:us.anthropic.claude-opus-4-8`.
 
-For several accounts or secrets, two bundle inputs match what the cloud float already consumes:
+For several accounts or secrets, two bundle inputs match what the cloud float already consumes: **`cone-config`** (a JSON bundle, stored as the `SLICC_CONE_CONFIG` secret) and **`secrets-env`** (`secrets.env` text, stored as `SLICC_SECRETS_ENV`).
 
-- **`cone-config`** — a JSON bundle `{ "model", "effortLevel", "accounts": [...], "secrets": [...] }`. `accounts` are provider accounts (`{"providerId":"anthropic","kind":"apikey","apiKey":"…"}` or `{"providerId":"github","kind":"oauth","accessToken":"…"}`); `secrets` are `{ "name", "value", "domains": ["api.example.com"] }`. Store it as one repository secret.
-- **`secrets-env`** — plain `secrets.env` text: `NAME=value` followed by `NAME_DOMAINS=a,b`. Every secret must be domain-scoped; a missing `_DOMAINS` line fails the boot with the offending name.
+### `cone-config` — full example
+
+The bundle is the same `ConeConfig` shape `packages/cloud-core/src/cone-config/index.ts` defines for the e2b float. Every field except `accounts` is optional. The comments below are for reading only — the stored secret must be plain JSON, so strip them before pasting.
+
+<!-- prettier-ignore -->
+```jsonc
+{
+  // Model the cone starts on, as "<providerId>:<modelId>". The `model`
+  // input overrides this. Omit it to let SLICC pick its default.
+  "model": "bedrock-camp:us.anthropic.claude-opus-4-8",
+
+  // Locked thinking effort: off | minimal | low | medium | high | xhigh.
+  // Omit for the model's default. The `effort-level` input overrides this.
+  "effortLevel": "high",
+
+  // Provider accounts applied at boot, before the first turn. One entry per
+  // providerId; a later `provider` + `provider-api-key` shortcut replaces the
+  // entry with the same providerId.
+  "accounts": [
+    {
+      // API-key provider that also needs an endpoint (Bedrock runtime for
+      // the region; the ABSK… value is the Bedrock API key / CAMP bearer).
+      "providerId": "bedrock-camp",
+      "kind": "apikey",
+      "apiKey": "ABSK...",
+      "baseUrl": "https://bedrock-runtime.us-west-2.amazonaws.com"
+    },
+    {
+      // Plain API-key provider: `baseUrl` is optional, as are `deployment`
+      // and `apiVersion` (Azure-style providers).
+      "providerId": "anthropic",
+      "kind": "apikey",
+      "apiKey": "sk-ant-..."
+    },
+    {
+      // OAuth provider: a pre-acquired access token (the cone cannot open a
+      // login popup). `refreshToken`, `tokenExpiresAt` (epoch ms), `userName`
+      // and `baseUrl` are optional. A GitHub token here also drives the
+      // in-cone `git clone` / `git push` bridge.
+      "providerId": "github",
+      "kind": "oauth",
+      "accessToken": "gho_...",
+      "refreshToken": "ghr_...",
+      "tokenExpiresAt": 1789520000000,
+      "userName": "octocat"
+    }
+  ],
+
+  // Domain-scoped secrets (same schema as secrets.env). The agent only ever
+  // sees a masked value; the fetch proxy substitutes the real one for
+  // requests whose hostname matches one of `domains`. Names must be
+  // identifiers ([A-Za-z_][A-Za-z0-9_.-]*) — identifier-shaped ones also
+  // surface as $NAME in the agent shell — and values single-line. The
+  // `oauth.` prefix is reserved. A `secrets-env` entry with the same name
+  // wins over one listed here.
+  "secrets": [
+    {
+      "name": "GITHUB_TOKEN",
+      "value": "ghp_...",
+      // Bare `github.com` is needed for `git push https://github.com/...`;
+      // `*.github.com` does not match the bare host.
+      "domains": ["github.com", "*.github.com", "raw.githubusercontent.com"]
+    },
+    {
+      "name": "OPENAI_KEY",
+      "value": "sk-...",
+      "domains": ["api.openai.com"]
+    },
+    {
+      // Dotted names stay out of the shell environment but are still
+      // unmasked by the proxy — the convention mount backends use.
+      "name": "s3.r2.access_key_id",
+      "value": "R2_ACCESS_KEY_ID",
+      "domains": ["*.r2.cloudflarestorage.com"]
+    }
+  ]
+}
+```
+
+Validation happens on the runner before node-server starts, and a bad bundle fails the boot with the offending path (`cone-config: accounts[1]: apikey account requires apiKey`, `secrets-env: TOKEN has no TOKEN_DOMAINS line`, …). Only names and provider ids are ever logged.
+
+### `secrets-env` — full example
+
+The same secrets in the line-oriented format node-server reads (`docs/secrets.md`). Each secret is two lines; a secret without a `_DOMAINS` line is rejected. Values are taken verbatim (no quoting, no escaping, single-line only; base64-encode a multi-line credential).
+
+<!-- prettier-ignore -->
+```env
+# GitHub PAT for the in-cone git bridge and `gh`-style API calls
+GITHUB_TOKEN=ghp_...
+GITHUB_TOKEN_DOMAINS=github.com,*.github.com,raw.githubusercontent.com
+
+OPENAI_KEY=sk-...
+OPENAI_KEY_DOMAINS=api.openai.com
+
+# S3 / R2 profile consumed by `mount --source s3://… --profile r2`
+s3.r2.access_key_id=R2_ACCESS_KEY_ID
+s3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com
+s3.r2.secret_access_key=R2_SECRET_ACCESS_KEY
+s3.r2.secret_access_key_DOMAINS=*.r2.cloudflarestorage.com
+s3.r2.endpoint=https://<account-id>.r2.cloudflarestorage.com
+s3.r2.endpoint_DOMAINS=*.r2.cloudflarestorage.com
+```
+
+Storing them as repository secrets from a terminal:
+
+```bash
+gh secret set SLICC_CONE_CONFIG --repo <owner>/<repo> < cone-config.json
+gh secret set SLICC_SECRETS_ENV --repo <owner>/<repo> < secrets.env
+```
 
 Accounts land in `/slicc/cone-config.json` and the leader's hosted bootstrap applies them before the first turn. Secrets land in a 0600 `secrets.env` under `$RUNNER_TEMP`; the agent only ever sees masked values and the fetch proxy unmasks them at the network boundary for the allowed domains (see `docs/secrets.md`). Neither input is placed in node-server's environment.
 
