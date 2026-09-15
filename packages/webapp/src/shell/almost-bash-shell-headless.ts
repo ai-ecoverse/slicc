@@ -154,6 +154,12 @@ export interface HeadlessShellOptions {
    * terminal (no tool context) never emits progress and can leave it unset.
    */
   scrubProgressLabel?: (text: string) => Promise<string>;
+  /**
+   * just-bash execution limits for this shell. Omit for the bundled defaults
+   * (512 MiB live / input). Tests pass a smaller budget so rg's byte-limit
+   * path is exercisable without multi-hundred-megabyte fixtures (#3106).
+   */
+  executionLimits?: NonNullable<ConstructorParameters<typeof Bash>[0]>['executionLimits'];
 }
 
 /** Command-level sudo enforcement hooks supplied to the shell. */
@@ -657,6 +663,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       sleep: makeSleepWithProgress(this.progress, {
         isAborted: () => this.activeRunSignal?.aborted ?? false,
       }),
+      executionLimits: options.executionLimits,
     });
 
     // Network-command post-registration cleanup (Codex P1 on #433).
@@ -1204,8 +1211,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     if (!this.isTransparentGatingEnabled()) return command;
     const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
     return {
-      name: command.name,
-      trusted: command.trusted,
+      ...command,
       async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
         const denial = await guard(args);
         if (denial) return denial;

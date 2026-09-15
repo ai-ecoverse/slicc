@@ -63,6 +63,7 @@ import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-
 import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createPython3LikeCommand } from './python-command.js';
+import { createRgCommand } from './rg-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createSayCommand } from './say-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
@@ -298,6 +299,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhoamiCommand(),
     createUnlinkCommand(),
     createMktempCommand(),
+    // Shadows just-bash `rg` so a byte-limit miss exits instead of aborting
+    // the script (#3106). Bundled search still runs via `ctx.origCommand`.
+    createRgCommand(),
     createManCommand(),
     createDigCommand(),
     createOAuthTokenCommand(),
