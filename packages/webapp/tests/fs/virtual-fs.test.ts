@@ -225,6 +225,14 @@ describe('VirtualFS', () => {
       expect(await vfs.readTextFile('/new.txt')).toBe('content');
     });
 
+    it('the in-VFS tree is byte-exact: a case-only rename is a real rename', async () => {
+      await vfs.mkdir('/tmp', { recursive: true });
+      await vfs.writeFile('/tmp/Slicc.md', 'tmp-payload');
+      await vfs.rename('/tmp/Slicc.md', '/tmp/SLICC.md');
+      expect(await vfs.exists('/tmp/Slicc.md')).toBe(false);
+      expect(await vfs.readTextFile('/tmp/SLICC.md')).toBe('tmp-payload');
+    });
+
     it('renames directories', async () => {
       await vfs.writeFile('/src/main.ts', 'code');
       await vfs.rename('/src', '/source');

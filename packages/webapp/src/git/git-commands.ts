@@ -37,7 +37,6 @@ import { lsTree } from './commands/ls-tree.js';
 import { merge } from './commands/merge.js';
 import { mergeBase } from './commands/merge-base.js';
 import { mergeFile } from './commands/merge-file.js';
-import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
 import { push } from './commands/push.js';
 import { rebase } from './commands/rebase.js';
@@ -562,8 +561,13 @@ export class GitCommands {
           return await stash(ctx, effectiveCwd, rest);
         case 'rm':
           return await rm(ctx, effectiveCwd, rest);
-        case 'mv':
+        case 'mv': {
+          // First-use import: git-commands is on the kernel-worker eager
+          // graph (almost-bash-shell-headless). `mv` is not boot-critical
+          // and grew for the same-inode no-op (#3107).
+          const { mv } = await import('./commands/mv.js');
           return await mv(ctx, effectiveCwd, rest);
+        }
         case 'rev-parse':
           return await revParse(ctx, effectiveCwd, rest);
         case 'help':

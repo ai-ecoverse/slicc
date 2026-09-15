@@ -88,13 +88,17 @@ function decodeReadBytes(bytes: Uint8Array): string {
  *
  * `identity` rather than `dev`/`ino`: just-bash only accepts the inode pair
  * when BOTH halves are present, and one VfsAdapter can span several backends
- * whose inode spaces are unrelated — there is no honest single `dev`. Only
- * positive inodes qualify: ZenFS pins `/` to 0, and a sidecar poisoned the way
- * #2146 describes can hand out 0 for many entries before the pre-boot repair
- * re-numbers them. A collided identity is worse than none, so 0 stays absent.
+ * whose inode spaces are unrelated — there is no honest single `dev` field on
+ * `FsStat`. Encode `dev` into the token when the backend reports one, so a
+ * hostfs file and a ZenFS file that share an inode number are not the same
+ * identity. Only positive inodes qualify: ZenFS pins `/` to 0, and a sidecar
+ * poisoned the way #2146 describes can hand out 0 for many entries before the
+ * pre-boot repair re-numbers them. A collided identity is worse than none, so
+ * 0 stays absent.
  */
-function toIdentity(ino: number | undefined): string | undefined {
-  return typeof ino === 'number' && Number.isInteger(ino) && ino > 0 ? `vfs-ino:${ino}` : undefined;
+function toIdentity(ino: number | undefined, dev?: number): string | undefined {
+  if (typeof ino !== 'number' || !Number.isInteger(ino) || ino <= 0) return undefined;
+  return typeof dev === 'number' && Number.isInteger(dev) ? `vfs:${dev}:${ino}` : `vfs-ino:${ino}`;
 }
 
 /**
@@ -510,7 +514,7 @@ export class VfsAdapter implements IFileSystem {
           mode: fast.type === 'directory' ? 0o755 : 0o644,
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino),
+          identity: toIdentity(fast.ino, fast.dev),
         };
       }
       // What the directory listing just reported, when it reported it
@@ -523,7 +527,7 @@ export class VfsAdapter implements IFileSystem {
         mode: s.type === 'directory' ? 0o755 : 0o644,
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino),
+        identity: toIdentity(s.ino, s.dev),
       };
     });
   }
@@ -546,7 +550,7 @@ export class VfsAdapter implements IFileSystem {
           mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
           size: fast.size,
           mtime: new Date(fast.mtime),
-          identity: toIdentity(fast.ino),
+          identity: toIdentity(fast.ino, fast.dev),
         };
       }
       const s = this.primedStats(normalized) ?? (await this.vfs.lstat(normalized));
@@ -557,7 +561,7 @@ export class VfsAdapter implements IFileSystem {
         mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
         size: s.size,
         mtime: new Date(s.mtime),
-        identity: toIdentity(s.ino),
+        identity: toIdentity(s.ino, s.dev),
       };
     });
   }
@@ -701,6 +705,14 @@ export class VfsAdapter implements IFileSystem {
     return this.trusted(async () => {
       await this.vfs.rename(normalizePath(src), normalizePath(dest));
     });
+  }
+
+  /**
+   * Alias of {@link mv}. Realm `fs.rename` probes this name; without it they
+   * fall back to copy+unlink, which truncates a case-/NFC-equal dest (#3107).
+   */
+  async rename(src: string, dest: string): Promise<void> {
+    return this.mv(src, dest);
   }
 
   resolvePath(base: string, path: string): string {

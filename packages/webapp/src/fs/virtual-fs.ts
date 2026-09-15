@@ -41,6 +41,7 @@ import {
 } from './mount-table-store.js';
 import { fileFromDirectoryHandle } from './native-file.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import { sameFileIdentity } from './same-file-identity.js';
 import {
   mergeSidecarEntries,
   type SidecarDirtyState,
@@ -2461,6 +2462,7 @@ export class VirtualFS {
           mtime: ms.mtime,
           ctime: ms.ctime ?? ms.mtime,
           ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
+          ...(ms.dev !== undefined ? { dev: ms.dev } : {}),
           ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
           ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
           ...(ms.mode !== undefined ? { mode: ms.mode } : {}),
@@ -2479,6 +2481,7 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,
@@ -2532,31 +2535,53 @@ export class VirtualFS {
   private async renameInner(oldPath: string, newPath: string): Promise<void> {
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
-    let entryType: EntryType | undefined;
+    if (normalizedOld === normalizedNew) return;
+    let oldStat: Stats | undefined;
     try {
-      entryType = (await this.lstat(normalizedOld)).type;
+      oldStat = await this.lstat(normalizedOld);
     } catch {
-      /* best effort */
+      /* best effort — rename below throws ENOENT */
     }
+    const entryType = oldStat?.type;
     // Same-mount rename on a backend that supports it natively (hostfs).
     // Mount subtrees live in the backend, not LightningFS, so the generic
     // lfs.rename below cannot see them; backends without a native rename
-    // keep the historical behavior.
+    // keep the historical behavior. Identity is the backend's job: hostfs
+    // `lstat`s (does not follow), so two distinct symlinks to one target
+    // still rename, while a case-/NFC-equal pair no-ops (#3107).
     const oldMount = this.findMount(normalizedOld);
     if (oldMount?.backend.rename) {
       const newMount = this.findMount(normalizedNew);
       if (newMount && newMount.backend === oldMount.backend) {
+        let noop = false;
         try {
-          await oldMount.backend.rename(oldMount.relParts.join('/'), newMount.relParts.join('/'));
+          const result = await oldMount.backend.rename(
+            oldMount.relParts.join('/'),
+            newMount.relParts.join('/')
+          );
+          noop = result?.noop === true;
         } catch (err) {
           rebrandFsError(err, normalizedOld);
         }
-        this.watcher?.notify([
-          { type: 'delete', path: normalizedOld, entryType },
-          { type: 'create', path: normalizedNew, entryType },
-        ]);
-        this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        if (!noop) {
+          this.watcher?.notify([
+            { type: 'delete', path: normalizedOld, entryType },
+            { type: 'create', path: normalizedNew, entryType },
+          ]);
+          this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        }
         return;
+      }
+    }
+    // Same inode (case / NFC-NFD / hardlink) on LightningFS / copy paths:
+    // POSIX no-op. Must not notify watchers, and must not fall through to a
+    // copy that O_TRUNCs dest before source is read (#3107).
+    if (oldStat) {
+      try {
+        const newStat = await this.lstat(normalizedNew);
+        if (sameFileIdentity(oldStat, newStat)) return;
+      } catch {
+        /* dest missing — real rename */
       }
     }
     try {
@@ -2622,9 +2647,16 @@ export class VirtualFS {
    * @throws FsError ENOENT if source doesn't exist, EISDIR if source is a directory
    */
   async copyFile(src: string, dest: string): Promise<void> {
-    const stat = await this.stat(src);
-    if (stat.type === 'directory') {
+    const srcStat = await this.stat(src);
+    if (srcStat.type === 'directory') {
       throw new FsError('EISDIR', 'is a directory', src);
+    }
+    try {
+      const destStat = await this.stat(dest);
+      // Same inode: writing dest would O_TRUNC the only copy (#3107).
+      if (sameFileIdentity(srcStat, destStat)) return;
+    } catch {
+      /* dest missing */
     }
     const content = await this.readFile(src, { encoding: 'binary' });
     await this.writeFile(dest, content);
@@ -2753,6 +2785,7 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
+          ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
           uid: s.uid,
           gid: s.gid,
           mode: s.mode,
@@ -2764,6 +2797,7 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        ...(typeof s.dev === 'number' ? { dev: s.dev } : {}),
         uid: s.uid,
         gid: s.gid,
         mode: s.mode,

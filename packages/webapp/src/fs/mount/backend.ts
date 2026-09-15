@@ -29,6 +29,8 @@ export interface MountStatIdentity {
   ctime?: number;
   /** Inode number. */
   ino?: number;
+  /** Device id (`st_dev`). Inodes are unique per device. */
+  dev?: number;
   uid?: number;
   gid?: number;
   /** Full POSIX `st_mode`, type bits included — carries the executable bit. */
@@ -178,9 +180,13 @@ export interface MountBackend {
    * Optional native rename within this mount. VirtualFS.rename() routes a
    * same-mount rename here when present (currently hostfs only); backends
    * without it keep the historical behavior (rename inside a mount fails —
-   * callers fall back to copy+delete).
+   * callers fall back to copy+delete). Hostfs must POSIX-no-op when both
+   * paths name the same inode (case / NFC-NFD / hardlink) — copy+delete of
+   * that pair truncates the only copy (#3107). `noop: true` when the
+   * backend already applied that POSIX no-op (so VirtualFS must not notify
+   * watchers of a move that did not happen).
    */
-  rename?(fromPath: string, toPath: string): Promise<void>;
+  rename?(fromPath: string, toPath: string): Promise<{ noop?: boolean } | void>;
 
   /**
    * Re-walk the source and reconcile cache. With opts.bodies, also

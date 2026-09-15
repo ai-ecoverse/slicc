@@ -414,14 +414,10 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'rename': {
       const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
-      const fs = ctx.fs as { rename?: (a: string, b: string) => Promise<void> };
-      if (fs.rename) {
-        await fs.rename(resolved!, newPath);
-      } else {
-        const content = await ctx.fs.readFileBuffer(resolved!);
-        await ctx.fs.writeFile(newPath, content);
-        await ctx.fs.rm(resolved!, { recursive: true });
-      }
+      // First-use import: this file is on the kernel-worker eager graph
+      // (host → jsh-executor → realm-runner). Rename is not boot-critical.
+      const { renameViaFs } = await import('./rename-via-fs.js');
+      await renameViaFs(ctx.fs, resolved!, newPath);
       return true;
     }
     case 'resolvePath':

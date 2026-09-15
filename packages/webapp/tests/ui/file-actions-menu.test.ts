@@ -142,4 +142,63 @@ describe('file-tree context menu', () => {
       expect(visibleIds(shown[0])).not.toContain('open-browser');
     });
   });
+
+  describe('rename of a same-inode dest (#3107)', () => {
+    it('does not copy+rm when dest stats as the same inode', async () => {
+      const fileTree = document.createElement('div');
+      document.body.appendChild(fileTree);
+      const writes: string[] = [];
+      const rms: string[] = [];
+      const files = new Map<string, { body: string; ino: number }>([
+        ['/mnt/kb/Slicc.md', { body: 'keep', ino: 42 }],
+      ]);
+      wireFileActions({
+        fileTree,
+        openFs: () =>
+          Promise.resolve({
+            readDir: () => Promise.resolve([]),
+            readFile: () => Promise.resolve(new Uint8Array()),
+            stat: () => Promise.reject(new Error('ENOENT')),
+          }),
+        openWriter: () =>
+          Promise.resolve({
+            stat: async (path: string) => {
+              const hit =
+                files.get(path) ??
+                (path.endsWith('SLICC.md') ? files.get('/mnt/kb/Slicc.md') : undefined);
+              if (!hit) throw new Error('ENOENT');
+              return {
+                type: 'file' as const,
+                size: hit.body.length,
+                mtime: 1,
+                ctime: 1,
+                ino: hit.ino,
+              };
+            },
+            readFile: async () => new TextEncoder().encode('keep'),
+            writeFile: async (path: string) => {
+              writes.push(path);
+            },
+            rm: async (path: string) => {
+              rms.push(path);
+            },
+            mkdir: async () => {},
+            flush: async () => {},
+            readDir: async () => [],
+            listMountPoints: () => [],
+          }),
+        insertReference: () => {},
+        toPreviewUrl: (p: string) => p,
+        log: { error: () => {} },
+      });
+      const prompt = vi.spyOn(window, 'prompt').mockReturnValue('SLICC.md');
+      chooseAction(fileTree, 'rename', '/mnt/kb/Slicc.md');
+      await vi.waitFor(() => {
+        expect(prompt).toHaveBeenCalled();
+      });
+      expect(writes).toEqual([]);
+      expect(rms).toEqual([]);
+      prompt.mockRestore();
+    });
+  });
 });

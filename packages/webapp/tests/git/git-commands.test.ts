@@ -2798,6 +2798,45 @@ EOF`);
       expect(result.stderr).toContain('usage');
     });
 
+    it('same-inode rename is a no-op and keeps the bytes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/Slicc.md', 'keep');
+      await git.execute(['add', 'Slicc.md'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const srcStat = await vfs.stat('/project/Slicc.md');
+      const realStat = vfs.stat.bind(vfs);
+      const spy = vi.spyOn(vfs, 'stat').mockImplementation(async (path: string) => {
+        if (path === '/project/SLICC.md') return srcStat;
+        return realStat(path);
+      });
+      try {
+        const result = await git.execute(['mv', 'Slicc.md', 'SLICC.md'], '/project');
+        expect(result.exitCode).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await vfs.readTextFile('/project/Slicc.md')).toBe('keep');
+      expect(await vfs.exists('/project/SLICC.md')).toBe(false);
+    });
+
+    it('falls back to copy+rm when native rename cannot see the mount', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/old.txt', 'content');
+      await git.execute(['add', 'old.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const spy = vi
+        .spyOn(vfs, 'rename')
+        .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      try {
+        const result = await git.execute(['mv', 'old.txt', 'new.txt'], '/project');
+        expect(result.exitCode).toBe(0);
+        expect(await vfs.exists('/project/old.txt')).toBe(false);
+        expect(await vfs.readTextFile('/project/new.txt')).toBe('content');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('moves file to a subdirectory', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/file.txt', 'content');

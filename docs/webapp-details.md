@@ -20,7 +20,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## VirtualFS
 
-- Path: `packages/webapp/src/fs/`. `virtual-fs.ts` POSIX-like FS backed by OPFS (in-memory in Node tests). `restricted-fs.ts` path ACLs. `mount-commands.ts` parses `--source`/`--profile`/`--no-probe`; `path-utils.ts` normalization.
+- Path: `packages/webapp/src/fs/`. `virtual-fs.ts` POSIX-like FS backed by OPFS (in-memory in Node tests). `restricted-fs.ts` path ACLs. `mount-commands.ts` parses `--source`/`--profile`/`--no-probe`; `path-utils.ts` normalization. `same-file-identity.ts` is the inode check `rename`/`copyFile` use so a case- or NFC-equal dest on hostfs is a no-op instead of an O_TRUNC of the only copy (#3107).
 - `mount/` — `MountBackend` + `backend-local.ts` / `backend-s3.ts` / `backend-da.ts` and shared `RemoteMountCache` (TTL+ETag, IDB). Browser-naive signing: CLI → `/api/s3-sign-and-forward`, extension → SW. `mount-table-store.ts` / `mount-recovery.ts` persist and restore. See `docs/mounts.md`.
 
 ## Shell

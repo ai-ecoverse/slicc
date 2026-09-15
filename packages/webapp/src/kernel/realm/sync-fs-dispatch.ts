@@ -136,25 +136,14 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         await fs.rm(resolved, { recursive: true });
         return { ok: true, kind: 'void' };
       case 'rename': {
-        // Extends realm-host.ts dispatchVfs (which probes only `rename`):
-        // production ctx.fs (VfsAdapter, possibly sudo-wrapped) exposes `mv`,
-        // not `rename`, so probe `mv` too, then fall back to copy+remove when
-        // neither is present. (Not reachable from the SW handler — the
-        // responder keeps this for completeness.)
+        // Probe `rename` then `mv` (VfsAdapter exposes `mv`); copy+remove
+        // only when neither is present, and never when dest is the same inode
+        // as source (#3107). Not reachable from the SW handler — kept for
+        // the responder's completeness. First-use import: this module is on
+        // the kernel-worker boot path (host → sync-fs-responder).
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
-        const maybe = fs as {
-          rename?: (a: string, b: string) => Promise<void>;
-          mv?: (a: string, b: string) => Promise<void>;
-        };
-        if (maybe.rename) {
-          await maybe.rename(resolved, dest);
-        } else if (maybe.mv) {
-          await maybe.mv(resolved, dest);
-        } else {
-          const content = await fs.readFileBuffer(resolved);
-          await fs.writeFile(dest, content);
-          await fs.rm(resolved, { recursive: true });
-        }
+        const { renameViaFs } = await import('./rename-via-fs.js');
+        await renameViaFs(fs, resolved, dest);
         return { ok: true, kind: 'void' };
       }
       default:
