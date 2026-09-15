@@ -17,6 +17,12 @@ slicc list-sessions [--json]                    List iCloud tray sessions (macOS
 slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL from iCloud, run <verb>
 ```
 
+- `prompt` ends on a `turn_end`/`error` event, or on a processing→ready
+  `status` flip that stands for `SLICC_PROMPT_SETTLE` (default 2 s) with no
+  resumed activity and no pending `tool_use_start`. Live leaders broadcast
+  `ready` after every assistant _message_, so a tool-using turn flips twice;
+  exiting on the first flip returned an empty reply (`promptTurn` in
+  `commands.go`).
 - `watch` — passive `tail -f` mirror; sends nothing, reconnects with backoff.
   **Does NOT filter by scoop by default** — the cone's `scoopJid` is a generated
   uid (not `"cone"`); pass a scoop jid to filter.

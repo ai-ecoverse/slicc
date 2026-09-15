@@ -1,0 +1,19 @@
+name: SLICC — keep alive
+description: >-
+  Hold the job until the leader's deadline (from start-leader's `duration`)
+  or an explicit `until`, failing fast if a watched process exits.
+inputs:
+  watch:
+    description: Which recorded processes must stay alive — `leader`, `followers`, or `all`.
+    default: all
+  until:
+    description: Override the recorded deadline with an ISO timestamp or a duration (e.g. `20m`). Required for follower-only jobs.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_WATCH: ${{ inputs.watch }}
+        INPUT_UNTIL: ${{ inputs.until }}
+      run: node "${{ github.action_path }}/../../scripts/wait-for-deadline.mjs"

@@ -19,6 +19,12 @@ slicc <join-url> follow --eval [repl]           Same, but into ONE persistent RE
 slicc update [--check]                          Self-update to the newest released CLI binary
 ```
 
+`prompt` returns once the turn is really over: a tool-using turn makes the
+leader report "ready" between the tool call and the final answer, so the CLI
+waits for that state to hold for two seconds with nothing else happening
+(`SLICC_PROMPT_SETTLE=5s` widens it) before exiting. A turn that errors exits 1
+with the error on stderr.
+
 `watch` is read-only: it prints the leader's agent output as it streams (a
 `tail -f` on what the cone is doing) and sends nothing back.
 

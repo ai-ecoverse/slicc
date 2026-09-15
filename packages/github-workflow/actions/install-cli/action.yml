@@ -1,0 +1,44 @@
+name: SLICC — install CLI
+description: >-
+  Download the Go `slicc` follower CLI from the newest release that ships it,
+  put it on PATH, and export `SLICC_CLI` (its absolute path) for the other
+  SLICC actions.
+inputs:
+  source:
+    description: '`release` downloads a published binary; `build` compiles `packages/slicc-cli` from the checkout (needs Go).'
+    default: release
+  build-dir:
+    description: Path of the slicc-cli Go module when `source` is `build`.
+    default: ''
+  version:
+    description: '`latest` or a release tag (e.g. `v6.154.4`); ignored for `build`.'
+    default: latest
+  install-dir:
+    description: Directory for the binary (default `$RUNNER_TEMP/slicc-gw/cli`).
+    default: ''
+  token:
+    description: GitHub token for the releases API (avoids the anonymous rate limit).
+    default: ${{ github.token }}
+  telemetry:
+    description: Keep the CLI's operational telemetry beacon on.
+    default: 'false'
+outputs:
+  path:
+    description: Absolute path of the installed binary.
+    value: ${{ steps.install.outputs.path }}
+  version:
+    description: Release tag the binary came from.
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_BUILD_DIR: ${{ inputs.build-dir }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_INSTALL_DIR: ${{ inputs.install-dir }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_TELEMETRY: ${{ inputs.telemetry }}
+      run: node "${{ github.action_path }}/../../scripts/install-cli.mjs"

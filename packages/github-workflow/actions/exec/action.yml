@@ -1,0 +1,58 @@
+name: SLICC — exec
+description: >-
+  Run a command in the leader's virtual shell over `slicc <join-url> exec`
+  and return its stdout and exit status. Piped stdin comes from `stdin-file`.
+inputs:
+  join-url:
+    description: The leader's `https://…/join/<token>` link. Pass a secret or a start-leader output.
+    required: true
+  command:
+    description: Command line for the leader's shell (just-bash).
+    required: true
+  stdin-file:
+    description: Runner file to pipe into the command's stdin.
+    default: ''
+  timeout:
+    description: Wall-clock cap (e.g. `10m`).
+    default: 10m
+  fail-on-error:
+    description: Fail the step when the command exits non-zero.
+    default: 'true'
+  output-file:
+    description: Runner path for the full stdout (default under `$RUNNER_TEMP/slicc-gw/out`).
+    default: ''
+  output-limit:
+    description: Max bytes copied into the `stdout` output.
+    default: '262144'
+  quiet:
+    description: Do not echo stdout to the job log.
+    default: 'false'
+outputs:
+  stdout:
+    description: Command stdout (possibly truncated).
+    value: ${{ steps.run.outputs.output }}
+  stdout-file:
+    description: Runner path holding the complete stdout.
+    value: ${{ steps.run.outputs.output-file }}
+  exit-code:
+    description: Exit status of the command on the leader.
+    value: ${{ steps.run.outputs.exit-code }}
+  timed-out:
+    description: Whether the timeout fired.
+    value: ${{ steps.run.outputs.timed-out }}
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_VERB: exec
+        INPUT_TEXT: ${{ inputs.command }}
+        INPUT_STDIN_FILE: ${{ inputs.stdin-file }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_OUTPUT_LIMIT: ${{ inputs.output-limit }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+      run: node "${{ github.action_path }}/../../scripts/slicc-run.mjs"

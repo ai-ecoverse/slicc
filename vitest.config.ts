@@ -278,6 +278,17 @@ export default defineConfig({
           include: ['.claude/hooks/**/*.test.mjs'],
         },
       },
+      {
+        // GitHub Actions package: zero-dependency .mjs orchestrator scripts
+        // behind composite actions, not an npm workspace (consumers run them
+        // from a bare checkout of this path). Co-located *.test.mjs cover the
+        // pure library + runner I/O helpers.
+        extends: true,
+        test: {
+          name: 'github-workflow',
+          include: ['packages/github-workflow/**/*.test.mjs'],
+        },
+      },
     ],
   },
 });

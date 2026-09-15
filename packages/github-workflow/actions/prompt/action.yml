@@ -1,0 +1,54 @@
+name: SLICC — prompt
+description: >-
+  Send one prompt to a running leader over `slicc <join-url> prompt`, stream
+  the assistant's reply, and return it once the turn completes.
+inputs:
+  join-url:
+    description: The leader's `https://…/join/<token>` link. Pass a secret or a start-leader output.
+    required: true
+  prompt:
+    description: The user message. Multiline is fine.
+    required: true
+  timeout:
+    description: Wall-clock cap for the turn (e.g. `30m`).
+    default: 30m
+  output-file:
+    description: Runner path for the full reply (default under `$RUNNER_TEMP/slicc-gw/out`).
+    default: ''
+  output-limit:
+    description: Max bytes copied into the `response` output; the file always holds everything.
+    default: '262144'
+  quiet:
+    description: Do not echo the reply to the job log.
+    default: 'false'
+outputs:
+  response:
+    description: The assistant's reply (possibly truncated; see `truncated`).
+    value: ${{ steps.run.outputs.output }}
+  response-file:
+    description: Runner path holding the complete reply.
+    value: ${{ steps.run.outputs.output-file }}
+  exit-code:
+    description: CLI exit status (0 = turn completed).
+    value: ${{ steps.run.outputs.exit-code }}
+  timed-out:
+    description: Whether the timeout fired.
+    value: ${{ steps.run.outputs.timed-out }}
+  truncated:
+    description: Whether `response` was truncated.
+    value: ${{ steps.run.outputs.truncated }}
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_VERB: prompt
+        INPUT_TEXT: ${{ inputs.prompt }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_OUTPUT_LIMIT: ${{ inputs.output-limit }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+        INPUT_FAIL_ON_ERROR: 'true'
+      run: node "${{ github.action_path }}/../../scripts/slicc-run.mjs"

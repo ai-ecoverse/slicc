@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
@@ -27,6 +28,94 @@ type inbound struct {
 	raw []byte
 }
 
+// promptSettleGrace is how long a processing→ready status flip must stand
+// unchallenged before `prompt` treats it as the end of the turn.
+//
+// A live browser leader broadcasts `ready` at the end of every assistant
+// MESSAGE, not every turn: a turn that calls a tool goes processing → ready
+// (tool call emitted) → processing (tool result fed back) → ready (final
+// answer). Exiting on the first flip returned an empty reply while the model
+// was still working (observed against a Bedrock cone: 3.3 s, no text, exit 0).
+// Any resumed activity — a `processing` status, a content delta, a
+// message/tool event — withdraws the candidate; a pending tool call (a
+// `tool_use_start` with no `tool_result` yet) blocks it outright, so a slow
+// tool cannot outlast the grace window. A real `turn_end` or an error ends
+// the turn immediately. SLICC_PROMPT_SETTLE overrides the window (tests).
+const promptSettleGrace = 2 * time.Second
+
+func promptSettleWindow() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SLICC_PROMPT_SETTLE")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return promptSettleGrace
+}
+
+// promptTurn is the turn-completion state machine shared by cmdPrompt's
+// dispatch goroutine (which feeds it frames) and its main loop (which decides
+// when the turn is over). All fields are guarded by mu.
+type promptTurn struct {
+	mu            sync.Mutex
+	sawProcessing bool
+	pendingTools  int
+	readyAt       time.Time // non-zero while a processing→ready flip is the candidate end
+}
+
+// activity records resumed work: any candidate end is withdrawn.
+func (p *promptTurn) activity() {
+	p.mu.Lock()
+	p.sawProcessing = true
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+func (p *promptTurn) toolStart() {
+	p.mu.Lock()
+	p.pendingTools++
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+func (p *promptTurn) toolResult() {
+	p.mu.Lock()
+	if p.pendingTools > 0 {
+		p.pendingTools--
+	}
+	p.readyAt = time.Time{}
+	p.mu.Unlock()
+}
+
+// status returns whether a ready flip became a candidate end.
+func (p *promptTurn) status(scoopStatus string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if scoopStatus == protocol.ScoopStatusProcessing {
+		p.sawProcessing = true
+		p.readyAt = time.Time{}
+		return false
+	}
+	if !p.sawProcessing {
+		return false
+	}
+	p.readyAt = now
+	return true
+}
+
+// settled reports whether the candidate end has stood for `grace`, and if
+// not, how long the caller should wait before asking again (0 = no candidate).
+func (p *promptTurn) settled(now time.Time, grace time.Duration) (bool, time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.readyAt.IsZero() || p.pendingTools > 0 {
+		return false, 0
+	}
+	if remaining := grace - now.Sub(p.readyAt); remaining > 0 {
+		return false, remaining
+	}
+	return true, 0
+}
+
 // cmdPrompt streams the leader's next assistant turn to stdout, then exits.
 func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	done := make(chan int, 1)
@@ -36,11 +125,16 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
-	// A live browser leader emits no `turn_end` — it signals turn completion via
-	// scoopStatus going processing→ready. Track that transition; also honor a real
-	// `turn_end` for non-live floats. (Handler runs single-threaded on the dispatch
-	// goroutine, so `sawProcessing` needs no lock.)
-	sawProcessing := false
+	turn := &promptTurn{}
+	// kick wakes the main loop to re-evaluate the settle timer; buffered so the
+	// dispatch goroutine never blocks on it.
+	kick := make(chan struct{}, 1)
+	wake := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
 	handler := func(typ string, raw []byte) {
 		switch typ {
 		case protocol.TypeAgentEvent:
@@ -48,25 +142,32 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			if json.Unmarshal(raw, &env) != nil {
 				return
 			}
+			debugLogf("prompt: agent_event %s", env.Event.Type)
 			switch env.Event.Type {
 			case protocol.AgentContentDelta:
 				fmt.Print(env.Event.Text)
+				turn.activity()
+			case protocol.AgentToolUseStart:
+				turn.toolStart()
+			case protocol.AgentToolResult:
+				turn.toolResult()
+			case protocol.AgentMessageStart, protocol.AgentContentDone:
+				turn.activity()
 			case protocol.AgentTurnEnd:
 				finish(0)
 			case protocol.AgentError:
 				errLineAfterStream("prompt", "%s", env.Event.Error)
 				finish(1)
 			}
+			wake()
 		case protocol.TypeStatus:
 			var s protocol.Status
 			if json.Unmarshal(raw, &s) != nil {
 				return
 			}
-			if s.ScoopStatus == protocol.ScoopStatusProcessing {
-				sawProcessing = true
-			} else if sawProcessing {
-				finish(0) // processing → ready = turn complete
-			}
+			debugLogf("prompt: status %s (scoop %q)", s.ScoopStatus, s.ScoopJid)
+			turn.status(s.ScoopStatus, time.Now())
+			wake()
 		case protocol.TypeError:
 			var e struct {
 				Error string `json:"error"`
@@ -92,17 +193,32 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		return 1
 	}
 
-	select {
-	case code := <-done:
-		fmt.Println()
-		return code
-	case <-conn.Done():
-		errLineAfterStream("prompt", "connection closed before the turn completed")
-		return 1
-	case <-ctx.Done():
-		// Tell the leader to stop the turn so it doesn't keep spending tokens.
-		_ = conn.SendJSON(protocol.Abort{Type: "abort"})
-		return 130
+	grace := promptSettleWindow()
+	settle := time.NewTimer(time.Hour)
+	settle.Stop()
+	defer settle.Stop()
+	for {
+		select {
+		case code := <-done:
+			fmt.Println()
+			return code
+		case <-conn.Done():
+			errLineAfterStream("prompt", "connection closed before the turn completed")
+			return 1
+		case <-ctx.Done():
+			// Tell the leader to stop the turn so it doesn't keep spending tokens.
+			_ = conn.SendJSON(protocol.Abort{Type: "abort"})
+			return 130
+		case <-kick:
+		case <-settle.C:
+		}
+		if ok, wait := turn.settled(time.Now(), grace); ok {
+			fmt.Println()
+			return 0
+		} else if wait > 0 {
+			settle.Stop()
+			settle.Reset(wait)
+		}
 	}
 }
 

@@ -171,6 +171,26 @@ This finds the newest release carrying CLI binaries (they only attach when the C
 
 On macOS, launching a terminal follower from Sliccstart also exposes its managed CLI at `~/.local/bin/slicc`. Existing user installs are never replaced, and failure to create the symlink does not block the terminal launch.
 
+### 8. GitHub Actions
+
+Run a leader on a GitHub Actions runner for as long as a job allows, seed it with credentials, files, and mounted folders, and talk to it from the same job or from other workflows through the `slicc` CLI:
+
+```yaml
+jobs:
+  slicc:
+    uses: ai-ecoverse/slicc/.github/workflows/slicc-leader.yml@main
+    with:
+      duration: 45m
+      prompt: Summarize /mnt/repo/README.md into /workspace/summary.md
+      fetch-file: /workspace/summary.md
+      mounts: |
+        ${{ github.workspace }}:/mnt/repo
+    secrets:
+      SLICC_CONE_CONFIG: ${{ secrets.SLICC_CONE_CONFIG }}
+```
+
+Companion workflows send prompts, run shell commands, read and write VFS files, and lend a second runner to the leader as an exec-capable follower. Reference and recipes: [packages/github-workflow/README.md](packages/github-workflow/README.md).
+
 ## How it works
 
 SLICC shares one core across every runtime ("float"). The browser is not just where you view the product — it is where the agent runtime lives.

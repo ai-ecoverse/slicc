@@ -1,0 +1,77 @@
+name: SLICC VFS write
+
+# Reusable workflow: write one file into a running leader's VFS from inline
+# text or from a workflow artifact.
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Absolute VFS path to write.
+        type: string
+        required: true
+      content:
+        description: Inline text to write (used when no artifact is given).
+        type: string
+        default: ''
+      source-artifact:
+        description: Artifact to download and copy from.
+        type: string
+        default: ''
+      source-file:
+        description: Path of the file inside the artifact.
+        type: string
+        default: ''
+      cli-version:
+        description: Release tag of the Go `slicc` CLI, or `latest`.
+        type: string
+        default: latest
+      slicc-ref:
+        description: Ref of ai-ecoverse/slicc to take the actions from.
+        type: string
+        default: main
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+    secrets:
+      SLICC_JOIN_URL:
+        description: The leader's join link.
+        required: true
+    outputs:
+      bytes:
+        description: Bytes written.
+        value: ${{ jobs.write.outputs.bytes }}
+
+permissions:
+  contents: read
+
+jobs:
+  write:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
+    outputs:
+      bytes: ${{ steps.write.outputs.bytes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ai-ecoverse/slicc
+          ref: ${{ inputs.slicc-ref }}
+          path: .slicc-gw
+          sparse-checkout: packages/github-workflow
+          persist-credentials: false
+      - uses: ./.slicc-gw/packages/github-workflow/actions/install-cli
+        with:
+          version: ${{ inputs.cli-version }}
+      - if: inputs.source-artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.source-artifact }}
+          path: ${{ runner.temp }}/slicc-gw/in
+      - id: write
+        uses: ./.slicc-gw/packages/github-workflow/actions/write-file
+        with:
+          join-url: ${{ secrets.SLICC_JOIN_URL }}
+          path: ${{ inputs.path }}
+          local: ${{ inputs.source-artifact != '' && format('{0}/slicc-gw/in/{1}', runner.temp, inputs.source-file) || '' }}
+          content: ${{ inputs.content }}

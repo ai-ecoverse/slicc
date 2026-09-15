@@ -1,0 +1,39 @@
+name: SLICC — export session
+description: >-
+  Run `session export` on the leader (redacted, integrity-verified transcript
+  bundle) and copy the ZIP to the runner.
+inputs:
+  join-url:
+    description: The leader's join link.
+    required: true
+  local:
+    description: Runner path for the ZIP.
+    required: true
+  session-id:
+    description: Frozen session id to export (default the active session).
+    default: ''
+  vfs-path:
+    description: Temporary VFS path for the bundle.
+    default: /tmp/slicc-session-export.zip
+  timeout:
+    description: Wall-clock cap for the export.
+    default: 10m
+outputs:
+  bytes:
+    description: ZIP size in bytes.
+    value: ${{ steps.export.outputs.bytes }}
+  local:
+    description: Runner path written.
+    value: ${{ steps.export.outputs.local }}
+runs:
+  using: composite
+  steps:
+    - id: export
+      shell: bash
+      env:
+        SLICC_JOIN_URL: ${{ inputs.join-url }}
+        INPUT_LOCAL: ${{ inputs.local }}
+        INPUT_SESSION_ID: ${{ inputs.session-id }}
+        INPUT_VFS_PATH: ${{ inputs.vfs-path }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+      run: node "${{ github.action_path }}/../../scripts/export-session.mjs"

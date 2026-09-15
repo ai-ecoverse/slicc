@@ -5,29 +5,30 @@ this file when a category grows; keep the root file to bare titles.
 
 ## Module Map — Package Purposes
 
-| Path                           | Purpose                                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------------------- |
-| `packages/webapp/`             | Browser app core (UI, VFS, shell, CDP, tools, providers, skills, scoops)                 |
-| `packages/cherry/`             | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader                |
-| `packages/chrome-extension/`   | Manifest V3 extension entry points, HTML shells, message bridges                         |
-| `packages/cloudflare-worker/`  | Tray hub worker: sessions, signaling, TURN, `sliccy.ai/cloud` dashboard                  |
-| `packages/node-server/`        | Node CLI/Electron server: Chrome launch, CDP proxy, dev serve, hosted-leader             |
-| `packages/cloud-core/`         | `@slicc/cloud-core` — sandbox-lifecycle lib (worker + `node-server --cloud`)             |
-| `packages/shared-ts/`          | `@slicc/shared-ts` — platform-agnostic primitives (secret masking pipeline)              |
-| `packages/webcomponents/`      | `@slicc/webcomponents` — webapp UI shell (Storybook + `@vitest/browser`)                 |
-| `packages/spoon/`              | `@ai-ecoverse/spoon` — injection overlay + IIFE bootstrap; used in all floats            |
-| `packages/vfs-root/`           | Default VFS content copied into the app on init/reset                                    |
-| `packages/go-optel/`           | Dependency-free Go RUM client used by `slicc-cli`                                        |
-| `packages/swift-launcher/`     | macOS SwiftUI launcher app (`Sliccstart`)                                                |
-| `packages/swift-optel/`        | Pure-Swift RUM library shared by iOS + macOS apps                                        |
-| `packages/swift-server/`       | macOS Hummingbird server (`slicc-server`)                                                |
-| `packages/swift-traysession/`  | Foundation-only iCloud tray-session sync (launcher + iOS)                                |
-| `packages/swift-trayfollower/` | `SliccTrayFollower` — shared tray-follower transport (WebRTC + tray-sync)                |
-| `packages/swift-widgetkit/`    | `SliccWidgetKit` — the Cones & Scoops home-screen widget (iOS + macOS)                   |
-| `packages/ios-app/`            | iOS SwiftUI follower (`SliccFollower`) — WebRTC join (SPM, not npm)                      |
-| `packages/slicc-cli/`          | `slicc` — headless Go (pion) follower CLI (`prompt`/`exec`/`follow`; Go module, not npm) |
-| `packages/dev-tools/`          | Repo tooling: build helpers, QA, providers filter, e2b template                          |
-| `packages/assets/`             | Shared static files (logos, fonts, favicon); folder, not an npm workspace                |
+| Path                           | Purpose                                                                                       |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `packages/webapp/`             | Browser app core (UI, VFS, shell, CDP, tools, providers, skills, scoops)                      |
+| `packages/cherry/`             | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader                     |
+| `packages/chrome-extension/`   | Manifest V3 extension entry points, HTML shells, message bridges                              |
+| `packages/cloudflare-worker/`  | Tray hub worker: sessions, signaling, TURN, `sliccy.ai/cloud` dashboard                       |
+| `packages/node-server/`        | Node CLI/Electron server: Chrome launch, CDP proxy, dev serve, hosted-leader                  |
+| `packages/cloud-core/`         | `@slicc/cloud-core` — sandbox-lifecycle lib (worker + `node-server --cloud`)                  |
+| `packages/shared-ts/`          | `@slicc/shared-ts` — platform-agnostic primitives (secret masking pipeline)                   |
+| `packages/webcomponents/`      | `@slicc/webcomponents` — webapp UI shell (Storybook + `@vitest/browser`)                      |
+| `packages/spoon/`              | `@ai-ecoverse/spoon` — injection overlay + IIFE bootstrap; used in all floats                 |
+| `packages/vfs-root/`           | Default VFS content copied into the app on init/reset                                         |
+| `packages/go-optel/`           | Dependency-free Go RUM client used by `slicc-cli`                                             |
+| `packages/swift-launcher/`     | macOS SwiftUI launcher app (`Sliccstart`)                                                     |
+| `packages/swift-optel/`        | Pure-Swift RUM library shared by iOS + macOS apps                                             |
+| `packages/swift-server/`       | macOS Hummingbird server (`slicc-server`)                                                     |
+| `packages/swift-traysession/`  | Foundation-only iCloud tray-session sync (launcher + iOS)                                     |
+| `packages/swift-trayfollower/` | `SliccTrayFollower` — shared tray-follower transport (WebRTC + tray-sync)                     |
+| `packages/swift-widgetkit/`    | `SliccWidgetKit` — the Cones & Scoops home-screen widget (iOS + macOS)                        |
+| `packages/ios-app/`            | iOS SwiftUI follower (`SliccFollower`) — WebRTC join (SPM, not npm)                           |
+| `packages/slicc-cli/`          | `slicc` — headless Go (pion) follower CLI (`prompt`/`exec`/`follow`; Go module, not npm)      |
+| `packages/dev-tools/`          | Repo tooling: build helpers, QA, providers filter, e2b template                               |
+| `packages/github-workflow/`    | GitHub Actions: hosted leader on a runner + `slicc` CLI wrappers (composite actions, not npm) |
+| `packages/assets/`             | Shared static files (logos, fonts, favicon); folder, not an npm workspace                     |
 
 ## Automated PR Review Checklist — Descriptions
 

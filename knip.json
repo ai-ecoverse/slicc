@@ -13,6 +13,7 @@
     "packages/swift-widgetkit/**",
     "packages/vfs-root/**",
     "packages/dev-tools/**",
+    "packages/github-workflow/**",
     "packages/assets/**",
     "**/*.d.ts",
     "packages/webapp/src/stubs/**"
