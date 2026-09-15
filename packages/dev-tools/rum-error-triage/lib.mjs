@@ -151,9 +151,7 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 function buildSinceExpression(opts) {
   const raw = opts.since == null ? '' : String(opts.since);
   if (raw === '') {
-    const sinceDays = Number.isFinite(opts.sinceDays)
-      ? Math.max(1, Math.floor(opts.sinceDays))
-      : 1;
+    const sinceDays = Number.isFinite(opts.sinceDays) ? Math.max(1, Math.floor(opts.sinceDays)) : 1;
     return `TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${sinceDays} DAY)`;
   }
   if (!ISO_INSTANT.test(raw) || Number.isNaN(Date.parse(raw))) {
