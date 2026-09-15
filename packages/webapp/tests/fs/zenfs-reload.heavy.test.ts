@@ -29,6 +29,12 @@ const SHOULD_RUN =
 
 const d = SHOULD_RUN ? describe : describe.skip;
 
+async function persistedEntry(dbName: string, path: string) {
+  const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle(dbName);
+  const sidecar = await (await directory.getFileHandle('.metadata.json')).getFile();
+  return JSON.parse(await sidecar.text()).entries[path];
+}
+
 d('VirtualFS — OPFS reload integrity (heavy)', () => {
   it('symlink survives a reload', async () => {
     const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
@@ -66,6 +72,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
       });
       await vfs.writeFile('/run.sh', '#!/bin/sh\necho ok\n');
       await vfs.chmod('/run.sh', 0o755);
+      expect((await persistedEntry(DB, '/run.sh')).mode & 0o777).toBe(0o755);
       await vfs.dispose();
     }
     {
@@ -87,6 +94,7 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
       await vfs.writeFile('/file', 'A');
       await Promise.all([vfs.appendFile('/file', 'B'), vfs.appendFile('/file', 'C')]);
       await vfs.utimes('/file', new Date(0), new Date(123456));
+      expect((await persistedEntry(dbName, '/file')).mtimeMs).toBe(123456);
       await vfs.dispose();
     }
     {

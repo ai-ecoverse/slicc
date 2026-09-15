@@ -699,16 +699,14 @@ export class RestrictedFS {
 
   async chmod(path: string, mode: number): Promise<void> {
     this.refuseDescriptorTreeOp(path);
-    this.checkWrite(path);
-    const resolved = await this.resolveAndCheckWrite(path);
-    return this.vfs.chmod(resolved, mode);
+    await this.checkContentWrite(path);
+    return this.vfs.chmod(path, mode);
   }
 
   async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
     this.refuseDescriptorTreeOp(path);
-    this.checkWrite(path);
-    const resolved = await this.resolveAndCheckWrite(path);
-    return this.vfs.utimes(resolved, atime, mtime);
+    await this.checkContentWrite(path);
+    return this.vfs.utimes(path, atime, mtime);
   }
 
   private async checkContentWrite(path: string): Promise<void> {

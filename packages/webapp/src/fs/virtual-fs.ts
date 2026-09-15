@@ -2184,6 +2184,7 @@ export class VirtualFS {
           const stat = await this.lfs.stat(resolved);
           this.markSidecarDirty(resolved);
           await update(resolved);
+          await this.writeOpfsMetadataSidecarUnlocked();
           this.watcher?.notify([
             {
               type: 'modify',
