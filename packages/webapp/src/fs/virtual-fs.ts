@@ -63,14 +63,6 @@ import type {
 import { FsError } from './types.js';
 import { walk } from './walker.js';
 
-/**
- * Maximum payload reads issued while ZenFS preloads OPFS into its synchronous
- * cache. `@zenfs/dom` 1.2.14 wires this through the semaphore added in
- * `@zenfs/core` 2.7.3 (zen-fs/core#318). The upstream default is 128; retain
- * the 16-read limit proven by SLICC's real-Chromium reproduction.
- */
-const OPFS_PRELOAD_MAX_OPEN_FILES = 16;
-
 /** The sliver of the Web Locks API {@link VirtualFS.withWriteLock} uses. */
 interface LockManagerLike {
   request<T>(name: string, callback: () => Promise<T>): Promise<T>;
@@ -104,7 +96,7 @@ export interface VirtualFsOptions {
    * does not persist across reloads).
    */
   dbName?: string;
-  /** Wipe existing data on init. */
+  /** Wipe existing data on init. OPFS rejects this while same-realm holders are live. */
   wipe?: boolean;
   /**
    * Backend selection. Defaults to `'opfs'` in browsers; environments
@@ -121,6 +113,13 @@ export interface VirtualFsOptions {
    * (2026-08-24 field incident). OPFS backend only; memory ignores it.
    */
   onRepairProgress?: () => void;
+  /**
+   * Experimental OPFS option: false skips ZenFS's eager copy into its sync cache.
+   * Async operations remain available; sync fast paths fall back to async.
+   * Omitted on a shared backend, inherits the first opener's choice (default true).
+   * Explicitly conflicting choices for a live dbName fail with EBUSY.
+   */
+  opfsAsyncCache?: boolean;
 }
 
 /**
@@ -320,7 +319,8 @@ export class VirtualFS {
     wipe?: boolean,
     backend?: VfsBackend,
     opfsHandle?: FileSystemDirectoryHandle,
-    onRepairProgress?: () => void
+    onRepairProgress?: () => void,
+    opfsAsyncCache?: boolean
   ) {
     this.dbName = dbName;
     // Assigned before `_ready` kicks off `initOpfsBackend`, which reads it.
@@ -338,7 +338,7 @@ export class VirtualFS {
     this.lfsSync = this.makeDeferredLfsSync();
     this._ready =
       this.backend === 'opfs'
-        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true)
+        ? VirtualFS.initOpfsBackend(this, opfsHandle, wipe === true, opfsAsyncCache)
         : VirtualFS.initMemoryBackend(this, dbName, wipe === true);
     this._ready.then(
       () => {
@@ -415,11 +415,45 @@ export class VirtualFS {
    * {@link opfsBackends} refcount cache (mirrors the memory backend's
    * per-`dbName` semantics); the last `dispose()` umounts the subpath.
    */
+  private static opfsInitChains = new Map<string, Promise<void>>();
+
   private static async initOpfsBackend(
     vfs: VirtualFS,
     providedHandle: FileSystemDirectoryHandle | undefined,
-    wipe: boolean
+    wipe: boolean,
+    asyncCache?: boolean
   ): Promise<void> {
+    const previous = VirtualFS.opfsInitChains.get(vfs.dbName) ?? Promise.resolve();
+    const pending = previous
+      .catch(() => {})
+      .then(() => VirtualFS.resolveOpfsBackend(vfs, providedHandle, wipe, asyncCache));
+    VirtualFS.opfsInitChains.set(vfs.dbName, pending);
+    try {
+      await pending;
+    } finally {
+      if (VirtualFS.opfsInitChains.get(vfs.dbName) === pending) {
+        VirtualFS.opfsInitChains.delete(vfs.dbName);
+      }
+    }
+  }
+
+  private static async resolveOpfsBackend(
+    vfs: VirtualFS,
+    providedHandle: FileSystemDirectoryHandle | undefined,
+    wipe: boolean,
+    asyncCache?: boolean
+  ): Promise<void> {
+    const shared = VirtualFS.opfsBackends.get(vfs.dbName);
+    if (shared && wipe) {
+      throw new FsError('EBUSY', 'Cannot wipe an OPFS backend with live holders', vfs.dbName);
+    }
+    if (shared && asyncCache !== undefined && shared.asyncCache !== asyncCache) {
+      throw new FsError(
+        'EBUSY',
+        'OPFS async cache setting conflicts with the live backend',
+        vfs.dbName
+      );
+    }
     const handle = providedHandle ?? (await VirtualFS.acquireOpfsHandle(vfs.dbName, wipe));
     // ZenFS' `WebAccessFS._loadMetadata` reads `/.metadata.json` eagerly when
     // a `metadata` path is configured and throws ENOENT on first boot of a
@@ -436,86 +470,30 @@ export class VirtualFS {
     // same lock, so validation cannot race a half-written document and mistake
     // it for a torn one.
     await vfs.withWriteLock(() => VirtualFS.seedOpfsMetadataSidecarIfMissing(handle));
-    const [zenfs, { WebAccess }] = await Promise.all([import('@zenfs/core'), import('@zenfs/dom')]);
+    const zenfs = await import('@zenfs/core');
     await VirtualFS.ensureRootMount(zenfs);
     const mountPoint = `/__opfs__/${vfs.dbName}`;
     let entry = VirtualFS.opfsBackends.get(vfs.dbName);
-    if (entry && wipe) {
-      try {
-        zenfs.umount(mountPoint);
-      } catch {
-        /* not mounted yet */
-      }
-      VirtualFS.opfsBackends.delete(vfs.dbName);
-      entry = undefined;
-    }
     if (!entry) {
-      // Self-heal (#1984): the mount's `crossCopy` trusts the sidecar, so a
-      // poisoned entry (kind flip, stale size, missing path) throws EISDIR
-      // here and bricks EVERY boot until the file is fixed. Validate the
-      // sidecar against the real tree and retry once instead of failing the
-      // whole kernel; an unrepairable failure rethrows the original error.
-      const resolveBackend = (): Promise<unknown> =>
-        (
-          zenfs as unknown as {
-            resolveMountConfig: (opts: unknown) => Promise<unknown>;
-          }
-        ).resolveMountConfig({
-          backend: WebAccess,
-          handle,
-          metadata: '/.metadata.json',
-          maxOpenFilesForCopy: OPFS_PRELOAD_MAX_OPEN_FILES,
-        });
-      const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
-        './sidecar-repair.js'
-      );
-      // Unconditional pre-boot repair (#2146): an UNDER-sized or ino-colliding
-      // sidecar entry never throws during mount — reads silently clamp to the
-      // recorded size and colliding inos share one vnode — so the on-throw
-      // retry below can never see this corruption class. Truing the document
-      // up BEFORE ZenFS parses it costs one metadata-only probe per entry per
-      // cold boot and heals sidecars already poisoned in the field.
-      try {
-        const preboot = await vfs.withWriteLock(() =>
-          repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)
-        );
-        if (preboot?.changed) {
-          console.warn('[virtual-fs] repaired metadata sidecar before mount (#2146)', {
-            dbName: vfs.dbName,
-            kindFixed: preboot.kindFixed,
-            sizesFixed: preboot.sizesFixed,
-            dropped: preboot.dropped,
-            inosReassigned: preboot.inosReassigned,
-            nlinksFixed: preboot.nlinksFixed,
-            selfEntryDropped: preboot.selfEntryDropped,
-          });
-        }
-      } catch {
-        /* best-effort — the on-throw retry below still covers hard failures */
-      }
-      const backendFs = (await resolveWithSidecarRepair(
-        resolveBackend,
-        // The repair's read-mutate-write shares the sidecar with every
-        // context of the origin: run it under the same cross-context Web
-        // Lock as `writeOpfsMetadataSidecarUnlocked`, so a realm that is
-        // already booted and flushing cannot be clobbered mid-repair.
-        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)),
-        (summary) =>
-          console.warn('[virtual-fs] repaired poisoned metadata sidecar; retrying mount', {
-            dbName: vfs.dbName,
-            kindFixed: summary.kindFixed,
-            sizesFixed: summary.sizesFixed,
-            dropped: summary.dropped,
-            nlinksFixed: summary.nlinksFixed,
-            selfEntryDropped: summary.selfEntryDropped,
-          })
-      )) as { index?: { toJSON: () => unknown } };
+      const { resolveOpfsMount } = await import('./opfs-mount.js');
+      const backendFs = await resolveOpfsMount({
+        handle,
+        dbName: vfs.dbName,
+        asyncCache,
+        onRepairProgress: vfs.onRepairProgress,
+        withWriteLock: (operation) => vfs.withWriteLock(operation),
+      });
       try {
         (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, backendFs);
       } catch {
         /* already mounted with this backend — safe to ignore */
       }
-      entry = { backendFs, refs: 0, sidecarDirty: { paths: new Set(), prefixes: new Set() } };
+      entry = {
+        backendFs,
+        refs: 0,
+        asyncCache: asyncCache !== false,
+        sidecarDirty: { paths: new Set(), prefixes: new Set() },
+      };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
     entry.refs += 1;
@@ -620,6 +598,7 @@ export class VirtualFS {
     {
       backendFs: { index?: { toJSON: () => unknown } };
       refs: number;
+      asyncCache: boolean;
       /**
        * Paths this realm mutated since its last successful sidecar write.
        * Shared per `dbName` (like the index itself) so every same-name
@@ -903,8 +882,20 @@ export class VirtualFS {
     const dbName = options?.dbName ?? 'browser-fs';
     const wipe = options?.wipe === true;
     const backend: VfsBackend = options?.backend ?? resolveVfsBackendFromEnv();
-    const vfs = new VirtualFS(dbName, wipe, backend, undefined, options?.onRepairProgress);
-    await vfs._ready;
+    const vfs = new VirtualFS(
+      dbName,
+      wipe,
+      backend,
+      undefined,
+      options?.onRepairProgress,
+      options?.opfsAsyncCache
+    );
+    try {
+      await vfs._ready;
+    } catch (error) {
+      vfs.mountSyncChannel?.close();
+      throw error;
+    }
     if (wipe) {
       await clearMountEntries().catch(() => {});
     }

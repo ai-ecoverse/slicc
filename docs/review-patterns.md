@@ -65,6 +65,8 @@ limits. `maxFileSystemBytes` is not a quota on an external VFS.
 
 **Trigger patterns**
 
+- OPFS cache-mode changes need native-browser reload tests and asynchronous fallbacks. Serialize same-database initializers before validating shared backend configuration; a failed conflicting opener must leave the live backend usable. Reject wipes before touching storage while same-realm holders remain live, even when the requested cache mode matches.
+
 - Recursive filesystem preloads that start every payload read at once, limit each
   directory separately, or reject while sibling copies still run. Bound leaf copies
   globally before allocating buffers; cancel queued work on the first failure,

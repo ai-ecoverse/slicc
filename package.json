@@ -55,6 +55,7 @@
     "pretypecheck": "npm run preflight",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p packages/node-server/tsconfig.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json && tsc --noEmit -p packages/cloud-core/tsconfig.json && tsc --noEmit -p packages/cherry/tsconfig.json && tsc --noEmit -p packages/spoon/tsconfig.json && tsc --noEmit -p packages/webcomponents/tsconfig.json",
     "pretest": "npm run preflight",
+    "test:opfs": "node packages/dev-tools/tools/run-vfs-opfs-tests.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:coverage:cloudflare-worker": "node packages/dev-tools/tools/coverage-gate.mjs cloudflare-worker",

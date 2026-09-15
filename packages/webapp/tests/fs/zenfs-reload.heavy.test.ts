@@ -109,3 +109,67 @@ d('VirtualFS — OPFS reload integrity (heavy)', () => {
     await vfs.dispose();
   });
 });
+
+d('VirtualFS — optional OPFS async cache (heavy)', () => {
+  it('supports async operations and shell reads without a synchronous preload', async () => {
+    const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+    const { VfsAdapter } = await import('../../src/shell/vfs-adapter.js');
+    const { Bash } = await import('just-bash');
+    const dbName = 'a6-no-preload';
+    const fs = await VirtualFS.create({
+      dbName,
+      backend: 'opfs',
+      wipe: true,
+      opfsAsyncCache: false,
+    });
+    let peer: Awaited<ReturnType<typeof VirtualFS.create>> | undefined;
+    try {
+      await fs.writeFile('/work/file', 'longer content');
+      await fs.writeFile('/work/file', 'short');
+      await fs.symlink('/work/file', '/link');
+      expect(fs.statSync('/work/file')).toBe(null);
+      expect(fs.readDirSync('/work')).toBe(null);
+      expect(await fs.readTextFile('/link')).toBe('short');
+      const adapter = new VfsAdapter(fs);
+      adapter.setRegisteredCommandsFn(() => ['cat', 'find']);
+      const bash = new Bash({ fs: adapter, cwd: '/', defenseInDepth: false });
+      const result = await bash.exec('cat /link; find /work -type f');
+      if (result.exitCode !== 0) throw new Error(JSON.stringify(result));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('short/work/file\n');
+      peer = await VirtualFS.create({ dbName, backend: 'opfs' });
+      expect(peer.statSync('/work/file')).toBe(null);
+      await peer.rename('/work/file', '/work/renamed');
+      expect(await fs.readTextFile('/work/renamed')).toBe('short');
+      let errorCode = '';
+      try {
+        await VirtualFS.create({ dbName, backend: 'opfs', opfsAsyncCache: true });
+      } catch (error) {
+        errorCode = (error as { code: string }).code;
+      }
+      expect(errorCode).toBe('EBUSY');
+      for (const opfsAsyncCache of [undefined, false, true]) {
+        errorCode = '';
+        try {
+          await VirtualFS.create({ dbName, backend: 'opfs', wipe: true, opfsAsyncCache });
+        } catch (error) {
+          errorCode = (error as { code: string }).code;
+        }
+        expect(errorCode).toBe('EBUSY');
+        expect(await peer.readTextFile('/work/renamed')).toBe('short');
+      }
+    } finally {
+      await peer?.dispose();
+      await fs.dispose();
+    }
+    const reloaded = await VirtualFS.create({ dbName, backend: 'opfs', opfsAsyncCache: true });
+    try {
+      expect(await reloaded.readTextFile('/work/renamed')).toBe('short');
+      expect(reloaded.statSync('/work/renamed')?.size).toBe(5);
+      await reloaded.rm('/work/renamed');
+      expect(await reloaded.exists('/work/renamed')).toBe(false);
+    } finally {
+      await reloaded.dispose();
+    }
+  });
+});

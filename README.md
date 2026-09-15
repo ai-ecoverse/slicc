@@ -284,6 +284,9 @@ SLICC would not have been possible without the pioneering inspiration of [OpenCl
 
 ## Development and deeper docs
 
+Developers can verify native browser storage with `npm run test:opfs` and trial the
+[optional OPFS preload setting](docs/filesystem-preload.md).
+
 If you want to go deeper, the detailed docs live here:
 
 - [Development guide](docs/development.md)
