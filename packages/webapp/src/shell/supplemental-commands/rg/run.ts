@@ -1,5 +1,5 @@
 /**
- * Overlay for just-bash `rg` (#3106).
+ * Overlay for just-bash `rg` (#3106, #3138).
  *
  * Bundled rg throws `ExecutionLimitError` when its live/aggregate byte budget
  * is exceeded. That poisons the execution scope and unwinds the whole script
@@ -13,8 +13,15 @@
  *   - returns exit 2 with capturable stderr naming the searchable limit, or
  *   - calls the bundled rg on the remaining files (under the 2× live reserve).
  *
+ * Bundled `-c` / `--count` / `--count-matches` also prints `0` on stdin when
+ * there are no matches (file args and multi-file already omit zeros). That
+ * makes `n=$(rg -c pat || echo 0)` through a pipe indistinguishable from a
+ * measured zero (#3138). The overlay suppresses a zero count; exit 1 still
+ * means no matches.
+ *
  * Remove once just-bash's rg returns a command result for this limit, reports
- * the number it actually enforces, and does not charge skipped binaries.
+ * the number it actually enforces, does not charge skipped binaries, and omits
+ * zero counts on stdin.
  */
 
 import type { ExecResult, IFileSystem, ResolvedCommandContext } from 'just-bash';
@@ -90,6 +97,7 @@ interface ParsedRg {
   nullSeparated: boolean;
   noFilename: boolean;
   withFilename: boolean;
+  countMode: boolean;
   flagTokens: string[];
   fileSelectArgs: string[];
   positionals: string[];
@@ -107,6 +115,7 @@ function emptyParsed(): ParsedRg {
     nullSeparated: false,
     noFilename: false,
     withFilename: false,
+    countMode: false,
     flagTokens: [],
     fileSelectArgs: [],
     positionals: [],
@@ -140,12 +149,14 @@ function noteMeta(parsed: ParsedRg, arg: string): void {
   if (arg === '--null' || arg === '-0') parsed.nullSeparated = true;
   if (arg === '--no-filename' || arg === '-h') parsed.noFilename = true;
   if (arg === '--with-filename' || arg === '-H') parsed.withFilename = true;
+  if (arg === '--count' || arg === '--count-matches') parsed.countMode = true;
 }
 
 function recordLong(parsed: ParsedRg, arg: string, args: string[], i: number): number {
   const long = longName(arg);
   if (!long) return i;
   parsed.flagTokens.push(arg);
+  if (long === 'count' || long === 'count-matches') parsed.countMode = true;
   if (PATTERN_LONG.has(long)) parsed.hasPatternOption = true;
   const attached = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : undefined;
   if (VALUE_LONG.has(long)) {
@@ -171,6 +182,7 @@ function noteShortLetter(parsed: ParsedRg, ch: string): void {
   if (ch === '0') parsed.nullSeparated = true;
   if (ch === 'h') parsed.noFilename = true;
   if (ch === 'H') parsed.withFilename = true;
+  if (ch === 'c') parsed.countMode = true;
   if (ch === 'u') {
     parsed.unrestricted += 1;
     parsed.fileSelectArgs.push('-u');
@@ -380,6 +392,12 @@ function limitResult(enforced: number): ExecResult {
   };
 }
 
+/** #3138: `-c` on stdin printed `0`; file args already omitted zeros. Exit 1 is enough. */
+function omitZeroCount(parsed: ParsedRg, result: ExecResult): ExecResult {
+  if (!parsed.countMode || result.exitCode !== 1 || result.stdout.length === 0) return result;
+  return { ...result, stdout: '' };
+}
+
 export async function runRg(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
   if (!ctx.origCommand) {
     return { stdout: '', stderr: 'rg: command not found\n', exitCode: 127 };
@@ -394,7 +412,7 @@ export async function runRg(args: string[], ctx: ResolvedCommandContext): Promis
   const stdinLen = stdinAsLatin1(ctx.stdin).length;
   const paths = operandPaths(parsed);
   if (paths.length === 0 && stdinLen > 0) {
-    return orig(args);
+    return omitZeroCount(parsed, await orig(args));
   }
 
   const { missing, includeDirectory } = await classifyOperands(ctx, paths);
@@ -415,6 +433,6 @@ export async function runRg(args: string[], ctx: ResolvedCommandContext): Promis
   if (bytes > enforced) {
     return limitResult(enforced);
   }
-  const result = await orig(searchArgs(parsed, files, includeDirectory));
+  const result = omitZeroCount(parsed, await orig(searchArgs(parsed, files, includeDirectory)));
   return listingError ? mergeListingFailure(listingError, result) : result;
 }
